@@ -206,3 +206,43 @@ describe('the attention queue over HTTP', () => {
     }
   });
 });
+
+test('batch list and counts preserve degraded reports even when scope or labels exclude readable items', async () => {
+  const run = makeDashboardWorkflowRun({
+    ...MOCK_RUNNING_RUN,
+    id: 'valid-gate',
+    status: 'paused',
+    metadata: { approval: { nodeId: 'review', message: 'Approve?' } },
+  });
+  const degraded = ['bad-a', 'bad-b'].map(runId => ({
+    type: 'degraded' as const,
+    reason: 'run_unreadable' as const,
+    runId,
+  }));
+  mockListAttentionQueueRows.mockImplementation(async () => [degraded[0]!, run, degraded[1]!]);
+  try {
+    const { app } = makeApp();
+    for (const project of ['', '&project=_cwd/unknown']) {
+      const warnings = project ? degraded.map(({ type, reason }) => ({ type, reason })) : degraded;
+      const list = await app.request(`/api/runs/attention?all=false${project}`);
+      expect(list.status).toBe(200);
+      const body = runsNeedingAttentionResponseSchema.parse(await list.json());
+      expect(body.degraded).toEqual(warnings);
+      expect(body.runs.map(run => run.id)).toEqual(project ? [] : [run.id]);
+      expect(body.items.map(item => item.runId)).toEqual(project ? [] : [run.id]);
+      for (const countBy of ['', '&countBy=project']) {
+        const response = await app.request(
+          `/api/runs/attention?label=missing%3Dyes${project}${countBy}`
+        );
+        expect(response.status).toBe(200);
+        expect(await response.json()).toEqual(
+          countBy
+            ? { counts: { by: 'project', counts: [] }, degraded: warnings }
+            : { runs: [], items: [], degraded: warnings }
+        );
+      }
+    }
+  } finally {
+    mockListAttentionQueueRows.mockReset();
+  }
+});

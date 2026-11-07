@@ -33,7 +33,6 @@ import {
   UNREADABLE,
   withMerge,
 } from '../../.shared/merge.ts';
-import { POLICY_DEFAULTS } from '../../.shared/policy-defaults.ts';
 import { readMaintainerList } from '../../.shared/maintainers.ts';
 import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
 import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
@@ -126,7 +125,7 @@ function recoveryPickup(snapshot: (pr: QualifiedPr) => PrFacts): Pickup {
  */
 function enrollOrNote(repo: QualifiedPr['repo'], authors: ReadonlySet<string>): void {
   try {
-    enrollOwnPrs(repo, authors, new Date().toISOString());
+    enrollOwnPrs(repo, authors);
   } catch (error) {
     note(`merge-queue facts: own-PR enrollment stopped: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -175,7 +174,6 @@ function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: r
     items,
     settled,
     gate,
-    policy_defaults: POLICY_DEFAULTS,
   });
 }
 

@@ -646,13 +646,20 @@ describe('watchAttentionQueue', () => {
     }
   });
 
-  test.each(['attention', 'ready'] as const)(
+  test.each(['attention', 'degraded', 'ready'] as const)(
     'startup waits for initial %s delivery and rejects without starting background work',
     async type => {
       const store = await makeStore();
       await pausedAtAsk(store);
       await pausedAtAsk(store);
       await running(store);
+      if (type === 'degraded') {
+        const rows = await store.listAttentionQueueRows();
+        store.listAttentionQueueRows = async () => [
+          ...rows,
+          { type: 'degraded', reason: 'run_unreadable', runId: 'bad' },
+        ];
+      }
       const reads = spyOn(store, 'readWorkflowEventsAfter');
       const listRunning = spyOn(store, 'listWorkflowRuns');
       const ownerLoss = mock(() => Promise.resolve(null));
@@ -685,7 +692,7 @@ describe('watchAttentionQueue', () => {
       expect(pending).toBe('pending');
       expect(result).toEqual({ status: 'rejected', error: cause });
       expect(lines.map(line => line.type)).toEqual(
-        type === 'attention' ? ['attention'] : ['attention', 'attention', 'ready']
+        type === 'attention' ? ['attention'] : ['attention', 'attention', type]
       );
       expect(reads).not.toHaveBeenCalled();
       expect(listRunning).not.toHaveBeenCalled();
@@ -1553,3 +1560,48 @@ describe('watchAttentionQueue', () => {
     expect(bookmark).toEqual({ type: 'bookmark', cursor: await store.getWorkflowEventHead() });
   });
 });
+
+test.each(['all', 'project'] as const)(
+  'snapshot reports every unreadable row before ready (%s scope)',
+  async kind => {
+    const store = await makeStore();
+    const { runId } = await pausedAtAsk(store, {}, 'alpha');
+    const rows = await store.listAttentionQueueRows();
+    const failures = ['private-run-a', 'private-run-b'].map(runId => ({
+      type: 'degraded' as const,
+      reason: 'run_unreadable' as const,
+      runId,
+    }));
+    store.listAttentionQueueRows = async () => [failures[0]!, ...rows, failures[1]!];
+    const branchOf = mock(async () => null);
+    const get = spyOn(store, 'getWorkflowRun');
+    const scope: AttentionWatchOptions['scope'] =
+      kind === 'all'
+        ? { kind: 'all' }
+        : { kind: 'project', project: { key: '_cwd/alpha', codebaseId: null, name: 'alpha' } };
+    const handle = await watch(store, { scope }, { branchOf });
+    try {
+      expect(handle.lines.map(line => line.type)).toEqual([
+        'attention',
+        'degraded',
+        'degraded',
+        'ready',
+      ]);
+      expect(handle.lines[0]).toMatchObject({ type: 'attention', snapshot: true, item: { runId } });
+      const start = await store.getWorkflowEventHead();
+      for (const line of handle.lines.filter(line => line.type === 'degraded')) {
+        expect(line).toEqual({
+          type: 'degraded',
+          reason: 'run_unreadable',
+          cursor: start,
+        });
+      }
+      expect(JSON.stringify(handle.lines)).not.toContain('private-run');
+      expect(branchOf).toHaveBeenCalledTimes(1);
+      expect(get.mock.calls.every(([id]) => id === runId)).toBe(true);
+    } finally {
+      await handle.close();
+      get.mockRestore();
+    }
+  }
+);

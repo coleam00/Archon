@@ -62,6 +62,7 @@ export type TemplateSlotName =
   | 'wait.event'
   | 'wait.attention'
   | 'wait.options'
+  | 'wait.recommendation'
   | 'wait.labels.*'
   | 'workflow.input'
   | 'workflow.with.*'
@@ -110,6 +111,7 @@ export const SLOT_SPEC = {
   'wait.event': { surface: 'value', outputReference: true },
   'wait.attention': { surface: 'prompt', outputReference: true },
   'wait.options': { surface: 'value', outputReference: true },
+  'wait.recommendation': { surface: 'value', outputReference: true },
   'wait.labels.*': { surface: 'value', outputReference: true },
   'workflow.input': { surface: 'value', outputReference: true },
   'workflow.with.*': { surface: 'value', outputReference: true, valuePosition: 'workflow_with' },
@@ -362,6 +364,11 @@ function walkWait(node: WaitNode, emit: SlotEmitter): void {
     emit.slot('wait.options', 'wait.options', node.wait.options, value => {
       const wait = node.wait;
       if (wait.attention !== undefined) node.wait = { ...wait, options: value };
+    });
+  if (typeof node.wait.recommendation === 'string')
+    emit.slot('wait.recommendation', 'wait.recommendation', node.wait.recommendation, value => {
+      const wait = node.wait;
+      if (wait.attention !== undefined) node.wait = { ...wait, recommendation: value };
     });
   for (const [key, label] of Object.entries(node.wait.labels ?? {}))
     emit.slot('wait.labels.*', `wait.labels.${key}`, label, value => {

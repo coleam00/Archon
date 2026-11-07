@@ -329,11 +329,14 @@ mock.module('../../db/sessions', () => ({
 }));
 
 mock.module('../../db/workflows', () => ({
+  getRunIdsByIsolationEnvId: mock(async (): Promise<string[]> => []),
+  getWorkflowRunsByIds: mock(async () => []),
   getActiveWorkflowRun: mockGetActiveWorkflowRun,
   cancelWorkflowRun: mockCancelWorkflowRun,
   cancelResumableRunsForConversation: mockCancelResumableRunsForConversation,
   listDashboardRuns: mockListDashboardRuns,
   getWorkflowRun: mockGetWorkflowRun,
+  getWorkflowRunForAttention: mockGetWorkflowRun,
   findWorkflowRunsByIdPrefix: mockFindWorkflowRunsByIdPrefix,
   findChildRuns: mockFindChildRuns,
   resumeWorkflowRun: mockResumeWorkflowRun,
@@ -421,7 +424,14 @@ export const mockIsolationDestroy = mock(
     })
 );
 
+const { VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } = await import(
+  '@archon/isolation'
+);
 mock.module('@archon/isolation', () => ({
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+  dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
+  releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,

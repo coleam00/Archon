@@ -39,7 +39,7 @@ for (const provider of ['anthropic', 'github-copilot']) {
       updated_at: 'now',
     };
     query.mockResolvedValueOnce(createQueryResult([row]));
-    query.mockResolvedValueOnce(createQueryResult([]));
+    query.mockResolvedValueOnce(createQueryResult([], 1));
     globalThis.fetch = Object.assign(
       async (input: Parameters<typeof fetch>[0]) => {
         if (String(input).endsWith('/models')) return Response.json({ data: [] });
@@ -56,6 +56,7 @@ for (const provider of ['anthropic', 'github-copilot']) {
       state: 'usable',
       credential: { oauthApiKey: 'rotated-access', rawCreds: { extra: 'keep-me' } },
     });
+    expect(result).not.toHaveProperty('storedStatus');
     expect(query).toHaveBeenCalledTimes(2);
     const params = query.mock.calls[1]?.[1];
     const encrypted: unknown = Array.isArray(params) ? params[0] : undefined;

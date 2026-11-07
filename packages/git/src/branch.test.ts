@@ -428,15 +428,23 @@ describe('git utilities', () => {
 
   describe('ownership-critical branch probes', () => {
     test('getCurrentBranchStrict returns a named branch', async () => {
-      execSpy.mockResolvedValue(output('feature/live-pr\n'));
+      execSpy.mockResolvedValue(output('refs/heads/feature/live-pr\n'));
 
       await expect(git.getCurrentBranchStrict('/workspace/repo' as Git.RepoPath)).resolves.toBe(
         branch('feature/live-pr')
       );
       expect(execSpy).toHaveBeenCalledWith(
         'git',
-        ['-C', '/workspace/repo', 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+        ['-C', '/workspace/repo', 'symbolic-ref', '--quiet', 'HEAD'],
         { timeout: 10000 }
+      );
+    });
+
+    test('getCurrentBranchStrict refuses a symbolic HEAD outside local branches', async () => {
+      execSpy.mockResolvedValue(output('refs/custom/foo\n'));
+
+      await expect(git.getCurrentBranchStrict('/workspace/repo' as Git.RepoPath)).rejects.toThrow(
+        "HEAD refers to 'refs/custom/foo', not a local branch"
       );
     });
 

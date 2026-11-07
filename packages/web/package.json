@@ -1,6 +1,6 @@
 {
   "name": "@archon/web",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -63,6 +63,9 @@
     ],
     [
       "src/experiments/AddProjectDialog.test.tsx"
+    ],
+    [
+      "src/experiments/DraftRunCardInteraction.test.tsx"
     ],
     [
       "src/experiments/ApprovalPanelResponse.test.tsx"

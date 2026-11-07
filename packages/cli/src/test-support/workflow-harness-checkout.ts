@@ -17,15 +17,29 @@ export const mockFolderBackendPrepare = mock(
   })
 );
 export const mockFolderBackendDestroy = mock(() => Promise.resolve());
+export const mockFolderBackendReleaseImages = mock(
+  async (_runId: string, _envId: string) => undefined
+);
 export const mockResolveFolderBackend = mock(() => ({
   prepare: mockFolderBackendPrepare,
   resumeEnv: mockFolderBackendPrepare,
   destroy: mockFolderBackendDestroy,
+  releaseVerificationImages: mockFolderBackendReleaseImages,
 }));
 
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
-const { worktreeRegistrationMetadata } = await import('@archon/isolation');
+const {
+  worktreeRegistrationMetadata,
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+  releaseRunVerificationImages: realReleaseRunVerificationImages,
+} = await import('@archon/isolation');
+export { realReleaseRunVerificationImages };
 mock.module('@archon/isolation', () => ({
+  VerificationImageInventoryError,
+  VERIFICATION_IMAGE_RUN_LABEL,
+  dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
+  releaseRunVerificationImages: mock(async () => undefined),
   ISOLATION_PROVIDER_TYPES,
   ISOLATION_WORKFLOW_TYPES,
   ENVIRONMENT_STATUSES,

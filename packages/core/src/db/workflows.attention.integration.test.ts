@@ -1,5 +1,6 @@
 // @archon-test-isolated
-import { afterAll, expect, mock, test } from 'bun:test';
+import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import { afterAll, expect, mock, spyOn, test } from 'bun:test';
 import type { WorkflowWaitContext } from '@archon/workflows/schemas/workflow-run';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
@@ -57,7 +58,10 @@ test('attention is unpaged, includes originless triggered runs, and excludes mac
     ]);
   }
   expect((await workflows.listDashboardRuns()).runs.map(run => run.id)).not.toContain(old);
-  const attention = await workflows.listRunsNeedingAttention();
+  const { values: attention, degraded } = splitAttentionRead(
+    await workflows.listRunsNeedingAttention()
+  );
+  expect(degraded).toEqual([]);
   expect(attention.map(run => run.id).sort()).toEqual([old, action].sort());
   for (const run of attention) {
     expect(run.origin).toEqual({ userId });
@@ -68,28 +72,56 @@ test('attention is unpaged, includes originless triggered runs, and excludes mac
   }
 });
 
-test('a corrupt paused origin cannot hide an independent valid gate', async () => {
+test('unreadable origins are reported beside valid gates without changing stored data', async () => {
   const valid = await workflows.createWorkflowRun({ workflow_name: 'valid', user_message: '' });
-  const corrupt = await workflows.createWorkflowRun({ workflow_name: 'corrupt', user_message: '' });
-  for (const run of [valid, corrupt]) {
+  const bad: string[] = [];
+  for (const origin of ['private-origin-sentinel-not-json', '[]']) {
+    const run = await workflows.createWorkflowRun({ workflow_name: 'corrupt', user_message: '' });
+    bad.push(run.id);
+    await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+      origin,
+      run.id,
+    ]);
+  }
+  const ids = [valid.id, ...bad];
+  for (const [index, id] of ids.entries()) {
     await db.query(
-      "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
-      [JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?' } }), run.id]
+      "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1, started_at = $3 WHERE id = $2",
+      [
+        JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?' } }),
+        id,
+        new Date(Date.UTC(2026, 9, 2, 0, 0, ids.length - index)).toISOString(),
+      ]
     );
   }
-  await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
-    'not-json',
-    corrupt.id,
-  ]);
+  const snapshot = async () => ({
+    rows: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
+    events: (await db.query('SELECT * FROM remote_agent_workflow_events ORDER BY id')).rows,
+  });
+  const before = await snapshot();
+  const { getLog } = await import('./workflow-run-shared');
+  const log = spyOn(getLog(), 'error').mockImplementation(() => {});
   try {
-    const attention = await workflows.listRunsNeedingAttention();
-    expect(attention.map(run => run.id)).toContain(valid.id);
-    expect(attention.map(run => run.id)).not.toContain(corrupt.id);
+    for (const read of [workflows.listRunsNeedingAttention, workflows.listAttentionQueueRows]) {
+      const attention = await read();
+      expect(attention).toContainEqual(expect.objectContaining({ id: valid.id }));
+      for (const runId of bad) {
+        expect(attention).toContainEqual({ type: 'degraded', reason: 'run_unreadable', runId });
+      }
+      expect(splitAttentionRead(attention).degraded.map(report => report.runId)).toEqual(bad);
+      expect(JSON.stringify(attention)).not.toContain('private-origin-sentinel');
+    }
+    expect(log.mock.calls).toEqual(
+      [...bad, ...bad].map(workflowRunId => [
+        { workflowRunId },
+        'attention_run_normalization_failed',
+      ])
+    );
+    expect(await snapshot()).toEqual(before);
   } finally {
-    await db.query('DELETE FROM remote_agent_workflow_runs WHERE id IN ($1, $2)', [
-      valid.id,
-      corrupt.id,
-    ]);
+    log.mockRestore();
+    for (const id of ids)
+      await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
   }
 });
 
@@ -107,8 +139,141 @@ test.each([
     [JSON.stringify(metadata), run.id]
   );
   try {
-    expect((await workflows.listRunsNeedingAttention()).map(row => row.id)).toContain(run.id);
+    expect(
+      splitAttentionRead(await workflows.listRunsNeedingAttention()).values.map(row => row.id)
+    ).toContain(run.id);
   } finally {
+    await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [run.id]);
+  }
+});
+
+test.each(
+  ['child_workflow', 'fan_out'].flatMap(type =>
+    [
+      { status: 'paused', nested: false },
+      { status: 'running', nested: false },
+      { status: 'running', nested: true },
+    ].map(scenario => ({ type, ...scenario }))
+  )
+)('batch attention contains unreadable descendants: %j', async ({ type, nested, status }) => {
+  const { listAttentionQueue } = await import('@archon/workflows/attention-queue');
+  const ids: string[] = [];
+  async function paused(approval: Record<string, unknown>) {
+    const run = await workflows.createWorkflowRun({
+      workflow_name: 'mixed-tree',
+      user_message: '',
+    });
+    ids.push(run.id);
+    await db.query(
+      "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+      [JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?', ...approval } }), run.id]
+    );
+    return run;
+  }
+  const blocked = (childRunId: string) =>
+    type === 'child_workflow' ? { type, childRunId } : { type, childRunIds: [childRunId] };
+  const valid = await paused({});
+  const child = await paused({});
+  await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+    'private-origin-sentinel-not-json',
+    child.id,
+  ]);
+  await db.query('UPDATE remote_agent_workflow_runs SET status = $1 WHERE id = $2', [
+    status,
+    child.id,
+  ]);
+  const badPaused = status === 'paused' ? child : await paused({});
+  if (badPaused !== child) {
+    await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+      'private-origin-sentinel-not-json',
+      badPaused.id,
+    ]);
+  }
+  const intermediate = nested ? await paused(blocked(child.id)) : child;
+  const parent = await paused(blocked(intermediate.id));
+  const missing = await paused(blocked(crypto.randomUUID()));
+  const snapshot = async () => ({
+    rows: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
+    events: (await db.query('SELECT * FROM remote_agent_workflow_events ORDER BY id')).rows,
+  });
+  const before = await snapshot();
+  const { getLog } = await import('./workflow-run-shared');
+  const log = spyOn(getLog(), 'error').mockImplementation(() => {});
+  try {
+    const result = splitAttentionRead(
+      await listAttentionQueue({
+        store: {
+          listAttentionQueueRows: workflows.listAttentionQueueRows,
+          getWorkflowRun: workflows.getWorkflowRun,
+          getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
+          getCodebase: async () => null,
+        },
+        branchOf: async () => null,
+      })
+    );
+    expect(result.values.map(item => item.runId)).toContain(valid.id);
+    expect(result.values.find(item => item.runId === missing.id)?.kind).toBe('unreadable');
+    const parents = nested ? [parent, intermediate] : [parent];
+    for (const blockedParent of parents) {
+      expect(result.values.map(item => item.runId)).not.toContain(blockedParent.id);
+    }
+    const affectedParents = status === 'paused' ? [] : parents;
+    const expectedReports = [badPaused, ...affectedParents].map(run => ({
+      type: 'degraded',
+      reason: 'run_unreadable',
+      runId: run.id,
+    }));
+    expect(result.degraded).toEqual(expect.arrayContaining(expectedReports));
+    expect(result.degraded).toHaveLength(expectedReports.length);
+    expect(log.mock.calls).toEqual(
+      [badPaused.id, ...affectedParents.map(() => child.id)].map(workflowRunId => [
+        { workflowRunId },
+        'attention_run_normalization_failed',
+      ])
+    );
+    expect(JSON.stringify(result)).not.toContain('private-origin-sentinel');
+    expect(await snapshot()).toEqual(before);
+  } finally {
+    log.mockRestore();
+    for (const id of ids)
+      await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
+  }
+});
+
+test('batch attention preserves unexpected descendant read failures', async () => {
+  const { listAttentionQueue } = await import('@archon/workflows/attention-queue');
+  const run = await workflows.createWorkflowRun({ workflow_name: 'parent', user_message: '' });
+  await db.query(
+    "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+    [
+      JSON.stringify({
+        approval: {
+          nodeId: 'child',
+          message: 'Waiting',
+          type: 'child_workflow',
+          childRunId: 'unavailable',
+        },
+      }),
+      run.id,
+    ]
+  );
+  const failure = new Error('point read unavailable');
+  const rows = await workflows.listAttentionQueueRows();
+  const query = spyOn(db, 'query').mockRejectedValueOnce(failure);
+  try {
+    await expect(
+      listAttentionQueue({
+        store: {
+          listAttentionQueueRows: async () => rows,
+          getWorkflowRun: workflows.getWorkflowRun,
+          getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
+          getCodebase: async () => null,
+        },
+        branchOf: async () => null,
+      })
+    ).rejects.toBe(failure);
+  } finally {
+    query.mockRestore();
     await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [run.id]);
   }
 });

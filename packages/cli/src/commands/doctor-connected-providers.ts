@@ -39,7 +39,8 @@ function describeStoredCredential(
 
 /**
  * Check every AI-provider credential the current CLI user connected, the way a run
- * would use it: decrypt, and refresh an expired OAuth grant (saving any rotation).
+ * would use it: decrypt, and refresh an expired OAuth grant. A rotation is saved
+ * only while the original credential remains stored.
  * Fails when a credential cannot be used and warns when one could not be verified.
  * Skips when there is no CLI identity, nothing is connected, or the database cannot
  * be read, so a DB hiccup does not make `archon doctor` exit non-zero.

@@ -1,34 +1,15 @@
 /**
  * The pack's pull-request reads and writes, and the marked comment on an issue or
- * pull request, through whichever source the run selected (./forge.ts).
+ * pull request, through the forge contract (./forge.ts).
  *
- * Every write here is performed and then read back before it is reported as
- * applied. On the forge path the plugin owns that verification and reports which
- * of the four outcomes happened; on `gh` this module performs the same read-back
- * and raises the failure itself. Neither path falls back to the other. Only the
- * comment upsert, which reads first whether an earlier attempt landed, is repeated,
- * and only after a `gh api` failure GitHub typed as transient (./forge.ts
- * `retryTransient`).
- *
- * Authored content — a pull-request body, a comment — travels in a request file
- * on both paths, so it never reaches any process's argv.
+ * Every write is performed and then read back by the forge plugin, which reports
+ * which of the contract's four outcomes happened. Nothing here repeats a write.
+ * Authored content, such as a pull-request body or a comment, travels in a request
+ * file, so it never reaches any process's argv.
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import {
-  ghApi,
-  invokeForge,
-  parsePrRecord,
-  qualifiedRepo,
-  record,
-  retryTransient,
-  sameRepo,
-  type ForgeSource,
-  type PrRecord,
-  type QualifiedPr,
-} from './forge.ts';
+import { readFileSync } from 'node:fs';
+import { invokeForge, parsePrRecord, qualifiedRepo, record, type PrRecord, type QualifiedPr } from './forge.ts';
 
 export const PR_CREATE_UNRESOLVED = 'pr_create_unresolved';
 /** The reason a tail's report gives when a node failure ended the run. */
@@ -78,90 +59,6 @@ export interface CreatePrIntent {
   readonly draft: boolean;
 }
 
-interface Ran {
-  readonly ok: boolean;
-  readonly stdout: string;
-  readonly stderr: string;
-}
-
-// Every gh call is captured: a node's stderr reaches the operator, and gh is
-// chatty there (update notices), so only this pack's own messages may.
-function gh(...args: string[]): Ran {
-  const result = Bun.spawnSync(['gh', ...args], { stdout: 'pipe', stderr: 'pipe' });
-  return {
-    ok: result.exitCode === 0,
-    stdout: result.stdout.toString().trim(),
-    stderr: result.stderr.toString().trim(),
-  };
-}
-
-function ghRepo(repo: QualifiedPr['repo']): string {
-  return `${repo.host}/${repo.path}`;
-}
-
-function required(result: Ran, what: string): string {
-  if (!result.ok) throw new Error(`${what} failed: ${result.stderr}`);
-  return result.stdout;
-}
-
-/** A GitHub GraphQL call through gh; numbers go as typed `-F` fields, strings as `-f`. */
-export function ghGraphql(host: string, query: string, fields: Record<string, string | number>): Record<string, unknown> {
-  const args = ['api', 'graphql', '--hostname', host, '-f', `query=${query}`];
-  for (const [key, value] of Object.entries(fields)) {
-    args.push(typeof value === 'number' ? '-F' : '-f', `${key}=${String(value)}`);
-  }
-  const data = record(record(JSON.parse(required(gh(...args), 'gh api graphql')))?.data);
-  if (data === undefined) throw new Error('gh api graphql returned no data');
-  return data;
-}
-
-const PR_FIELDS = [
-  'number',
-  'url',
-  'title',
-  'body',
-  'isDraft',
-  'state',
-  'baseRefName',
-  'headRefName',
-  'headRefOid',
-  'headRepository',
-  'headRepositoryOwner',
-  'maintainerCanModify',
-].join(',');
-
-/** One `gh pr view --json` row, narrowed to the fields this pack consumes. */
-function ghPrView(repo: QualifiedPr['repo'], value: unknown): PrView {
-  const row = record(value);
-  const headRepository = record(row?.headRepository);
-  const headOwner = record(row?.headRepositoryOwner);
-  const headPath =
-    typeof headRepository?.name === 'string' && typeof headOwner?.login === 'string'
-      ? `${headOwner.login}/${headRepository.name}`
-      : undefined;
-  const state = typeof row?.state === 'string' ? row.state.toLowerCase() : '';
-  return {
-    pr: parsePrRecord({
-      schemaVersion: 1,
-      repo,
-      number: row?.number,
-      url: row?.url,
-      head: row?.headRefName,
-      base: row?.baseRefName,
-      is_draft: row?.isDraft,
-      state,
-      head_repo: headPath === undefined ? null : { host: repo.host, path: headPath },
-      head_revision: typeof row?.headRefOid === 'string' && row.headRefOid !== '' ? row.headRefOid : null,
-      // gh does not report the base revision; the record keeps that absence explicit.
-      base_revision: null,
-      maintainer_can_modify:
-        typeof row?.maintainerCanModify === 'boolean' ? row.maintainerCanModify : null,
-    }),
-    title: typeof row?.title === 'string' ? row.title : '',
-    body: typeof row?.body === 'string' ? row.body : '',
-  };
-}
-
 /** A forge operation whose success always carries a result. */
 function forgeResult(op: string, request: Record<string, unknown>): Record<string, unknown> {
   const value = invokeForge(op, request);
@@ -178,130 +75,48 @@ function forgePrView(value: Record<string, unknown>): PrView {
 }
 
 /**
- * The open pull request whose head is `headRepo:head` in `repo`, or undefined.
- *
- * "Open" is the question every caller here is actually asking: a branch that was
- * delivered and closed months ago must not stop a new pull request from opening,
- * and an open one must never be duplicated. More than one match is refused rather
- * than guessed at.
+ * The open pull request whose head is `headRepo:head` in `repo`, or undefined. The
+ * forge's head selector answers only for an open pull request, and refuses more than one.
  */
 export function findOpenPrByHead(
   repo: QualifiedPr['repo'],
   headRepo: QualifiedPr['repo'],
-  head: string,
-  source: ForgeSource
+  head: string
 ): PrView | undefined {
-  if (source === 'forge') {
-    const value = invokeForge('pr.view', {
-      selector: { kind: 'head', repo, headRepo, head },
-    });
-    return value === null ? undefined : forgePrView(value);
-  }
-  const listed = gh(
-    'pr',
-    'list',
-    '--repo',
-    ghRepo(repo),
-    '--head',
-    head,
-    '--state',
-    'open',
-    '--json',
-    PR_FIELDS
-  );
-  const rows: unknown = JSON.parse(required(listed, 'gh pr list'));
-  if (!Array.isArray(rows)) throw new Error('gh pr list returned an unexpected payload');
-  // gh matches a head branch by name alone, so the qualified head repository is
-  // compared here; the forge selector already carries it.
-  const matches = rows
-    .map(row => ghPrView(repo, row))
-    .filter(view => view.pr.head_repo !== null && sameRepo(view.pr.head_repo, headRepo));
-  if (matches.length > 1) {
-    throw new Error(
-      `more than one open pull request in ${repo.path} has head ${headRepo.path}:${head}`
-    );
-  }
-  return matches[0];
-}
-
-export function viewPr(ref: QualifiedPr, source: ForgeSource): PrView {
-  if (source === 'forge') {
-    const value = forgeResult('pr.view', {
-      selector: { kind: 'number', ref: { repo: ref.repo, number: ref.number } },
-    });
-    return forgePrView(value);
-  }
-  const result = gh(
-    'pr',
-    'view',
-    String(ref.number),
-    '--repo',
-    ghRepo(ref.repo),
-    '--json',
-    PR_FIELDS
-  );
-  return ghPrView(ref.repo, JSON.parse(required(result, `gh pr view ${String(ref.number)}`)));
+  const value = invokeForge('pr.view', { selector: { kind: 'head', repo, headRepo, head } });
+  return value === null ? undefined : forgePrView(value);
 }
 
 /**
- * Open the pull request and return the record read back from the forge.
- *
- * A create that cannot be found again afterwards is reported as a pull request
- * that may exist, never as a failure that leaves the branch free to try again.
+ * The newest pull request, open, closed or merged, whose head is `head` in `repo`
+ * itself, or undefined when the branch never had one. Asking for any state needs the
+ * plugin's `pr.view:any-state` capability; without it the host refuses the read,
+ * naming the capability.
  */
-export function createPr(intent: CreatePrIntent, source: ForgeSource): PrRecord {
-  if (source === 'forge') {
-    const value = forgeResult('pr.create', {
-      repo: intent.repo,
-      headRepo: intent.headRepo,
-      head: intent.head,
-      headRevision: intent.headRevision,
-      base: intent.base,
-      title: intent.title,
-      body: readFileSync(intent.bodyPath, 'utf8'),
-      draft: intent.draft,
-    });
-    return parsePrRecord(value.pr);
-  }
-  const body = readFileSync(intent.bodyPath, 'utf8');
-  const sameRepository = intent.headRepo.path === intent.repo.path;
-  const head = sameRepository ? intent.head : `${intent.headRepo.path.split('/')[0]}:${intent.head}`;
-  const created = gh(
-    'pr',
-    'create',
-    '--repo',
-    ghRepo(intent.repo),
-    '--base',
-    intent.base,
-    '--head',
-    head,
-    '--title',
-    intent.title,
-    '--body-file',
-    intent.bodyPath,
-    ...(intent.draft ? ['--draft'] : [])
+export function findPrByHead(repo: QualifiedPr['repo'], head: string): PrRecord | undefined {
+  const value = invokeForge('pr.view', { selector: { kind: 'head', repo, headRepo: repo, head, state: 'any' } });
+  return value === null ? undefined : forgePrView(value).pr;
+}
+
+export function viewPr(ref: QualifiedPr): PrView {
+  return forgePrView(
+    forgeResult('pr.view', { selector: { kind: 'number', ref: { repo: ref.repo, number: ref.number } } })
   );
-  if (!created.ok) throw new Error(`gh pr create failed: ${created.stderr}`);
-  const view = findOpenPrByHead(intent.repo, intent.headRepo, intent.head, source);
-  if (!view) {
-    throw new Error(
-      `gh pr create reported success but no open pull request has head ${intent.headRepo.path}:${intent.head}; a pull request may exist`
-    );
-  }
-  if (
-    view.title !== intent.title ||
-    view.body !== body ||
-    view.pr.head !== intent.head ||
-    view.pr.base !== intent.base ||
-    view.pr.head_revision !== intent.headRevision ||
-    view.pr.is_draft !== intent.draft ||
-    view.pr.state !== 'open'
-  ) {
-    throw new Error(
-      `the created pull request ${view.pr.url} does not match what was requested; it may need reconciling`
-    );
-  }
-  return view.pr;
+}
+
+/** Open the pull request and return the record the forge read back. */
+export function createPr(intent: CreatePrIntent): PrRecord {
+  const value = forgeResult('pr.create', {
+    repo: intent.repo,
+    headRepo: intent.headRepo,
+    head: intent.head,
+    headRevision: intent.headRevision,
+    base: intent.base,
+    title: intent.title,
+    body: readFileSync(intent.bodyPath, 'utf8'),
+    draft: intent.draft,
+  });
+  return parsePrRecord(value.pr);
 }
 
 /**
@@ -315,31 +130,12 @@ export const DESCRIPTION_SECTION = {
 
 /**
  * Replace a pull request's whole description and return the record read back from
- * the forge. Neither source has a conditional body write, so an edit saved between
+ * the forge. The contract has no conditional body write, so an edit saved between
  * the caller's read and this write is lost.
  */
-export function editPrBody(ref: QualifiedPr, body: string, source: ForgeSource): PrRecord {
-  if (source === 'forge') {
-    const value = forgeResult('pr.edit-body', { ref: { repo: ref.repo, number: ref.number }, body });
-    return parsePrRecord(value.pr);
-  }
-  const directory = mkdtempSync(join(tmpdir(), 'archon-pr-body-'));
-  let written: Ran;
-  try {
-    const path = join(directory, 'body.md');
-    writeFileSync(path, body, { mode: 0o600 });
-    written = gh('pr', 'edit', String(ref.number), '--repo', ghRepo(ref.repo), '--body-file', path);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-  if (!written.ok) throw new Error(`gh pr edit ${String(ref.number)} failed: ${written.stderr}`);
-  const view = viewPr(ref, source);
-  if (view.body !== body) {
-    throw new Error(
-      `pull request ${String(ref.number)} does not read back the written description; it may have been written`
-    );
-  }
-  return view.pr;
+export function editPrBody(ref: QualifiedPr, body: string): PrRecord {
+  const value = forgeResult('pr.edit-body', { ref: { repo: ref.repo, number: ref.number }, body });
+  return parsePrRecord(value.pr);
 }
 
 /**
@@ -347,75 +143,11 @@ export function editPrBody(ref: QualifiedPr, body: string, source: ForgeSource):
  * return the record read back from the forge. A pull request already in the wanted
  * state is not written.
  */
-export function setPrDraft(ref: QualifiedPr, draft: boolean, source: ForgeSource): PrRecord {
-  if (source === 'forge') {
-    const value = forgeResult(draft ? 'pr.draft' : 'pr.ready', {
-      ref: { repo: ref.repo, number: ref.number },
-    });
-    return parsePrRecord(value.pr);
-  }
-  const wanted = draft ? 'an open draft' : 'an open pull request ready for review';
-  const before = viewPr(ref, source).pr;
-  if (before.state !== 'open') {
-    throw new Error(`${before.url} is ${before.state} and cannot become ${wanted}`);
-  }
-  if (before.is_draft === draft) return before;
-  const flip = gh(
-    'pr',
-    'ready',
-    String(ref.number),
-    '--repo',
-    ghRepo(ref.repo),
-    ...(draft ? ['--undo'] : [])
-  );
-  if (!flip.ok) throw new Error(`the conversion to ${wanted} failed: ${flip.stderr}`);
-  const after = viewPr(ref, source).pr;
-  if (after.is_draft !== draft || after.state !== 'open') {
-    throw new Error(`${after.url} does not report ${wanted} after conversion`);
-  }
-  return after;
-}
-
-export interface GhComment {
-  readonly id: string;
-  readonly body: string;
-  readonly url: string;
-  /** Null for a deleted account. */
-  readonly author: string | null;
-}
-
-export function ghIssueComments(ref: QualifiedPr): GhComment[] {
-  const comments: GhComment[] = [];
-  // Paged explicitly rather than through `gh api --paginate`, so what this reads
-  // does not depend on how gh chooses to join pages of a JSON array.
-  for (let page = 1; ; page++) {
-    const rows: unknown = JSON.parse(
-      ghApi('gh api issue comments', [
-        '--hostname',
-        ref.repo.host,
-        `repos/${ref.repo.path}/issues/${String(ref.number)}/comments?per_page=100&page=${String(page)}`,
-      ])
-    );
-    if (!Array.isArray(rows)) throw new Error('gh api returned an unexpected comment payload');
-    for (const row of rows) {
-      const comment = record(row);
-      if (
-        comment === undefined ||
-        (typeof comment.id !== 'number' && typeof comment.id !== 'string') ||
-        typeof comment.html_url !== 'string'
-      ) {
-        throw new Error('gh api returned an unexpected comment payload');
-      }
-      const login = record(comment.user)?.login;
-      comments.push({
-        id: String(comment.id),
-        body: typeof comment.body === 'string' ? comment.body : '',
-        url: comment.html_url,
-        author: typeof login === 'string' && login !== '' ? login : null,
-      });
-    }
-    if (rows.length < 100) return comments;
-  }
+export function setPrDraft(ref: QualifiedPr, draft: boolean): PrRecord {
+  const value = forgeResult(draft ? 'pr.draft' : 'pr.ready', {
+    ref: { repo: ref.repo, number: ref.number },
+  });
+  return parsePrRecord(value.pr);
 }
 
 /** An issue or a pull request, as a comment addresses it. */
@@ -426,94 +158,19 @@ export interface CommentSubject {
 
 /**
  * Write the one comment carrying `marker` on its first line, creating it if it is
- * not there yet and replacing it in place when it is. More than one marked
- * comment is a conflict: guessing which one is canonical would silently abandon
- * the other.
- *
- * On `gh`, a transient failure of the marker read or of the write repeats both from
- * the marker read, and the read-back is repeated in place. A write that landed but
- * is missing from that listing is posted again (an accepted risk), and the second
- * marked comment makes the next upsert refuse loudly. A write that succeeded is
- * never repeated: a read-back that keeps failing fails the upsert.
+ * not there yet and replacing it in place when it is. More than one marked comment
+ * is a conflict the forge refuses: guessing which one is canonical would silently
+ * abandon the other.
  */
-export function upsertComment(
-  subject: CommentSubject,
-  marker: string,
-  body: string,
-  source: ForgeSource
-): { readonly url: string } {
+export function upsertComment(subject: CommentSubject, marker: string, body: string): { readonly url: string } {
   const ref = { repo: subject.ref.repo, number: subject.ref.number };
-  if (source === 'forge') {
-    // A pull request keeps the original operation, so a plugin that predates
-    // subjects still publishes reviews; an issue needs the subject form.
-    const value =
-      subject.kind === 'pr'
-        ? forgeResult('comment.upsert', { ref, marker, body })
-        : forgeResult('workitem.comment.upsert', { subject: { kind: 'issue', ref }, marker, body });
-    const comment = record(value.comment);
-    if (typeof comment?.url !== 'string') throw new Error('forge returned no verified comment');
-    return { url: comment.url };
-  }
-  if ((body.split(/\r?\n/, 1)[0] ?? '') !== marker) {
-    throw new Error('the comment body must begin with the exact canonical marker');
-  }
-  const written = retryTransient(() => writeMarkedComment(ref, marker, body));
-  if ('url' in written) return written;
-  let observed: GhComment | undefined;
-  try {
-    observed = retryTransient(() => ghIssueComments(ref)).find(comment => comment.id === written.id);
-  } catch (error) {
-    throw new Error(
-      `comment ${written.id} was written, but reading it back failed: ${error instanceof Error ? error.message : String(error)}`
-    );
-  }
-  if (observed?.body !== body) {
-    throw new Error(`comment ${written.id} does not read back as written; it may need reconciling`);
-  }
-  return { url: observed.url };
-}
-
-/**
- * One marker read and, when the marked comment differs, one write. Returns the
- * unchanged comment's url, or the written comment's id for the caller to read back.
- */
-function writeMarkedComment(
-  ref: QualifiedPr,
-  marker: string,
-  body: string
-): { readonly url: string } | { readonly id: string } {
-  const marked = ghIssueComments(ref).filter(
-    comment => (comment.body.split(/\r?\n/, 1)[0] ?? '') === marker
-  );
-  if (marked.length > 1) {
-    throw new Error('more than one comment on this item carries the canonical marker');
-  }
-  const previous = marked[0];
-  if (previous?.body === body) return { url: previous.url };
-  // gh reads the body from a JSON request file: `-f body=@path` would post the
-  // literal string, and argv is not where authored content belongs.
-  const directory = mkdtempSync(join(tmpdir(), 'archon-comment-'));
-  let written: string;
-  try {
-    const payload = join(directory, 'comment.json');
-    writeFileSync(payload, JSON.stringify({ body }), { mode: 0o600 });
-    written = ghApi('gh api comment write', [
-      '--hostname',
-      ref.repo.host,
-      '--method',
-      previous ? 'PATCH' : 'POST',
-      previous
-        ? `repos/${ref.repo.path}/issues/comments/${previous.id}`
-        : `repos/${ref.repo.path}/issues/${String(ref.number)}/comments`,
-      '--input',
-      payload,
-    ]);
-  } finally {
-    rmSync(directory, { recursive: true, force: true });
-  }
-  const id = record(JSON.parse(written))?.id;
-  if (typeof id !== 'number' && typeof id !== 'string') {
-    throw new Error('gh api returned no comment identity; a comment may have changed');
-  }
-  return { id: String(id) };
+  // A pull request keeps the original operation, so a plugin that predates
+  // subjects still publishes reviews; an issue needs the subject form.
+  const value =
+    subject.kind === 'pr'
+      ? forgeResult('comment.upsert', { ref, marker, body })
+      : forgeResult('workitem.comment.upsert', { subject: { kind: 'issue', ref }, marker, body });
+  const comment = record(value.comment);
+  if (typeof comment?.url !== 'string') throw new Error('forge returned no verified comment');
+  return { url: comment.url };
 }

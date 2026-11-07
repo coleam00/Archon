@@ -2,6 +2,8 @@ import { afterEach, describe, expect, spyOn, test } from 'bun:test';
 import {
   currentProcessOwner,
   isOwnerProvablyGone,
+  isPidProvablyGone,
+  probePidLiveness,
   parseProcessOwner,
   ProcessOwnerRecordError,
 } from './process-owner';
@@ -52,4 +54,42 @@ describe('parseProcessOwner', () => {
       expect(() => parseProcessOwner(record, 'test')).toThrow(ProcessOwnerRecordError);
     }
   );
+});
+
+describe('probePidLiveness', () => {
+  // Node types promise only true; retain false too if a runtime returns it.
+  test.each([true, false])('retains a normal %p return without proving death', value => {
+    const kill = spyOn(process, 'kill').mockImplementation((() => value) as typeof process.kill);
+    spies.push(kill);
+    expect(probePidLiveness(123)).toEqual({ status: 'returned', value });
+    expect(kill.mock.calls).toEqual([[123, 0]]);
+    expect(isPidProvablyGone(123)).toBe(false);
+  });
+
+  test.each(['ESRCH', 'EPERM', 'EOTHER', undefined])('retains thrown code %p', code => {
+    const kill = spyOn(process, 'kill').mockImplementation(() => {
+      throw Object.assign(new Error('probe'), { code, errno: -42 });
+    });
+    spies.push(kill);
+    expect(probePidLiveness(123)).toEqual({
+      status: 'threw',
+      code: code ?? null,
+      errno: -42,
+    });
+    expect(kill.mock.calls).toEqual([[123, 0]]);
+    expect(isPidProvablyGone(123)).toBe(code === 'ESRCH');
+  });
+
+  test('represents missing error metadata explicitly', () => {
+    spies.push(
+      spyOn(process, 'kill').mockImplementation(() => {
+        throw new Error('probe');
+      })
+    );
+    expect(probePidLiveness(123)).toEqual({
+      status: 'threw',
+      code: null,
+      errno: null,
+    });
+  });
 });

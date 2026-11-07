@@ -157,6 +157,10 @@ async function runCli(
     cwd,
     env: {
       ...process.env,
+      // A suite run inside a workflow node inherits its run identity; the child CLI
+      // must not act as that node's caller.
+      WORKFLOW_ID: '',
+      ARCHON_NODE_EXECUTION: '',
       DATABASE_URL: '',
       ARCHON_HOME: archonHome,
       TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32),
@@ -335,6 +339,8 @@ describe('trigger CLI durable execution', () => {
       );
       const env = {
         ...process.env,
+        WORKFLOW_ID: '',
+        ARCHON_NODE_EXECUTION: '',
         ARCHON_HOME: archonHome,
         DATABASE_URL: '',
         TOKEN_ENCRYPTION_KEY: 'ab'.repeat(32),

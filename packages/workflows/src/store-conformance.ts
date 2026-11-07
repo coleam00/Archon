@@ -14,6 +14,7 @@ import { describeEventFeedConformance } from './store-conformance/event-feed';
 import { CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID } from './store-conformance/fixtures';
 import { describeGatesAndTerminalsConformance } from './store-conformance/gates-and-terminals';
 import { describeListingConformance } from './store-conformance/listing';
+import { describeMetricRecordsConformance } from './store-conformance/metrics';
 import { describePausesAndWaitsConformance } from './store-conformance/pauses-and-waits';
 import { describeResumeReductionConformance } from './store-conformance/resume-reduction';
 import { describeRunsAndClaimsConformance } from './store-conformance/runs-and-claims';
@@ -62,5 +63,6 @@ export function describeWorkflowStoreConformance(
     describeGatesAndTerminalsConformance(current);
     describeResumeReductionConformance(current);
     describeListingConformance(current);
+    describeMetricRecordsConformance(current);
   });
 }

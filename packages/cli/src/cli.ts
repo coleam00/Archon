@@ -390,6 +390,7 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
 // Commands that don't require git repo validation
 const NO_GIT_COMMANDS = [
   'state',
+  'metrics',
   'trigger',
   'version',
   'help',
@@ -477,6 +478,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
   switch (command) {
     case 'state':
       return await routes.runState(ctx);
+    case 'metrics':
+      return await routes.runMetrics(ctx);
     case 'trigger':
       return await routes.runTrigger(ctx);
     case 'version':

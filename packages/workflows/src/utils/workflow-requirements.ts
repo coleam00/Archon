@@ -10,6 +10,9 @@
  * just encodes the policy so all three behave identically.
  */
 import type { WorkflowRequirement, WorkflowInputSpec } from '../schemas/workflow';
+import type { WorkflowPack } from '../schemas/pack-settings';
+import type { JsonValue } from '../output-ref';
+import { packSettingValue } from '../pack-settings';
 import { resolveDeclaredInputs, WorkflowInputContractError } from '../workflow-inputs';
 
 /** Minimal shape needed to evaluate requirements — avoids a full WorkflowDefinition dep. */
@@ -60,6 +63,7 @@ export function assertWorkflowRequirementsMet(
 export interface InputBearingWorkflow {
   name?: string;
   inputs?: Record<string, WorkflowInputSpec>;
+  pack?: WorkflowPack;
 }
 
 /**
@@ -97,23 +101,23 @@ export class WorkflowMissingInputsError extends Error {
  * (#2554) — `--input name=value` on the CLI, the `inputs` map on the run route, or the
  * console's run form.
  *
- * Validation delegates to {@link resolveDeclaredInputs}, the same implementation
- * `include:` and `workflow:` use, so a map accepted when composing is accepted here and
- * vice versa. Callers run this BEFORE any worktree, clone, run row, or AI call, matching
- * where the `workflow:` child path resolves its own `with:` map.
+ * A supplied name may be one of the workflow's own `inputs:` or one of its pack's
+ * settings, which an invocation may set for this one run. A workflow input goes through
+ * {@link resolveDeclaredInputs}, the same implementation `include:` and `workflow:` use, so
+ * a map accepted when composing is accepted here and vice versa; a pack setting is checked
+ * against its declared type. A name that is both is the workflow's input. Callers run this
+ * BEFORE any worktree, clone, run row, or AI call, matching where the `workflow:` child
+ * path resolves its own `with:` map.
  *
- * Returns ONLY the caller-supplied entries — never the declared defaults that
- * `resolveDeclaredInputs` folds in. Defaults stay DERIVED at execution time
- * (`defaultRunInputs` in executor.ts), so they track the workflow's current YAML instead
- * of freezing a snapshot into the run row, and a bare run persists exactly nothing and so
- * behaves byte-for-byte as it did before this feature. The `workflow:` child path
- * persists the resolved map instead; the effective `$INPUTS` is identical either way
- * because the executor layers defaults *under* whatever the row carries — the difference
- * is deliberate, not drift.
+ * Returns ONLY the caller-supplied entries. The run itself layers them over its pack's
+ * settings and the declared defaults when it starts, and fixes the result on its row; a
+ * `required` pack setting is checked there too, because the project's settings file may
+ * supply it.
  *
  * @returns the supplied map, or undefined when nothing was supplied.
  * @throws WorkflowMissingInputsError when a `required` input has no supplied value.
- * @throws WorkflowInputContractError when a supplied key is not declared.
+ * @throws WorkflowInputContractError when a supplied key is not declared, or a pack
+ *   setting's value does not fit its type.
  */
 export function resolveTopLevelInputs(
   workflow: InputBearingWorkflow,
@@ -121,20 +125,66 @@ export function resolveTopLevelInputs(
 ): Record<string, string> | undefined {
   const suppliedMap = { ...supplied };
   try {
-    resolveDeclaredInputs(
-      suppliedMap,
-      workflow.inputs,
-      `Cannot run workflow '${workflow.name ?? 'unknown'}'`,
-      'it'
-    );
+    resolveInvocationInputs(workflow, suppliedMap);
   } catch (err) {
     // Re-shape only the missing-required case: its shared message ends in "Pass them
-    // through 'with:'", which is the wrong remediation for a direct run. The undeclared-key
-    // message already reads correctly and lists the declared names, so it propagates as-is.
+    // through 'with:'", which is the wrong remediation for a direct run.
     if (err instanceof WorkflowInputContractError && err.missingRequired.length > 0) {
       throw new WorkflowMissingInputsError(workflow.name, err.missingRequired);
     }
     throw err;
   }
   return Object.keys(suppliedMap).length > 0 ? suppliedMap : undefined;
+}
+
+/**
+ * The invocation contract every run-starting channel shares (`--input`, the run route,
+ * the console, a trigger binding): a supplied name is the workflow's own input, checked by
+ * {@link resolveDeclaredInputs}, or one of its pack's settings, checked against the
+ * setting's type. A name that is both is the workflow's input.
+ *
+ * @returns the supplied map, a pack setting's value as its checked text.
+ * @throws WorkflowInputContractError on an undeclared name (listing the pack settings
+ *   too), a mistyped pack setting, or a missing required input.
+ */
+export function resolveInvocationInputs(
+  workflow: InputBearingWorkflow,
+  supplied: Readonly<Record<string, JsonValue>>
+): Record<string, JsonValue> {
+  const context = `Cannot run workflow '${workflow.name ?? 'unknown'}'`;
+  const settings = workflow.pack?.settings ?? {};
+  const resolved: Record<string, JsonValue> = {};
+  const forWorkflow: Record<string, JsonValue> = {};
+  for (const [name, value] of Object.entries(supplied)) {
+    const spec =
+      Object.hasOwn(settings, name) && !Object.hasOwn(workflow.inputs ?? {}, name)
+        ? settings[name]
+        : undefined;
+    if (spec === undefined) {
+      forWorkflow[name] = value;
+      resolved[name] = value;
+      continue;
+    }
+    const checked = packSettingValue(spec, value);
+    if ('error' in checked) {
+      throw new WorkflowInputContractError(`${context}: pack setting '${name}' ${checked.error}.`);
+    }
+    resolved[name] = checked.value;
+  }
+  try {
+    resolveDeclaredInputs(forWorkflow, workflow.inputs, context, 'it');
+  } catch (err) {
+    throw withPackSettingNames(err, Object.keys(settings));
+  }
+  return resolved;
+}
+
+/** An undeclared name is told the pack settings it could also have meant. */
+function withPackSettingNames(err: unknown, settingNames: readonly string[]): unknown {
+  if (!(err instanceof WorkflowInputContractError)) return err;
+  if (err.undeclared.length === 0 || settingNames.length === 0) return err;
+  return new WorkflowInputContractError(
+    `${err.message} Pack settings: ${[...settingNames].sort().join(', ')}.`,
+    { undeclared: err.undeclared }
+  );
 }

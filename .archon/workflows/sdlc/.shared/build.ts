@@ -1,26 +1,25 @@
 /**
  * The build queue's record on an item's work item: `facts.build`.
  *
- * It is the queue's memory of the item: every round it ran (one archon-ship run), every
+ * It is the queue's memory of the item: every round it ran (one build-queue run), every
  * decision it made with the person's answer when it asked, and what happens next. The
  * deciding agents read it before deciding, and the queue's pickup reads `status` to
  * know whether the item waits for it.
  */
 
 import { type QualifiedPr, sameRepo } from './forge.ts';
-import { note } from './io.ts';
-import { PR_CREATE_UNRESOLVED } from './pr.ts';
+import { followUp } from './follow-up.ts';
+import { note, text } from './io.ts';
+import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
-  claimable,
-  claimItem,
+  type Claim,
   type HistoryEntry,
   newest,
   type Pickup,
   parseWorkItem,
   read,
-  releaseIfTerminal,
   type Stage,
   type TriageFacts,
   type WorkItem,
@@ -57,7 +56,10 @@ export const LAUNCH_STAGES = [
   'continue',
 ] as const satisfies readonly Stage[];
 
-/** One archon-ship run the queue launched, as its terminal report ended it. */
+/**
+ * One build round, as its terminal report ended it. `run_id` is the build-queue run that
+ * delivered it; the ship work runs inside that run through `include:`.
+ */
 export interface BuildRound {
   readonly run_id: string;
   readonly at: string;
@@ -106,25 +108,6 @@ export function buildWaits(doc: WorkItem): boolean {
 }
 
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
-
-/**
- * Claim the named item for the build queue, releasing a terminal claim on it first as
- * `claimNext` does. Refuses with the facts an operator acts on when it cannot.
- */
-export function claimNamed(number: number, at: string, runId: string): WorkItem {
-  const issue = `issue ${String(number)}`;
-  const found = read(workItemName(number));
-  if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
-  const item = releaseIfTerminal(found, at, runId, BUILD_PICKUP);
-  const won = claimable(item, BUILD_PICKUP) ? claimItem(item, at, runId, BUILD_PICKUP) : null;
-  if (won !== null) return won;
-  const now = read(item.name) ?? item;
-  if (now.doc.claim !== null) throw new Error(`${issue} is claimed by run ${now.doc.claim.run_id}`);
-  // Both conditional writes can lose to concurrent writes that leave the item waiting.
-  if (buildWaits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
-  const status = now.doc.facts.build?.status ?? 'none';
-  throw new Error(`${issue} does not wait for the build queue: stage ${now.doc.stage}, build status ${status}`);
-}
 
 /** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
 export interface BlockedItem {
@@ -264,5 +247,48 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
     claim: change.release ? null : doc.claim,
     facts: { ...doc.facts, build },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
+  };
+}
+
+/** The reason of a round recorded at release: its run ended before it decided the round. */
+export const ENDED_UNDECIDED = 'ended_undecided';
+
+/**
+ * Start the item's next build-queue round now, through the operator's build-queue
+ * binding (`build_queue_binding`). One run starts at most one next round per item.
+ */
+export function nextRound(item: QualifiedPr, runId: string): string {
+  const { host, path } = item.repo;
+  return followUp(
+    text(process.env.INPUTS_BUILD_QUEUE_BINDING),
+    `build-round:${host}/${path}#${String(item.number)}:${runId}`,
+    { repo_host: host, repo_path: path, number: String(item.number) },
+    'its next round'
+  );
+}
+
+/**
+ * The work item with the round a released build claim's run left: the pull request
+ * whose head is the branch the claim recorded. A run that opened none, and a run that
+ * recorded its round before it stopped, such as one that asked, add nothing.
+ */
+export function withReleasedRound(doc: WorkItem, claim: Claim, at: string): WorkItem {
+  const prior = doc.facts.build;
+  if (claim.branch === undefined || prior?.rounds.some(round => round.run_id === claim.run_id)) return doc;
+  const pr = findPrByHead(doc.subject.repo, claim.branch);
+  if (pr === undefined) return doc;
+  const round: BuildRound = {
+    run_id: claim.run_id,
+    at,
+    delivered: false,
+    reason: ENDED_UNDECIDED,
+    pr_url: pr.url,
+    summary: `The run ended after it opened ${pr.url} and before it recorded the round.`,
+    artifacts: '',
+  };
+  const build: BuildRecord = prior ?? { status: 'next', brief: '', rounds: [], decisions: [], at };
+  return {
+    ...doc,
+    facts: { ...doc.facts, build: { ...build, rounds: [...build.rounds, round].slice(-KEPT_ROUNDS) } },
   };
 }

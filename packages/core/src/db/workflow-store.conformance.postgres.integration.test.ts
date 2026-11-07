@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
@@ -216,6 +217,45 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   }
 
   describeSqlStatusReadConformance(makeHarness);
+  test('SQL attention reads report unreadable origins without losing valid rows or writing state', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const { listRunsNeedingAttention, listAttentionQueueRows } = await import(
+        './workflow-run-lists'
+      );
+      const valid = await store.createWorkflowRun({ workflow_name: 'valid', user_message: '' });
+      const bad = await store.createWorkflowRun({ workflow_name: 'bad', user_message: '' });
+      await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+        '[]',
+        bad.id,
+      ]);
+      for (const id of [valid.id, bad.id]) {
+        await db.query(
+          "UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $1 WHERE id = $2",
+          [JSON.stringify({ approval: { nodeId: 'review', message: 'Approve?' } }), id]
+        );
+      }
+      const snapshot = async () => ({
+        rows: (await db.query('SELECT * FROM remote_agent_workflow_runs ORDER BY id')).rows,
+        events: (await db.query('SELECT * FROM remote_agent_workflow_events ORDER BY id')).rows,
+      });
+      const before = await snapshot();
+      for (const read of [
+        listRunsNeedingAttention,
+        listAttentionQueueRows,
+        () => store.listAttentionQueueRows(),
+      ]) {
+        const { values, degraded } = splitAttentionRead(await read());
+        expect(values.map(run => run.id)).toEqual([valid.id]);
+        expect(degraded).toEqual([{ type: 'degraded', reason: 'run_unreadable', runId: bad.id }]);
+        expect(JSON.stringify(degraded)).not.toContain('private-origin-sentinel');
+      }
+      expect(await snapshot()).toEqual(before);
+    } finally {
+      await harness.close();
+    }
+  });
   test.each([false, true])(
     'source suspension excludes a resume on another connection (resumed=%s)',
     async resumed => {

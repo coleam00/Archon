@@ -1,0 +1,63 @@
+name: archon-metrics-test-value
+description: |
+  Judge the tests in each factory pull request merged since a date, and record
+  per pull request how many tests it added or changed (sdlc.tests_added) and how
+  many of them protect nothing on their own merits (sdlc.tests_unprotective).
+  Each record is attributed to the build-queue runs that built its pull request;
+  both counts name the judge's identity, so agreement from
+  `archon-metrics-test-value-calibrate` is read for the same judge. Re-runs
+  replace earlier records. It needs a forge plugin whose pr.view reports pull
+  request timestamps and that provides pr.files and repo.file.
+
+  Use when: an operator wants to see whether factory pull requests carry tests
+  that protect nothing, or a schedule binding the operator installed starts it
+  (see the SDLC pack README, "Metrics"). The pack installs no binding.
+  NOT for: reviewing an open pull request's tests (review).
+
+# It reads the state store and the forge, not a checkout, so it runs beside any
+# other run on the same checkout.
+worktree:
+  enabled: false
+mutates_checkout: false
+
+inputs:
+  since:
+    required: true
+    description: >-
+      An ISO date or time, or a number of days back from now such as 7d. Pull
+      requests merged at or after it are judged, one judge run each, so the
+      window sets the cost.
+
+nodes:
+  - id: prs
+    script: prs
+    runtime: bun
+    mutates_checkout: false
+    output_format:
+      type: object
+      required: [prs, urls]
+      properties:
+        prs: { type: array }
+        urls: { type: array, items: { type: string } }
+
+  - id: judge
+    workflow: archon-metrics-test-value-judge
+    depends_on: [prs]
+    fan_out:
+      items: $prs.output.urls
+      as: pr
+      max_parallel: 3
+
+  - id: emit
+    script: emit
+    runtime: bun
+    depends_on: [prs, judge]
+    mutates_checkout: false
+    with:
+      prs: $prs.output.prs
+      verdicts: $judge.output
+    output_format:
+      type: object
+      required: [metrics]
+      properties:
+        metrics: { type: array }

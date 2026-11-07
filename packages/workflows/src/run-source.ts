@@ -423,6 +423,7 @@ export async function establishAdoptedRunSource(
     ExecuteWorkflowOptions,
     | 'adoptedFromRunId'
     | 'continuationMode'
+    | 'preCreatedRun'
     | 'priorCompletedNodes'
     | 'preparedSource'
     | 'capturedSourceOwner'

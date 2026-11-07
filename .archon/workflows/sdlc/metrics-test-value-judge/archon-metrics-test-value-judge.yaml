@@ -1,0 +1,97 @@
+name: archon-metrics-test-value-judge
+description: |
+  Judge, for each test one pull request adds or changes, whether it protects
+  behavior on its own merits as a test in the suite: whether a plausible
+  regression would make it fail where no other test it is shown would. It
+  returns the verdicts and records no metric, so calibrating it never changes
+  the metric. `archon-metrics-test-value` and
+  `archon-metrics-test-value-calibrate` launch it once per pull request.
+
+  Use when: one of those workflows judges a pull request.
+  NOT for: reviewing a change (review); it judges tests that already merged.
+
+# It reads the forge only, so judges of many pull requests share one checkout.
+mutates_checkout: false
+
+inputs:
+  pr:
+    required: true
+    description: The pull request's URL.
+
+returns: judge
+
+nodes:
+  - id: read
+    script: read
+    runtime: bun
+
+  - id: judge
+    depends_on: [read]
+    model: large
+    allowed_tools: []
+    prompt: |
+      You are judging the tests one pull request adds or changes. Judge each test on
+      its own merits, as a test in the suite: does it protect behavior that matters,
+      so that a plausible future edit breaking that behavior makes this test fail
+      where no other test shown below would? Do not judge a test against what its
+      pull request promised. A test that confirms the change does what it set out to
+      do still has to earn its place in the suite. Judge a test the pull request
+      changed the same way, as the test it is now.
+
+      The criteria below are this project's test-review lens. It reviews a change for
+      missing tests, anchored on what the change promises; here, ignore that anchor
+      and its instructions about files to write, worktrees, findings and output. Use
+      only its standard for what a valuable test is and what is not worth testing.
+
+      $read.output
+
+      Rules:
+      - Judge every test case the pull request adds, and every existing test case
+        whose body it changes, wherever it is defined: a test file, or a shared suite
+        such as a conformance module that test files run. Leave out tests it only
+        moves or deletes, and helpers that are not test cases.
+      - `file` is the path of the file that defines the test, exactly as the pull
+        request lists it.
+      - `name` is the test's full name as its source writes it: the titles of its
+        enclosing `describe` (or suite) blocks and its own title, joined by " > ".
+        Keep a parameterized title's placeholders as written, such as `%s` or
+        `${value}`.
+      - A test protects behavior when it asserts an outcome or invariant someone
+        relies on, and a regression of it is an edit someone would plausibly make to
+        the code as it stands. Models overrate imagined regressions: a regression no
+        supported path reaches, or one the first real use would show at once, earns
+        no credit.
+      - A test protects nothing another test already protects. When several of the
+        tests below, in the patches or the full files, fail for the same regression,
+        only the one that proves it most directly protects; the rest, including one
+        more permutation of a proven invariant, do not. Compare regressions, not
+        levels: a test at a higher boundary asserts an outcome that a break in how the
+        layers work together would change, which a lower test cannot catch.
+      - A test that only asserts that parts are connected, such as that one function
+        calls another or a handler is registered, without asserting an outcome, does
+        not protect behavior. Neither does one of framework behavior or of what the
+        type system already proves.
+      - A test that only checks diagnostic or log content does not protect behavior.
+        The one exception is a test proving that the evidence is captured at all.
+      - A test that keeps a secret or credential out of logs or output protects
+        behavior.
+      - A test that only checks clearer error wording does not protect behavior, as
+        long as the bad input is still rejected without it.
+      - `reason` is one sentence: the regression it would catch that no other test
+        does, or why it catches none.
+    output_format:
+      type: object
+      additionalProperties: false
+      properties:
+        tests:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              file: { type: string }
+              name: { type: string }
+              protects: { type: boolean }
+              reason: { type: string }
+            required: [file, name, protects, reason]
+      required: [tests]

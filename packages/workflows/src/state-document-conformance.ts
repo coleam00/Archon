@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   StateRevisionConflictError,
   StateDocumentTooLargeError,
+  StateLeaseHeldError,
   StatePatchError,
   stateValueSchema,
   statePutSchema,
@@ -12,6 +13,7 @@ import {
   type StateScope,
   type StateWriter,
 } from './state-document-store';
+import type { WorkflowRunStatus } from './schemas/run-status';
 
 const writer: StateWriter = { kind: 'surface', via: 'cli' };
 const p = (name: string): StateScope => ({ kind: 'project', key: `conformance/${name}` });
@@ -58,11 +60,21 @@ export async function assertStatePatchRace(
     throw new Error('Missing ledger');
   expect(value.seen).toHaveLength(8);
 }
+/** Runs a store's leases can name, moved through statuses in the order a real run can. */
+export interface StateLeaseRuns {
+  /** A new `pending` run's id. */
+  create(): Promise<string>;
+  setStatus(id: string, status: WorkflowRunStatus): Promise<void>;
+  /** Delete a finished run. */
+  remove(id: string): Promise<void>;
+}
 export interface StateDocumentHarness {
   store: IStateDocumentStore;
+  runs: StateLeaseRuns;
   backdate(scope: StateScope, name: string): Promise<void>;
   close(): Promise<void>;
 }
+const leaseWriter = (runId: string): StateWriter => ({ kind: 'run', runId, nodePath: 'claim' });
 export function describeStateDocumentConformance(
   label: string,
   makeHarness: () => Promise<StateDocumentHarness>
@@ -383,6 +395,169 @@ export function describeStateDocumentConformance(
         { revision: 3, value: null },
       ]);
       expect(await store.getStateDocument(p('one'), 'deleted')).toBeNull();
+    });
+    check('a lease survives pause and failure and a resumed run still holds it', async harness => {
+      const { store, runs } = harness;
+      const holder = await runs.create();
+      const scope = p('lease');
+      const taken = await store.putStateDocument({
+        scope,
+        name: 'item',
+        value: { stage: 'next' },
+        ifRevision: 0,
+        writer: leaseWriter(holder),
+        lease: 'take',
+      });
+      expect(taken.lease).toMatchObject({ runId: holder, nodePath: 'claim', live: true });
+      for (const status of ['running', 'paused', 'running', 'failed', 'running'] as const) {
+        await runs.setStatus(holder, status);
+        expect((await store.getStateDocument(scope, 'item'))?.lease?.live).toBe(true);
+      }
+      const other = await runs.create();
+      expect(
+        await rejection(
+          store.patchStateDocument({
+            scope,
+            name: 'item',
+            ops: [{ op: 'set', path: '/stage', value: 'stolen' }],
+            writer: leaseWriter(other),
+            lease: 'take',
+          })
+        )
+      ).toBeInstanceOf(StateLeaseHeldError);
+      // The resumed holder writes its outcome under the lease it took before failing.
+      const outcome = await store.patchStateDocument({
+        scope,
+        name: 'item',
+        ops: [{ op: 'set', path: '/stage', value: 'done' }],
+        writer: leaseWriter(holder),
+        lease: 'take',
+        ifRevision: 1,
+      });
+      expect(outcome.lease).toEqual(taken.lease);
+      expect(await store.listStateRevisions(scope, 'item')).toHaveLength(2);
+    });
+    const leaseEndings: [string, (runs: StateLeaseRuns, id: string) => Promise<void>][] = [
+      ['completes', (runs, id) => runs.setStatus(id, 'completed')],
+      ['is cancelled', (runs, id) => runs.setStatus(id, 'cancelled')],
+      [
+        'is deleted',
+        async (runs, id) => {
+          await runs.setStatus(id, 'failed');
+          await runs.remove(id);
+        },
+      ],
+    ];
+    for (const [ending, end] of leaseEndings)
+      check(
+        `a lease ends when its holder ${ending}, and another run takes it over`,
+        async harness => {
+          const { store, runs } = harness;
+          const scope = p('lease-end');
+          const holder = await runs.create();
+          await runs.setStatus(holder, 'running');
+          await store.putStateDocument({
+            scope,
+            name: 'item',
+            value: {},
+            ifRevision: 0,
+            writer: leaseWriter(holder),
+            lease: 'take',
+          });
+          await end(runs, holder);
+          const ended = await store.getStateDocument(scope, 'item');
+          expect(ended?.lease).toMatchObject({ runId: holder, live: false });
+          expect((await store.listStateDocuments(scope))[0]?.lease).toEqual(ended?.lease ?? null);
+          expect((await store.getStateDocuments(scope))[0]?.lease).toEqual(ended?.lease ?? null);
+          // Taking over an ended lease is an ordinary conditional write.
+          const next = await runs.create();
+          const takeover = await store.putStateDocument({
+            scope,
+            name: 'item',
+            value: { taken: true },
+            ifRevision: 1,
+            writer: leaseWriter(next),
+            lease: 'take',
+          });
+          expect(takeover.lease).toMatchObject({ runId: next, live: true });
+        }
+      );
+    check(
+      'writes that name no lease change keep the lease; release and delete end it',
+      async harness => {
+        const { store, runs } = harness;
+        const holder = await runs.create();
+        const scope = p('lease-keep');
+        const input = { scope, name: 'item', writer: leaseWriter(holder) };
+        const taken = await store.putStateDocument({
+          ...input,
+          value: { seen: [] },
+          ifRevision: 0,
+          lease: 'take',
+        });
+        const appended = await store.patchStateDocument({
+          scope,
+          name: 'item',
+          ops: [{ op: 'append', path: '/seen', value: 1 }],
+          writer,
+        });
+        expect(appended.lease).toEqual(taken.lease);
+        expect(
+          await rejection(
+            store.patchStateDocument({
+              scope,
+              name: 'item',
+              ops: [{ op: 'append', path: '/seen', value: 2 }],
+              writer,
+              lease: 'take',
+            })
+          )
+        ).toMatchObject({ message: 'Only a run can take or release a state lease' });
+        const released = await store.putStateDocument({
+          ...input,
+          value: { seen: [1] },
+          ifRevision: 2,
+          lease: 'release',
+        });
+        expect(released.lease).toBeNull();
+        await store.putStateDocument({
+          ...input,
+          value: { seen: [1] },
+          ifRevision: 3,
+          lease: 'take',
+        });
+        const deleted = await store.deleteStateDocument({ ...input, ifRevision: 4 });
+        expect(deleted.lease).toBeNull();
+        expect(
+          (await store.listStateRevisions(scope, 'item')).map(row => row.lease?.live ?? null)
+        ).toEqual([null, true, null, true, true]);
+      }
+    );
+    check('runs racing to take one lease: exactly one wins', async harness => {
+      const { store, runs } = harness;
+      const scope = p('lease-race');
+      await store.putStateDocument({ scope, name: 'item', value: {}, ifRevision: 0, writer });
+      const contenders = await Promise.all(Array.from({ length: 8 }, () => runs.create()));
+      const results = await Promise.allSettled(
+        contenders.map(runId =>
+          store.patchStateDocument({
+            scope,
+            name: 'item',
+            ops: [{ op: 'set', path: '/owner', value: runId }],
+            writer: leaseWriter(runId),
+            lease: 'take',
+          })
+        )
+      );
+      const won = results.flatMap(result => (result.status === 'fulfilled' ? [result.value] : []));
+      expect(won).toHaveLength(1);
+      for (const result of results)
+        if (result.status === 'rejected') expect(result.reason).toBeInstanceOf(StateLeaseHeldError);
+      const winner = won[0]?.lease?.runId ?? null;
+      const current = await store.getStateDocument(scope, 'item');
+      expect(winner).not.toBeNull();
+      expect(current?.lease?.runId ?? null).toBe(winner);
+      expect(JSON.stringify(current?.value)).toBe(JSON.stringify({ owner: winner }));
     });
   });
 }

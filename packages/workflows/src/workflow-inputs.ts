@@ -4,11 +4,14 @@
  * A workflow's `inputs:` block is one contract with three callers:
  *   - `include:` resolves it at LOAD time (include/inputs-macro.ts), splicing values into
  *     `$INPUTS.<name>` before the DAG is ever persisted;
- *   - `workflow:` resolves it at RUN time (executor.ts), persisting the resolved map to
- *     the child's `metadata.inputs`;
+ *   - `workflow:` resolves a child's `with:` at RUN time (`resolveCallerInputs` in
+ *     child-runs.ts), persisting the resolved map to the child's `metadata.inputs`;
  *   - a DIRECT top-level invocation resolves it at the invocation gate (#2554) —
  *     `resolveTopLevelInputs` in utils/workflow-requirements.ts — from values supplied
  *     by the CLI's `--input name=value` or the run route's `inputs` map.
+ *
+ * Every fresh run's complete `$INPUTS` (pack settings, declared defaults, supplied
+ * values) is then merged once at start by `resolveRunStartInputs` in pack-settings.ts.
  *
  * They must agree — a map accepted by one and rejected by another would make the same
  * workflow behave differently depending on how it was called. This module is the single
@@ -108,6 +111,36 @@ export function resolveDeclaredInputs(
     );
   }
   return resolved;
+}
+
+/**
+ * Resolve a `workflow:` node's `with:` map against the child workflow it launches.
+ *
+ * The child is a run of its own and reads its own pack's settings, which only that run's
+ * invocation (`--input`, a trigger) may set, checked against the setting's type. So the
+ * parent's `with:` may not set one; a name the child also declares as its own input is
+ * that input, and stays settable. The refusal holds whether or not the child declares
+ * `inputs:`, so the passthrough of an undeclared child cannot smuggle one in either.
+ *
+ * @throws WorkflowInputContractError on a pack-setting name, then as {@link resolveDeclaredInputs}.
+ */
+export function resolveCallerInputs(
+  supplied: Record<string, JsonValue>,
+  callee: Pick<WorkflowDefinition, 'inputs' | 'pack'>,
+  context: string,
+  calleeLabel: string
+): Record<string, JsonValue> {
+  const settings = callee.pack?.settings ?? {};
+  const setsSetting = Object.keys(supplied).filter(
+    name => Object.hasOwn(settings, name) && !Object.hasOwn(callee.inputs ?? {}, name)
+  );
+  if (setsSetting.length > 0) {
+    throw new WorkflowInputContractError(
+      `${context}: ${calleeLabel} reads ${quoteNames(setsSetting)} as pack '${callee.pack?.key ?? ''}' setting${setsSetting.length === 1 ? '' : 's'}, which 'with:' cannot set. Set ${setsSetting.length === 1 ? 'it' : 'them'} in .archon/packs/${callee.pack?.key ?? ''}.yaml, or pass --input to the run.`,
+      { undeclared: setsSetting }
+    );
+  }
+  return resolveDeclaredInputs(supplied, callee.inputs, context, calleeLabel);
 }
 
 /**

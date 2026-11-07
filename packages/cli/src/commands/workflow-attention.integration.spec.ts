@@ -812,3 +812,84 @@ test.each(['', 'missing-project'])(
     }
   }
 );
+
+test.each([true, false].flatMap(all => [undefined, 'project'].map(countBy => ({ all, countBy }))))(
+  'mixed attention batches retain reports (all: $all, countBy: $countBy)',
+  async ({ all, countBy }) => {
+    const root = track(mkdtempSync(join(tmpdir(), 'attention-degraded-')));
+    process.env.ARCHON_HOME = join(root, 'home');
+    const host = createHost();
+    const project = await host.records.codebases.createCodebase({
+      name: 'alpha',
+      default_cwd: root,
+    });
+    const store = host.deps.store;
+    const run = await store.createWorkflowRun({
+      workflow_name: 'valid',
+      user_message: '',
+      codebase_id: project.id,
+    });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.pauseWorkflowRunForWait(
+      run.id,
+      {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: new Date().toISOString(),
+        message: 'Readable question',
+      },
+      { kind: 'started', stepName: 'ask' }
+    );
+    const rows = await store.listAttentionQueueRows();
+    const degraded = ['bad-a', 'bad-b'].map(runId => ({
+      type: 'degraded' as const,
+      reason: 'run_unreadable' as const,
+      runId,
+    }));
+    store.listAttentionQueueRows = async () => [...degraded, ...rows];
+    const warnings = all ? degraded : degraded.map(({ type, reason }) => ({ type, reason }));
+    for (const labels of [[], ['missing=yes']]) {
+      const result = await captured(() =>
+        workflowAttentionCommand(host, root, undefined, {
+          all,
+          project: all ? undefined : project.id,
+          labels,
+          countBy,
+          json: true,
+        })
+      );
+      expect(result.code).toBe(0);
+      expect(result.json).toMatchObject({ ok: true, degraded: warnings });
+      if (countBy === undefined)
+        expect(result.json).toMatchObject({
+          items: labels.length ? [] : [expect.objectContaining({ runId: run.id })],
+        });
+      else
+        expect(result.json).toMatchObject({
+          counts: { counts: labels.length ? [] : [expect.objectContaining({ count: 1 })] },
+        });
+    }
+    const lines: string[] = [];
+    const log = spyOn(console, 'log').mockImplementation((line: string) => {
+      lines.push(line);
+    });
+    try {
+      expect(
+        await workflowAttentionCommand(host, root, undefined, {
+          all,
+          project: all ? undefined : project.id,
+          labels: ['missing=yes'],
+          countBy,
+        })
+      ).toBe(0);
+      const text = lines.join('\n');
+      expect(text.match(/Attention coverage incomplete/g)).toHaveLength(2);
+      expect(text).not.toContain('No runs need attention');
+      expect(text.includes('bad-a')).toBe(all);
+      expect(text.includes('bad-b')).toBe(all);
+    } finally {
+      log.mockRestore();
+    }
+  }
+);

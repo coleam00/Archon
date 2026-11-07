@@ -103,6 +103,7 @@ describe('startRun — declared inputs (#2554)', () => {
     expect(JSON.parse(String(form.get('inputs')))).toEqual({ diff: 'D1' });
     expect(form.get('message')).toBe('go');
     expect(form.getAll('files')).toHaveLength(1);
+    expect(new Headers(runCall().init?.headers).has('Content-Type')).toBe(false);
   });
 
   test('multipart branch omits the `inputs` field when none are supplied', async () => {
@@ -149,22 +150,48 @@ describe('startRun — declared inputs (#2554)', () => {
       '@planner': 'codex/gpt-5.6-sol',
     });
   });
-  test('multipart launch rejects an HTTP refusal with the server message', async () => {
-    stubFetch(409, { error: 'A run is already active for this conversation' });
+  for (const attached of [false, true]) {
+    test(`launch preserves the full server refusal (attached: ${String(attached)})`, async () => {
+      const message = `Launch refused: ${'credential preflight detail; '.repeat(12)}TAIL-MUST-BE-VISIBLE`;
+      stubFetch(409, { error: message });
 
-    const launch = startRun({
-      projectId: 'p1',
-      workflow: 'review-block',
-      message: 'go',
-      files: [new File(['x'], 'a.txt', { type: 'text/plain' })],
+      const launch = startRun({
+        projectId: 'p1',
+        workflow: 'review-block',
+        message: 'go',
+        files: attached ? [new File(['x'], 'a.txt', { type: 'text/plain' })] : undefined,
+      });
+
+      await expect(launch).rejects.toBeInstanceOf(HttpError);
+      await expect(launch).rejects.toMatchObject({
+        status: 409,
+        path: '/api/workflows/review-block/run',
+        bodySnippet: `${JSON.stringify({ error: message }).slice(0, 200)}...`,
+        serverError: message,
+      });
     });
 
-    await expect(launch).rejects.toBeInstanceOf(HttpError);
-    await expect(launch).rejects.toMatchObject({
-      status: 409,
-      path: '/api/workflows/review-block/run',
-      bodySnippet: 'A run is already active for this conversation',
-      message: expect.stringContaining('A run is already active for this conversation'),
+    test(`launch caps a proxy HTML refusal (attached: ${String(attached)})`, async () => {
+      const html = `<html><body>${'Bad gateway '.repeat(40)}</body></html>`;
+      globalThis.fetch = ((input: RequestInfo | URL) =>
+        Promise.resolve(
+          String(input).includes('/api/conversations')
+            ? Response.json({ conversationId: 'web-test-1' })
+            : new Response(html, { status: 502 })
+        )) as typeof fetch;
+
+      await expect(
+        startRun({
+          projectId: 'p1',
+          workflow: 'review-block',
+          message: 'go',
+          files: attached ? [new File(['x'], 'a.txt')] : undefined,
+        })
+      ).rejects.toMatchObject({
+        status: 502,
+        bodySnippet: `${html.slice(0, 200)}...`,
+        serverError: undefined,
+      });
     });
-  });
+  }
 });

@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import {
   testHome,
   mockLogger,
@@ -194,7 +195,7 @@ describe('workflowRunCommand — detach', () => {
       kind: 'folder',
     });
     (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-      { id: adoptedRunId },
+      makeContinuationRun({ id: adoptedRunId }),
     ]);
     (resolveWorkflowAdoption as ReturnType<typeof mock>).mockResolvedValueOnce({
       adoptedRun: { id: adoptedRunId, status: 'completed', working_path: '/test/worktree' },

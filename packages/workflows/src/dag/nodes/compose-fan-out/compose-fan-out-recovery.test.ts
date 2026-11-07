@@ -116,7 +116,7 @@ nodes:
       foldDagResumeSnapshot(persistedEvents(store), id)
     );
     const snapshot = await store.getDagResumeSnapshot(runId);
-    expect(snapshot.loopConfigFailureBaselines?.has(execution.invocation.id)).toBe(true);
+    expect(snapshot.loopUsageBaselines?.has(execution.invocation.id)).toBe(true);
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: '<promise>APPROVED</promise>' };
       yield {

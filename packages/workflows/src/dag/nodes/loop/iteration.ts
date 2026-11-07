@@ -1,3 +1,4 @@
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { LOOP_COMPLETION_CHANNELS, type LoopCompletionChannel } from '../../../schemas/loop';
 import { bashInvocation } from '../../../bash-invocation';
 import { resolveBashPath } from '@archon/git';
@@ -26,10 +27,14 @@ import { gateOccurrence } from '../../../schemas/workflow-run';
 import type { ApprovalContext } from '../../../schemas';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
 import { declaredOutputPathsFromSchema, canonicalValueText } from '../../../output-ref';
-import { writeNodeArtifactsListing } from '../../../artifacts-index';
+import { writeInvocationListings } from '../../../invocation-listings';
 import { logNodeComplete } from '../../../logger';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
-import { detectCompletionSignal, stripCompletionTags } from '../../../executor-shared';
+import {
+  describeUnmetCompletion,
+  detectCompletionSignal,
+  stripCompletionTags,
+} from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { nodeTemplateReferences, buildNodeShellEnvironment } from '../../references';
@@ -133,7 +138,11 @@ async function stopBeforeIteration(
   i: number
 ): Promise<NodeExecutionResult | undefined> {
   const { ctx, node } = run;
-  const runStatus = await ctx.deps.store.getWorkflowRunStatus(ctx.workflowRun.id);
+  const runStatus = await ctx.deps.store
+    .getWorkflowRunStatus(ctx.workflowRun.id)
+    .catch((cause: unknown) => {
+      throw new ParentStatusReadError(ctx.workflowRun.id, node.id, cause);
+    });
   if (shouldContinueStreamingForStatus(runStatus)) return undefined;
   const effectiveStatus = runStatus ?? 'deleted';
   getLog().info(
@@ -316,7 +325,7 @@ async function runUntilBash(
   // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
   // to the caller instead of being swallowed by the per-iteration catch.
   const loopBashPath = resolveBashPath();
-  const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
+  const listings = await writeInvocationListings(ctx);
   try {
     const { prompt: substitutedBash } = substituteWorkflowVariables(
       untilBash,
@@ -332,7 +341,7 @@ async function runUntilBash(
       {
         shellSafe: true,
         stateDir,
-        typedArtifactsFile,
+        ...listings,
         references: nodeTemplateReferences(untilBash, ctx, 'shell', {
           artifactsDir,
           requiredContext: { consumerId: node.id, field: 'loop.until_bash' },
@@ -371,7 +380,7 @@ async function runUntilBash(
           rejectionReason: '',
           issueContext: ctx.issueContext,
           adoptedRunDir: currentAdoptedRunDir(),
-          typedArtifactsFile,
+          ...listings,
           nodeExecution: state.execution,
         }),
       }
@@ -460,10 +469,16 @@ function recordIterationCompleted(
     });
 }
 
-async function completeLoop(
+/**
+ * Complete the loop with its last iteration's output. `exhaustedAt` is the iteration
+ * limit when the loop ran out under `on_exhausted: complete`; the record then keeps it
+ * as `maxIterations`, as an exhaustion failure does.
+ */
+export async function completeLoop(
   run: LoopRun,
   state: LoopState,
-  i: number
+  i: number,
+  exhaustedAt?: number
 ): Promise<NodeExecutionResult> {
   const { ctx, node } = run;
   if (state.sessionId !== undefined) {
@@ -472,7 +487,9 @@ async function completeLoop(
   await safeSendMessage(
     ctx.platform,
     ctx.conversationId,
-    `Loop node '${node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`,
+    exhaustedAt === undefined
+      ? `Loop node '${node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`
+      : `Loop node '${node.id}' reached max iterations (${String(exhaustedAt)}) ${describeUnmetCompletion(node.loop)} and completed with its last output`,
     run.msgContext
   );
   // Write node_completed event so resume hydration knows this
@@ -498,6 +515,7 @@ async function completeLoop(
         sessionId: state.sessionId,
         diagnostics: {
           loopIterations: i,
+          ...(exhaustedAt !== undefined ? { maxIterations: exhaustedAt } : {}),
           ...(state.backgroundTasksIncomplete.size > 0
             ? { backgroundTasksIncomplete: [...state.backgroundTasksIncomplete] }
             : {}),

@@ -4,13 +4,14 @@
  */
 import { isAbsolute } from 'path';
 import { z } from 'zod';
+// A value import with no runtime cycle: output-ref imports from schemas only as types.
 import {
+  canonicalValueText,
   declaredOutputPathsSchema,
   outputPathsFromRootFields,
   type DeclaredOutputPaths,
+  type JsonValue,
 } from '../output-ref';
-// Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
-import type { JsonValue } from '../output-ref';
 import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
 
@@ -61,6 +62,26 @@ export const SUBRUN_METADATA_KEYS = {
   summaryDeclaredFields: 'summary_declared_fields',
   summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
+
+/**
+ * A run's resolved `$INPUTS` as the two keys a row stores them under: `inputs` as canonical
+ * text, kept string-valued for older binaries, and the logical map in `inputs_values` when
+ * any value is not a string (or when `keepValues` says the row already carries one, which
+ * a text-only write would leave stale, since readers prefer it).
+ */
+export function runInputsMetadata(
+  inputs: Record<string, JsonValue>,
+  keepValues = false
+): Record<string, unknown> {
+  return {
+    [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
+      Object.entries(inputs).map(([k, v]) => [k, canonicalValueText(v)])
+    ),
+    ...(keepValues || Object.values(inputs).some(v => typeof v !== 'string')
+      ? { [SUBRUN_METADATA_KEYS.inputsValues]: inputs }
+      : {}),
+  };
+}
 
 /** Parent deletion clears the foreign key; this creation-only key preserves child provenance. */
 export function initialRunMetadata(
@@ -137,6 +158,10 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   };
 }
 
+export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
+
+export const ISOLATION_ENV_ID_METADATA_KEY = 'isolation_env_id';
+
 /**
  * Keys the run-lifecycle machinery writes into a row's untyped `metadata` JSONB, and the
  * shape of each value. `metadata` is `Record<string, unknown>`, so a typo in a string
@@ -165,21 +190,33 @@ export const RUN_METADATA_KEYS = {
  * Between-run continuation (#2747). Written once at run creation alongside
  * `adopted_from_run_id`: `{mode: 'adopt'}` when this run took over a terminal
  * run's estate, `{mode: 'supersede'}` when a fresh-lane rerun replaces its open
- * item (NO lane inheritance). Lives in metadata, not a column — nothing queries
- * it except display.
+ * item (NO lane inheritance). Execution uses the stamp to select inheritance.
  */
 export const CONTINUATION_METADATA_KEY = 'continuation';
 
-export type ContinuationMode = 'adopt' | 'supersede';
+export const CONTINUATION_MODES = { adopt: 'adopt', supersede: 'supersede' } as const;
+export type ContinuationMode = (typeof CONTINUATION_MODES)[keyof typeof CONTINUATION_MODES];
+const continuationMetadataSchema = z.object({ mode: z.enum(Object.values(CONTINUATION_MODES)) });
+export type ContinuationMetadata = z.infer<typeof continuationMetadataSchema>;
 
-/** Typed view of the continuation stamp; undefined when the run adopted nothing. */
+export function continuationInheritsEstate(mode: ContinuationMode): boolean {
+  switch (mode) {
+    case CONTINUATION_MODES.adopt:
+      return true;
+    case CONTINUATION_MODES.supersede:
+      return false;
+  }
+  return mode satisfies never;
+}
+
+/** Unstamped legacy runs retain adoption behavior; malformed stamps must not select an estate. */
 export function readContinuationMode(
   metadata: Record<string, unknown> | undefined
 ): ContinuationMode | undefined {
-  const raw = metadata?.[CONTINUATION_METADATA_KEY];
-  if (typeof raw !== 'object' || raw === null) return undefined;
-  const mode = (raw as { mode?: unknown }).mode;
-  return mode === 'adopt' || mode === 'supersede' ? mode : undefined;
+  if (!metadata || !Object.hasOwn(metadata, CONTINUATION_METADATA_KEY)) return undefined;
+  const parsed = continuationMetadataSchema.safeParse(metadata[CONTINUATION_METADATA_KEY]);
+  if (!parsed.success) throw new Error('Invalid recorded continuation metadata.');
+  return parsed.data.mode;
 }
 
 /**
@@ -311,6 +348,18 @@ export const runDispatchMetadataSchema = z.object({
   base_branch: z.string(),
   /** Discovery source, for run attribution and telemetry categorization. */
   source: workflowSourceSchema.optional(),
+  /**
+   * Key of the pack the run's workflow was loaded from; absent for a flat workflow. How a
+   * run knows its pack: a continuation carries it forward, and reporting where each of a
+   * run's settings came from reads it.
+   */
+  pack: z.string().min(1).optional(),
+  /**
+   * Written by every fresh run: the row's `inputs` are the run's complete, fixed `$INPUTS`
+   * (pack settings, declared defaults, supplied values), so a resume layers no declared
+   * defaults over them. Absent on rows from older builds.
+   */
+  inputs_resolved: z.literal(true).optional(),
 });
 
 export type RunDispatchMetadata = z.infer<typeof runDispatchMetadataSchema>;

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'bun:test';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { TerminalStatusWriteError } from './terminal-status-write';
+import { prepareWorkflowRunFailure } from './workflow-run-failure';
 import type { WorkflowConfig, WorkflowDeps } from './deps';
 import {
   RESUME_FORBIDDEN_OPTIONS,
@@ -580,12 +581,14 @@ nodes:
       const config = Promise.withResolvers<WorkflowConfig>();
       const resumed = makeRun({ id: 'failed-run', status: 'running' });
       const failures: { id: string; message: string }[] = [];
-      let durableStatus: import('./schemas').WorkflowRunStatus = 'running';
+      let durableRun = resumed;
       const store = resumableStore({
         resumeWorkflowRun: async () => resumed,
-        getWorkflowRunStatus: async () => durableStatus,
-        failWorkflowRun: async (id, message) => {
-          durableStatus = 'failed';
+        getWorkflowRunStatus: async () => durableRun.status,
+        failWorkflowRun: async (id, message, options) => {
+          const failed = prepareWorkflowRunFailure(id, durableRun, message, options);
+          if (!failed) return { failed: false };
+          durableRun = failed;
           failures.push({ id, message });
           return { failed: true };
         },

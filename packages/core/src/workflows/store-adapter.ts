@@ -1,3 +1,4 @@
+import { createRunResourceRelease } from '../services/cleanup/run-verification-images';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
  * IWorkflowStore trait defined in @archon/workflows.
@@ -20,6 +21,7 @@ import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
+import { listMetricRecords } from '../db/workflow-metrics';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import {
   listWorkflowRunNodeSessions,
@@ -165,11 +167,14 @@ export function createWorkflowStore(): IWorkflowStore {
           rows.map(hydrateWorkflowEventRow),
         ])
       ),
+    listMetricRecords,
     findWorkflowRunsByIdPrefix: workflowDb.findWorkflowRunsByIdPrefix,
     createWorkflowRun: workflowDb.createWorkflowRun,
     claimPendingWorkflowRun: workflowDb.claimPendingWorkflowRun,
     recordWorkflowRunCheckoutBaseline: workflowDb.recordWorkflowRunCheckoutBaseline,
     getWorkflowRun: workflowDb.getWorkflowRun,
+    getWorkflowRunsByIds: workflowDb.getWorkflowRunsByIds,
+    getWorkflowRunForAttention: workflowDb.getWorkflowRunForAttention,
     findChildRuns: workflowDb.findChildRuns,
     getRunAncestry: workflowDb.getRunAncestry,
     getActiveWorkflowRunByPath: workflowDb.getActiveWorkflowRunByPath,
@@ -304,6 +309,7 @@ export function createWorkflowDeps(
   return {
     store,
     credentialStore,
+    releaseRunResources: createRunResourceRelease(store),
     providers: providerRegistry,
     getAgentProvider,
     loadConfig: loadMergedConfig,

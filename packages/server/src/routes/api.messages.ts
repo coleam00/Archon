@@ -165,18 +165,16 @@ export function registerMessageRoutes(
       });
 
       try {
-        while (true) {
+        while (!writer.closed) {
           await stream.sleep(30000);
-          if (!stream.closed) {
-            await stream.writeSSE({
-              data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
-            });
-          }
+          if (writer.closed) break;
+          await writer.writeSSE({
+            data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
+          });
         }
       } catch (e: unknown) {
-        const msg = (e as Error).message ?? '';
-        if (!msg.includes('aborted') && !msg.includes('closed') && !msg.includes('cancel')) {
-          getLog().warn({ err: e as Error }, 'dashboard_sse_heartbeat_error');
+        if (!writer.closed) {
+          getLog().warn({ err: e }, 'dashboard_sse_heartbeat_error');
         }
       } finally {
         webAdapter.removeStream(DASHBOARD_STREAM, writer);
@@ -223,20 +221,16 @@ export function registerMessageRoutes(
       });
 
       try {
-        while (true) {
+        while (!writer.closed) {
           await stream.sleep(30000);
-          if (!stream.closed) {
-            await stream.writeSSE({
-              data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
-            });
-          }
+          if (writer.closed) break;
+          await writer.writeSSE({
+            data: JSON.stringify({ type: 'heartbeat', timestamp: Date.now() }),
+          });
         }
       } catch (e: unknown) {
-        // stream.sleep() throws when client disconnects — expected behavior.
-        // Log unexpected errors for debugging.
-        const msg = (e as Error).message ?? '';
-        if (!msg.includes('aborted') && !msg.includes('closed') && !msg.includes('cancel')) {
-          getLog().warn({ err: e as Error, conversationId }, 'sse_heartbeat_error');
+        if (!writer.closed) {
+          getLog().warn({ err: e, conversationId }, 'sse_heartbeat_error');
         }
       } finally {
         webAdapter.removeStream(conversationId, writer);

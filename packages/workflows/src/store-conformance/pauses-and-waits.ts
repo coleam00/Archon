@@ -1,3 +1,4 @@
+import { splitAttentionRead } from '../schemas/attention-degraded';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import {
   executionClaim,
@@ -197,7 +198,9 @@ export function describePausesAndWaitsConformance(getHarness: () => WorkflowStor
       await seedFuture(attentionWait);
       expect(pausedAttentionWait(await currentRun())).toEqual(attentionWait);
       expect(
-        (await listAttentionQueue({ store, branchOf: async () => null })).map(item => item.runId)
+        splitAttentionRead(
+          await listAttentionQueue({ store, branchOf: async () => null })
+        ).values.map(item => item.runId)
       ).toContain(run.id);
       const labeled = await store.labelAttentionWait(run.id, {
         pauseId: 'ask-1',

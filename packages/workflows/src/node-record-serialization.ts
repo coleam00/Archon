@@ -43,6 +43,8 @@ export const serializedNodeDataSchema = z.object({
   duration_ms: z.number().optional(),
   tokens: executionSpendSchema.shape.tokens.options[0].shape.value.optional(),
   cost_usd: z.number().optional(),
+  /** Carried gate spend; deferred `spend` contains only newly incurred usage. */
+  loopBaseline: executionSpendSchema.optional(),
   cost_partial: z.literal(true).optional(),
   stop_reason: z.string().optional(),
   num_turns: z.number().optional(),
@@ -112,6 +114,7 @@ export interface SerializedNodeEvent {
 export const DEFERRED_NODE_USAGE_EVENT_TYPE = 'node_deferred_usage';
 export const serializedDeferredNodeUsageDataSchema = serializedNodeDataSchema.pick({
   accounting: true,
+  loopBaseline: true,
   invocation: true,
   spend: true,
   aggregate: true,
@@ -124,10 +127,14 @@ export type SerializedDeferredNodeUsageEvent = Omit<SerializedNodeEvent, 'event_
 };
 
 export function serializeDeferredNodeUsage(
-  record: NodeExecutionRecord
+  record: NodeExecutionRecord,
+  loopBaseline?: NodeExecutionRecord['spend']
 ): SerializedDeferredNodeUsageEvent {
   const serialized = serializeNodeStateRecord(record);
-  const data = serializedDeferredNodeUsageDataSchema.parse(serialized.data);
+  const data = serializedDeferredNodeUsageDataSchema.parse({
+    ...serialized.data,
+    ...(loopBaseline !== undefined ? { loopBaseline } : {}),
+  });
   return {
     workflow_run_id: serialized.workflow_run_id,
     step_name: serialized.step_name,

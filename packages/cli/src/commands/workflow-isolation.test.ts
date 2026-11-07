@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import * as chatScope from '../workflow-scope';
 import {
   mockLogger,
@@ -256,7 +257,7 @@ describe('run codebase resolution', () => {
       const { resolveWorkflowAdoption } = await import('@archon/core/operations/workflow-adoption');
       const workflowDb = await import('@archon/core/db/workflows');
       (workflowDb.findWorkflowRunsByIdPrefix as ReturnType<typeof mock>).mockResolvedValueOnce([
-        { id: 'run-adopted' },
+        makeContinuationRun({ id: 'run-adopted', codebase_id: child.id }),
       ]);
       scopeSpy.mockReturnValue(child.id);
       const workingPath = laneKind === 'foreign-worktree' ? '/parent' : `${childRoot}/worktree`;
@@ -1440,6 +1441,7 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
       id: 'cb-123',
       default_cwd: '/test/path',
     });
+    (git.getCurrentBranchStrict as ReturnType<typeof mock>).mockResolvedValueOnce('my-feature');
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
@@ -1499,6 +1501,7 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
       id: 'cb-123',
       default_cwd: '/test/path',
     });
+    (git.getCurrentBranchStrict as ReturnType<typeof mock>).mockResolvedValueOnce('my-feature');
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
@@ -1555,6 +1558,7 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
       id: 'cb-123',
       default_cwd: '/test/path',
     });
+    (git.getCurrentBranchStrict as ReturnType<typeof mock>).mockResolvedValueOnce('my-feature');
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
@@ -1608,6 +1612,7 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
       id: 'cb-123',
       default_cwd: '/test/path',
     });
+    (git.getCurrentBranchStrict as ReturnType<typeof mock>).mockResolvedValueOnce('my-feature');
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',
@@ -1667,6 +1672,7 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
       default_cwd: '/test/path',
       default_branch: 'develop',
     });
+    (git.getCurrentBranchStrict as ReturnType<typeof mock>).mockResolvedValueOnce('my-feature');
     (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
       id: 'env-1',
       working_path: '/worktrees/feat',

@@ -1,0 +1,31 @@
+name: archon-metrics-prs
+description: |
+  Record the outcomes of the pull requests the build queue opened, as metrics:
+  sdlc.prs_opened, sdlc.prs_merged, sdlc.prs_abandoned and sdlc.pr_merge_rate.
+  Each record is attributed to the build-queue runs that built its pull request,
+  so `archon metrics --compare` splits pull requests by when those runs started.
+  Pull requests a round only continued, such as a contributor's, are reported in
+  `skipped` and count in no metric. Re-runs replace earlier records.
+
+  Use when: an operator wants current PR counts and merge rate (`archon metrics
+  sdlc.pr_merge_rate`), or a schedule binding the operator installed starts it
+  (see the SDLC pack README, "Metrics"). The pack installs no binding.
+  NOT for: pull requests opened by hand. It needs a forge plugin whose pr.view
+  reports pull request timestamps, and refuses without them.
+
+# It reads the state store and the forge, not a checkout, so it runs beside any
+# other run on the same checkout.
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+  - id: prs
+    script: prs
+    runtime: bun
+    mutates_checkout: false
+    output_format:
+      type: object
+      required: [metrics]
+      properties:
+        metrics: { type: array }

@@ -38,6 +38,8 @@ import { formatPersistedNodeOutput, persistedExecutionOutput } from './node-outp
 import { isCheckoutGuarded } from './checkout-guard';
 import { checkComposedBlockBoundaries, checkTriggerRule } from './trigger-rule';
 import { dispatchNode } from './dispatch';
+import { nodePackDir } from '../pack-dir';
+import { runWithPackDir } from '../workflow-variables';
 import { getStaleCachedDependencies } from './stale-dependencies';
 /**
  * Await thunks one at a time, collecting outcomes in `Promise.allSettled` shape so the
@@ -154,7 +156,10 @@ async function runLayerPhase(
         try {
           const result =
             (await admitNode(nodeCtx, node)) ??
-            (await dispatchNode(nodeCtx, node, isParallelLayer));
+            (await runWithPackDir(
+              await nodePackDir(nodeCtx.workflowSourceRoots, nodeCtx.workflowPack, node),
+              () => dispatchNode(nodeCtx, node, isParallelLayer)
+            ));
           if (result.output.state === 'failed') nodeCtx.interactionAdmission?.failed(node.id);
           return result;
         } catch (error) {
@@ -632,9 +637,7 @@ async function aggregateLayerResults(
 function addNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult): void {
   const execution = output.execution;
   const prior =
-    execution === undefined
-      ? undefined
-      : ctx.loopConfigFailureBaselines?.get(execution.invocation.id);
+    execution === undefined ? undefined : ctx.loopUsageBaselines?.get(execution.invocation.id);
   const usage = incrementalLoopUsage(output, prior);
   ctx.totalCostPartial ||= output.costPartial;
   if (usage.costUsd !== undefined) {

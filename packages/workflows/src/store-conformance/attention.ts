@@ -1,3 +1,4 @@
+import { splitAttentionRead } from '../schemas/attention-degraded';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { WorkflowNotResumableError, type IWorkflowStore } from '../store';
 import {
@@ -382,7 +383,8 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         store,
         branchOf: async run => (run.id === a.id ? 'feat/a' : null),
       };
-      const items = await listAttentionQueue(source);
+      const { values: items, degraded } = splitAttentionRead(await listAttentionQueue(source));
+      expect(degraded).toEqual([]);
       const ids = (selected: readonly AttentionQueueItem[]): string[] =>
         selected.map(item => item.runId);
       const select = (
@@ -507,7 +509,9 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         unspawnedItems: 0,
       });
       const source: AttentionQueueSource = { store, branchOf: async () => null };
-      const listed = (await listAttentionQueue(source)).filter(item => item.runId === parent.id);
+      const listed = splitAttentionRead(await listAttentionQueue(source)).values.filter(
+        item => item.runId === parent.id
+      );
       expect(listed).toEqual([
         expect.objectContaining({ kind: 'unreadable', reason: 'child_run_missing' }),
       ]);
@@ -527,7 +531,7 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
       await blockOn(a.id, b.id);
       await blockOn(b.id, a.id);
       const source: AttentionQueueSource = { store, branchOf: async () => null };
-      const listed = (await listAttentionQueue(source)).filter(
+      const listed = splitAttentionRead(await listAttentionQueue(source)).values.filter(
         item => item.runId === a.id || item.runId === b.id
       );
       expect(listed.map(item => item.runId).sort()).toEqual([a.id, b.id].sort());

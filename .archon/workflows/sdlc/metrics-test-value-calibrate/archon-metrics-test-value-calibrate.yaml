@@ -1,0 +1,54 @@
+name: archon-metrics-test-value-calibrate
+description: |
+  Measure how far the test-value judge can be trusted: judge every pull request
+  the project labeled in .archon/sdlc/metrics/test-value-cases.json, and score
+  the verdicts against the labels, as
+  sdlc.tests_unprotective_judge_agreement (every labeled test) and
+  sdlc.tests_unprotective_judge_catch_rate (the tests labeled unprotective). Both
+  name the judge's identity, so they are read beside the sdlc.tests_unprotective
+  counts the same judge produced. The judge needs a forge plugin that provides
+  pr.files and repo.file.
+
+  Use when: the judge's files, the criteria it inlines, or the model behind its
+  tier changed, or the labels grew (see the SDLC pack README, "Metrics").
+  NOT for: judging new pull requests (archon-metrics-test-value).
+
+# It reads the labels from the checkout it starts in and changes nothing there, so it
+# runs beside any other run on the same checkout.
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+  - id: cases
+    script: cases
+    runtime: bun
+    mutates_checkout: false
+    output_format:
+      type: object
+      required: [cases, urls]
+      properties:
+        cases: { type: array }
+        urls: { type: array, items: { type: string } }
+
+  - id: judge
+    workflow: archon-metrics-test-value-judge
+    depends_on: [cases]
+    fan_out:
+      items: $cases.output.urls
+      as: pr
+      max_parallel: 3
+
+  - id: score
+    script: score
+    runtime: bun
+    depends_on: [cases, judge]
+    mutates_checkout: false
+    with:
+      cases: $cases.output.cases
+      verdicts: $judge.output
+    output_format:
+      type: object
+      required: [metrics]
+      properties:
+        metrics: { type: array }

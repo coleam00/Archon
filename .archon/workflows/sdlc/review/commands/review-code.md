@@ -33,6 +33,14 @@ The two-hop bound governs ordinary search. Once one concrete defect proves that 
 
 When execution is practical, run the smallest command that can falsify a finding. Invoke it the way this repository documents its own commands — the package scripts and invocation rules its steering files name, never an ad-hoc variant one of them warns against — and treat an environment-dependent failure as suspect until you reproduce it that documented way. A passing broad suite is not proof an untested path is correct. A falsifying command creates whatever it needs — a scratch database you create and drop, never a configured live DSN — and never writes to a resource you did not create. If only a live resource could settle a finding, leave it unfalsified and say so.
 
+## Use a user-facing change
+
+When the change is something a person sees or does in a browser, find out whether it works for that person. Reading the code is not enough: start the app from your scratch worktree and use it, driving it with playwright-cli (`$playwright-cli` where skills are invoked that way, otherwise the `playwright-cli` command and its `SKILL.md` in the project's or your skills directory). A flow that is broken, stuck, wrong or misleading for its user is a finding, with a screenshot or snapshot under `$ARTIFACTS_DIR/review/ui/` as evidence.
+
+- Never run it on the user's real data or a live database. `ui-check.md` (`.archon/sdlc/policy/`, over the default in `$PACK_DIR/.shared/policy/`) says how this project starts safely.
+- Stop exactly what you started.
+- If you could not run it, say so and review the code alone.
+
 ## What a finding costs
 
 State what each finding costs if it merges — the concrete consequence and who meets it — and never assign it a severity: synthesis labels every finding. Report only a reachable supported path that is wrong or broken, or an explicit repository invariant the change violates; anything weaker is silence. A risk you can imagine but no supported path reaches today is silence too, not a note.
@@ -48,3 +56,7 @@ Write `$ARTIFACTS_DIR/review/code.md`: each in-scope finding begins with `source
 A defect that touches the change — on the path it changed, made reachable or visible by it, or a claim it makes false — is a finding, even when the contract never named it. A proved defect you meet that does not touch the change — unrelated or pre-existing — is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/review-code.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`code`). Write no file for no discovery; never append to another lens's file or record suspicion.
 
 Verify the file exists and every `file:line` in it is real, then reply with one line pointing to it: `review findings: $ARTIFACTS_DIR/review/code.md` and the findings count.
+
+## Docker verification builds
+
+For disposable Docker verification builds, follow the [Docker verification guidance](../../README.md#docker-verification).

@@ -3,6 +3,11 @@ import { readFile, readdir, access, stat } from 'fs/promises';
 import { join, resolve } from 'path';
 import { PLUGIN_MANIFEST_FILE } from '@archon/plugin-manifest';
 import type { WorkflowDefinition, WorkflowLoadError, WorkflowSource } from '../schemas';
+import { isIncludeDirective } from '../schemas';
+import { visitNodeTemplateSlots } from '../template-walker';
+import { PACK_DIR_REFERENCE } from '../workflow-variables';
+import type { WorkflowPack } from '../schemas/pack-settings';
+import { loadPackDeclaration, PackSettingsError } from '../pack-settings';
 import { MAX_DISCOVERY_DEPTH } from '../command-validation';
 import { parseWorkflow } from '../loader';
 import { isValidWorkflowFolderSegment, qualifyWorkflowResources } from '../packaged-workflow';
@@ -50,7 +55,10 @@ export interface PackWorkflowFile {
   parsed: ParsedWorkflowFile;
 }
 
-/** One pack directory to load: `pack` qualifies its resources, `label` names it in errors. */
+/**
+ * One pack directory to load: `pack` qualifies its resources and keys its settings,
+ * `label` names it in errors.
+ */
 export interface PackLoad extends WorkflowParseContext {
   pack: string;
   source: WorkflowSource;
@@ -215,6 +223,15 @@ async function loadDirEntry(
     into.errors.push(result.error);
     return;
   }
+  const packDirReader = findPackDirReference(result.workflow.nodes);
+  if (packDirReader !== undefined) {
+    into.errors.push({
+      filename: entry,
+      error: `Node '${packDirReader}' references $PACK_DIR, but this workflow is not in a pack. $PACK_DIR names the pack folder of a packaged workflow (.archon/workflows/<pack>/<workflow>/<workflow>.yaml); move the workflow into one.`,
+      errorType: 'validation_error',
+    });
+    return;
+  }
   into.workflows.set(entry, {
     workflow: result.workflow,
     parseWarnings: result.warnings,
@@ -225,7 +242,11 @@ async function loadDirEntry(
 
 /**
  * Load every `<workflow>/<one>.yaml` of one pack directory, qualifying each workflow's
- * commands and scripts to its own folder.
+ * commands and scripts to its own folder and attaching the pack it came from.
+ *
+ * The pack's settings declaration is read once. An invalid one fails every workflow of
+ * the pack, each under its own file: a workflow whose settings cannot be known must not
+ * run with a guess at them.
  */
 export async function loadPackWorkflows(
   pack: PackLoad,
@@ -240,13 +261,26 @@ export async function loadPackWorkflows(
     errors.push(fileSystemError(pack.label, 'Directory read', error));
     return { files, errors };
   }
+  let workflowPack: WorkflowPack | PackSettingsError;
+  try {
+    const settings = await loadPackDeclaration(packPath, pack.label);
+    workflowPack = {
+      key: pack.pack,
+      source: pack.source,
+      ...(settings !== undefined ? { settings } : {}),
+    };
+  } catch (error) {
+    if (!(error instanceof PackSettingsError)) throw error;
+    getLog().warn({ err: error, packPath }, 'pack_declaration_invalid');
+    workflowPack = error;
+  }
   for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
     // A dot directory (`.shared`, `.github`, ...) is never a workflow folder: a workflow
     // folder name cannot start with a dot. A pack installed from a repository root
     // carries that repository's other directories, so these are expected, not errors.
     if (workflowFolder.startsWith('.')) continue;
     if (workflowFolder === FIXTURES_DIR) continue;
-    const loaded = await loadPackWorkflowFolder(pack, packPath, workflowFolder);
+    const loaded = await loadPackWorkflowFolder(pack, workflowPack, packPath, workflowFolder);
     if (loaded === undefined) continue;
     if ('parsed' in loaded) files.push(loaded);
     else errors.push(loaded);
@@ -258,6 +292,7 @@ export async function loadPackWorkflows(
 /** One `<workflow>/` folder of a pack: its workflow, a load error, or nothing to load. */
 async function loadPackWorkflowFolder(
   pack: PackLoad,
+  workflowPack: WorkflowPack | PackSettingsError,
   packPath: string,
   workflowFolder: string
 ): Promise<PackWorkflowFile | WorkflowLoadError | undefined> {
@@ -295,20 +330,26 @@ async function loadPackWorkflowFolder(
   }
 
   const filename = yamlFiles[0];
+  // A scope file's error keeps its bare filename, which resume matches against a
+  // run's workflow name. An installed pack's error names the pack and folder.
+  const errorFilename = pack.source === 'installed' ? `${folderLabel}/${filename}` : filename;
+  if (workflowPack instanceof PackSettingsError) {
+    return { filename: errorFilename, error: workflowPack.message, errorType: 'validation_error' };
+  }
   let content: string;
   try {
     content = await readFile(join(workflowPath, filename), 'utf-8');
   } catch (error) {
     return fileSystemError(`${folderLabel}/${filename}`, 'File read', error);
   }
-  const parsed = parseWorkflow(content, filename, pack.providers, pack.configuredEnvNames);
-  if (!parsed.workflow) {
-    // A scope file's error keeps its bare filename, which resume matches against a
-    // run's workflow name. An installed pack's error names the pack and folder.
-    return pack.source === 'installed'
-      ? { ...parsed.error, filename: `${folderLabel}/${filename}` }
-      : parsed.error;
-  }
+  const parsed = parseWorkflow(
+    content,
+    filename,
+    pack.providers,
+    pack.configuredEnvNames,
+    workflowPack
+  );
+  if (!parsed.workflow) return { ...parsed.error, filename: errorFilename };
   qualifyWorkflowResources(parsed.workflow, {
     source: pack.source,
     pack: pack.pack,
@@ -399,4 +440,20 @@ async function loadScopePack(
     };
   }
   return loadPackWorkflows(pack, packPath);
+}
+
+/**
+ * The id of the first node whose YAML text references `$PACK_DIR`. Only a flat or grouped
+ * workflow is checked: it has no pack, so the reference could never resolve at run time.
+ */
+function findPackDirReference(nodes: WorkflowDefinition['nodes']): string | undefined {
+  for (const node of nodes) {
+    if (isIncludeDirective(node)) continue;
+    let found = false;
+    visitNodeTemplateSlots(node, slot => {
+      if (PACK_DIR_REFERENCE.test(slot.value)) found = true;
+    });
+    if (found) return node.id;
+  }
+  return undefined;
 }

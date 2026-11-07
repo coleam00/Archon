@@ -7,6 +7,7 @@ import {
 } from '@archon/workflows/schemas/run-config';
 import { createLogger } from '@archon/paths';
 import { getRegisteredPlatformPolicies } from '../platforms/registry';
+import { InvalidConfigError } from './config-validation';
 import type {
   AssistantDefaults,
   AssistantDefaultsConfig,
@@ -210,8 +211,10 @@ export function mergeGlobalConfig(defaults: MergedConfig, global: GlobalConfig):
     if (isRegisteredProvider(global.defaultAssistant)) {
       result.assistant = global.defaultAssistant;
     } else {
-      throw new Error(
-        `defaultAssistant in global config (~/.archon/config.yaml): ${missingProviderMessage(providerRegistry, global.defaultAssistant)}`
+      throw new InvalidConfigError(
+        'Invalid defaultAssistant',
+        '~/.archon/config.yaml',
+        missingProviderMessage(providerRegistry, global.defaultAssistant)
       );
     }
   }
@@ -258,8 +261,10 @@ export function mergeRepoConfig(merged: MergedConfig, repo: RepoConfig): MergedC
     if (isRegisteredProvider(repo.assistant)) {
       result.assistant = repo.assistant;
     } else {
-      throw new Error(
-        `assistant in repo config (.archon/config.yaml): ${missingProviderMessage(providerRegistry, repo.assistant)}`
+      throw new InvalidConfigError(
+        'Invalid assistant',
+        '.archon/config.yaml',
+        missingProviderMessage(providerRegistry, repo.assistant)
       );
     }
   }

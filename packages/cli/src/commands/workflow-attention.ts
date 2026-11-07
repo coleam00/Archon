@@ -1,3 +1,8 @@
+import {
+  splitAttentionRead,
+  scopeAttentionDegraded,
+  type AttentionDegraded,
+} from '@archon/workflows/schemas/attention-degraded';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { AttentionWatch } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
@@ -280,17 +285,20 @@ export async function workflowAttentionCommand(
 
     const { labels, order, countBy } = parseAttentionQueueRequest(opts);
     const scope = await attentionScope(host, cwd, opts);
-    const items = await listAttentionQueue(source);
+    const { values: items, degraded } = splitAttentionRead(await listAttentionQueue(source));
+    const reports = scopeAttentionDegraded(degraded, scope).degraded ?? [];
     if (countBy !== undefined)
       return await renderAttentionCounts(
         countAttentionQueue(items, { scope, labels, countBy }),
         scope,
-        opts.json
+        opts.json,
+        reports
       );
     return await renderAttentionItems(
       selectAttentionQueue(items, { scope, labels, order }),
       scope,
-      opts.json
+      opts.json,
+      reports
     );
   } catch (error) {
     return attentionCommandFailure(error, runId, opts.json);
@@ -334,15 +342,31 @@ async function attentionRunCommand(
   return 0;
 }
 
+function printAttentionDegraded(reports: readonly AttentionDegraded[]): void {
+  for (const report of reports) {
+    console.log(
+      `Attention coverage incomplete: ${report.runId === undefined ? 'a paused run' : `run ${report.runId}`} could not be read. Check operator logs, repair the stored run, then read again.`
+    );
+  }
+}
+
 async function renderAttentionCounts(
   counts: AttentionQueueCounts,
   scope: AttentionQueueScope,
-  json: boolean | undefined
+  json: boolean | undefined,
+  degraded: AttentionDegraded[]
 ): Promise<number> {
   if (json) {
-    await writeJsonLine({ ok: true, action: 'attention', scope, counts });
+    await writeJsonLine({
+      ok: true,
+      action: 'attention',
+      scope,
+      counts,
+      ...(degraded.length === 0 ? {} : { degraded }),
+    });
     return 0;
   }
+  printAttentionDegraded(degraded);
   const rows =
     counts.by === 'project'
       ? counts.counts.map(entry => [entry.count, entry.project?.name ?? '(no project)'] as const)
@@ -350,22 +374,39 @@ async function renderAttentionCounts(
           entry => [entry.count, entry.value ?? `(no '${counts.key}' label)`] as const
         );
   for (const [count, name] of rows) console.log(`  ${String(count).padStart(4)}  ${name}`);
-  if (rows.length === 0) console.log('No runs need attention.');
+  if (rows.length === 0)
+    console.log(
+      degraded.length === 0
+        ? 'No runs need attention.'
+        : 'No readable matching runs need attention; counts are incomplete.'
+    );
   return 0;
 }
 
 async function renderAttentionItems(
   selected: AttentionQueueItem[],
   scope: AttentionQueueScope,
-  json: boolean | undefined
+  json: boolean | undefined,
+  degraded: AttentionDegraded[]
 ): Promise<number> {
   if (json) {
-    await writeJsonLine({ ok: true, action: 'attention', scope, items: selected });
+    await writeJsonLine({
+      ok: true,
+      action: 'attention',
+      scope,
+      items: selected,
+      ...(degraded.length === 0 ? {} : { degraded }),
+    });
     return 0;
   }
+  printAttentionDegraded(degraded);
   const where = scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`;
   if (selected.length === 0) {
-    console.log(`No runs need attention in ${where}.`);
+    console.log(
+      degraded.length === 0
+        ? `No runs need attention in ${where}.`
+        : `No readable matching runs need attention in ${where}; coverage is incomplete.`
+    );
     return 0;
   }
   console.log(`\n${String(selected.length)} run(s) need attention in ${where}:\n`);

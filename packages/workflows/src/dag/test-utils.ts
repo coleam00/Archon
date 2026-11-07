@@ -38,9 +38,17 @@ import { CONTAINER_MARKER_PROBE } from '../checkout-observation';
  * providers, so an importing test file must start with `// @archon-test-isolated`.
  */
 
+const actualPaths = await import('@archon/paths');
+const levelProbe = actualPaths.createLogger('test.dag');
+
 export const mockLogFn = mock((_data: unknown, _message?: string): void => undefined);
 export const mockLogger = {
   level: 'info',
+  // Pino's level setter replaces log methods; keep it off the double that owns the spies.
+  isLevelEnabled: (level: string): boolean => {
+    levelProbe.level = mockLogger.level;
+    return levelProbe.isLevelEnabled(level);
+  },
   info: mockLogFn,
   warn: mockLogFn,
   error: mockLogFn,
@@ -62,9 +70,6 @@ export function setMockArtifactHome(home: string): void {
 export function setMockWorkflowHome(home: string): void {
   mockWorkflowHome = home;
 }
-// Captured before the module mock below replaces it.
-const actualPaths = await import('@archon/paths');
-const { isPathInside } = actualPaths;
 mock.module('@archon/paths', () => ({
   ...actualPaths,
   createLogger: mock(() => mockLogger),
@@ -80,7 +85,7 @@ mock.module('@archon/paths', () => ({
   // Real semantics, rooted at the mutable fake home above, so the artifact-pointer
   // containment rules are exercised rather than stubbed away.
   isInsideArchonHome: (candidate: string): boolean =>
-    isPathInside(mockArtifactHome, candidate, { includeRoot: true, lexical: true }),
+    actualPaths.isPathInside(mockArtifactHome, candidate, { includeRoot: true, lexical: true }),
   getRunArtifactsDirForRoot: (root: string, runId: string): string =>
     join(root, 'artifacts', 'runs', runId),
 }));
@@ -111,8 +116,6 @@ export function composeInnerStep(
   const scope = composeScope(nodeId, loopGroupPath);
   return `${scope}__${identity}__${nodeId}__${identity}__${innerNodeId}`;
 }
-
-// --- Mock helpers ---
 
 // This fixture's createWorkflowEvent mock collects both durable and best-effort writes.
 // The production IWorkflowStore interface separately restricts the best-effort route.
@@ -154,6 +157,10 @@ export function createMockStore(): MockWorkflowStore {
     async _data => undefined
   );
   const getWorkflowRunStatus = mock<IWorkflowStore['getWorkflowRunStatus']>(async _id => 'running');
+  const runEvents = (runId: string, types?: readonly string[]) =>
+    inMemoryEventRows(createWorkflowEvent.mock.calls.map(([event]) => event)).filter(
+      e => e.workflow_run_id === runId && (types?.includes(e.event_type) ?? true)
+    );
   return {
     getWorkflowEventHead: mock<IWorkflowStore['getWorkflowEventHead']>(() => {
       throw new Error('Unexpected event feed read');
@@ -250,6 +257,9 @@ export function createMockStore(): MockWorkflowStore {
     labelAttentionWait: mock<IWorkflowStore['labelAttentionWait']>(() => {
       throw new Error('Unexpected labelAttentionWait');
     }),
+    getWorkflowRunForAttention: mock<IWorkflowStore['getWorkflowRunForAttention']>(() => {
+      throw new Error('Unexpected getWorkflowRunForAttention');
+    }),
     listAttentionQueueRows: mock<IWorkflowStore['listAttentionQueueRows']>(() => {
       throw new Error('Unexpected listAttentionQueueRows');
     }),
@@ -279,14 +289,11 @@ export function createMockStore(): MockWorkflowStore {
     deleteOldWorkflowRuns: mock<IWorkflowStore['deleteOldWorkflowRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
-    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId =>
-      inMemoryEventRows(createWorkflowEvent.mock.calls.map(([event]) => event)).filter(
-        event => event.workflow_run_id === runId
-      )
+    listWorkflowEvents: mock<IWorkflowStore['listWorkflowEvents']>(async runId => runEvents(runId)),
+    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(
+      async (ids, types) => new Map(ids.map(id => [id, runEvents(id, types)]))
     ),
-    listEventsForRuns: mock<IWorkflowStore['listEventsForRuns']>(async () => {
-      throw new Error('Not used by this test');
-    }),
+    listMetricRecords: mock<IWorkflowStore['listMetricRecords']>(async () => []),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
       throw new Error('Unexpected listWorkflowRuns');
@@ -299,6 +306,7 @@ export function createMockStore(): MockWorkflowStore {
       async (_id, baseline) => baseline
     ),
     getWorkflowRun: mock<IWorkflowStore['getWorkflowRun']>(async _id => null),
+    getWorkflowRunsByIds: mock<IWorkflowStore['getWorkflowRunsByIds']>(async _ids => []),
     findChildRuns: mock<IWorkflowStore['findChildRuns']>(async _parentRunId => []),
     getRunAncestry: mock<IWorkflowStore['getRunAncestry']>(async _runId => []),
     getActiveWorkflowRunByPath: mock<IWorkflowStore['getActiveWorkflowRunByPath']>(
@@ -644,8 +652,6 @@ export function dagOptions(overrides: DagOptionsOverrides): ExecuteDagWorkflowOp
     workflow: resolveTestWorkflow(workflow),
   };
 }
-
-// --- Helpers ---
 
 export function ready(wf: TestWorkflowDefinition): ResolvedWorkflow {
   return resolveTestWorkflow(wf);

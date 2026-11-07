@@ -500,10 +500,14 @@ export async function getCurrentBranchStrict(
   try {
     const { stdout } = await execFileAsync(
       'git',
-      ['-C', workingPath, 'symbolic-ref', '--quiet', '--short', 'HEAD'],
+      ['-C', workingPath, 'symbolic-ref', '--quiet', 'HEAD'],
       { timeout: 10000 }
     );
-    const branch = stdout.trim();
+    const ref = stdout.trim();
+    if (!ref.startsWith('refs/heads/')) {
+      throw new Error(`HEAD refers to '${ref}', not a local branch`);
+    }
+    const branch = ref.slice('refs/heads/'.length);
     if (!branch) {
       throw new Error(`Git returned no branch for checkout ${workingPath}`);
     }

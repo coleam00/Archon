@@ -8,6 +8,7 @@
  * The records and rules every store shares live in `./store/` by area and are
  * re-exported here, so this stays the one import path for the port.
  */
+import type { AttentionRead } from './schemas/attention-degraded';
 import type { IResourceStartStore } from './resource-start-store';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
@@ -90,6 +91,31 @@ export interface IRunTreeStore {
   getRunAncestry(runId: string): Promise<WorkflowRun[]>;
 }
 
+/** A `node_completed` row whose `structured_output` carries a `metrics` key. */
+export interface MetricRecordRow {
+  eventId: string;
+  runId: string;
+  workflowName: string;
+  /** The run's codebase. */
+  codebaseId: string | null;
+  /** The event's `step_name`. */
+  nodeId: string;
+  /** The event's `data.type`: the kind of node that completed, when the row records it. */
+  nodeType: string | null;
+  completedAt: string;
+  /** The raw `structured_output.metrics` value; the engine parses it. */
+  metrics: unknown;
+}
+
+/**
+ * Every metric completion on the install, in the order it was recorded, across runs. Rows
+ * are raw: which completions count, for which codebase, and what a record means, is
+ * decided once in `queryMetrics`.
+ */
+export interface IMetricRecordStore {
+  listMetricRecords(): Promise<MetricRecordRow[]>;
+}
+
 export interface IWorkflowRunNodeSessionStore {
   listWorkflowRunNodeSessions(workflowRunId: string): Promise<readonly WorkflowRunNodeSession[]>;
   upsertWorkflowRunNodeSession(params: {
@@ -102,6 +128,7 @@ export interface IWorkflowRunNodeSessionStore {
 
 export interface IWorkflowStore
   extends IRunTreeStore,
+    IMetricRecordStore,
     IWorkflowRunNodeSessionStore,
     IResourceStartStore,
     IStateDocumentStore,
@@ -195,6 +222,8 @@ export interface IWorkflowStore
     baseline: CheckoutObservation
   ): Promise<CheckoutObservation>;
   getWorkflowRun(id: string): Promise<WorkflowRun | null>;
+  /** The runs with these ids, in no particular order; an id with no run is absent. */
+  getWorkflowRunsByIds(ids: readonly string[]): Promise<WorkflowRun[]>;
   /**
    * Find the workflow run currently holding the lock on `workingPath`.
    *
@@ -251,11 +280,14 @@ export interface IWorkflowStore
     id: string,
     write: AttentionLabelWrite
   ): Promise<{ labeled: true; wait: WorkflowAttentionWaitContext } | { labeled: false }>;
+  /** Batch descendant read: corrupt origins become safe reports; query failures still reject. */
+  getWorkflowRunForAttention(id: string): Promise<AttentionRead<WorkflowRun> | null>;
   /**
    * Every row the attention queue reads (`isAttentionQueueRow`), most recently started
-   * first. The rows only: `@archon/workflows/attention-queue` builds the items.
+   * first, with a degraded report for each unreadable row.
+   * `@archon/workflows/attention-queue` builds items from readable rows.
    */
-  listAttentionQueueRows(): Promise<WorkflowRun[]>;
+  listAttentionQueueRows(): Promise<AttentionRead<WorkflowRun>[]>;
   /** Atomically record an unexpired event signal and its audit event without changing lifecycle. */
   signalWorkflowWait(
     id: string,

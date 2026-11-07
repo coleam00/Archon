@@ -21,21 +21,38 @@ or through a helper, must start with the exact line `// @archon-test-isolated`;
 discovery fails on a direct call without it.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
-are forwarded to Bun verbatim and bypass default grouping.
+retain Bun's substring-filter meaning and run only matching files, preserving the same
+isolation groups. Every requested group runs, and any failed group makes the command
+fail. Discovery errors, including selected files outside explicit `testGroups`, stop
+the request before any group starts. Test flags apply to each selected group; JUnit output
+is combined across groups and, from the repository root, across every started owner.
+Name filters (`-t` or `--test-name-pattern`) are supported only when the request selects
+one isolation group, preserving Bun's native exit result. Requests selecting multiple
+groups with a name filter fail before tests load, with a diagnostic naming the groups.
+Sharding (`--shard`) also requires one isolation group; splitting the shard across
+groups could omit selected files. Root requests with name filters or `--shard` must
+also select one test owner; multi-owner requests fail before any tests start and name
+the owners. Select files from one group or run each group separately. Load and hook
+failures remain failures. An unreadable or invalid private report fails its group and
+contributes a runner error; later requested groups still run. Bun can omit JUnit output on successful
+zero-file runs. An absent report after exit 0 emits a diagnostic and contributes no
+results, preserving Bun's exit code; absence after a nonzero exit remains a runner error.
+The wrapper cannot distinguish successful zero-file execution from report loss after exit 0.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
-`generated-files`, `merge-sweep-contract`, `type-check`, `lint`, `mock-modules`, `ratchet`,
+`generated-files`, `merge-sweep-contract`, `type-check`, `lint`, `ratchet`,
 `format`, `installer` (POSIX only), `package-tests`, `cli-tests`, `core-tests`, and
-`script-tests`. `mock-modules` fails when a `mock.module()` factory leaves out an export of
-the module it mocks; see "`mock.module()` merges over the real module" in the DX quirks guide.
+`script-tests`.
 The generated group checks the Pi vendor map, the capability matrix,
 provider and chat contract schemas, and API types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
-drift, the workflow persistence boundary, and SDK type restatements. Install the Biome
+drift, incomplete `mock.module()` factories (see "`mock.module()` merges over the real module"
+in the DX quirks guide), pack portability, the workflow persistence boundary, and SDK type
+restatements. Install the Biome
 extension for in-editor lint and formatting; disable Prettier for this repository.
 Formatting uses two spaces, single quotes, semicolons, a 100-column width, and LF line
 endings on every OS. On Windows, `bun run format` converts CRLF working files to LF;
@@ -93,11 +110,13 @@ prose change's test-visible effects are checked on `dev`.
 
 CI runs the merge-sweep conformance test through `merge-sweep-contract`. The remaining
 tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-do not run on pull requests or pushes. Run them with `bun run test --plan pack` and
-`bun run validate --only workflow-fixtures` when you change `.archon/workflows/` or
-`.archon/scripts/`; a single test file runs with
-`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI, dispatch the
-Test Suite workflow with `pack-tests` or `pack-fixtures` set:
+run in the `test-pack` job when a pull request or an unproven push changes the pack or a
+contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
+those paths. Run them locally with `bun run test --plan pack` and
+`bun run validate --only workflow-fixtures`; a single test file runs with
+`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI on a branch
+without a pull request, dispatch the Test Suite workflow with `pack-tests` or
+`pack-fixtures` set:
 `gh workflow run test.yml --ref <branch> -f pack-tests=true -f pack-fixtures=true`.
 
 Local validation has no fixed duration: tests and typed analysis dominate, and machine
@@ -109,7 +128,7 @@ or other-platform CI results.
 
 **Important:** Use `bun run test` (not `bun test` from the repo root) to avoid mock pollution across packages.
 
-**macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Do not compile binaries locally on macOS. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`. One exception: the file-store lock tests compile their probe only under GitHub Actions, on every OS, and skip it everywhere else whatever `ARCHON_TEST_COMPILED_BINARIES` says. The `file-store-primitives-macos` job runs the file-store group and database-free CLI lifecycle on a disposable Mac so the persistence behavior and compiled probe are also proved on macOS.
+**macOS:** tests that compile a fresh binary with `bun build --compile` skip on macOS and print a line saying so. Running them locally has preceded a stuck `syspolicyd` that stalls every new process on the machine until a reboot. CI runs them on Linux and Windows. Do not compile binaries locally on macOS. A new test that compiles a binary gates itself on `skipCompiledBinaryTests()` from `@archon/paths/test-utils`. One exception: the file-store lock tests compile their probe only under GitHub Actions, on every OS, and skip it everywhere else whatever `ARCHON_TEST_COMPILED_BINARIES` says. The `file-store-primitives-macos` job runs POSIX plugin cleanup, provider and chat inspection diagnostics, process-provider and Codex cleanup, the file-store group, and database-free CLI lifecycle on a disposable Mac so these behaviors and the compiled probe are also proved on macOS.
 
 #### What `bun run validate` deliberately leaves out
 
@@ -120,12 +139,12 @@ drop; never run destructive verification against a configured live database.
 | CI job | Needs | Run it yourself |
 | --- | --- | --- |
 | `schema-upgrade` | a live PostgreSQL; the SQLite half also reads every release tag | `bun run check:schema-upgrades` (`PGHOST`/`PGUSER`/… or `DATABASE_URL`) and `bun run check:sqlite-vintages` |
-| `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts`, `packages/core/src/db/state-documents.postgres.integration.test.ts`, `packages/core/src/db/codebase-rename.postgres.integration.test.ts`, and `packages/core/src/db/schema-convergence.postgres.integration.test.ts`; then `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/users.postgres.integration.test.ts` and `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/codebase-delete.postgres.integration.test.ts` |
+| `postgres-parity` | a PostgreSQL service; conformance creates and drops scratch databases and requires `CREATE DATABASE` permission | `ARCHON_TEST_PG_URL=postgres://… bun test packages/core/src/db/isolation-environments.live-run.postgres.integration.test.ts`, then the same for `packages/core/src/db/resource-slots.postgres.integration.test.ts`, `packages/core/src/db/provider-attempts.postgres.integration.test.ts`, `packages/core/src/db/workflows.postgres.integration.test.ts`, `packages/core/src/db/workflow-events.provider-events.postgres.integration.test.ts`, `packages/core/src/db/workflow-store.conformance.postgres.integration.test.ts`, `packages/core/src/db/state-documents.postgres.integration.test.ts`, `packages/core/src/db/codebase-rename.postgres.integration.test.ts`, and `packages/core/src/db/schema-convergence.postgres.integration.test.ts`; then `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/users.postgres.integration.test.ts`, `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/codebase-delete.postgres.integration.test.ts`, and `ARCHON_TEST_PG_URL=postgres://… bun run --cwd packages/core test src/db/user-provider-key-store.postgres.integration.test.ts` |
 | `docker-build` | a Docker daemon, and ~14GB of free disk for the image | `docker build .` |
 | Linux `test` Slack conformance and smoke | compiled Slack plugin with a stubbed client for conformance, and the unmodified release binary for initialization and missing-token smoke | CI only; source conformance runs in `cd packages/chat-slack && bun run test` |
 | `serve-binary` | compiled CLI and server artifacts; CI runs the build and smoke on Linux and Windows | CI only; no local compilation on macOS |
 | `docs-build` | Node (Astro's CLI does not run under Bun); path-filtered to `packages/docs-web/` | `bun run build:docs` — run it when you change the docs site |
-| `file-store-primitives-macos` | GitHub Actions for the compiled probe, and a macOS runner for filesystem behavior; ordinary tests also run under `validate` | `bun run --cwd packages/workflows test src/file-store` and `bun run --cwd packages/cli test src/commands/workflow-file-store.integration.spec.ts`; the compiled probe skips locally |
+| `file-store-primitives-macos` | GitHub Actions for the compiled probe, and a macOS runner for process-group and filesystem behavior; ordinary tests also run under `validate` | On macOS, run the test commands from this job in [`.github/workflows/test.yml`](.github/workflows/test.yml); the compiled probe skips locally |
 
 The `serve-binary` CI job builds matching CLI and server executables on Linux and
 Windows, then checks `archon serve` against `/api/health` and the console. The

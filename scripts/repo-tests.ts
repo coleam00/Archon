@@ -2,6 +2,8 @@ import { existsSync } from 'node:fs';
 import { join, relative, resolve } from 'node:path';
 import { archonCliInvocation } from '@archon/paths/cli-command';
 import { bunTestCommand, bunTestEnv } from './bun-test-command';
+import { junitDestination, parseTestArguments } from './package-test-requests';
+import { runReportedGroup, writeCombinedReport } from './package-test-reports';
 
 /**
  * Runs the repository's tests, from the repository root.
@@ -21,8 +23,8 @@ import { bunTestCommand, bunTestEnv } from './bun-test-command';
  * is what made a mistyped path look like a pass.
  *
  * `--plan <shard>` walks only the plan steps of that shard. CI runs each shard on its own
- * runner so they finish side by side, except `pack`: CI runs it only on a manual dispatch
- * that asks for it, and `bun run test --plan pack` runs it locally. A workspace shard too slow
+ * runner so they finish side by side; `pack` runs only when the change touches the pack
+ * (`PACK_INPUTS` in `should-run-test-suite.ts`). A workspace shard too slow
  * for one runner runs in parts across runners; `ARCHON_TEST_PART` in `package-tests.ts`.
  */
 
@@ -189,15 +191,11 @@ export function planShard(requested: readonly string[]): TestShard | undefined {
  * owner means no run: the caller reports that rather than falling back to the full suite.
  */
 export function planRequestedRuns(requested: string[]): RequestedRun[] {
-  let expectsTestName = false;
-  const routes = requested.map(
-    (argument): { argument: string; route: RoutedArgument | undefined } => {
-      const route = expectsTestName ? undefined : routeArgument(argument);
-      expectsTestName =
-        !expectsTestName && (argument === '-t' || argument === '--test-name-pattern');
-      return { argument, route };
-    }
-  );
+  const selectors = new Set(parseTestArguments(requested).positionals.map(token => token.index));
+  const routes = requested.map((argument, index) => ({
+    argument,
+    route: selectors.has(index) ? routeArgument(argument) : undefined,
+  }));
 
   const owners = new Map<string, TestOwner>();
   for (const { route } of routes) {
@@ -220,7 +218,9 @@ async function runRequested(requested: string[]): Promise<number> {
   if (runs.length === 0) {
     console.error(
       [
-        `No argument named a test path this runner can place: ${requested.join(' ')}`,
+        `No argument named a test path this runner can place: ${parseTestArguments(requested)
+          .positionals.map(token => token.value)
+          .join(' ')}`,
         'Name a path under packages/<name>/, scripts/ or .archon/scripts/, or run',
         '`bun run test <selector>` from the package directory the selector belongs to.',
       ].join('\n')
@@ -228,12 +228,38 @@ async function runRequested(requested: string[]): Promise<number> {
     return 1;
   }
 
-  for (const { owner, args } of runs) {
-    const code = await run(bunTestCommand(args), owner.cwd);
-    if (code !== 0) return code;
+  const { optionTokens } = parseTestArguments(requested);
+  const singleOwnerOption = optionTokens.some(token => token.name === 'test-name-pattern')
+    ? 'Name filters require'
+    : optionTokens.some(token => token.name === 'shard')
+      ? 'Sharding requires'
+      : undefined;
+  if (runs.length > 1 && singleOwnerOption !== undefined) {
+    console.error(
+      `${singleOwnerOption} one test owner; selected: ${runs.map(({ owner }) => owner.label).join(', ')}. Run each owner separately.`
+    );
+    return 1;
   }
-
-  return 0;
+  const destination = junitDestination(optionTokens);
+  const reports = [];
+  let code = 0;
+  for (const { owner, args } of runs) {
+    const runOwner = (ownerArgs: string[]) =>
+      run(
+        owner.cwd === REPO_ROOT ? bunTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
+        owner.cwd
+      );
+    if (destination === undefined) {
+      code = await runOwner(args);
+    } else {
+      const result = await runReportedGroup(args, runOwner);
+      reports.push(result.report);
+      code = result.code;
+    }
+    if (code !== 0) break;
+  }
+  if (destination !== undefined) writeCombinedReport(resolve(REPO_ROOT, destination), reports);
+  return code;
 }
 
 async function main(requested: string[]): Promise<number> {

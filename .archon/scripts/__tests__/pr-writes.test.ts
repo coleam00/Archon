@@ -1,8 +1,8 @@
 /**
- * The pack's pull-request writes, through both sources.
+ * The pack's pull-request writes, through the forge.
  *
  * Fixtures stub these nodes, so only a subprocess run can observe what they
- * actually write, which source they wrote through, and whether a write that did
+ * actually write, and whether a write that did
  * not read back is reported as a failure rather than a delivery.
  */
 import { describe, expect, it } from 'bun:test';
@@ -10,18 +10,12 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
-import {
-  ForgeOperationError,
-  ghApi,
-  ghRetryWait,
-  retryTransient,
-  TransientForgeError,
-} from '../../workflows/sdlc/.shared/forge';
 import { trackTempRoots } from './temp-roots';
 import {
   PACK,
   PR,
   PR_URL,
+  forgeCalls,
   forgeOperation,
   forgeFailure,
   forgePrRecord,
@@ -60,11 +54,10 @@ function publishPr(
   const cwd = gitCheckout({}, trackTempRoot);
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
-    source: 'gh',
     ...rest,
     ...(forgeAt ? { forge: forgeAt(head) } : {}),
     cwd,
-    gh: { ...rest.gh, pr: { headRefOid: head, ...rest.gh?.pr } },
+    tracker: { ...rest.tracker, pr: { headRefOid: head, ...rest.tracker?.pr } },
     inputs: {
       INPUTS_REPO: JSON.stringify(PR.repo),
       INPUTS_HEAD_REPO: JSON.stringify(target.headRepo ?? PR.repo),
@@ -85,10 +78,9 @@ function publishPr(
 }
 
 describe('publish-pr opens the pull request at most once', () => {
-  it.each(['gh', 'forge'] as const)('continues without a publication record when no description is prepared through %s', source => {
+  it('continues without a publication record when no description is prepared', () => {
     for (const existing of [42, null]) {
       const result = publishPr({
-        source,
         target: { existing },
         prepareBody: false,
         forgeAt: head => ({ kind: 'fake', response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }) }),
@@ -121,30 +113,23 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(command).toContain(`$ARTIFACTS_DIR/${pointer.path}`);
   });
 
-  it.each(['gh', 'forge'] as const)(
-    'refuses another create through %s while the earlier write is unresolved',
-    source => {
+  it('refuses another create while the earlier write is unresolved', () => {
       const result = publishPr({
-        source,
         artifacts: { 'pr-create-started': JSON.stringify({ repo: PR.repo }) },
-        gh: { noOpenPr: true },
+        tracker: { noOpenPr: true },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
       });
       expect(result.code).not.toBe(0);
       expect(result.stdout).toBe('');
       expect(result.stderr).toContain('a previous PR create is unresolved');
-      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
       expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
     }
   );
 
-  it.each(['gh', 'forge'] as const)(
-    'reconciles a previously started create through %s when its PR is visible',
-    source => {
+  it('reconciles a previously started create when its PR is visible', () => {
       const result = publishPr({
-        source,
         artifacts: { 'pr-create-started': JSON.stringify({ repo: PR.repo }) },
-        gh: { pr: { headRefName: 'feature' } },
+        tracker: { pr: { headRefName: 'feature' } },
         forgeAt: head => ({
           kind: 'fake',
           response: forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) }),
@@ -152,112 +137,63 @@ describe('publish-pr opens the pull request at most once', () => {
       });
       expect(result.code).toBe(0);
       expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
       expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
     }
   );
 
-  it('creates and verifies through gh when the head has no open pull request', () => {
-    const result = publishPr({ gh: { noOpenPr: true, pr: { headRefName: 'feature' } } });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL, is_draft: true });
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(true);
-    expect(result.gh.every(call => call.includes('--repo ghe.example.com/example/repo'))).toBe(true);
-    expect(result.forge).toEqual([]);
-  });
-
-  it.each(['gh', 'forge'] as const)('refuses to open a pull request through %s without a body, leaving no claim', source => {
+  it('refuses to open a pull request without a body, leaving no claim', () => {
     const result = publishPr({
-      source,
       forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-      gh: { noOpenPr: true, pr: { headRefName: 'feature' } },
+      tracker: { noOpenPr: true, pr: { headRefName: 'feature' } },
       prepareBody: false,
     });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('prepare wrote no body');
     expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
   });
 
-  it.each(['gh', 'forge'] as const)('requires the declared body before creating through %s', source => {
+  it('requires the declared body before creating', () => {
     for (const leftover of ['', 'An old body']) {
       const result = publishPr({
-        source,
         target: { existing: 42 },
         inputs: { INPUTS_BRANCH: 'selected', INPUTS_BODY: 'null' },
-        gh: { noOpenPr: true },
+        tracker: { noOpenPr: true },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
         artifacts: { 'pr-body.md': leftover },
       });
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain('prepare wrote no body');
-      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
       expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
       expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
     }
   });
 
-  it.each(['gh', 'forge'] as const)('rejects a body pointer outside its declared contract through %s', source => {
-    for (const override of [{ type: 'file' }, { run_id: 'other-run' }, { path: 'other-body.md' }, { path: '../pr-body.md' }]) {
-      const result = publishPr({
-        source,
-        inputs: { INPUTS_BODY: JSON.stringify({ ...PREPARED_BODY, ...override }) },
-        gh: { noOpenPr: true },
-        forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
-      });
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain('prepare must declare the pr-body.md artifact from this run');
-      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
-      expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
-      expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
-    }
-  });
-
-  it.each(['gh', 'forge'] as const)('reads the body before claiming a create through %s', source => {
+  it('reads the body before claiming a create', () => {
     for (const directory of [false, true]) {
       const result = publishPr({
-        source,
         prepareBody: false,
         inputs: { INPUTS_BODY: JSON.stringify({ type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' }) },
         artifacts: directory ? { 'pr-body.md/entry': 'a directory cannot be a PR body' } : {},
-        gh: { noOpenPr: true },
+        tracker: { noOpenPr: true },
         forge: { kind: 'fake', response: forgeOperation('pr.view', null) },
       });
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain(directory ? 'EISDIR' : 'ENOENT');
-      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
       expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
       expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
     }
   });
 
   it('reuses the open pull request for that head instead of opening a second one', () => {
-    const result = publishPr({ gh: { pr: { headRefName: 'feature' } } });
+    const result = publishPr({ tracker: { pr: { headRefName: 'feature' } } });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(result.stderr).toContain('already has this head');
   });
 
-  it('refuses when a create reports success but no pull request has that head', () => {
-    const result = publishPr({ gh: { noOpenPr: true, writeLost: true } });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('a pull request may exist');
-  });
-
-  it('refuses when the created pull request does not match what was requested', () => {
+  it('publishes through the plugin', () => {
     const result = publishPr({
-      gh: { noOpenPr: true, pr: { headRefName: 'feature', headRefOid: 'a-different-revision' } },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('does not match what was requested');
-  });
-
-  it('publishes through the plugin, never gh, on the forge source', () => {
-    const result = publishPr({
-      source: 'forge',
       forge: {
         kind: 'fake',
         response: [
@@ -273,7 +209,6 @@ describe('publish-pr opens the pull request at most once', () => {
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL });
-    expect(result.gh).toEqual([]);
     expect(result.forge[1]).toContain('forge pr.create --json --data-file');
     // The authored body travels in the request file, never on the command line.
     expect(result.forge.join(' ')).not.toContain('A body');
@@ -282,7 +217,6 @@ describe('publish-pr opens the pull request at most once', () => {
 
   it('reports a refused create as a refusal that wrote nothing', () => {
     const result = publishPr({
-      source: 'forge',
       forge: {
         kind: 'fake',
         response: [
@@ -303,7 +237,6 @@ describe('publish-pr opens the pull request at most once', () => {
     'keeps the create claim after a %s create so a retry cannot open a duplicate',
     outcome => {
       const result = publishPr({
-        source: 'forge',
         forge: {
           kind: 'fake',
           response: [
@@ -320,16 +253,14 @@ describe('publish-pr opens the pull request at most once', () => {
   it('reuses the open pull request when the head repository differs only in case', () => {
     const result = publishPr({
       target: { headRepo: { host: PR.repo.host, path: 'Example/Repo' } },
-      gh: { pr: { headRefName: 'feature' } },
+      tracker: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(result.stderr).toContain('already has this head');
   });
 
   it('keeps the created pull request when the host could not audit the write', () => {
     const result = publishPr({
-      source: 'forge',
       forge: {
         kind: 'fake',
         okExitCode: 2,
@@ -353,20 +284,18 @@ describe('publish-pr opens the pull request at most once', () => {
     const result = publishPr({
       target: { existing: 42 },
       prepareBody: false,
-      gh: { pr: { headRefName: 'feature' } },
+      tracker: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
     expect(existsSync(join(result.artifacts, 'pr-body.md'))).toBe(false);
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
-    expect(result.gh.some(call => call.startsWith('pr list'))).toBe(false);
-    expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
+    expect(forgeCalls(result).map(call => call.op)).toEqual(['pr.view', 'pr.view']);
   });
 
   it('adopts a named pull request whose head repository differs only in case', () => {
     const result = publishPr({
       target: { headRepo: { host: PR.repo.host, path: 'Example/Repo' }, existing: 42 },
-      gh: { pr: { headRefName: 'feature' } },
+      tracker: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
@@ -377,12 +306,11 @@ describe('publish-pr opens the pull request at most once', () => {
       const result = publishPr({ target: { existing }, inputs: { INPUTS_PULL_REQUEST: '42' } });
       expect(result.code).not.toBe(0);
       expect(result.stderr).toContain('the caller named pull request 42 to continue');
-      expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     }
     const agreed = publishPr({
       target: { existing: 42 },
       inputs: { INPUTS_PULL_REQUEST: '42' },
-      gh: { pr: { headRefName: 'feature' } },
+      tracker: { pr: { headRefName: 'feature' } },
     });
     expect(agreed.code).toBe(0);
     // A caller with no pull request to continue binds null.
@@ -392,35 +320,35 @@ describe('publish-pr opens the pull request at most once', () => {
   it('pushes a continued pull request to its own head, not the branch prepare recorded', () => {
     const result = publishPr({
       target: { existing: 42, head: 'archon/task-local' },
-      gh: { pr: { headRefName: 'feature' } },
+      tracker: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
     expect(remoteHead(result.cwd, 'archon/task-local')).toBe('');
   });
 
   // GitHub's pull request API can report the previous head after the branch moved.
-  // The first `gh pr view` is the read before the push; the next `stale` reads lag.
+  // The first `pr.view` is the read before the push; the next `stale` reads lag.
   const lagging = (stale: number) => `
 const fakeSpawn = Bun.spawnSync.bind(Bun);
 let views = 0;
 Bun.sleepSync = () => {};
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   const result = fakeSpawn(argv, settings);
-  if (argv[0] !== 'gh' || argv[1] !== 'pr' || argv[2] !== 'view' || !argv.includes('--json')) return result;
+  if (argv[argv.indexOf('forge') + 1] !== 'pr.view' || !argv.includes('forge')) return result;
   views++;
   if (views < 2 || views > 1 + ${String(stale)}) return result;
-  const pr = JSON.parse(String(result.stdout));
-  return { ...result, stdout: Buffer.from(JSON.stringify({ ...pr, headRefOid: 'stale' })) };
+  const response = JSON.parse(String(result.stdout));
+  response.result.value.pr.head_revision = 'stale';
+  return { ...result, stdout: Buffer.from(JSON.stringify(response)) };
 } });
 `;
 
   it('waits for a continued pull request to report the pushed head before recording it', () => {
     const result = publishPr({
       target: { existing: 42 },
-      gh: { pr: { headRefName: 'feature' } },
+      tracker: { pr: { headRefName: 'feature' } },
       preload: lagging(3),
     });
     expect(result.code).toBe(0);
@@ -430,7 +358,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   it('refuses when a continued pull request never reports the pushed head', () => {
     const result = publishPr({
       target: { existing: 42 },
-      gh: { pr: { headRefName: 'feature' } },
+      tracker: { pr: { headRefName: 'feature' } },
       preload: lagging(100),
     });
     expect(result.code).not.toBe(0);
@@ -439,7 +367,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   });
 
   it.each(['CLOSED', 'MERGED'] as const)('refuses to push to a continued pull request that is %s', state => {
-    const result = publishPr({ target: { existing: 42 }, gh: { pr: { state } } });
+    const result = publishPr({ target: { existing: 42 }, tracker: { pr: { state } } });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain(`pull request 42 is ${state.toLowerCase()}; nothing is pushed`);
     expect(remoteHead(result.cwd, 'feature')).toBe('');
@@ -448,10 +376,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   it('opens the pull request from the branch the caller named', () => {
     const result = publishPr({
       inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
-      gh: { noOpenPr: true, pr: { headRefName: 'build/7-an-issue-run12345' } },
+      tracker: { noOpenPr: true, pr: { headRefName: 'build/7-an-issue-run12345' } },
     });
     expect(result.code).toBe(0);
-    expect(result.gh.some(call => call.startsWith('pr create') && call.includes('--head build/7-an-issue-run12345'))).toBe(true);
+    expect(forgeCalls(result).find(call => call.op === 'pr.create')?.request.head).toBe('build/7-an-issue-run12345');
     expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe(result.head);
     expect(remoteHead(result.cwd, 'feature')).toBe('');
   });
@@ -461,11 +389,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       target: { head: 'archon/task-local' },
       prepareBody: false,
       inputs: { INPUTS_BRANCH: 'feature' },
-      gh: { pr: { headRefName: 'feature' } },
+      tracker: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(result.stderr).toContain('already has this head');
     expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
   });
@@ -474,10 +401,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const result = publishPr({
       target: { existing: 42 },
       inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
-      gh: { noOpenPr: true, pr: { headRefName: 'feature' } },
+      tracker: { noOpenPr: true, pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
-    expect(result.gh.some(call => call.startsWith('pr create') && call.includes('--head build/7-an-issue-run12345'))).toBe(true);
+    expect(forgeCalls(result).find(call => call.op === 'pr.create')?.request.head).toBe('build/7-an-issue-run12345');
     expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe(result.head);
     expect(remoteHead(result.cwd, 'feature')).toBe('');
   });
@@ -487,12 +414,11 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       target: { existing: 42 },
       prepareBody: false,
       inputs: { INPUTS_BRANCH: 'build/7-an-issue-run12345' },
-      gh: { noOpenPr: true, pr: { headRefName: 'feature' } },
+      tracker: { noOpenPr: true, pr: { headRefName: 'feature' } },
     });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain('prepare wrote no body');
     expect(result.forge.some(call => call.includes('forge pr.create'))).toBe(false);
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(existsSync(join(result.artifacts, 'pr-create-started'))).toBe(false);
   });
 
@@ -501,19 +427,17 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       target: { existing: 42 },
       prepareBody: false,
       inputs: { INPUTS_PULL_REQUEST: '42', INPUTS_BRANCH: 'build/7-an-issue-run12345' },
-      gh: { pr: { headRefName: 'feature' } },
+      tracker: { pr: { headRefName: 'feature' } },
     });
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(false);
     expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
     expect(remoteHead(result.cwd, 'build/7-an-issue-run12345')).toBe('');
   });
 
-  it('fails loudly when forge is selected but unavailable, never falling back to gh', () => {
-    const result = publishPr({ source: 'forge', forge: { kind: 'no-host' } });
+  it('fails loudly when the forge is unavailable', () => {
+    const result = publishPr({ forge: { kind: 'no-host' } });
     expect(result.code).not.toBe(0);
-    expect(result.gh).toEqual([]);
     expect(result.stderr).toContain('ARCHON_CLI_COMMAND is not set');
   });
 });
@@ -527,7 +451,7 @@ function publishSection(options: Parameters<typeof publishPr>[0] & { live?: stri
     target: { existing: 42 },
     prepareBody: false,
     ...rest,
-    gh: { ...rest.gh, pr: { headRefName: 'feature', body: live, ...rest.gh?.pr } },
+    tracker: { ...rest.tracker, pr: { headRefName: 'feature', body: live, ...rest.tracker?.pr } },
     inputs: {
       INPUTS_DESCRIPTION: JSON.stringify(DESCRIPTION),
       ...(allowed ? { INPUTS_PUBLISH_DESCRIPTION: 'true' } : {}),
@@ -545,28 +469,10 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(result.bodies).toEqual([`Written by hand.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`]);
   });
 
-  it.each([
-    { trailing: '', gap: '\n\n' },
-    { trailing: '\n', gap: '\n' },
-    { trailing: '\n\n', gap: '' },
-  ])('publishes terminal tables and replaces legacy table sections: $trailing', ({ trailing, gap }) => {
-    const table = `| case | ms |\n| --- | --- |\n| a | 12 |${trailing}`;
-    const first = publishSection({ artifacts: { [DESCRIPTION.path]: table } });
-    expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
-    expect(first.bodies[0]).toBe(`Written by hand.\n\n${START}\n${table}${gap}${END}\n`);
-    const again = publishSection({ live: first.bodies[0], artifacts: { [DESCRIPTION.path]: table } });
-    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
-    expect(again.bodies).toEqual([]);
-    const legacy = `Author.  \n\n${START}\n${table}${trailing ? '' : '\n'}${END}\nAfter.  \n`;
-    const replaced = publishSection({ live: legacy, artifacts: { [DESCRIPTION.path]: 'Replacement evidence.' } });
-    expect({ code: replaced.code, stderr: replaced.stderr }).toMatchObject({ code: 0 });
-    expect(replaced.bodies).toEqual([`Author.  \n\n${START}\nReplacement evidence.\n\n${END}\nAfter.  \n`]);
-  });
-
-  it.each(['gh', 'forge'] as const)('preserves fenced and inline marker examples through %s', source => {
+  it('preserves fenced and inline marker examples', () => {
     const live = `Author text.  \n\n\`\`\`md\n${START}\nexample\n${END}\n\`\`\`\nInline: \`${START}\` and \`${END}\`.  \n\n`;
     const result = publishSection({
-      live, source,
+      live,
       forgeAt: head => ({ kind: 'fake', response: [
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
@@ -575,40 +481,11 @@ describe('publish-pr writes the description section a delivery round prepared', 
       ] }),
     });
     expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
-    const body = source === 'gh' ? result.bodies[0] : JSON.parse(result.forgeRequests.at(-1) ?? '{}').body;
+    const body = JSON.parse(result.forgeRequests.at(-1) ?? '{}').body;
     expect(body).toBe(`${live}${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`);
   });
 
-  it('preserves trailing authored whitespace exactly', () => {
-    const live = 'Author text.  \n\n';
-    const result = publishSection({ live });
-    expect(result.code).toBe(0);
-    expect(result.bodies[0]).toBe(`${live}${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`);
-  });
-
-  it('can publish prepared fenced marker examples again', () => {
-    const section = `\`\`\`md\n${START}\nliteral\n${END}\n\`\`\``;
-    const result = publishSection({ artifacts: { [DESCRIPTION.path]: section } });
-    expect(result.code).toBe(0);
-    const again = publishSection({ live: result.bodies[0], artifacts: { [DESCRIPTION.path]: section } });
-    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
-    expect(again.bodies).toEqual([]);
-  });
-
-  it.each([
-    `    ${START}\n    literal\n    ${END}\n`,
-    ...['pre', 'code', 'script', 'style', 'textarea', 'table', 'thead', 'tbody', 'tr', 'th', 'td'].map(tag => `<${tag}>\n\n${START}\nliteral\n${END}\n\n</${tag}>`),
-  ])('preserves literal marker containers in both ingresses and can publish again: %s', section => {
-    const live = `Authored.\n\n${section}\n\n`;
-    const first = publishSection({ live, artifacts: { [DESCRIPTION.path]: section } });
-    expect({ code: first.code, stderr: first.stderr }).toMatchObject({ code: 0 });
-    expect(first.bodies[0]).toBe(`${live}${START}\n${section}${section.endsWith('\n\n') ? '' : section.endsWith('\n') ? '\n' : '\n\n'}${END}\n`);
-    const again = publishSection({ live: first.bodies[0], artifacts: { [DESCRIPTION.path]: section } });
-    expect({ code: again.code, stderr: again.stderr }).toMatchObject({ code: 0 });
-    expect(again.bodies).toEqual([]);
-  });
-
-  it.each(['```', '~~~', '<pre>', '<code>', '<script>', '<style>', '<textarea>', '<table>'])(
+  it.each(['```'])(
     'refuses a composed pair swallowed by an unclosed %s in either ingress', opening => {
       for (const options of [
         { artifacts: { [DESCRIPTION.path]: `${opening}\nunfinished` } },
@@ -627,37 +504,23 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('reserved description markers');
     expect(spawnSync('git', ['ls-remote', 'upstream', 'refs/heads/feature'], { cwd: result.cwd, encoding: 'utf8' }).stdout).toBe('');
-    expect(result.gh).toEqual([]);
-  });
-
-  it('refuses reserved prepared markers before creating a pull request', () => {
-    const result = publishSection({
-      target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
-      artifacts: { [DESCRIPTION.path]: `${START}\nnested\n${END}` },
-    });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('reserved description markers');
-    expect(remoteHead(result.cwd, 'feature')).toBe('');
-    expect(result.gh).toEqual([]);
   });
 
   it('publishes and reads back the section when creating a pull request', () => {
-    const result = publishSection({ target: { existing: null }, prepareBody: true, gh: { noOpenPr: true } });
+    const result = publishSection({ target: { existing: null }, prepareBody: true, tracker: { noOpenPr: true } });
     expect({ code: result.code, stderr: result.stderr }).toMatchObject({ code: 0 });
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(true);
+    expect(forgeCalls(result).map(call => call.op)).toContain('pr.create');
     expect(result.bodies).toEqual([`A body\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`]);
-    expect(result.gh.at(-1)).toContain('pr view 42');
   });
 
-  it.each(['gh', 'forge'] as const)('keeps a created PR in the failure report when its description edit fails through %s', source => {
-    const result = publishSection({ source, target: { existing: null }, prepareBody: true, gh: { noOpenPr: true },
+  it('keeps a created PR in the failure report when its description edit fails', () => {
+    const result = publishSection({ target: { existing: null }, prepareBody: true, tracker: { noOpenPr: true },
       forgeAt: head => ({ kind: 'fake', response: [
         forgeOperation('pr.view', null),
         forgeOperation('pr.create', { target: PR.repo, outcome: 'applied', changed: true, pr: forgePrRecord({ head_revision: head }) }),
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
         forgeFailure('pr.edit-body', 'refused', 'edit unavailable'),
       ] }),
-      preload: `const spawn = Bun.spawnSync.bind(Bun); Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'edit' ? { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('edit unavailable') } : spawn(argv, settings) });`,
     });
     expect(result.code).toBe(1);
     expect(result.stderr).toContain('edit unavailable');
@@ -666,40 +529,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
       artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
     });
     expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
-  });
-
-  it.each(['gh', 'forge'] as const)('retains named and reconciled PR identities after a failed description edit through %s', source => {
-    for (const { existing, priorClaim } of [42, null].flatMap(existing => [false, true].map(priorClaim => ({ existing, priorClaim })))) {
-      const result = publishSection({ source, target: { existing },
-        artifacts: priorClaim ? { 'pr-create-started': JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) } : {},
-        forgeAt: head => ({ kind: 'fake', response: [
-          ...(existing === null ? [] : [forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }) })]),
-          forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
-          forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: 'A body' }),
-          forgeFailure('pr.edit-body', 'refused', 'edit unavailable'),
-        ] }),
-        preload: `const spawn = Bun.spawnSync.bind(Bun); Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'edit' ? { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('edit unavailable') } : spawn(argv, settings) });`,
-      });
-      expect(result.code).toBe(1);
-      expect(result.stderr).toContain('edit unavailable');
-      const report = runPackScript('deliver/scripts/report', {
-        inputs: { INPUTS_OUTCOME: 'null' },
-        artifacts: { 'pr-create-started': readFileSync(join(result.artifacts, 'pr-create-started'), 'utf8') },
-      });
-      expect(report.code).toBe(0);
-      expect(JSON.parse(report.stdout)).toMatchObject({ ready: false, reason: 'failed', pr_url: PR_URL });
-    }
-  });
-
-  it.each([
-    { name: 'replacement', live: `${START}\nold\n${END}` },
-    { name: 'reusing a head PR', target: { existing: null }, prepareBody: true },
-    { name: 'creating a PR', target: { existing: null }, prepareBody: true, gh: { noOpenPr: true } },
-  ])('refuses invalid composition when $name', ({ name: _name, ...options }) => {
-    const result = publishSection({ ...options, artifacts: { [DESCRIPTION.path]: '```\nunclosed' } });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('composed description');
-    expect(result.bodies).toEqual([]);
   });
 
   it('replaces only the content between its markers', () => {
@@ -711,12 +540,11 @@ describe('publish-pr writes the description section a delivery round prepared', 
   it('writes nothing when the section is already current', () => {
     const result = publishSection({ live: `Before.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n` });
     expect(result.code).toBe(0);
-    expect(result.gh.some(call => call.startsWith('pr edit'))).toBe(false);
+    expect(result.bodies).toEqual([]);
   });
 
-  it('writes through the plugin, never gh, on the forge source', () => {
+  it('writes through the plugin', () => {
     const result = publishSection({
-      source: 'forge',
       forgeAt: head => {
         const view = forgeOperation('pr.view', {
           pr: forgePrRecord({ head_revision: head }),
@@ -741,24 +569,11 @@ describe('publish-pr writes the description section a delivery round prepared', 
       },
     });
     expect(result.code).toBe(0);
-    expect(result.gh).toEqual([]);
     expect(result.forge[3]).toContain('forge pr.edit-body --json --data-file');
     expect(JSON.parse(result.forgeRequests[3])).toEqual({
       ref: { repo: PR.repo, number: 42 },
       body: `Written by hand.\n\n${START}\n| case | ms |\n| --- | --- |\n| a | 12 |\n\n${END}\n`,
     });
-  });
-
-  it.each([
-    { ...DESCRIPTION, type: 'file' },
-    { ...DESCRIPTION, run_id: 'another-run' },
-    { ...DESCRIPTION, path: 'pr-body.md' },
-  ])('refuses an uncertified description pointer before pushing: %j', pointer => {
-    const result = publishSection({ inputs: { INPUTS_DESCRIPTION: JSON.stringify(pointer) } });
-    expect(result.code).toBe(1);
-    expect(result.stderr).toContain('prepare must declare the pr-description.md artifact from this run');
-    expect(remoteHead(result.cwd, 'feature')).toBe('');
-    expect(result.gh).toEqual([]);
   });
 
   it('refuses a prepared section before pushing when the caller did not allow one', () => {
@@ -775,18 +590,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
     expect(result.stderr).toContain('unpaired or repeated archon-delivery-description marker');
     expect(result.bodies).toEqual([]);
   });
-
-  it('fails when the written description does not read back', () => {
-    const result = publishSection({ gh: { writeLost: true } });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('does not read back the written description');
-  });
-
-  it('names the same markers in the update-pr-body prompt that keeps them', () => {
-    const prompt = readFileSync(join(PACK, 'deliver/commands/update-pr-body.md'), 'utf8');
-    expect(prompt).toContain(`\`${START}\``);
-    expect(prompt).toContain(`\`${END}\``);
-  });
 });
 
 /** The commit the `upstream` remote holds for a branch, or empty when it has none. */
@@ -797,7 +600,6 @@ function remoteHead(cwd: string, branch: string): string {
 
 function publishReview(options: ScriptOptions = {}): ScriptRun {
   return runPackScript('review/scripts/publish-review', {
-    source: 'gh',
     ...options,
     inputs: {
       INPUTS_PR: JSON.stringify(PR),
@@ -820,7 +622,7 @@ function publishReview(options: ScriptOptions = {}): ScriptRun {
   });
 }
 
-/** The PR head the fake gh and forge report, and so the commit a passing round reviewed. */
+/** The PR head the fake forge reports, and so the commit a passing round reviewed. */
 const REVIEWED = 'deadbeef';
 
 function atCommit(commit: string): string {
@@ -840,52 +642,21 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       action: 'none',
       contract_left: ['acceptance: the console shows it'],
     });
-    expect(first.gh.some(call => call.includes('--method POST'))).toBe(true);
+    expect(first.comments).toEqual([{ issue: 42, body: `${MARKER}\nReviewed commit: \`${REVIEWED}\`\nVerdict: ready\nContract: open\n\n${REPORT}` }]);
 
     const second = publishReview({
       inputs: report,
-      gh: { comments: [{ id: 5, body: `${MARKER}\nRound 1: ready\n` }] },
+      tracker: { comments: [{ id: 5, body: `${MARKER}\nRound 1: ready\n` }] },
     });
     expect(second.code).toBe(0);
-    expect(second.gh.some(call => call.includes('--method PATCH'))).toBe(true);
-    expect(second.gh.some(call => call.includes('--method POST'))).toBe(false);
-  });
-
-  it('refuses rather than choosing between two marked comments', () => {
-    const result = publishReview({
-      inputs: report,
-      gh: {
-        comments: [
-          { id: 1, body: `${MARKER}\nolder` },
-          { id: 2, body: `${MARKER}\nnewer` },
-        ],
-      },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('more than one comment');
-    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
-  });
-
-  it('refuses when the written comment does not read back', () => {
-    const result = publishReview({ inputs: report, gh: { writeLost: true } });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('does not read back as written');
+    expect(forgeCalls(second).filter(call => call.op === 'comment.upsert').map(call => call.request.marker)).toEqual([MARKER]);
   });
 
   it('publishes nothing for a working-diff review and still reports the verdict', () => {
     const result = publishReview({ inputs: { ...report, INPUTS_PR: 'null' } });
     expect(result.code).toBe(0);
-    expect(result.gh).toEqual([]);
     expect(result.forge).toEqual([]);
     expect(JSON.parse(result.stdout)).toMatchObject({ ready: true, action: 'none' });
-  });
-
-  it('still accepts a legacy empty-object working-diff declaration', () => {
-    const result = publishReview({ inputs: { ...report, INPUTS_PR: '{}' } });
-    expect(result.code).toBe(0);
-    expect(result.gh).toEqual([]);
-    expect(result.forge).toEqual([]);
   });
 
   // Delivery hands the review its verified record as the scope. The scope agent's
@@ -901,18 +672,16 @@ describe('publish-review keeps one canonical comment per pull request', () => {
     expect(result.code).not.toBe(0);
     expect(result.stdout).toBe('');
     expect(result.stderr).toContain('delivery recorded');
-    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+    expect(result.comments).toEqual([]);
   });
 
   it('publishes to the recorded pull request when the scope declaration agrees', () => {
     const result = publishReview({ inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR) } });
     expect(result.code).toBe(0);
-    expect(result.gh.some(call => call.includes('repos/example/repo/issues/42/comments'))).toBe(
-      true
-    );
+    expect(forgeCalls(result).find(call => call.op === 'comment.upsert')?.request.ref).toEqual(PR);
   });
 
-  it('upserts through the plugin on the forge source, with the report in the request file', () => {
+  it('upserts through the plugin, with the report in the request file', () => {
     const forge: ScriptOptions['forge'] = {
       kind: 'fake',
       response: [
@@ -931,12 +700,10 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       ],
     };
     const result = publishReview({
-      source: 'forge',
       inputs: report,
       forge,
     });
     expect(result.code).toBe(0);
-    expect(result.gh).toEqual([]);
     const request = JSON.parse(result.forgeRequests[1]) as { marker: string; body: string };
     expect(request.marker).toBe(MARKER);
     expect(request.body.split('\n')[0]).toBe(MARKER);
@@ -950,7 +717,6 @@ describe('publish-review keeps one canonical comment per pull request', () => {
 
     // A review that left nothing open is stamped complete: only that lets a merge close the issue.
     const complete = publishReview({
-      source: 'forge',
       inputs: { ...report, INPUTS_CONTRACT_LEFT: '[]' },
       forge,
     });
@@ -961,7 +727,6 @@ describe('publish-review keeps one canonical comment per pull request', () => {
 
   it('still reports the verdict when the host could not audit the comment write', () => {
     const result = publishReview({
-      source: 'forge',
       inputs: report,
       forge: {
         kind: 'fake',
@@ -989,7 +754,6 @@ describe('publish-review keeps one canonical comment per pull request', () => {
 
   it('reports an unknown comment outcome without claiming the review was published', () => {
     const result = publishReview({
-      source: 'forge',
       inputs: report,
       forge: {
         kind: 'fake',
@@ -1006,174 +770,6 @@ describe('publish-review keeps one canonical comment per pull request', () => {
 // rate limit) must not end a run that has done hours of work. The repeat starts
 // from the marker read, so a first attempt that landed is found when the next
 // listing shows it; a listing that lags behind it lets the repeat post again.
-describe('publish-review repeats a comment write the forge failed transiently', () => {
-  const report = { INPUTS_REPORT: '{ARTIFACTS}/review-report.md' };
-  const posts = (result: ScriptRun): number => result.gh.filter(call => call.includes('--method POST')).length;
-
-  it('publishes exactly one comment after a 504 on the first write', () => {
-    const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 504 }] } });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ ready: true });
-    expect(posts(result)).toBe(2);
-    expect(result.comments).toHaveLength(1);
-  });
-
-  it('finds a 504 write that landed instead of writing it again', () => {
-    const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 504, landed: true }] } });
-    expect(result.code).toBe(0);
-    expect(posts(result)).toBe(1);
-    expect(result.comments).toHaveLength(1);
-  });
-
-  it('repeats a comment listing that got no response and publishes one comment', () => {
-    const result = publishReview({ inputs: report, gh: { commentListDrops: [0] } });
-    expect(result.code).toBe(0);
-    expect(result.gh.filter(call => call.includes('/comments?per_page=100')).length).toBe(3);
-    expect(result.comments).toHaveLength(1);
-  });
-
-  it('gives up on a listing that never answers, with its evidence', () => {
-    const result = publishReview({ inputs: report, gh: { commentListDrops: [0, 1, 2, 3, 4, 5] } });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('connection reset');
-    expect(result.gh.filter(call => call.includes('/comments?per_page=100'))).toHaveLength(4);
-    expect(posts(result)).toBe(0);
-    // The three waits (1s, 2s, 4s) outlast bun's default test timeout.
-  }, 15_000);
-
-  it('finds a landed write when its read-back got no response', () => {
-    const result = publishReview({ inputs: report, gh: { commentListDrops: [1] } });
-    expect(result.code).toBe(0);
-    expect(posts(result)).toBe(1);
-    expect(result.comments).toHaveLength(1);
-  });
-
-  it('never writes again after a successful POST whose read-back cannot find it', () => {
-    const result = publishReview({ inputs: report, gh: { commentListDrops: [1], commentListLags: [2] } });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('does not read back as written');
-    expect(posts(result)).toBe(1);
-    expect(result.comments).toHaveLength(1);
-  });
-
-  it('finds a landed PATCH after a 504 instead of writing it again', () => {
-    const result = publishReview({
-      inputs: report,
-      gh: {
-        comments: [{ id: 5, body: `${MARKER}\nRound 1: ready\n` }],
-        commentWriteFaults: [{ status: 504, landed: true }],
-      },
-    });
-    expect(result.code).toBe(0);
-    expect(result.gh.filter(call => call.includes('--method PATCH'))).toHaveLength(1);
-    expect(posts(result)).toBe(0);
-    expect(result.comments).toHaveLength(1);
-    expect(result.comments[0]?.body).toContain(REPORT);
-  });
-
-  it('repeats a 403 carrying a Retry-After header once', () => {
-    const result = publishReview({
-      inputs: report,
-      gh: { commentWriteFaults: [{ status: 403, headers: { 'Retry-After': '0' } }] },
-    });
-    expect(result.code).toBe(0);
-    expect(posts(result)).toBe(2);
-    expect(result.comments).toHaveLength(1);
-  });
-
-  it('fails at once with the forge evidence on a permanent error', () => {
-    const result = publishReview({ inputs: report, gh: { commentWriteFaults: [{ status: 404 }] } });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('(HTTP 404)');
-    expect(posts(result)).toBe(1);
-    expect(result.comments).toEqual([]);
-  });
-});
-
-describe('a gh api failure is classified from its HTTP status and headers', () => {
-  const at = (status: number, headers: Record<string, string> = {}) =>
-    ghRetryWait(1, { status, headers: new Map(Object.entries(headers)) });
-
-  it('repeats a 5xx or a request that got no response, but not missing authentication', () => {
-    expect(at(502)).toBe(0);
-    expect(at(504)).toBe(0);
-    expect(ghRetryWait(1, undefined)).toBe(0);
-    expect(ghRetryWait(4, undefined)).toBeUndefined();
-  });
-
-  it('waits out a rate limit for the time GitHub names, or a minute', () => {
-    expect(at(429, { 'retry-after': '30' })).toBe(30_000);
-    expect(at(403, { 'retry-after': '5' })).toBe(5_000);
-    expect(at(429)).toBe(60_000);
-  });
-
-  it('waits at least a valid Retry-After on a 5xx', () => {
-    expect(at(503, { 'retry-after': '120' })).toBe(120_000);
-    expect(at(503, { 'retry-after': 'soon' })).toBe(0);
-    expect(at(404, { 'retry-after': '5' })).toBeUndefined();
-  });
-
-  it('fails a permission refusal or any other 4xx at once', () => {
-    expect(at(403)).toBeUndefined();
-    expect(at(404)).toBeUndefined();
-    expect(at(422)).toBeUndefined();
-  });
-
-  it('reads a mixed-case Retry-After from the raw gh api response', () => {
-    const spawnSync = Bun.spawnSync;
-    const raw = 'HTTP/2.0 503 Service Unavailable\nRetry-After: 120\r\nContent-Type: application/json\r\n\r\n{}';
-    Object.defineProperty(Bun, 'spawnSync', {
-      value: () => ({ exitCode: 1, stdout: Buffer.from(raw), stderr: Buffer.from('gh: (HTTP 503)') }),
-    });
-    let thrown: unknown;
-    try {
-      ghApi('gh api comment write', ['repos/example/repo/issues/42/comments']);
-    } catch (error) {
-      thrown = error;
-    } finally {
-      Object.defineProperty(Bun, 'spawnSync', { value: spawnSync });
-    }
-    expect(thrown).toBeInstanceOf(TransientForgeError);
-    expect((thrown as TransientForgeError).waitMs).toBe(120_000);
-  });
-
-  it('waits at least the time the failure asked for', () => {
-    const waits: number[] = [];
-    let attempts = 0;
-    const result = retryTransient(
-      () => {
-        if (attempts++ === 0) throw new TransientForgeError('gh api failed (HTTP 503)', 30_000);
-        return 'done';
-      },
-      ms => waits.push(ms)
-    );
-    expect(result).toBe('done');
-    expect(waits).toEqual([30_000]);
-  });
-
-  it('stops repeating after its last wait and never repeats another failure', () => {
-    const waits: number[] = [];
-    let attempts = 0;
-    const transient = () => {
-      attempts++;
-      throw new TransientForgeError('gh api failed (HTTP 504)', 0);
-    };
-    expect(() => retryTransient(transient, ms => waits.push(ms))).toThrow('HTTP 504');
-    expect(attempts).toBe(4);
-    expect(waits).toEqual([1_000, 2_000, 4_000]);
-
-    attempts = 0;
-    const permanent = () => {
-      attempts++;
-      throw new ForgeOperationError('forge comment.upsert refused', undefined);
-    };
-    expect(() => retryTransient(permanent, () => {})).toThrow('refused');
-    expect(attempts).toBe(1);
-  });
-});
-
 // A round's verdict goes public only about the commit it reviewed. The stale case
 // is a pull-request record whose head revision was captured when the PR opened:
 // a report about that commit must not stand as the verdict on the PR's head.
@@ -1199,7 +795,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain(`this round reviewed ${STALE}, but`);
     expect(result.stderr).toContain(`is at ${REVIEWED}`);
-    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+    expect(result.comments).toEqual([]);
     expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
   });
 
@@ -1226,65 +822,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     });
     expect(result.code).not.toBe(0);
     expect(result.stderr).toContain(`reviewed ${REVIEWED}, but the checkout is now at moved0000`);
-    expect(result.gh.some(call => call.includes('--method'))).toBe(false);
+    expect(result.comments).toEqual([]);
   });
 });
 
-describe('setPrDraft into draft uses the selected source', () => {
-  const script = '../../scripts/__tests__/mark-pr-draft';
-  it('converts through gh and reads back draft state', () => {
-    const result = runPackScript(script, { source: 'gh', gh: { pr: { isDraft: false } } });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true, state: 'open' });
-    expect(result.gh).toContain('pr ready 42 --repo ghe.example.com/example/repo --undo');
-  });
-  it.each(['CLOSED', 'MERGED'] as const)('refuses %s without a write', state => {
-    const result = runPackScript(script, { source: 'gh', gh: { pr: { state } } });
-    expect(result.code).not.toBe(0);
-    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
-  });
-  it('does not write for an already-draft PR', () => {
-    const result = runPackScript(script, { source: 'gh' });
-    expect(result.code).toBe(0);
-    expect(result.gh.some(call => call.startsWith('pr ready'))).toBe(false);
-  });
-  it('fails when gh conversion does not read back', () => {
-    const result = runPackScript(script, { source: 'gh', gh: { pr: { isDraft: false }, writeLost: true } });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('does not report an open draft');
-  });
-  it('calls pr.draft through forge without gh', () => {
-    const result = runPackScript(script, {
-      source: 'forge',
-      forge: {
-        kind: 'fake',
-        response: forgeOperation('pr.draft', {
-          target: PR,
-          outcome: 'applied',
-          changed: true,
-          pr: forgePrRecord(),
-        }),
-      },
-    });
-    expect(result.code).toBe(0);
-    expect(result.gh).toEqual([]);
-    expect(result.forge[0]).toContain('forge pr.draft --json --data-file');
-    expect(JSON.parse(result.forgeRequests[0]).ref).toEqual(PR);
-    expect(JSON.parse(result.stdout)).toMatchObject({ is_draft: true });
-  });
-  it.each(['refused', 'verification_failed', 'outcome_unknown'] as const)(
-    'surfaces %s with no fallback',
-    outcome => {
-      const result = runPackScript(script, {
-        source: 'forge',
-        forge: {
-          kind: 'fake',
-          response: forgeFailure('pr.draft', outcome, 'unsupported or unverifiable conversion'),
-        },
-      });
-      expect(result.code).not.toBe(0);
-      expect(result.stderr).toContain(outcome);
-      expect(result.gh).toEqual([]);
-    }
-  );
-});

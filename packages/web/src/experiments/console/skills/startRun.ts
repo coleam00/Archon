@@ -1,5 +1,5 @@
 import type { paths } from '../../../lib/api.generated';
-import { requestJson, HttpError } from '../lib/http';
+import { requestJson } from '../lib/http';
 import type { TierName } from '../lib/tiers';
 
 /**
@@ -75,17 +75,11 @@ export async function startRun({
     ...(hasAliases ? { aliases } : {}),
   } satisfies WorkflowRunLaunchJson;
 
-  if (files === undefined || files.length === 0) {
-    await requestJson<{ accepted: boolean; status: string }>(url, {
-      method: 'POST',
-      body: JSON.stringify(body),
-    });
-    return;
-  }
-
-  const form = buildRunForm(body, files);
-  const res = await fetch(url, { method: 'POST', body: form });
-  if (!res.ok) await throwRunError(res, url);
+  await requestJson<{ accepted: boolean; status: string }>(url, {
+    method: 'POST',
+    body:
+      files !== undefined && files.length > 0 ? buildRunForm(body, files) : JSON.stringify(body),
+  });
 }
 
 function buildRunForm(body: WorkflowRunFormFields, files: File[]): FormData {
@@ -100,20 +94,4 @@ function buildRunForm(body: WorkflowRunFormFields, files: File[]): FormData {
     form.append('files', file, file.name);
   }
   return form;
-}
-
-async function throwRunError(res: Response, url: string): Promise<never> {
-  const text = await res.text().catch(() => '');
-  let parsed: { error?: string } = {};
-  try {
-    parsed = JSON.parse(text) as { error?: string };
-  } catch {
-    /* not JSON */
-  }
-  // Match requestJson's 200-char truncation so a 502 HTML body doesn't
-  // land in the error toast as raw markup.
-  const raw = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
-  const msg = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
-  const path = new URL(url, window.location.origin).pathname;
-  throw new HttpError(res.status, path, msg);
 }

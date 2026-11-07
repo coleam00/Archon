@@ -167,7 +167,7 @@ every distinct schema Archon has ever released, re-applies it to confirm idempot
 the result against a fresh install — columns, indexes, column comments, constraints and sequences.
 Run the same check yourself against any PostgreSQL with `bun run check:schema-upgrades`.
 
-If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.pg_schema_init_failed`.
+If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.postgres_schema_init_failed`.
 
 ## Local PostgreSQL via Docker
 
@@ -237,6 +237,8 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Within one process, a run's standalone event writes (those not part of a larger transaction) go to the database one at a time, in the order they are issued, so they commit and read back in that order. Writes for the same run from two processes (for example the CLI and the server) are not ordered against each other
   - The dashboard event poller follows the store's commit-ordered event feed (`event_order`) across all runs. On PostgreSQL an `AFTER INSERT` trigger (`archon_workflow_event_notify`) calls `pg_notify('archon_dashboard_event', …)` so runs started out of process (the `archon` CLI / `--detach`) stream live to the console; on SQLite the poller picks them up within its interval. The trigger is Postgres-only and best-effort (a role without `CREATE TRIGGER` degrades to poll-only, not a boot failure).
   - A `BEFORE DELETE` trigger copies each deleted row into `remote_agent_workflow_event_archive`, which has the same columns and no run foreign keys, so cursors saved before a deletion can still read the payload. Schema apply adds any column the events table gains to the archive as well
+  - The partial index `idx_workflow_events_metrics` covers only `node_completed` rows whose `structured_output` has a `metrics` key, so [metric](/guides/metrics/) queries skip every other completion. Its predicate is textually the same as the metric records query's, which SQLite needs to use a partial index; SQLite also names it with `INDEXED BY`, because without `ANALYZE` statistics it prefers the `event_type` index
+  - `idx_workflow_events_run_type` on `(workflow_run_id, event_type)` serves reads of chosen event types for a list of runs, such as run listings and the steps a metrics report reads. It reads only the requested types of each run, skipping its high-volume `provider_event` rows, and gives SQLite a better choice than walking the `event_type` index across every run
 
 - **`remote_agent_workflow_event_sequence`** - Single-row high-water mark of committed `event_order` values; it never moves backwards when events or runs are deleted
 

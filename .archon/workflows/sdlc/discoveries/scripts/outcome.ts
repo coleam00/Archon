@@ -5,8 +5,7 @@
  * an issue a discovery is tracked by reads back open in the repository. Then the public
  * writes: a filing creates or recovers its issue by the key's marker, and an evidence
  * comment is upserted by the same marker, so a pass that stops anywhere and is run
- * again never files twice, and comments twice only on the `gh` source, when a write that
- * landed returned a retryable response (5xx, or a rate limit) or no response and the listing lagged (the next upsert then refuses). Last, each run's document records the refs this
+ * again never files or comments twice. Last, each run's document records the refs this
  * pass decided and the questions it asked, and its claim is released, except on a run
  * with an asked record: it stays claimed by this run until the question is answered and
  * the run ends.
@@ -28,11 +27,11 @@ import {
   refRun,
   runName,
 } from '../../.shared/discoveries.ts';
-import { forgeSource, sameRepo } from '../../.shared/forge.ts';
+import { sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { createIssue, viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { stateGet, statePut } from '../../.shared/state.ts';
+import { stateGet, statePutClaimed } from '../../.shared/state.ts';
 
 const IDLE = 'No finished run has undecided discoveries.';
 
@@ -97,7 +96,6 @@ function main(): void {
   // after a stop never repeats one.
   const sha = queue.base.sha;
   const written: { key: string; outcome: 'file' | 'track'; url: string }[] = [];
-  const source = forgeSource();
   for (const decision of decisions) {
     const marker = discoveryMarker(decision.key);
     if (decision.outcome === 'file') {
@@ -109,7 +107,7 @@ function main(): void {
       const url =
         comment === null
           ? issueUrl(decision.issue)
-          : upsertComment({ kind: 'issue', ref: decision.issue }, marker, `${marker}\n${comment}`, source).url;
+          : upsertComment({ kind: 'issue', ref: decision.issue }, marker, `${marker}\n${comment}`).url;
       written.push({ key: decision.key, outcome: 'track', url });
     }
   }
@@ -146,7 +144,7 @@ function main(): void {
         ...questions,
       ],
     };
-    if (statePut(name, next, read.revision) === 'conflict') {
+    if (statePutClaimed(name, next, read.revision) === 'conflict') {
       throw new Error(`${name} changed while this run held its claim`);
     }
   }

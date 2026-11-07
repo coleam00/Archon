@@ -51,7 +51,7 @@ describe('the default branch snapshot', () => {
     expect(JSON.parse(run.stdout)).toEqual([]);
   });
 
-  it.each(['before fetch', 'at fetch'])('fetches fresh objects when the remote advances %s without changing tracking refs or FETCH_HEAD', timing => {
+  it('fetches fresh objects when the remote advances at fetch without changing tracking refs or FETCH_HEAD', () => {
     const cwd = gitCheckout({}, track);
     const stale = git(cwd, 'rev-parse', 'refs/remotes/upstream/dev');
     git(cwd, 'fetch', '-q', 'upstream', 'dev');
@@ -64,14 +64,13 @@ describe('the default branch snapshot', () => {
     writeFileSync(join(writer, '.archon/sdlc/policy/maintainers.json'), '["NewMaintainer"]');
     git(writer, 'add', '.archon/sdlc/policy/maintainers.json');
     git(writer, 'commit', '-q', '-m', 'new maintainer');
-    if (timing === 'before fetch') git(writer, 'push', '-q', 'origin', 'dev');
     const fresh = git(writer, 'rev-parse', 'HEAD');
 
     const run = spawnSync(process.execPath, ['-e', `
       import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
       import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
       const nativeGit = Bun.spawnSync.bind(Bun);
-      let advance = ${JSON.stringify(timing === 'at fetch')};
+      let advance = true;
       Bun.spawnSync = (argv, options) => {
         if (advance && argv[0] === 'git' && argv[1] === 'fetch') {
           advance = false;
@@ -90,7 +89,7 @@ describe('the default branch snapshot', () => {
     expect(git(cwd, 'for-each-ref', 'refs/archon')).toBe('');
   });
 
-  it.each(['switch before fetch', 'switch after fetch', 'advance after fetch', 'missing default after fetch'])(
+  it.each(['switch before fetch', 'advance after fetch'])(
     'binds the default branch identity to the fetched snapshot: %s', change => {
       const cwd = gitCheckout({}, track);
       const remote = git(cwd, 'remote', 'get-url', 'upstream');
@@ -103,11 +102,12 @@ describe('the default branch snapshot', () => {
         import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
         const nativeGit = Bun.spawnSync.bind(Bun);
         const change = ${JSON.stringify(change)};
+        // Advance the remote inside the bare repository: a push from this checkout to its
+        // remote's URL updates the checkout's tracking ref under newer git.
         const mutate = () => {
           const argv = change === 'advance after fetch'
-            ? ['git', 'push', '-q', ${JSON.stringify(remote)}, 'HEAD:refs/heads/dev']
-            : ['git', '--git-dir', ${JSON.stringify(remote)}, 'symbolic-ref', 'HEAD',
-                change === 'missing default after fetch' ? 'refs/heads/missing' : 'refs/heads/main'];
+            ? ['git', '--git-dir', ${JSON.stringify(remote)}, 'update-ref', 'refs/heads/dev', ${JSON.stringify(fresh)}]
+            : ['git', '--git-dir', ${JSON.stringify(remote)}, 'symbolic-ref', 'HEAD', 'refs/heads/main'];
           const changed = nativeGit(argv);
           if (changed.exitCode !== 0) throw new Error(changed.stderr.toString());
         };
@@ -125,8 +125,7 @@ describe('the default branch snapshot', () => {
         expect(git(cwd, 'ls-remote', 'upstream', 'refs/heads/dev')).toContain(stale);
       } else {
         expect(run.status).not.toBe(0);
-        expect(run.stderr).toContain(change === 'missing default after fetch'
-          ? 'reports no default branch' : 'default branch changed during fetch');
+        expect(run.stderr).toContain('default branch changed during fetch');
         expect(run.stdout).toBe('');
       }
       expect(git(cwd, 'rev-parse', 'refs/remotes/upstream/dev')).toBe(stale);

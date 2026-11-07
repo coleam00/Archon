@@ -161,6 +161,7 @@ Performs a soft delete -- the conversation is hidden but not destroyed.
 | DELETE | `/api/codebases/{id}` | Delete a codebase after container cleanup |
 | GET | `/api/codebases/{id}/environments` | List isolation environments for a codebase |
 | POST | `/api/codebases/base-branch` | Inspect the remote default branch without registering a project |
+| GET | `/api/codebases/{id}/config` | Get a codebase's merged config (defaults, global and its `.archon/config.yaml`) with secrets removed; `envKeys` lists its `env:` key names only |
 | GET | `/api/codebases/{id}/env` | List a codebase's environment variable keys (values are never returned) |
 | PUT | `/api/codebases/{id}/env` | Set or update a codebase environment variable |
 | DELETE | `/api/codebases/{id}/env/{key}` | Delete a codebase environment variable |
@@ -355,13 +356,18 @@ curl -X POST http://localhost:3090/api/workflows/archon-investigate/run \
 ```
 
 **Adoption and supersede.** JSON requests may supply `adopt_run_id` or `supersedes_run_id`,
-but cannot supply both. If the conversation would continue an existing run, either declaration
+but cannot supply both. Unique prefixes resolve within the conversation's selected project;
+a prefix without a selected project is refused. Full IDs select the exact run without prefix
+lookup; adoption still requires the same project. Unknown or ambiguous targets and non-terminal
+targets return HTTP 400 before uploads, history writes or queuing. Ambiguity errors list candidate
+IDs. Targets are checked again when execution begins, since their status can change while queued.
+If the conversation would continue an existing run, either declaration
 is refused before continuation or its fresh fallback. The refusal names the existing run: resume
 it with `/workflow resume <id>`, abandon it with `/workflow abandon <id>` before retrying, or
 use a conversation with no open run. An accepted fresh supersede records the replaced run ID in
 `adopted_from_run_id` and `metadata.continuation.mode: "supersede"` on the new run.
 
-For a continuation refusal, the launch response still returns HTTP 200 with `accepted: true`.
+For an execution-time continuation refusal, the launch response still returns HTTP 200 with `accepted: true`.
 The refusal arrives as a `text` event on the conversation's SSE stream. Callers must read
 the stream to determine whether the workflow started; the JSON response alone does not confirm it.
 
@@ -392,7 +398,7 @@ curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
   -H "Content-Type: application/json" \
   -d '{"message":"fix #2481","conversationId":"conv-123",
        "tiers":{"large":"openai/gpt-5.6"},
-       "aliases":{"@reviewer":"codex/gpt-5.6-sol"}}'
+       "aliases":{"@reviewer":"codex/gpt-6.1-sol"}}'
 
 # multipart: each map is one JSON-encoded form field
 curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
@@ -475,8 +481,22 @@ These routes record the decision and return. The server's continuation scheduler
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/runs/attention` | List attention queue items or count them with `countBy` |
+| GET | `/api/runs/attention/stream` | Stream the attention queue as server-sent events; `Last-Event-ID` resumes ([stream over HTTP](/getting-started/operate/#stream-over-http)) |
 | GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
+
+List and count responses add a `degraded` array when a paused row or a descendant needed
+to project its attention item cannot be read:
+`{ "type": "degraded", "reason": "run_unreadable", "runId": "<id>" }`.
+`runId` identifies the unreadable paused row, or an affected readable paused parent when
+its unreadable descendant is not paused. A parent blocked on an already-reported unreadable
+paused descendant is omitted without an additional warning; absence does not mean its block cleared.
+Readable runs and items remain available; counts cover readable matching items and may be incomplete.
+Project-scoped responses omit each warning's `runId` because the unreadable row's project membership cannot be established.
+Warnings survive project and label filters. Operator logs retain safe run IDs without stored origin contents.
+Use the logged unreadable run ID to locate the stored data to repair; a warning may name its
+readable parent instead. Read again after repair; warnings offer no run action and do not transition runs.
+Healthy responses omit `degraded`.
 
 Queue items include answerable pauses, `usage_limit` waits that continue automatically
 when a provider usage limit resets or a rate limit's wait ends (its reported reset, else a backoff), and `unreadable` pauses needing inspection. Branch on `kind` before acting:
@@ -534,6 +554,39 @@ owner, or no answer in time). It is `null` for a run that is not running. It is 
 and never changes `status`; how long a run has been quiet is not an input. The console shows
 a run whose owner is `unreachable` or `unknown` as not live and offers Abandon for
 `unreachable`.
+
+---
+
+## Metrics
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/metrics` | Aggregate stored metric records as a `MetricsReport` |
+| GET | `/api/metric-views` | The overview cards workflow packs declare, as `MetricViews` |
+
+```bash
+curl 'http://localhost:3090/api/metrics?name=factory.prs_merged&since=7d'
+```
+
+Query parameters, all optional: `since` (a duration such as `7d`, `24h` or `2w`, or an ISO
+date or time; default 30 days before `until`), `until` (an ISO date or time; default now),
+`name`, `subject`, `codebaseId`, `compare` (an ISO date or time to split each
+instrument's records at) and `byModel` (a node id to split them by the model that ran it).
+The window is half-open. It returns the same `MetricsReport` `archon metrics --json`
+prints: per name, its definition and one entry per instrument and `measured_by` with
+`value`, `n`, `interval`, `cost`, `latest` and a daily `series`, a `compare` block when
+`compare` is given or a `by_model` block when `byModel` is, plus `refused[]`. Returns
+**400** for a malformed window or `compare`, an empty `byModel`, `compare` with `byModel`, and a
+`byModel` node none of the window's existing producing runs ran, with the AI node ids they
+did run in the error. The node is not checked when no producing run still exists: a window
+with no records returns an empty report, and records whose runs were all deleted are
+`unattributed`.
+
+`GET /api/metric-views` lists each pack's `.shared/metric-views.json` as `packs[]` (pack,
+source, `names` and `cards`) and the declarations that could not be read or did not
+validate as `errors[]`. With `codebaseId`, the codebase's project packs are included and its
+config decides whether bundled packs are; an unknown `codebaseId` returns **404**.
+See the [metrics guide](/guides/metrics/).
 
 ---
 

@@ -18,9 +18,10 @@ import type { ApprovalContext, GateNode, NodeOutput, WaitNode } from '../../../s
 import { canSuspend, isGateNode } from '../../../schemas';
 import { planGraph } from '../../../graph-plan';
 import { getWorkflowEventEmitter } from '../../../event-emitter';
-import { writeNodeArtifactsListing } from '../../../artifacts-index';
+import { writeInvocationListings } from '../../../invocation-listings';
 import {
   aggregateProviderFailure,
+  describeUnmetCompletion,
   rootFailures,
   detectCompletionSignal,
   stripCompletionTags,
@@ -256,7 +257,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
         ? { nodeId: node.id, bodyGateId: terminalSuspendNode.id, iteration: i }
         : undefined,
     unfinishedInvocations: ctx.unfinishedInvocations,
-    loopConfigFailureBaselines: ctx.loopConfigFailureBaselines,
+    loopUsageBaselines: ctx.loopUsageBaselines,
     deps: ctx.deps,
     platform: ctx.platform,
     conversationId: ctx.conversationId,
@@ -283,6 +284,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     // enclosing tier and preset in place would run the group's model, attribute it to
     // the workflow's tier, and apply the workflow preset's effort to it.
     workflowLevelOptions: { ...ctx.workflowLevelOptions, workflowTier: run.workflowTier },
+    workflowPack: ctx.workflowPack,
     aiProfile: ctx.aiProfile,
     workflowPreset: run.workflowPreset,
     artifactsDir: ctx.artifactsDir,
@@ -559,10 +561,10 @@ async function iterationUntilBash(
   // Resolve outside the try so ARCHON_BASH_PATH validation errors bubble up
   // to the caller instead of being swallowed by the per-iteration catch.
   const groupBashPath = resolveBashPath();
-  // Observed after the body ran, so the condition sees the typed artifacts this
-  // iteration published. Outside the try: a materialization fault is a
+  // Observed after the body ran, so the condition sees the typed artifacts and node
+  // outcomes this iteration recorded. Outside the try: a materialization fault is a
   // provisioning error, not an unreachable bash binary.
-  const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
+  const listings = await writeInvocationListings(ctx);
   // Resolve this group's own cross-iteration refs against the snapshot captured
   // before its body ran. `loopPrevOutputs` now contains the CURRENT iteration, so
   // using it here would collapse `$LOOP_PREV` into `$node.output` semantics. Only
@@ -590,7 +592,7 @@ async function iterationUntilBash(
       {
         shellSafe: true,
         stateDir: ctx.stateDir,
-        typedArtifactsFile,
+        ...listings,
         references: nodeTemplateReferences(
           untilBash,
           {
@@ -610,7 +612,7 @@ async function iterationUntilBash(
     script: substitute,
     loopUserInput: i === resume.startIteration ? resume.loopUserInput : '',
     loopPrevOutput: iteration.prevIterationOutput,
-    typedArtifactsFile,
+    listings,
   });
 }
 
@@ -641,15 +643,22 @@ function recordIterationCompleted(
     });
 }
 
-async function completeLoopGroup(
+/**
+ * Complete the group with its last iteration's output. `exhaustedAt` is the iteration
+ * limit when the group ran out under `on_exhausted: complete`.
+ */
+export async function completeLoopGroup(
   run: LoopGroupRun,
   state: LoopGroupState,
-  i: number
+  i: number,
+  exhaustedAt?: number
 ): Promise<LoopGroupBodyResult> {
   await safeSendMessage(
     run.ctx.platform,
     run.ctx.conversationId,
-    `Loop-group node '${run.node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`,
+    exhaustedAt === undefined
+      ? `Loop-group node '${run.node.id}' completed after ${String(i)} iteration${i > 1 ? 's' : ''}`
+      : `Loop-group node '${run.node.id}' reached max iterations (${String(exhaustedAt)}) ${describeUnmetCompletion(run.node.loop_group)} and completed with its last output`,
     run.msgContext
   );
   return {
@@ -657,6 +666,7 @@ async function completeLoopGroup(
     output: state.lastOutput,
     ...run.progress.usage,
     loopIterations: i,
+    ...(exhaustedAt !== undefined ? { maxIterations: exhaustedAt } : {}),
     // The final iteration's sink payload, so downstream `$group.output.field`
     // resolves from the logical value (#2637). No declaredOutputPaths: a group's
     // own output_format is ignored, so field access stays tier-2 lenient.

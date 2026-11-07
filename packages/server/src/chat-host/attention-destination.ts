@@ -55,7 +55,13 @@ function waitNotice(run: WorkflowRun): ChatAttentionNotice {
     ...(pauseId ? { pauseId } : {}),
     message: attention.message,
     form: attention.form,
-    options: attention.options,
+    // An option's `value` is the workflow's own data; a plugin gets what it can show.
+    options: attention.options.map(({ id, label, does }) => ({
+      id,
+      ...(label !== undefined ? { label } : {}),
+      ...(does !== undefined ? { does } : {}),
+    })),
+    ...(attention.recommendation !== undefined ? { recommendation: attention.recommendation } : {}),
   };
 }
 

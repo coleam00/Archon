@@ -687,3 +687,55 @@ export function registerFinalizeTests() {
     });
   });
 }
+
+export function registerVerificationImageTests() {
+  describe('ContainerBackend.releaseVerificationImages', () => {
+    test('uses its injected runner for container and image inventory without an environment row', async () => {
+      const docker = fakeDocker(() => ({ stdout: '', stderr: '' }));
+      const backend = new ContainerBackend({
+        store: fakeStore(),
+        config: CONFIG,
+        dockerRunner: docker,
+      });
+      await backend.releaseVerificationImages('run-owned', 'env-owned');
+      expect(docker.calls).toEqual([
+        [
+          'container',
+          'ls',
+          '--all',
+          '--quiet',
+          '--filter',
+          'label=diy.archon.managed=true',
+          '--filter',
+          'label=diy.archon.env-id=env-owned',
+        ],
+        [
+          'image',
+          'ls',
+          '--all',
+          '--quiet',
+          '--no-trunc',
+          '--filter',
+          'label=archon.run_id=run-owned',
+        ],
+      ]);
+    });
+    test('propagates its runner failure', async () => {
+      const failure = new Error('backend unavailable');
+      const docker = fakeDocker(() => {
+        throw failure;
+      });
+      const backend = new ContainerBackend({
+        store: fakeStore(),
+        config: CONFIG,
+        dockerRunner: docker,
+      });
+      const error = await backend
+        .releaseVerificationImages('run-owned', 'env-owned')
+        .catch((err: unknown) => err);
+      expect(error).toBeInstanceOf(AggregateError);
+      if (!(error instanceof AggregateError)) throw new Error('Expected cleanup failure');
+      expect(error.errors).toEqual([failure]);
+    });
+  });
+}

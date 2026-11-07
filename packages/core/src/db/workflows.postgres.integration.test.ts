@@ -286,6 +286,20 @@ describe.skipIf(!baseUrl)('workflow runs — real Postgres behavior', () => {
     ).toEqual({ resolved: true });
   });
 
+  test('unknown continuation prefixes produce typed refusals for both modes', async () => {
+    const { resolveRunContinuation, WorkflowContinuationError } = await import(
+      '../operations/workflow-continuation'
+    );
+    const codebaseId = crypto.randomUUID();
+    for (const reference of ['deadbeef', 'unknown', '   ']) {
+      for (const declaration of [{ adoptRunId: reference }, { supersedesRunId: reference }]) {
+        const result = resolveRunContinuation({ store: workflows, codebaseId, ...declaration });
+        await expect(result).rejects.toBeInstanceOf(WorkflowContinuationError);
+        await expect(result).rejects.toThrow(`'${reference}'`);
+      }
+    }
+  });
+
   test('a run is found by the short id shown in listings', async () => {
     const { rows } = await db.query<{ id: string }>(
       `INSERT INTO remote_agent_codebases (name, default_cwd) VALUES ('prefix', '/tmp') RETURNING id`

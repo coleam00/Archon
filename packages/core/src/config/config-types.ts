@@ -406,3 +406,12 @@ export interface SafeConfig {
   /** Configured @custom model aliases (merged repo > global). Not secrets. */
   aliases?: RawAliasesConfig;
 }
+
+/**
+ * One project's merged config as clients may see it. `envKeys` names the keys of
+ * the project's `env:` block; its values can be secrets and are never included.
+ */
+export interface SafeProjectConfig {
+  config: SafeConfig;
+  envKeys: string[];
+}

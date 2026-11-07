@@ -16,7 +16,12 @@ import type {
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
 import type { AttentionOption } from './schemas/wait-node';
-import { legacyOccurrenceStep, type RunAttention, type WorkflowRun } from './schemas/workflow-run';
+import {
+  describeAttentionRecommendation,
+  legacyOccurrenceStep,
+  type RunAttention,
+  type WorkflowRun,
+} from './schemas/workflow-run';
 import type { WorktreeDisposition } from './schemas/terminal-record';
 import type {
   IAgentProvider,
@@ -144,36 +149,52 @@ export function sourceReleaseNotice(
  * How to answer an attention wait, one line per way, spelled for `surface`. The verbs are
  * the `approve`, `reject` and `respond` sugar every surface parses. A `multi_select`
  * answer carries several options at once, which only the CLI's `answer` verb (and its
- * HTTP route) takes, so that line is spelled for the CLI. A wait paused before answers
- * existed (a legacy occurrence) takes no answer; it resumes.
+ * HTTP route) takes, so that line is spelled for the CLI. A recommendation leads, and each
+ * option's `does` text precedes the way to choose it. A wait paused before answers existed
+ * (a legacy occurrence) takes no answer; it resumes.
  */
 export function attentionAnswerLines(
   surface: WorkflowCommandSurface,
   attention: Pick<
     Extract<RunAttention, { kind: 'attention' }>,
-    'runId' | 'form' | 'options' | 'occurrence'
+    'runId' | 'form' | 'options' | 'occurrence' | 'recommendation'
   >
 ): string[] {
-  const { runId, options } = attention;
+  const { runId, options, recommendation } = attention;
   const command = (text: string): string => `\`${spellWorkflowCommand(surface, text)}\``;
   if (legacyOccurrenceStep(attention.occurrence) !== undefined)
     return [`When it is done, resume: ${command(`resume ${runId}`)}`];
   const choice = (option: AttentionOption): string =>
     option.label === undefined ? option.id : `${option.label} (${option.id})`;
+  // What choosing an option does, before the way to choose it.
+  const does = (option: AttentionOption): string =>
+    option.does === undefined ? '' : `${option.does} `;
+  const recommended =
+    recommendation === undefined
+      ? []
+      : [`Recommended: ${describeAttentionRecommendation(recommendation)}`];
   switch (attention.form) {
     case 'message':
       return [`Answer: ${command(`approve ${runId} <your answer>`)}`];
     case 'approval':
       return [
+        ...recommended,
         `Approve: ${command(`approve ${runId} [text]`)}`,
         `Reject: ${command(`reject ${runId} [text]`)}`,
       ];
     case 'select':
-      return options.map(
-        option => `${choice(option)}: ${command(`respond ${runId} ${option.id} [text]`)}`
-      );
+      return [
+        ...recommended,
+        ...options.map(
+          option =>
+            `${choice(option)}: ${does(option)}${command(`respond ${runId} ${option.id} [text]`)}`
+        ),
+      ];
     case 'multi_select':
       return [
+        ...options
+          .filter(option => option.does !== undefined)
+          .map(option => `${choice(option)}: ${option.does ?? ''}`),
         `Choose one or more of: ${options.map(choice).join(', ')}`,
         `Answer: \`archon workflow answer ${runId} --occurrence ${attention.occurrence} --choose <id> [--choose <id>]… [--text <text>]\``,
       ];
@@ -243,7 +264,17 @@ export interface StoredProviderCredential {
   getStatus: () => Promise<CredentialStatus>;
 }
 
+export type ReleaseVerificationImages = (runId: string, containerEnvId: string) => Promise<void>;
+
 export interface WorkflowDeps {
+  /**
+   * Host cleanup after terminal execution; retains live writers and returns non-fatal warnings.
+   * Container cleanup requires a supplied effect or an explicitly bound host resource owner.
+   */
+  releaseRunResources?: (
+    runId: string,
+    releaseVerificationImages?: ReleaseVerificationImages
+  ) => Promise<void | string[]>;
   providers: ProviderRegistry;
   store: IWorkflowStore;
   /**

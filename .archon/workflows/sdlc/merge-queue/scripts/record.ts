@@ -46,7 +46,7 @@ import {
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { attentionOptions, renderAttention, withOther } from '../../.shared/queue.ts';
+import { askFields, attentionWait, withOther } from '../../.shared/queue.ts';
 
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -91,8 +91,6 @@ export interface Sweep {
   readonly decisions: readonly Decision[];
   readonly base: {
     readonly summary: string;
-    /** The sweep re-ran the default branch's failed jobs this run. */
-    readonly reran: boolean;
     readonly attention: BaseAttention | null;
   };
   readonly summary: string;
@@ -169,10 +167,10 @@ function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decis
 /** The default branch as facts read it. */
 type Base = ReturnType<typeof readBase>;
 
-/** A red default branch the sweep neither re-ran nor raised would hold every merge in silence. */
+/** A red default branch the sweep did not raise would hold every merge in silence. */
 function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null {
-  if (sweep === null || base?.checks.state !== 'red' || sweep.base.attention !== null || sweep.base.reran) return null;
-  return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep neither reran it nor raised it`;
+  if (sweep === null || base?.checks.state !== 'red' || sweep.base.attention !== null) return null;
+  return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep did not raise it`;
 }
 
 interface Outcome {
@@ -303,6 +301,7 @@ function main(): void {
       summary: idleSummary('No pull request waits for the merge queue.', stuckItems(text(process.env.WORKFLOW_ID))),
       attention: '',
       options: [],
+      recommendation: null,
       class: '',
       asked: null,
     });
@@ -329,12 +328,12 @@ function main(): void {
             brief: firstAsk.brief,
             attention: withQueueOther(firstAsk.attention as MergeAttention, itemOf(firstAsk.number), firstAsk.brief),
           };
-  const render = (raised: MergeAsked | null): string =>
+  const waitOf = (raised: MergeAsked | null) =>
     raised === null
-      ? ''
+      ? null
       : raised.by === 'base'
-        ? renderAttention('Merge queue: the default branch is red', raised.attention)
-        : renderAttention(`Merge queue, PR ${String(raised.pr.number)}: merge decision`, raised.attention);
+        ? attentionWait<string>('Merge queue: the default branch is red', raised.attention)
+        : attentionWait<string>(`Merge queue, PR ${String(raised.pr.number)}: merge decision`, raised.attention);
 
   // Settlements are independent of the policy refresh and the sweep's decisions.
   recordSettled(writes, settled);
@@ -366,8 +365,7 @@ function main(): void {
   emit({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
     summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
-    attention: render(asked),
-    options: asked === null ? [] : attentionOptions<string>(asked.attention),
+    ...askFields(waitOf(asked)),
     class: asked?.by ?? '',
     asked,
   });

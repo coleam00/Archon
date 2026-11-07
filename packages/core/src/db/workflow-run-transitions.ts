@@ -5,6 +5,7 @@
  */
 
 import {
+  CANCELLED_REASON_METADATA_KEY,
   initialRunMetadata,
   mutableRunMetadata,
   SUBRUN_METADATA_KEYS,
@@ -517,7 +518,11 @@ export async function cancelFanOutRun(
              completed_at = ${dialect.now()},
              metadata = ${dialect.jsonMerge('metadata', 2)}
          WHERE id = $1 AND status NOT IN (${CANCELLATION_NOOP_WORKFLOW_STATUSES.map((_, index) => `$${index + 3}`).join(', ')})`,
-        [id, JSON.stringify({ cancelled_reason: reason }), ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
+        [
+          id,
+          JSON.stringify({ [CANCELLED_REASON_METADATA_KEY]: reason }),
+          ...CANCELLATION_NOOP_WORKFLOW_STATUSES,
+        ]
       );
       if ((update.rowCount ?? 0) > 0) {
         await insertTerminalWorkflowEvent(

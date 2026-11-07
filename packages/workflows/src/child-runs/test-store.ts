@@ -1,3 +1,4 @@
+import { CANCELLED_REASON_METADATA_KEY } from '../schemas/run-metadata';
 import { inMemoryEventRows, type InMemoryStoreEvent } from '../test-utils';
 import { readEventsForRuns } from './test-events';
 import { foldDagResumeSnapshot } from '../dag-resume-snapshot';
@@ -145,6 +146,7 @@ export class InMemoryStore implements IWorkflowStore {
     inMemoryEventRows(this.events).filter(event => event.workflow_run_id === runId);
   listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (ids, types) =>
     readEventsForRuns(this.events, ids, types);
+  listMetricRecords: IWorkflowStore['listMetricRecords'] = async () => [];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
     throw new Error('Unexpected listWorkflowRuns');
@@ -207,6 +209,16 @@ export class InMemoryStore implements IWorkflowStore {
     return Promise.resolve(r ? this.clone(r) : null);
   };
 
+  getWorkflowRunsByIds = (ids: readonly string[]): Promise<WorkflowRun[]> =>
+    Promise.resolve(
+      [...new Set(ids)].flatMap(id => {
+        const r = this.runs.get(id);
+        return r ? [this.clone(r)] : [];
+      })
+    );
+
+  getWorkflowRunForAttention = (id: string) => this.getWorkflowRun(id);
+
   findChildRuns = (parentRunId: string): Promise<WorkflowRun[]> =>
     Promise.resolve(
       [...this.runs.values()].filter(r => r.parent_run_id === parentRunId).map(r => this.clone(r))
@@ -247,13 +259,13 @@ export class InMemoryStore implements IWorkflowStore {
 
   recoverCancelledFanOutRun = (id: string): Promise<WorkflowRun> => {
     const r = this.runs.get(id);
-    const reason = r?.metadata.cancelled_reason;
+    const reason = r?.metadata[CANCELLED_REASON_METADATA_KEY];
     if (!r || r.status !== 'cancelled' || !FAN_OUT_CANCEL_REASONS.some(known => known === reason)) {
       throw new Error(`run ${id} is not recoverable`);
     }
     r.status = 'running';
     r.completed_at = null;
-    const { cancelled_reason: _cancelledReason, ...metadata } = r.metadata;
+    const { [CANCELLED_REASON_METADATA_KEY]: _cancelledReason, ...metadata } = r.metadata;
     r.metadata = metadata;
     return Promise.resolve(this.clone(r));
   };
@@ -392,7 +404,7 @@ export class InMemoryStore implements IWorkflowStore {
     if (r && r.status !== 'completed' && r.status !== 'cancelled') {
       r.status = 'cancelled';
       r.completed_at = new Date();
-      r.metadata = { ...r.metadata, cancelled_reason: reason };
+      r.metadata = { ...r.metadata, [CANCELLED_REASON_METADATA_KEY]: reason };
       this.events.push({
         workflow_run_id: id,
         event_type: 'workflow_cancelled',

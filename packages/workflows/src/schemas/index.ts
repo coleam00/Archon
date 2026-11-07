@@ -252,6 +252,7 @@ export {
   reRunsOwnNodeOnResume,
   SUBRUN_METADATA_KEYS,
   readSubrunMetadata,
+  runInputsMetadata,
   RUN_METADATA_KEYS,
   readIdentityUnresolved,
   WORKFLOW_SOURCE_METADATA_KEY,
@@ -259,7 +260,9 @@ export {
   workflowSourceMetadataSchema,
   readWorkflowSourceState,
   CONTINUATION_METADATA_KEY,
+  CONTINUATION_MODES,
   readContinuationMode,
+  continuationInheritsEstate,
   EXECUTION_OWNER_METADATA_KEY,
   readExecutionOwner,
   RUN_DISPATCH_METADATA_KEY,
@@ -293,6 +296,7 @@ export type {
   WorkflowSourceConfig,
   WorkflowSourceState,
   ContinuationMode,
+  ContinuationMetadata,
   ExecutionOwnerRecord,
   RunDispatchMetadata,
 } from './workflow-run';
@@ -351,3 +355,9 @@ export {
 export type { SessionCursor } from './workflow-run';
 
 export { canSuspend, isInteractiveSink } from './node-suspension';
+
+export {
+  packSettingSpecSchema,
+  type PackSettingSpec,
+  type WorkflowPack,
+} from './pack-settings';

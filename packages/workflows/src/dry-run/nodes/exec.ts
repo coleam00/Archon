@@ -55,8 +55,10 @@ export async function executeCodeNode(
         loopPrevOutput: '',
         rejectionReason: '',
         issueContext: '',
-        // No artifacts are written in a dry run, so there is no listing to point at.
+        // A dry run writes no artifacts and records no node state, so there is no
+        // listing to point at.
         typedArtifactsFile: '',
+        nodeOutcomesFile: '',
         nodeExecution: execution ?? null,
         inputEnvKeys: Object.keys(inputEnv),
       }),

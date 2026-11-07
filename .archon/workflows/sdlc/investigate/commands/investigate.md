@@ -91,3 +91,7 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
   `$ARTIFACTS_DIR`.
 
 Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, no unresolved gap was disguised by extra breadth, and `git status` matches what you started with.
+
+## Docker verification builds
+
+For disposable Docker verification builds, follow the [Docker verification guidance](../../README.md#docker-verification).

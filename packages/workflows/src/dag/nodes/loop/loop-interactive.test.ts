@@ -20,6 +20,7 @@ import {
   expectLoopGateEvidence,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
+import { ParentStatusReadError } from '../../../parent-status-read';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import {
   executionMetadata,
@@ -1225,6 +1226,118 @@ describe('interactive loop node', () => {
       };
     };
 
+    for (const legacy of [false, true]) {
+      it.each(['between iterations', 'before retry'] as const)(
+        `counts carried and interrupted spend once after recovery %s (legacy gate: ${legacy})`,
+        async boundary => {
+          const runId = 'interrupted-gate';
+          const deps = createMockDeps();
+          const store = deps.store;
+          (
+            store.getDagResumeSnapshot as Mock<IWorkflowStore['getDagResumeSnapshot']>
+          ).mockImplementation(async () => foldDagResumeSnapshot(persistedEvents(store), runId));
+          const execute = async (node: DagNode, approval?: Record<string, unknown>) => {
+            const prior =
+              approval === undefined
+                ? undefined
+                : await foldDagResumeSnapshot(persistedEvents(store), runId);
+            return executeDagWorkflow(
+              dagOptions({
+                priorCompletedNodes: prior?.completedNodeOutputs,
+                priorUsage: prior,
+                deps,
+                platform: createMockPlatform(),
+                cwd: testDir,
+                workflow: { name: 'interrupted-gate', nodes: [node] },
+                workflowRun: makeWorkflowRun(
+                  runId,
+                  approval === undefined
+                    ? {}
+                    : {
+                        metadata: { approval, loop_user_input: 'again', loop_feedback_given: true },
+                      }
+                ),
+              })
+            );
+          };
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: 'Review this.' };
+            yield {
+              type: 'result',
+              sessionId: 'gate-session',
+              cost: 0.04,
+              tokens: { input: 40, output: 4, cacheRead: 10, cacheWrite: 0 },
+            };
+          });
+          await execute(refine);
+          const savedGate = store.pauseWorkflowRun.mock.calls.at(-1)?.[1];
+          if (savedGate === undefined) throw new Error('Expected gate');
+          const approval = { ...savedGate, ...(legacy ? { execution: undefined } : {}) };
+          const node: LoopNode = {
+            ...refine,
+            retry: { max_attempts: 1, delay_ms: 0 },
+          };
+          const cause = new Error('parent status unavailable');
+          let reject = true;
+          (
+            store.getWorkflowRunStatus as Mock<IWorkflowStore['getWorkflowRunStatus']>
+          ).mockImplementation(async () => {
+            if (
+              reject &&
+              (boundary === 'between iterations' ||
+                persistedEvents(store).some(e => e.event_type === 'node_retry_scheduled'))
+            ) {
+              reject = false;
+              throw cause;
+            }
+            return 'running';
+          });
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield {
+              type: 'result',
+              sessionId: 'paid-interrupted',
+              cost: 0.03,
+              tokens: { input: 30, output: 3, cacheRead: 5, cacheWrite: 0 },
+              isError: true,
+              failure: { class: 'transient', evidence: 'retry' },
+            };
+          });
+          const error: unknown = await execute(node, approval).catch((error: unknown) => error);
+          expect(error).toBeInstanceOf(ParentStatusReadError);
+          if (!(error instanceof ParentStatusReadError)) throw new Error('Expected interruption');
+          expect(error.cause).toBe(cause);
+          const interrupted = await foldDagResumeSnapshot(persistedEvents(store), runId);
+          expect(interrupted.costUsd).toBeCloseTo(boundary === 'before retry' ? 0.07 : 0.04, 5);
+          expect(interrupted.tokens?.input).toBe(boundary === 'before retry' ? 70 : 40);
+          expect(persistedEvents(store).some(e => e.event_type === 'node_failed')).toBe(false);
+          mockSendQueryDag.mockImplementation(async function* () {
+            yield { type: 'agent_message_chunk', text: '<promise>APPROVED</promise>' };
+            yield {
+              type: 'result',
+              sessionId: 'recovered',
+              cost: 0.03,
+              tokens: { input: 30, output: 3, cacheRead: 5, cacheWrite: 0 },
+            };
+          });
+          await execute(node, approval);
+          const snapshot = await foldDagResumeSnapshot(persistedEvents(store), runId);
+          const retried = boundary === 'before retry';
+          expect(snapshot.costUsd).toBeCloseTo(retried ? 0.1 : 0.07, 5);
+          expect(snapshot.tokens).toMatchObject({
+            input: retried ? 100 : 70,
+            output: retried ? 10 : 7,
+            cacheRead: retried ? 20 : 15,
+            cacheWrite: 0,
+          });
+          expect(runUsageWrites(store).at(-1)).toMatchObject({
+            total_cost_usd: expect.closeTo(retried ? 0.1 : 0.07, 5),
+            total_tokens_in: retried ? 100 : 70,
+            total_tokens_out: retried ? 10 : 7,
+          });
+        }
+      );
+    }
+
     it.each([true, false])(
       'ignores negative persisted gate cost on resume with feedback=%s',
       async feedbackGiven => {
@@ -1476,9 +1589,7 @@ describe('interactive loop node', () => {
             runId
           );
           expect(pausedSnapshot.costUsd).toBeCloseTo(0.04, 5);
-          expect(
-            pausedSnapshot.loopConfigFailureBaselines?.get(execution.invocation.id)
-          ).toMatchObject({
+          expect(pausedSnapshot.loopUsageBaselines?.get(execution.invocation.id)).toMatchObject({
             costUsd: execution.spend.costUsd,
             tokens: execution.spend.tokens,
           });
@@ -1542,7 +1653,7 @@ describe('interactive loop node', () => {
         });
         const finalSnapshot = await foldDagResumeSnapshot(retriedEvents, runId);
         expect(finalSnapshot.tokens).toMatchObject(expectedTokens);
-        expect(finalSnapshot.loopConfigFailureBaselines?.size).toBe(0);
+        expect(finalSnapshot.loopUsageBaselines?.size).toBe(0);
       }
     );
 
@@ -1691,7 +1802,12 @@ describe('interactive loop node', () => {
   });
 
   describe('at max_iterations (#4290)', () => {
-    const runAtCap = async (loopUserInput: string, feedbackGiven: boolean, iteration = 1) => {
+    const runAtCap = async (
+      loopUserInput: string,
+      feedbackGiven: boolean,
+      iteration = 1,
+      exhausted: { onExhausted?: 'complete'; iterationOutput?: string } = {}
+    ) => {
       const mockDeps = createMockDeps();
       await executeDagWorkflow(
         dagOptions({
@@ -1711,6 +1827,7 @@ describe('interactive loop node', () => {
                   max_iterations: 1,
                   interactive: true,
                   gate_message: 'Review.',
+                  ...(exhausted.onExhausted ? { on_exhausted: exhausted.onExhausted } : {}),
                 },
               },
             ],
@@ -1725,6 +1842,9 @@ describe('interactive loop node', () => {
                 message: 'gate',
                 completionSignaled: false,
                 signaledOutput: null,
+                ...(exhausted.iterationOutput !== undefined
+                  ? { iterationOutput: exhausted.iterationOutput }
+                  : {}),
               },
               loop_user_input: loopUserInput,
               loop_feedback_given: feedbackGiven,
@@ -1765,6 +1885,17 @@ describe('interactive loop node', () => {
       expect(mockSendQueryDag.mock.calls.length).toBe(0);
       expect(completed).toBeUndefined();
       expect(failed?.data).toMatchObject({ failure_kind: 'max_iterations' });
+    });
+
+    it('completes with the paused output when the final gate is approved without feedback under on_exhausted: complete', async () => {
+      const { completed, failed } = await runAtCap('Approved', false, 1, {
+        onExhausted: 'complete',
+        iterationOutput: 'draft 1',
+      });
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      expect(failed).toBeUndefined();
+      expect(completed?.data).toMatchObject({ node_output: 'draft 1', maxIterations: 1 });
     });
 
     it('runs exactly one iteration past max_iterations per feedback answer when it does not complete', async () => {

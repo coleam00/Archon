@@ -185,7 +185,7 @@ async function collectDefaultChatModel(provider: string): Promise<string | undef
   if (choice === CUSTOM_MODEL) {
     const typed = await text({
       message: `Model id for ${provider}:`,
-      placeholder: provider === 'codex' ? 'gpt-5.6-sol' : 'claude-sonnet-4-6',
+      placeholder: provider === 'codex' ? 'gpt-6.1-sol' : 'claude-sonnet-5-5',
     });
     if (isCancel(typed)) cancelSetup();
     // clack's text() is typed as string but resolves undefined on an empty

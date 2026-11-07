@@ -17,6 +17,7 @@ import type { DagNode, NestedKeySpec } from './dag-node';
 import { jsonValueSchema } from '../output-ref';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
 import { modelRefSchema, type WorkflowModelRef } from './model-binding';
+import type { WorkflowPack } from './pack-settings';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -293,8 +294,16 @@ export const workflowDefinitionSchema = z.preprocess(
   workflowDefinitionObjectSchema
 );
 
-/** Authored workflow definition parsed from YAML, before include expansion. */
-export type WorkflowDefinition = z.infer<typeof workflowDefinitionSchema> & { prompt?: never };
+/**
+ * Authored workflow definition parsed from YAML, before include expansion.
+ *
+ * `pack` is not authorable: it is absent from the schema (and so from the known keys),
+ * and only discovery sets it, from the pack directory it loaded the file from.
+ */
+export type WorkflowDefinition = z.infer<typeof workflowDefinitionSchema> & {
+  prompt?: never;
+  pack?: WorkflowPack;
+};
 
 /** Static execution plan attached after include expansion and graph validation. */
 export interface GraphPlan {

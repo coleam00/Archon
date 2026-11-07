@@ -4,7 +4,7 @@
  * JSON-RPC protocol so a failed turn reports a typed `codexErrorInfo`.
  */
 import { z } from 'zod';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -45,6 +45,7 @@ import {
   JsonRpcError,
   settlesWithin,
   type Spawner,
+  type ProcessGroupOwner,
 } from './app-server';
 import { failureClassOfStop, withModelAccessAdvice } from './turn-error';
 import { codexLaunch, codexLogin, type CodexLogin } from './login';
@@ -275,7 +276,8 @@ export class CodexProvider implements IAgentProvider {
    */
   constructor(
     private readonly spawner?: Spawner,
-    private readonly shutdownGraceMs = SHUTDOWN_GRACE_MS
+    private readonly shutdownGraceMs = SHUTDOWN_GRACE_MS,
+    private readonly processGroupOwner: ProcessGroupOwner = 'connection'
   ) {}
 
   async checkCredential(
@@ -332,7 +334,11 @@ export class CodexProvider implements IAgentProvider {
     aborted: Promise<never>
   ): Promise<CredentialStatus> {
     signal.throwIfAborted();
-    const connection = AppServerConnection.start(binary, [], env, this.spawner);
+    const connection = AppServerConnection.start(binary, [], env, this.spawner, {
+      processGroupOwner: this.processGroupOwner,
+    });
+    let response: unknown;
+    const errors: string[] = [];
     try {
       await Promise.race([
         aborted,
@@ -342,38 +348,48 @@ export class CodexProvider implements IAgentProvider {
         }),
       ]);
       connection.notify('initialized');
-      const response = await Promise.race([
+      response = await Promise.race([
         aborted,
         // Ask for a refresh so a revoked sign-in reads as no account. A turn never sends
         // account/read, so this refresh is the check's own.
         connection.request('account/read', { refreshToken: true }),
       ]);
-      signal.throwIfAborted();
-      const validated = accountResponseSchema.safeParse(response);
-      if (!validated.success) {
-        return {
-          state: 'check_failed',
-          source: 'native',
-          evidence: 'Codex account/read returned an invalid protocol response.',
-        };
-      }
-      const { account, requiresOpenaiAuth } = validated.data;
-      if (account !== null) return { state: 'usable', source: 'native' };
-      // A model provider configured in Codex that needs no OpenAI login authenticates on its
-      // own terms, which account/read does not report.
-      if (!requiresOpenaiAuth) return { state: 'not_checked', source: 'native' };
-      return {
-        state: 'unusable',
-        source: 'native',
-        evidence:
-          'Codex reports no usable login: it is not signed in, or its sign-in could not be refreshed. Run `codex login`.',
-      };
-    } finally {
-      // Cleanup keeps observing the process after cancellation; the credential decision
-      // must still end at the caller's deadline.
-      await Promise.race([aborted, connection.shutdown(this.shutdownGraceMs)]);
-      signal.throwIfAborted();
+    } catch (error) {
+      errors.push(
+        error instanceof ConnectionClosedError
+          ? error.evidence
+          : error instanceof Error
+            ? error.message
+            : String(error)
+      );
     }
+    // Cleanup keeps observing the process after cancellation; the credential decision
+    // must still end at the caller's deadline.
+    const end = await Promise.race([aborted, connection.shutdown(this.shutdownGraceMs)]);
+    signal.throwIfAborted();
+    if (end.kind !== 'exited' || end.code !== 0 || end.signal !== null) {
+      throw connection.closedError(end, errors);
+    }
+    if (errors.length) throw new Error(errors.join('\n'));
+    const validated = accountResponseSchema.safeParse(response);
+    if (!validated.success) {
+      return {
+        state: 'check_failed',
+        source: 'native',
+        evidence: 'Codex account/read returned an invalid protocol response.',
+      };
+    }
+    const { account, requiresOpenaiAuth } = validated.data;
+    if (account !== null) return { state: 'usable', source: 'native' };
+    // A model provider configured in Codex that needs no OpenAI login authenticates on its
+    // own terms, which account/read does not report.
+    if (!requiresOpenaiAuth) return { state: 'not_checked', source: 'native' };
+    return {
+      state: 'unusable',
+      source: 'native',
+      evidence:
+        'Codex reports no usable login: it is not signed in, or its sign-in could not be refreshed. Run `codex login`.',
+    };
   }
 
   getCapabilities(): ProviderCapabilities {
@@ -397,6 +413,7 @@ export class CodexProvider implements IAgentProvider {
     resumeSessionId?: string,
     requestOptions?: SendQueryOptions
   ): AsyncGenerator<MessageChunk> {
+    const runId = randomUUID();
     const abortSignal = requestOptions?.abortSignal;
     const run: CodexRun = {
       connection: undefined,
@@ -459,7 +476,11 @@ export class CodexProvider implements IAgentProvider {
           appServerArgs(login, plugins, modelCatalogPath),
           launch.env,
           this.spawner,
-          requestOptions?.protectedEnvKeys
+          {
+            protectedEnvKeys: requestOptions?.protectedEnvKeys,
+            runId,
+            processGroupOwner: this.processGroupOwner,
+          }
         );
       run.connection = startAppServer(nodePlugins);
       // An abort while the setup above awaited found no process to stop.
@@ -492,7 +513,10 @@ export class CodexProvider implements IAgentProvider {
       abortSignal?.removeEventListener('abort', onAbort);
       if (run.connection && !(await this.shutDown(run.connection))) call.observationLost = true;
     }
-    if (!call.observationLost) yield { type: 'settled' };
+    if (!call.observationLost) {
+      getLog().debug({ runId }, 'codex.settle');
+      yield { type: 'settled' };
+    }
   }
 
   /**
@@ -557,25 +581,26 @@ export class CodexProvider implements IAgentProvider {
   }
 
   /**
-   * Finish tool calls and stop the process after its turn; false when it did not exit
-   * cleanly. It waits for the exit after stdin closes without a SIGTERM, which would turn
+   * Finish tool calls and stop the process after its turn; false on abnormal process
+   * exit. It waits for the exit after stdin closes without a SIGTERM, which would turn
    * a slow clean exit into exit code 1.
    */
   private async shutDown(connection: AppServerConnection): Promise<boolean> {
     await connection.finishToolCalls();
+    getLog().debug({ runId: connection.runId }, 'codex.host_tool_calls_finished');
     const end = await connection.shutdown();
-    if (end?.kind === 'exited' && end.code === 0 && end.signal === null) return true;
-    if (end) {
-      getLog().error(
-        {
-          err: connection.closedError(end),
-          ...(end.kind === 'exited' && {
-            lifecycle: 'process_abnormal_exit' satisfies ProviderLifecycleEvent,
-          }),
-        },
-        'codex.app_server_abnormal_exit'
-      );
-    }
+    if (end.kind === 'exited' && end.code === 0 && end.signal === null) return true;
+    const error = connection.closedError(end);
+    getLog().error(
+      {
+        err: error,
+        ...(end.kind === 'exited' && {
+          lifecycle: 'process_abnormal_exit' satisfies ProviderLifecycleEvent,
+        }),
+      },
+      'codex.app_server_abnormal_exit'
+    );
+    if (end.kind === 'cleanup_failed') throw error;
     return false;
   }
 

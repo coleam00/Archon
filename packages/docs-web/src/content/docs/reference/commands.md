@@ -74,7 +74,7 @@ The following commands exist in the command handler but are **not** deterministi
 | `/worktree list` | Show worktrees for this repo |
 | `/worktree remove [--force]` | Remove current worktree |
 | `/worktree cleanup merged\|stale` | Clean up worktrees |
-| `/worktree orphans` | Show all worktrees from git |
+| `/worktree orphans` | Show secondary local-branch worktrees, including those created externally; use `git worktree list` for the full inventory |
 | `/init` | Create `.archon` structure in current repo |
 | `/reset-context` | Reset AI context, keep worktree |
 

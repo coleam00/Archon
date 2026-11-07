@@ -22,5 +22,5 @@ them before they stop for a person, and a question one of them answers is settle
   in provider config, tiers, or aliases").
 - **Agent judgment is checked by its outcome.** Ruled 2026-10-20. Agent judgment in a
   pack prompt is evaluated by its outcome
-  ([`CONSTITUTION.md`](../../workflows/sdlc/CONSTITUTION.md) §13). A review does not
+  ([`CONSTITUTION.md`](../../workflows/sdlc/CONSTITUTION.md#tests-help-authoring)). A review does not
   require a pack fixture or test that pins which decision a prompt makes.

@@ -2,6 +2,7 @@ import type { FanOutConfig, WorkflowNode } from '../../../schemas';
 import type { FanOutOutcome } from '../../../schemas/fan-out-outcome';
 import type { NodeFailureKind } from '../../../schemas/node-execution';
 import type { JsonValue } from '../../../output-ref';
+import { fanOutFailureMarker } from '../fan-out-shared';
 import { getLog } from '../../log';
 import type { ChildWorkflowOutcome } from '../../child-run';
 
@@ -82,19 +83,12 @@ export function joinFanOutOutcomes(
   // join: all_done — node succeeds once all children are terminal; a failed/cancelled
   // entry is represented as a failure-marker object in the aggregate array (so a
   // collector can reconcile partial results). Never fails the node on a partial failure.
-  //
-  // `archon_failed: true` is the marker's reserved discriminator (#2637): now that a
-  // completed structured child's slot is its payload OBJECT, a child whose own schema
-  // happens to carry `error` + `status` fields (a natural verifier shape) would be
-  // indistinguishable from a failed slot by shape alone. No key can be made literally
-  // unproducible through `output_format`, but no schema grows an `archon_failed`
-  // field by accident — collectors check `r?.archon_failed === true`, nothing else.
   return {
     status: 'completed',
     elements: outcomes.map((o, i) =>
       o.status === 'completed'
         ? childElement(o, i, parentRunId, node.id)
-        : { archon_failed: true, error: o.error ?? `child ${o.status}`, status: o.status }
+        : fanOutFailureMarker(o.status, o.error ?? `child ${o.status}`)
     ),
   };
 }

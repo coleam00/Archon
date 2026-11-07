@@ -1632,7 +1632,8 @@ describe('OpencodeProvider', () => {
   });
 
   test('embedded runtime retries startup on port conflict and succeeds', async () => {
-    startupErrors.push(new Error('Failed to start server on port 4096'));
+    const startupError = Object.assign(new Error('Listener unavailable'), { code: 'EADDRINUSE' });
+    startupErrors.push(startupError);
     const runtime = makeRuntime({ close: mock(() => undefined) });
     runtimeQueue.push(runtime);
     scriptedEvents = [{ type: 'session.idle', properties: { sessionID: 'session-1' } }];
@@ -1663,7 +1664,7 @@ describe('OpencodeProvider', () => {
     expect(secondConfig?.server?.port).toBe(secondPort);
     expect(mockLogger.warn).toHaveBeenCalledWith(
       {
-        err: expect.any(Error),
+        err: startupError,
         startupPort: expect.any(Number),
         attempt: 1,
         maxAttempts: 3,
@@ -1672,8 +1673,14 @@ describe('OpencodeProvider', () => {
     );
   });
 
-  test('embedded runtime does not retry non-port startup errors', async () => {
-    startupErrors.push(new Error('OpenCode binary missing'));
+  test.each([
+    new Error('OpenCode binary missing'),
+    new Error('address already in use'),
+    new Error('EADDRINUSE'),
+    new Error('Failed to start server on port 4096'),
+    Object.assign(new Error('address already in use'), { code: 'EACCES' }),
+  ])('embedded runtime does not retry unclassified startup errors: %s', async startupError => {
+    startupErrors.push(startupError);
 
     const { chunks, failure } = await consume(
       new OpencodeProvider().sendQuery('no retry startup', '/tmp', undefined, {
@@ -1683,7 +1690,8 @@ describe('OpencodeProvider', () => {
 
     // Only the failure result precedes `settled`.
     expect(chunks).toEqual([expect.objectContaining({ type: 'result', isError: true })]);
-    expect(failure?.evidence).toContain('OpenCode binary missing');
+    expect(failure?.class).toBe('unknown');
+    expect(failure?.evidence).toContain(startupError.message);
     expect(mockCreateOpencode).toHaveBeenCalledTimes(1);
     expect(mockLogger.warn).not.toHaveBeenCalledWith(
       expect.any(Object),

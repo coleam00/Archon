@@ -73,13 +73,15 @@ async function adoptAtPath(
   // "branch already exists" cascade) or silently adopting.
   await verifySameRepository(request, branchName, worktreePath);
 
-  if (exactBranch) {
+  const expectedBranch =
+    exactBranch ?? (request.workflowType === 'task' ? request.taskBranch?.branch : undefined);
+  if (expectedBranch) {
     const actualBranch = await getCurrentBranchStrict(worktreePath);
-    if (actualBranch !== exactBranch) {
+    if (actualBranch !== expectedBranch) {
       throw new IsolationFailure(
         'adoption_refused',
         `Cannot adopt worktree at '${worktreePath}': expected branch ` +
-          `'${exactBranch}', found '${actualBranch ?? 'detached HEAD'}'.`
+          `'${expectedBranch}', found '${actualBranch ?? 'detached HEAD'}'.`
       );
     }
   }

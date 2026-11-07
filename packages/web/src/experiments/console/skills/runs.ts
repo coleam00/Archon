@@ -44,10 +44,16 @@ export async function listRuns(
   };
 }
 
-export async function listRunsNeedingAttention(): Promise<Run[]> {
+type AttentionResponse = components['schemas']['RunsNeedingAttentionResponse'];
+export interface RunsAttention {
+  runs: Run[];
+  degraded: NonNullable<AttentionResponse['degraded']>;
+}
+
+export async function listRunsNeedingAttention(): Promise<RunsAttention> {
   const res =
     await requestJson<components['schemas']['RunsNeedingAttentionResponse']>('/api/runs/attention');
-  return res.runs.map(toRun);
+  return { runs: res.runs.map(toRun), degraded: res.degraded ?? [] };
 }
 
 export async function listGlobalCounts(): Promise<RunCounts> {

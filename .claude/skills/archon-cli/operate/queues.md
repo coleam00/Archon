@@ -21,7 +21,8 @@ reference covers launching and tending the queues by hand.
 ## Before the first run
 
 - `archon workflow run archon-forge-check` must pass in the checkout. It proves the
-  pack can read the repository through its forge source (`gh` by default).
+  pack can read the repository through the forge plugin
+  (`archon plugin add coleam00/Archon/plugins/forge-github`).
 - `.archon/sdlc/policy/maintainers.json` on the default branch lists the forge logins
   whose issues are triaged and whose review comments count. An entry can be an object,
   `{ "login": "<login>", "merge_queue": "own-prs" }`, which also sends that
@@ -127,7 +128,8 @@ A round ends one of three ways, recorded on the item:
   ready without another round.
 - `continue`: the issue already answers what stopped the round, and the correction
   stays inside the issue's shape (one that adds machinery the issue does not name asks
-  instead). The run starts the
+  instead). A pull request that changed nothing material since its last
+  review never continues; the round ends as done or ask. The run starts the
   item's next round at once, as a detached `archon-build-queue --input number=<n>`
   run on the same run config and the same `retriage_as` and `round_limit`.
   If that launch fails, the item waits for the next queue run.

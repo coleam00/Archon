@@ -1,3 +1,4 @@
+import { attentionDegradedSchema } from '@archon/workflows/schemas/attention-degraded';
 import {
   toolCallAttentionArraySchema,
   TOOL_CALL_ATTENTION_METADATA_KEY,
@@ -15,6 +16,7 @@ import {
   attentionQueueCountsSchema,
   attentionQueueItemSchema,
 } from '@archon/workflows/attention-queue';
+import { attentionStreamLineSchema } from '@archon/workflows/attention-watch';
 import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
 import {
   workflowDefinitionSchema as engineWorkflowDefinitionSchema,
@@ -369,6 +371,17 @@ export const attentionQueueQuerySchema = z.object({
   countBy: z.string().optional(),
 });
 
+/** GET /api/runs/attention/stream query: the list query without its ordering and counting. */
+export const attentionStreamQuerySchema = attentionQueueQuerySchema.pick({
+  project: true,
+  all: true,
+  label: true,
+});
+
+/** One GET /api/runs/attention/stream event's data: the `--watch --json` line. */
+export const attentionStreamLineResponseSchema =
+  attentionStreamLineSchema.openapi('AttentionStreamLine');
+
 /**
  * GET /api/runs/attention list response. `items` is the queue; `runs` holds the same runs
  * as dashboard rows for the console.
@@ -377,12 +390,16 @@ export const runsNeedingAttentionResponseSchema = z
   .object({
     runs: z.array(dashboardWorkflowRunSchema),
     items: z.array(attentionQueueItemSchema.meta({ id: 'AttentionQueueItem' })),
+    degraded: z.array(attentionDegradedSchema).optional(),
   })
   .openapi('RunsNeedingAttentionResponse');
 
 /** GET /api/runs/attention response when `countBy` is given. */
 export const attentionQueueCountsResponseSchema = z
-  .object({ counts: attentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }) })
+  .object({
+    counts: attentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }),
+    degraded: z.array(attentionDegradedSchema).optional(),
+  })
   .openapi('AttentionQueueCountsResponse');
 
 /** GET /api/runs/{runId}/attention response: null when the run needs no one now. */

@@ -1,6 +1,6 @@
 {
   "name": "@archon/isolation",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -47,6 +47,7 @@
       "src/backends/in-place.test.ts",
       "src/backends/container.test.ts",
       "src/container/docker-exec.test.ts",
+      "src/container/verification-images.test.ts",
       "src/container/overlay.test.ts",
       "src/container/overlay-scripts.test.ts"
     ]

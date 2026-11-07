@@ -3,9 +3,12 @@
  */
 import type { ProviderRegistry } from '@archon/provider-contract';
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, IncludeDirective } from './schemas';
+import type { WorkflowPack } from './schemas/pack-settings';
 import { sandboxSettingsSchema } from './schemas/dag-node';
 import { modelReasoningEffortSchema, webSearchModeSchema } from './schemas/workflow';
 import { validateInlineExecInputs } from './exec-input-validation';
+import { isIncludeDirective, isLoopGroupNode } from './schemas';
+import { PACK_DIR_REFERENCE } from './workflow-variables';
 import { getLog } from './loader/log';
 import {
   validateLoopGroupProseCompletion,
@@ -26,6 +29,7 @@ import {
   parseEvidencePolicy,
   parseFallbackModel,
   parseWorkflowModel,
+  inputEnvKeyCollision,
   parseInputs,
   parseMutatesCheckout,
   parseOptionalField,
@@ -130,17 +134,21 @@ function nodeGraphError(
 }
 
 /**
- * Parse and validate a workflow YAML file
+ * Parse and validate a workflow YAML file.
+ *
+ * @param pack the pack the file was loaded from, set by discovery for a packaged workflow.
+ *   Its settings count as declared inputs for the checks that need every input name.
  */
 export function parseWorkflow(
   content: string,
   filename: string,
   providers: ProviderRegistry,
-  configuredEnvNames?: ReadonlySet<string>
+  configuredEnvNames?: ReadonlySet<string>,
+  pack?: WorkflowPack
 ): ParseResult {
   try {
     const raw = parseYaml(content) as Record<string, unknown>;
-    return parseWorkflowDocument(raw, filename, providers, configuredEnvNames);
+    return parseWorkflowDocument(raw, filename, providers, configuredEnvNames, pack);
   } catch (error) {
     return yamlParseFailure(filename, error as Error);
   }
@@ -151,7 +159,8 @@ function parseWorkflowDocument(
   raw: Record<string, unknown>,
   filename: string,
   providers: ProviderRegistry,
-  configuredEnvNames: ReadonlySet<string> | undefined
+  configuredEnvNames: ReadonlySet<string> | undefined,
+  pack: WorkflowPack | undefined
 ): ParseResult {
   const reject = (error: string): ParseResult => ({
     workflow: null,
@@ -184,7 +193,7 @@ function parseWorkflowDocument(
 
   collectUnknownWorkflowKeys(raw, header.name, parseWarnings);
 
-  const workflow = buildWorkflowDefinition(header, dagNodes, fields);
+  const workflow = buildWorkflowDefinition(header, dagNodes, fields, pack);
   const contractError = workflowContractError(workflow, configuredEnvNames, parseWarnings);
   if (contractError !== null) return reject(contractError);
 
@@ -336,9 +345,11 @@ function parseWorkflowFields(
 function buildWorkflowDefinition(
   header: WorkflowHeader,
   dagNodes: (DagNode | IncludeDirective)[],
-  fields: WorkflowFields
+  fields: WorkflowFields,
+  pack: WorkflowPack | undefined
 ): WorkflowDefinition {
   return {
+    ...(pack !== undefined ? { pack } : {}),
     name: header.name,
     description: header.description,
     provider: fields.provider,
@@ -384,6 +395,19 @@ function workflowContractError(
   configuredEnvNames: ReadonlySet<string> | undefined,
   parseWarnings: string[]
 ): string | null {
+  // A pack setting is delivered as an input, so it shares the inputs' env-key space. The
+  // same name in both is the workflow overriding the pack's value, not a collision.
+  if (workflow.pack?.settings !== undefined) {
+    const collision = inputEnvKeyCollision([
+      ...Object.keys(workflow.inputs ?? {}),
+      ...Object.keys(workflow.pack.settings),
+    ]);
+    if (collision !== null) return `${collision} (workflow inputs and pack settings)`;
+  }
+  const packDirInclude = includePassingPackDir(workflow.nodes);
+  if (packDirInclude !== undefined) {
+    return `Node '${packDirInclude}' passes $PACK_DIR through 'with:'. An included block resolves its text in its own pack, so the value would name the block's pack, not this file's. Reference $PACK_DIR inside the block instead.`;
+  }
   const execInputValidation = validateInlineExecInputs(workflow, configuredEnvNames);
   parseWarnings.push(...execInputValidation.warnings);
   if (execInputValidation.errors.length > 0) return execInputValidation.errors.join(' ');
@@ -412,4 +436,25 @@ function yamlParseFailure(filename: string, err: Error): ParseResult {
       errorType: 'parse_error',
     },
   };
+}
+
+/**
+ * The id of an `include:` node whose `with:` passes `$PACK_DIR`. The value is spliced into
+ * the block and resolved in the block's pack at run time, so it would silently name the
+ * wrong pack; refusing it keeps "text resolves in the pack of the file that wrote it".
+ */
+function includePassingPackDir(nodes: WorkflowDefinition['nodes']): string | undefined {
+  for (const node of nodes) {
+    if (isIncludeDirective(node)) {
+      // Stringified so a reference nested in an array or object value is caught too.
+      const passes = Object.values(node.with ?? {}).some(value =>
+        PACK_DIR_REFERENCE.test(JSON.stringify(value))
+      );
+      if (passes) return node.id;
+    } else if (isLoopGroupNode(node)) {
+      const nested = includePassingPackDir(node.loop_group.nodes);
+      if (nested !== undefined) return nested;
+    }
+  }
+  return undefined;
 }

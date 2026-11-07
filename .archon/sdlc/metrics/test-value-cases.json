@@ -1,0 +1,507 @@
+[
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5239",
+    "tests": [
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > a failed dashboard writer does not remove or delay another connection",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > a late conversation write failure cannot remove its replacement",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > retains a live write cancelled through Hono: %s",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > the Hono writer rejects writes to an already %s stream",
+        "protects": false
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > stop prevents a pending live write from restoring old events: %s",
+        "protects": false
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > emit > buffers events until a stream connects and replays them only once",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > emit > retains failed and unattempted replay events for the next connection",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > emit > retains concurrent live events in emission order for ${conversationId}: %s",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > emit > live completion after ${retention} cannot restore or consume retained events: %s",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > emit > retains a failed live write for reconnect: %s",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > pending replay > hands the backlog to a replacement after the old write settles: %s",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > pending replay > retains the suffix when the writer is %s before the next attempt",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > pending replay > failure preserves original TTL while newer events remain eligible",
+        "protects": false
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > pending replay > expiry is checked again after a pending write",
+        "protects": false
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > pending replay > completion of an evicted entry cannot consume the retained head",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > pending replay > stop invalidates pending replay even if the transport is reused: %s",
+        "protects": false
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > pending replay > buffer cleanup invalidates old replay before a new buffer is created",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/adapters/web/transport.test.ts",
+        "name": "SSETransport > pending replay > dashboard replay has one owner and retries a failed head on another writer",
+        "protects": true
+      },
+      {
+        "file": "packages/server/src/routes/api.messages.test.ts",
+        "name": "SSE route replay > retains cancelled replay and drains it once through /api/stream/%s",
+        "protects": true
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5243",
+    "tests": [
+      {
+        "file": "packages/cli/src/commands/workflow-container-resume.integration.spec.ts",
+        "name": "a held write-back claim with no recorded outcome fails the run and keeps the overlay",
+        "protects": true
+      },
+      {
+        "file": "packages/workflows/src/dag/container-gate.test.ts",
+        "name": "executeDagWorkflow -- container write-back gate > resume after approve with a held claim and no resolution fails for reconciliation",
+        "protects": true
+      },
+      {
+        "file": "packages/workflows/src/dag/container-gate.test.ts",
+        "name": "executeDagWorkflow -- container write-back gate > resume after an apply whose resolution was recorded completes without a second apply",
+        "protects": true
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5258",
+    "tests": [
+      {
+        "file": "packages/git/src/worktree-operations.test.ts",
+        "name": "git utilities > listWorktrees > parses NUL-delimited worktree paths and excludes detached checkouts",
+        "protects": true
+      },
+      {
+        "file": "packages/isolation/src/providers/worktree-real-git.test.ts",
+        "name": "WorktreeProvider against real git > a new-branch request naming a branch that already exists > reports a branch held %s without changing the holder",
+        "protects": true
+      },
+      {
+        "file": "packages/isolation/src/providers/worktree-real-git.test.ts",
+        "name": "WorktreeProvider against real git > a new-branch request naming a branch that already exists > reports recovery for a deleted holder without removing its registration (locked: %s)",
+        "protects": true
+      },
+      {
+        "file": "packages/isolation/src/providers/worktree-real-git.test.ts",
+        "name": "WorktreeProvider against real git > a new-branch request naming a branch that already exists > collision-like stderr without a porcelain holder keeps the original add failure",
+        "protects": false
+      },
+      {
+        "file": "packages/isolation/src/providers/worktree-real-git.test.ts",
+        "name": "WorktreeProvider against real git > a new-branch request naming a branch that already exists > a failed add keeps the original failure without a holder diagnosis (inspection fails: %s)",
+        "protects": true
+      },
+      {
+        "file": "packages/isolation/src/providers/worktree-real-git.test.ts",
+        "name": "WorktreeProvider against real git > a new-branch request naming a branch that already exists > preserves a failed remote fetch when a holder appears concurrently",
+        "protects": false
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5261",
+    "tests": [
+      {
+        "file": "packages/workflows/src/dry-run-stubs.test.ts",
+        "name": "dry-run stub scaffolding and sparse defaults (#2624) > preserves authored null in agent and exec outputs with defaultStubs=%s",
+        "protects": true
+      },
+      {
+        "file": "packages/workflows/src/dry-run-stubs.test.ts",
+        "name": "dry-run stub scaffolding and sparse defaults (#2624) > holds an authored stub to the contract it stands in for",
+        "protects": true
+      },
+      {
+        "file": "packages/workflows/src/dry-run-routing.test.ts",
+        "name": "dry-run reachability and missing stubs > tolerates a missing stub on an all_done join and completes past it (#2869)",
+        "protects": false
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5284",
+    "tests": [
+      {
+        "file": "packages/workflows/src/dag-resume-usage.test.ts",
+        "name": "interrupted loop accounting > counts carried gate spend once across repeated interrupted continuations",
+        "protects": true
+      },
+      {
+        "file": "packages/workflows/src/dag/nodes/loop/loop-interactive.test.ts",
+        "name": "interactive loop node > cost carried in from a gate > counts carried and interrupted spend once after recovery %s (legacy gate: ${legacy}) (between iterations, before retry x legacy false/true)",
+        "protects": true
+      },
+      {
+        "file": "packages/workflows/src/dag/nodes/loop/loop.test.ts",
+        "name": "loop node execution > interrupts an unreadable parent %s without recording failure (usage write fails: ${usageWriteFails}) (between iterations, before retry x false/true)",
+        "protects": true
+      },
+      {
+        "file": "packages/workflows/src/dag/nodes/loop/loop.test.ts",
+        "name": "loop node execution > preserves supported parent status %s ${boundary} (all workflowRunStatus values + null x between iterations, before retry)",
+        "protects": true
+      },
+      {
+        "file": "packages/workflows/src/node-record-serialization.test.ts",
+        "name": "node record serializers > projects deferred usage without lifecycle, output or provider binding",
+        "protects": false
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5291",
+    "tests": [
+      {
+        "file": "packages/provider-contract/src/strict-output-schema.test.ts",
+        "name": "required fields forbidden by strict closure > names the enclosing forbidden field before completing ${keyword} (additionalProperties %s) (oneOf, anyOf x undefined, false, true)",
+        "protects": false
+      },
+      {
+        "file": "packages/provider-contract/src/strict-output-schema.test.ts",
+        "name": "required fields forbidden by strict closure > refuses undeclared required fields with authored additionalProperties %s (undefined, false, true)",
+        "protects": true
+      },
+      {
+        "file": "packages/provider-contract/src/strict-output-schema.test.ts",
+        "name": "required fields forbidden by strict closure > reports the nested object path and does not mistake inherited keys for properties",
+        "protects": true
+      },
+      {
+        "file": "packages/provider-contract/src/strict-output-schema.test.ts",
+        "name": "required fields forbidden by strict closure > preserves matching properties, required names and strict closure",
+        "protects": false
+      },
+      {
+        "file": "packages/workflows/src/dag/capability-preflight.test.ts",
+        "name": "executeDagWorkflow -- strict-schema preflight > rejects forbidden required fields before any agent starts (additionalProperties %s) (undefined, false)",
+        "protects": true
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5292",
+    "tests": [
+      {
+        "file": "packages/cli/src/commands/workflow-launch-config.integration.spec.ts",
+        "name": "registered named-branch reuse > refuses a non-branch symbolic HEAD before workflow execution",
+        "protects": true
+      },
+      {
+        "file": "packages/cli/src/commands/workflow-launch-config.integration.spec.ts",
+        "name": "registered named-branch reuse > refuses %s before workflow execution without changing the checkout (other branch, detached HEAD, colliding short ref)",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/handlers/commands/worktree.test.ts",
+        "name": "CommandHandler > handleCommand > /worktree > Windows path spelling > marks the current checkout in %s (list, orphans)",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/handlers/commands/worktree.test.ts",
+        "name": "CommandHandler > handleCommand > /worktree > Windows path spelling > excludes the main checkout under equivalent Windows spelling",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/handlers/commands/worktree.test.ts",
+        "name": "CommandHandler > handleCommand > /worktree > orphans > shows a secondary local-branch checkout when main is listed=%s (false, true)",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/handlers/commands/worktree.test.ts",
+        "name": "CommandHandler > handleCommand > /worktree > orphans > reports no secondary local-branch checkouts when main is listed=%s (false, true)",
+        "protects": false
+      },
+      {
+        "file": "packages/git/src/branch.test.ts",
+        "name": "git utilities > ownership-critical branch probes > getCurrentBranchStrict returns a named branch",
+        "protects": false
+      },
+      {
+        "file": "packages/git/src/branch.test.ts",
+        "name": "git utilities > ownership-critical branch probes > getCurrentBranchStrict refuses a symbolic HEAD outside local branches",
+        "protects": true
+      },
+      {
+        "file": "packages/git/src/worktree-operations.test.ts",
+        "name": "git utilities > listWorktrees > parses local-branch paths",
+        "protects": false
+      },
+      {
+        "file": "packages/git/src/worktree-operations.test.ts",
+        "name": "git utilities > listWorktrees > excludes non-local symbolic ref %s without losing local branches (refs/custom/foo, refs/custom/refs/heads/foo)",
+        "protects": true
+      },
+      {
+        "file": "packages/isolation/src/providers/worktree-real-git.test.ts",
+        "name": "WorktreeProvider against real git > named task target-path reuse refuses %s and preserves dirty contents (other branch, detached HEAD, colliding short ref)",
+        "protects": true
+      },
+      {
+        "file": "packages/isolation/src/providers/worktree-real-git.test.ts",
+        "name": "WorktreeProvider against real git > named task reuse refuses a non-branch symbolic HEAD without changing the checkout",
+        "protects": true
+      },
+      {
+        "file": "packages/isolation/src/providers/worktree-real-git.test.ts",
+        "name": "WorktreeProvider against real git > discovery excludes a non-local symbolic HEAD and preserves independent valid worktrees",
+        "protects": true
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5295",
+    "tests": [
+      {
+        "file": "packages/server/src/routes/api.messages.test.ts",
+        "name": "SSE heartbeat lifecycle > ${conversationId} stops heartbeats and finishes after %s (web-test-abc and __dashboard__ x abort, close, error)",
+        "protects": true
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5296",
+    "tests": [
+      {
+        "file": "packages/core/src/services/cleanup-status.integration.test.ts",
+        "name": "status preserves safe inventory failure identity for code $code",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/db/adapters/postgres-retry.test.ts",
+        "name": "<query|transaction> retry logs retain <40001|40P01> without private text (exhausted: %s)",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/db/adapters/postgres-retry.test.ts",
+        "name": "failed rollback logs retain only validated identity for $code (exhausted: $exhausted)",
+        "protects": true
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5297",
+    "tests": [
+      {
+        "file": "packages/core/src/db/subscription-oauth-store.test.ts",
+        "name": "<provider>: encrypted legacy blob refreshes through real core flow and saves the rotation",
+        "protects": false
+      },
+      {
+        "file": "packages/core/src/db/user-provider-key-store.test.ts",
+        "name": "user-provider-key-store > getDecryptedProviderCredential > oauth rotation → re-saves the new blob",
+        "protects": false
+      },
+      {
+        "file": "packages/core/src/db/user-provider-key-store.test.ts",
+        "name": "user-provider-key-store > getDecryptedProviderCredential > returns the rotated token after %i failed save attempts, and flags the stored credential when the rotation is lost",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/db/user-provider-key-store.test.ts",
+        "name": "user-provider-key-store > getDecryptedProviderCredential > a superseded rotation stops after %i save errors",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/db/user-provider-key-store.test.ts",
+        "name": "user-provider-key-store > getDecryptedProviderCredential > a lost save that kept the refresh token leaves the stored credential usable",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/db/user-provider-key-store.sqlite.integration.test.ts",
+        "name": "an in-flight rotation preserves reconnect",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/db/user-provider-key-store.sqlite.integration.test.ts",
+        "name": "an in-flight rotation preserves identical reconnect",
+        "protects": true
+      },
+      {
+        "file": "packages/core/src/db/user-provider-key-store.sqlite.integration.test.ts",
+        "name": "an in-flight rotation preserves deletion",
+        "protects": false
+      },
+      {
+        "file": "packages/core/src/db/user-provider-key-store.sqlite.integration.test.ts",
+        "name": "an in-flight rotation preserves api key",
+        "protects": false
+      },
+      {
+        "file": "packages/core/src/db/user-provider-key-store.postgres.integration.test.ts",
+        "name": "PostgreSQL rotation preserves newer credentials",
+        "protects": true
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5302",
+    "tests": [
+      {
+        "file": "packages/paths/src/plugin-process.test.ts",
+        "name": "Windows stop diagnostics > logs the single deciding probe %p and preserves the taskkill error",
+        "protects": true
+      },
+      {
+        "file": "packages/paths/src/plugin-process.test.ts",
+        "name": "Windows stop diagnostics > identity <observed|absent|unavailable> cannot change %p decision",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/plugin-process.test.ts",
+        "name": "Windows stop diagnostics > info-level rethrow logs at warn with a post-failure identity sample",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/plugin-process.test.ts",
+        "name": "Windows stop diagnostics > successful taskkill never probes liveness, takes a failure snapshot or emits diagnostics",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/plugin-process.test.ts",
+        "name": "Windows stop diagnostics > capture and sink failures cannot replace %p result",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/plugin-process.test.ts",
+        "name": "Windows stop diagnostics > throwing taskkill <code|stderr|toString> cannot replace %p result",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/plugin-process.test.ts",
+        "name": "Windows stop diagnostics > logs launch failure %p with explicit unavailable fields",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/plugin-process.test.ts",
+        "name": "Windows capture ordering > samples entry, taskkill, deciding probe, then failure identity in that order",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/process-owner.test.ts",
+        "name": "probePidLiveness > retains a normal %p return without proving death",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/process-owner.test.ts",
+        "name": "probePidLiveness > retains thrown code %p",
+        "protects": true
+      },
+      {
+        "file": "packages/paths/src/process-owner.test.ts",
+        "name": "probePidLiveness > represents missing error metadata explicitly",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/windows-process-identity.test.ts",
+        "name": "queries only the target identity with bounded, profile-free PowerShell",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/windows-process-identity.test.ts",
+        "name": "retains structured observation %p",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/windows-process-identity.test.ts",
+        "name": "rejects malformed identity output %p",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/windows-process-identity.test.ts",
+        "name": "retains capture failure code %p",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/windows-process-identity.test.ts",
+        "name": "does not interpolate invalid PID %p",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/windows-process-identity.test.ts",
+        "name": "native query observes the same live incarnation twice",
+        "protects": true
+      },
+      {
+        "file": "packages/paths/src/windows-process-identity.test.ts",
+        "name": "native absent query round-trips a lookup ArgumentException",
+        "protects": false
+      },
+      {
+        "file": "packages/paths/src/windows-process-identity.test.ts",
+        "name": "native unavailable query preserves the exception code $code",
+        "protects": false
+      }
+    ]
+  },
+  {
+    "pr": "https://github.com/coleam00/Archon/pull/5304",
+    "tests": [
+      {
+        "file": "packages/providers/src/community/opencode/provider.test.ts",
+        "name": "OpencodeProvider > embedded runtime retries startup on port conflict and succeeds",
+        "protects": true
+      },
+      {
+        "file": "packages/providers/src/community/opencode/provider.test.ts",
+        "name": "OpencodeProvider > embedded runtime does not retry unclassified startup errors: %s",
+        "protects": true
+      }
+    ]
+  }
+]

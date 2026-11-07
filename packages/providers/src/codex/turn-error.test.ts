@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import ts from 'typescript';
 import type { RateLimitSnapshot } from './protocol/v2/RateLimitSnapshot';
 import type { ProviderFailureClass } from '@archon/provider-contract';
-import { CLASS_BY_VARIANT, classifyTurnError } from './turn-error';
+import { CLASS_BY_VARIANT, classifyTurnError, failureClassOfStop } from './turn-error';
+import { ConnectionClosedError } from './app-server';
 
 /** The string literals of the generated `CodexErrorInfo` union, which its `| string` hides from the type. */
 function generatedStringVariants(): string[] {
@@ -42,6 +43,21 @@ function snapshot(
 }
 
 describe('classifyTurnError', () => {
+  test.each([true, false])(
+    'cleanup failure is unknown beforeFirstResponse=%p',
+    beforeFirstResponse => {
+      const error = new ConnectionClosedError(
+        {
+          kind: 'cleanup_failed',
+          exit: { kind: 'exited', code: 0, signal: null },
+          error: new Error('cleanup refused'),
+        },
+        beforeFirstResponse,
+        ''
+      );
+      expect(failureClassOfStop(error)).toBe('unknown');
+    }
+  );
   test('classifies every string variant the generated protocol declares', () => {
     const generated = generatedStringVariants();
     expect(generated).toContain('unauthorized');

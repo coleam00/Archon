@@ -1,7 +1,12 @@
 import { execFile } from 'node:child_process';
 import { extname, isAbsolute, join } from 'node:path';
 import { promisify } from 'node:util';
-import { isPidProvablyGone } from './process-owner';
+import { createLogger } from './logger';
+import { probePidLiveness } from './process-owner';
+import {
+  readWindowsProcessIdentity,
+  type WindowsProcessIdentity,
+} from './windows-process-identity';
 
 const execFileAsync = promisify(execFile);
 
@@ -60,10 +65,28 @@ export function validateCommand(command: string): string | undefined {
   return undefined;
 }
 
+async function listPosixProcessGroupStates(): Promise<string> {
+  const { stdout } = await execFileAsync('/bin/ps', ['-A', '-o', 'pgid=,stat='], { timeout: 5000 });
+  return stdout;
+}
+
+function processGroupHasEnded(pgid: number, listing: string): boolean {
+  for (const line of listing.split('\n')) {
+    if (!line.trim()) continue;
+    const fields = /^\s*(\d+)\s+(\S+)\s*$/.exec(line);
+    if (!fields) throw new Error('Invalid POSIX process listing');
+    const group = Number(fields[1]);
+    if (!Number.isSafeInteger(group)) throw new Error('Invalid POSIX process identifier');
+    if (group === pgid && !fields[2].startsWith('Z')) return false;
+  }
+  return true;
+}
+
 /** End the process group led by `pid` on POSIX, or the tree rooted at `pid` on Windows. */
 export async function terminateTree(
   pid: number,
-  posixSignal: NodeJS.Signals = 'SIGKILL'
+  posixSignal: NodeJS.Signals = 'SIGKILL',
+  listGroups: () => Promise<string> = listPosixProcessGroupStates
 ): Promise<void> {
   if (process.platform === 'win32') {
     await terminateWindowsTree(pid);
@@ -72,7 +95,23 @@ export async function terminateTree(
   try {
     process.kill(-pid, posixSignal);
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error;
+    const code = (error as NodeJS.ErrnoException).code;
+    if (code === 'ESRCH') return;
+    if (code !== 'EPERM') throw error;
+    // Darwin can refuse signals to zombie-only groups. Failed observation proves nothing.
+    try {
+      if (processGroupHasEnded(pid, await listGroups())) return;
+    } catch (inspectionError) {
+      try {
+        createLogger('paths.plugin-process').warn(
+          { err: inspectionError, targetPid: pid },
+          'process_group_inspection_failed'
+        );
+      } catch {
+        // Optional diagnostics must not replace the original signal error.
+      }
+    }
+    throw error;
   }
 }
 
@@ -80,14 +119,59 @@ export async function terminateWindowsTree(
   pid: number,
   taskkill: (pid: number) => Promise<unknown> = runTaskkill
 ): Promise<void> {
+  const log = createLogger('paths.plugin-process');
+  const debug = log.isLevelEnabled('debug');
+  const identity = async (): Promise<WindowsProcessIdentity> => {
+    try {
+      return await readWindowsProcessIdentity(pid);
+    } catch {
+      return { pid, status: 'unavailable', code: 'CAPTURE_FAILED' };
+    }
+  };
+  const entryIdentity = debug ? await identity() : undefined;
   try {
     await taskkill(pid);
   } catch (error) {
-    // taskkill's exit code does not say whether the tree survived: 128 means the root was
-    // already gone, and 255 can mean the root exited while its children were being ended.
-    // A root that no longer exists is the only proof that is not taskkill's prose.
-    if (!isPidProvablyGone(pid)) throw error;
+    const liveness = probePidLiveness(pid);
+    const gone = liveness.status === 'threw' && liveness.code === 'ESRCH';
+    const level = gone ? 'debug' : 'warn';
+    if (log.isLevelEnabled(level)) {
+      const failureIdentity = await identity();
+      try {
+        log[level](
+          {
+            targetPid: pid,
+            phase: 'taskkill_failed',
+            entryIdentity,
+            failureIdentity,
+            liveness,
+            taskkill: taskkillFailureFields(error),
+          },
+          'process.windows_tree_stop'
+        );
+      } catch {
+        // Optional diagnostics must not replace the saved stop result.
+      }
+    }
+    // Identity samples and taskkill's prose are diagnostic evidence, never stop authorization.
+    if (!gone) throw error;
   }
+}
+
+function taskkillFailureFields(error: unknown): {
+  code: string | number | null;
+  stderr: string | null;
+} {
+  if (typeof error !== 'object' || error === null) return { code: null, stderr: null };
+  const code =
+    'code' in error && (typeof error.code === 'number' || typeof error.code === 'string')
+      ? error.code
+      : null;
+  const stderr =
+    'stderr' in error && (typeof error.stderr === 'string' || Buffer.isBuffer(error.stderr))
+      ? error.stderr.toString()
+      : null;
+  return { code, stderr };
 }
 
 function runTaskkill(pid: number): Promise<unknown> {

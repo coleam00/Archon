@@ -15,11 +15,16 @@
 import { artifactsDir, emit, nullableJson } from '../../.shared/io.ts';
 import { failed, failedPublication } from '../../.shared/report.ts';
 
+const options = {
+  listingFile: process.env.TYPED_ARTIFACTS_FILE,
+  outcomesFile: process.env.NODE_OUTCOMES_FILE,
+};
+
 const outcome = nullableJson(process.env.INPUTS_OUTCOME);
 emit(
   outcome ?? {
     delivered: false,
-    ...failedPublication(artifactsDir(), { listingFile: process.env.TYPED_ARTIFACTS_FILE }),
-    summary: failed(artifactsDir(), { listingFile: process.env.TYPED_ARTIFACTS_FILE }),
+    ...failedPublication(artifactsDir(), options),
+    summary: failed(artifactsDir(), options),
   }
 );

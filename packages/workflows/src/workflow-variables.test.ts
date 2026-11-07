@@ -19,7 +19,11 @@ mock.module('@archon/paths', () => ({
   createLogger: mock(() => mockLogger),
 }));
 
-import { substituteWorkflowVariables, buildPromptWithContext } from './workflow-variables';
+import {
+  substituteWorkflowVariables,
+  buildPromptWithContext,
+  runWithPackDir,
+} from './workflow-variables';
 import { buildExecNodeEnvironment, EXEC_NODE_ENVIRONMENT_NAMES } from './exec-environment';
 import {
   USER_CONTROLLED_VARIABLES,
@@ -51,6 +55,7 @@ describe('user-controlled runtime variable delivery', () => {
         rejectionReason: values.rejectionReason ?? '',
         loopPrevOutput: values.loopPrevOutput ?? '',
         typedArtifactsFile: '/listing.json',
+        nodeOutcomesFile: '/outcomes.json',
         nodeExecution: null,
         inputEnvKeys: [],
       });
@@ -87,6 +92,7 @@ describe('user-controlled runtime variable delivery', () => {
         STATE_DIR: '/state',
         LOG_DIR: '/logs',
         ADOPTED_RUN_DIR: '',
+        PACK_DIR: '',
         WORKFLOW_ID: 'run-1',
         BASE_BRANCH: 'dev',
         USER_MESSAGE: value('message'),
@@ -98,6 +104,7 @@ describe('user-controlled runtime variable delivery', () => {
         EXTERNAL_CONTEXT: value('issue'),
         ISSUE_CONTEXT: value('issue'),
         TYPED_ARTIFACTS_FILE: '/listing.json',
+        NODE_OUTCOMES_FILE: '/outcomes.json',
         ARCHON_NODE_EXECUTION: '',
         ARCHON_RUN_ENV_KEYS: JSON.stringify([...EXEC_NODE_ENVIRONMENT_NAMES]),
       });
@@ -201,6 +208,41 @@ describe('substituteWorkflowVariables', () => {
     expect(prompt).toBe('Read /root/artifacts/runs/run-1/report.md');
   });
 
+  // A node outside a pack has no $PACK_DIR. An empty value would point a read at the
+  // checkout, so the reference fails instead, in a shell body as in a prompt.
+  it('throws when $PACK_DIR is referenced outside a pack', async () => {
+    const substitute = (): unknown =>
+      substituteWorkflowVariables(
+        'cat $PACK_DIR/x',
+        'run-2',
+        'msg',
+        '/a',
+        'main',
+        'docs/',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { shellSafe: true }
+      );
+    expect(substitute).toThrow(/not loaded from a pack/);
+    await runWithPackDir({ kind: 'none' }, async () => {
+      expect(substitute).toThrow(/not loaded from a pack/);
+    });
+    // A pack the run's source does not hold is a broken source, not a workflow outside a pack.
+    await runWithPackDir(
+      { kind: 'unlocated', pack: { source: 'installed', key: 'acme.kit' } },
+      async () => {
+        expect(substitute).toThrow(
+          "pack 'acme.kit' (installed) is not in this run's workflow source"
+        );
+      }
+    );
+    await runWithPackDir({ kind: 'dir', dir: '/packs/alpha' }, async () => {
+      expect(substitute()).toEqual({ prompt: 'cat /packs/alpha/x', contextSubstituted: false });
+    });
+  });
+
   it('throws when $ADOPTED_RUN_DIR is referenced without an adoption active', () => {
     expect(() =>
       substituteWorkflowVariables(
@@ -259,6 +301,41 @@ describe('substituteWorkflowVariables', () => {
         'docs/'
       )
     ).toThrow(/has no typed-artifact listing/);
+  });
+
+  it("replaces $NODE_OUTCOMES_FILE with this invocation's listing", () => {
+    const { prompt } = substituteWorkflowVariables(
+      'Read $NODE_OUTCOMES_FILE',
+      'run-1',
+      'msg',
+      '/tmp/artifacts',
+      'main',
+      'docs/',
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { nodeOutcomesFile: '/tmp/artifacts/.archon/node-outcomes/o.json' }
+    );
+    expect(prompt).toBe('Read /tmp/artifacts/.archon/node-outcomes/o.json');
+  });
+
+  it('throws when $NODE_OUTCOMES_FILE is referenced without a materialized listing', () => {
+    expect(() =>
+      substituteWorkflowVariables(
+        'Read $NODE_OUTCOMES_FILE',
+        'run-1',
+        'msg',
+        '/tmp/artifacts',
+        'main',
+        'docs/',
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        { typedArtifactsFile: '/listing.json' }
+      )
+    ).toThrow(/has no node-outcome listing/);
   });
 
   it('treats an explicit empty listing as a caller stating it has none (dry run)', () => {

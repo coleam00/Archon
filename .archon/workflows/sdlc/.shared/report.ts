@@ -16,6 +16,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
+import { latestOutcomeOf, readOutcomes } from './outcomes.ts';
 import { isObject, readTyped } from './typed.ts';
 
 const DISCOVERY_RELAY =
@@ -200,42 +201,50 @@ export function caveats(
 }
 
 /** A verified publication can outlive a failed node with no typed output. */
-function createdPr(artifacts: string): { url: string; at?: number; unresolvedAt?: number; problem?: string } {
+function createdPr(artifacts: string): { url: string; unresolved?: true; problem?: string } {
   const path = join(artifacts, PR_CREATE_RECORD);
   try {
     const claim = decodePrPublicationRecord(JSON.parse(readFileSync(path, 'utf8')));
-    const at = modified(path);
-    return claim.state === 'verified' ? { url: claim.pr.url, at } : { url: '', unresolvedAt: at };
+    return claim.state === 'verified' ? { url: claim.pr.url } : { url: '', unresolved: true };
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
     return {
       url: '',
-      unresolvedAt: modified(path) ?? Infinity,
+      unresolved: true,
       problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }
 
+export interface ReportListings {
+  readonly listingFile: string | undefined;
+  readonly outcomesFile: string | undefined;
+}
+
 /**
- * Verified publication records outlive failed nodes that produced no typed output.
- * An unresolved creation claim must not look like permission to open another PR.
+ * The pull request a failed run already published. The latest typed publication
+ * stands while its publish node's latest invocation did not fail. When a later
+ * invocation failed, or none published, the creation record decides: a publish node
+ * can verify a PR and then fail, and its failed output is never handed on. An
+ * unresolved creation claim must not look like permission to open another PR.
  */
 export function failedPublication(
   artifacts: string,
-  options: { readonly listingFile: string | undefined }
+  options: ReportListings
 ): { reason: string; pr_url: string } {
   const read = readTyped<unknown>(options.listingFile, artifacts, 'pull-request');
   const latest = read.values.at(-1);
   const entry = read.entries?.at(-1);
   const created = createdPr(artifacts);
-  const publishedAt = entry === undefined ? undefined : modified(join(artifacts, entry.path));
-  const { url, at } = isObject(latest) && typeof latest.url === 'string' &&
-    (created.url === '' || (publishedAt ?? 0) >= (created.at ?? 0))
-    ? { url: latest.url, at: publishedAt } : created;
-  if (created.unresolvedAt !== undefined && (url === '' || created.unresolvedAt > (at ?? 0))) {
-    return { reason: PR_CREATE_UNRESOLVED, pr_url: '' };
-  }
-  return { reason: RUN_FAILED, pr_url: url };
+  const typedUrl = isObject(latest) && typeof latest.url === 'string' ? latest.url : '';
+  // Unreadable outcomes leave the creation record to decide, as a later failure would.
+  const publish =
+    typedUrl !== '' && entry !== undefined
+      ? latestOutcomeOf(readOutcomes(options.outcomesFile) ?? [], entry)
+      : undefined;
+  if (publish !== undefined && publish.state !== 'failed') return { reason: RUN_FAILED, pr_url: typedUrl };
+  if (created.unresolved) return { reason: PR_CREATE_UNRESOLVED, pr_url: '' };
+  return { reason: RUN_FAILED, pr_url: created.url || typedUrl };
 }
 
 /**
@@ -243,10 +252,7 @@ export function failedPublication(
  * reaching its outcome. It names no result: the engine's terminal record names the
  * failed node, and nothing here may read as a delivery.
  */
-export function failed(
-  artifacts: string,
-  options: { readonly listingFile: string | undefined }
-): string {
+export function failed(artifacts: string, options: ReportListings): string {
   const { problem } = createdPr(artifacts);
   const unresolved = failedPublication(artifacts, options).reason === PR_CREATE_UNRESOLVED;
   return (

@@ -12,6 +12,10 @@ import { WorktreeProvider } from '@archon/isolation';
 import { getDefaultBranch, syncWorkspace, toRepoPath, toBranchName } from '@archon/git';
 import { SqliteAdapter, sqliteDialect } from '../db/adapters/sqlite';
 
+import { stubVerificationImageRelease } from '../test/stub-verification-image-release';
+
+stubVerificationImageRelease();
+
 const root = await realpath(await mkdtemp(join(tmpdir(), 'archon-base-branch-')));
 const dbPath = join(root, 'upgrade.sqlite');
 const vintage = new Database(dbPath);

@@ -209,10 +209,12 @@ Usage:
 Commands:
   state <get|put|patch|log|delete|list>
                              Read and audit durable project or install JSON documents
+  metrics [name]             Aggregate metric records by name, window and instrument
   forge resolve              Resolve an explicit remote through optional forge plugins
   forge checks               Observe checks for an explicit qualified pull request
   user <list|role|link>      List users, link identities and manage roles as the operator
   project list               List registered projects (id, kind, name, key, path)
+  project config <id|name>   Show a project's merged config with secrets removed (env key names only)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
   chat <message>             Send a message to the orchestrator
@@ -322,7 +324,7 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list)
+  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list/config)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
@@ -357,6 +359,7 @@ Examples:
   archon workflow get <run-id> --json
   archon workflow artifacts <run-id> plan.md
   archon project list --json
+  archon project config <id|name> --json
   archon workflow logs <run-id> --follow
   archon workflow logs <run-id> --follow --format text
   archon workflow wait <run-id> --json

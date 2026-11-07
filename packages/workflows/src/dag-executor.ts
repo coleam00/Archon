@@ -509,8 +509,8 @@ async function createRunContext(
     providerLimitDeadline: createProviderLimitDeadlineResolver(),
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),
     unfinishedInvocations,
-    loopConfigFailureBaselines:
-      priorCompletedNodes === undefined ? undefined : resumeSnapshot?.loopConfigFailureBaselines,
+    loopUsageBaselines:
+      priorCompletedNodes === undefined ? undefined : resumeSnapshot?.loopUsageBaselines,
     reportedChildUsage: resumeSnapshot?.reportedChildUsage,
     unattributedChildUsagePaths: resumeSnapshot?.unattributedChildUsagePaths,
     runBudget,
@@ -522,6 +522,10 @@ async function createRunContext(
     runChildWorkflow,
     workflowRun,
     workflowName: workflow.name,
+    workflowPack:
+      workflow.pack === undefined
+        ? undefined
+        : { source: workflow.pack.source, key: workflow.pack.key },
     workflowSourceRoots: workflowSourceRoots ?? liveSourceRoots(cwd),
     config,
     workflowProvider,

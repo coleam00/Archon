@@ -3,6 +3,7 @@
  * queue's paused rows, filtered lists, the open-work inbox and the health check.
  * Re-exported from the `./workflows` entry.
  */
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import {
   isAttentionQueueRow,
@@ -250,21 +251,21 @@ export async function listDashboardRuns(
 /** Paused runs that are attention queue items on their own (`queuedRunAttention`). */
 export function listRunsNeedingAttention(
   query: IDatabase['query'] = pool.query
-): Promise<DashboardWorkflowRun[]> {
+): Promise<AttentionRead<DashboardWorkflowRun>[]> {
   return listPausedRuns(query, run => queuedRunAttention(run) !== undefined);
 }
 
 /** The rows the attention queue reads (see `IWorkflowStore.listAttentionQueueRows`). */
 export function listAttentionQueueRows(
   query: IDatabase['query'] = pool.query
-): Promise<DashboardWorkflowRun[]> {
+): Promise<AttentionRead<DashboardWorkflowRun>[]> {
   return listPausedRuns(query, isAttentionQueueRow);
 }
 
 async function listPausedRuns(
   query: IDatabase['query'],
   keep: (run: DashboardWorkflowRun) => boolean
-): Promise<DashboardWorkflowRun[]> {
+): Promise<AttentionRead<DashboardWorkflowRun>[]> {
   const result = await query<JoinedWorkflowRunRow>(
     `SELECT r.*, CAST(r.origin AS TEXT) AS origin,
             c.platform_type,
@@ -278,7 +279,7 @@ async function listPausedRuns(
      WHERE r.status = 'paused'
      ORDER BY r.started_at DESC`
   );
-  const runs: DashboardWorkflowRun[] = [];
+  const runs: AttentionRead<DashboardWorkflowRun>[] = [];
   for (const row of result.rows) {
     let run: DashboardWorkflowRun;
     try {
@@ -295,6 +296,7 @@ async function listPausedRuns(
     } catch {
       // Parser errors can quote stored data, including message text.
       getLog().error({ workflowRunId: row.id }, 'attention_run_normalization_failed');
+      runs.push({ type: 'degraded', reason: 'run_unreadable', runId: row.id });
       continue;
     }
     if (keep(run)) runs.push(run);

@@ -1,5 +1,10 @@
 import { z } from 'zod';
-import { OUTPUT_REF_SOURCE, parseWholeInputsRef, parseWholeOutputRef } from '../output-ref';
+import {
+  jsonValueSchema,
+  OUTPUT_REF_SOURCE,
+  parseWholeInputsRef,
+  parseWholeOutputRef,
+} from '../output-ref';
 import { AGENT_ID_REGEX, dagNodeBaseSchema } from './dag-node-base';
 import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 
@@ -10,20 +15,34 @@ import { MAX_DURABLE_WAIT_MS } from './durable-wait';
 export const attentionFormSchema = z.enum(['message', 'approval', 'select', 'multi_select']);
 export type AttentionForm = z.infer<typeof attentionFormSchema>;
 
+const attentionOptionIdSchema = z
+  .string()
+  .regex(
+    AGENT_ID_REGEX,
+    "must be kebab-case (lowercase letters, digits, single hyphens — e.g. 'use-main')"
+  );
+
 /**
  * One answer a `select` or `multi_select` attention wait accepts. The id is the wire
  * value the answer carries and the next node reads; kebab-case keeps it one CLI token.
+ * `label` and `does` are display text. `value` is opaque to the engine: no surface shows
+ * it, and a `select` answer returns the chosen option's `value` unchanged.
  */
 export const attentionOptionSchema = z.strictObject({
-  id: z
-    .string()
-    .regex(
-      AGENT_ID_REGEX,
-      "must be kebab-case (lowercase letters, digits, single hyphens — e.g. 'use-main')"
-    ),
+  id: attentionOptionIdSchema,
   label: z.string().min(1).optional(),
+  does: z.string().min(1).optional(),
+  value: jsonValueSchema.optional(),
 });
 export type AttentionOption = z.infer<typeof attentionOptionSchema>;
+
+/** The option an attention wait recommends, why, and how sure it is. Display only. */
+export const attentionRecommendationSchema = z.strictObject({
+  option: attentionOptionIdSchema,
+  why: z.string().trim().min(1, 'must not be empty'),
+  confidence: z.enum(['low', 'medium', 'high']).optional(),
+});
+export type AttentionRecommendation = z.infer<typeof attentionRecommendationSchema>;
 
 /**
  * The options of an attention wait, literal or resolved at pause time from an upstream
@@ -67,6 +86,59 @@ export const APPROVAL_ATTENTION_OPTIONS: readonly AttentionOption[] = [
   { id: 'reject' },
 ];
 
+/**
+ * `attentionDeclarationProblem` over what an authored wait declares literally. A
+ * referenced field is checked when the wait pauses, so referenced options defer the check;
+ * a recommendation on a form that takes none is refused either way.
+ */
+function literalDeclarationProblem(
+  value: { options?: readonly AttentionOption[] | string; recommendation?: unknown },
+  form: AttentionForm
+): string | undefined {
+  if (value.recommendation !== undefined) {
+    const formProblem = recommendationFormProblem(form);
+    if (formProblem !== undefined) return formProblem;
+  }
+  // Referenced or missing options (the latter already refused) leave nothing to check.
+  if (!Array.isArray(value.options) && form !== 'approval') return undefined;
+  const recommendation = attentionRecommendationSchema.safeParse(value.recommendation);
+  return attentionDeclarationProblem({
+    form,
+    ...(Array.isArray(value.options) ? { options: value.options } : {}),
+    ...(recommendation.success ? { recommendation: recommendation.data } : {}),
+  });
+}
+
+/** Why `form` takes no recommendation: only a single choice can be recommended. */
+function recommendationFormProblem(form: AttentionForm): string | undefined {
+  return form === 'select' || form === 'approval'
+    ? undefined
+    : `'recommendation' is only valid for forms 'select' and 'approval', not '${form}'`;
+}
+
+/**
+ * Why a resolved attention declaration cannot pause, or undefined when it can: a
+ * recommendation on a form that takes none or of an option the wait does not offer, or a
+ * `value` on a `multi_select` option, whose answer returns no value. The load check runs
+ * it on literal fields and the pause runs it on resolved ones, so both refuse the same.
+ */
+export function attentionDeclarationProblem(declaration: {
+  form: AttentionForm;
+  options?: readonly AttentionOption[];
+  recommendation?: AttentionRecommendation;
+}): string | undefined {
+  const { form, recommendation } = declaration;
+  const options = form === 'approval' ? APPROVAL_ATTENTION_OPTIONS : (declaration.options ?? []);
+  if (form === 'multi_select' && options.some(option => option.value !== undefined))
+    return "'value' is only valid on options of form 'select', not 'multi_select'";
+  if (recommendation === undefined) return undefined;
+  const formProblem = recommendationFormProblem(form);
+  if (formProblem !== undefined) return formProblem;
+  if (!options.some(option => option.id === recommendation.option))
+    return `'recommendation' names option '${recommendation.option}', which the wait does not offer (${options.map(option => option.id).join(', ')})`;
+  return undefined;
+}
+
 const attentionTextOutput = { type: 'string' } as const;
 
 /** The output contract each attention form fixes: what the next node reads. */
@@ -88,7 +160,8 @@ export const ATTENTION_OUTPUT_FORMATS = {
   },
   select: {
     type: 'object',
-    properties: { decision: { type: 'string' }, text: attentionTextOutput },
+    // `value` is the chosen option's `value`, present only when that option declares one.
+    properties: { decision: { type: 'string' }, text: attentionTextOutput, value: {} },
     required: ['decision', 'text'],
     additionalProperties: false,
   },
@@ -139,6 +212,17 @@ const waitConfigVariantSchemas = [
             ),
         ])
         .optional(),
+      recommendation: z
+        .union([
+          attentionRecommendationSchema,
+          z
+            .string()
+            .refine(
+              value => parseWholeOutputRef(value)?.field !== undefined,
+              "must be a recommendation or one whole '$node.output.<field>' reference"
+            ),
+        ])
+        .optional(),
       /** Values may hold runtime references, resolved when the wait pauses. */
       labels: attentionLabelsSchema.optional(),
     })
@@ -157,6 +241,8 @@ const waitConfigVariantSchemas = [
           path: ['options'],
           message: `is only valid for forms 'select' and 'multi_select', not '${form}'`,
         });
+      const problem = literalDeclarationProblem(value, form);
+      if (problem !== undefined) ctx.addIssue({ code: 'custom', path: [], message: problem });
     }),
 ] as const;
 export const waitConfigKeys = new Set(
@@ -185,6 +271,8 @@ export type WaitCondition =
       form: AttentionForm;
       /** Literal options, or the whole `$node.output.<field>` reference resolved at pause time. */
       options?: AttentionOption[] | string;
+      /** A literal recommendation, or the whole reference resolved at pause time. */
+      recommendation?: AttentionRecommendation | string;
       labels?: AttentionLabels;
     };
 
@@ -203,6 +291,7 @@ export function waitCondition(config: WaitConfig): WaitCondition {
     message: config.attention,
     form: config.form ?? 'message',
     ...(config.options !== undefined ? { options: config.options } : {}),
+    ...(config.recommendation !== undefined ? { recommendation: config.recommendation } : {}),
     ...(config.labels !== undefined ? { labels: config.labels } : {}),
   };
 }

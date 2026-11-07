@@ -51,7 +51,7 @@ archon doctor
 
 Doctor does not check forge access for the bundled SDLC pack. Run `archon workflow run archon-forge-check` from the checkout for that; it names the credential source it used or says why it refused. See the [SDLC pack README](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md).
 
-With no registered providers, doctor fails and prints `archon provider add <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a database-store run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant). It prints one line per credential and fails when one cannot be used (it cannot be read, the vendor rejected the refresh, or the refresh replaced the refresh token and the new grant could not be saved), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it.
+With no registered providers, doctor fails and prints `archon provider add <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a database-store run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant only if the credential it refreshed is still stored). It prints one line per credential and fails when one cannot be used (it cannot be read, the vendor rejected the refresh, or the refresh replaced the refresh token and the new grant could not be saved), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable or a concurrent credential change superseded the refresh. Run doctor again to verify the replacement. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it.
 
 The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon that the assistant can use. Provider specifics:
 
@@ -291,12 +291,12 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--folder` | Register the current directory, git or not, as a folder project on first use and run in place, without a worktree. Rejects `--branch`, `--from` and `--base`. |
 | `--container` | Run a **folder project** inside an overlay-isolated Docker container instead of in place (writes land in an overlay, not the live root, until an approval-gated write-back). Folder-only; a repo project errors. Requires the runner image (`bun run build:runner-image`). Normal gate pauses `docker stop` the container; `--resume`/`approve`/`reject` rediscover and restart it after resume admission. Failed resume setup marks the run failed. Failed setup or suspension can leave its container running and consuming resources; see [Pause economics](/guides/container-isolation/#pause-economics). See the [Container isolation guide](/guides/container-isolation/) and [configuration](/reference/configuration/#container-isolation-folder-projects). |
 | `--input <name>=<value>` | Supply one value for the workflow's declared `inputs:`. **Repeat the flag per input.** Splits on the first `=`, so the value may itself contain `=`; `--input name=` supplies an empty string. Omitted inputs take their declared `default:`. A missing **required** input or an **undeclared** name is refused before any worktree, clone, or AI cost, through the same contract a composing `with:` map goes through. Works with `--dry-run` (inputs resolve exactly as in a real run). Rejected with `--resume` (a resume replays the inputs recorded on the run). See [Running a workflow that declares inputs](/reference/workflow-language/#running-a-workflow-that-declares-inputs). |
-| `--model <name>=<spec>` | Rebind one `small`, `medium`, `large`, or `@alias` for this run. **Repeat the flag per binding.** An Archon agent prefix selects that agent (`codex/gpt-5.6-sol`); another valid vendor/model ref selects Pi (`openai/gpt-5.6`); an unqualified model keeps the binding's current provider, so binding an `@alias` no config defines (one a workflow's model preference list names, such as `@reviewer`) needs a prefixed model, a tier, or another alias; a tier or alias RHS copies that preset. Unspecified names keep their user → repo → global → built-in values. Literal `model:` pins and nodes that never reference the rebound name do not change. Bare `--model <spec>` is invalid, there is no run-wide `--provider`, and the flag is rejected with `--resume`. Works with `--dry-run`. |
+| `--model <name>=<spec>` | Rebind one `small`, `medium`, `large`, or `@alias` for this run. **Repeat the flag per binding.** An Archon agent prefix selects that agent (`codex/gpt-6.1-sol`); another valid vendor/model ref selects Pi (`openai/gpt-5.6`); an unqualified model keeps the binding's current provider, so binding an `@alias` no config defines (one a workflow's model preference list names, such as `@reviewer`) needs a prefixed model, a tier, or another alias; a tier or alias RHS copies that preset. Unspecified names keep their user → repo → global → built-in values. Literal `model:` pins and nodes that never reference the rebound name do not change. Bare `--model <spec>` is invalid, there is no run-wide `--provider`, and the flag is rejected with `--resume`. Works with `--dry-run`. |
 | `--config <path>` | Load one sparse YAML config layer for this fresh run. Relative paths resolve from the directory named by `--cwd`, even when it is a repository subdirectory. Values in the file override persistent config and user AI preferences; explicit `--model` flags then replace only their named bindings. Works with `--dry-run` and `--detach`; the parent validates and seals the layer before handing it to a detached child, so later file edits cannot change that launch. Rejected with `--resume` because a continuation restores the sealed layer recorded when the run started. |
 | `--config-from-run <run-id>` | Start this fresh run with the run config layer the named run was started with, as if its `--config` file were passed again. A run started without `--config` contributes nothing, so the new run uses the install's config alone. Use it when one workflow launches another to continue the same work, so the continuation keeps the provider configuration it started on. Exclusive with `--config`, and rejected with `--resume`. Works with `--detach`. |
 | `--resume` | Select the newest eligible run by start time for this workflow name and working path: a failed or paused run, or a `running` run whose last activity timestamp is missing or more than one day old. With a SQL store, a `running` run is excluded while its resource-start request is `admitted`; see [trigger inspection](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). Resume skips completed nodes and reuses the run's recorded AI configuration. Missing or old activity does not prove the owner is gone; verify that before resuming a `running` run. Rejected with `--branch`. Prefer [`workflow resume <run-id>`](#workflow-resume) when you hold the id of a failed or paused run. |
-| `--adopt <run-id>` | Start a new run in a terminal run's exact worktree or branch, with `adopted_from_run_id` provenance and `$ADOPTED_RUN_DIR` access. Inherits its recorded AI configuration; conflicting AI config or model overrides are rejected. Run-id selection is exact; adoption never infers a run from workflow name or prompt text. |
-| `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Unlike `--adopt`, it inherits no checkout. |
+| `--adopt <run-id>` | Start a new run in a terminal run's exact worktree or branch, with `adopted_from_run_id` provenance and `$ADOPTED_RUN_DIR` access. Inherits its recorded AI configuration; conflicting AI config or model overrides are rejected. A unique run-id prefix resolves within the launch project; ambiguous prefixes fail with candidate IDs unless `--chat-project-id` scopes selection. With that flag, use a longer prefix or full ID. Adoption never infers a run from workflow name or prompt text. |
+| `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Accepts a unique prefix within the launch project; ambiguous prefixes fail with candidate IDs unless `--chat-project-id` scopes selection. With that flag, use a longer prefix or full ID. Full IDs select the exact run, including another project unless `--chat-project-id` restricts selection. Unlike `--adopt`, it inherits no checkout. |
 | `--quiet`, `-q` | Suppress the progress lines on stderr |
 | `--verbose`, `-v` | Also print tool calls (name and duration) in the progress lines, and debug logs |
 | `--detach` | Run in a detached background child and return before completion. Human output names the transcript and the child's log file; the `--json` acknowledgement carries `runId`, `transcriptPath` (the run's JSONL transcript) and `logPath` (the child process's stdout and stderr). Follow execution with [`workflow logs <run-id> --follow`](#workflow-logs) and wait for the next terminal or gate transition with [`workflow wait <run-id>`](#workflow-wait). `approve`, `reject`, `respond` and `resume` accept it too; see [Detached control verbs](#detached-control-verbs). |
@@ -322,11 +322,12 @@ With `--branch <name>`:
 
 - Archon first looks for a healthy active task worktree registered for that project and branch. It reuses the registered path without advancing it, even if it differs from the configured target.
 - Without a healthy registration, worktree creation uses `~/.archon/workspaces/<owner>/<repo>/worktrees/<name>/` (or the repo-local path `worktree.path` configures). A usable existing checkout at that target path is reused without advancing it.
+- Before either reuse path, Archon verifies the checkout is on the requested branch. A different branch or detached HEAD fails with the requested branch, actual branch, and checkout path, leaving the checkout unchanged.
 - If no healthy active task registration was reused and another path holds the branch, the run fails with `branch_checked_out`, naming the holder, whether or not it is registered in Archon. Check whether a live Archon run still needs that checkout before freeing the branch. Once it is safe, preserve its changes, then detach it with `git -C <holder-path> switch --detach` or remove it before retrying.
 - If the branch already exists but no worktree holds it, checks it out at its current head: the local branch, or `<remote>/<branch>` when that contains the local branch (the local branch is fast-forwarded to it). It never resets an existing branch to the base.
 - Fails before any work if the local branch and `<remote>/<branch>` have diverged. Reconcile them, or delete the local branch to start from the remote one.
 - To start fresh from the base, delete the branch (`git branch -D <name>`, and the remote branch if there is one) or choose another name.
-- `--from` is rejected when the branch already exists, locally or on the remote.
+- If a new worktree must be created, `--from` is rejected when the branch already exists, locally or on the remote. Reusing an existing worktree leaves its checkout unchanged and ignores `--from`; healthy registered reuse warns that `--from` was not applied.
 
 `--no-worktree` runs in the target directory with no isolation and cannot be combined with `--branch`, `--from` or `--base`.
 
@@ -427,7 +428,7 @@ Every node that takes an AI turn also reports the provider and model it will run
 
 ```text
 STUBBED   review__scope (prompt)
-  runs on: codex (node) / gpt-5.6-sol (node) [from review-block]
+  runs on: codex (node) / gpt-6.1-sol (node) [from review-block]
   effort: high (node)
 ```
 
@@ -597,7 +598,7 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
 The node events for every listed run are read in one query, so the cost does not grow with
 one query per run.
 
-The listing shows short 8-character run ids. Every `<run-id>` command below (`get`, `artifacts`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any git repository or registered project folder. Short ids from `--all` rows belonging to *other* projects cannot be resolved; use the full id from `--json` for those.
+The listing shows short 8-character run ids. `workflow run --adopt` and `--supersedes` also resolve unique prefixes within the launch project and reject ambiguous prefixes. Full IDs select the exact run; adoption still requires the same project, and `--chat-project-id` restricts both flags to the selected project. Every `<run-id>` command below (`get`, `artifacts`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any git repository or registered project folder. Short ids from `--all` rows belonging to *other* projects cannot be resolved; use the full id from `--json` for those.
 
 ### `workflow get`
 
@@ -759,8 +760,8 @@ filesystem when you query it.
 `leave_behind.artifactFiles` lists the files a person or an agent would open, capped at
 200 for display. Each directory contributes its own files before its subdirectories,
 sorted by name, so a run's top-level reports lead the list. It excludes the engine's
-own `$ARTIFACTS_DIR/.archon/` child: the typed-artifact listings and node-output
-spills the engine writes for itself, which on a long run outnumber the reports.
+own `$ARTIFACTS_DIR/.archon/` child: the typed-artifact and node-outcome listings and
+node-output spills the engine writes for itself, which on a long run outnumber the reports.
 Nothing leaves the list quietly: `leave_behind.artifactFilesOmitted` reports how many
 engine-internal files were skipped (`internalFiles`), whether the display cap was
 reached (`truncated`), and any directory the walk could not read (`unreadable`). Human
@@ -885,7 +886,8 @@ to a different pause in the meantime. If the diagnostic read succeeds and the ru
 awaiting another answer, the refusal names the current occurrence. Otherwise, fetch the
 current item again before retrying.
 For an attention wait, the output carries `attention.kind: "attention"`, the authored
-message, the paused node id, the `form` and the `options` an answer may choose from.
+message, the paused node id, the `form`, the `options` an answer may choose from (with
+each option's `does` when the wait declares it), and the `recommendation` when there is one.
 Answer it with [`workflow answer`](#workflow-answer); use `archon workflow abandon
 <run-id>` if the run should not continue.
 
@@ -940,7 +942,9 @@ the host the run recorded and says when it is not this one. The console applies 
   merely still running wakes nobody.
 - `attention`: a `wait: attention` needs an answer to `message`, in its `form`
   (`message`, `approval`, `select` or `multi_select`). `options` lists the ids an answer may
-  choose (none for `message`, `approve` and `reject` for `approval`), and `occurrence`
+  choose (none for `message`, `approve` and `reject` for `approval`), each with its `does`
+  text and `value` when the wait declares them; `recommendation` is the option the wait
+  recommends, when it declares one; and `occurrence`
   identifies this pause. A wait paused before attention waits took answers reports a
   `legacy:<node>` occurrence and the `message` form; it takes no answer and continues
   with `workflow resume <run-id>`.
@@ -979,8 +983,9 @@ inspect the run normally with `workflow get <run-id>`.
 
 ### `workflow attention`
 
-List, count, stream or read the [attention queue](/getting-started/operate/): every paused
-run that needs an answer or inspection, plus observable provider usage- and rate-limit waits.
+List, count, stream or read the [attention queue](/getting-started/operate/): readable paused
+runs that need an answer or inspection, plus observable provider usage- and rate-limit waits.
+Batch reads report unreadable stored rows and affected paused parents through `degraded` warnings, described below.
 Branch on `kind`: `attention` and `awaiting_response` accept answers, `usage_limit`
 continues automatically after reset, and `unreadable` needs inspection. Read-only.
 
@@ -1002,12 +1007,30 @@ The default scope is the current project, resolved from the working directory as
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
 `item` is null when there is no queue item; a parent blocked on sub-runs resolves to the
-item of the child that holds the pause, or to its own `unreadable` item when its sub-run
-tree cannot be read. The list holds the same items. An unknown run id prints `error: "not_found"` and
+item of the child that holds the pause, or to its own `unreadable` item for a missing
+child, a revisited run, or a tree exceeding 500 runs. A descendant with unreadable stored
+origin data can instead make a single read fail. Batch lists omit a parent blocked on an
+unreadable paused descendant and report that child through `degraded`; if the descendant
+is not paused, they report the affected paused parent instead. An absent parent does not
+mean its block has cleared. An unknown run id prints `error: "not_found"` and
 exits `1`. The item shape is described in the [Operate page](/getting-started/operate/#queue-items).
 
+Batch list and count reads add an optional `degraded` array when a paused row or a descendant
+needed to project its attention item cannot be read. Each entry has the shape
+`{ "type": "degraded", "reason": "run_unreadable", "runId": "<id>" }`.
+`runId` identifies the unreadable paused row, or an affected readable paused parent when
+its unreadable descendant is not paused. It is present only for install-wide reads;
+the unreadable row's project membership cannot be established.
+Warnings survive label and project filters. Readable items remain available, counts cover only
+readable matches, and mixed reads still exit `0`. Text output prints a repair advisory per warning.
+Healthy JSON omits `degraded`. Operator logs retain safe run IDs without stored origin contents;
+use the logged unreadable run ID to locate the data to repair, since a warning may name its
+readable parent instead. Read again after repair.
+
 **`--watch`** streams the queue instead of reading it once: one `attention` line per open
-item in scope, then `ready`, then follows changes any process commits, as
+item in scope and an identifier-free `degraded` warning for each batch report of an affected
+paused run (an unreadable row or a readable parent whose descendant cannot be read),
+then `ready`, then follows changes any process commits, as
 `attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
 Every run line carries the run's `workflow` and `parentRunId`, so a consumer can keep
 top-level runs or one parent's children, and a failed `terminal` line carries `cause`, the
@@ -1103,7 +1126,7 @@ Approve a paused workflow run. At an attention wait this is the shorthand descri
 
 **Sub-run child gates:** when a `workflow:` sub-run pauses at its own gate, the parent run pauses "blocked on child". Approve (or reject) the **child** by its own full run id, available from `archon workflow get <parentRunId> --json` at `.metadata.approval.childRunId`, not the parent's. The stored block message contains only a short child label; a surface notice may include the full child command. The parent auto-resumes when the child completes. A child inside a `fan_out:` expansion pauses the same way: it stays paused as its own run, and the parent pauses on a `fan_out` gate listing every unfinished child, then continues once they finish. `approve`/`reject` against the parent's id while it's blocked on a child are refused with a redirect to the child id (every listed child for a fan-out).
 
-**Deprecated interactive-loop gates, finalize or iterate:** when the gate paused on an iteration where any declared completion channel fired (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion: the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. When no completion condition met, both forms run another iteration. On the final iteration (`max_iterations`), only a comment runs one more; approving with no comment fails the node with `max_iterations`.
+**Deprecated interactive-loop gates, finalize or iterate:** when the gate paused on an iteration where any declared completion channel fired (`workflow get <run-id> --json` → `.metadata.approval.completionSignaled` is `true`), approving with **no comment** accepts the completion: the node finalizes from the already-computed output on resume, with no re-run. Approving **with** a comment runs another iteration using it as `$LOOP_USER_INPUT`. When no completion condition met, both forms run another iteration. On the final iteration (`max_iterations`), only a comment runs one more; approving with no comment fails the node with `max_iterations`, or completes it with the paused iteration's text output when the loop sets `on_exhausted: complete`.
 
 ```bash
 archon workflow approve <run-id>
@@ -1306,11 +1329,13 @@ this host:
   above apply here too; inspect warnings before reusing or removing the checkout.
   Abandon retains owned checkouts
   when owner-stop warnings report held output or possible leftovers, including
-  descendant checkouts and their root. Warnings learned after cancellation during
-  descendant cleanup or conversation reset are appended to that run as `workflow_cleanup_warning` events.
-  If writing a warning event fails, cleanup continues and the command reports the
-  persistence failure with the cleanup warnings. Keep that command result: those
-  warnings may be missing from the run history.
+  descendant checkouts and their root. Owner-check warnings learned after cancellation
+  during descendant cleanup or conversation reset are appended to that run as
+  `workflow_cleanup_warning` events. If writing a warning event fails, cleanup continues
+  and the command reports the persistence failure with the cleanup warnings.
+  Verification-image inventory warnings are returned in the immediate result only;
+  they are not saved as cleanup events. Keep that result for recovery guidance and
+  any warnings missing from the run history.
 - **No owner answers:** abandon records `cancelled` and prints what the run recorded:
   the host and pid of the process that last executed it, and its last activity. If that
   host is not this one, or the owner ran as another user on this host, it says so:
@@ -1570,7 +1595,9 @@ environments remain. The error lists their environment IDs and the cleanup comma
 Clean them up explicitly, then retry deletion.
 
 Cleanup continues after individual errors and exits with status `1` if any removal fails;
-protected skips exit with status `0`.
+protected skips exit with status `0`. After container teardown, cleanup attempts image
+release for every associated run. Image lookup/removal failures count as errors even when
+the container was successfully removed.
 
 Age cleanup uses the originating platform's registered policy.
 Both the CLI and server read chat policies from installed plugin receipts without starting
@@ -1895,6 +1922,17 @@ archon project list --json   # { "projects": [ { ...project row, "key" } ] }
 
 `key` is the value `workflow attention --project` and `archon state --project` accept. The list is read-only; register and remove projects through the Web UI or chat.
 
+### `project config`
+
+`archon project config <id|name>` shows one registered project's merged config: defaults, `~/.archon/config.yaml` and the project's own `.archon/config.yaml`, in that order of precedence. It prints the view `GET /api/codebases/{id}/config` serves, plus a `project` field with the matched project's ID and name. Secrets are removed: assistant settings are limited to their safe fields, paths are left out, and `envKeys` lists the keys of the project's `env:` block without their values. The command writes no config file, not even a missing `~/.archon/config.yaml`, and needs no server. Like every CLI command, it opens the project store, so on a fresh install it creates `~/.archon/archon.db`.
+
+```bash
+archon project config acme/widget          # YAML
+archon project config <project-id> --json  # { "project": { "id", "name" }, "config": { ... }, "envKeys": [ ... ] }
+```
+
+The project is matched by ID, then by exact name; a name shared by several projects is refused with their IDs. An unknown project, an ambiguous name and an invalid config file exit 1.
+
 ### state
 
 Durable, audited JSON documents. A document lives in a project or in install scope.
@@ -1912,19 +1950,34 @@ archon state list --prefix review/ --values
 archon state delete review/123 --if-revision 3
 archon state get notes --install --raw
 archon state list --project acme/widgets
+# inside a run: claim the document in the same write, and give it back with the outcome
+printf '{"stage":"building"}' | archon state put work/7 --if-revision 4 --lease
+printf '{"stage":"done"}' | archon state put work/7 --if-revision 5 --release-lease
 ```
 
 Every command writes JSON and names the scope it used: `{kind: "project", key}` or
-`{kind: "install"}`. `get` returns `{scope, name, revision, value}`; an absent document
+`{kind: "install"}`. `get` returns `{scope, name, revision, value, lease}`; an absent document
 returns revision `0` and value `null`. A deleted document returns value `null`,
 `deleted: true` and its tombstone revision, which is the revision a recreating `put` must
 name. `put`, `patch`, and `delete` return the scope and the new full revision. `log`
 returns `{scope, name, revisions}`, newest first (use a positive `--limit` to bound the
 result), including tombstones, operation, writer and timestamp. `list` returns
-`{scope, documents}`: each document's name, latest revision, `updatedAt`, writer and
+`{scope, documents}`: each document's name, latest revision, `updatedAt`, writer, lease and
 `deleted`, ordered by name, without values. `--prefix` keeps names that start with
 the given text. `list --values` reads every live document's value in one call instead:
-each entry is `{name, revision, value}`, and deleted documents are left out.
+each entry is `{name, revision, value, lease}`, and deleted documents are left out.
+
+**Leases.** Inside a run, `put` and `patch` accept `--lease`, which takes the document's
+lease for the calling run in the same write, or `--release-lease`, which gives it back. Every
+revision a read returns carries `lease`: `null`, or `{runId, nodePath, takenAt, live}`.
+`live` is computed when you read: a lease is live while its run is `pending`, `running`,
+`paused` or `failed`, and has ended once the run is `completed` or `cancelled` (including
+through `workflow abandon`) or has been deleted. A failed run keeps its leases because it
+can resume. Nothing ends a lease on age or inactivity; to free a lease held by a run that
+will not continue, abandon that run. A take or release while another run's lease is live
+exits `3` naming the holder and writes nothing. Taking an ended lease, or one the run
+already holds, succeeds. A write without a lease flag keeps the document's lease unchanged,
+whoever writes it, and `delete` clears it. The lease flags are refused outside a run.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
@@ -1947,7 +2000,7 @@ a string). Use plain `get` when you need the revision for a following `put`.
 
 Names contain 1–200 lowercase letters, digits, `.`, `_`, `-`, and slash-separated segments.
 Values are limited to 64 KiB of serialized UTF-8 JSON. Exit codes: `0` success, `1` usage
-or storage failure, `3` revision conflict, `4` oversized value, invalid patch or non-text
+or storage failure, `3` revision conflict or a lease another live run holds, `4` oversized value, invalid patch or non-text
 `--raw` value, `5` the CLI opened a store that does not know the calling run. Failures
 return `{ok:false, error, code}` and rejected writes append no revision.
 
@@ -1965,6 +2018,58 @@ and `--install` selects install scope. The writer is recorded as
 revision, retains the latest tombstone of deleted documents, and reports both counts.
 See [Durable state documents](/reference/workflow-language/#durable-state-documents).
 
+### `metrics [name]`
+
+Aggregate the metric records nodes returned under their reserved `metrics` output key.
+See the [metrics guide](/guides/metrics/) for how to emit them.
+
+```bash
+archon metrics
+archon metrics factory.prs_merged --since 7d
+archon metrics factory.prs_merged --since 2026-10-01 --until 2026-10-22 --json
+archon metrics sdlc.tests_unprotective --subject https://github.com/acme/widgets/pull/12
+archon metrics --project acme/widgets
+archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
+archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.review__code
+```
+
+The window is `[--since, --until)`. `--until` defaults to now and takes an ISO date or a
+time with an offset; a date alone is UTC midnight. `--since` takes the same, or a duration
+(`24h`, `7d`, `2w`) counted back from `--until`, and defaults to 30 days. `--subject` keeps
+records about one subject. `--project <id|name|key>` keeps records from one registered
+codebase. A name's definition is install-wide either way: a record another codebase
+stored first still fixes it. `--compare <ISO>` takes an ISO date or a time with an offset
+and splits each instrument's records by when their producing runs started: before the cut,
+or at or after it. `--by-model <node>` splits them instead by the model label that ran
+`<node>` in their producing runs and the runs below them. The two cannot be combined.
+
+Text output prints one line per metric for its newest instrument: name, kind and unit,
+`value` (the sum for a `count`, the mean for a `score`), `n`, the 95% interval for a score
+of at least two records, the latest record, and the instrument with the models that ran its
+`instrument_node`, such as `[judge-v1 on claude/claude-opus-5-5@high]`. An indented line
+gives the cost and tokens of the producing runs, with how many runs recorded no cost, no
+tokens, only partial cost, or no longer exist. Other instruments follow with the same
+lines, indented further. With `--compare`, each
+entry adds the `before` and `after` cohorts with their value, `n` and interval, the delta
+with its 95% interval, whether that interval excludes zero (`separated`), and how many
+records were `straddling` the cut or `unattributed`, and the output ends with a line that
+the comparison is observational. With `--by-model`, each entry adds one line per model label,
+then `(mixed)` and `(none)`, with its value, `n`, interval, its difference from the other
+model labels combined (`vs rest`, with its interval and `separated`), the requested models
+it merges, and its cost, and the output ends with a line that the split is observational. `--json` prints one `MetricsReport` document, the same
+shape `GET /api/metrics` returns, with names and instruments in sorted order.
+
+A record that conflicts with its name's first definition is left out and reported on
+stderr as `error: metric <name> is <definition>; run <id> node <node> offered
+<definition>`, where each `<definition>` is `<kind>/<unit>`, followed by
+` calibrates <metric>` for a score that calibrates another metric. A stored output the record schema rejects is reported the same way when
+no name is given. Exit codes: `0` success, `1` usage (including a malformed window or
+`--compare`, an empty `--by-model`, or `--compare` with `--by-model`), `2` the window has existing producing runs and
+none ran the `--by-model` node, with the AI node ids they did run (at most 50) on stderr
+(with no existing producing run the node is not checked and the query exits `0`: a window
+with no records reports none, and records whose runs were all deleted are `unattributed`), `4` the report refused a
+record.
+
 ### `chat <message>`
 
 Send one message to the orchestrator, print its response and exit. Each invocation creates a new conversation. Multi-turn conversations and project selection through `/setproject <name>` are available in the Web UI and chat adapters. Projectless chat can answer questions; use `archon workflow run <name> --project <owner/repo>` to launch work for a registered repository from the CLI.
@@ -1981,11 +2086,13 @@ Start workflows from deployment bindings and inspect durable resource admission;
 
 When a binding fails launch preparation, `trigger fire` exits nonzero and prints the refusal (with `--json`, in `error`). The stored receipt keeps only the failed stage, for example `launch_preparation_failed`. `trigger whoami` prints the Archon user ID of your CLI identity, for a binding's `runAsUserId`.
 
+Run from inside a workflow node, `trigger fire` records the calling run and node as the receipt's `sourceActor` (`{source: "archon-run", id: <run id>, display: <node path>}`); outside a run it records none. A set `WORKFLOW_ID` makes `fire` act as a call from that node: it then requires a matching `ARCHON_NODE_EXECUTION`, and refuses a run the opened store does not know before a receipt is written, so a shell left with a stale `WORKFLOW_ID` fails instead of firing. `trigger inspect <request-id>` and `workflow get <run-id> --json` always carry the requesting run, as `requestedBy` and `requested_by` (`{runId, nodePath}`, or `null` when no run asked for the start), and the plain `workflow get` view prints a `Requested by` line when there is one. The started run still acts as its binding's `runAsUserId`; the requesting run is provenance only.
+
 ### `forge`
 
 `archon forge <operation> --data <json>` runs one forge operation through the installed forge plugin; `archon forge --help` lists the operations. Reads return structured observations. Writes report whether they were applied and verified, refused, applied but unverified, or left with an unknown outcome. Pass a request that carries authored text with `--data-file <path>` so it stays out of argv. `archon forge metadata --data '{"host":"github.com"}' --json` inspects the selected plugin's capabilities without credentials or a forge operation.
 
-See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack uses `gh` by default; set `ARCHON_SDLC_FORGE=forge` to opt into a plugin that implements every operation the pack needs. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
+See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack reaches the forge only through a plugin that implements every operation it needs. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
 ## Global options
 

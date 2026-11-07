@@ -19,6 +19,7 @@ import {
   getWorkflowRun,
   getWorkflowRunStatus,
   getRunByIsolationEnvId,
+  getRunIdsByIsolationEnvId,
   findWorkflowRunsByIdPrefix,
   getWorkflowRunByWorkerPlatformId,
   WorkflowStatusReadError,
@@ -91,6 +92,11 @@ describe('workflow run reads', () => {
   ] as const)('preserves query failure diagnostics', async (read, message) => {
     mockQuery.mockRejectedValueOnce(new Error('offline'));
     await expect(read()).rejects.toThrow(message);
+  });
+
+  test('environment inventory propagates query errors', async () => {
+    mockQuery.mockRejectedValueOnce(new Error('offline'));
+    await expect(getRunIdsByIsolationEnvId('env')).rejects.toThrow('offline');
   });
 
   describe('getWorkflowRunStatus', () => {

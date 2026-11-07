@@ -23,10 +23,14 @@ import {
   createMockDeps,
   createMockPlatform,
   persistedEvents,
+  runUsageWrites,
   dagOptions,
   makeWorkflowRun,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
+import { ParentStatusReadError } from '../../../parent-status-read';
+import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
+import { workflowRunStatusSchema } from '../../../schemas/workflow-run';
 import { providerEventEnvelopeSchema } from '../../../schemas/provider-event';
 import type { DagNode } from '../../../schemas';
 import type { IWorkflowPlatform } from '../../../deps';
@@ -61,6 +65,191 @@ describe('loop node execution', () => {
     }));
     await removeTempTree(testDir);
   });
+
+  for (const usageWriteFails of [false, true]) {
+    it.each(['between iterations', 'before retry'] as const)(
+      `interrupts an unreadable parent %s without recording failure (usage write fails: ${usageWriteFails})`,
+      async boundary => {
+        const store = createMockStore();
+        store.getDagResumeSnapshot.mockImplementation(async runId =>
+          foldDagResumeSnapshot(persistedEvents(store), runId)
+        );
+        const usageError = new Error('usage storage unavailable');
+        if (usageWriteFails) {
+          const persistEvent = store.persistWorkflowEvent;
+          store.persistWorkflowEvent = mock(async event => {
+            if (event.event_type === 'node_deferred_usage') throw usageError;
+            await persistEvent(event);
+          });
+        }
+        mockLogFn.mockClear();
+        const cause = new Error('parent status unavailable');
+        const runId = 'loop-unreadable-parent';
+        const boundaryEvent =
+          boundary === 'between iterations' ? 'loop_iteration_completed' : 'node_retry_scheduled';
+        let rejected = false;
+        store.getWorkflowRunStatus.mockImplementation(async () => {
+          if (
+            !rejected &&
+            persistedEvents(store).some(event => event.event_type === boundaryEvent)
+          ) {
+            rejected = true;
+            throw cause;
+          }
+          return 'running';
+        });
+        mockSendQueryDag.mockImplementation(async function* () {
+          yield { type: 'agent_message_chunk', text: 'Working' };
+          yield {
+            type: 'result',
+            sessionId: 'paid-attempt',
+            cost: 0.02,
+            tokens: { input: 2, output: 1 },
+            ...(boundary === 'before retry'
+              ? {
+                  isError: true,
+                  failure: { class: 'transient' as const, evidence: 'provider unavailable' },
+                }
+              : {}),
+          };
+        });
+
+        const error: unknown = await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun(runId),
+            workflow: {
+              name: 'loop-unreadable-parent',
+              nodes: [
+                {
+                  id: 'my-loop',
+                  kind: 'loop',
+                  retry: { max_attempts: 1, delay_ms: 0 },
+                  loop: {
+                    prompt: 'Work',
+                    until: 'COMPLETE',
+                    max_iterations: 2,
+                    fresh_context: false,
+                  },
+                },
+              ],
+            },
+          })
+        ).catch((error: unknown) => error);
+
+        expect(error).toBeInstanceOf(ParentStatusReadError);
+        if (!(error instanceof ParentStatusReadError)) throw new Error('Expected interruption');
+        expect(error.cause).toBe(cause);
+        expect(error.workflowRunId).toBe(runId);
+        expect(error.nodeId).toBe('my-loop');
+        expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+        const events = persistedEvents(store);
+        expect(events.some(event => event.event_type === boundaryEvent)).toBe(true);
+        expect(events.some(event => event.event_type === 'node_failed')).toBe(false);
+        expect(events.some(event => event.event_type === 'node_completed')).toBe(false);
+        expect(store.failWorkflowRun).not.toHaveBeenCalled();
+        expect(store.completeWorkflowRun).not.toHaveBeenCalled();
+        expect(store.pauseWorkflowRun).not.toHaveBeenCalled();
+        expect(store.cancelWorkflowRun).not.toHaveBeenCalled();
+        if (usageWriteFails) {
+          expect(mockLogFn).toHaveBeenCalledWith(
+            expect.objectContaining({
+              err: expect.objectContaining({ cause: usageError }),
+              workflowRunId: runId,
+              nodeId: 'my-loop',
+            }),
+            'loop_node.interrupted_usage_write_failed'
+          );
+        } else {
+          expect(runUsageWrites(store).at(-1)).toMatchObject({
+            total_cost_usd: 0.02,
+            total_tokens_in: 2,
+            total_tokens_out: 1,
+          });
+        }
+        const snapshot = await foldDagResumeSnapshot(events, runId);
+        expect(snapshot.failedNodes.size).toBe(0);
+        expect(snapshot.completedNodeOutputs.size).toBe(0);
+        expect(snapshot.unresolvedNodeStarts.has('my-loop')).toBe(true);
+      }
+    );
+  }
+
+  for (const boundary of ['between iterations', 'before retry'] as const) {
+    it.each([...workflowRunStatusSchema.options, null])(
+      `preserves supported parent status %s ${boundary}`,
+      async status => {
+        const store = createMockStore();
+        const boundaryEvent =
+          boundary === 'between iterations' ? 'loop_iteration_completed' : 'node_retry_scheduled';
+        store.getWorkflowRunStatus.mockImplementation(async () =>
+          persistedEvents(store).some(event => event.event_type === boundaryEvent)
+            ? status
+            : 'running'
+        );
+        let attempts = 0;
+        mockSendQueryDag.mockImplementation(async function* () {
+          attempts++;
+          yield {
+            type: 'agent_message_chunk',
+            text: attempts === 2 ? '<promise>COMPLETE</promise>' : 'Working',
+          };
+          yield {
+            type: 'result',
+            sessionId: 'loop-status',
+            cost: 0.02,
+            tokens: { input: 2, output: 1 },
+            ...(boundary === 'before retry' && attempts === 1
+              ? {
+                  isError: true,
+                  failure: { class: 'transient' as const, evidence: 'provider unavailable' },
+                }
+              : {}),
+          };
+        });
+
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            cwd: testDir,
+            workflowRun: makeWorkflowRun('loop-parent-status'),
+            workflow: {
+              name: 'loop-parent-status',
+              nodes: [
+                {
+                  id: 'my-loop',
+                  kind: 'loop',
+                  retry: { max_attempts: 1, delay_ms: 0 },
+                  loop: {
+                    prompt: 'Work',
+                    until: 'COMPLETE',
+                    max_iterations: 2,
+                    fresh_context: false,
+                  },
+                },
+              ],
+            },
+          })
+        );
+
+        const continues = status === 'running' || status === 'paused';
+        expect(attempts).toBe(continues ? 2 : 1);
+        const terminal = persistedEvents(store).filter(
+          event => event.event_type === 'node_failed' || event.event_type === 'node_completed'
+        );
+        expect(terminal).toHaveLength(1);
+        expect(terminal[0]?.event_type).toBe(continues ? 'node_completed' : 'node_failed');
+        expect(terminal[0]?.data).toMatchObject({
+          cost_usd: continues ? 0.04 : 0.02,
+          tokens: { input: continues ? 4 : 2, output: continues ? 2 : 1 },
+          ...(!continues
+            ? { failure_kind: 'cancelled', error: `Workflow ${status ?? 'deleted'}` }
+            : {}),
+        });
+      }
+    );
+  }
 
   it('records the subtasks and hooks a loop iteration streams', async () => {
     const store = createMockStore();

@@ -19,15 +19,21 @@ import type {
   WorkflowSource,
 } from './schemas';
 import {
+  CONTINUATION_MODES,
+  continuationInheritsEstate,
   isIncludeDirective,
   isLoopGroupNode,
   isWaitNode,
   readContinuationMode,
   readRunDispatchMetadata,
+  readSubrunMetadata,
   type RunDispatchMetadata,
 } from './schemas';
+import type { JsonValue } from './output-ref';
+import { resolveRunStartInputs } from './pack-settings';
 import { isContainerRun, type WorkflowRunOrigin } from './schemas/workflow-run';
-import { TerminalStatusWriteError, requireTerminalStatusWrite } from './terminal-status-write';
+import { requireTerminalStatusWrite } from './terminal-status-write';
+import { executionClaim } from './store';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -47,6 +53,12 @@ export interface RunDispatch {
   /** Discovery source for telemetry attribution, as recorded at the run's start. */
   runSource: WorkflowSource | undefined;
   dispatchMetadata: RunDispatchMetadata;
+  /**
+   * A fresh run's complete `$INPUTS`, resolved now and written to its row: its pack's
+   * settings, the workflow's declared defaults, then the supplied values. Undefined on a
+   * continuation, which keeps the inputs its row holds, and when the run has none.
+   */
+  startInputs: Record<string, JsonValue> | undefined;
   docsDir: string;
 }
 
@@ -119,9 +131,11 @@ export async function resolveRunDispatch(
    * original. Only a run with no record at all (warned above) takes the live value.
    */
   const runSource = recordedDispatch ? recordedDispatch.source : opts.source;
+  const packs = await resolveRunPacks(cwd, workflow, opts, isContinuation, recordedDispatch);
   const dispatchMetadata: RunDispatchMetadata = {
     base_branch: baseBranch,
     ...(runSource ? { source: runSource } : {}),
+    ...packs.metadata,
   };
 
   const docsDir = config.docsPath ?? 'docs/';
@@ -144,8 +158,51 @@ export async function resolveRunDispatch(
       baseBranch,
       runSource,
       dispatchMetadata,
+      startInputs: packs.startInputs,
       docsDir,
     },
+  };
+}
+
+/**
+ * The run's pack and its inputs. A fresh run resolves them now, from its
+ * working directory's `.archon/packs/` file, before its row exists or any node spends.
+ * A continuation keeps what its record says, exactly as it keeps `source`: a record
+ * without a pack is a run that had none, and a project file edited since the start
+ * reaches no resumed run.
+ */
+async function resolveRunPacks(
+  cwd: string,
+  workflow: ResolvedWorkflow,
+  opts: ExecuteWorkflowOptions,
+  isContinuation: boolean,
+  recordedDispatch: RunDispatchMetadata | undefined
+): Promise<{
+  metadata: Pick<RunDispatchMetadata, 'pack' | 'inputs_resolved'>;
+  startInputs: Record<string, JsonValue> | undefined;
+}> {
+  if (isContinuation) {
+    const { pack, inputs_resolved } = recordedDispatch ?? {};
+    return {
+      metadata: {
+        ...(pack !== undefined ? { pack } : {}),
+        ...(inputs_resolved !== undefined ? { inputs_resolved } : {}),
+      },
+      startInputs: undefined,
+    };
+  }
+  // A pre-created row already carries what its launcher supplied (`--input`, a parent's
+  // `with:`); a run the executor creates itself is supplied through `opts.inputs`.
+  const supplied =
+    (opts.preCreatedRun ? readSubrunMetadata(opts.preCreatedRun.metadata).inputs : undefined) ??
+    opts.inputs;
+  const { inputs } = await resolveRunStartInputs(cwd, workflow, supplied);
+  return {
+    metadata: {
+      ...(workflow.pack !== undefined ? { pack: workflow.pack.key } : {}),
+      inputs_resolved: true,
+    },
+    startInputs: inputs,
   };
 }
 
@@ -215,8 +272,7 @@ async function refuseContainerResumeWithoutBackend(
   // reaches here for a container run WITHOUT that context — e.g. approving a
   // --container run from chat/web, which has no docker backend wired — would run
   // host-side and SILENTLY skip the write-back apply, losing the approved changes.
-  // Fail loudly and point at the CLI instead; the run stays resumable (failed) so
-  // the CLI can rediscover the container and apply.
+  // A pending submission owns no execution claim; only a running continuation can settle one.
   if (preCreatedRun && isContainerRun(preCreatedRun) && !container) {
     const msg =
       `Run '${preCreatedRun.id}' executed inside an isolation container. Resume it from the ` +
@@ -224,10 +280,18 @@ async function refuseContainerResumeWithoutBackend(
       'container is rediscovered — chat/web resume cannot rewire it.';
     getLog().warn({ workflowRunId: preCreatedRun.id }, 'workflow.container_resume_without_backend');
     await safeSendMessage(platform, conversationId, `⚠️ ${msg}`);
-    await requireTerminalStatusWrite(deps.store.failWorkflowRun(preCreatedRun.id, msg), {
-      workflowRunId: preCreatedRun.id,
-      site: 'workflow.container_resume_guard_fail_failed',
-    });
+    if (preCreatedRun.status === 'running') {
+      await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(preCreatedRun.id, msg, {
+          expectedExecutionClaim: executionClaim(preCreatedRun.metadata),
+        }),
+        {
+          workflowRunId: preCreatedRun.id,
+          site: 'workflow.container_resume_refused',
+          failure: msg,
+        }
+      );
+    }
     return { success: false, workflowRunId: preCreatedRun.id, error: msg };
   }
   return undefined;
@@ -240,9 +304,26 @@ async function findAdoptedAiRun(
   recorded: boolean
 ) {
   const { preCreatedRun } = opts;
-  const aiAncestorId = opts.adoptedFromRunId ?? preCreatedRun?.adopted_from_run_id;
-  const aiContinuationMode = opts.continuationMode ?? readContinuationMode(preCreatedRun?.metadata);
-  return !isContinuation && !recorded && aiAncestorId && aiContinuationMode !== 'supersede'
+  const recordedMode = readContinuationMode(preCreatedRun?.metadata) ?? CONTINUATION_MODES.adopt;
+  if (preCreatedRun) {
+    if (
+      opts.adoptedFromRunId !== undefined &&
+      opts.adoptedFromRunId !== preCreatedRun.adopted_from_run_id
+    ) {
+      throw new Error('Caller ancestor conflicts with recorded continuation ancestor.');
+    }
+    if (opts.continuationMode !== undefined && opts.continuationMode !== recordedMode) {
+      throw new Error('Caller mode conflicts with recorded continuation mode.');
+    }
+  }
+  const aiAncestorId = preCreatedRun ? preCreatedRun.adopted_from_run_id : opts.adoptedFromRunId;
+  const aiContinuationMode = preCreatedRun
+    ? recordedMode
+    : (opts.continuationMode ?? CONTINUATION_MODES.adopt);
+  return !isContinuation &&
+    !recorded &&
+    aiAncestorId &&
+    continuationInheritsEstate(aiContinuationMode)
     ? await deps.store.getWorkflowRun(aiAncestorId)
     : undefined;
 }
@@ -260,33 +341,23 @@ async function prepareDispatchAiConfiguration(
   isContinuation: boolean
 ): Promise<PreparedRunAiConfiguration> {
   const { preCreatedRun } = opts;
-  try {
-    const recorded =
-      preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    const adoptedAiRun = await findAdoptedAiRun(deps, opts, isContinuation, !!recorded);
-    const inherited =
-      adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
-    if (!recorded && !inherited && opts.preparedAiConfiguration) {
-      return opts.preparedAiConfiguration;
-    }
-    return await prepareRunAiConfiguration(deps, workflow, cwd, {
-      codebaseId: opts.codebaseId,
-      userId: executionUserId,
-      runConfig: opts.runConfig,
-      modelOverrideLayer: opts.modelOverrideLayer,
-      ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
-      aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
-      ...(recorded ? { inheritAiConfiguration: true } : {}),
-    });
-  } catch (error) {
-    if (error instanceof TerminalStatusWriteError) throw error;
-    if (preCreatedRun)
-      await requireTerminalStatusWrite(
-        deps.store.failWorkflowRun(preCreatedRun.id, (error as Error).message),
-        { workflowRunId: preCreatedRun.id, site: 'workflow.configuration_fail_db_record_failed' }
-      );
-    throw error;
+  const recorded =
+    preCreatedRun && Object.hasOwn(preCreatedRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
+  const adoptedAiRun = await findAdoptedAiRun(deps, opts, isContinuation, !!recorded);
+  const inherited =
+    adoptedAiRun && Object.hasOwn(adoptedAiRun.metadata, RUN_AI_CONFIGURATION_METADATA_KEY);
+  if (!recorded && !inherited && opts.preparedAiConfiguration) {
+    return opts.preparedAiConfiguration;
   }
+  return await prepareRunAiConfiguration(deps, workflow, cwd, {
+    codebaseId: opts.codebaseId,
+    userId: executionUserId,
+    runConfig: opts.runConfig,
+    modelOverrideLayer: opts.modelOverrideLayer,
+    ...(isContinuation ? { continuationRun: preCreatedRun } : {}),
+    aiConfigurationRun: recorded ? preCreatedRun : (adoptedAiRun ?? undefined),
+    ...(recorded ? { inheritAiConfiguration: true } : {}),
+  });
 }
 
 async function resolveBaseBranch(

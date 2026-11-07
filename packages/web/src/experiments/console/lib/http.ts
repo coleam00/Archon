@@ -24,21 +24,39 @@ export class HttpError extends Error {
   /** apiError's full `error` message, read from the whole body; undefined when the body
    *  is not apiError JSON. Operator-facing refusals are longer than the snippet. */
   readonly serverError: string | undefined;
-  constructor(status: number, path: string, bodySnippet: string, serverError?: string) {
+  /** apiError's full optional `detail`, read before the diagnostic snippet is capped. */
+  readonly serverDetail: string | undefined;
+  constructor(
+    status: number,
+    path: string,
+    bodySnippet: string,
+    serverError?: string,
+    serverDetail?: string
+  ) {
     super(`API error ${status.toString()} (${path}): ${bodySnippet}`);
     this.name = 'HttpError';
     this.status = status;
     this.path = path;
     this.bodySnippet = bodySnippet;
     this.serverError = serverError;
+    this.serverDetail = serverDetail;
   }
 }
 
-function apiErrorMessage(body: string): string | undefined {
+function apiErrorFields(body: string): Pick<HttpError, 'serverError' | 'serverDetail'> | undefined {
   try {
     const parsed: unknown = JSON.parse(body);
-    if (typeof parsed === 'object' && parsed !== null && 'error' in parsed) {
-      return typeof parsed.error === 'string' ? parsed.error : undefined;
+    if (
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'error' in parsed &&
+      typeof parsed.error === 'string'
+    ) {
+      return {
+        serverError: parsed.error,
+        serverDetail:
+          'detail' in parsed && typeof parsed.detail === 'string' ? parsed.detail : undefined,
+      };
     }
   } catch {
     // Not apiError JSON (a proxy page, an empty body); the snippet still carries it.
@@ -106,7 +124,8 @@ export async function requestJson<T>(url: string, options?: RequestInit): Promis
     const body = await res.text().catch(() => '');
     const truncated = body.length > 200 ? `${body.slice(0, 200)}...` : body;
     const path = new URL(url, window.location.origin).pathname;
-    throw new HttpError(res.status, path, truncated, apiErrorMessage(body));
+    const fields = apiErrorFields(body);
+    throw new HttpError(res.status, path, truncated, fields?.serverError, fields?.serverDetail);
   }
   return res.json() as Promise<T>;
 }

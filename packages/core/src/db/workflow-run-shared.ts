@@ -7,6 +7,7 @@ import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { getDatabaseType, getDialect } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { parseJsonObject } from './workflow-run-normalization';
+import { readWorkflowRunStatus } from './workflow-run-status';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -30,11 +31,12 @@ export async function lockedRunRow(
   if (getDatabaseType() === 'sqlite') {
     await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
   }
-  const result = await query<{ status: WorkflowRunStatus; metadata: unknown }>(
+  const result = await query<{ status: string; metadata: unknown }>(
     `SELECT status, metadata FROM remote_agent_workflow_runs WHERE id = $1${getDialect().rowLock()}`,
     [id]
   );
-  return result.rows[0];
+  const row = result.rows[0];
+  return row ? { ...row, status: readWorkflowRunStatus(id, row.status) } : undefined;
 }
 
 /** SQL fragment reading an integer from a JSON column at a dotted key path. */

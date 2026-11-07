@@ -23,7 +23,9 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
 | `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. **Scratch work** (a checkout to bisect or spike against, a dependency install) goes under `$ARTIFACTS_DIR/.archon/scratch/`; create it with `mkdir -p`. Archon deletes that directory once the run is completed, failed or cancelled and its nodes have stopped (for a container run, when its container is removed), so a resumed run starts without it. A run whose nodes Archon cannot confirm stopped (its owner ran on another host, or its owner process is still alive) keeps it, and so does a CLI run stopped by a signal until it is abandoned or its conversation is reset; write evidence a later node or the operator reads anywhere else in `$ARTIFACTS_DIR`, which is kept. The deletion removes files only: remove a scratch worktree with `git worktree remove` (or use `git clone`), or its registration stays behind until `git worktree prune`. |
 | `$TYPED_ARTIFACTS_FILE` | Absolute path to the current typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation grouped by exact case-sensitive `output_type`. Each agent attempt receives a fresh listing before it starts, including transient retries. Plain `loop` structured-output reasks also receive fresh listings. Ordinary agent structured-output reasks (including agents in a `loop_group` body) reuse their attempt's listing. `bash:` and `script:` nodes receive one before execution. Each `until_bash` check receives a separate listing after the plain loop's agent work or the loop group's body. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/reference/workflow-language/#typed-artifacts-output_type). |
+| `$NODE_OUTCOMES_FILE` | Absolute path to the current node-outcome listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation of every node invocation the run has recorded: its state (`pending`, `running`, `completed`, `failed`, `skipped`), a failed node's error, a skipped node's reason and cause, and a completed node's structured output. One entry per `loop_group` iteration. Written at the same moment as `$TYPED_ARTIFACTS_FILE`, to the same invocation contexts, and delivered to `bash:`/`script:` as the `NODE_OUTCOMES_FILE` environment variable. Referencing it in a context with no listing throws, except in a `--dry-run` preview, which substitutes an empty string. See [Reading what other nodes did](/reference/workflow-language/#reading-what-other-nodes-did-node_outcomes_file). |
 | `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** unlike `$ARTIFACTS_DIR`, this host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
+| `$PACK_DIR` | The directory of the pack the node's workflow file was loaded from, in the run's source (`.archon/workflows/<pack>/`, or an installed or bundled pack's folder) | Read-only by contract. Inside an `include:`d block it is the included workflow's pack, and a `workflow:` child reads its own. Also delivered to `bash:`/`script:` as the `PACK_DIR` environment variable, which project env cannot override. A workflow outside a pack (a flat or grouped `.yaml` under `.archon/workflows/`) that references it fails to load. See [`$PACK_DIR`](#pack_dir-the-workflows-own-pack) |
 | `$BASE_BRANCH` | Base branch for git operations | For top-level runs, resolved in order: the `--base <branch>` flag on `archon workflow run` (per dispatch), then `worktree.baseBranch` in `.archon/config.yaml`, then the registered codebase's stored default branch, then git auto-detection. Fresh shared-checkout children (`inherit` or omitted) inherit the parent's resolved value, including `--base`. New isolated branches use `worktree.baseBranch`, then the codebase default, then detection, independently of parent flags. If an isolated branch is reused without a surviving child run record, its original base is unavailable; config is not used to guess it. A continuation -- `--resume`, an approved gate, or the automatic resume of a parent whose sub-run gate was approved -- reports the value recorded when the run was first dispatched instead of consulting config, the codebase default, or git again; only a `--base` re-passed to that continuation overrides the recorded value. `--base` sets the worktree cut-from too, so for a newly created top-level branch this variable names the branch the worktree was cut from -- unless `--from` was also passed, which overrides only the cut-from. See [Base branch precedence](/reference/cli/#base-branch-precedence). Throws an error if referenced in a prompt but cannot be resolved |
 | `$DOCS_DIR` | Documentation directory path | Configured via `docs.path` in `.archon/config.yaml`. Defaults to `docs/` when not set. Never throws |
 | `$CONTEXT` | GitHub issue or PR context, if available | Populated when the workflow is triggered from a GitHub issue/PR. Replaced with empty string when unavailable |
@@ -107,6 +109,50 @@ its location and the new root. Inspect the legacy `state/` directory and manuall
 only state belonging to this directory into the new `$STATE_DIR`; legacy state may have
 been shared by unrelated directories. New runs do not read or copy legacy state.
 Runs with an already recorded output root keep using it when resumed.
+
+### Disposable Docker verification images
+
+Use the current run's identity to opt disposable images into terminal cleanup:
+
+```bash
+docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
+```
+
+See the [SDLC Docker verification guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#docker-verification) for build requirements, cleanup eligibility and safe manual recovery.
+
+### `$PACK_DIR`: the workflow's own pack
+
+A pack can ship documents for its nodes to read, such as a default policy under
+`<pack>/.shared/`. `$PACK_DIR` names the pack's directory, so no node has to work out
+the path:
+
+```markdown
+<!-- my-pack/triage/commands/triage.md -->
+Read the pack's default policy at `$PACK_DIR/.shared/policy/triage.md`, then the
+project's `.archon/sdlc/policy/triage.md` when it exists.
+```
+
+```yaml
+- id: check
+  bash: test -f "$PACK_DIR/.shared/policy/triage.md"
+```
+
+The path is in the run's frozen source, not the live checkout, so a binary install and
+a source checkout read the same files, a resumed run reads what it started with, and an
+edit to the live pack after the run started changes nothing it reads. A container run
+sees the same absolute path, mounted read-only.
+
+Each node reads the pack of the workflow file that authored it. A node inside an
+`include:`d block reads the block's pack, even when the includer is in another pack, and
+a block that is not in a pack has no `$PACK_DIR`. Referencing it from a workflow outside
+a pack is a load error for the workflow's own YAML; a command file that references it in
+such a workflow fails the node instead of reading an empty path. In a `bash:` or
+`script:` node of such a workflow, the `PACK_DIR` environment variable is empty. A pack
+the run's source does not hold fails the node with its own error.
+
+An `include:` node cannot pass `$PACK_DIR` through `with:`: the block resolves its text
+in its own pack, so the value would name the block's pack instead of the includer's. The
+load fails naming the include; reference `$PACK_DIR` inside the block instead.
 
 ## Positional Arguments (not supported)
 
@@ -347,7 +393,7 @@ Where two grammars could match at the same `$`, the earlier group in this list w
 
 1. **Loop references** (inside a `loop_group` body) -- `$LOOP_PREV.<nodeId>.output`, and the
    group's `$LOOP_USER_INPUT` reply
-2. **Workflow variables** -- `$WORKFLOW_ID`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$ADOPTED_RUN_DIR`, `$TYPED_ARTIFACTS_FILE`, `$BASE_BRANCH`, `$DOCS_DIR`, `$USER_MESSAGE`, `$ARGUMENTS`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`, `$INPUTS.<name>`, then the context variables `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
+2. **Workflow variables** -- `$WORKFLOW_ID`, `$ARTIFACTS_DIR`, `$STATE_DIR`, `$PACK_DIR`, `$ADOPTED_RUN_DIR`, `$TYPED_ARTIFACTS_FILE`, `$NODE_OUTCOMES_FILE`, `$BASE_BRANCH`, `$DOCS_DIR`, `$USER_MESSAGE`, `$ARGUMENTS`, `$LOOP_USER_INPUT`, `$REJECTION_REASON`, `$LOOP_PREV_OUTPUT`, `$INPUTS.<name>`, then the context variables `$CONTEXT`, `$EXTERNAL_CONTEXT`, `$ISSUE_CONTEXT`
 3. **Node output references** -- `$nodeId.output`, `$nodeId.output.field`
 
 Issue context that is appended because the template names no context variable is added after
@@ -363,7 +409,9 @@ Positional arguments (`$1` through `$9`) are **not** supported in any context �
 | `$WORKFLOW_ID` | Yes | No | No |
 | `$ARTIFACTS_DIR` | Yes | No | No |
 | `$TYPED_ARTIFACTS_FILE` | Yes (exec and AI nodes) | No | No |
+| `$NODE_OUTCOMES_FILE` | Yes (exec and AI nodes) | No | No |
 | `$STATE_DIR` | Yes | No | No |
+| `$PACK_DIR` | Yes (packaged workflows) | No | No |
 | `$BASE_BRANCH` | Yes | No | No |
 | `$DOCS_DIR` | Yes | No | No |
 | `$CONTEXT` / aliases | Yes | No | No |

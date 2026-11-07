@@ -1,38 +1,13 @@
-import { describe, it, expect, beforeEach, mock } from 'bun:test';
-import pino from 'pino';
+import { describe, it, expect, beforeEach, afterEach } from 'bun:test';
+import { createLogger, setLogLevel, getLogLevel, rootLogger } from './logger';
 
-// Previous test files mock './logger' via mock.module which persists across files
-// in Bun's single-process test runner. Re-mock with the real implementation.
-const VALID_LEVELS = new Set(['fatal', 'error', 'warn', 'info', 'debug', 'trace']);
-const realRootLogger = pino({ level: 'info' });
-let levelSetByCode = false;
-
-mock.module('./logger', () => ({
-  rootLogger: realRootLogger,
-  createLogger: (module: string) => realRootLogger.child({ module }),
-  setLogLevel: (level: string) => {
-    const normalized = level.toLowerCase();
-    if (!VALID_LEVELS.has(normalized)) {
-      throw new Error(
-        `Invalid log level: '${level}'. Valid levels: ${[...VALID_LEVELS].join(', ')}`
-      );
-    }
-    realRootLogger.level = normalized;
-    levelSetByCode = true;
-  },
-  getLogLevel: () => realRootLogger.level,
-  applyEnvLogLevel: () => {
-    const level = process.env.LOG_LEVEL?.toLowerCase();
-    if (!levelSetByCode && level && VALID_LEVELS.has(level)) realRootLogger.level = level;
-  },
-  resetLogLevelOverride: () => {
-    levelSetByCode = false;
-  },
-}));
-
-const { createLogger, setLogLevel, getLogLevel, rootLogger } = await import('./logger');
+const originalLevel = getLogLevel();
 
 describe('logger', () => {
+  afterEach(() => {
+    setLogLevel(originalLevel);
+  });
+
   beforeEach(() => {
     // Reset to default level before each test
     setLogLevel('info');

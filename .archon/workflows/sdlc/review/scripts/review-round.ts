@@ -60,6 +60,7 @@ const NO_LENSES: Record<ReviewLens, boolean> = {
   tests: false,
   errors: false,
   docs: false,
+  ux: false,
 };
 
 function isFile(path: string): boolean {
@@ -83,11 +84,8 @@ try {
   const part = partAssignment(process.env.INPUTS_PART);
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
   const head = nodeStartCommit();
-  // The engine's identity for this node, which synthesis uses to count only this
-  // round's lens artifacts.
-  const execution: unknown = JSON.parse(process.env.ARCHON_NODE_EXECUTION ?? '');
   if (prior === '') {
-    emit({ continuation: false, light: false, head, cursor: '', risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, part });
+    emit({ continuation: false, light: false, head, cursor: '', risks: FULL_REVIEW_RISKS, ...NO_LENSES, part });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
@@ -103,7 +101,7 @@ try {
       );
     }
     const light = trimmed(process.env.INPUTS_LIGHT) === 'true';
-    emit({ continuation: true, light, head, cursor, risks: FULL_REVIEW_RISKS, execution, ...NO_LENSES, code: true, part });
+    emit({ continuation: true, light, head, cursor, risks: FULL_REVIEW_RISKS, ...NO_LENSES, code: true, part });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

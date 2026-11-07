@@ -16,6 +16,7 @@ How-to guides for building and running AI coding workflows with Archon.
 - [Build your first workflow](/getting-started/first-workflow/) — Build, validate, dry-run and test a workflow with an approval gate
 - [Workflow language](/reference/workflow-language/) — Every workflow field, node type and engine behavior
 - [Authoring Commands](/guides/authoring-commands/) — Write prompt templates that serve as building blocks for workflow nodes
+- [Metrics](/guides/metrics/) — Return counts and judged scores from nodes and read them across runs with `archon metrics`
 
 ## Node Types
 

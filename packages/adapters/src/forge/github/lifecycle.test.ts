@@ -84,6 +84,64 @@ describe('GitHub lifecycle reads', () => {
     expect(legacy.ok && legacy.result.value).not.toHaveProperty('author');
   });
 
+  test.each([
+    ['open', pull(), { merged_at: null, closed_at: null }],
+    [
+      'merged',
+      pull({
+        state: 'closed',
+        merged: true,
+        merged_at: '2026-11-03T10:00:00Z',
+        closed_at: '2026-11-03T10:00:00Z',
+      }),
+      { merged_at: '2026-11-03T10:00:00Z', closed_at: '2026-11-03T10:00:00Z' },
+    ],
+    [
+      'closed',
+      pull({ state: 'closed', merged: false, closed_at: '2026-11-04T10:00:00Z' }),
+      { merged_at: null, closed_at: '2026-11-04T10:00:00Z' },
+    ],
+  ] as const)('a %s pull request view carries its timestamps', async (state, observed, times) => {
+    const response = forgeResponseSchema.parse(
+      await run(
+        { operationId: 'times', op: 'pr.view', selector: { kind: 'number', ref } },
+        fakeGitHub({ pull: { ...observed } })
+      )
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        value: {
+          pr: { state },
+          timestamps: { created_at: '2026-11-01T09:00:00Z', ...times },
+        },
+      },
+    });
+  });
+
+  test('a head selector for any state reads the newest pull request, merged or not', async () => {
+    const merged = '2026-11-03T10:00:00Z';
+    const github = fakeGitHub({
+      pull: pull({ state: 'closed', merged: true, merged_at: merged, closed_at: merged }),
+    });
+    const response = await run(
+      {
+        operationId: 'any-state',
+        op: 'pr.view',
+        selector: { kind: 'head', repo, headRepo: repo, head: 'feature', state: 'any' },
+      },
+      github
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      result: { value: { pr: { number: 7, state: 'merged' } } },
+    });
+    const listing = github.calls.find(call => call.url.includes('/pulls?'))?.url ?? '';
+    expect(new URL(listing).searchParams.get('state')).toBe('all');
+    expect(new URL(listing).searchParams.get('sort')).toBe('created');
+    expect(new URL(listing).searchParams.get('direction')).toBe('desc');
+  });
+
   test('reports no pull request for a head that has none', async () => {
     const github = fakeGitHub();
     const empty = { ...github, fetch: async () => json([]) };
@@ -794,4 +852,24 @@ describe('GitHub draft conversion', () => {
     expect(forgeResponseSchema.safeParse(response).success).toBe(true);
     expect(JSON.stringify(response)).not.toContain('secret-token');
   });
+});
+
+test('a mutation GitHub answers 502 is sent once, never repeated', async () => {
+  const github = fakeGitHub({
+    status: (_url: string, method: string) => (method === 'PATCH' ? 502 : undefined),
+  });
+  const waits: number[] = [];
+  const response = await handleGithubOperation(
+    { operationId: 'edit', op: 'pr.edit-body', ref, body: 'next' },
+    {
+      token: 'token',
+      fetch: github.fetch,
+      sleep: async ms => {
+        waits.push(ms);
+      },
+    }
+  );
+  expect(response).toMatchObject({ ok: false, mutation: { outcome: 'outcome_unknown' } });
+  expect(github.calls.filter(call => call.method === 'PATCH')).toHaveLength(1);
+  expect(waits).toEqual([]);
 });

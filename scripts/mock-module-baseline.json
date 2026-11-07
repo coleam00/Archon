@@ -427,7 +427,6 @@
       "node:fs/promises"
     ],
     "packages/isolation/src/resolver.test.ts": ["@archon/paths"],
-    "packages/paths/src/logger.test.ts": ["./logger"],
     "packages/providers/src/claude/binary-resolver-dev.test.ts": ["@archon/paths"],
     "packages/providers/src/claude/binary-resolver.test.ts": ["@archon/paths"],
     "packages/providers/src/claude/provider.test.ts": [
@@ -2619,7 +2618,6 @@
       "workflowOperations"
     ],
     "packages/core/src/operations/workflow-adoption.ts": [
-      "CONTINUATION_METADATA_KEY",
       "WorkflowAdoptionError",
       "adoptRegisteredWorktree",
       "resolveRegisteredWorktree"
@@ -2758,7 +2756,6 @@
       "configureIsolation",
       "copyWorktreeFile",
       "copyWorktreeFiles",
-      "dockerCli",
       "dockerPreflight",
       "extractDockerError",
       "getPrState",
@@ -2889,7 +2886,6 @@
       "toSafeNameSegment",
       "validateAppDefaultsPaths"
     ],
-    "packages/paths/src/logger.ts": ["setLogDestination", "setLogSink"],
     "packages/paths/src/plugin-process.ts": [
       "confirmProcessGroupsGone",
       "inspectProcessGroups",

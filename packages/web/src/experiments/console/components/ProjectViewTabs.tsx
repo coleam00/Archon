@@ -1,20 +1,23 @@
 import type { ReactElement } from 'react';
 import { Link } from 'react-router';
 
+type ProjectView = 'runs' | 'chat' | 'metrics';
+
 interface ProjectViewTabsProps {
   projectId: string;
-  active: 'runs' | 'chat';
+  active: ProjectView;
 }
 
-const TABS: readonly { key: 'runs' | 'chat'; label: string; suffix: string }[] = [
+const TABS: readonly { key: ProjectView; label: string; suffix: string }[] = [
   { key: 'runs', label: 'Runs', suffix: '' },
   { key: 'chat', label: 'Chat', suffix: '/chat' },
+  { key: 'metrics', label: 'Metrics', suffix: '/metrics' },
 ];
 
 /**
- * Runs | Chat tab control under a project. Active styling mirrors FilterChips
- * (brand-bar underline). Only meaningful when a project is scoped — chat is
- * project-scoped, so this is never rendered on the All-projects view.
+ * Runs | Chat | Metrics tab control under a project. Active styling mirrors
+ * FilterChips (brand-bar underline). Only meaningful when a project is scoped —
+ * chat is project-scoped, so this is never rendered on the All-projects view.
  */
 export function ProjectViewTabs({ projectId, active }: ProjectViewTabsProps): ReactElement {
   return (

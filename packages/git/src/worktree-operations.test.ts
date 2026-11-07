@@ -86,7 +86,7 @@ describe('git utilities', () => {
       execSpy.mockRestore();
     });
 
-    test('parses NUL-delimited worktree paths and excludes detached checkouts', async () => {
+    test('parses local-branch paths', async () => {
       const mockOutput = [
         'worktree /path/to/main',
         'HEAD abc123',
@@ -100,6 +100,10 @@ describe('git utilities', () => {
         'HEAD abc123',
         'detached',
         '',
+        'worktree /path/to/local-ref-name',
+        'HEAD abc123',
+        'branch refs/heads/refs/custom/foo',
+        '',
         '',
       ].join('\0');
       execSpy.mockResolvedValue(output(mockOutput));
@@ -111,13 +115,32 @@ describe('git utilities', () => {
         ['-C', repo('/path/to/main'), 'worktree', 'list', '--porcelain', '-z'],
         { timeout: 10000 }
       );
-      expect(result).toHaveLength(2);
+      expect(result).toHaveLength(3);
       expect(result[0]).toEqual({ path: listed('/path/to/main'), branch: branch('main') });
       expect(result[1]).toEqual({
         path: listed('/path/to/new\nline'),
         branch: branch('feature/auth'),
       });
+      expect(result[2]).toEqual({
+        path: listed('/path/to/local-ref-name'),
+        branch: branch('refs/custom/foo'),
+      });
     });
+
+    test.each(['refs/custom/foo', 'refs/custom/refs/heads/foo'])(
+      'excludes non-local symbolic ref %s without losing local branches',
+      async ref => {
+        execSpy.mockResolvedValue(
+          output(
+            `worktree /path/to/custom\0HEAD abc123\0branch ${ref}\0\0` +
+              'worktree /path/to/valid\0HEAD abc123\0branch refs/heads/valid\0\0'
+          )
+        );
+        expect(await git.listWorktrees(repo('/path/to/main'))).toEqual([
+          { path: listed('/path/to/valid'), branch: branch('valid') },
+        ]);
+      }
+    );
 
     test('returns empty array only for a typed non-repository failure', async () => {
       execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary vendor wording'));

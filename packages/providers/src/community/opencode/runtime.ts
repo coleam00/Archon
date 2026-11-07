@@ -152,28 +152,13 @@ function killProcess(pid: number): void {
   }
 }
 
-function errorText(error: unknown): string {
-  if (error instanceof Error) return `${error.name} ${error.message}`.toLowerCase();
-  return String(error).toLowerCase();
-}
-
 function isPortBindConflict(error: unknown): boolean {
-  const message = errorText(error);
-
-  if (
+  return (
     typeof error === 'object' &&
     error !== null &&
     'code' in error &&
-    typeof (error as { code?: unknown }).code === 'string' &&
-    (error as { code: string }).code.toUpperCase() === 'EADDRINUSE'
-  ) {
-    return true;
-  }
-
-  return (
-    message.includes('eaddrinuse') ||
-    message.includes('address already in use') ||
-    message.includes('failed to start server on port')
+    typeof error.code === 'string' &&
+    error.code.toUpperCase() === 'EADDRINUSE'
   );
 }
 

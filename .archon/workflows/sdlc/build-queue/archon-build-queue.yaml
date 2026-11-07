@@ -30,6 +30,14 @@ inputs:
       The issue to build. Empty claims the waiting item that sorts first. A number
       claims that item, and refuses the run with the reason when it cannot: it has no
       work item, another run holds it, or it does not wait for the build queue.
+  orders_only:
+    default: "false"
+    description: >-
+      "true" claims only items that are members of an open work order (a
+      `work-order/<id>` state document; see the SDLC pack README, "Work orders"), and
+      nothing when no order is open. It first marks done each open order whose members
+      have all merged. A named item is claimed either way. Anything else picks from
+      every waiting item.
   retriage_as:
     default: ""
     description: >-
@@ -42,6 +50,14 @@ inputs:
     description: >-
       After this many rounds since the item's scope last changed, the answer to a round
       that ends wanting another also judges whether the rounds converge.
+  build_queue_binding:
+    default: ""
+    description: >-
+      The absolute path of the operator's timer-binding config for this repository's
+      build queue. A decision that wants the item's next round now fires it with
+      `archon trigger fire`, so the round is admitted under that binding's resource,
+      capacity and overlap policy, at most once per decision. Empty starts no
+      follow-up; the next queue run picks the item up.
 
 returns: apply
 
@@ -76,7 +92,6 @@ nodes:
         rounds: { type: array, items: { type: object } }
         # Whether this run's round reaches round_limit rounds since the scope changed.
         at_cap: { type: boolean }
-        policy_defaults: { type: string }
         # The item's pull request as the forge reports it now: the latest round's that
         # recorded one, or the one triage routed it to continue; else null.
         pull_request: { type: [object, 'null'] }
@@ -87,7 +102,7 @@ nodes:
         # The branch the round opens its pull request from when route continues none: a
         # new build/<issue>-<slug>-<run>. Empty with no item.
         branch: { type: string }
-      required: [path, item, url, record, brief, rounds, at_cap, policy_defaults, pull_request, continues, branch]
+      required: [path, item, url, record, brief, rounds, at_cap, pull_request, continues, branch]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -100,7 +115,6 @@ nodes:
     model: large
     mutates_checkout: false
     with:
-      policy_defaults: "$facts.output.policy_defaults"
       url: "$facts.output.url"
       record: { from: "$facts.output.record" }
       brief: "$facts.output.brief"
@@ -173,6 +187,10 @@ nodes:
       type: object
       properties:
         head: { type: [string, 'null'] }
+        # The commit the continued pull request's review comment names at the round's
+        # start; null on a fresh round or when it has no trusted review. Checkout refuses
+        # a pull request with more than one.
+        reviewed: { type: [string, 'null'] }
         # What ship continues: the number, `none` when the item has a pull request
         # the round does not continue, or null when it has none and ship's triage
         # decides.
@@ -181,7 +199,7 @@ nodes:
             - { type: integer, minimum: 1 }
             - { type: string, enum: [none] }
             - { type: 'null' }
-      required: [head, pull_request]
+      required: [head, reviewed, pull_request]
 
   - id: ship
     include: archon-ship-block
@@ -194,17 +212,17 @@ nodes:
 
   - id: answer
     command: answer
-    depends_on: [facts, ship]
+    depends_on: [facts, checkout, ship]
     trigger_rule: none_failed_min_one_success
     when: "$facts.output.path == 'route' && $route.output.decision == 'launch'"
     model: large
     mutates_checkout: false
     with:
-      policy_defaults: "$facts.output.policy_defaults"
       url: "$facts.output.url"
       record: { from: "$facts.output.record" }
       rounds: { from: "$facts.output.rounds" }
       ending: { from: "$ship.output", if_skipped: null }
+      reviewed: "$checkout.output.reviewed"
       at_cap: "$facts.output.at_cap"
     output_format:
       type: object
@@ -228,8 +246,10 @@ nodes:
           required: [repo, number]
         reason: { type: string, pattern: '\S' }
         # On ask, what the question is about, as the agent judged it: `scope` for the
-        # contract's shape or the rounds' trend, `stop` for anything else. Null otherwise.
-        ask_class: { type: [string, 'null'], enum: [stop, scope, null] }
+        # contract's shape or the rounds' trend, `stop` for anything else. Ignored on
+        # done and continue. Not nullable: Codex's constrained decoding could not emit
+        # `null` from an enum and padded whitespace until max_output_tokens.
+        ask_class: { type: string, enum: [stop, scope] }
         attention: *attention
       required: [decision, brief, push, reason, ask_class, attention]
 
@@ -254,6 +274,7 @@ nodes:
         summary: { type: string }
         # The attention message; empty when nothing is asked.
         attention: { type: string }
+        # Each choice as a wait option; its value is the choice the answer returns.
         options:
           type: array
           items:
@@ -261,12 +282,16 @@ nodes:
             properties:
               id: { type: string }
               label: { type: string }
-            required: [id, label]
+              does: { type: string }
+              value: { type: object }
+            required: [id, label, does, value]
+        # The wait's recommendation; null when nothing is asked.
+        recommendation: { type: [object, 'null'] }
         class: { type: string, enum: ['', route, stop, scope] }
         # What the answer node needs: the attention item, the brief a continue choice
         # launches and which decision asked; null when nothing is asked.
         asked: { type: [object, 'null'] }
-      required: [decision, summary, attention, options, class, asked]
+      required: [decision, summary, attention, options, recommendation, class, asked]
 
   # A paused run gives its resource slot back, so the next scheduled run can work
   # another item while this one waits.
@@ -277,6 +302,7 @@ nodes:
       attention: "$apply.output.attention"
       form: select
       options: "$apply.output.options"
+      recommendation: "$apply.output.recommendation"
       labels:
         build: "$apply.output.class"
 
@@ -287,7 +313,7 @@ nodes:
     with:
       item: { from: "$facts.output.item" }
       asked: { from: "$apply.output.asked" }
-      choice: "$ask.output.decision"
+      choice: { from: "$ask.output.value" }
       text: "$ask.output.text"
     output_format:
       type: object

@@ -10,6 +10,7 @@ import { clearRegistry } from '@archon/providers';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { ContainerBackend } from '@archon/isolation';
+import * as isolation from '@archon/isolation';
 import * as git from '@archon/git';
 import * as credentials from '@archon/workflows/run-preflight';
 import * as subprocess from '@archon/workflows/subprocess';
@@ -72,6 +73,12 @@ async function prepare(root: string) {
         overlayMode: 'native',
       };
     }
+  );
+  const releaseImages = watch(
+    spyOn(ContainerBackend.prototype, 'releaseVerificationImages')
+  ).mockResolvedValue();
+  const defaultRelease = watch(spyOn(isolation, 'releaseRunVerificationImages')).mockRejectedValue(
+    new Error('wrong daemon')
   );
   const destroy = watch(spyOn(ContainerBackend.prototype, 'destroy')).mockResolvedValue();
   const suspend = watch(spyOn(ContainerBackend.prototype, 'suspend')).mockResolvedValue();
@@ -141,6 +148,8 @@ async function prepare(root: string) {
     });
   return {
     accepted,
+    releaseImages,
+    defaultRelease,
     host,
     store,
     cwd,
@@ -762,3 +771,29 @@ for (const stage of ['notice', 'announcement', 'subscription', 'lease'] as const
     }
   );
 }
+
+test('resumed backend owns both executor and foreground image release', async () => {
+  await fixture(async f => {
+    const run = await f.paused();
+    await f.command(run);
+    expect(f.releaseImages.mock.calls).toEqual([
+      [run.id, f.envId],
+      [run.id, f.envId],
+    ]);
+    expect(f.defaultRelease).not.toHaveBeenCalled();
+    expect(f.destroy).toHaveBeenCalledTimes(1);
+  });
+});
+
+test('backend image cleanup failure still fails a successful foreground resume', async () => {
+  const failure = new Error('owner cleanup failed');
+  await fixture(async f => {
+    const run = await f.paused();
+    f.releaseImages.mockRejectedValue(failure);
+    const error = await f.command(run).catch((err: unknown) => err);
+    expect(error).toBeInstanceOf(Error);
+    expect(error).toMatchObject({ cause: failure });
+    expect((await f.store.getWorkflowRun(run.id))?.status).toBe('completed');
+    expect(f.defaultRelease).not.toHaveBeenCalled();
+  });
+});
