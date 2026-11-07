@@ -1,0 +1,180 @@
+name: archon-split
+description: |
+  The split queue: breaks a large item into the fewest pieces that each prove
+  something on their own, when triage judged that building it as one work item would
+  not work. Each run claims the waiting item triage routed `split` with intake's
+  claim, or the one the number input names. One agent checks triage's reason first:
+  when one work item would work after all, it hands the item to the build queue
+  whole, with why. Otherwise it files only the current piece: a PRD's current phase,
+  an epic's current increment, or every task of a bundle. Later phases are recorded
+  on the item, each with what the earlier work must show first, and filed by a later
+  split. A script files each issue once and records it on the item's work item. A
+  PRD is labelled archon-prd and stays open until its hypothesis has a verdict; an
+  epic stays open until its increments merge; a bundle is closed with links to its
+  issues. The filed issues come back through intake like any other.
+
+  Use when: a trigger binding the operator installed starts it (see the SDLC pack
+  README, "Split queue").
+  NOT for: writing a PRD, triaging (archon-intake), or building the filed issues
+  (archon-build-queue).
+
+inputs:
+  repo_host:
+    description: The forge host of the repository whose work items the queue splits.
+  repo_path:
+    description: The owner/name path of that repository.
+  number:
+    default: ""
+    description: >-
+      The issue to split. Empty claims the waiting item that sorts first. A number
+      claims that item, and refuses the run with the reason when it cannot: it has no
+      work item, another run holds it, or it does not wait for the split queue.
+
+returns: publish
+
+# Reads the checkout and writes only to the tracker and the state store: runs in the
+# launch checkout beside any other run, and creates no worktree.
+worktree:
+  enabled: false
+mutates_checkout: false
+
+nodes:
+  # Claims the item and writes its issue to split/prd.md, the text the slice agent
+  # splits. Writes only the claim.
+  - id: facts
+    script: facts
+    runtime: bun
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, closed, slice] }
+        item:
+          type: [object, 'null']
+          properties:
+            repo:
+              type: object
+              properties:
+                host: { type: string }
+                path: { type: string }
+              required: [host, path]
+            number: { type: integer }
+          required: [repo, number]
+        url: { type: string }
+        # The issues already filed from the item, by key, from its work item; empty
+        # when none are.
+        filed: { type: array, items: { type: object } }
+        # Triage's summary from the run that routed the item `split`: why building it
+        # whole would not work. Empty when no such entry is recorded.
+        reason: { type: string }
+      required: [path, item, url, filed, reason]
+
+  - id: slice
+    command: slice
+    depends_on: [facts]
+    when: "$facts.output.path == 'slice'"
+    model: large
+    with:
+      url: "$facts.output.url"
+      filed: { from: "$facts.output.filed" }
+      reason: "$facts.output.reason"
+    output_format:
+      type: object
+      properties:
+        # What the item is, or `whole` with the route it is built at, when one work
+        # item would work.
+        split:
+          anyOf:
+            - type: object
+              additionalProperties: false
+              properties:
+                kind: { type: string, enum: [prd, epic, bundle] }
+              required: [kind]
+            - type: object
+              additionalProperties: false
+              properties:
+                kind: { type: string, enum: [whole] }
+                route: { type: string, enum: [plan, deliver] }
+              required: [kind, route]
+        # The issues filed now: a PRD's current phase, an epic's current increment, or
+        # every task of a bundle. Empty when the item is built whole, or when nothing
+        # is left to file.
+        issues:
+          type: array
+          maxItems: 12
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              key: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+              title: { type: string, pattern: '\S' }
+              body: { type: string, pattern: '\S' }
+            required: [key, title, body]
+        # Later phases or increments, recorded on the item and not filed yet, each
+        # with what the earlier work must show before it is filed.
+        later:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              title: { type: string, pattern: '\S' }
+              signal: { type: string, pattern: '\S' }
+            required: [title, signal]
+        # Existing open issues that already own part of the outcome, listed instead
+        # of filed again.
+        existing:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              number: { type: integer, minimum: 1 }
+              why: { type: string, pattern: '\S' }
+            required: [number, why]
+        summary: { type: string, pattern: '\S' }
+      required: [split, issues, later, existing, summary]
+
+  # Files each current issue once, records it on the work item as it goes, comments
+  # the list and the later phases on the item, then labels a PRD or closes a bundle,
+  # and releases the claim. An item
+  # built whole gets the comment with why and moves to its build route instead.
+  - id: publish
+    script: publish
+    runtime: bun
+    depends_on: [facts, slice]
+    trigger_rule: none_failed_min_one_success
+    with:
+      path: "$facts.output.path"
+      item: { from: "$facts.output.item" }
+      split: { from: "$slice.output.split", if_skipped: null }
+      issues: { from: "$slice.output.issues", if_skipped: null }
+      later: { from: "$slice.output.later", if_skipped: null }
+      existing: { from: "$slice.output.existing", if_skipped: null }
+      summary: { from: "$slice.output.summary", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, closed, slice] }
+        item: { type: [integer, 'null'] }
+        # The split kind, `whole` when the item was handed back, null otherwise.
+        kind: { type: [string, 'null'] }
+        issues:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              number: { type: integer }
+              url: { type: string }
+            required: [key, number, url]
+        adopted:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer }
+              url: { type: string }
+              why: { type: string }
+            required: [number, url, why]
+        summary: { type: string }
+      required: [path, item, kind, issues, adopted, summary]

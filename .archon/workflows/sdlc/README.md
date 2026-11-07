@@ -471,7 +471,7 @@ it; both share one resource so runs queue rather than overlap:
 
 The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 `{"kind": "label.changed", "actions": ["added"], "predicates": [{"field": "label.name",
-"in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate"]}]}`, and two
+"in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate", "archon-split"]}]}`, and two
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
 The predicate only saves runs; intake ignores any other label. A binding installed before the investigate label was renamed still lists `archon-issue`: replace it with `archon-investigate` in that binding, and in any build-queue binding that selects on it, because `label.name` predicates match exactly.
 
@@ -485,7 +485,8 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
 
 - **Pickup.** A run claims one item with intake's claim and order. An item waits for the build queue when its work item's stage is a READY
   route (`deliver`, `continue`, `plan` or `investigate`) and the queue has not
-  recorded it, or recorded it as waiting for its next round. A re-triage after the
+  recorded it, or recorded it as waiting for its next round. A `split` item is the
+  split queue's, never the build queue's. A re-triage after the
   queue's last decision starts the item over. The build queue's claim takes none of
   the item's intake requests, so an edit or label request recorded while it holds the
   item waits for intake's next pickup. The queue writes no labels; intake's mirror
@@ -656,6 +657,93 @@ until the operator removes it from `members`. To drop an item, or add one, repla
 document at its current revision. A malformed order, including an `open` one with a
 `done_at` or a `done` one without, refuses the run with its name, rather than building
 something no order chose.
+
+## Split queue
+
+[`archon-split`](split/archon-split.yaml) breaks a large item into the fewest pieces
+that each prove something on their own, and files only the piece that comes next. A
+large item, such as a PRD, an epic or a bundle of tasks, is built as one work item by
+default. Triage routes it `split` only when building it whole would not work, and its
+summary says why. The default triage policy,
+[`.shared/policy/triage.md`](.shared/policy/triage.md), says when splitting is right,
+how each kind splits, and what a PRD is: a release that tests a hypothesis, held to
+its hypothesis, its signal with the command that measures it, and its threshold and
+window, whether it is split or built whole. A PRD missing any of them gets
+`archon-needs-contract`, naming the gap. A project refines the bar in its own
+`.archon/sdlc/policy/triage.md`.
+
+- **Pickup.** A run claims one item with intake's claim and order. An item waits for
+  the split queue when its stage is `split` and no split finished on it, or a
+  re-triage came after the last one. The `number` input claims that issue instead,
+  and refuses the run with why when it cannot, as the build queue's does. The claim
+  takes none of the item's intake requests.
+- **Slice.** One agent reads the issue (written to `split/prd.md`), triage's reason,
+  the triage policy, the project's direction and current code. It checks triage's
+  judgment first: when one work item would work, it answers `whole` with a build
+  route (`plan` or `deliver`) and why. Otherwise it judges the item a PRD, an epic or
+  a bundle. A PRD splits into phases, each proving a desired outcome; an epic into
+  vertical increments, each leaving the product working; a bundle is not sliced, and
+  every task is filed as written. Only the current phase or increment is filed. Each
+  later one is listed with what the earlier work must show before it is filed. An
+  open issue that already owns a piece is listed as existing instead of being filed
+  again.
+- **Publish.** The `publish` script files each issue with a hidden first line,
+  `<!-- archon-split: <item> <key> -->`. Each filed issue is recorded on the work item
+  before the next is filed, and a key already recorded is never filed again; a key
+  whose issue was filed but not recorded is recovered by its marker. So a run that
+  stops part way, or the next phase's split after a re-triage, files no issue twice.
+  Each existing issue the agent listed is read to prove it is an open issue of the
+  repository. The item then gets one marked comment listing its issues and the later
+  phases. A PRD is labelled `archon-prd` and stays open until its hypothesis has a
+  verdict; an epic stays open until its increments merge; a bundle is closed as
+  completed. The last write records the split done and releases the claim. An issue
+  closed before its split finishes is recorded and files nothing more.
+- **Next phase.** When the earlier work shows its signal, re-triage the item. It
+  routes `split` again, and the agent files the next phase from the plan in the
+  comment, reusing the keys of what is already filed.
+- **Build whole.** On a `whole` answer, the item gets the same marked comment with the
+  agent's reason, its route label in place of `archon-split`, and the last write moves
+  its stage to that route, where the build queue picks it up as one work item.
+  Triage reads that comment on a later re-triage. An item an earlier split already
+  filed issues from refuses a `whole` answer, since those pieces may be in flight.
+- **Record.** The work item's `facts.split` holds the status (`filing`, `done`,
+  `whole` or `closed`), whether the item is a `prd`, an `epic` or a `bundle`, every
+  issue filed from it by key and title, and the existing issues it adopted with why,
+  kept across phases. A `whole` record holds only the route; the reason is in its
+  history entry and the comment.
+- **The filed issues** come back through intake like any other issue. They are opened
+  by the install's own identity, so intake trusts them only when that login is on the
+  maintainer list.
+
+The pack installs no binding. A schedule keeps items moving, as for the build queue.
+The run reads the checkout and writes only to the tracker and the state store, so it
+needs no worktree:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-split-queue",
+  "binding": {
+    "bindingId": "split-queue",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "forge:github.com/acme/widgets:split",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-split",
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
+}
+```
+
+To split an item as soon as intake routes it, add a label binding on the same
+resource, with intake's label selector narrowed to `archon-split` and the same launch.
 
 ## Merge queue
 
