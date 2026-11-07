@@ -1,9 +1,13 @@
-import { readFile, readdir, stat } from 'fs/promises';
+import { readFile } from 'fs/promises';
 import { join, basename, resolve } from 'path';
 import { getBundledWorkflowsPath } from '@archon/paths';
 import { providerRegistry } from '@archon/providers';
-import { isValidWorkflowFolderSegment } from '@archon/workflows/workflow-discovery';
-import { FIXTURES_DIR } from '@archon/workflows/fixture-layout';
+import {
+  readPackWorkflowFolders,
+  readScopePacks,
+  type PackWorkflowLocation,
+} from '@archon/workflows/pack-layout';
+import type { WorkflowLoadError } from '@archon/workflows/schemas/workflow';
 import { parseWorkflow, parseYaml } from '@archon/workflows/loader';
 import { BUNDLED_WORKFLOWS } from '@archon/workflows/defaults';
 
@@ -56,47 +60,20 @@ export function authoredForm(content: string): Record<string, unknown> | undefin
     : undefined;
 }
 
-/** Entries of `dir`, sorted; null when `dir` does not exist. */
-async function sortedEntries(dir: string): Promise<string[] | null> {
-  try {
-    return (await readdir(dir)).sort((a, b) => a.localeCompare(b));
-  } catch (error) {
-    if (isNotFound(error)) return null;
-    throw error;
-  }
+/** A by-name lookup matched a packaged workflow folder that discovery reports as a load error. */
+export class PackagedWorkflowFolderError extends Error {}
+
+/** A root or pack directory that cannot be listed fails the lookup instead of hiding the workflow. */
+function readFailure({ error, cause }: WorkflowLoadError): Error {
+  return new Error(error, { cause });
 }
 
-async function isDirectory(path: string): Promise<boolean> {
-  try {
-    return (await stat(path)).isDirectory();
-  } catch (error) {
-    if (isNotFound(error)) return false;
-    throw error;
-  }
-}
-
-/** Subfolders of `dir` that can be a pack or a packaged workflow, in sorted order. */
-async function* workflowFolderSegments(dir: string): AsyncGenerator<string> {
-  for (const entry of (await sortedEntries(dir)) ?? []) {
-    if (entry === FIXTURES_DIR || !isValidWorkflowFolderSegment(entry)) continue;
-    if (await isDirectory(join(dir, entry))) yield entry;
-  }
-}
-
-/** The packaged workflow in `<root>/<pack>/<folder>`: its one YAML file, or null with none or several. */
-async function readPackagedWorkflow(
-  workflowsRoot: string,
+/** The one YAML file of a packaged workflow folder, read and parsed; null when it vanished. */
+async function readPackagedFile(
   pack: string,
-  workflowFolder: string
+  { folder, path, filename }: PackWorkflowLocation
 ): Promise<RawWorkflowFile | null> {
-  const workflowPath = join(workflowsRoot, pack, workflowFolder);
-  const yamlFiles = ((await sortedEntries(workflowPath)) ?? []).filter(
-    entry => entry.endsWith('.yaml') || entry.endsWith('.yml')
-  );
-  if (yamlFiles.length !== 1) return null;
-
-  const yamlFilename = yamlFiles[0];
-  const absolutePath = join(workflowPath, yamlFilename);
+  const absolutePath = join(path, filename);
   let content: string;
   try {
     content = await readFile(absolutePath, 'utf-8');
@@ -106,9 +83,9 @@ async function readPackagedWorkflow(
   }
   return {
     absolutePath,
-    filename: `${pack}/${workflowFolder}/${yamlFilename}`,
+    filename: `${pack}/${folder}/${filename}`,
     packaged: true,
-    parsed: parseWorkflow(content, yamlFilename, providerRegistry),
+    parsed: parseWorkflow(content, filename, providerRegistry),
     content,
   };
 }
@@ -120,26 +97,51 @@ async function readPackagedWorkflow(
  */
 function answersToName(file: RawWorkflowFile, workflowFolder: string, name: string): boolean {
   if (file.parsed.workflow !== null) return file.parsed.workflow.name === name;
-  const yamlStem = basename(file.absolutePath).replace(/\.ya?ml$/, '');
-  return yamlStem === name || workflowFolder === name;
+  return yamlStem(basename(file.absolutePath)) === name || workflowFolder === name;
 }
 
+function yamlStem(filename: string): string {
+  return filename.replace(/\.ya?ml$/, '');
+}
+
+type PackagedMatch = RawWorkflowFile | PackagedWorkflowFolderError;
+
+async function packMatches(pack: string, packPath: string, name: string): Promise<PackagedMatch[]> {
+  const listing = await readPackWorkflowFolders(packPath, pack);
+  if ('error' in listing) throw readFailure(listing.error);
+  const matches: PackagedMatch[] = [];
+  for (const entry of listing.folders) {
+    if (entry.kind === 'error') {
+      if (entry.folder === name || entry.yamlFiles.some(file => yamlStem(file) === name)) {
+        matches.push(new PackagedWorkflowFolderError(entry.error.error));
+      }
+      continue;
+    }
+    const file = await readPackagedFile(pack, entry);
+    if (file !== null && answersToName(file, entry.folder, name)) matches.push(file);
+  }
+  return matches;
+}
+
+/**
+ * The packaged workflow `name` resolves to under `workflowsRoot`. A malformed workflow
+ * folder that answers to the name throws its discovery load error rather than reading
+ * as not found. An invalid pack directory is skipped: no workflow name attributes to it.
+ */
 export async function findPackagedWorkflowAt(
   workflowsRoot: string,
   name: string
 ): Promise<RawWorkflowFile | null> {
-  let match: RawWorkflowFile | null = null;
-  for await (const pack of workflowFolderSegments(workflowsRoot)) {
-    for await (const workflowFolder of workflowFolderSegments(join(workflowsRoot, pack))) {
-      const file = await readPackagedWorkflow(workflowsRoot, pack, workflowFolder);
-      if (file === null || !answersToName(file, workflowFolder, name)) continue;
-      if (match !== null) {
-        throw new Error(`Multiple packaged workflows declare the name '${name}'`);
-      }
-      match = file;
-    }
-  }
-  return match;
+  const { packs, errors } = await readScopePacks(workflowsRoot);
+  const unreadable = errors.find(error => error.errorType === 'read_error');
+  if (unreadable !== undefined) throw readFailure(unreadable);
+
+  const matches: PackagedMatch[] = [];
+  for (const pack of packs) matches.push(...(await packMatches(pack.name, pack.path, name)));
+  if (matches.length > 1) throw new Error(`Multiple packaged workflows declare the name '${name}'`);
+  const [match] = matches;
+  if (match instanceof PackagedWorkflowFolderError) throw match;
+  return match ?? null;
 }
 
 export async function findWorkflowAt(

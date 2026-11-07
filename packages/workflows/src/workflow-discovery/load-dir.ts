@@ -10,9 +10,16 @@ import type { WorkflowPack } from '../schemas/pack-settings';
 import { loadPackDeclaration, PackSettingsError } from '../pack-settings';
 import { MAX_DISCOVERY_DEPTH } from '../command-validation';
 import { parseWorkflow } from '../loader';
-import { isValidWorkflowFolderSegment, qualifyWorkflowResources } from '../packaged-workflow';
+import { qualifyWorkflowResources } from '../packaged-workflow';
 import { FIXTURES_DIR } from '../fixture-layout';
 import { getLog } from './log';
+import {
+  fileSystemError,
+  isYamlFile,
+  readPackWorkflowFolders,
+  readScopePacks,
+  type PackWorkflowLocation,
+} from './pack-layout';
 
 /** What parsing a workflow file needs beyond its content. */
 export interface WorkflowParseContext {
@@ -63,37 +70,6 @@ export interface PackLoad extends WorkflowParseContext {
   pack: string;
   source: WorkflowSource;
   label: string;
-}
-
-export function isYamlFile(entry: string): boolean {
-  return entry.endsWith('.yaml') || entry.endsWith('.yml');
-}
-
-/** A filesystem failure as a load error: `<operation> error: <message> (<code>)`. */
-export function fileSystemError(
-  filename: string,
-  operation: 'Directory read' | 'File read' | 'Path read',
-  error: unknown
-): WorkflowLoadError {
-  const err = error as NodeJS.ErrnoException;
-  return {
-    filename,
-    error: `${operation} error: ${err.message} (${err.code ?? 'unknown'})`,
-    errorType: 'read_error',
-    cause: error,
-  };
-}
-
-/** A failed `stat` of a packaged path: a vanished path is skipped, anything else reported. */
-function pathReadError(
-  filename: string,
-  logContext: Record<string, string>,
-  error: unknown
-): WorkflowLoadError | undefined {
-  const err = error as NodeJS.ErrnoException;
-  if (err.code === 'ENOENT') return undefined;
-  getLog().warn({ err, ...logContext }, 'packaged_workflow_path_read_error');
-  return fileSystemError(filename, 'Path read', error);
 }
 
 export function mergeScopeResults(base: DirLoadResult, packaged: DirLoadResult): DirLoadResult {
@@ -254,13 +230,8 @@ export async function loadPackWorkflows(
 ): Promise<{ files: PackWorkflowFile[]; errors: WorkflowLoadError[] }> {
   const files: PackWorkflowFile[] = [];
   const errors: WorkflowLoadError[] = [];
-  let workflowFolders: string[];
-  try {
-    workflowFolders = await readdir(packPath);
-  } catch (error) {
-    errors.push(fileSystemError(pack.label, 'Directory read', error));
-    return { files, errors };
-  }
+  const listing = await readPackWorkflowFolders(packPath, pack.label);
+  if ('error' in listing) return { files, errors: [listing.error] };
   let workflowPack: WorkflowPack | PackSettingsError;
   try {
     const settings = await loadPackDeclaration(packPath, pack.label);
@@ -274,14 +245,12 @@ export async function loadPackWorkflows(
     getLog().warn({ err: error, packPath }, 'pack_declaration_invalid');
     workflowPack = error;
   }
-  for (const workflowFolder of workflowFolders.sort((a, b) => a.localeCompare(b))) {
-    // A dot directory (`.shared`, `.github`, ...) is never a workflow folder: a workflow
-    // folder name cannot start with a dot. A pack installed from a repository root
-    // carries that repository's other directories, so these are expected, not errors.
-    if (workflowFolder.startsWith('.')) continue;
-    if (workflowFolder === FIXTURES_DIR) continue;
-    const loaded = await loadPackWorkflowFolder(pack, workflowPack, packPath, workflowFolder);
-    if (loaded === undefined) continue;
+  for (const entry of listing.folders) {
+    if (entry.kind === 'error') {
+      errors.push(entry.error);
+      continue;
+    }
+    const loaded = await loadPackWorkflowFile(pack, workflowPack, entry);
     if ('parsed' in loaded) files.push(loaded);
     else errors.push(loaded);
   }
@@ -289,47 +258,13 @@ export async function loadPackWorkflows(
   return { files, errors };
 }
 
-/** One `<workflow>/` folder of a pack: its workflow, a load error, or nothing to load. */
-async function loadPackWorkflowFolder(
+/** The one workflow file of a pack's `<workflow>/` folder: its workflow or its load error. */
+async function loadPackWorkflowFile(
   pack: PackLoad,
   workflowPack: WorkflowPack | PackSettingsError,
-  packPath: string,
-  workflowFolder: string
-): Promise<PackWorkflowFile | WorkflowLoadError | undefined> {
-  const workflowPath = join(packPath, workflowFolder);
-  const folderLabel = `${pack.label}/${workflowFolder}`;
-  try {
-    if (!(await stat(workflowPath)).isDirectory()) return undefined;
-  } catch (error) {
-    return pathReadError(folderLabel, { workflowPath }, error);
-  }
-  if (!isValidWorkflowFolderSegment(workflowFolder)) {
-    return {
-      filename: folderLabel,
-      error: `Invalid packaged workflow directory '${folderLabel}'.`,
-      errorType: 'validation_error',
-    };
-  }
-
-  let workflowEntries: string[];
-  try {
-    workflowEntries = await readdir(workflowPath);
-  } catch (error) {
-    return fileSystemError(folderLabel, 'Directory read', error);
-  }
-  const yamlFiles = workflowEntries.filter(isYamlFile).sort((a, b) => a.localeCompare(b));
-  // A folder with no YAML (tests, docs, assets) holds no workflow. Two or more is an
-  // ambiguous workflow folder, and stays an error.
-  if (yamlFiles.length === 0) return undefined;
-  if (yamlFiles.length !== 1) {
-    return {
-      filename: folderLabel,
-      error: `Packaged workflow '${folderLabel}' must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`,
-      errorType: 'validation_error',
-    };
-  }
-
-  const filename = yamlFiles[0];
+  { folder, path, filename }: PackWorkflowLocation
+): Promise<PackWorkflowFile | WorkflowLoadError> {
+  const folderLabel = `${pack.label}/${folder}`;
   // A scope file's error keeps its bare filename, which resume matches against a
   // run's workflow name. An installed pack's error names the pack and folder.
   const errorFilename = pack.source === 'installed' ? `${folderLabel}/${filename}` : filename;
@@ -338,7 +273,7 @@ async function loadPackWorkflowFolder(
   }
   let content: string;
   try {
-    content = await readFile(join(workflowPath, filename), 'utf-8');
+    content = await readFile(join(path, filename), 'utf-8');
   } catch (error) {
     return fileSystemError(`${folderLabel}/${filename}`, 'File read', error);
   }
@@ -353,16 +288,16 @@ async function loadPackWorkflowFolder(
   qualifyWorkflowResources(parsed.workflow, {
     source: pack.source,
     pack: pack.pack,
-    workflow: workflowFolder,
+    workflow: folder,
   });
 
   return {
-    folder: workflowFolder,
+    folder,
     filename,
     parsed: {
       workflow: parsed.workflow,
       parseWarnings: parsed.warnings,
-      filePath: resolve(workflowPath, filename),
+      filePath: resolve(path, filename),
     },
   };
 }
@@ -372,23 +307,13 @@ export async function loadPackagedWorkflowsFromDir(
   workflowsRoot: string,
   source: WorkflowSource
 ): Promise<DirLoadResult> {
-  const result: DirLoadResult = { workflows: new Map(), errors: [] };
+  const { packs, errors } = await readScopePacks(workflowsRoot);
+  const result: DirLoadResult = { workflows: new Map(), errors };
   const collided = new Set<string>();
-  let packs: string[];
-  try {
-    packs = await readdir(workflowsRoot);
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return result;
-    getLog().warn({ err, workflowsRoot }, 'packaged_workflow_directory_read_error');
-    result.errors.push(fileSystemError(workflowsRoot, 'Directory read', error));
-    return result;
-  }
-
-  for (const pack of packs.sort((a, b) => a.localeCompare(b))) {
-    const loaded = await loadScopePack(
-      { ...context, pack, source, label: pack },
-      join(workflowsRoot, pack)
+  for (const pack of packs) {
+    const loaded = await loadPackWorkflows(
+      { ...context, pack: pack.name, source, label: pack.name },
+      pack.path
     );
     result.errors.push(...loaded.errors);
     for (const { filename, parsed } of loaded.files) {
@@ -407,39 +332,6 @@ export async function loadPackagedWorkflowsFromDir(
   }
 
   return result;
-}
-
-/** One pack directory inside a scope's workflow folder. */
-async function loadScopePack(
-  pack: PackLoad,
-  packPath: string
-): Promise<{ files: PackWorkflowFile[]; errors: WorkflowLoadError[] }> {
-  const skipped = { files: [], errors: [] };
-  try {
-    if (!(await stat(packPath)).isDirectory()) return skipped;
-  } catch (error) {
-    const pathError = pathReadError(pack.pack, { packPath }, error);
-    return { files: [], errors: pathError === undefined ? [] : [pathError] };
-  }
-  // `defaults` is the flat-defaults convention, not a pack: loadWorkflowsFromDir
-  // reads its files. Captures taken by builds that still bundled flat defaults
-  // hold `defaults/legacy/`, which packaged scanning would misread and fail with
-  // "must contain exactly one .yaml" on every discovery pass.
-  if (pack.pack === 'defaults') return skipped;
-  if (pack.pack === FIXTURES_DIR) return skipped;
-  if (!isValidWorkflowFolderSegment(pack.pack)) {
-    return {
-      files: [],
-      errors: [
-        {
-          filename: pack.pack,
-          error: `Invalid packaged workflow pack directory '${pack.pack}'.`,
-          errorType: 'validation_error',
-        },
-      ],
-    };
-  }
-  return loadPackWorkflows(pack, packPath);
 }
 
 /**

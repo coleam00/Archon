@@ -34,6 +34,7 @@ import {
   findPackagedWorkflowAt,
   findWorkflowAt,
   isBundledWorkflowsRoot,
+  PackagedWorkflowFolderError,
 } from './workflow-files';
 import type { WorkflowFile } from './workflow-files';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
@@ -368,6 +369,9 @@ async function getWorkflowDefinition(
     try {
       hit = await lookup.find();
     } catch (err) {
+      if (err instanceof PackagedWorkflowFolderError) {
+        return apiError(c, 500, `${lookup.invalidLabel}: ${err.message}`);
+      }
       if (!lookup.readFailure) throw err;
       getLog().error({ err, name }, lookup.readFailure.event);
       return apiError(c, 500, lookup.readFailure.message);
@@ -588,6 +592,9 @@ export function registerWorkflowDefinitionRoutes(app: OpenAPIHono): void {
     try {
       return await saveWorkflowFile(c, name, target, definition);
     } catch (error) {
+      if (error instanceof PackagedWorkflowFolderError) {
+        return apiError(c, 500, 'Failed to save workflow', error.message);
+      }
       const err = error instanceof Error ? error : new Error(String(error));
       getLog().error({ err, name }, 'workflow.save_failed');
       return apiError(c, 500, 'Failed to save workflow');
@@ -607,6 +614,9 @@ export function registerWorkflowDefinitionRoutes(app: OpenAPIHono): void {
     try {
       return await deleteWorkflowFiles(c, name, target);
     } catch (err) {
+      if (err instanceof PackagedWorkflowFolderError) {
+        return apiError(c, 500, 'Failed to delete workflow', err.message);
+      }
       getLog().error({ err, name }, 'workflow.delete_failed');
       return apiError(c, 500, 'Failed to delete workflow');
     }

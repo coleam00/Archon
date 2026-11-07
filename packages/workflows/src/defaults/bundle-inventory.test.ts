@@ -73,3 +73,31 @@ test('the index selects exact runtime files, shared documents and metric views, 
   await writeFile(indexPath, JSON.stringify({ packs: ['../outside'] }));
   await expect(readBundleIndex(indexPath)).rejects.toThrow('Invalid bundle pack name');
 });
+
+async function writeTree(root: string, files: Record<string, string>): Promise<void> {
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), content);
+  }
+}
+
+test('a workflow folder without YAML holds no bundled workflow', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-no-yaml-')));
+  await writeTree(root, {
+    'workflows/selected/flow/main.yaml': 'name: main\n',
+    'workflows/selected/docs/README.md': 'documentation',
+  });
+  const selected = await collectBundleSources(join(root, 'workflows'), ['selected']);
+  expect(selected.map(file => file.relativePath)).toEqual(['workflows/selected/flow/main.yaml']);
+});
+
+test('a workflow folder with two YAML files fails with the discovery error', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-crowded-')));
+  await writeTree(root, {
+    'workflows/selected/crowded/one.yaml': 'name: one\n',
+    'workflows/selected/crowded/two.yaml': 'name: two\n',
+  });
+  await expect(collectBundleSources(join(root, 'workflows'), ['selected'])).rejects.toThrow(
+    "Packaged workflow 'selected/crowded' must contain exactly one .yaml or .yml file (found 2)."
+  );
+});

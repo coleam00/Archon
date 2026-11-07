@@ -91,13 +91,6 @@ mock.module('@archon/core', () => ({
 
 mock.module('@archon/workflows/workflow-discovery', () => ({
   discoverWorkflowsWithConfig: mockDiscoverWorkflows,
-  isValidWorkflowFolderSegment: (name: string) =>
-    !name.includes('/') &&
-    !name.includes('\\') &&
-    !name.includes('..') &&
-    !name.includes(':') &&
-    !!name &&
-    !name.startsWith('.'),
 }));
 mock.module('@archon/workflows/loader', () => ({
   parseWorkflow: mockParseWorkflow,
@@ -933,6 +926,51 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('surfaces the load error of a packaged workflow folder holding two YAML files', async () => {
+    const testDir = join(tmpdir(), `wf-get-crowded-packaged-${Date.now()}`);
+    const packageDir = join(testDir, '.archon', 'workflows', 'author-pack', 'test');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'one.yaml'), 'name: one\nnodes: []\n');
+    await writeFile(join(packageDir, 'two.yaml'), 'name: two\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`);
+      expect(response.status).toBe(500);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toBe(
+        "Workflow file is invalid: Packaged workflow 'author-pack/test' must contain exactly one .yaml or .yml file (found 2)."
+      );
+    } finally {
+      await removeTempTree(testDir);
+    }
+  });
+
+  test('surfaces the load error of an invalid packaged workflow folder found by its YAML stem', async () => {
+    const testDir = join(tmpdir(), `wf-get-invalid-folder-${Date.now()}`);
+    const packageDir = join(testDir, '.archon', 'workflows', 'author-pack', 'test..v2');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'test.yaml'), 'name: test\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`);
+      expect(response.status).toBe(500);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toBe(
+        "Workflow file is invalid: Invalid packaged workflow directory 'author-pack/test..v2'."
+      );
+    } finally {
+      await removeTempTree(testDir);
+    }
+  });
+
   test('classifies a package in the app workflow root as bundled', async () => {
     const testDir = join(tmpdir(), `wf-get-source-bundle-${Date.now()}`);
     const workflowsRoot = join(testDir, '.archon', 'workflows');
@@ -1593,6 +1631,37 @@ describe('DELETE /api/workflows/:name', () => {
       await expect(access(packageDir)).rejects.toThrow();
     } finally {
       await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses to delete when the name matches a malformed packaged workflow folder', async () => {
+    const testDir = join(tmpdir(), `wf-delete-crowded-packaged-${Date.now()}`);
+    const workflowsRoot = join(testDir, '.archon', 'workflows');
+    const packageDir = join(workflowsRoot, 'author-pack', 'test');
+    const flatPath = join(workflowsRoot, 'test.yaml');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'one.yaml'), 'name: one\nnodes: []\n');
+    await writeFile(join(packageDir, 'two.yaml'), 'name: two\nnodes: []\n');
+    await writeFile(flatPath, 'name: other\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`, {
+        method: 'DELETE',
+      });
+
+      expect(response.status).toBe(500);
+      const body = (await response.json()) as { detail?: string };
+      expect(body.detail).toBe(
+        "Packaged workflow 'author-pack/test' must contain exactly one .yaml or .yml file (found 2)."
+      );
+      await access(flatPath);
+      await access(join(packageDir, 'one.yaml'));
+      await access(join(packageDir, 'two.yaml'));
+    } finally {
+      await removeTempTree(testDir);
     }
   });
 

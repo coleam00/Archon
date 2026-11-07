@@ -15,7 +15,6 @@ import { parseWorkflow } from '../loader';
 import { qualifyWorkflowResources } from '../packaged-workflow';
 import type { DiscoveryContext } from './context';
 import {
-  isYamlFile,
   loadPackagedWorkflowsFromDir,
   loadScopeDirectory,
   loadWorkflowsFromDir,
@@ -25,6 +24,7 @@ import {
   type ScopeFile,
   type WorkflowParseContext,
 } from './load-dir';
+import { isYamlFile } from './pack-layout';
 import { getLog } from './log';
 
 /** Workflows by filename; a higher scope's file replaces a lower scope's of the same name. */
