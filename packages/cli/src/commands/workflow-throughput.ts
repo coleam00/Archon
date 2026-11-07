@@ -57,14 +57,14 @@ export async function listedRunThroughput<
 ) {
   if (!options.throughput) return undefined;
   const verbose = options.json === true && options.verbose === true;
+  const eventTypes = verbose
+    ? [...new Set([...NODE_SUMMARY_EVENT_TYPES, ...THROUGHPUT_EVENT_TYPES])]
+    : THROUGHPUT_EVENT_TYPES;
   const events = new Map<string, WorkflowEventRow[]>();
   for (let start = 0; start < runs.length; start += 20) {
     if (start > 0) await new Promise<void>(resolve => setImmediate(resolve));
     const ids = runs.slice(start, start + 20).map(run => run.id);
-    const fetched = await host.deps.store.listEventsForRuns(
-      ids,
-      verbose ? NODE_SUMMARY_EVENT_TYPES : THROUGHPUT_EVENT_TYPES
-    );
+    const fetched = await host.deps.store.listEventsForRuns(ids, eventTypes);
     for (const id of ids) events.set(id, fetched.get(id) ?? []);
   }
   const measured = runs.map(run => {

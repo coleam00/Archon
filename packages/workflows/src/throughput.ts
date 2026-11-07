@@ -1,11 +1,11 @@
 import { readNodeRecordEvent, type NodeRecordEventEnvelope } from './node-record-reader';
 import type { NodeExecutionMetadata } from './schemas/node-execution';
-import type { WorkflowEventType } from './store';
+import { NODE_EXECUTION_EVENT_TYPES } from './node-record-serialization';
 
 export const THROUGHPUT_EVENT_TYPES = [
-  'node_completed',
-  'node_failed',
-] as const satisfies readonly WorkflowEventType[];
+  NODE_EXECUTION_EVENT_TYPES.completed,
+  NODE_EXECUTION_EVENT_TYPES.failed,
+] as const;
 
 export interface ThroughputSummary {
   outputTokens: number;

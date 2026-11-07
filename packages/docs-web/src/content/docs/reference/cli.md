@@ -608,8 +608,9 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
   work with overdue provider tools or reported subtasks), or `unreadable`.
   It is read from the run row alone.
 
-The node events for every listed run are read in one query, so the cost does not grow with
-one query per run.
+Without `--throughput`, the node events for every listed run are read in one query.
+With `--throughput`, events are read in batches of 20 runs as described above, and the
+same reads supply the verbose node summaries.
 
 The listing shows short 8-character run ids. `workflow run --adopt` and `--supersedes` also resolve unique prefixes within the launch project and reject ambiguous prefixes. Full IDs select the exact run; adoption still requires the same project, and `--chat-project-id` restricts both flags to the selected project. Every `<run-id>` command below (`get`, `artifacts`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any git repository or registered project folder. Short ids from `--all` rows belonging to *other* projects cannot be resolved; use the full id from `--json` for those.
 
