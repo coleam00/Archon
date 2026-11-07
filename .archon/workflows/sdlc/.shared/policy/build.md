@@ -26,9 +26,11 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
   subtractive option. A pull request that changed nothing material since its last
   review, no commits or only cosmetic edits, never continues; the round ends as done or ask.
 - **Push** commits a run left committed but unpushed on its pull request's branch.
-- **Done** when the pull request's latest review says Ready at its head commit and CI
-  marked it ready. When the only thing left is a check no round can run, such as an
-  operator check the review deferred, the queue asks once for it at that head instead.
+- **Done** when the pull request's latest review says Ready at its head commit and the
+  delivery handed it off ready, out of draft. CI pending at that head does not hold
+  it: the merge queue judges CI before it merges and returns red the change caused.
+  When the only thing left is a check no round can run, such as an operator check the
+  review deferred, the queue asks once for it at that head instead.
 
 ## Unclear: the queue asks
 

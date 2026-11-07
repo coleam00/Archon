@@ -14,7 +14,8 @@ description: |
   a finding the previous round left open or for the delta's area, reviews only
   the correction delta since the reviewed commit, leaving out code a merge of the
   base brought in, and judges whether each prior finding was resolved or validly
-  declined (`light` runs the general code reviewer alone, for a CI fix); one
+  declined (`light` runs the general code reviewer alone, for a CI or simplify
+  correction); one
   continuation reviewer carries the prior findings forward.
 
   When the checkout matches the PR head, the final synthesized report is posted
@@ -51,8 +52,8 @@ inputs:
   light:
     default: "false"
     description: >-
-      "true" when this continuation follows a correction for CI rather than for
-      review: the general code lens alone reviews the delta.
+      "true" when this continuation follows a correction for CI or simplify rather
+      than for review: the general code lens alone reviews the delta.
   part:
     default: ""
     description: >-
@@ -94,7 +95,7 @@ nodes:
       type: object
       properties:
         continuation: { type: boolean }
-        # A continuation after a CI correction: the code lens alone, and no routing.
+        # A continuation after a CI or simplify correction: the code lens alone, and no routing.
         light: { type: boolean }
         head: { type: string, minLength: 1 }
         # The previous round's reviewed commit; empty on a first round.
@@ -394,5 +395,3 @@ nodes:
     runtime: bun
     depends_on: [synthesize]
     trigger_rule: all_done
-    with:
-      lens: ""

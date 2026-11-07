@@ -42,22 +42,28 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-CI is the project's full validation; implementers run only focused checks. Whether
-CI is green is judgment, so one agent prompt owns it (`deliver/commands/ci.md`), run
-once a round's review passes. It never judges a stale head (it pushes the
-checkout's `HEAD` when the pull request is behind it), refuses a head that
-conflicts with its base, marks the pull request ready (a
-project whose CI skips drafts starts it then), waits however long CI takes, and
-answers green, pr_caused, or other. On anything but green it puts the pull request
-back to draft before it answers, so a red PR never stays ready. A red the change
-caused, or a conflict with the base, goes back to the implementer in the next
-round, which merges the base on a conflict, and that correction is reviewed before
-CI runs again. A flake or infrastructure failure outside the change gets one re-run
-of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
-the run not ready, and a defect outside the change becomes a discovery.
+CI is the project's full validation; implementers run only focused checks.
+Delivery never waits for it: the merge queue judges CI at the head before it merges
+(see [Merge queue](#merge-queue)). Once a round's review passes and simplify names
+nothing, one agent prompt hands the pull request off (`deliver/commands/ci.md`). It
+never hands off a stale head (it pushes the checkout's `HEAD` when the pull request
+is behind it), refuses a head that conflicts with its base, reads the checks once,
+marks the pull request ready (a project whose CI skips drafts starts it then), and
+answers ready, pr_caused, or other. A check already red because of the change, or a
+conflict with the base, goes back to the implementer in the next round, which
+merges the base on a conflict, and that correction is reviewed before the next
+hand-off; the pull request stays a draft. Pending checks and red outside the change
+are the merge queue's. A project with no CI gets the full validation from this
+agent instead.
+
+Simplify runs beside each round's review, so the implementer of the next round
+adopts or declines its smaller shapes together with the review's findings. A round
+whose review passes but whose simplify pass named smaller shapes ends
+`simplify_open`, and the next round's light review checks that correction. A later
+round's simplify judges only a delta that is large or reshapes the code.
 
 Unresolved review threads on the pull request are work too, whoever opened them: a
-person, a review bot, or no one in a project without outside reviewers. After CI,
+person, a review bot, or no one in a project without outside reviewers. After the hand-off,
 each round's `threads` node lists the unresolved threads in `threads.md`, quoted as
 untrusted review data, and puts a ready pull request back to draft while any is
 open, so the round ends `threads_open` instead of ready. The next round's
@@ -70,7 +76,7 @@ with a reply saying so; it belongs in its own issue. So is a thread a dated ruli
 in the issue body already decided: `settle-threads` reads the work order and the
 issue's "Current scope" sections, and its reply names the ruling. A thread no agent
 can settle ends the run `ask`.
-`settle-threads` runs before CI and a failed one skips it, so the pull request stays
+`settle-threads` runs before the hand-off and a failed one skips it, so the pull request stays
 the draft the previous round left; a failed `threads` node puts it back to draft
 before the run fails. The
 pack's own review verdict is unchanged: threads gate delivery, not the review.
@@ -80,10 +86,10 @@ comment's first lines are stamped by `publish-review` from the round's certified
 output ([`.shared/review-comment.ts`](.shared/review-comment.ts)): the reviewed commit
 and the verdict, which the merge queue's gate reads, and the contract coverage
 (`complete` only when the review left nothing open), which the sweep reads before it
-lets a merge close the issue. CI never
+lets a merge close the issue. The hand-off never
 marks ready a head carrying commits the round's review did not cover. Commits pushed
 after a run ends, by a fixer or by hand, are reviewed by a continuation delivery of
-that pull request, whose first round reviews the whole change before CI marks it
+that pull request, whose first round reviews the whole change before the hand-off marks it
 ready again, or by `archon-review` given the earlier round's `review/report.md` as
 `prior_report`.
 
@@ -183,12 +189,11 @@ on `$deliver.output.ready`. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the forge, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in
-the forge contract. Three agents write directly: the structure pass's implementer
-pushes its own commit to the pull request's branch with `git`, and CI pushes a
-head that was left behind before it judges anything, ending `other` if it cannot;
+the forge contract. Two agents write directly: `ci` pushes a head that was left
+behind with `git` before it judges anything, ending `other` if it cannot, and marks
+the pull request ready, or back to draft when it sends the change back; and
 `update-pr-body` edits the description, because judging which claims are stale and
-rewriting them is the whole job; and `ci` marks the pull request ready and back to
-draft around its CI wait. The last two act through `archon forge`, after the `forge`
+rewriting them is the whole job. Their forge writes go through `archon forge`, after the `forge`
 node checked the plugin can. PR publication reads the agent-authored
 `pr-body.md` and `pr-description.md` content through certified artifact pointers;
 the publisher owns the writes and verifies the description edit.
@@ -333,7 +338,7 @@ always used. A user who sets nothing gets the same models as before.
 | `@triage` | triage | `medium` |
 | `@planner` | plan | `large` |
 | `@investigator` | investigate | `medium` |
-| `@implementer` | implement, including delivery's reshape | `large` |
+| `@implementer` | implement | `large` |
 | `@reviewer` | every agent node of review (scope, lenses, synthesis) and simplify | each node's tier |
 | `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code` and `ux`, `medium` for the rest) |
 
@@ -512,7 +517,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   it ended and decides: `done` when the pull request's latest review says Ready at its
   head commit and no check no round can run is still outstanding (a dated scope section records such a check as met; otherwise it asks for it once), `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
-  step), or `ask`. Before any `continue`, it compares the whole change with the contract's shape, and asks when a correction would add machinery the contract does not name. It never continues a pull request that changed nothing material since its last review, no commits or only cosmetic edits; that round ends as done or ask by the same rules. A Ready, green pull request whose only remaining check no round can run is asked about once rather than continued. It declares the pull request when the round left commits unpushed.
+  step), or `ask`. Before any `continue`, it compares the whole change with the contract's shape, and asks when a correction would add machinery the contract does not name. It never continues a pull request that changed nothing material since its last review, no commits or only cosmetic edits; that round ends as done or ask by the same rules. A Ready pull request whose only remaining check no round can run is asked about once rather than continued. It declares the pull request when the round left commits unpushed.
   A `continue` starts the item's next round at once by firing the operator's
   build-queue binding (`build_queue_binding`) with the item's `number`, keyed so one
   run starts at most one next round per item. The binding's resource, capacity and

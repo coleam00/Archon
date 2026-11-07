@@ -175,20 +175,20 @@ describe('prune-scratch', () => {
     const target = track(mkdtempSync(join(tmpdir(), 'archon-scratch-target-')));
     writeFileSync(join(target, 'keep.txt'), 'kept');
     // A junction needs no privilege on Windows; elsewhere the type is ignored.
-    mkdirSync(join(artifacts, '.archon'));
-    symlinkSync(target, scratchDir(artifacts, ''), 'junction');
+    mkdirSync(scratchDir(artifacts, ''), { recursive: true });
+    symlinkSync(target, scratchDir(artifacts, 'code'), 'junction');
 
     const run = spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
       cwd,
-      env: { ...process.env, ARTIFACTS_DIR: artifacts, INPUTS_LENS: '' },
+      env: { ...process.env, ARTIFACTS_DIR: artifacts },
       encoding: 'utf8',
     });
     expect(run.status).toBe(0);
-    expect(existsSync(scratchDir(artifacts, ''))).toBe(false);
+    expect(existsSync(scratchDir(artifacts, 'code'))).toBe(false);
     expect(existsSync(join(target, 'keep.txt'))).toBe(true);
   });
 
-  it("removes the run's scratch worktrees and nothing else", () => {
+  it("removes the review's scratch worktrees and nothing else, not even simplify's", () => {
     const cwd = gitCheckout({}, track);
     const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
     const scratch = scratchDir(artifacts, 'code');
@@ -197,13 +197,16 @@ describe('prune-scratch', () => {
     const oneSpellings = [join(scratch, 'one'), realpathSync.native(join(scratch, 'one'))].map(path =>
       path.split(sep).join('/')
     );
+    const simplify = scratchDir(artifacts, 'simplify');
+    mkdirSync(simplify, { recursive: true });
+    git(cwd, 'worktree', 'add', '-q', '--detach', join(simplify, 'live'), 'HEAD');
     const user = track(mkdtempSync(join(tmpdir(), 'archon-user-wt-')));
     git(cwd, 'worktree', 'add', '-q', '--detach', join(user, 'mine'), 'HEAD');
     writeFileSync(join(cwd, 'untracked.txt'), 'kept');
 
     const run = spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
       cwd,
-      env: { ...process.env, ARTIFACTS_DIR: artifacts, INPUTS_LENS: '' },
+      env: { ...process.env, ARTIFACTS_DIR: artifacts },
       encoding: 'utf8',
     });
     expect(run.status).toBe(0);
@@ -217,7 +220,8 @@ describe('prune-scratch', () => {
       .map(line => slashes(line.slice('worktree '.length)));
     expect(listed.some(path => oneSpellings.includes(path))).toBe(false);
     expect(listed.some(path => spellings(join(user, 'mine')).includes(path))).toBe(true);
-    expect(existsSync(scratchDir(artifacts, ''))).toBe(false);
+    expect(listed.some(path => spellings(join(simplify, 'live')).includes(path))).toBe(true);
+    expect(existsSync(scratch)).toBe(false);
     expect(existsSync(join(cwd, 'untracked.txt'))).toBe(true);
   });
 });
