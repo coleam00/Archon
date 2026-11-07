@@ -1121,6 +1121,9 @@ test.each([
   'commit-pulls',
 ] as const)('cleanup retains and reports failed PR inspection: %s', async failure => {
   await git(repo, 'remote', 'rename', 'upstream', 'origin');
+  await writeFile(join(env.working_path, 'feature'), 'unmerged work');
+  await git(env.working_path, 'add', 'feature');
+  await git(env.working_path, 'commit', '-qm', 'feature');
   const tip = await git(env.working_path, 'rev-parse', 'HEAD');
   await db.query(
     "UPDATE remote_agent_isolation_environments SET created_at = '2020-01-01' WHERE id = $1",

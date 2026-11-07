@@ -206,11 +206,11 @@ If merged cleanup frees space → proceed with creation. If not → block with f
 
 ### How cleanup decides a branch is merged
 
-`judgeBranchForRemoval()` in `services/cleanup/merge-verdict.ts` is the one decision for the scheduled sweep, `makeRoom()` and `--merged`. It first looks up a PR by the local branch name, then discovers candidates through GitHub's commit-to-PR lookup for each existing local tip. This also finds PRs published under a different branch name.
+`judgeBranchForRemoval()` in `services/cleanup/merge-verdict.ts` is the shared decision for the scheduled sweep, `makeRoom()` and `--merged`. It first checks base-branch ancestry and `git cherry` patch equivalence, requiring Git integration to cover both the worktree HEAD and local branch ref where they exist.
 
-Removal requires one **MERGED PR** whose head commit covers both the worktree HEAD and the local branch ref, where each exists. Coverage means equal to or an ancestor of that same PR head (`isRevCoveredBy`, which fetches a PR head missing locally). Base-branch ancestry, patch equivalence and closed-but-unmerged PRs do not authorize merged removal.
+If Git does not prove integration, cleanup looks up a PR by the local branch name, then discovers candidates through GitHub's commit-to-PR lookup for each existing local tip. This also finds PRs published under a different branch name. One **MERGED PR** must cover every existing local tip: each tip must equal or be an ancestor of that same PR head (`isRevCoveredBy` fetches a missing head). Manual `--include-closed` also accepts a closed but unmerged PR with the same coverage check; scheduled cleanup and `makeRoom()` do not opt in.
 
-Anything past the proving commit is unmerged work: run branch names get reused, and a detached HEAD can hold commits no ref protects. A failed `gh` lookup (`UNAVAILABLE`) or a git error keeps the worktree and reports it; it never counts as merged.
+A tip past the proving PR head stays: run branch names get reused, and a detached HEAD can hold commits no ref protects. If base inspection fails, eligible PR coverage can independently settle the work. Otherwise unresolved Git errors retain the worktree and are reported. A failed PR lookup (`UNAVAILABLE`) retains and reports it when Git has not already proved integration; it never counts as merged.
 
 ---
 

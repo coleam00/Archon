@@ -514,8 +514,9 @@ export function isSettleableRunStatus(status: string): boolean {
 
 /**
  * When a cleanup sweep stops counting a failed run as a lock: once its outcome is
- * settled (a merged PR covers its local tips), or once the run has been inactive
- * longer than the sweep's stale window. The run row itself is never touched.
+ * settled by Git integration or an eligible PR covering its local tips, or once
+ * the run has been inactive longer than the sweep's stale window.
+ * The run row itself is never touched.
  */
 export type FailedRunRelease = { kind: 'settled' } | { kind: 'stale'; staleDays: number };
 

@@ -315,8 +315,10 @@ Manual `includeClosed` also authorizes closed PRs whose head covers every local 
 with a `pr-closed` verdict and `PR closed` release reason. Scheduled cleanup does not
 opt in. If base inspection fails, an eligible PR can independently prove coverage;
 otherwise the error retains the worktree. The optional `gh` CLI currently
-provides GitHub evidence. Missing `gh` or an unsupported remote supplies no PR
-proof; an applicable lookup that fails is unavailable evidence, never an empty
+provides GitHub evidence. An unsupported remote returns `NONE` (no PR proof).
+For a GitHub remote, missing `gh` or another lookup failure returns `UNAVAILABLE`,
+retaining and reporting the worktree and blocking scheduled stale deletion when
+Git has not already proved integration. A failed lookup is never an empty
 successful response. No pack branch naming is used.
 
 **Code:** `packages/core/src/services/cleanup/` — `merge-verdict.ts`,

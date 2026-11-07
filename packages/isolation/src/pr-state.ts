@@ -3,9 +3,6 @@
  *
  * Non-GitHub remotes return 'NONE'. Failed inspection, including a missing
  * `gh` CLI, returns 'UNAVAILABLE', which callers must not read as "no PR".
- * Merged cleanup requires a merged PR head
- * covering every existing local tip before removal. Scheduled stale cleanup
- * follows its separate age and unpushed-commit policy.
  */
 import { execFileAsync } from '@archon/git';
 import type { BranchName, RepoPath } from '@archon/git';
