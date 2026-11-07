@@ -165,8 +165,9 @@ describe('split publish', () => {
     const at = install();
     seed(at);
     const filed: TrackerIssue = { number: 100, title: 'Measure the signal', body: `${splitMarker(7, 'measure')}\n\nThe measurement contract.`, state: 'OPEN' };
-    const run = publish(at, { kind: 'bundle' }, { issues: [filed] });
-    ok(run);
+    // The agent also lists the unrecorded issue as an existing one; it shows only as filed.
+    const run = publish(at, { kind: 'bundle' }, { issues: [filed], existing: [{ number: 100, why: 'owns the measurement' }] });
+    expect(ok(run)).toMatchObject({ adopted: [] });
     expect(run.createdIssues.map(issue => issue.title)).toEqual(['Ship the thin slice']);
     // A bundle is closed with its list; it gets no PRD label.
     expect(run.closes).toEqual([{ number: 7, state: 'closed', state_reason: 'completed' }]);

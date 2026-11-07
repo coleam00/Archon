@@ -69,7 +69,7 @@ const COMMENT_MARKER = '<!-- archon-split -->';
 const KIND: Record<SplitKind, { readonly piece: string; readonly is: string; readonly then: string }> = {
   prd: { piece: "This PRD's current phase", is: 'is', then: 'It stays open until its hypothesis has a verdict.' },
   epic: { piece: "This epic's current increment", is: 'is', then: 'It stays open until its increments merge.' },
-  bundle: { piece: "This bundle's tasks", is: 'are', then: 'It is closed; follow the work in those issues.' },
+  bundle: { piece: "This bundle's tasks", is: 'are', then: 'It is closed.' },
 };
 
 function filedOn(doc: WorkItem | null): readonly SplitIssue[] {
@@ -121,14 +121,6 @@ function publish(
   summary: string
 ): void {
   const at = new Date().toISOString();
-  const recorded = (issues: readonly SplitIssue[], status: 'filing' | 'done' = 'filing'): SplitRecord => ({
-    status,
-    kind,
-    issues,
-    adopted,
-    at,
-    run_id: runId,
-  });
   // Two entries under one key would file only the first.
   const keys = planned.map(entry => entry.key);
   const twice = keys.find((key, index) => keys.indexOf(key) !== index);
@@ -140,12 +132,21 @@ function publish(
     if (view.state !== 'open') throw new Error(`nothing was filed: existing issue ${String(entry.number)} is ${view.state}, not open`);
     return { number: entry.number, url: view.url, why: entry.why };
   });
-  let issues = filedIssues(before);
+  const adopting = [...adoptedIssues(before).filter(entry => !listed.some(next => next.number === entry.number)), ...listed];
   // An earlier phase's adoptions stay unless this phase lists the issue again. An issue
-  // this item's own split filed is shown once, as filed, never also as adopted.
-  const adopted = [...adoptedIssues(before).filter(entry => !listed.some(next => next.number === entry.number)), ...listed].filter(
-    entry => !issues.some(filed => filed.number === entry.number)
-  );
+  // this item's own split filed is shown once, as filed, never also as adopted; that
+  // includes one createIssue recovers by its marker, so this runs against the final list.
+  const adoptedBeside = (issues: readonly SplitIssue[]): AdoptedIssue[] =>
+    adopting.filter(entry => !issues.some(filed => filed.number === entry.number));
+  const recorded = (issues: readonly SplitIssue[], status: 'filing' | 'done' = 'filing'): SplitRecord => ({
+    status,
+    kind,
+    issues,
+    adopted: adoptedBeside(issues),
+    at,
+    run_id: runId,
+  });
+  let issues = filedIssues(before);
   for (const entry of planned) {
     if (issues.some(filed => filed.key === entry.key)) continue;
     const marker = splitMarker(item.number, entry.key);
@@ -158,6 +159,7 @@ function publish(
     issues = filedOn(doc);
   }
 
+  const adopted = adoptedBeside(issues);
   upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(kind, issues, adopted, later));
   if (kind === 'prd') writeLabels(item, ['archon-prd'], []);
   if (kind === 'bundle') closeIssue(item, 'completed');
