@@ -1075,6 +1075,43 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test('a malformed package in the app workflow root does not hide a home workflow of that name', async () => {
+    const testDir = join(tmpdir(), `wf-get-source-bundle-malformed-${Date.now()}`);
+    const workflowsRoot = join(testDir, '.archon', 'workflows');
+    const packageDir = join(workflowsRoot, 'author-pack', 'test');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'one.yaml'), 'name: one\nnodes: []\n');
+    await writeFile(join(packageDir, 'two.yaml'), 'name: two\nnodes: []\n');
+    const tmpHome = join(testDir, 'home');
+    await mkdir(join(tmpHome, 'workflows'), { recursive: true });
+    await writeFile(join(tmpHome, 'workflows', 'test.yaml'), 'name: test\nnodes: []\n');
+    const prevArchonHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = tmpHome;
+    const defaultsPathSpy = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(
+      workflowsRoot
+    );
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { source: string; filename: string };
+      expect(body.source).toBe('global');
+      expect(body.filename).toBe('test.yaml');
+    } finally {
+      defaultsPathSpy.mockRestore();
+      if (prevArchonHome === undefined) {
+        delete process.env.ARCHON_HOME;
+      } else {
+        process.env.ARCHON_HOME = prevArchonHome;
+      }
+      await removeTempTree(testDir);
+    }
+  });
+
   test('keeps a flat workflow in the app workflow root project-scoped', async () => {
     const testDir = join(tmpdir(), `wf-get-source-project-${Date.now()}`);
     const workflowsRoot = join(testDir, '.archon', 'workflows');

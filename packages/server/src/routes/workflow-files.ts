@@ -31,7 +31,10 @@ function isNotFound(error: unknown): boolean {
   return (error as NodeJS.ErrnoException).code === 'ENOENT';
 }
 
-async function tryReadWorkflowAt(dir: string, name: string): Promise<RawWorkflowFile | null> {
+export async function findFlatWorkflowAt(
+  dir: string,
+  name: string
+): Promise<RawWorkflowFile | null> {
   const acceptedNames = new Set(name.includes('/') ? [name, basename(name)] : [name]);
   for (const ext of ['yaml', 'yml']) {
     const filename = `${name}.${ext}`;
@@ -169,7 +172,7 @@ export async function findWorkflowAt(
   name: string
 ): Promise<RawWorkflowFile | null> {
   return (
-    (await tryReadWorkflowAt(workflowsRoot, name)) ??
+    (await findFlatWorkflowAt(workflowsRoot, name)) ??
     (await findPackagedWorkflowAt(workflowsRoot, name))
   );
 }

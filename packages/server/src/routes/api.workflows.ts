@@ -31,6 +31,7 @@ import {
 import {
   authoredForm,
   findBundledWorkflow,
+  findFlatWorkflowAt,
   findPackagedWorkflowAt,
   findWorkflowAt,
   isBundledWorkflowsRoot,
@@ -317,13 +318,11 @@ function workflowLookups(name: string, workingDir: string | undefined): Workflow
       source: 'project',
       invalidLabel: 'Workflow file is invalid',
       readFailure: { event: 'workflow.fetch_failed', message: 'Failed to read workflow' },
-      find: async () => {
-        const hit = await findWorkflowAt(projectWorkflowsRoot, name);
-        // A source checkout's own bundled packs are reported as bundled, below.
-        const isSourceBundledPackage =
-          hit?.packaged === true && isBundledWorkflowsRoot(projectWorkflowsRoot);
-        return isSourceBundledPackage ? null : hit;
-      },
+      // A source checkout's own bundled packs are found, and fail, as bundled, below.
+      find: () =>
+        isBundledWorkflowsRoot(projectWorkflowsRoot)
+          ? findFlatWorkflowAt(projectWorkflowsRoot, name)
+          : findWorkflowAt(projectWorkflowsRoot, name),
     });
   }
   lookups.push(
