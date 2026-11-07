@@ -45,24 +45,31 @@ reference covers launching and tending the queues by hand.
 
 ## Inputs
 
-Every queue takes the repository as two inputs: `repo_host` (such as `github.com`)
-and `repo_path` (`<owner>/<repo>`). Launch from the repository's checkout, detached.
+Launch from the repository's checkout, detached. Every queue works on the repository
+the forge plugin resolves the checkout's remote to: its only remote, or `origin`. In a
+checkout whose `origin` is a fork, or that has several remotes and no `origin`, pass
+`--input repo_host=github.com --input repo_path=<owner>/<repo>`. A binding always
+passes both.
 
 ```bash
-R="--input repo_host=github.com --input repo_path=<owner>/<repo>"
-
-archon workflow run archon-intake $R --input number=<issue> --detach
-archon workflow run archon-build-queue $R --detach
-archon workflow run archon-merge-queue $R --detach
-archon workflow run archon-discoveries $R --detach
+archon workflow run archon-intake --input number=<issue> --detach
+archon workflow run archon-build-queue --detach
+archon workflow run archon-merge-queue --detach
+archon workflow run archon-discoveries --detach
 ```
+
+The build queue also takes a message saying what to build, when `number` is empty:
+`archon workflow run archon-build-queue "build the retry fix from #123" --detach`. An
+agent resolves it to one issue to claim, a choice between issues (a `build: message`
+attention item), new work it files and hands to intake (the run builds nothing), or a
+refusal with its reason.
 
 Optional inputs, with their defaults in each workflow's YAML:
 
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
   for a label), `label` and `label_actor` for a label event.
-- `archon-build-queue`: `number` (the issue to build; empty claims the first in
-  order), `retriage_as` (a maintainer login; set, a run that names no item also
+- `archon-build-queue`: `number` (the issue to build; empty claims the item the
+  message names, or the first in order), `retriage_as` (a maintainer login; set, a run that names no item also
   re-triages blocked items that no longer look blocked) and `round_limit` (default
   `3`), the rounds after which a run that wants another also judges whether the rounds
   converge.

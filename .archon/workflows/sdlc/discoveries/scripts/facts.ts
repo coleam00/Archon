@@ -24,7 +24,7 @@ import {
   runName,
 } from '../../.shared/discoveries.ts';
 import { artifactsDir, emit, note, refuse, trimmed } from '../../.shared/io.ts';
-import { fetchDefaultBranch } from '../../.shared/remote.ts';
+import { fetchDefaultBranch, workflowRepo } from '../../.shared/remote.ts';
 import { latestVerdictOf, relayedDiscoveries } from '../../.shared/report.ts';
 import { claimEnded, listRuns, stateDocuments, stateGet, statePut } from '../../.shared/state.ts';
 
@@ -104,11 +104,7 @@ function main(): void {
   const until = parseTime('until', trimmed(process.env.INPUTS_UNTIL));
   const limit = Number(trimmed(process.env.INPUTS_LIMIT));
   if (!Number.isInteger(limit) || limit <= 0) throw new Error('limit must be a positive integer');
-  const repo = {
-    host: trimmed(process.env.INPUTS_REPO_HOST),
-    path: trimmed(process.env.INPUTS_REPO_PATH),
-  };
-  if (repo.host === '' || repo.path === '') throw new Error('repo_host and repo_path are required');
+  const repo = workflowRepo();
   const self = trimmed(process.env.WORKFLOW_ID);
   if (self === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
@@ -169,6 +165,7 @@ function main(): void {
   writeFileSync(join(drain, 'queue.json'), `${JSON.stringify(document, null, 2)}\n`);
   emit({
     path: queue.length === 0 ? 'idle' : 'decide',
+    repo,
     base,
   });
 }

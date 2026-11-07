@@ -3,6 +3,7 @@
 # scripts are stubbed; .archon/scripts/__tests__/discoveries.test.ts runs them.
 facts:
   path: decide
+  repo: { host: github.com, path: example/repo }
   base: { branch: dev, sha: "stub-sha" }
 decide:
   decisions:

@@ -87,13 +87,12 @@ The issue body is the contract every round is measured against. State the proble
 
 ## 5. Run the queues by hand
 
-Run each queue once yourself before you automate anything. Replace `acme/widgets` with your repository and `42` with the issue number.
+Run each queue once yourself before you automate anything, from your repository's checkout. Replace `42` with the issue number. Each queue works on the repository the checkout's `origin` remote (or its only remote) names; when `origin` is a fork, add `--input repo_host=github.com --input repo_path=<owner>/<repo>` to choose the repository.
 
 Triage the issue:
 
 ```bash
-archon workflow run archon-intake \
-  --input repo_host=github.com --input repo_path=acme/widgets --input number=42
+archon workflow run archon-intake --input number=42
 ```
 
 Intake labels the issue with its route (`archon-ready`, `archon-plan`, `archon-investigate` or `archon-split`), its type and its size, creating any pack label the repository lacks, and records a work item. Read the item with `archon state get work/42`.
@@ -101,16 +100,17 @@ Intake labels the issue with its route (`archon-ready`, `archon-plan`, `archon-i
 Build it:
 
 ```bash
-archon workflow run archon-build-queue \
-  --input repo_host=github.com --input repo_path=acme/widgets --input number=42 --detach
+archon workflow run archon-build-queue --input number=42 --detach
 ```
+
+You can also say what to build instead of giving a number, such as `archon workflow run archon-build-queue "build the retry fix" --detach`. An agent finds the issue you mean and claims it, asks you to choose when several match, or files new work as an issue and hands it to intake, which triages it before any queue builds it.
 
 A round runs `archon-ship`: investigate or plan if the route needs it, implement, open a draft pull request, review it, fix the findings, wait for CI and mark it ready. When a round ends on something the contract already answers, such as a review finding or red CI the change caused, the queue starts the next round at once as a new detached run, unless the fix would add machinery the issue does not ask for; then it asks you first. A pull request that changed nothing material since its last review, no commits or only cosmetic edits, never gets another round. The item is done when the pull request's latest review says Ready at its head (when only a check no round can run is left, such as a deferred operator check, the queue asks you for it once at that head), or when a maintainer answers `ready`, for example after finishing the pull request by hand; the merge gate still checks the verdict and CI either way. Follow it with `archon workflow runs` and answer anything it asks (step 6).
 
 Merge it:
 
 ```bash
-archon workflow run archon-merge-queue --input repo_host=github.com --input repo_path=acme/widgets
+archon workflow run archon-merge-queue
 ```
 
 One sweep agent decides every pull request the build queue made ready. It never pushes, never builds or tests, and never waits for CI. Each merge goes through a gate script that reads the pull request fresh and refuses unless:
@@ -125,7 +125,7 @@ The gate merges pinned to that head through the forge's `pr.merge` (squash by de
 Drain what the runs noticed outside their task:
 
 ```bash
-archon workflow run archon-discoveries --input repo_host=github.com --input repo_path=acme/widgets
+archon workflow run archon-discoveries
 ```
 
 ## 6. Answer what the factory asks

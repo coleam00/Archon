@@ -125,6 +125,14 @@ The metrics workflows read each pull request through `pr.view` and need the
 plugin that omits the timestamps or lacks those operations makes them refuse, naming
 what is missing.
 
+A queue, intake and discoveries take the repository from their `repo_host` and
+`repo_path` inputs, which a binding passes. Left empty, as in a run started by hand
+from a checkout, the repository is the one the forge's `resolve` operation finds for
+the checkout's remote: its only remote, or `origin` among several. A checkout whose
+remote resolves to no repository, or that has several remotes and no `origin`, refuses
+the run and says so. A checkout whose `origin` is a fork works on the fork; set both
+inputs to choose another repository.
+
 Own-PR enrollment lists a maintainer's open pull requests by author, which has no forge
 operation yet, so it refuses, naming the missing operation.
 
@@ -499,6 +507,18 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   `--input number=123` with the config that selects Codex. An issue that cannot be
   claimed refuses the run before any agent, with why: it has no work item, another
   run holds it, or its stage and build status show it does not wait.
+- **A message.** A run with no `number` and a message, such as
+  `archon workflow run archon-build-queue "build the retry fix"`, has the `interpret`
+  agent resolve the message with the tracker's CLI to one of four typed decisions:
+  `build` one issue, which the run then claims as a named item; `choose` between
+  several, which pauses as a `select` attention item labelled `build: message` and
+  claims the issue picked; `intake`, for new work no issue covers, such as a pasted
+  brief or a file, which the `handoff` script files as an issue and hands to
+  `archon-intake` detached, so the run builds nothing; or `none`, which refuses the run
+  with the agent's reason. Scripts claim and file only what the agent declared; nothing
+  reads the message's text. A run with a `number` ignores its message, and a scheduled
+  run has none, so it picks up as before. Several items to build at once are refused
+  for now: name one per run.
 - **Blocked items.** Intake's blocked verdict can go stale while work lands in
   parallel: a blocker's outcome can arrive another way while its issue is still open.
   When `retriage_as` names a maintainer login, a run that names no item also revisits
@@ -913,7 +933,8 @@ checkout, and the claim keeps two runs off the same item:
         "repo_path": "acme/widgets",
         "merge_queue_binding": "/srv/archon/bindings/widgets-merge-queue.json",
         "build_queue_binding": "/srv/archon/bindings/widgets-build-queue.json"
-      }
+      },
+      "isolation": { "kind": "default" }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }

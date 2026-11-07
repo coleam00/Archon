@@ -11,8 +11,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { sameRepo, type QualifiedPr } from './forge.ts';
+import { invokeForge, qualifiedRepo, sameRepo, type QualifiedPr } from './forge.ts';
 import { git, gitOrThrow } from './git.ts';
+import { trimmed } from './io.ts';
 
 type Repo = QualifiedPr['repo'];
 
@@ -45,8 +46,10 @@ export function urlRepo(url: string): Repo | undefined {
   return { host, path };
 }
 
-/** Every configured remote's name and the repository its URL names, if any. */
-function remotes(checkout = process.cwd()): { readonly name: string; readonly repo: Repo | undefined }[] {
+/** Every configured remote's name, URL, and the repository its URL names, if any. */
+function remotes(
+  checkout = process.cwd()
+): { readonly name: string; readonly url: string; readonly repo: Repo | undefined }[] {
   const listed = git('-C', checkout, 'config', '--get-regexp', '^remote\\..*\\.url$');
   // Exit 1 means no remote is configured at all; anything else non-zero is a failure.
   if (listed.code !== 0 && listed.code !== 1) {
@@ -55,9 +58,8 @@ function remotes(checkout = process.cwd()): { readonly name: string; readonly re
   return listed.stdout.split('\n').flatMap(line => {
     const space = line.indexOf(' ');
     if (space === -1) return [];
-    return [
-      { name: line.slice('remote.'.length, space - '.url'.length), repo: urlRepo(line.slice(space + 1)) },
-    ];
+    const url = line.slice(space + 1);
+    return [{ name: line.slice('remote.'.length, space - '.url'.length), url, repo: urlRepo(url) }];
   });
 }
 
@@ -68,6 +70,39 @@ export function remoteRepos(): Repo[] {
     if (repo && !repos.some(known => sameRepo(known, repo))) repos.push(repo);
   }
   return repos;
+}
+
+/**
+ * The repository a workflow works on: its `repo_host` and `repo_path` inputs when both
+ * are set, otherwise the repository the forge's `resolve` finds for this checkout's
+ * remote. That remote is the only one, or `origin` among several, the remote git
+ * clones and Archon registers by default. A checkout whose `origin` is a fork works on
+ * the fork, so a run there passes both inputs; a binding always does.
+ */
+export function workflowRepo(): Repo {
+  const host = trimmed(process.env.INPUTS_REPO_HOST);
+  const path = trimmed(process.env.INPUTS_REPO_PATH);
+  if (host !== '' && path !== '') return { host, path };
+  if (host !== '' || path !== '') throw new Error('set both repo_host and repo_path, or neither');
+  const all = remotes();
+  const remote = all.length === 1 ? all[0] : all.find(candidate => candidate.name === 'origin');
+  if (remote === undefined) {
+    throw new Error(
+      all.length === 0
+        ? 'repo_host and repo_path are empty, and this checkout has no git remote'
+        : `repo_host and repo_path are empty, and this checkout has several git remotes and none is origin (${all.map(r => r.name).join(', ')}); set both inputs`
+    );
+  }
+  // The URL stays out of the message: a configured remote URL can carry a credential.
+  const value = invokeForge('resolve', { remote: remote.url });
+  if (value?.kind !== 'resolved') {
+    throw new Error(
+      `repo_host and repo_path are empty, and git remote ${remote.name} does not resolve to a repository through an installed forge plugin`
+    );
+  }
+  const repo = qualifiedRepo(value.repo);
+  if (repo === undefined) throw new Error('forge resolve returned no repository');
+  return repo;
 }
 
 /** The one remote whose URL names `repo`, undefined when none does; refuses on several. */
