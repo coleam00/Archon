@@ -9,8 +9,13 @@ import {
   isWaitNode,
   loopGroupSoleTerminalSink,
 } from '../schemas';
-import { KNOWN_DAG_NODE_KEYS, KNOWN_NODE_NESTED_KEYS } from '../schemas/dag-node';
+import {
+  KNOWN_DAG_NODE_KEYS,
+  KNOWN_NODE_NESTED_KEYS,
+  nodeFieldDeprecations,
+} from '../schemas/dag-node';
 import type { NestedKeySpec } from '../schemas/dag-node';
+import type { LegacyPauseShape } from '../schemas/field-deprecation';
 import {
   KNOWN_WORKFLOW_KEYS,
   KNOWN_WORKFLOW_NESTED_KEYS,
@@ -341,23 +346,20 @@ export function collectLoopUntilDeprecationWarnings(
   // file in its own right: discovery parses that file and warns on what it declares
   // there, so the inlined copy needs no second notice.
   if (isIncludeDirective(node)) return;
-  if (isLoopNode(node) && node.loop.until !== undefined) {
-    const message =
-      `Node '${id}': the prose 'loop.until' completion signal is deprecated. Declare ` +
-      "'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean " +
-      'in output_format) instead (#2707 step 3). While supported, emit legacy signals as ' +
-      "'<promise>SIGNAL</promise>' or a final standalone signal line.";
+  const mode =
+    isLoopNode(node) && node.loop.until !== undefined
+      ? 'loop'
+      : isLoopGroupNode(node) && node.loop_group.until !== undefined
+        ? 'loop_group'
+        : undefined;
+  if (mode !== undefined) {
+    const field = nodeFieldDeprecations().find(
+      field => field.metadata.kind === 'prose_until' && field.path[0] === mode
+    );
+    if (field === undefined) throw new Error(`Missing ${mode} until deprecation`);
+    const message = `Node '${id}': ${field.message}`;
     warnings.push(message);
-    getLog().debug({ id, warning: message }, 'node_loop_until_deprecated');
-  } else if (isLoopGroupNode(node) && node.loop_group.until !== undefined) {
-    const message =
-      `Node '${id}': the prose 'loop_group.until' completion signal is deprecated. ` +
-      "Declare 'loop_group.until_bash' instead — it can read a body node's structured " +
-      'output (e.g. \'value=$body-node.output.field; test "$value" = "true"\') (#2707 step 3). While ' +
-      "supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone " +
-      'signal line.';
-    warnings.push(message);
-    getLog().debug({ id, warning: message }, 'node_loop_group_until_deprecated');
+    getLog().debug({ id, warning: message }, `node_${mode}_until_deprecated`);
   }
 
   if (isLoopGroupNode(node)) {
@@ -367,45 +369,6 @@ export function collectLoopUntilDeprecationWarnings(
     }
   }
 }
-
-/**
- * The legacy answerable pauses, each still answerable but replaced by an attention
- * wait (#4042). A plain gate, a `decisions:` gate and an `on_reject:` gate
- * are mutually exclusive shapes; `capture_response` can ride on any of them.
- */
-type LegacyPauseShape =
-  | 'approval'
-  | 'decisions'
-  | 'on_reject'
-  | 'capture_response'
-  | 'interactive_loop';
-
-/** Each legacy shape's replacement. The runtime is unchanged: nothing is translated. */
-const LEGACY_PAUSE_REPLACEMENTS: Record<LegacyPauseShape, string> = {
-  approval:
-    "'approval:' is deprecated. Write 'wait: { attention: <message>, form: approval }' " +
-    "instead; the next node reads '$<id>.output.decision' and '$<id>.output.text'. A legacy " +
-    "reject cancels the run, while an attention wait continues with decision 'reject', so add " +
-    "a 'cancel:' node with when: \"$<id>.output.decision == 'reject'\" where rejecting " +
-    'should end the run.',
-  decisions:
-    "'approval.decisions' is deprecated. Write 'wait: { attention: <message>, form: select, " +
-    "options: <the same decisions> }' instead; the output is the same {decision, text}.",
-  on_reject:
-    "'approval.on_reject' and '$REJECTION_REASON' are deprecated. Write 'wait: { attention: " +
-    "<message>, form: approval }' followed by a rework node with " +
-    "when: \"$<id>.output.decision == 'reject'\" that reads '$<id>.output.text'. To repeat " +
-    "the rework, write a 'loop_group' whose body ends in the wait; the rework node comes " +
-    "first and reads '$LOOP_PREV.<id>.output.text'.",
-  capture_response:
-    "'approval.capture_response' is deprecated. An attention wait always records the answer; " +
-    "the next node reads '$<id>.output.text'.",
-  interactive_loop:
-    "loop 'interactive:' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a " +
-    "'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration " +
-    "reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at " +
-    "'$<id>.output'.",
-};
 
 function legacyPauseShapes(node: DagNode, raw: unknown): LegacyPauseShape[] {
   const shapes: LegacyPauseShape[] = [];
@@ -469,12 +432,17 @@ export function collectLegacyPauseWarnings(
   };
   visit(nodes, rawNodes);
 
+  const fields = nodeFieldDeprecations();
   for (const [shape, nodeIds] of nodeIdsByShape) {
+    const field = fields.find(
+      field => field.metadata.kind === 'legacy_pause' && field.metadata.shape === shape
+    );
+    if (field === undefined) throw new Error(`Missing legacy pause deprecation: ${shape}`);
     const label =
       nodeIds.length === 1
         ? `Node '${nodeIds[0]}'`
         : `Nodes ${nodeIds.map(id => `'${id}'`).join(', ')}`;
-    const message = `${label}: ${LEGACY_PAUSE_REPLACEMENTS[shape]} It keeps running as before until rewritten.`;
+    const message = `${label}: ${field.message} It keeps running as before until rewritten.`;
     warnings.push(message);
     getLog().debug({ shape, nodeIds, warning: message }, 'legacy_pause_deprecated');
   }

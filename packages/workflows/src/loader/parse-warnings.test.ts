@@ -8,6 +8,7 @@ import {
   useTempWorkflowRoot,
 } from './test-utils';
 import { describe, it, expect } from 'bun:test';
+import { nodeFieldDeprecations } from '../schemas/dag-node';
 
 /**
  * Most warnings are raised by `parseWorkflow` and are asserted on its result. The
@@ -576,11 +577,9 @@ describe('legacy pause and loop deprecation warnings', () => {
     return [...(result.workflows[0].parseWarnings ?? [])];
   };
 
-  // Each legacy answerable pause warns once per file, naming its attention-form
-  // replacement (#4042). The runtime is unchanged, so every shape still loads.
-  it.each([
+  const deprecationCases: [string, string[], string[]][] = [
     [
-      'a plain approval gate',
+      'approval',
       ['  - id: gate', '    approval:', '      message: ok?'],
       [
         "Node 'gate': 'approval:' is deprecated. Write 'wait: { attention: <message>, form: approval }' instead; the next node reads '$<id>.output.decision' and '$<id>.output.text'. A legacy reject cancels the run, while an attention wait continues with decision 'reject', so add a 'cancel:' node with when: \"$<id>.output.decision == 'reject'\" where rejecting should end the run. It keeps running as before until rewritten.",
@@ -604,7 +603,7 @@ describe('legacy pause and loop deprecation warnings', () => {
       'approval.capture_response',
       ['  - id: gate', '    approval:', '      message: ok?', '      capture_response: false'],
       [
-        expect.stringContaining("Node 'gate': 'approval:' is deprecated."),
+        "Node 'gate': 'approval:' is deprecated. Write 'wait: { attention: <message>, form: approval }' instead; the next node reads '$<id>.output.decision' and '$<id>.output.text'. A legacy reject cancels the run, while an attention wait continues with decision 'reject', so add a 'cancel:' node with when: \"$<id>.output.decision == 'reject'\" where rejecting should end the run. It keeps running as before until rewritten.",
         "Node 'gate': 'approval.capture_response' is deprecated. An attention wait always records the answer; the next node reads '$<id>.output.text'. It keeps running as before until rewritten.",
       ],
     ],
@@ -622,7 +621,7 @@ describe('legacy pause and loop deprecation warnings', () => {
       ],
     ],
     [
-      'an interactive loop',
+      'loop.interactive',
       [
         '  - id: iterate',
         '    loop:',
@@ -637,7 +636,7 @@ describe('legacy pause and loop deprecation warnings', () => {
       ],
     ],
     [
-      'an interactive loop_group',
+      'loop_group.interactive',
       [
         '  - id: iterate',
         '    loop_group:',
@@ -649,10 +648,116 @@ describe('legacy pause and loop deprecation warnings', () => {
         '        - id: work',
         '          prompt: work',
       ],
-      [expect.stringContaining("Node 'iterate': loop 'interactive:' with 'gate_message'")],
+      [
+        "Node 'iterate': loop 'interactive:' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'. It keeps running as before until rewritten.",
+      ],
     ],
-  ])('warns on %s with its attention-form replacement', async (_, nodeLines, expected) => {
+    [
+      'loop.until',
+      [
+        '  - id: iterate',
+        '    loop:',
+        '      prompt: work',
+        '      until: DONE',
+        '      max_iterations: 3',
+      ],
+      [
+        "Node 'iterate': the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.",
+      ],
+    ],
+    [
+      'loop_group.until',
+      [
+        '  - id: iterate',
+        '    loop_group:',
+        '      until: DONE',
+        '      max_iterations: 3',
+        '      nodes:',
+        '        - id: work',
+        '          prompt: work',
+      ],
+      [
+        "Node 'iterate': the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'value=$body-node.output.field; test \"$value\" = \"true\"') (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.",
+      ],
+    ],
+  ];
+
+  it('covers every live deprecated path', () => {
+    expect(deprecationCases.map(([path]) => path).sort()).toEqual(
+      nodeFieldDeprecations()
+        .map(field => field.path.join('.'))
+        .sort()
+    );
+  });
+
+  it.each(deprecationCases)('warns on %s with its replacement', async (_, nodeLines, expected) => {
     expect(await discoveredWarnings(['nodes:', ...nodeLines])).toEqual(expected);
+  });
+
+  it.each(['loop', 'loop_group'])('does not warn on %s interactive false or absent', mode => {
+    for (const setting of [[], ['      interactive: false']]) {
+      expect(
+        parsedWarnings([
+          'nodes:',
+          '  - id: iterate',
+          `    ${mode}:`,
+          '      until_bash: "exit 0"',
+          '      max_iterations: 3',
+          ...setting,
+          ...(mode === 'loop'
+            ? ['      prompt: work']
+            : ['      nodes:', '        - id: work', '          prompt: work']),
+        ])
+      ).toEqual([]);
+    }
+  });
+
+  it.each([true, false])('warns on authored capture_response %s with each gate shape', capture => {
+    for (const shape of [
+      [],
+      ['      decisions: [{ id: approve }]'],
+      ['      on_reject: { prompt: fix }'],
+    ]) {
+      const warnings = parsedWarnings([
+        'nodes:',
+        '  - id: gate',
+        '    approval:',
+        '      message: ok?',
+        ...shape,
+        `      capture_response: ${capture}`,
+      ]);
+      expect(warnings).toHaveLength(2);
+      expect(warnings[1]).toContain("'approval.capture_response' is deprecated.");
+      expect(warnings.some(warning => warning.includes('unknown key'))).toBe(false);
+    }
+  });
+
+  it('groups interactive loop modes together and skips include directives', () => {
+    expect(
+      parsedWarnings([
+        'nodes:',
+        '  - id: first',
+        '    loop:',
+        '      prompt: work',
+        '      until_bash: "exit 0"',
+        '      max_iterations: 3',
+        '      interactive: true',
+        '      gate_message: ok?',
+        '  - id: second',
+        '    depends_on: [first]',
+        '    loop_group:',
+        '      until_bash: "exit 0"',
+        '      max_iterations: 3',
+        '      interactive: true',
+        '      gate_message: ok?',
+        '      nodes:',
+        '        - id: work',
+        '          prompt: work',
+        '  - id: inc',
+        '    depends_on: [second]',
+        '    include: reusable',
+      ])
+    ).toEqual([expect.stringContaining("Nodes 'first', 'second': loop 'interactive:'")]);
   });
 
   it('warns once per file per shape, naming every node that uses it, loop_group bodies included', async () => {
@@ -1006,46 +1111,6 @@ describe('legacy pause and loop deprecation warnings', () => {
     ).toContain(
       "loop_group 'grp' body: approval node 'check' must be the body's sole terminal sink"
     );
-  });
-
-  it('warns on the prose until: channel on a loop node', () => {
-    const pw = parsedWarnings([
-      'nodes:',
-      '  - id: iterate',
-      '    loop:',
-      '      prompt: work',
-      '      until: DONE',
-      '      max_iterations: 5',
-    ]);
-    expect(pw).toHaveLength(1);
-    expect(pw[0]).toContain(
-      "Node 'iterate': the prose 'loop.until' completion signal is deprecated"
-    );
-    expect(pw[0]).toContain('until_bash');
-    expect(pw[0]).toContain('until_field');
-    expect(pw[0]).toContain('<promise>SIGNAL</promise>');
-    expect(pw[0]).toContain('final standalone signal line');
-  });
-
-  it('warns on the prose until: channel on a loop_group node, with loop_group-specific guidance (no until_field)', async () => {
-    const pw = await discoveredWarnings([
-      'nodes:',
-      '  - id: grp',
-      '    loop_group:',
-      '      until: DONE',
-      '      max_iterations: 3',
-      '      nodes:',
-      '        - id: work',
-      '          prompt: do work',
-    ]);
-    expect(pw).toHaveLength(1);
-    expect(pw[0]).toContain(
-      "Node 'grp': the prose 'loop_group.until' completion signal is deprecated"
-    );
-    expect(pw[0]).toContain('loop_group.until_bash');
-    expect(pw[0]).not.toContain('until_field');
-    expect(pw[0]).toContain('<promise>SIGNAL</promise>');
-    expect(pw[0]).toContain('final standalone signal line');
   });
 
   it('does NOT warn on until_bash or until_field alone', async () => {
