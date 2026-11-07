@@ -24,7 +24,7 @@ Agents discover a project's commands, branches and CI and record them as typed o
 
 ## CI is the validation
 
-An implementer checks only what it changed; CI is the full validation. One agent node judges CI: green marks the pull request ready, red from the change goes back to the implementer, and a flake outside the change gets one re-run. Any other red ends the delivery not ready and the stage pauses. Without CI, that agent runs the full validation once. A red pull request never stays ready.
+An implementer checks only what it changed; CI is the full validation. The merge queue judges it at the head before it merges: pending waits, red from the change goes back to the build queue, and red outside the change gets one re-run. Nothing merges without CI green at its head. Delivery never waits for CI: once review passes, one agent node hands the pull request off ready, and sends a check already red because of the change back to the implementer. Without CI, that agent runs the full validation once.
 
 ## Stages hand off through queues
 

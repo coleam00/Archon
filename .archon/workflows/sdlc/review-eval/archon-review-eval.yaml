@@ -23,8 +23,7 @@ nodes:
     with:
       work_order: "$INPUTS.work_order"
 
-  # Delivery runs simplify only after a passing review, which would tie its catches
-  # to every other lens's misses; here it always runs.
+  # Simplify runs whatever the review found, as it does beside delivery's review.
   - id: simplify
     include: archon-simplify
     depends_on: [review]
