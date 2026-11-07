@@ -268,3 +268,36 @@ it('keeps typed bindings authoritative over legacy mirrors, including absent com
     [null, null],
   ]);
 });
+
+it('counts suspended loop work once when the same attempt later completes or fails', () => {
+  const loop = execution(50000, 300000);
+  loop.node = { id: 'work', kind: 'loop' };
+  loop.lifecycle = { status: 'suspended', point: 'interactive_loop' };
+  const suspended = row(loop);
+  const paused = runThroughput('one', [suspended, suspended]);
+  expect(paused.nodes).toHaveLength(1);
+  expect(paused.nodes[0]).toMatchObject({
+    exclusion: 'loop',
+    provider: 'claude',
+    requestedModel: 'large',
+    attempt: loop.attempt,
+  });
+  expect(paused.summary).toMatchObject({ loopNodesNotMeasured: 1, durationMs: 0 });
+  expect(throughputAcrossRuns([paused]).models[0]).toMatchObject({
+    provider: 'claude',
+    requestedModel: 'large',
+    loopNodesNotMeasured: 1,
+  });
+  for (const lifecycle of [
+    { status: 'completed' },
+    { status: 'failed', error: 'failed after resume' },
+  ] as const) {
+    const resumed = runThroughput('one', [suspended, row({ ...loop, lifecycle })]);
+    expect(resumed).toEqual(paused);
+  }
+  const feedback = { ...loop, attempt: execution().attempt };
+  expect(runThroughput('one', [suspended, row(feedback)]).summary.loopNodesNotMeasured).toBe(2);
+  const suspendedAgent = execution();
+  suspendedAgent.lifecycle = loop.lifecycle;
+  expect(runThroughput('one', [row(suspendedAgent)]).nodes).toEqual([]);
+});

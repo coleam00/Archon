@@ -71,7 +71,7 @@ export async function listedRunThroughput<
   for (let start = 0; start < runs.length; start += 20) {
     if (start > 0) await new Promise<void>(resolve => setImmediate(resolve));
     const ids = runs.slice(start, start + 20).map(run => run.id);
-    const fetched = await host.deps.store.listEventsForRuns(ids, eventTypes);
+    const fetched = await host.deps.store.listEventsForRuns(ids, eventTypes, { strict: true });
     for (const id of ids) events.set(id, fetched.get(id) ?? []);
   }
   const measured = runs.map(run => {

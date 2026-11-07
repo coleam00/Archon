@@ -5,6 +5,7 @@ import { nodeCostScope, NODE_EXECUTION_EVENT_TYPES } from './node-record-seriali
 export const THROUGHPUT_EVENT_TYPES = [
   NODE_EXECUTION_EVENT_TYPES.completed,
   NODE_EXECUTION_EVENT_TYPES.failed,
+  NODE_EXECUTION_EVENT_TYPES.suspended,
 ] as const;
 
 export interface ThroughputSummary {
@@ -94,16 +95,18 @@ function nodeThroughput(event: NodeRecordEventEnvelope): NodeThroughput | null {
   if (!record) return null;
   const metadata = record.metadata;
   const kind = metadata?.node.kind ?? record.data.type;
+  if (event.event_type === NODE_EXECUTION_EVENT_TYPES.suspended && kind !== 'loop') return null;
   if ((kind !== 'agent' && kind !== 'loop') || nodeCostScope(record.data) !== 'own') return null;
+  const binding = metadata?.binding ?? {
+    provider: record.data.provider,
+    model: { requested: record.data.model_usage?.requested ?? record.data.model },
+  };
   return {
     path: record.path,
     invocation: metadata?.invocation ?? null,
     attempt: metadata?.attempt ?? null,
-    provider: (metadata ? metadata.binding.provider : record.data.provider) ?? null,
-    requestedModel:
-      (metadata
-        ? metadata.binding.model?.requested
-        : (record.data.model_usage?.requested ?? record.data.model)) ?? null,
+    provider: binding.provider ?? null,
+    requestedModel: binding.model?.requested ?? null,
     // Loop descriptors do not record whether their duration includes an approval pause.
     ...(kind === 'loop'
       ? { exclusion: 'loop' as const, effectiveTokensPerSecond: null }
@@ -111,7 +114,7 @@ function nodeThroughput(event: NodeRecordEventEnvelope): NodeThroughput | null {
   };
 }
 
-/** Own terminal attempts only: wrappers and amendments restate already recorded work. */
+/** Own agent terminal attempts and loop work: wrappers and amendments restate work. */
 export function runThroughput(
   runId: string,
   events: readonly NodeRecordEventEnvelope[]

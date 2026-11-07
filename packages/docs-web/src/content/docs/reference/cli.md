@@ -649,11 +649,12 @@ Only provider-reported output tokens with a positive usable duration enter the c
 agent rows without explicit token-source provenance. Missing or invalid durations have a
 separate exclusion count; missing tokens take precedence so the counts do not overlap.
 Unavailable rates display `unavailable` (JSON `null`); provider-reported zero is `0 tok/s`.
-All own terminal `loop:` attempts are excluded and counted as `N loop nodes not measured`
-on run and model summaries (`loopNodesNotMeasured` in JSON). Their persisted durations can
+All own terminal and suspended `loop:` attempts are excluded and counted as
+`N loop nodes not measured` on run and model summaries (`loopNodesNotMeasured` in JSON). Their persisted durations can
 include approval pauses, and the records do not distinguish safe durations. This exclusion
-takes precedence over missing tokens or duration. Historical aggregate restatements do not
-count as attempts. Historical rows that cannot be identified as agent or loop executions
+takes precedence over missing tokens or duration. A suspended attempt that later completes
+or fails counts once; feedback that starts a new attempt counts separately. Historical
+aggregate restatements do not count as attempts. Historical rows that cannot be identified as agent or loop executions
 are outside the sample.
 Historical rows retain their recorded provider and requested model (`model_usage.requested`,
 then `model`); resolved-only model names are not substituted. Typed execution bindings

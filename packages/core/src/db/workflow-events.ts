@@ -305,11 +305,12 @@ export async function listActiveWorkflowNodeIds(
  * Legacy rows without a sequence precede sequenced rows, ordered by timestamp then id. A
  * run list uses it to report per-node state without one query per run, fetching only the
  * types its fold reads so high-volume rows such as provider events never leave the
- * database.
+ * database. Strict reads reject malformed JSON; default reads retain the polling fallback.
  */
 export async function listEventsForRuns(
   workflowRunIds: readonly string[],
-  eventTypes: readonly WorkflowEventType[]
+  eventTypes: readonly WorkflowEventType[],
+  options: { strict?: boolean } = {}
 ): Promise<Map<string, WorkflowEventRow[]>> {
   const byRun = new Map<string, WorkflowEventRow[]>(workflowRunIds.map(id => [id, []]));
   if (workflowRunIds.length === 0 || eventTypes.length === 0) return byRun;
@@ -319,7 +320,12 @@ export async function listEventsForRuns(
       runEventsSql('*', workflowRunIds.length, eventTypes.length),
       [...workflowRunIds, ...eventTypes]
     );
-    for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));
+    for (const row of result.rows) {
+      const parsed = options.strict
+        ? { ...row, data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data }
+        : parseEventRow(row);
+      byRun.get(row.workflow_run_id)?.push(parsed);
+    }
     return byRun;
   } catch (error) {
     getLog().error({ err: error as Error }, 'db.events_for_runs_list_failed');

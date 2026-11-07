@@ -92,7 +92,8 @@ describe('workflowRunsCommand', () => {
       expect(read).toHaveBeenCalledTimes(1);
       expect(read).toHaveBeenCalledWith(
         ['one', 'two'],
-        verbose ? NODE_SUMMARY_EVENT_TYPES : ['node_completed', 'node_failed']
+        verbose ? NODE_SUMMARY_EVENT_TYPES : ['node_completed', 'node_failed', 'node_suspended'],
+        { strict: true }
       );
       if (json) {
         const result = JSON.parse(firstJsonPayload(stdoutSpy));
@@ -146,6 +147,65 @@ describe('workflowRunsCommand', () => {
     }
   );
 
+  it.each([false, true])('reports suspended loop exclusions in listings json=%s', async json => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      runs: [
+        {
+          id: 'one',
+          workflow_name: 'work',
+          status: 'paused',
+          metadata: {},
+          active_nodes: [],
+          started_at: new Date(),
+        },
+      ],
+      total: 1,
+      counts: EMPTY_COUNTS,
+    });
+    const event = throughputEvents('one')[0]!;
+    (eventsDb.listEventsForRuns as ReturnType<typeof mock>).mockResolvedValueOnce(
+      new Map([
+        [
+          'one',
+          [
+            {
+              ...event,
+              event_type: 'node_suspended',
+              data: {
+                ...event.data,
+                node: { id: 'work', kind: 'loop' },
+                type: 'loop',
+                suspend_point: 'interactive_loop',
+              },
+            },
+          ],
+        ],
+      ])
+    );
+    expect(
+      await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+        all: true,
+        throughput: true,
+        json,
+      })
+    ).toBe(0);
+    if (json) {
+      const result = JSON.parse(firstJsonPayload(stdoutSpy));
+      expect(result.runs[0].throughput.summary.loopNodesNotMeasured).toBe(1);
+      expect(result.throughput.models[0]).toMatchObject({
+        provider: 'claude',
+        requestedModel: 'large',
+        loopNodesNotMeasured: 1,
+      });
+    } else {
+      const text = consoleSpy.mock.calls.map(call => String(call[0])).join('\n');
+      expect(text).toContain('one effective throughput: unavailable; 1 loop nodes not measured');
+      expect(text).toContain('claude/large: unavailable; 1 loop nodes not measured');
+    }
+  });
+
   it('reads a large requested page in bounded batches and reuses them for verbose detail', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');
@@ -176,9 +236,10 @@ describe('workflowRunsCommand', () => {
     expect(read).toHaveBeenNthCalledWith(
       1,
       runs.slice(0, 20).map(run => run.id),
-      NODE_SUMMARY_EVENT_TYPES
+      NODE_SUMMARY_EVENT_TYPES,
+      { strict: true }
     );
-    expect(read).toHaveBeenNthCalledWith(2, ['run-20'], NODE_SUMMARY_EVENT_TYPES);
+    expect(read).toHaveBeenNthCalledWith(2, ['run-20'], NODE_SUMMARY_EVENT_TYPES, { strict: true });
     const result = JSON.parse(firstJsonPayload(stdoutSpy));
     expect(result.throughput.runCount).toBe(21);
     expect(result.runs[20].throughput.summary.effectiveTokensPerSecond).toBeNull();
