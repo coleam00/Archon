@@ -18,7 +18,7 @@ import { workflowSourceConfigFrom } from '@archon/workflows/run-source';
 import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
 import type { WorkflowLoadError, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import { workflowRunStatusSchema, runAttention } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import {
   loadWorkflows,
