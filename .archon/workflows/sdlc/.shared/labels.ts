@@ -66,25 +66,10 @@ export const PACK_LABELS = {
 
 export type PackLabel = keyof typeof PACK_LABELS;
 
+export const PACK_LABEL_NAMES = Object.keys(PACK_LABELS) as PackLabel[];
+
 export function isPackLabel(name: string): name is PackLabel {
   return Object.hasOwn(PACK_LABELS, name);
-}
-
-// Labels an earlier version of the pack wrote. A write removes them from the item
-// and never creates them, so re-triaging an item clears its old size label, and
-// intake's next write on an item clears archon-issue, the investigate route's old name.
-const RETIRED_LABELS = ['archon-small', 'archon-risky', 'archon-large', 'archon-issue'] as const;
-
-/** A label the pack owns on an item: one it writes now, or one it retired. */
-export type OwnedLabel = PackLabel | (typeof RETIRED_LABELS)[number];
-
-export const OWNED_LABEL_NAMES: readonly OwnedLabel[] = [
-  ...(Object.keys(PACK_LABELS) as PackLabel[]),
-  ...RETIRED_LABELS,
-];
-
-export function isOwnedLabel(name: string): name is OwnedLabel {
-  return (OWNED_LABEL_NAMES as readonly string[]).includes(name);
 }
 
 export type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
@@ -168,7 +153,7 @@ export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size):
 export function writeLabels(
   item: QualifiedPr,
   add: readonly string[],
-  remove: readonly OwnedLabel[]
+  remove: readonly PackLabel[]
 ): string[] {
   // Single add and remove operations, never a whole-set write, so labels another
   // writer adds concurrently survive. Each forge write reads itself back, and a write

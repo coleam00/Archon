@@ -5,12 +5,10 @@
  * answer's value, so its effect is read from the choice, never from the answer's text. On a pull request: `merge` records the approval pinned
  * to the head that was asked about, and the next sweep merges it once the gate passes
  * at that head; `return` hands the item back to the build queue with the brief the
- * sweep wrote; `park` stops working it until renewed build readiness or, for an
- * answered own-PR park, a different head observed by a later sweep. A
+ * sweep wrote; `park` stops working it until renewed build readiness. A
  * choice's ruling and the person's words are written into the issue body as one dated
  * "Current scope" section first, as the build queue does, so a returned round reads
- * them as the contract; an enrolled own pull request has no issue body, so its ruling
- * stays on its work item. On a red default branch the only answer is `hold`: the queue
+ * them as the contract. On a red default branch the only answer is `hold`: the queue
  * merges nothing while the branch is red, which every sweep reads from the forge, so
  * nothing is written. A `merge` then starts a sweep at once through the operator's
  * merge-queue binding, and a `return` the item's next round through the build-queue
@@ -45,15 +43,9 @@ function continueNow(effect: string, item: QualifiedPr, runId: string): string {
   return `; ${followUp(text(process.env.INPUTS_MERGE_QUEUE_BINDING), key, {}, 'a sweep')}`;
 }
 
-/**
- * Write the ruling into the issue body as a dated section; returns its heading, or ''.
- * An enrolled own pull request is its own work item and has no issue body to write, so
- * its ruling stays on the work item's decision entry, which keeps the answer's text.
- */
+/** Write the ruling into the issue body as a dated section; returns its heading, or ''. */
 function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, at: string): string {
-  // Issues and pull requests share one numbering, so an item numbered as its pull request is that pull request.
-  const ownPr = asked.item.number === asked.pr.number && asked.item.repo.path === asked.pr.repo.path && asked.item.repo.host === asked.pr.repo.host;
-  if (ruling === '' || ownPr) return '';
+  if (ruling === '') return '';
   const heading = rulingHeading(at, `the merge queue's question on PR ${String(asked.pr.number)}`);
   appendSection(asked.item, heading, ruling);
   return heading;

@@ -135,8 +135,6 @@ export interface WorkItem {
     readonly build?: BuildRecord;
     readonly merge?: MergeRecord;
     readonly split?: SplitRecord;
-    /** A maintainer's own pull request the merge queue enrolled; no build round made it. */
-    readonly own_pr?: { readonly url: string; readonly at: string };
   };
   readonly history: readonly HistoryEntry[];
 }

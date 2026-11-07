@@ -169,7 +169,7 @@ archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in
 
 **What it produces**: A PR marked ready for review, with one canonical review comment.
 
-### Review and validation
+### Review
 
 #### `archon-review`
 
@@ -191,18 +191,6 @@ archon workflow run archon-review --input scope=<PR-URL> --branch <fresh-review-
 Use the fork's actual clone URL, head ref and full head SHA, and choose a review branch absent locally, on the configured remote and from existing worktrees. `--from` only applies to a new branch; `--branch` alone cannot resolve a fork-only ref and would create it from the base. If the checkout commit differs from the PR head, the run stops before routing or any review lens and returns the exact rerun command, including the fetch prerequisite for a fork.
 
 **What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Empty `scope` selects the current branch's open PR first, otherwise the working diff. A Ready verdict on a draft PR pauses the run as one attention item: `ready` takes the PR out of draft, and `finish` leaves it a draft.
-
-#### `archon-validate`
-
-Discovers and runs the project's own checks, such as types, lint, tests, and build, and reports a structured verdict. It judges nothing and fixes nothing.
-
-**When to use it**: You want to know whether your checkout is green.
-
-```bash
-archon workflow run archon-validate --no-worktree
-```
-
-**What it produces**: A structured verdict on the project's checks. Pass `--input scope=<package or check>` to narrow the run.
 
 ### Maintenance
 
@@ -263,7 +251,6 @@ archon metrics sdlc.tests_unprotective
 | `archon-pr` | Open a PR for committed work | Yes | No |
 | `archon-deliver` | Decided work to reviewed PR | Yes | Yes |
 | `archon-review` | Review a PR or the working diff | No (comments on a PR) | No |
-| `archon-validate` | Run the project's checks | No | No |
 | `archon-upkeep` | Update one dependency | Yes | Yes |
 | `archon-metrics-prs` | Count factory PRs and their merge rate | No | No |
 | `archon-metrics-test-value` | Count factory tests that protect nothing on their own merits | No | No |
@@ -271,7 +258,7 @@ archon metrics sdlc.tests_unprotective
 
 ## Workflows that no longer ship
 
-Archon 0.12.0 stopped bundling the older `archon-*` workflows, such as `archon-fix-github-issue`, `archon-idea-to-pr`, `archon-smart-pr-review`, and `archon-assist`. Most have an `sdlc` replacement: use `archon-ship` for issue fixing and idea-to-PR work, `archon-review` for PR review, `archon-plan` followed by `archon-deliver` for plan-to-PR, and `archon-validate` for running checks. For questions, ask in chat.
+Archon 0.12.0 stopped bundling the older `archon-*` workflows, such as `archon-fix-github-issue`, `archon-idea-to-pr`, `archon-smart-pr-review`, and `archon-assist`. Most have an `sdlc` replacement: use `archon-ship` for issue fixing and idea-to-PR work, `archon-review` for PR review, and `archon-plan` followed by `archon-deliver` for plan-to-PR. For questions, ask in chat.
 
 To keep using one of the old workflows, copy its YAML from [`.archon/workflows/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/workflows/defaults) (most are in its `legacy/` folder) into your project's `.archon/workflows/`, and the commands it uses from [`.archon/commands/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/commands/defaults) into `.archon/commands/`. `archon-idea-to-pr`, `archon-plan-to-pr` and `archon-issue-review-full` also need `archon-review-block.yaml` from the same `legacy/` folder, because they include it. Save that copy under another name, such as `legacy-review-block` (its file name and its `name:`), and point the three workflows' `include:` at it: the `sdlc` pack ships its own `archon-review-block`, and a project or global copy with that name would replace it.
 

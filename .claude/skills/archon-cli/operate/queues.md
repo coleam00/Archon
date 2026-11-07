@@ -24,12 +24,7 @@ reference covers launching and tending the queues by hand.
   pack can read the repository through the forge plugin
   (`archon plugin add coleam00/Archon/plugins/forge-github`).
 - `.archon/sdlc/policy/maintainers.json` on the default branch lists the forge logins
-  whose issues are triaged and whose review comments count. An entry can be an object,
-  `{ "login": "<login>", "merge_queue": "own-prs" }`, which also sends that
-  maintainer's own open pull requests through the merge queue, except one a work item
-  already names, such as a pull request the build queue delivered, and one from a
-  `build/` branch in the repository itself, the build queue's branch namespace: a
-  hand-made pull request on a `build/` branch does not enroll. Without the file
+  whose issues are triaged and whose review comments count. Without the file
   every author is an outsider: intake labels their issues `archon-needs-maintainer`
   and runs no agent.
 - The forge account the pack's review runs post as must also be on
@@ -158,14 +153,10 @@ branch's CI on a merge is the next sweep's first fact. Claims keep two sweeps of
 same item.
 
 A verdict counts only at the head it reviewed: after a push, the pull request goes
-back to the build queue for a new round. A maintainer's own pull request
-(`merge_queue: "own-prs"`) is an own-PR work item with no build record to return to,
-so where another would go back, the sweep asks instead and offers no `return`.
+back to the build queue for a new round.
 
 A pull request whose read fails twice in a row is parked with the read error until
-the build queue readies the item again. A maintainer's own pull request has no build
-record, so nothing readies it again: once parked, it stays parked, and you merge it by
-hand.
+the build queue readies the item again.
 
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
 change, pauses as an attention item labelled `merge: pr` with the choices `merge`,
@@ -181,11 +172,6 @@ judges that everything since is merges of the default branch and their conflict
 resolutions, and the verdict is Ready at the later head. A `return` hands the item
 back to the build queue, whose next round starts at once on the build queue's own
 input defaults. A `park` stops work on the item until the build queue readies it again.
-
-For an own pull request, `park` and `other` stop queue work until a later sweep
-observes a head different from the head asked about. At the same head it stays
-parked, even after green CI or a new review. The `other` text is recorded as the
-ruling on the work item; it starts no build round.
 
 ## Discoveries drain
 
@@ -208,9 +194,7 @@ archon workflow respond <run-id> <choice> "<reason>" --detach
 ```
 
 The build queue and merge items owned by a build write the ruling into the issue
-body as a dated "Current scope" section, and later rounds work from it. An enrolled
-own PR keeps the answer on its work item's merge decision entry; it writes no issue
-section. Write the reason as a ruling a later round can act on: what is in scope,
+body as a dated "Current scope" section, and later rounds work from it. Write the reason as a ruling a later round can act on: what is in scope,
 what is not, and why. An answer that
 continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
 run at once, on the run config the answered run started with, so you don't relaunch. A
@@ -225,8 +209,7 @@ follow-up in the same queue also keeps the answered run's input selections.
 ## Merging by hand
 
 A pull request the queues did not deliver has no work item, so the merge queue does
-not take it, unless its author's `maintainers.json` entry sets
-`merge_queue: "own-prs"`. To merge one yourself:
+not take it. To merge one yourself:
 
 1. Read the review verdict and the open review threads, including automated
    reviewers' inline comments.
