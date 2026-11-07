@@ -105,6 +105,22 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
         'token counts for direct chat turns, plus whether cache totals are partial\n' +
         '(numbers only, never message content).'
     );
+    const notice = String(writeSpy.mock.calls[0]?.[0]).replace(/\s+/g, ' ');
+    for (const disclosure of [
+      'the shape of each workflow (node-type counts, depth, fan-out, how many commands it uses, a prompt-size bucket)',
+      "for a copy of a bundled workflow, which bundled one it came from — never your own workflow's name, description or text",
+      'an anonymous per-run reference (a hash, never the run id), cancelled runs',
+      'how Archon was installed (binary, Docker, or source), the build commit',
+      'chat activity (platform/provider/model, never message content)',
+      'aggregate usage totals (token counts, cost, durations, loop iterations)',
+      'approval decisions (approved/rejected only), deployment shape, a categorical failure class',
+      'workflow name, run outcome, OS/arch, and version',
+      'Still no code, prompts, file paths, IP, or personal data',
+      'see README "Telemetry"',
+      'Opt out anytime: DO_NOT_TRACK=1 or ARCHON_TELEMETRY_DISABLED=1',
+    ]) {
+      expect(notice).toContain(disclosure);
+    }
     expect(NOTICE_STAMP_FILENAME).toBe('telemetry-notice-shown-v8');
     expect(existsSync(stampPath())).toBe(true);
     resetTelemetryForTests();
