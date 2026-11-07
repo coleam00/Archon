@@ -12,6 +12,8 @@ export interface NativeScheduleConfig {
   programArguments: readonly [string, ...string[]];
   workingDirectory: string;
   archonHome: string;
+  /** The installing shell's PATH; launchd's default PATH lacks bun, gh, and provider CLIs. */
+  path: string;
   schedule: {
     intervalSeconds: number;
     runAtLoad: boolean;
@@ -64,6 +66,9 @@ export function renderMacosLaunchAgent(config: NativeScheduleConfig): RenderedMa
   assertAbsolute('Native schedule working directory', config.workingDirectory);
   assertAbsolute('Native schedule ARCHON_HOME', config.archonHome);
 
+  if (config.path.length === 0) {
+    throw new Error('Native schedule PATH must not be empty');
+  }
   if (config.programArguments.some(argument => argument.length === 0)) {
     throw new Error('Native schedule program arguments must not be empty');
   }
@@ -99,6 +104,8 @@ ${programArguments}
     <dict>
       <key>ARCHON_HOME</key>
       <string>${escapeXml(config.archonHome)}</string>
+      <key>PATH</key>
+      <string>${escapeXml(config.path)}</string>
     </dict>
     <key>StartInterval</key>
     <integer>${String(config.schedule.intervalSeconds)}</integer>
