@@ -1092,7 +1092,7 @@ run per pull request, and records per pull request:
 | Metric | Kind | Unit | Meaning |
 |---|---|---|---|
 | `sdlc.tests_added` | count | `tests` | tests the pull request added or changed, as the judge listed them |
-| `sdlc.tests_unprotective` | count | `tests` | those that no plausible regression would fail |
+| `sdlc.tests_unprotective` | count | `tests` | those that protect nothing on their own merits: no plausible regression fails them that another test the judge was shown would not catch |
 
 Both are the judge's counts: a test the judge leaves out is in neither, and calibration
 scores such omissions as disagreements. Both are attributed to the build-queue runs that
@@ -1100,15 +1100,21 @@ built the pull request, at its merge time, like the PR metrics. A pull request w
 judge run failed has no record and is listed in the node's `skipped` output. Each pull
 request costs one judge run on the `large` tier, so the window sets the cost.
 
-The judge reads the pull request's changed files through `pr.files`, and each changed
-test file's text at the head that list was read at through `repo.file`. The `prs` node
-refuses before any judge runs when the plugin lacks either. A test file the
-forge does not return as text, such as one over 1 MB on GitHub, fails that pull
-request's judge run, so the pull request is listed in `skipped`.
+The judge reads the pull request's changed files through `pr.files`, and the text of
+each changed file that holds test code at the head that list was read at through
+`repo.file`. The `prs` node refuses before any judge runs when the plugin lacks either.
+A file holding test code that the forge does not return as text, such as one over 1 MB
+on GitHub, fails that pull request's judge run, so the pull request is listed in
+`skipped`.
 
 The judge applies the review pack's test lens
 ([`review/commands/review-tests.md`](review/commands/review-tests.md)), read when it runs,
-plus the rules in its own prompt. It has no tools and records no metric of its own.
+for its standard of what a valuable test is. The lens anchors on what a change promises;
+the judge's prompt overrides that anchor and adds its own rules. The judge sees the pull
+request's patches and the full text of the files that hold changed test code, so
+redundancy is judged only against those tests: a duplicate of an unchanged test elsewhere
+in the suite counts as protective. It records no metric of its own. On Claude it runs
+with no tools; Codex does not enforce the restriction and can read the checkout.
 
 **Calibration.** A judged count is only as good as the judge.
 [`archon-metrics-test-value-calibrate`](metrics-test-value-calibrate/archon-metrics-test-value-calibrate.yaml)
@@ -1147,7 +1153,8 @@ model drafted calibrate the judge against itself.
 judge workflow's files and the criteria text it inlines. The engine adds the models that
 ran the judge node, so `archon metrics` reports one entry per judge and model, and never
 averages two. Editing the judge's prompt, the test lens or anything in the judge's
-directory, or remapping the `large` tier to another model, starts a new identity. Run
+directory, including the rule in `scripts/test-code.ts` that picks which files it reads
+in full, or remapping the `large` tier to another model, starts a new identity. Run
 the calibration again before trusting the counts it produces. Compare the agreement the
 two models reached after calibrating with each:
 
