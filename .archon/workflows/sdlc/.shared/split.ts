@@ -21,8 +21,11 @@ export interface SplitIssue {
   readonly key: string;
   readonly number: number;
   readonly url: string;
-  /** The title it was filed with, so a later split's comment still names it. */
-  readonly title: string;
+  /**
+   * The title it was filed with, so a later split's comment still names it. Absent on
+   * records written before titles were recorded.
+   */
+  readonly title?: string;
 }
 
 /** An existing issue the item's outcome depends on, which the split did not file. */

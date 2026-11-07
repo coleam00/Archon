@@ -65,10 +65,11 @@ type Answer = { readonly kind: SplitKind } | { readonly kind: 'whole'; readonly 
 
 const COMMENT_MARKER = '<!-- archon-split -->';
 
-const LEAD: Record<SplitKind, string> = {
-  prd: "This PRD's current phase is filed as these issues. It stays open until its hypothesis has a verdict.",
-  epic: "This epic's current increment is filed as these issues. It stays open until its increments merge.",
-  bundle: 'This bundle of tasks is filed as these issues and closed; follow the work there.',
+/** What the comment says about the item's current piece, and what happens to the item. */
+const KIND: Record<SplitKind, { readonly piece: string; readonly is: string; readonly then: string }> = {
+  prd: { piece: "This PRD's current phase", is: 'is', then: 'It stays open until its hypothesis has a verdict.' },
+  epic: { piece: "This epic's current increment", is: 'is', then: 'It stays open until its increments merge.' },
+  bundle: { piece: "This bundle's tasks", is: 'are', then: 'It is closed.' },
 };
 
 function filedOn(doc: WorkItem | null): readonly SplitIssue[] {
@@ -85,15 +86,42 @@ function finish(doc: WorkItem, record: SplitRecord, runId: string, outcome: stri
   };
 }
 
-function comment(kind: SplitKind, issues: readonly SplitIssue[], adopted: readonly AdoptedIssue[], later: readonly Later[]): string {
-  const listed = issues.map(entry => `- #${String(entry.number)} ${entry.title}`);
+/**
+ * `issues` holds every issue filed from the item; only those under a key the agent
+ * listed for this phase are the current piece, the rest came from earlier phases.
+ * `listed` holds the adoptions this run read as open; earlier adoptions are not
+ * re-read, so they never claim the current piece.
+ */
+function comment(
+  kind: SplitKind,
+  issues: readonly SplitIssue[],
+  keys: readonly string[],
+  adopted: readonly AdoptedIssue[],
+  listed: readonly AdoptedIssue[],
+  later: readonly Later[]
+): string {
+  const { piece, is, then } = KIND[kind];
+  const line = (entry: SplitIssue): string => `- #${String(entry.number)}${entry.title === undefined ? '' : ` ${entry.title}`}`;
+  const current = issues.filter(entry => keys.includes(entry.key)).map(line);
+  const earlier = issues.filter(entry => !keys.includes(entry.key)).map(line);
   const tracked = adopted.map(entry => `- #${String(entry.number)} ${entry.why}`);
   const planned = later.map(entry => `- ${entry.title}. Filed once the earlier work shows: ${entry.signal}`);
+  const owned = adopted.some(entry => listed.some(next => next.number === entry.number));
+  // Say only what is true: issues filed for this piece, open issues that own it, or neither.
+  const lead =
+    current.length > 0
+      ? `${piece} ${is} filed as these issues. ${then}`
+      : owned
+        ? `${piece} ${is} owned by existing open issues, so nothing new is filed. ${then}`
+        : `Nothing is filed for it now. ${then}`;
   return [
     COMMENT_MARKER,
-    LEAD[kind],
-    listed.join('\n'),
-    tracked.length > 0 ? `It also depends on these open issues, which already own part of it:\n${tracked.join('\n')}` : '',
+    lead,
+    current.join('\n'),
+    earlier.length > 0 ? `Filed by earlier phases:\n${earlier.join('\n')}` : '',
+    tracked.length > 0
+      ? `${current.length > 0 ? 'It also depends on these issues, which already own part of it' : 'The existing issues'}:\n${tracked.join('\n')}`
+      : '',
     planned.length > 0 ? `Later phases, not filed yet:\n${planned.join('\n')}` : '',
   ]
     .filter(part => part !== '')
@@ -110,14 +138,6 @@ function publish(
   summary: string
 ): void {
   const at = new Date().toISOString();
-  const recorded = (issues: readonly SplitIssue[], status: 'filing' | 'done' = 'filing'): SplitRecord => ({
-    status,
-    kind,
-    issues,
-    adopted,
-    at,
-    run_id: runId,
-  });
   // Two entries under one key would file only the first.
   const keys = planned.map(entry => entry.key);
   const twice = keys.find((key, index) => keys.indexOf(key) !== index);
@@ -129,8 +149,20 @@ function publish(
     if (view.state !== 'open') throw new Error(`nothing was filed: existing issue ${String(entry.number)} is ${view.state}, not open`);
     return { number: entry.number, url: view.url, why: entry.why };
   });
-  // An earlier phase's adoptions stay unless this phase lists the issue again.
-  const adopted = [...adoptedIssues(before).filter(entry => !listed.some(next => next.number === entry.number)), ...listed];
+  const adopting = [...adoptedIssues(before).filter(entry => !listed.some(next => next.number === entry.number)), ...listed];
+  // An earlier phase's adoptions stay unless this phase lists the issue again. An issue
+  // this item's own split filed is shown once, as filed, never also as adopted; that
+  // includes one createIssue recovers by its marker, so this runs against the final list.
+  const adoptedBeside = (issues: readonly SplitIssue[]): AdoptedIssue[] =>
+    adopting.filter(entry => !issues.some(filed => filed.number === entry.number));
+  const recorded = (issues: readonly SplitIssue[], status: 'filing' | 'done' = 'filing'): SplitRecord => ({
+    status,
+    kind,
+    issues,
+    adopted: adoptedBeside(issues),
+    at,
+    run_id: runId,
+  });
   let issues = filedIssues(before);
   for (const entry of planned) {
     if (issues.some(filed => filed.key === entry.key)) continue;
@@ -144,7 +176,8 @@ function publish(
     issues = filedOn(doc);
   }
 
-  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(kind, issues, adopted, later));
+  const adopted = adoptedBeside(issues);
+  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(kind, issues, keys, adopted, listed, later));
   if (kind === 'prd') writeLabels(item, ['archon-prd'], []);
   if (kind === 'bundle') closeIssue(item, 'completed');
 

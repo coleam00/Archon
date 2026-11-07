@@ -142,12 +142,47 @@ describe('split publish', () => {
     expect(publish(at, { kind: 'prd' }, { issues: [...first.createdIssues] }).createdIssues).toEqual([]);
   });
 
+  test('a record from before titles were kept lists its issues by number, once', () => {
+    const at = install();
+    seed(at, doc => ({
+      ...doc,
+      facts: {
+        ...doc.facts,
+        split: { status: 'done', kind: 'prd', issues: [{ key: 'measure', number: 100, url: 'u' }], adopted: [], at: AT, run_id: 'old-run' },
+      },
+    }));
+    const filed: TrackerIssue = { number: 100, title: 'Measure the signal', body: `${splitMarker(7, 'measure')}\n\nThe contract.`, state: 'OPEN' };
+    // The agent adopts the issue this item's own split filed.
+    const run = publish(at, { kind: 'prd' }, { issues: [filed], existing: [{ number: 100, why: 'owns the phase' }], planned: [] });
+    ok(run);
+    const body = run.comments[0]?.body ?? '';
+    expect(body).toEndWith('- #100');
+    expect(body).not.toContain('undefined');
+    expect(body).not.toContain('owns the phase');
+  });
+
+  test("a later phase owned by an existing issue does not claim an earlier phase's filing", () => {
+    const at = install();
+    seed(at, doc => ({
+      ...doc,
+      facts: {
+        ...doc.facts,
+        split: { status: 'done', kind: 'prd', issues: [{ key: 'measure', number: 100, url: 'u', title: 'Measure' }], adopted: [], at: AT, run_id: 'old-run' },
+      },
+    }));
+    const owner: TrackerIssue = { number: 200, title: 'The next phase', body: 'Owned elsewhere.', state: 'OPEN' };
+    const run = publish(at, { kind: 'prd' }, { issues: [owner], existing: [{ number: 200, why: 'owns the next phase' }], planned: [] });
+    ok(run);
+    expect(run.comments[0]?.body).toContain("This PRD's current phase is owned by existing open issues, so nothing new is filed.");
+  });
+
   test('an issue filed before a stop, but not recorded, is recovered by its marker', () => {
     const at = install();
     seed(at);
     const filed: TrackerIssue = { number: 100, title: 'Measure the signal', body: `${splitMarker(7, 'measure')}\n\nThe measurement contract.`, state: 'OPEN' };
-    const run = publish(at, { kind: 'bundle' }, { issues: [filed] });
-    ok(run);
+    // The agent also lists the unrecorded issue as an existing one; it shows only as filed.
+    const run = publish(at, { kind: 'bundle' }, { issues: [filed], existing: [{ number: 100, why: 'owns the measurement' }] });
+    expect(ok(run)).toMatchObject({ adopted: [] });
     expect(run.createdIssues.map(issue => issue.title)).toEqual(['Ship the thin slice']);
     // A bundle is closed with its list; it gets no PRD label.
     expect(run.closes).toEqual([{ number: 7, state: 'closed', state_reason: 'completed' }]);
