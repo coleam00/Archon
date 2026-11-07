@@ -36,10 +36,8 @@ interface Segment {
   offset: number;
 }
 
-export function checkSource(file: string, text: string): string[] {
-  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
-  const lineAt = (position: number): number =>
-    source.getLineAndCharacterOfPosition(position).line + 1;
+function sourceParts(source: ts.SourceFile): { segments: Segment[]; comments: ts.CommentRange[] } {
+  const text = source.text;
   const segments: Segment[] = [];
   const comments = new Map<number, ts.CommentRange>();
   function visit(node: ts.Node): void {
@@ -59,7 +57,7 @@ export function checkSource(file: string, text: string): string[] {
     }
     ts.forEachChild(node, visit);
   }
-  if (file.endsWith('.css')) {
+  if (source.fileName.endsWith('.css')) {
     for (const match of text.matchAll(
       /"(?:\\.|[^"\\])*"|'(?:\\.|[^'\\])*'|\/\*[\s\S]*?\*\/|@apply\s+([^;]+);/g
     )) {
@@ -74,9 +72,24 @@ export function checkSource(file: string, text: string): string[] {
       }
     }
   } else visit(source);
+  return { segments, comments: [...comments.values()] };
+}
+
+interface TokenException {
+  line: number;
+  utility: string;
+  used: boolean;
+}
+
+function readExceptions(
+  file: string,
+  text: string,
+  comments: ts.CommentRange[],
+  lineAt: (position: number) => number
+): { exceptions: TokenException[]; failures: string[] } {
   const failures: string[] = [];
-  const exceptions: { line: number; utility: string; used: boolean }[] = [];
-  for (const range of comments.values()) {
+  const exceptions: TokenException[] = [];
+  for (const range of comments) {
     const comment = text.slice(range.pos, range.end);
     if (!comment.includes(DIRECTIVE)) continue;
     const body = comment.replace(/^\/\/|^\/\*|\*\/$/g, '').trim();
@@ -88,6 +101,15 @@ export function checkSource(file: string, text: string): string[] {
       );
     } else exceptions.push({ line, utility: match[1], used: false });
   }
+  return { exceptions, failures };
+}
+
+export function checkSource(file: string, text: string): string[] {
+  const source = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true);
+  const lineAt = (position: number): number =>
+    source.getLineAndCharacterOfPosition(position).line + 1;
+  const { segments, comments } = sourceParts(source);
+  const { exceptions, failures } = readExceptions(file, text, comments, lineAt);
   for (const segment of segments) {
     for (const match of segment.text.matchAll(/\S+/g)) {
       const utility = match[0];
