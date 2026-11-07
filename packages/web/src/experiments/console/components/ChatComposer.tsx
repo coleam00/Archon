@@ -1,5 +1,5 @@
 import { Paperclip } from 'lucide-react';
-import { useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
+import { useLayoutEffect, useRef, useState, type KeyboardEvent, type ReactElement } from 'react';
 import {
   ACCEPTED_EXTENSIONS,
   MAX_FILES,
@@ -39,12 +39,22 @@ export function ChatComposer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const idRef = useRef(0);
 
-  const grow = (el: HTMLTextAreaElement): void => {
-    el.style.height = 'auto';
-    const next = Math.min(el.scrollHeight, MAX_HEIGHT);
-    el.style.height = `${next.toString()}px`;
-    el.style.overflowY = next >= MAX_HEIGHT ? 'auto' : 'hidden';
-  };
+  useLayoutEffect(() => {
+    const el = textareaRef.current;
+    if (el === null) return;
+    const grow = (): void => {
+      el.style.height = 'auto';
+      const next = Math.min(el.scrollHeight, MAX_HEIGHT);
+      el.style.height = `${String(next)}px`;
+      el.style.overflowY = next >= MAX_HEIGHT ? 'auto' : 'hidden';
+    };
+    grow();
+    const observer = new ResizeObserver(grow);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+    };
+  }, [value, disabled, disabledReason]);
 
   const addFiles = (incoming: File[]): void => {
     const next = [...files];
@@ -88,7 +98,6 @@ export function ChatComposer({
     setFileError(null);
     if (fileInputRef.current !== null) fileInputRef.current.value = '';
     if (textareaRef.current !== null) {
-      textareaRef.current.style.height = 'auto';
       textareaRef.current.focus();
     }
   };
@@ -109,7 +118,7 @@ export function ChatComposer({
 
   return (
     <div
-      className="shrink-0 border-t border-border bg-surface px-4 py-3.5 sm:px-7.5"
+      className="shrink-0 border-t border-border bg-surface px-7.5 py-3.5"
       title={disabledReason}
     >
       <div className="mx-auto max-w-235">
@@ -187,7 +196,6 @@ export function ChatComposer({
             value={value}
             onChange={e => {
               setValue(e.target.value);
-              grow(e.target);
             }}
             onKeyDown={onKeyDown}
             rows={1}
