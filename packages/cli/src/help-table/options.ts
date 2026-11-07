@@ -118,19 +118,22 @@ export const orderedFlags: FlagHelp[] = [
     spec: '--stubs-init <path>',
     description:
       'Write a dry-run stub scaffold and exit; omits child workflows.\n' +
-      'Child stubs must be authored unless fan-out items resolve to [].',
+      'Reached child workflows need authored stubs unless fan-out items resolve to [].',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
     spec: '--default-stubs',
     description:
       'Fill missing reached AI, bash, and script nodes with validated placeholders during --dry-run.\n' +
-      'Child stubs must be authored unless fan-out items resolve to [].',
+      'With --exec-code, unstubbed bash/script nodes execute locally instead. Explicit stubs win.\n' +
+      'Reached child workflows need authored stubs unless fan-out items resolve to [].',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
     spec: '--exec-code',
-    description: 'Execute trusted bash/script nodes during --dry-run (default: require stubs)',
+    description:
+      'Execute trusted unstubbed bash/script nodes locally during --dry-run, even with --default-stubs.\n' +
+      'Explicit stubs win; default is no code execution.',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
