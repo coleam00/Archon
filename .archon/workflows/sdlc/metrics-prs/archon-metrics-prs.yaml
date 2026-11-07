@@ -17,7 +17,8 @@ description: |
   NOT for: pull requests opened by hand. It needs a forge plugin whose pr.view
   reports pull request timestamps, and refuses without them.
 
-# It reads the state store, the forge and the build runs' artifacts, not a
+# It reads the state store and the forge (and, for rounds recorded before they
+# carried their review verdicts, the build runs' artifacts), not a
 # checkout, so it runs beside any other run on the same checkout.
 worktree:
   enabled: false

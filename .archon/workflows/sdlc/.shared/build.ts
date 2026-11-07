@@ -59,6 +59,12 @@ export const LAUNCH_STAGES = [
   'continue',
 ] as const satisfies readonly Stage[];
 
+/** One review verdict a round's delivery published, at the time the engine produced it. */
+export interface ReviewVerdict {
+  readonly ready: boolean;
+  readonly at: string;
+}
+
 /**
  * One build round, as its terminal report ended it. `run_id` is the build-queue run that
  * delivered it; the ship work runs inside that run through `include:`.
@@ -71,6 +77,12 @@ export interface BuildRound {
   readonly pr_url: string;
   readonly summary: string;
   readonly artifacts: string;
+  /**
+   * Every review verdict the round's delivery published, oldest first. Absent on a round
+   * recorded before rounds carried them, recorded at a release, or whose run's
+   * typed-artifact listing could not be read.
+   */
+  readonly reviews?: readonly ReviewVerdict[];
 }
 
 /**

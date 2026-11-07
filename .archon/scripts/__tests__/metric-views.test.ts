@@ -30,12 +30,14 @@ function pr(number: number, facts: Partial<PrFacts>): PrFacts {
 function emitted(): Map<string, { kind: unknown; calibrates: unknown }> {
   const prs = [pr(1, { state: 'MERGED', mergedAt: AT }), pr(2, { state: 'CLOSED', closedAt: AT })];
   const runsByUrl = new Map(prs.map(row => [row.url, [RUN]]));
+  const round = { run_id: RUN, at: AT, delivered: true, reason: 'delivered', summary: '', artifacts: '', reviews: [{ ready: true, at: AT }] };
+  const reviewed = new Map(prs.map(row => [row.url, [{ ...round, pr_url: row.url }]]));
   const verdict = { file: 'a.test.ts', name: 'logs the probe', protects: false, reason: 'why' };
   const judged = judgeSlots([{ url: PR, merged_at: AT, runs: [RUN] }], [{ tests: [verdict] }]);
   const labeled = { pr: PR, tests: [{ file: 'a.test.ts', name: 'logs the probe', protects: false }] };
   const records: { name?: unknown; kind?: unknown; calibrates?: unknown }[] = [
     ...prMetricRecords(prs, runsByUrl),
-    ...reviewRoundRecords(prs, runsByUrl, new Set(), () => ({ ok: true, verdicts: [{ at: AT, ready: true }] })).metrics,
+    ...reviewRoundRecords(prs, runsByUrl, reviewed, new Set(), () => ({ ok: false, problem: 'unused' })).metrics,
     ...testValueRecords(judged, 'judge:abc').metrics,
     ...scoreCalibration(judgeSlots([labeled], [{ tests: [verdict] }]), 'judge:abc').metrics,
   ];

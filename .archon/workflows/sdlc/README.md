@@ -1006,20 +1006,28 @@ that built it:
 
 A review round is one verdict a delivery round's review published on the pull request:
 the `review-report` output of the deliver loop's `review` node, or of its `rereview`
-node, which reviews what simplify's reshape changed. Every build run that carried the
-pull request counts, oldest verdict first; the engine keeps each verdict in that run's
-artifacts, which its build round on the work item names. Rounds to Ready counts up to the
+node, which reviews what simplify's reshape changed. The build queue records each run's
+verdicts on its build round (`reviews` on the work item) when it records the round, from
+the run's typed-artifact listing, and the metric reads only the work item. Every build
+round that carried the pull request counts, oldest verdict first. Rounds to Ready counts up to the
 verdict from which every later verdict is ready, so a Ready review that a later review
 overturned does not end the count. A pull request Ready on its first review and on every
 review after it, such as the light review after a CI fix, took one round.
 
 Only merged pull requests are measured: an open one can take another round, and a record
 cannot be withdrawn. The node's `review_rounds_distribution` output gives the number of
-pull requests per round count. A merged pull request is listed in
-`review_rounds_skipped`, with the reason, and counts in none of these when a build run's
-artifacts are gone (`archon workflow cleanup` removes them), when its work item dropped
-the build rounds that may have carried it, or when it merged without a Ready review on
-record.
+pull requests per round count.
+
+A round recorded before rounds carried their verdicts, or recorded when its run was
+released before it decided, has no `reviews`. For those rounds only, the metric backfills
+the verdicts from the run's typed-output sidecars (`nodes/<id>.meta.json` in its
+artifacts). Run artifacts do not last: `archon workflow cleanup` and disk cleanup remove
+them, and the backfill cannot read a removed run.
+
+A merged pull request is listed in `review_rounds_skipped`, with the reason, and counts
+in none of these when a round without `reviews` has lost its run's artifacts, when its
+work item dropped the build rounds that may have carried it, or when it merged without a
+Ready review on record.
 
 Two metrics of the review set are reported in the node's `not_available` output instead
 of recorded, because no record carries them yet: the share of merged pull requests later
