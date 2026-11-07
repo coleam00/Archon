@@ -14,15 +14,12 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
-import { workflowRepo } from '../../.shared/remote.ts';
 import { filedIssues, SPLIT_PICKUP } from '../../.shared/split.ts';
 import { claimNamed, claimNext } from '../../.shared/workitem.ts';
 
 function main(): void {
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-  // Refuses a run outside the queue's repository before it claims anything.
-  workflowRepo();
   const at = new Date().toISOString();
   const named = trimmed(process.env.INPUTS_NUMBER);
   const number = Number(named);

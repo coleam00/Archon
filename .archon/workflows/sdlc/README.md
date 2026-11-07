@@ -125,7 +125,7 @@ The metrics workflows read each pull request through `pr.view` and need the
 plugin that omits the timestamps or lacks those operations makes them refuse, naming
 what is missing.
 
-A queue, intake and discoveries take the repository from their `repo_host` and
+The build and merge queues, intake and discoveries take the repository from their `repo_host` and
 `repo_path` inputs, which a binding passes. Left empty, as in a run started by hand
 from a checkout, the repository is the one the forge's `resolve` operation finds for
 the checkout's remote: its only remote, or `origin` among several. A checkout whose

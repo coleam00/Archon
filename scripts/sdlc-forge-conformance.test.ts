@@ -169,11 +169,14 @@ test('preflight capabilities cover the forge operations the pack calls', () => {
   expect(used).toContain('checks.state');
   // Typed as operation names, so a capability token such as `pr.view:any-state` cannot
   // enter a preflight list. The build queue's any-state lookup runs no preflight: the
-  // host refuses it on a plugin without the capability, naming it.
+  // host refuses it on a plugin without the capability, naming it. Neither does
+  // `resolve`: a workflow calls it first, only when its repo inputs are empty, so the
+  // host's refusal already comes before any spend.
   const preflighted = new Set<ForgeRequest['op']>([
     ...REQUIRED_FORGE_OPERATIONS,
     ...MERGE_QUEUE_FORGE_OPERATIONS,
     ...TEST_VALUE_FORGE_OPERATIONS,
+    'resolve',
   ]);
   expect(used.sort()).toEqual([...preflighted].sort());
 });
