@@ -241,7 +241,7 @@ archon metrics sdlc.tests_unprotective
 archon workflow run archon-deliver --adopt <run-id> "the flaky test is out of scope; skip it"
 ```
 
-[`--adopt`](/reference/cli/#continuing-an-existing-estate) starts the new run in the prior run's worktree and branch, so a delivery continues its pull request. The prior run's artifacts are readable at `$ADOPTED_RUN_DIR`: name the report to build on in your note, or pass it as an input, such as `--input prior_report=<path>` for `archon-review`. Repeat any `--input` the first run had. The queues compose these same workflows and raise their own attention items when they need you.
+[`--adopt`](/reference/cli/#continuing-an-existing-estate) starts the new run in the prior run's worktree and branch, so a delivery continues its pull request. The prior run's artifacts are readable at `$ADOPTED_RUN_DIR`: name the report to build on in your note, or pass it as an input, such as `--input prior_report=<path>` for `archon-review`. Repeat any `--input` the first run had. `archon-triage` runs in the launch checkout and has no worktree to adopt, so run it again with your note instead. The queues compose these same workflows and raise their own attention items when they need you.
 
 ## Summary
 
