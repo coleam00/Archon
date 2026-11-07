@@ -66,8 +66,7 @@ export async function listedRunThroughput<
     );
     for (const id of ids) events.set(id, fetched.get(id) ?? []);
   }
-  const detailed = verbose ? await withRunDetail(host, runs, events) : runs;
-  const measured = detailed.map(run => {
+  const measured = runs.map(run => {
     try {
       return { ...run, throughput: runThroughput(run.id, events.get(run.id) ?? []) };
     } catch (error) {
@@ -77,7 +76,8 @@ export async function listedRunThroughput<
       );
     }
   });
-  return { runs: measured, throughput: throughputAcrossRuns(measured.map(run => run.throughput)) };
+  const detailed = verbose ? await withRunDetail(host, measured, events) : measured;
+  return { runs: detailed, throughput: throughputAcrossRuns(measured.map(run => run.throughput)) };
 }
 
 export function printListedRunThroughput(

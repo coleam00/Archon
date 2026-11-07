@@ -199,9 +199,13 @@ describe('workflowRunsCommand', () => {
     });
   });
 
-  it.each(['read', 'metadata'])(
-    'fails the entire throughput listing on %s failure',
-    async failure => {
+  it.each([
+    ['read', false],
+    ['metadata', false],
+    ['metadata', true],
+  ] as const)(
+    'fails the entire throughput listing on %s failure (verbose=%s)',
+    async (failure, verbose) => {
       const workflowDb = await import('@archon/core/db/workflows');
       const eventsDb = await import('@archon/core/db/workflow-events');
       (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -221,6 +225,7 @@ describe('workflowRunsCommand', () => {
           json: true,
           all: true,
           throughput: true,
+          verbose,
         })
       ).toBe(1);
       expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
