@@ -22,6 +22,10 @@ describe('console token utility boundary', () => {
     '[font:99px_Geist]',
     '[grid:99px/99px]',
     '[grid-template:99px/99px]',
+    '[grid-auto-columns:99px]',
+    '[grid-auto-rows:99px]',
+    'auto-cols-[99px]',
+    'auto-rows-[99px]',
     '[grid-gap:99px]',
     '[grid-row-gap:99px]',
     '[grid-column-gap:99px]',
@@ -67,6 +71,9 @@ describe('console token utility boundary', () => {
     'w-[70%]',
     'h-[50vh]',
     'grid-cols-[auto_1fr]',
+    'auto-cols-[minmax(0,1fr)]',
+    'auto-rows-[50vh]',
+    '[grid-auto-flow:row_dense]',
     'z-[1]',
     'tracking-[var(--tracking)]',
   ])('permits %s', utility => {
@@ -132,6 +139,8 @@ const coveredUtilities = [
   'end',
   'grid-cols',
   'grid-rows',
+  'auto-cols',
+  'auto-rows',
   'translate',
   'translate-x',
   'translate-y',
@@ -187,8 +196,31 @@ const coveredProperties = [
   'left',
   'grid-template-columns',
   'grid-template-rows',
+  'grid-auto-columns',
+  'grid-auto-rows',
   'translate',
 ];
+
+describe('implicit grid track utilities', () => {
+  test.each(['auto-cols', 'auto-rows'])('checks %s through source and CSS entry points', name => {
+    for (const length of ['99px', '2rem', '0.5em']) {
+      const utility = `md:${name}-[${length}]!`;
+      expect(check(`const C = '${utility}';`)).toEqual([
+        expect.stringContaining(`${utility}: use a design token`),
+      ]);
+      expect(checkSource('theme.css', `.a { @apply ${utility}; }`)).toHaveLength(1);
+      expect(
+        check(`// console-token-exception ${utility} -- Local layout.\nconst C = '${utility}';`)
+      ).toEqual([]);
+      expect(
+        checkSource(
+          'theme.css',
+          `/* console-token-exception ${utility} -- Local layout. */\n.a { @apply ${utility}; }`
+        )
+      ).toEqual([]);
+    }
+  });
+});
 
 describe('arbitrary properties', () => {
   test('handles case-insensitive CSS names and relative units', () => {
@@ -206,6 +238,12 @@ describe('arbitrary properties', () => {
     expect(checkSource('theme.css', `.a { @apply ${utility}; }`)).toHaveLength(1);
     expect(
       check(`// console-token-exception ${utility} -- Local layout.\nconst C = '${utility}';`)
+    ).toEqual([]);
+    expect(
+      checkSource(
+        'theme.css',
+        `/* console-token-exception ${utility} -- Local layout. */\n.a { @apply ${utility}; }`
+      )
     ).toEqual([]);
   });
   test.each(['color', 'background-color', 'line-height', 'box-shadow', '--custom'])(
