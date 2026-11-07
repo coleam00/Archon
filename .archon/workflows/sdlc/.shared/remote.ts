@@ -84,13 +84,16 @@ export function workflowRepo(): Repo {
   const path = trimmed(process.env.INPUTS_REPO_PATH);
   if (host !== '' && path !== '') return { host, path };
   if (host !== '' || path !== '') throw new Error('set both repo_host and repo_path, or neither');
+  // A remote with several `url` entries is listed once per URL; git fetches from the first.
   const all = remotes();
-  const remote = all.length === 1 ? all[0] : all.find(candidate => candidate.name === 'origin');
+  const names = [...new Set(all.map(candidate => candidate.name))];
+  const chosen = names.length === 1 ? names[0] : names.find(name => name === 'origin');
+  const remote = all.find(candidate => candidate.name === chosen);
   if (remote === undefined) {
     throw new Error(
       all.length === 0
         ? 'repo_host and repo_path are empty, and this checkout has no git remote'
-        : `repo_host and repo_path are empty, and this checkout has several git remotes and none is origin (${all.map(r => r.name).join(', ')}); set both inputs`
+        : `repo_host and repo_path are empty, and this checkout has several git remotes and none is origin (${names.join(', ')}); set both inputs`
     );
   }
   // The URL stays out of the message: a configured remote URL can carry a credential.

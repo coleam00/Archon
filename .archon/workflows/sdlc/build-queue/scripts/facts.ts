@@ -29,7 +29,15 @@ import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.
 import { viewIssue } from '../../.shared/issue.ts';
 import { openOrderMembers } from '../../.shared/order.ts';
 import { viewPr } from '../../.shared/pr.ts';
-import { claimNamed, claimNext, type Pickup, updateClaimed, type WorkItem, withPlainReports } from '../../.shared/workitem.ts';
+import {
+  claimNamed,
+  claimNext,
+  type Pickup,
+  readWorkItem,
+  updateClaimed,
+  type WorkItem,
+  withPlainReports,
+} from '../../.shared/workitem.ts';
 
 function positive(name: string, value: unknown): number {
   const parsed = typeof value === 'string' ? Number(value) : value;
@@ -67,6 +75,21 @@ function namedItem(): number | null | 'handoff' {
       return 'handoff';
     case 'none':
       throw new Error(`the message names nothing to build: ${interpreted.reason}`);
+  }
+}
+
+/**
+ * A named number is an issue of the run's repository, and the project's `work/<number>`
+ * can belong to another, as in a checkout whose `origin` is a fork. Refuses before the
+ * claim, so a release or claim never touches that other repository's item.
+ */
+function requireRunRepo(number: number): void {
+  const repo = nullableJson(process.env.INPUTS_REPO) as QualifiedPr['repo'];
+  const subject = readWorkItem(number)?.subject;
+  if (subject !== undefined && !sameRepo(subject.repo, repo)) {
+    throw new Error(
+      `issue ${String(number)}'s work item is ${subject.repo.host}/${subject.repo.path}'s, not ${repo.host}/${repo.path}'s`
+    );
   }
 }
 
@@ -149,6 +172,7 @@ function main(): void {
     emit({ path: 'handoff', ...NOTHING, ...NO_ITEM_PR });
     return;
   }
+  if (named !== null) requireRunRepo(named);
   const doc =
     named === null
       ? claimNext(new Date().toISOString(), runId, pickup())

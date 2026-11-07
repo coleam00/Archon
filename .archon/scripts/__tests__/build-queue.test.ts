@@ -450,6 +450,9 @@ describe('the build queue scripts', () => {
     const at = install();
     const inferred = { INPUTS_REPO_HOST: '', INPUTS_REPO_PATH: '', INPUTS_NUMBER: '', ARGUMENTS: 'build the retry fix' };
     expect(ok(run(at, 'start', inferred))).toEqual({ repo: PR.repo, message: true });
+    // A sole remote with a second URL is still one remote; git fetches from the first.
+    spawnSync('git', ['config', '--add', 'remote.upstream.url', 'https://ghe.example.com/mirror/repo.git'], { cwd: at.checkout });
+    expect(ok(run(at, 'start', inferred)).repo).toEqual(PR.repo);
     // An explicit input wins, and a run that names a number ignores its message.
     expect(ok(run(at, 'start', { INPUTS_NUMBER: '7', INPUTS_REPO_PATH: 'example/other', ARGUMENTS: 'build it' }))).toEqual({
       repo: { host: PR.repo.host, path: 'example/other' },
@@ -481,6 +484,15 @@ describe('the build queue scripts', () => {
     // A pick the person made names the item; a named issue intake never recorded is refused.
     const picked = run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('choose', null), INPUTS_PICKED: '{"number":8}' });
     expect(picked.stderr).toContain('issue 8 has no work item');
+    // The project's work/7 belonging to another repository is refused before any claim.
+    const foreign = run(at, 'facts', {
+      ...SELECTED,
+      INPUTS_REPO: JSON.stringify({ host: PR.repo.host, path: 'someone/repo' }),
+      INPUTS_INTERPRETED: interpreted('build', 7),
+      INPUTS_PICKED: 'null',
+    });
+    expect(foreign.stderr).toContain("issue 7's work item is ghe.example.com/example/repo's, not ghe.example.com/someone/repo's");
+    expect(stored(at).value?.claim).toBeNull();
     expect(ok(run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('build', 7), INPUTS_PICKED: 'null' }))).toMatchObject({ path: 'route', item: SUBJECT });
     expect(stored(at).value?.claim).toMatchObject({ run_id: 'run-1' });
   }, 60_000);
