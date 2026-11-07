@@ -649,16 +649,23 @@ Only provider-reported output tokens with a positive usable duration enter the c
 agent rows without explicit token-source provenance. Missing or invalid durations have a
 separate exclusion count; missing tokens take precedence so the counts do not overlap.
 Unavailable rates display `unavailable` (JSON `null`); provider-reported zero is `0 tok/s`.
-Historical rows that cannot be identified as agent executions are outside the sample.
-Missing provider/model binding components remain distinct `not recorded` groups. These
-rates inherit the stored counts and their limitations, including Codex's resumed-turn
+All own terminal `loop:` attempts are excluded and counted as `N loop nodes not measured`
+on run and model summaries (`loopNodesNotMeasured` in JSON). Their persisted durations can
+include approval pauses, and the records do not distinguish safe durations. This exclusion
+takes precedence over missing tokens or duration. Historical aggregate restatements do not
+count as attempts. Historical rows that cannot be identified as agent or loop executions
+are outside the sample.
+Historical rows retain their recorded provider and requested model (`model_usage.requested`,
+then `model`); resolved-only model names are not substituted. Typed execution bindings
+remain authoritative. Missing provider/model binding components remain distinct
+`not recorded` groups. These rates inherit the stored counts and their limitations, including Codex's resumed-turn
 first-snapshot accounting edge case; they do not repair old capture errors or establish
 benchmark decode performance.
 
 JSON adds a top-level `throughput` report with `nodes` and `summary`, retaining unrounded
-rates, eligible `outputTokens`/`durationMs`, `measuredExecutions`, `nodesWithoutTokenData`
-and `nodesWithoutDuration`. It combines with `--verbose` and `--events` without replacing
-the existing `nodes`, `events` or metadata usage fields. No new persistence is written.
+rates, eligible `outputTokens`/`durationMs`, `measuredExecutions`, `nodesWithoutTokenData`,
+`nodesWithoutDuration` and `loopNodesNotMeasured`. It combines with `--verbose` and
+`--events` without replacing the existing `nodes`, `events` or metadata usage fields. No new persistence is written.
 
 For a paused gate, human-readable output lists its declared decision IDs and optional
 labels, with an exact `archon workflow respond <run-id> <decision> [text]` command

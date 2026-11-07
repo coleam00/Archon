@@ -1,6 +1,6 @@
 import { readNodeRecordEvent, type NodeRecordEventEnvelope } from './node-record-reader';
 import type { NodeExecutionMetadata } from './schemas/node-execution';
-import { NODE_EXECUTION_EVENT_TYPES } from './node-record-serialization';
+import { nodeCostScope, NODE_EXECUTION_EVENT_TYPES } from './node-record-serialization';
 
 export const THROUGHPUT_EVENT_TYPES = [
   NODE_EXECUTION_EVENT_TYPES.completed,
@@ -13,12 +13,13 @@ export interface ThroughputSummary {
   measuredExecutions: number;
   nodesWithoutTokenData: number;
   nodesWithoutDuration: number;
+  loopNodesNotMeasured: number;
   effectiveTokensPerSecond: number | null;
 }
 
 type Sample =
   | { exclusion: null; outputTokens: number; durationMs: number; effectiveTokensPerSecond: number }
-  | { exclusion: 'tokens' | 'duration'; effectiveTokensPerSecond: null };
+  | { exclusion: 'tokens' | 'duration' | 'loop'; effectiveTokensPerSecond: null };
 
 export type NodeThroughput = {
   path: string;
@@ -45,13 +46,15 @@ function summarize(nodes: readonly NodeThroughput[]): ThroughputSummary {
   let measuredExecutions = 0;
   let nodesWithoutTokenData = 0;
   let nodesWithoutDuration = 0;
+  let loopNodesNotMeasured = 0;
   for (const node of nodes) {
     if (node.exclusion === null) {
       outputTokens += node.outputTokens;
       durationMs += node.durationMs;
       measuredExecutions++;
     } else if (node.exclusion === 'tokens') nodesWithoutTokenData++;
-    else nodesWithoutDuration++;
+    else if (node.exclusion === 'duration') nodesWithoutDuration++;
+    else loopNodesNotMeasured++;
   }
   return {
     outputTokens,
@@ -59,6 +62,7 @@ function summarize(nodes: readonly NodeThroughput[]): ThroughputSummary {
     measuredExecutions,
     nodesWithoutTokenData,
     nodesWithoutDuration,
+    loopNodesNotMeasured,
     effectiveTokensPerSecond: measuredExecutions === 0 ? null : (outputTokens / durationMs) * 1000,
   };
 }
@@ -89,19 +93,21 @@ function nodeThroughput(event: NodeRecordEventEnvelope): NodeThroughput | null {
   const record = readNodeRecordEvent(event);
   if (!record) return null;
   const metadata = record.metadata;
-  if (
-    metadata
-      ? metadata.node.kind !== 'agent' || metadata.accounting !== 'node'
-      : record.data.type !== 'agent'
-  )
-    return null;
+  const kind = metadata?.node.kind ?? record.data.type;
+  if ((kind !== 'agent' && kind !== 'loop') || nodeCostScope(record.data) !== 'own') return null;
   return {
     path: record.path,
     invocation: metadata?.invocation ?? null,
     attempt: metadata?.attempt ?? null,
-    provider: metadata?.binding.provider ?? null,
-    requestedModel: metadata?.binding.model?.requested ?? null,
-    ...sample(metadata),
+    provider: (metadata ? metadata.binding.provider : record.data.provider) ?? null,
+    requestedModel:
+      (metadata
+        ? metadata.binding.model?.requested
+        : (record.data.model_usage?.requested ?? record.data.model)) ?? null,
+    // Loop descriptors do not record whether their duration includes an approval pause.
+    ...(kind === 'loop'
+      ? { exclusion: 'loop' as const, effectiveTokensPerSecond: null }
+      : sample(metadata)),
   };
 }
 

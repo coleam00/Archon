@@ -17,8 +17,16 @@ export function formatThroughput(summary: ThroughputSummary): string {
     parts.push(`${summary.nodesWithoutTokenData} nodes without token data`);
   if (summary.nodesWithoutDuration)
     parts.push(`${summary.nodesWithoutDuration} nodes without usable duration`);
+  if (summary.loopNodesNotMeasured)
+    parts.push(`${summary.loopNodesNotMeasured} loop nodes not measured`);
   return parts.join('; ');
 }
+
+const exclusionReasons = {
+  tokens: 'without token data',
+  duration: 'without usable duration',
+  loop: 'loop duration may include approval pauses',
+} as const;
 
 export function printRunThroughput(report: RunThroughput | undefined): void {
   if (!report) return;
@@ -26,9 +34,8 @@ export function printRunThroughput(report: RunThroughput | undefined): void {
   console.log(`    Run: ${formatThroughput(report.summary)}`);
   console.log('    Counts refer to recorded execution attempts.');
   for (const node of report.nodes) {
-    const rate = node.effectiveTokensPerSecond;
     console.log(
-      `    ${node.path} · loop ${JSON.stringify(node.invocation?.loopPath ?? [])} · invocation ${node.invocation?.id ?? 'not recorded'} · attempt ${node.attempt?.id ?? 'not recorded'} · ${node.provider ?? 'not recorded'}/${node.requestedModel ?? 'not recorded'}: ${rate === null ? `unavailable (${node.exclusion === 'tokens' ? 'without token data' : 'without usable duration'})` : `${rate.toFixed(2)} tok/s`}`
+      `    ${node.path} · loop ${JSON.stringify(node.invocation?.loopPath ?? [])} · invocation ${node.invocation?.id ?? 'not recorded'} · attempt ${node.attempt?.id ?? 'not recorded'} · ${node.provider ?? 'not recorded'}/${node.requestedModel ?? 'not recorded'}: ${node.exclusion !== null ? `unavailable (${exclusionReasons[node.exclusion]})` : `${node.effectiveTokensPerSecond.toFixed(2)} tok/s`}`
     );
   }
 }

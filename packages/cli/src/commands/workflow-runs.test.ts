@@ -1,3 +1,10 @@
+import { runThroughput, throughputAcrossRuns } from '@archon/workflows/throughput';
+import {
+  printListedRunThroughput,
+  printModelThroughput,
+  printRunThroughput,
+} from './workflow-throughput';
+
 import { throughputEvents } from '../test-support/throughput-fixtures';
 import {
   spyOnJsonStdout,
@@ -100,6 +107,7 @@ describe('workflowRunsCommand', () => {
             measuredExecutions: 2,
             nodesWithoutTokenData: 2,
             nodesWithoutDuration: 0,
+            loopNodesNotMeasured: 0,
             effectiveTokensPerSecond: 250,
           },
           {
@@ -110,6 +118,7 @@ describe('workflowRunsCommand', () => {
             measuredExecutions: 2,
             nodesWithoutTokenData: 0,
             nodesWithoutDuration: 0,
+            loopNodesNotMeasured: 0,
             effectiveTokensPerSecond: 100,
           },
         ]);
@@ -721,4 +730,36 @@ describe('workflowRunsCommand', () => {
     expect(parsed.ok).toBe(false);
     expect(parsed.error).toContain("Invalid --status 'bogus'");
   });
+});
+
+it('shows loop exclusions on attempts, runs and model summaries without inventing a rate', () => {
+  const report = runThroughput('one', [
+    {
+      workflow_run_id: 'one',
+      step_name: 'implement',
+      event_type: 'node_completed',
+      data: {
+        type: 'loop',
+        provider: 'codex',
+        model: 'large',
+        duration_ms: 300000,
+        tokens: { input: 1, output: 10000 },
+      },
+    },
+  ]);
+  const output = spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    printRunThroughput(report);
+    printListedRunThroughput('one', [{ id: 'one', throughput: report }]);
+    printModelThroughput(throughputAcrossRuns([report]));
+    const text = output.mock.calls.map(call => String(call[0])).join('\n');
+    expect(text).toContain('Run: unavailable; 1 loop nodes not measured');
+    expect(text).toContain('one effective throughput: unavailable; 1 loop nodes not measured');
+    expect(text).toContain('codex/large: unavailable; 1 loop nodes not measured');
+    expect(text).toContain('unavailable (loop duration may include approval pauses)');
+    expect(text).not.toContain('0.00 tok/s');
+    expect(text).not.toContain('without token data');
+  } finally {
+    output.mockRestore();
+  }
 });

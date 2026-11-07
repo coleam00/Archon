@@ -58,6 +58,7 @@ it('pairs output with attempt duration, excludes waits and restated spend, and w
     measuredExecutions: 2,
     nodesWithoutTokenData: 1,
     nodesWithoutDuration: 0,
+    loopNodesNotMeasured: 0,
     effectiveTokensPerSecond: 100,
   });
   expect(one.nodes.map(node => node.effectiveTokensPerSecond)).toEqual([100, 100, null]);
@@ -147,6 +148,7 @@ it('distinguishes provider zero, absent tokens, unusable duration and unsourced 
     measuredExecutions: 0,
     nodesWithoutTokenData: 4,
     nodesWithoutDuration: 3,
+    loopNodesNotMeasured: 0,
     effectiveTokensPerSecond: null,
   });
   expect(throughputAcrossRuns([report]).models[0]?.effectiveTokensPerSecond).toBeNull();
@@ -170,4 +172,99 @@ it('rejects invalid typed metadata instead of reinterpreting it as unsourced his
       runThroughput('one', [{ ...event, data: { ...event.data, ...change } }])
     ).toThrow();
   }
+});
+
+it('counts own loop attempts as unmeasured without including possible approval pauses', () => {
+  const loop = execution(50000, 300000);
+  loop.node = { id: 'work', kind: 'loop' };
+  const failed = {
+    ...loop,
+    attempt: execution().attempt,
+    lifecycle: { status: 'failed', error: 'failed' },
+  } satisfies NodeExecutionRecord;
+  const report = runThroughput('one', [
+    row(execution()),
+    row(loop),
+    row(failed),
+    row(loop),
+    ...(['aggregate', 'instance', 'amendment'] as const).map(accounting =>
+      row({ ...loop, accounting })
+    ),
+    {
+      workflow_run_id: 'one',
+      step_name: 'old-loop',
+      event_type: 'node_completed',
+      data: { type: 'loop', provider: 'claude', model: 'large' },
+    },
+  ]);
+  expect(report.summary).toMatchObject({
+    outputTokens: 100,
+    durationMs: 1000,
+    measuredExecutions: 1,
+    loopNodesNotMeasured: 3,
+    nodesWithoutTokenData: 0,
+    nodesWithoutDuration: 0,
+    effectiveTokensPerSecond: 100,
+  });
+  expect(report.nodes.slice(1).map(node => node.exclusion)).toEqual(['loop', 'loop', 'loop']);
+  expect(throughputAcrossRuns([report]).models[0]).toMatchObject({
+    loopNodesNotMeasured: 3,
+    effectiveTokensPerSecond: 100,
+  });
+});
+
+it('excludes legacy restatements and groups historical missing data by recorded bindings', () => {
+  const legacy = (data: Record<string, unknown>) => ({
+    workflow_run_id: 'one',
+    step_name: 'old',
+    event_type: 'node_completed',
+    data: { type: 'agent', ...data },
+  });
+  const report = runThroughput('one', [
+    legacy({ aggregate: true, provider: 'ignored', model: 'ignored' }),
+    legacy({ type: 'loop', aggregate: true }),
+    legacy({
+      provider: 'pi',
+      model: 'alias',
+      model_usage: { requested: 'requested', resolved: 'resolved' },
+    }),
+    legacy({ provider: 'claude', model: 'alias' }),
+    legacy({ provider: 'codex', model_usage: { resolved: 'resolved-only' } }),
+    legacy({ model: 'model-only' }),
+    legacy({}),
+  ]);
+  expect(report.summary.nodesWithoutTokenData).toBe(5);
+  expect(report.nodes.map(({ provider, requestedModel }) => [provider, requestedModel])).toEqual([
+    ['pi', 'requested'],
+    ['claude', 'alias'],
+    ['codex', null],
+    [null, 'model-only'],
+    [null, null],
+  ]);
+  expect(throughputAcrossRuns([report]).models.map(model => model.nodesWithoutTokenData)).toEqual([
+    1, 1, 1, 1, 1,
+  ]);
+});
+
+it('keeps typed bindings authoritative over legacy mirrors, including absent components', () => {
+  const bound = row(execution());
+  const absent = execution();
+  absent.binding = {};
+  const unbound = row(absent);
+  const report = runThroughput(
+    'one',
+    [bound, unbound].map(event => ({
+      ...event,
+      data: {
+        ...event.data,
+        provider: 'stale',
+        model: 'stale',
+        model_usage: { requested: 'stale', resolved: 'stale' },
+      },
+    }))
+  );
+  expect(report.nodes.map(({ provider, requestedModel }) => [provider, requestedModel])).toEqual([
+    ['claude', 'large'],
+    [null, null],
+  ]);
 });
