@@ -19,6 +19,12 @@ const check = (text: string): string[] => checkSource('fixture.tsx', text);
 
 describe('console token utility boundary', () => {
   test.each([
+    '[font:99px_Geist]',
+    '[grid:99px/99px]',
+    '[grid-template:99px/99px]',
+    '[grid-gap:99px]',
+    '[grid-row-gap:99px]',
+    '[grid-column-gap:99px]',
     'text-[12px]',
     'text-[length:0.8rem]',
     'rounded-tl-[3px]',
@@ -132,6 +138,12 @@ const coveredUtilities = [
   'translate-z',
 ];
 const coveredProperties = [
+  'font',
+  'grid',
+  'grid-template',
+  'grid-gap',
+  'grid-row-gap',
+  'grid-column-gap',
   'font-size',
   'letter-spacing',
   'border-radius',

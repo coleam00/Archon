@@ -30,7 +30,7 @@ export function needsToken(candidate: string): boolean {
   const property = /^\[([a-z-]+):(.*)\]$/i.exec(base);
   if (property) {
     return (
-      /^(font-size|letter-spacing|border(?:-(?:top-left|top-right|bottom-left|bottom-right|start-start|start-end|end-start|end-end))?-radius|(?:padding|margin)(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?|(?:row-|column-)?gap|(?:(?:min|max)-)?(?:width|height|inline-size|block-size)|inset(?:-(?:block|inline)(?:-(?:start|end))?)?|top|right|bottom|left|grid-template-(?:columns|rows)|translate)$/i.test(
+      /^(font(?:-size)?|letter-spacing|border(?:-(?:top-left|top-right|bottom-left|bottom-right|start-start|start-end|end-start|end-end))?-radius|(?:padding|margin)(?:-(?:top|right|bottom|left|block|inline)(?:-(?:start|end))?)?|(?:grid-)?(?:row-|column-)?gap|(?:(?:min|max)-)?(?:width|height|inline-size|block-size)|inset(?:-(?:block|inline)(?:-(?:start|end))?)?|top|right|bottom|left|grid(?:-template(?:-(?:columns|rows))?)?|translate)$/i.test(
         property[1]
       ) && hasLength(property[2])
     );
