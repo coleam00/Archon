@@ -244,7 +244,17 @@ describe('interactive loop_group gate and resume', () => {
     const runGroupAtCap = async (
       loopUserInput: string,
       feedbackGiven: boolean,
-      { iteration = 1, reply = 'Retried. <promise>APPROVED</promise>' } = {}
+      {
+        iteration = 1,
+        reply = 'Retried. <promise>APPROVED</promise>',
+        onExhausted,
+        iterationOutput,
+      }: {
+        iteration?: number;
+        reply?: string;
+        onExhausted?: 'complete';
+        iterationOutput?: string;
+      } = {}
     ) => {
       mockSendQueryDag.mockImplementation(async function* () {
         yield { type: 'agent_message_chunk', text: reply };
@@ -261,6 +271,7 @@ describe('interactive loop_group gate and resume', () => {
             fresh_context: true,
             interactive: true,
             gate_message: 'Review.',
+            ...(onExhausted ? { on_exhausted: onExhausted } : {}),
             nodes: [
               {
                 id: 'work',
@@ -280,6 +291,10 @@ describe('interactive loop_group gate and resume', () => {
           conversationId: 'conv-lg-feedback-at-cap',
           cwd: testDir,
           workflow: { name: 'lg-feedback-at-cap', nodes },
+          // The paused iteration's body output, as a resume hydrates it.
+          ...(iterationOutput !== undefined
+            ? { priorCompletedNodes: new Map([['grp.work', { output: iterationOutput }]]) }
+            : {}),
           workflowRun: makeWorkflowRun('lg-feedback-at-cap', {
             metadata: {
               approval: {
@@ -321,6 +336,23 @@ describe('interactive loop_group gate and resume', () => {
           data: expect.objectContaining({ failure_kind: 'max_iterations' }),
         })
       );
+    });
+
+    it('completes with the paused output when the final gate is approved without feedback under on_exhausted: complete', async () => {
+      const store = await runGroupAtCap('Approved', false, {
+        onExhausted: 'complete',
+        iterationOutput: 'draft 1',
+      });
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(0);
+      expect(store.persistWorkflowEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          event_type: 'node_completed',
+          step_name: 'grp',
+          data: expect.objectContaining({ node_output: 'draft 1', maxIterations: 1 }),
+        })
+      );
+      expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
     });
 
     it('runs exactly one iteration past max_iterations per feedback answer when it does not complete', async () => {

@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from 'node:async_hooks';
+import { packDirOrThrow, type PackDirScope } from './pack-dir';
 import { createLogger } from '@archon/paths';
 import {
   USER_CONTROLLED_VARIABLES,
@@ -40,6 +41,26 @@ export function currentAdoptedRunDir(): string | undefined {
   return adoptedRunDirContext.getStore();
 }
 
+/**
+ * Scope holding `$PACK_DIR`: the directory, inside the run's source roots, of the pack
+ * whose workflow file authored the executing node. Scoped like the adopted run dir, for
+ * the same reason, but entered per node at dispatch (`nodePackDir`), so an included
+ * block reads its own pack, never its includer's. `undefined` is a node outside any pack.
+ */
+const packDirContext = new AsyncLocalStorage<PackDirScope>();
+
+export function runWithPackDir<T>(scope: PackDirScope, fn: () => Promise<T>): Promise<T> {
+  return packDirContext.run(scope, fn);
+}
+
+/** The executing node's `$PACK_DIR` scope; undefined outside node dispatch. */
+export function currentPackDir(): PackDirScope | undefined {
+  return packDirContext.getStore();
+}
+
+/** Matches what the substitution below replaces as `$PACK_DIR`. */
+export const PACK_DIR_REFERENCE = /\$PACK_DIR/;
+
 const contextVariables = USER_CONTROLLED_VARIABLES.filter(group => group.kind === 'context').map(
   group => ({ ...group, pattern: `\\$(?:${group.names.join('|')})(?![A-Za-z0-9_])` })
 );
@@ -68,11 +89,15 @@ export interface TemplateReferences {
  * - $STATE_DIR - External per-PROJECT cross-run state directory (shared by every
  *   workflow in the project; pre-created by the executor). Throws if referenced
  *   without a resolved value.
+ * - $PACK_DIR - The directory of the pack that authored the node, in the run's source
+ *   roots (see {@link runWithPackDir}). Throws when that workflow is not in a pack.
  * - $ADOPTED_RUN_DIR (#2747) - The adopted run's artifact directory, resolved
  *   through its persisted `output_root`. Read-only by contract; throws if
  *   referenced without an adoption active.
  * - $TYPED_ARTIFACTS_FILE - The consumer's typed-artifact observation (JSON). Throws
  *   if referenced by a context that never materialized one (see below).
+ * - $NODE_OUTCOMES_FILE - The consumer's node-outcome observation (JSON), delivered with
+ *   the typed-artifact listing and throwing under the same rule.
  * - $BASE_BRANCH - The base branch (from config or auto-detected)
  * - $CONTEXT, $EXTERNAL_CONTEXT, $ISSUE_CONTEXT - GitHub issue/PR context (if available)
  * - $DOCS_DIR - Documentation directory path (configured or default 'docs/')
@@ -116,6 +141,8 @@ export function substituteWorkflowVariables(
      * listing — the dry-run preview — and substitutes empty without throwing.
      */
     typedArtifactsFile?: string;
+    /** The consumer's node-outcome observation path, under the same rule as `typedArtifactsFile`. */
+    nodeOutcomesFile?: string;
     references?: TemplateReferences;
   }
 ): { prompt: string; contextSubstituted: boolean } {
@@ -154,6 +181,9 @@ export function substituteWorkflowVariables(
       }
       return options?.adoptedRunDir ?? currentAdoptedRunDir() ?? '';
     }),
+    // Engine-controlled like $ARTIFACTS_DIR, so substituted under shellSafe too. A node
+    // with no pack directory fails: an empty path would point a read at the checkout.
+    variable('PACK_DIR', () => packDirOrThrow(currentPackDir())),
     // $TYPED_ARTIFACTS_FILE is delivered by every executable invocation context (bash,
     // script, agent prompt, loop attempt), and to exec subprocesses as TYPED_ARTIFACTS_FILE.
     // A context that never supplied one must fail loudly: substituting '' would read as
@@ -169,6 +199,18 @@ export function substituteWorkflowVariables(
         );
       }
       return options.typedArtifactsFile;
+    }),
+    // Delivered beside $TYPED_ARTIFACTS_FILE by the same invocation contexts, and absent
+    // from the same ones, so it fails loudly for the same reason.
+    variable('NODE_OUTCOMES_FILE', () => {
+      if (options?.nodeOutcomesFile === undefined) {
+        throw new Error(
+          '$NODE_OUTCOMES_FILE is referenced but this invocation has no node-outcome listing. ' +
+            'It is available inside bash, script, agent, loop, and approval-rework nodes; ' +
+            'if you are seeing this from one of those, please report it as a bug.'
+        );
+      }
+      return options.nodeOutcomesFile;
     }),
     variable('BASE_BRANCH', () => {
       if (!baseBranch) {
@@ -249,7 +291,8 @@ export function substituteWorkflowVariables(
  * @param issueContext - Optional GitHub issue/PR context to substitute or append
  * @param logLabel - Human-readable label for logging (e.g., 'workflow step prompt')
  * @param options - Forwarded to {@link substituteWorkflowVariables}; carries `stateDir`
- *   for `$STATE_DIR` and `typedArtifactsFile` for `$TYPED_ARTIFACTS_FILE`, each of
+ *   for `$STATE_DIR`, `typedArtifactsFile` for `$TYPED_ARTIFACTS_FILE` and
+ *   `nodeOutcomesFile` for `$NODE_OUTCOMES_FILE`, each of
  *   which throws when referenced without one, `rejectionReason` for
  *   `$REJECTION_REASON`, and the `references` resolved in the same pass.
  * @returns The final prompt with variables substituted and context optionally appended
@@ -268,6 +311,7 @@ export function buildPromptWithContext(
     stateDir?: string;
     inputs?: Record<string, JsonValue>;
     typedArtifactsFile?: string;
+    nodeOutcomesFile?: string;
     rejectionReason?: string;
     references?: TemplateReferences;
   }

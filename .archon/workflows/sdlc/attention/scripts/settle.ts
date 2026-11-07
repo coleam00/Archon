@@ -15,7 +15,7 @@ function main(): void {
   const answered = JSON.parse(text(process.env.INPUTS_ANSWERED)) as Answered;
   const decision = nullableJson(process.env.INPUTS_DECISION) as StageDecision | null;
   if (!answered.judge) {
-    return emit({ done: true, outcome: answered.outcome, message: '', options: [], asked: null, brief: '' });
+    return emit({ done: true, outcome: answered.outcome, message: '', options: [], recommendation: null, asked: null, brief: '' });
   }
   if (decision === null) throw new Error('the stage ran but no decision was made on its ending');
   emit(settle(text(process.env.INPUTS_STAGE), answered.outcome, decision));

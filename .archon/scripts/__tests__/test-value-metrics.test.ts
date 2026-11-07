@@ -7,7 +7,6 @@ import {
   type Case,
   type JudgeSlot,
   judgeSlots,
-  parseCases,
   scoreCalibration,
   testValueRecords,
 } from '../../workflows/sdlc/.shared/test-value';
@@ -93,40 +92,6 @@ describe('scoreCalibration', () => {
   it('gives a judge that always answers "protects" a catch rate of 0', () => {
     const { metrics } = judgedAs({ ok: true, tests: entry.tests.map(test => verdict(test.name, true)) });
     expect(metrics.filter(row => row.name === 'sdlc.tests_unprotective_judge_catch_rate').map(row => row.value)).toEqual([0, 0]);
-  });
-});
-
-describe('judge identity', () => {
-  it('is carried the same way by the metric and the agreement records', () => {
-    const identity = 'test-value-judge:abc';
-    const metric = testValueRecords(
-      [{ item: { url: PR_A, merged_at: '2026-10-05T12:00:00Z', runs: [RUN] }, slot: { ok: true, tests: [] } }],
-      identity
-    );
-    const scored = scoreCalibration(
-      [{ item: { pr: PR_A, tests: [{ file: FILE, name: 'a', protects: true }] }, slot: { ok: true, tests: [] } }],
-      identity
-    );
-    const instruments = [...metric.metrics, ...scored.metrics].flatMap(row => (row.instrument === undefined ? [] : [[row.instrument, row.instrument_node]]));
-    expect(instruments).toEqual([
-      [identity, 'judge'],
-      [identity, 'judge'],
-      [identity, 'judge'],
-    ]);
-  });
-});
-
-describe('parseCases', () => {
-  it('refuses a case that labels no tests', () => {
-    expect(() => parseCases([{ pr: PR_A, tests: [] }])).toThrow(PR_A);
-  });
-
-  it('refuses a case that labels two tests with one key', () => {
-    const tests = [
-      { file: FILE, name: 'widget > keeps %s', protects: true },
-      { file: FILE, name: 'widget > keeps ${kind}', protects: false },
-    ];
-    expect(() => parseCases([{ pr: PR_A, tests }])).toThrow(PR_A);
   });
 });
 

@@ -4,13 +4,14 @@
  */
 import { isAbsolute } from 'path';
 import { z } from 'zod';
+// A value import with no runtime cycle: output-ref imports from schemas only as types.
 import {
+  canonicalValueText,
   declaredOutputPathsSchema,
   outputPathsFromRootFields,
   type DeclaredOutputPaths,
+  type JsonValue,
 } from '../output-ref';
-// Type-only, so the output-ref ↔ schemas edge stays erased (no runtime cycle).
-import type { JsonValue } from '../output-ref';
 import { runStopReasonSchema, type RunStopReason } from './run-terminal-reason';
 import { workflowSourceSchema } from './workflow';
 
@@ -61,6 +62,26 @@ export const SUBRUN_METADATA_KEYS = {
   summaryDeclaredFields: 'summary_declared_fields',
   summaryDeclaredOutputPaths: 'summary_declared_output_paths',
 } as const;
+
+/**
+ * A run's resolved `$INPUTS` as the two keys a row stores them under: `inputs` as canonical
+ * text, kept string-valued for older binaries, and the logical map in `inputs_values` when
+ * any value is not a string (or when `keepValues` says the row already carries one, which
+ * a text-only write would leave stale, since readers prefer it).
+ */
+export function runInputsMetadata(
+  inputs: Record<string, JsonValue>,
+  keepValues = false
+): Record<string, unknown> {
+  return {
+    [SUBRUN_METADATA_KEYS.inputs]: Object.fromEntries(
+      Object.entries(inputs).map(([k, v]) => [k, canonicalValueText(v)])
+    ),
+    ...(keepValues || Object.values(inputs).some(v => typeof v !== 'string')
+      ? { [SUBRUN_METADATA_KEYS.inputsValues]: inputs }
+      : {}),
+  };
+}
 
 /** Parent deletion clears the foreign key; this creation-only key preserves child provenance. */
 export function initialRunMetadata(
@@ -327,6 +348,18 @@ export const runDispatchMetadataSchema = z.object({
   base_branch: z.string(),
   /** Discovery source, for run attribution and telemetry categorization. */
   source: workflowSourceSchema.optional(),
+  /**
+   * Key of the pack the run's workflow was loaded from; absent for a flat workflow. How a
+   * run knows its pack: a continuation carries it forward, and reporting where each of a
+   * run's settings came from reads it.
+   */
+  pack: z.string().min(1).optional(),
+  /**
+   * Written by every fresh run: the row's `inputs` are the run's complete, fixed `$INPUTS`
+   * (pack settings, declared defaults, supplied values), so a resume layers no declared
+   * defaults over them. Absent on rows from older builds.
+   */
+  inputs_resolved: z.literal(true).optional(),
 });
 
 export type RunDispatchMetadata = z.infer<typeof runDispatchMetadataSchema>;

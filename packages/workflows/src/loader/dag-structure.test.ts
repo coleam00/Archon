@@ -619,8 +619,80 @@ nodes:
     const result = parseWithOptionsItems(items);
     expect(result.error?.error).toContain("Node 'ask' field 'wait.options'");
     expect(result.error?.error).toContain(
-      "must be an array of objects declaring only { id: string; label?: string } in 'plan's output_format"
+      "must be an array of objects declaring only { id: string; label?: string; does?: string; value?: any } in 'plan's output_format"
     );
+  });
+
+  it('loads a producer whose items declare what each option does and a value of any type', () => {
+    const result = parseWithOptionsItems({
+      type: 'object',
+      properties: {
+        id: { type: 'string' },
+        does: { type: 'string' },
+        value: { type: 'object', properties: { effect: { type: 'string' } } },
+      },
+      required: ['id'],
+    });
+    expect(result.error).toBeNull();
+  });
+});
+
+describe('attention wait recommendation and option values', () => {
+  function parseWait(wait: string): ParseResult {
+    return parseWorkflow(
+      `name: recommended
+description: A wait that recommends an option
+nodes:
+  - id: ask
+    wait:
+${wait}
+`,
+      'recommended.yaml'
+    );
+  }
+
+  it('loads a select wait whose recommendation names an offered option', () => {
+    const result = parseWait(`      attention: Merge it?
+      form: select
+      options:
+        - { id: merge, does: Squash-merges the pull request., value: { effect: merge } }
+        - { id: hold }
+      recommendation: { option: merge, why: Review is ready., confidence: high }`);
+    expect(result.error).toBeNull();
+  });
+
+  it.each([
+    [
+      'a recommendation of an option the wait does not offer',
+      `      attention: Merge it?
+      form: select
+      options: [{ id: merge }, { id: hold }]
+      recommendation: { option: ship, why: Ready. }`,
+      "'recommendation' names option 'ship', which the wait does not offer (merge, hold)",
+    ],
+    [
+      'a recommendation on a multi_select wait',
+      `      attention: Which?
+      form: multi_select
+      options: [{ id: a }, { id: b }]
+      recommendation: { option: a, why: Best. }`,
+      "'recommendation' is only valid for forms 'select' and 'approval', not 'multi_select'",
+    ],
+    [
+      'a referenced recommendation on a message wait',
+      `      attention: Anything?
+      recommendation: "$plan.output.recommendation"`,
+      "'recommendation' is only valid for forms 'select' and 'approval', not 'message'",
+    ],
+    [
+      'a value on a multi_select option',
+      `      attention: Which?
+      form: multi_select
+      options: [{ id: a, value: 1 }, { id: b }]`,
+      "'value' is only valid on options of form 'select', not 'multi_select'",
+    ],
+  ])('rejects %s at load', (_case, wait, message) => {
+    expect(parseWait(wait).error?.error).toContain(message);
   });
 });
 

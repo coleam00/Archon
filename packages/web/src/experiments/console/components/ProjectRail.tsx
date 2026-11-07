@@ -1,6 +1,6 @@
 import { useCallback, useMemo, useRef, useState, type ReactElement } from 'react';
-import { Link, useNavigate, useLocation } from 'react-router';
-import { Settings, PenTool, type LucideIcon } from 'lucide-react';
+import { NavLink, useNavigate, useLocation } from 'react-router';
+import { ChartLine, Settings, PenTool, type LucideIcon } from 'lucide-react';
 import { SessionMenu } from '@/components/auth/SessionMenu';
 import { ProjectRow } from './ProjectRow';
 import { EnvVarsDialog } from './EnvVarsDialog';
@@ -78,7 +78,7 @@ function writeRailWidth(w: number): void {
 }
 
 const RAIL_NAV_LINK_CLASS =
-  'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary';
+  'flex w-full items-center gap-2.5 rounded-[10px] px-2.5 py-1.5 text-left text-[13px] font-medium transition-colors hover:bg-surface-hover hover:text-text-primary';
 
 /** A destination in the console navigation. */
 function RailNavLink({
@@ -96,7 +96,13 @@ function RailNavLink({
   badge?: string;
 }): ReactElement {
   return (
-    <Link to={to} title={title} className={RAIL_NAV_LINK_CLASS}>
+    <NavLink
+      to={to}
+      title={title}
+      className={({ isActive }) =>
+        `${RAIL_NAV_LINK_CLASS} ${isActive ? 'bg-surface-elevated text-text-primary' : 'text-text-secondary'}`
+      }
+    >
       <Icon aria-hidden className="h-3.5 w-3.5 shrink-0" />
       <span className="truncate">{label}</span>
       {badge !== undefined ? (
@@ -104,7 +110,7 @@ function RailNavLink({
           {badge}
         </span>
       ) : null}
-    </Link>
+    </NavLink>
   );
 }
 
@@ -356,6 +362,7 @@ export function ProjectRail({ onAddProject }: ProjectRailProps): ReactElement {
 
       {/* Console navigation */}
       <div className="flex flex-col gap-0.5 border-t border-border px-2.5 py-2">
+        <RailNavLink to="/console/metrics" icon={ChartLine} label="Metrics" />
         <RailNavLink
           to="/console/builder"
           icon={PenTool}

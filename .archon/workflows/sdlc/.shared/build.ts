@@ -7,21 +7,19 @@
  * know whether the item waits for it.
  */
 
-import { forgeSource, type QualifiedPr, sameRepo } from './forge.ts';
-import { note } from './io.ts';
+import { type QualifiedPr, sameRepo } from './forge.ts';
+import { followUp } from './follow-up.ts';
+import { note, text } from './io.ts';
 import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
   type Claim,
-  claimable,
-  claimItem,
   type HistoryEntry,
   newest,
   type Pickup,
   parseWorkItem,
   read,
-  releaseIfTerminal,
   type Stage,
   type TriageFacts,
   type WorkItem,
@@ -110,25 +108,6 @@ export function buildWaits(doc: WorkItem): boolean {
 }
 
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
-
-/**
- * Claim the named item for the build queue, releasing a terminal claim on it first as
- * `claimNext` does. Refuses with the facts an operator acts on when it cannot.
- */
-export function claimNamed(number: number, at: string, runId: string): WorkItem {
-  const issue = `issue ${String(number)}`;
-  const found = read(workItemName(number));
-  if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
-  const item = releaseIfTerminal(found, at, runId, BUILD_PICKUP);
-  const won = claimable(item, BUILD_PICKUP) ? claimItem(item, at, runId, BUILD_PICKUP) : null;
-  if (won !== null) return won;
-  const now = read(item.name) ?? item;
-  if (now.doc.claim !== null) throw new Error(`${issue} is claimed by run ${now.doc.claim.run_id}`);
-  // Both conditional writes can lose to concurrent writes that leave the item waiting.
-  if (buildWaits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
-  const status = now.doc.facts.build?.status ?? 'none';
-  throw new Error(`${issue} does not wait for the build queue: stage ${now.doc.stage}, build status ${status}`);
-}
 
 /** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
 export interface BlockedItem {
@@ -275,14 +254,28 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
 export const ENDED_UNDECIDED = 'ended_undecided';
 
 /**
+ * Start the item's next build-queue round now, through the operator's build-queue
+ * binding (`build_queue_binding`). One run starts at most one next round per item.
+ */
+export function nextRound(item: QualifiedPr, runId: string): string {
+  const { host, path } = item.repo;
+  return followUp(
+    text(process.env.INPUTS_BUILD_QUEUE_BINDING),
+    `build-round:${host}/${path}#${String(item.number)}:${runId}`,
+    { repo_host: host, repo_path: path, number: String(item.number) },
+    'its next round'
+  );
+}
+
+/**
  * The work item with the round a released build claim's run left: the pull request
  * whose head is the branch the claim recorded. A run that opened none, and a run that
  * recorded its round before it stopped, such as one that asked, add nothing.
  */
-export function withReleasedRound(doc: WorkItem, claim: Claim, status: string, at: string): WorkItem {
+export function withReleasedRound(doc: WorkItem, claim: Claim, at: string): WorkItem {
   const prior = doc.facts.build;
   if (claim.branch === undefined || prior?.rounds.some(round => round.run_id === claim.run_id)) return doc;
-  const pr = findPrByHead(doc.subject.repo, claim.branch, forgeSource());
+  const pr = findPrByHead(doc.subject.repo, claim.branch);
   if (pr === undefined) return doc;
   const round: BuildRound = {
     run_id: claim.run_id,
@@ -290,7 +283,7 @@ export function withReleasedRound(doc: WorkItem, claim: Claim, status: string, a
     delivered: false,
     reason: ENDED_UNDECIDED,
     pr_url: pr.url,
-    summary: `The run ended ${status} after it opened ${pr.url} and before it recorded the round.`,
+    summary: `The run ended after it opened ${pr.url} and before it recorded the round.`,
     artifacts: '',
   };
   const build: BuildRecord = prior ?? { status: 'next', brief: '', rounds: [], decisions: [], at };

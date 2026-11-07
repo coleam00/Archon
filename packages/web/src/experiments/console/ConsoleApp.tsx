@@ -8,6 +8,7 @@ import { KeymapHelp } from './components/KeymapHelp';
 import { BuilderConnected } from './builder/BuilderConnected';
 import { RunsPage } from './routes/RunsPage';
 import { RunDetailPage } from './routes/RunDetailPage';
+import { MetricsPage } from './routes/metrics/MetricsPage';
 import { ChatPage } from './routes/ChatPage';
 import { PreviewPage } from './routes/PreviewPage';
 import { SettingsPage } from './routes/SettingsPage';
@@ -106,6 +107,8 @@ export function ConsoleApp(): ReactElement {
         <main className="flex min-w-0 flex-1 flex-col">
           <Routes>
             <Route index element={<RunsPage />} />
+            <Route path="metrics" element={<MetricsPage />} />
+            <Route path="metrics/details" element={<MetricsPage view="details" />} />
             <Route path="settings" element={<SettingsPage />} />
             <Route path="builder" element={<BuilderConnected />} />
             <Route path="builder/:name" element={<BuilderConnected />} />
@@ -114,6 +117,8 @@ export function ConsoleApp(): ReactElement {
             <Route path="*" element={<Navigate to="/console" replace />} />
             <Route path="p/:projectId" element={<RunsPage />} />
             <Route path="p/:projectId/chat" element={<ChatPage />} />
+            <Route path="p/:projectId/metrics" element={<MetricsPage />} />
+            <Route path="p/:projectId/metrics/details" element={<MetricsPage view="details" />} />
             <Route path="p/:projectId/r/:runId" element={<RunDetailPage />} />
           </Routes>
         </main>

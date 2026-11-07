@@ -59,6 +59,7 @@ import { resolveWorkflow } from './graph-plan';
 import type { IncludeCommandContent } from './compiled-command';
 import { IncludeExpansionError } from './include/expansion-error';
 import { instantiateResolvedInclude, type ExpandedInclude } from './include/inline';
+import type { ExecInputSource } from './exec-input-validation';
 import {
   applyOutputRefRename,
   attachIncludeOutputAliases,
@@ -80,6 +81,7 @@ export const INCLUDE_MAX_DEPTH = 3;
 interface IncludeExpansion {
   rawByName: Map<string, WorkflowDefinition>;
   commandContents: ReadonlyMap<string, IncludeCommandContent>;
+  namedScripts: ReadonlyMap<string, ExecInputSource>;
   loadErrors: readonly WorkflowLoadError[];
   memo: Map<string, ResolvedWorkflow>;
 }
@@ -116,11 +118,15 @@ interface NodeListExpansion {
  * omits the map may still expand workflows without commands. Included command nodes fail
  * composition; included loop commands fail before a fresh AI turn but remain discoverable
  * so an already-paused loop can resume from its persisted read-once snapshot.
+ *
+ * `namedScripts` maps a named `script:` reference to the text discovery read for it, so
+ * an included block's named scripts are checked for raw reads of its pack settings.
  */
 export function expandWorkflowIncludes(
   rawByName: Map<string, WorkflowDefinition>,
   commandContents?: ReadonlyMap<string, IncludeCommandContent>,
-  loadErrors: readonly WorkflowLoadError[] = []
+  loadErrors: readonly WorkflowLoadError[] = [],
+  namedScripts: ReadonlyMap<string, ExecInputSource> = new Map()
 ): {
   workflows: Map<string, ResolvedWorkflow>;
   errors: WorkflowLoadError[];
@@ -128,6 +134,7 @@ export function expandWorkflowIncludes(
   const expansion: IncludeExpansion = {
     rawByName,
     commandContents: commandContents ?? new Map(),
+    namedScripts,
     loadErrors,
     memo: new Map(),
   };
@@ -354,7 +361,8 @@ function expandComposeFanOut(
       with: { ...(node.with ?? {}), [node.fan_out.as]: null },
     },
     child,
-    expansion.commandContents
+    expansion.commandContents,
+    expansion.namedScripts
   );
   list.includedRequirements.push(...(child.requires ?? []));
   list.expandedNodes.push(node);
@@ -369,7 +377,12 @@ function expandIncludeDirective(
   const child = expandTarget(expansion, node, stack);
   warnDroppedWorkflowLevelFields(node, child);
   list.includedRequirements.push(...(child.requires ?? []));
-  const inlined = instantiateResolvedInclude(node, child, expansion.commandContents);
+  const inlined = instantiateResolvedInclude(
+    node,
+    child,
+    expansion.commandContents,
+    expansion.namedScripts
+  );
   list.includesById.set(node.id, inlined);
   list.includeAliases.set(inlined.primarySink, node.id);
   list.expandedNodes.push(...inlined.namespaced);

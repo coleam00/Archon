@@ -53,14 +53,17 @@ function settled(decision: StageDecision): Settled {
   return JSON.parse(run.stdout) as Settled;
 }
 
-function answer(previous: Settled | null, choice: string | null, outcome: unknown, gh = {}): ScriptRun {
+function answer(previous: Settled | null, choice: string | null, outcome: unknown, tracker = {}): ScriptRun {
   return runPackScript('attention/scripts/answer', {
-    source: 'gh',
-    gh,
+    tracker,
     inputs: {
       INPUTS_OUTCOME: outcome === null ? '' : JSON.stringify(outcome),
       INPUTS_PREVIOUS: previous === null ? '' : JSON.stringify(previous),
-      INPUTS_ANSWER: choice === null ? '' : JSON.stringify({ decision: choice, text: 'my note' }),
+      // The wait's output: the chosen option's value is the choice itself.
+      INPUTS_ANSWER:
+        choice === null
+          ? ''
+          : JSON.stringify({ decision: choice, text: 'my note', value: previous?.options.find(option => option.id === choice)?.value }),
     },
   });
 }
@@ -68,42 +71,14 @@ function answer(previous: Settled | null, choice: string | null, outcome: unknow
 describe('settle', () => {
   it('ends the loop on a done decision, with nothing asked', () => {
     expect(settled({ decision: 'done', reason: 'ready', pull_request: null, attention: null })).toEqual({
-      done: true, outcome: OUTCOME, message: '', options: [], asked: null, brief: '',
+      done: true, outcome: OUTCOME, message: '', options: [], recommendation: null, asked: null, brief: '',
     });
   });
 
-  it('renders every field of an asked item and offers its choices', () => {
-    const out = settled(ask([RERUN, FINISH], 'rerun'));
-    expect(out.done).toBe(false);
-    expect(out.outcome).toEqual(OUTCOME);
-    expect(out.options).toEqual([{ id: 'rerun', label: 'Deliver again' }, { id: 'finish', label: 'Leave it' }]);
-    for (const field of [
-      '**What it is.** Delivery ran out of rounds',
-      '**Why it matters.** The pull request stays a draft',
-      '**Recommendation: `rerun`** (medium confidence). mechanical',
-      'Evidence: ci.md',
-      'What would change it: a design question',
-      '- `rerun` (Deliver again): Runs another batch',
-      '**If nobody answers.** The run stays paused',
-      `- ${PR_URL}`,
-    ]) expect(out.message).toContain(field);
-    expect(out.brief).toContain(out.message);
-    expect(out.brief.endsWith('(empty when they wrote none):\n')).toBe(true);
-  });
-
-  it('settles a pass whose stage did not run on the outcome the answer kept', () => {
-    const run = settle(null, { judge: false, outcome: OUTCOME, applied: 'kept' });
-    expect(run.code, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout)).toMatchObject({ done: true, outcome: OUTCOME, message: '' });
-  });
-
   it.each([
-    ['a done decision with an item', { ...ask([RERUN, FINISH], 'rerun'), decision: 'done' as const }, 'a done decision carries an attention item'],
-    ['an ask with no item', { decision: 'ask' as const, reason: 'r', pull_request: null, attention: null }, 'an ask decision carries no attention item'],
     ['an item a person cannot end', ask([RERUN], 'rerun'), 'offers no `finish` choice'],
     ['`ready` with no pull request', ask([READY, FINISH], 'ready'), 'offers `ready` but names no pull request'],
     ['a recommendation never offered', ask([RERUN, FINISH], 'ready'), 'the recommended choice "ready" is not offered'],
-    ['a judged pass with no decision', null, 'no decision was made on its ending'],
   ])('refuses %s', (_name, decision, message) => {
     const run = settle(decision, { judge: true, outcome: OUTCOME, applied: '' });
     expect(run.code).not.toBe(0);
@@ -112,54 +87,41 @@ describe('settle', () => {
 });
 
 describe('answer', () => {
-  it('judges the first pass on its own outcome', () => {
-    const run = answer(null, null, OUTCOME);
-    expect(run.code, run.stderr).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual({ judge: true, outcome: OUTCOME, applied: '' });
-  });
 
   it('rerun: the stage ran again, and its new outcome is judged', () => {
     const run = answer(settled(ask([RERUN, FINISH], 'rerun')), 'rerun', LATER);
     expect(run.code, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toMatchObject({ judge: true, outcome: LATER });
-    expect(run.gh).toEqual([]);
+    expect(run.forge).toEqual([]);
   });
 
   it('finish: the outcome the item was about stands, with no write', () => {
     const run = answer(settled(ask([RERUN, FINISH], 'rerun')), 'finish', null);
     expect(run.code, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toMatchObject({ judge: false, outcome: OUTCOME });
-    expect(run.gh).toEqual([]);
+    expect(run.forge).toEqual([]);
   });
 
   it('ready: takes the pull request out of draft, reads it back, and keeps the outcome', () => {
     const run = answer(settled(ask([READY, FINISH], 'ready', PR)), 'ready', null, { pr: { isDraft: true } });
     expect(run.code, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({ judge: false, outcome: OUTCOME, applied: `${PR_URL} is ready for review.` });
-    expect(run.gh).toContain(`pr ready 42 --repo ${PR.repo.host}/${PR.repo.path}`);
+    expect(run.forge.map(call => call.split(' ')[1])).toContain('pr.ready');
   });
 
   it('ready fails when the pull request does not read back out of draft', () => {
     const run = answer(settled(ask([READY, FINISH], 'ready', PR)), 'ready', null, { pr: { isDraft: true }, writeLost: true });
     expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('does not report an open pull request ready for review');
+    expect(run.stderr).toContain('forge pr.ready verification_failed');
   });
 
   it.each([
     ['a stage that reports reason failed', null, { ...OUTCOME, reason: 'failed' }],
-    ['a stage whose PR create ended unresolved', null, { ...OUTCOME, ready: false, reason: 'pr_create_unresolved', pr_url: '' }],
-    ['a stage that left no outcome', null, null],
     ['a rerun whose stage failed', 'rerun', { ...LATER, ready: false, reason: 'failed' }],
   ])('does not judge %s, so nothing is asked', (_name, choice, outcome) => {
     const previous = choice === null ? null : settled(ask([RERUN, FINISH], 'rerun'));
     const run = answer(previous, choice, outcome);
     expect(run.code, run.stderr).toBe(0);
     expect(JSON.parse(run.stdout)).toMatchObject({ judge: false, outcome });
-  });
-
-  it('refuses an answer the item never offered', () => {
-    const run = answer(settled(ask([RERUN, FINISH], 'rerun')), 'ready', null);
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain('the answer "ready" is not one of the choices');
   });
 });

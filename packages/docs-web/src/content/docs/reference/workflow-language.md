@@ -47,7 +47,7 @@ Workflows live in `.archon/workflows/` relative to the working directory:
 
 The two directories form a fixed package boundary: `.archon/workflows/<pack>/<workflow>/`. A packaged workflow contains exactly one YAML definition; bare `command:` and named `script:` references resolve only from its own `commands/` and `scripts/` directories, with no shared or cross-scope fallback. Included workflows retain their own resource folder, so two workflows may reuse names such as `review.md` without collisions.
 
-Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules and `.md` documents, not workflow definitions or `script:` targets. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
+Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, `.md` documents and the pack's `metric-views.json`, not workflow definitions or `script:` targets. A node reads a document the pack ships through [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack), for example `$PACK_DIR/.shared/policy/triage.md`. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
 
 The same tree works under `~/.archon/workflows/` for home-scoped workflows. Existing flat `.archon/workflows/foo.yaml`, one-level grouped YAML, shared `.archon/commands/`, and shared `.archon/scripts/` remain supported for compatibility.
 
@@ -92,8 +92,8 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `prompt` | string | Inline prompt string |
 | `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms; without one the node runs until it exits); `on_timeout: skip` makes a timeout skipped instead of failed |
 | `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`): inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms; without one the node runs until it exits); `on_timeout: skip` makes a timeout skipped instead of failed; optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars. See [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
-| `loop` | object | Iterative AI prompt until a declared completion condition is met. See [Loop Nodes](/guides/loop-nodes/) |
-| `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
+| `loop` | object | Iterative AI prompt until a declared completion condition is met. Reaching `max_iterations` unmet fails the node, or completes it with the last output under `on_exhausted: complete`. See [Loop Nodes](/guides/loop-nodes/) |
+| `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. Takes `on_exhausted` like `loop`. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 | `approval` | object | **Deprecated.** Use `wait: { attention: <message>, form: approval }` instead. See [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates) |
 | `wait` | object | Durably pauses the run until a time, bounded external event, or an answer to an attention wait. See [Durable waits](#durable-waits) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing. In-flight parallel nodes are stopped |
@@ -729,8 +729,15 @@ An attention wait pauses until someone answers it, in the form it declares. For 
       attention: "$plan.output.question"
       form: select                       # message (default) | approval | select | multi_select
       options:                           # select and multi_select only
-        - { id: use-main, label: "Base on main" }
+        - id: use-main
+          label: "Base on main"
+          does: "Rebases the branch onto main."   # optional; shown with the option
+          value: { base: main }                   # optional, select only; returned with the answer
         - { id: use-dev }
+      recommendation:                    # optional; select and approval only
+        option: use-main
+        why: "Main already has the fix."
+        confidence: high                 # optional: low | medium | high
       labels:                            # optional; values may use runtime references
         about: "$plan.output.topic"
 ```
@@ -739,18 +746,20 @@ An attention wait pauses until someone answers it, in the form it declares. For 
 |---|---|---|
 | `message` | free text, which may be empty | `{ text }` |
 | `approval` | `approve` or `reject`, plus optional text | `{ decision, text }` |
-| `select` | exactly one declared option id, plus optional text | `{ decision, text }` |
+| `select` | exactly one declared option id, plus optional text | `{ decision, text, value? }` |
 | `multi_select` | one or more distinct declared option ids, plus optional text | `{ decisions, text }` |
 
 - `options` is required for `select` and `multi_select` and a load error on the other forms. Option ids are unique and kebab-case; `label` is display text only.
-- `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`. It is read when the wait pauses and must pass the same rules: an array of `{ id, label? }` with unique kebab-case ids and at least one entry. If it does not, the wait node fails with an error naming the producer; it never pauses with options nobody can answer. For plain-property declarations in the producer's `output_format`, the loader also checks that the field is an array of `{ id, label? }`. When the options declaration uses `allOf`, `anyOf`, or `oneOf` along its field path, in its items, or in an item property, its declared path is checked at load and its option shape is checked at runtime. Composition in unrelated fields does not bypass the plain-property check.
+- An option may say what choosing it does in `does`, which every surface shows with the option. A `select` option may also carry `value`, any JSON value. The engine never interprets it, and no console, CLI text or chat surface renders it, but it is part of the wait: the JSON attention output (`--json`), the API and the run record return it with the options, so do not put secrets in it. When the answer chooses that option, the wait's output includes its `value` unchanged, so the next node reads what the choice means as `$ask.output.value` instead of looking the id up again. An option without `value` leaves the output as `{ decision, text }`. Read `value` whole, for example as a script binding; its fields are not declared in the wait's output contract, so `$ask.output.value.<field>` is a load error. `value` on a `multi_select` option is a load error.
+- `recommendation` names the option the workflow recommends, `why`, and optionally a `confidence` of `low`, `medium` or `high`. It is valid on `select` and `approval` waits (where it names `approve` or `reject`). A recommendation of an option the wait does not offer is a load error. The console, the CLI and the conversation's pause notice show it ahead of the choices. It is display only: the answer may choose any declared option.
+- `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`, and so may `recommendation`, `recommendation: "$plan.output.recommendation"`. A reference is read when the wait pauses and must pass the same rules as its literal form, and the resolved recommendation must name a resolved option. If it does not, the wait node fails with an error naming the producer; it never pauses with a question nobody can answer. For plain-property declarations in the producer's `output_format`, the loader also checks that an options field is an array of `{ id, label?, does?, value? }`, where `value` may have any type. When the options declaration uses `allOf`, `anyOf`, or `oneOf` along its field path, in its items, or in an item property, its declared path is checked at load and its option shape is checked at runtime. Composition in unrelated fields does not bypass the plain-property check.
 - `form` is always a literal, because it fixes the node's output contract, so a strict `$ask.output.decision` reference is checked at load time.
 - An undeclared option is refused on every surface. In the `approval` form `reject` is an answer like any other and never cancels the run; wire `cancel:` with `when: "$ask.output.decision == 'reject'"` if a rejection should end it.
 - `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/getting-started/operate/) by them.
 
 Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer that names its occurrence is refused if it targets an earlier pause of the same run. For HTTP `/approve`, `/reject` and `/respond`, include the optional `expectedGate` using the [gate identity instructions in the API reference](/reference/api/#approve--reject-a-paused-run); omitting it answers the current pause. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
 
-On the first answer, an attention wait compares its current message, form, and options with the question it paused on. If they changed, it discards the old answer and asks a fresh question. After this one re-ask, the next answer is accepted without comparing the question again, even if it changed. This bound prevents a question built from a value that changes on every resume from blocking the run forever. Loop-owned questions use the paused iteration's body outputs and saved loop reference values without repeating body work. Older loop waits without saved loop references can still resume when their question does not use those references; otherwise validation fails with a restart explanation. An older Archon binary can strip the saved references when writing the wait, so keep the newer binary for runs using this protection.
+On the first answer, an attention wait compares its current message, form, options, and recommendation with the question it paused on. If they changed, it discards the old answer and asks a fresh question. After this one re-ask, the next answer is accepted without comparing the question again, even if it changed. This bound prevents a question built from a value that changes on every resume from blocking the run forever. Loop-owned questions use the paused iteration's body outputs and saved loop reference values without repeating body work. Older loop waits without saved loop references can still resume when their question does not use those references; otherwise validation fails with a restart explanation. An older Archon binary can strip the saved references when writing the wait, so keep the newer binary for runs using this protection. An older binary also cannot read a wait whose options declare `does` or `value`: it reports the run as unreadable rather than answering it, and if it continues the run it asks the wait again, dropping an answer the newer binary recorded. Answer and continue such a wait with a binary that knows these fields.
 
 A wait paused before attention waits took answers has no pause id. It reads as a `message` wait, takes no answer, and continues with `archon workflow resume <run-id>`. A bare resume also completes any `message` wait, with empty text; the other forms refuse it until they are answered.
 
@@ -1313,6 +1322,81 @@ Properties worth knowing:
 
 Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a best-effort file sidecar that may contain the full output and is not required for ordinary bash audit retention.
 
+### Reading what other nodes did: `$NODE_OUTCOMES_FILE`
+
+A node joined past a failure with `trigger_rule: all_done` can run, but a binding to the
+failed producer fails it, and the typed-artifact listing only names nodes that completed. To
+report what happened, read the node-outcome listing instead. Every executable invocation that
+receives `$TYPED_ARTIFACTS_FILE` also receives `$NODE_OUTCOMES_FILE` (and the
+`NODE_OUTCOMES_FILE` environment variable in `bash:` and `script:` nodes), written at the
+same moment from the run's recorded node events:
+
+```json
+{
+  "run_id": "…",
+  "first_failed_node": "rounds.pr__publish",
+  "nodes": [
+    { "node_id": "plan", "state": "completed", "output": { "steps": 3 } },
+    { "node_id": "rounds", "state": "failed", "error": "…" },
+    { "node_id": "outcome", "state": "skipped", "reason": "trigger_rule",
+      "cause": { "kind": "upstream_failed", "origin": "rounds" } },
+    { "node_id": "report", "state": "running" },
+    { "node_id": "rounds.pr__publish", "state": "completed",
+      "loop_group_path": [{ "groupId": "rounds", "iteration": 1 }], "output": { "url": "https://…/pull/43" } },
+    { "node_id": "rounds.pr__publish", "state": "failed",
+      "loop_group_path": [{ "groupId": "rounds", "iteration": 2 }], "error": "…" }
+  ]
+}
+```
+
+```yaml
+  - id: report
+    script: report
+    runtime: bun
+    depends_on: [outcome]
+    trigger_rule: all_done
+```
+
+```ts
+const outcomes = JSON.parse(readFileSync(process.env.NODE_OUTCOMES_FILE!, 'utf8'));
+if (outcomes.run_id !== process.env.WORKFLOW_ID) throw new Error('listing is for another run');
+const failed = outcomes.nodes.filter(node => node.state === 'failed');
+```
+
+Properties worth knowing:
+
+- **Same per-node shape as the terminal record.** Each entry carries the fields of the
+  terminal record's `nodes` (`node_id`, `state`, `error`, `reason`, `cause`, `fan_out_outcome`),
+  so a node can say during the run what `archon workflow get` says after it. `node_id` is the
+  step path: a `loop_group` body node is `<group>.<id>`, and a node expanded from an `include:`
+  keeps its load-time `<include>__<node>` id, so the publish node of an included `pr` block
+  inside `rounds` is `rounds.pr__publish`.
+- **Joining with the typed-artifact listing.** A typed artifact names its producer by the bare
+  node id (`nodeId: "pr__publish"`) plus `loopGroupPath`; the outcome entry for the same
+  invocation is `node_id: "rounds.pr__publish"` with an equal `loop_group_path`. Match an
+  artifact to its outcome by equal loop frames and a `node_id` that ends in `.` plus the
+  artifact's `nodeId` (or equals it, for a top-level node). Comparing `nodeId` with `node_id`
+  directly finds nothing for a loop body node.
+- **One entry per invocation.** A `loop_group` body node appears once per iteration, with
+  `loop_group_path` in the same shape as a typed artifact's `loopGroupPath`. Graph nodes that
+  have recorded nothing yet are `pending`. Top-level nodes keep the run graph's order, loop
+  iterations follow in the order they first recorded a state, and a retry or resume updates an
+  entry in place.
+- **Find yourself by `node_id`, not by state.** A node's own entry shows what was recorded
+  before its listing was written. A `bash:` node records its start first, so it sees itself
+  `running`. A `script:` node and an agent attempt write the listing first, so they see
+  themselves `pending`, or the state an earlier attempt left.
+- **`first_failed_node` is the earliest failure across all invocations.** It is the step path
+  of the first failure the run recorded, even when a later iteration of the same node
+  completed. To find the failing entry, filter `nodes` by `state === "failed"`.
+- **A failed node's output is never listed.** `output` appears only on a `completed` entry
+  whose node produced structured output (`output_format`); a failed entry carries only its
+  `error`, under the same rule that fails a binding to a failed producer.
+- **Observation, not a ledger.** Like the typed-artifact listing, each file freezes what was
+  recorded when it was written. A resumed run's listing includes nodes replayed from the
+  earlier attempt as `completed`. A `loop_group` body node is never replayed: a resumed group
+  runs its body again, and each run updates the entry for its iteration.
+
 ### Retained subprocess evidence
 
 Separately from the value channel above, the engine retains **what each subprocess printed** in
@@ -1448,6 +1532,17 @@ An absent document starts as `{}`; appending to `/seen` creates the array. Inval
 or oversized values exit `4` and write nothing. Exit `5` means the CLI opened a different
 store than the run's. Exit `1` means usage or storage failure.
 The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.
+
+A run can claim a document with a lease: `put` or `patch` with `--lease` takes it in the
+same write that marks the document as claimed, and `--release-lease` gives it back in the
+write that records the outcome. Reads report the lease with `live`, so a workflow handing
+out work never reads another run's status to decide whether a claim still stands. The
+engine keeps a lease live while its run can still finish, including when the run is paused
+or failed and can resume, and ends it when the run completes, is cancelled or abandoned, or
+is deleted. A take while another run's lease is live exits `3`; taking over an ended lease is
+an ordinary conditional write. A lease does not block other writers: writes without a lease
+flag keep it. What a document means once its lease has ended stays with the workflow. See
+the [CLI reference](/reference/cli/#state) for the fields.
 
 Let the agent judge what to remember, then commit its structured output in a script node
 when the write must happen. For example, a review agent returns a completed PR identifier;
@@ -1854,12 +1949,13 @@ which surfaces can read it:
 |--------|-------------------------|-------------------------------------|--------------------------------|
 | `include:` | **Load time** (the block and command bodies are compiled into the flat DAG) | `prompt:` yes; `bash:` as a quoted `INPUTS_<UPPER_SNAKE>` reference; inline `script:` is a load error | **Yes**: resolved command bodies receive the same input binding before execution |
 | `workflow:` sub-run | **Runtime** (values become inputs on the child run) | `prompt:` yes; `bash:` and `script:` read `INPUTS_<UPPER_SNAKE>` env vars | **Yes**: command-backed prompts receive runtime substitution |
-| direct run (`--input` / console form) | **Runtime**: the same path as a sub-run; supplied values are persisted to the run's own metadata, so inputs reconstitute on a cold resume | `prompt:` yes; `bash:` and `script:` read `INPUTS_<UPPER_SNAKE>` env vars | **Yes**: command-backed prompts receive runtime substitution |
+| direct run (`--input` / console form) | **Runtime**: the same path as a sub-run; when the run starts, its complete `$INPUTS` (pack settings, declared defaults, supplied values) is written to the run's own metadata, so a cold resume reads the values the run started with | `prompt:` yes; `bash:` and `script:` read `INPUTS_<UPPER_SNAKE>` env vars | **Yes**: command-backed prompts receive runtime substitution |
 
 Both composition paths support command-backed prompts; their binding time differs. Includes
 snapshot and bind the resolved command body at load time, while sub-runs resolve inputs at
-runtime. Sub-run inputs are persisted to the child run's metadata at spawn, so `$INPUTS`
-reconstitutes on a cold resume.
+runtime. Every run, sub-run or direct, fixes its complete `$INPUTS` on its own row when it
+starts, so a cold resume reads exactly what the run started with, even if a default or a
+[pack setting](#pack-settings) was edited since.
 
 ### `$INPUTS` in `bash:`/`script:` nodes uses env vars
 
@@ -1953,7 +2049,13 @@ map goes through, so a map accepted when composing is accepted here:
 - a **required** input with no value is refused, naming it;
 - an **undeclared** key is refused, naming it and listing what the workflow does declare;
 - both refusals happen **before any worktree, clone, or AI cost**;
-- supplied values are recorded on the run, so a resume replays exactly what the run started with.
+- when the run starts, the supplied values, the declared defaults and the workflow's
+  [pack settings](#pack-settings) are recorded on the run together, so a resume replays exactly
+  what the run started with.
+
+A `--input`, or a trigger binding's input (event-mapped ones included), may also name one of
+the workflow's [pack settings](#pack-settings): it overrides the project's value for this one
+run, and is checked against the setting's type.
 
 One consequence worth knowing on **chat, the run route, and the console**: the surfaces that reuse a
 conversation. Invoking a workflow there when a resumable run of it already exists in that
@@ -1980,6 +2082,103 @@ registered project directory. Copilot/OpenCode launches are headless, use CLI id
 return a run ID for inspection without originating-chat progress or result delivery.
 Assistant prose, including slash-command examples, never launches or registers anything.
 See [Deprecated providers](/getting-started/ai-assistants/#deprecated-providers).
+
+### Pack settings
+
+A packaged workflow (`.archon/workflows/<pack>/<workflow>/<workflow>.yaml`, or an installed
+pack) can read settings its **pack** declares once, instead of each workflow declaring the
+same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
+`INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
+
+The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
+shape as a workflow's, plus a `type`:
+
+```yaml
+# .archon/workflows/review-kit/.pack/pack.yaml
+inputs:
+  forge:
+    type: enum            # string (default) | bool | enum | list
+    values: [gh, glab]    # enum only, and required for it
+    default: gh
+  strict:
+    type: bool            # the text true or false
+    default: false
+  reviewers:
+    type: list            # comma-separated text, no empty items
+    description: who to request reviews from
+```
+
+The declaration sits in a dot folder so neither workflow loader reads it as a workflow. Values
+stay text, as every `--input` is. An invalid declaration fails every workflow of the pack at
+load, naming the file and the key.
+
+A project sets the values in `.archon/packs/<pack>.yaml`, under `settings:` only:
+
+```yaml
+# .archon/packs/review-kit.yaml
+settings:
+  forge: glab
+  reviewers: ann,bo
+```
+
+`<pack>` is the pack's folder name; for an installed pack it is `<owner>.<manifest name>`
+(`acme.review-kit`), never its install path. The file is read from the run's own checkout
+(its worktree, for an isolated run) when the run starts. An isolated run sees the file only if
+it is committed or listed under
+[`worktree.copyFiles`](/reference/configuration/#worktree-file-copying-worktreecopyfiles).
+An unknown key, a value of the wrong type, or any top-level key other than `settings:` refuses
+the run at that point, before any node runs, naming the file and the key; for an isolated run
+that is after its worktree was created. A `required` setting must be set there, given a default
+by a workflow `inputs:` entry of the same name, or passed with `--input`.
+
+Pack folders of the same name in the project, home and bundled scopes share one file, and each
+reads it against its own declaration. A bundled pack declares no settings, so if a project pack
+folder takes a bundled pack's name and the file sets the project pack's settings, the bundled
+workflows of that name refuse to start ("declares no settings"); the same happens when the
+project and home declarations of one name differ. Give a pack with settings a name of its own.
+
+**Layers**, lowest first: the pack's `default:`, then the workflow's own `inputs:` default of the
+same name, then the project's `.archon/packs/<pack>.yaml`, then the run's supplied inputs
+(`--input`, a parent's `with:`). Both defaults are the pack author's; the project file is the
+project's choice, so it beats them. The run resolves them **once, when it starts**, and stores the
+result on its row; a resumed run keeps those values even if the project file changed since.
+
+- **Settings belong to a run.** A run reads its root workflow's pack; every node of the run
+  sees the same `$INPUTS`. A workflow input of the same name as a pack setting overrides the
+  pack's default, never the project file.
+  Two different names that fold to the same `INPUTS_*` key across a workflow's inputs and its
+  pack's settings are a load error.
+- **An `include:`d block takes nothing from its pack.** Its `$INPUTS.<name>` references read
+  what its includer passes through `with:`, and a reference nothing supplies fails the load. A
+  block that wants a setting gets it from its includer:
+
+  ```yaml
+  - id: review
+    include: review-block
+    with:
+      forge: $INPUTS.forge   # the including run's setting, passed in
+  ```
+
+  A raw `$INPUTS_<NAME>` env read of one of the block's pack settings is checked the same way,
+  in `bash:`, inline and named `script:`, `until_bash` and `loop_group` body nodes. The read
+  loads only when the block's input contract supplies the name (the includer's `with:`, or a
+  default the block declares under `inputs:`) or a `script:` node binds it in its own `with:`;
+  a `bash:` node has no node-local `with:`. Otherwise the load fails, naming the node and the
+  read. A block that declares `inputs:` must declare the name there too. Run directly, the same
+  workflow reads its pack settings raw.
+
+  A raw read of a name that is not one of the block's pack settings follows the block's own
+  load check: in a block that declares `inputs:`, a read of an undeclared name fails to load.
+  A read of a declared input gets the value passed through `with:` or the declared default;
+  only a read the contract leaves unsupplied, or any read in a block that declares no
+  `inputs:`, gets the including run's input of that name, if the run has one.
+- **A `workflow:` child is a run of its own**: it resolves its own pack's settings when it
+  starts, under the `with:` values its parent passes. The parent's `with:` cannot set one of the
+  child's pack settings (unless the child also declares an input of that name); the node fails,
+  naming it. Only a run's own invocation can, `--input` or a trigger binding, and its value is
+  checked against the setting's type.
+- A run refused at start by its project settings file is marked failed, including a run row
+  created in advance by a background or detached launch.
 
 ## Launching a Separate Governed Run with `workflow:`
 
@@ -2306,6 +2505,11 @@ Consequences worth planning for:
 | `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
 | `first_success` | never (load error) | Racing: **rejected**, not deferred. See below. Rejected at load rather than silently treated as another join |
 
+Failure markers have `archon_failed: true`, a string `error`, and `status: "failed" | "cancelled"`.
+Collectors check `archon_failed === true`; `error` and `status` alone may also appear in a
+successful payload. The discriminator is reserved, so child payloads must avoid it.
+Paused children stay held until they finish and do not become aggregate slots.
+
 **Every child runs to its own terminal state before the join reduces, under both joins.** A
 child that fails does not stop its siblings, does not stop later items from being spawned,
 and does not change any other child's outcome. `all_success` still fails the node if any
@@ -2618,6 +2822,9 @@ Two hard limits, both enforced at load time before any upstream node can spend:
 Cancellation stops the pool from claiming new items. An in-flight item may still reach its
 own terminal event; under `all_done`, a cancelled slot is represented by the same reserved
 `{ archon_failed: true, error, status: "cancelled" }` marker used by child-run fan-out.
+Failed slots use `status: "failed"`; both statuses follow the
+[reserved failure-marker contract](#join-semantics). An instance with ambiguous
+non-terminal work blocks the join rather than becoming a failure-marker slot.
 Instance and wrapper events are aggregate accounting rows, so their rolled-up usage is not
 counted again during resume. Engine-managed artifact names also carry the enclosing
 `loop_group` iteration path, preventing later iterations from overwriting earlier sidecars.
@@ -2916,7 +3123,7 @@ nodes:
     model: ['@review-seams', '@reviewer', medium]
 ```
 
-A list is how a bundled workflow names the concern each node serves without requiring you to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-5.5`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-5.5`. A run binding of an alias that no config defines must name its provider.
+A list is how a bundled workflow names the concern each node serves without requiring you to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-6.1-sol`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-6.1-sol`. A run binding of an alias that no config defines must name its provider.
 
 Tier and alias refs resolve to a provider, model and optional `effort`. If a workflow or node sets `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
 

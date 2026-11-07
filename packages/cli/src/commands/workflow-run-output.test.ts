@@ -3,6 +3,7 @@ import {
   mockRunLiveOwnerClose,
   mockStartRunLiveOwner,
   mockFolderBackendDestroy,
+  mockFolderBackendReleaseImages,
   testRunParents,
   commitTestEvent,
   createTestWorkflowHost,
@@ -13,7 +14,8 @@ import {
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import * as isolation from '@archon/isolation';
 import { realReleaseRunVerificationImages } from '../test-support/workflow-harness-checkout';
-import { tmpdir } from 'node:os';
+import { hostname, tmpdir } from 'node:os';
+import type { ReleaseVerificationImages } from '@archon/workflows/deps';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
@@ -217,9 +219,10 @@ describe('workflowRunCommand — progress rendering', () => {
       const warning = spyOn(console, 'error').mockImplementation(() => {});
       try {
         const host = createTestWorkflowHost();
-        host.deps.releaseRunResources = createRunResourceRelease({
-          getWorkflowRun: async () => row,
-        });
+        host.deps.releaseRunResources = createRunResourceRelease(
+          { getWorkflowRun: async () => row },
+          container ? (id, env) => realReleaseRunVerificationImages(id, env, runner) : undefined
+        );
         const error = await workflowRunCommand(host, '/test/path', 'plan', 'hello', {}).catch(
           (err: unknown) => err
         );
@@ -253,6 +256,80 @@ describe('workflowRunCommand — progress rendering', () => {
         warning.mockRestore();
         process.env.PATH = previousPath;
         release.mockRestore();
+      }
+    }
+  );
+
+  it.each([false, true])(
+    'uses the fresh container backend for foreground cleanup (failure=%s)',
+    async fails => {
+      const { discoverWorkflowsWithConfig } = require('@archon/workflows/workflow-discovery');
+      (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        workflows: [makeTestWorkflowWithSource({ name: 'assist' })],
+        errors: [],
+      });
+      const codebaseDb = require('@archon/core/db/codebases');
+      (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'cb-folder',
+        name: 'folder',
+        default_cwd: '/test/path',
+        default_branch: null,
+        kind: 'folder',
+      });
+      const { executeWorkflow } = require('@archon/workflows/executor');
+      (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(
+        async (
+          ...args: Parameters<typeof import('@archon/workflows/executor').executeWorkflow>
+        ) => {
+          expect(args[7]?.container?.backend.releaseVerificationImages).toEqual(
+            expect.any(Function)
+          );
+          return { success: true, workflowRunId: 'test-run-id' };
+        }
+      );
+      const { hostname } = await import('node:os');
+      const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
+      const { createRunResourceRelease } = await import(
+        '../../../core/src/services/cleanup/run-verification-images'
+      );
+      const row = {
+        ...mockWorkflowRun,
+        id: 'test-run-id',
+        status: 'completed' as const,
+        metadata: {
+          execution_owner: { host: hostname(), pid: process.pid },
+          isolation: 'container',
+          isolation_env_id: 'container-env-1',
+        },
+      };
+      const host = createTestWorkflowHost();
+      host.deps.store.getWorkflowRun = async () => row;
+      const defaultRelease = mock(async () => {
+        throw new Error('wrong daemon');
+      });
+      host.deps.releaseRunResources = createRunResourceRelease(
+        { getWorkflowRun: async () => row },
+        defaultRelease
+      );
+      const failure = new Error('backend cleanup failed');
+      mockFolderBackendReleaseImages.mockClear();
+      mockFolderBackendReleaseImages.mockImplementation(async () => {
+        if (fails) throw failure;
+      });
+      try {
+        const error = await workflowRunCommand(host, '/test/path', 'assist', 'go', {
+          container: true,
+        }).catch((err: unknown) => err);
+        if (fails) {
+          expect(error).toMatchObject({ cause: failure });
+          expect(resolveCliExitCode(error)).toBe(1);
+        } else expect(error).toBeUndefined();
+        expect(mockFolderBackendReleaseImages.mock.calls).toEqual([
+          ['test-run-id', 'container-env-1'],
+        ]);
+        expect(defaultRelease).not.toHaveBeenCalled();
+      } finally {
+        mockFolderBackendReleaseImages.mockResolvedValue(undefined);
       }
     }
   );
@@ -922,10 +999,24 @@ describe('workflowRunCommand — progress rendering', () => {
     });
     const signalBefore = process.listeners(signal);
     const host = createTestWorkflowHost();
-    const releaseRunResources = mock(async (id: string) => {
+    const { createRunResourceRelease } = await import(
+      '../../../core/src/services/cleanup/run-verification-images'
+    );
+    const defaultRelease = mock(async () => {
+      throw new Error('wrong daemon');
+    });
+    const release = createRunResourceRelease(
+      { getWorkflowRun: id => host.deps.store.getWorkflowRun(id) },
+      defaultRelease
+    );
+    mockFolderBackendReleaseImages.mockClear();
+    mockFolderBackendReleaseImages.mockImplementation(async () => {
+      if (cleanupError) throw cleanupError;
+    });
+    const releaseRunResources = mock(async (id: string, owner?: ReleaseVerificationImages) => {
       expect(id).toBe(OWNED_RUN);
       expect(mockFolderBackendDestroy.mock.calls.length).toBeGreaterThan(0);
-      if (cleanupError) throw cleanupError;
+      return release(id, owner);
     });
     host.deps.releaseRunResources = releaseRunResources;
     const initialStatus =
@@ -952,7 +1043,16 @@ describe('workflowRunCommand — progress rendering', () => {
         .listeners(signal)
         .filter(listener => !signalBefore.includes(listener));
       for (const listener of handlers) (listener as () => void)();
-      if (handlers.length > 0) await exitCalled;
+      if (handlers.length > 0) {
+        await exitCalled;
+        if (
+          status === 'completed' &&
+          !destroyError &&
+          mockFolderBackendDestroy.mock.calls.length > 0
+        ) {
+          expect(mockFolderBackendReleaseImages).toHaveBeenCalledWith(OWNED_RUN, 'container-env-1');
+        }
+      }
       destroyedAtSignal = mockFolderBackendDestroy.mock.calls.length;
     };
     const getRun = host.deps.store.getWorkflowRun.bind(host.deps.store);
@@ -969,7 +1069,14 @@ describe('workflowRunCommand — progress rendering', () => {
         status: end === 'unresolved-writeback' ? 'failed' : (status ?? 'running'),
         outcome: null,
         user_message: 'go',
-        metadata: end === 'unresolved-writeback' ? { pending_writeback: { envId: 'env-1' } } : {},
+        metadata:
+          end === 'unresolved-writeback'
+            ? { pending_writeback: { envId: 'env-1' } }
+            : {
+                execution_owner: { host: hostname(), pid: process.pid },
+                isolation: 'container',
+                isolation_env_id: 'container-env-1',
+              },
         started_at: new Date(),
         completed_at: new Date(),
         last_activity_at: null,
@@ -1006,7 +1113,9 @@ describe('workflowRunCommand — progress rendering', () => {
       }
     } finally {
       exitSpy.mockRestore();
+      mockFolderBackendReleaseImages.mockResolvedValue(undefined);
     }
+    expect(defaultRelease).not.toHaveBeenCalled();
     expect(releaseRunResources.mock.calls.length).toBe(
       destroyError ? 0 : mockFolderBackendDestroy.mock.calls.length
     );

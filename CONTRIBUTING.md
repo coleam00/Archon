@@ -21,7 +21,23 @@ or through a helper, must start with the exact line `// @archon-test-isolated`;
 discovery fails on a direct call without it.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
-are forwarded to Bun verbatim and bypass default grouping.
+retain Bun's substring-filter meaning and run only matching files, preserving the same
+isolation groups. Every requested group runs, and any failed group makes the command
+fail. Discovery errors, including selected files outside explicit `testGroups`, stop
+the request before any group starts. Test flags apply to each selected group; JUnit output
+is combined across groups and, from the repository root, across every started owner.
+Name filters (`-t` or `--test-name-pattern`) are supported only when the request selects
+one isolation group, preserving Bun's native exit result. Requests selecting multiple
+groups with a name filter fail before tests load, with a diagnostic naming the groups.
+Sharding (`--shard`) also requires one isolation group; splitting the shard across
+groups could omit selected files. Root requests with name filters or `--shard` must
+also select one test owner; multi-owner requests fail before any tests start and name
+the owners. Select files from one group or run each group separately. Load and hook
+failures remain failures. An unreadable or invalid private report fails its group and
+contributes a runner error; later requested groups still run. Bun can omit JUnit output on successful
+zero-file runs. An absent report after exit 0 emits a diagnostic and contributes no
+results, preserving Bun's exit code; absence after a nonzero exit remains a runner error.
+The wrapper cannot distinguish successful zero-file execution from report loss after exit 0.
 
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,
@@ -93,11 +109,13 @@ prose change's test-visible effects are checked on `dev`.
 
 CI runs the merge-sweep conformance test through `merge-sweep-contract`. The remaining
 tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-do not run on pull requests or pushes. Run them with `bun run test --plan pack` and
-`bun run validate --only workflow-fixtures` when you change `.archon/workflows/` or
-`.archon/scripts/`; a single test file runs with
-`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI, dispatch the
-Test Suite workflow with `pack-tests` or `pack-fixtures` set:
+run in the `test-pack` job when a pull request or an unproven push changes the pack or a
+contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
+those paths. Run them locally with `bun run test --plan pack` and
+`bun run validate --only workflow-fixtures`; a single test file runs with
+`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI on a branch
+without a pull request, dispatch the Test Suite workflow with `pack-tests` or
+`pack-fixtures` set:
 `gh workflow run test.yml --ref <branch> -f pack-tests=true -f pack-fixtures=true`.
 
 Local validation has no fixed duration: tests and typed analysis dominate, and machine

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { trackTempRoots } from './temp-roots';
-import { PR, PR_URL, gitCheckout, packScriptRunner } from './deliver-checks-harness';
+import { PR, PR_URL, forgeCalls, gitCheckout, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -15,8 +15,7 @@ function publish(failures: number, wrongReadBack = false) {
   const head = spawnSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).stdout.trim();
   const run = runPackScript('pr/scripts/publish-pr', {
     cwd,
-    source: 'gh',
-    gh: { noOpenPr: true, pr: { headRefOid: head } },
+    tracker: { noOpenPr: true, pr: { headRefOid: head } },
     inputs: {
       INPUTS_REPO: JSON.stringify(PR.repo),
       INPUTS_HEAD_REPO: JSON.stringify(PR.repo),
@@ -68,7 +67,7 @@ describe('publish-pr push retry', () => {
     const result = publish(failures);
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, url: PR_URL });
-    expect(result.gh.some(call => call.startsWith('pr create'))).toBe(true);
+    expect(forgeCalls(result).some(call => call.op === 'pr.create')).toBe(true);
     expect(result.events).toEqual(failures === 0
       ? [pushArgs, readArgs]
       : [pushArgs, ['sleep', 20_000], pushArgs, readArgs]);
@@ -83,7 +82,7 @@ describe('publish-pr push retry', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toBe('publish-pr: git push upstream HEAD:refs/heads/feature refused: opaque failure 2\n');
     expect(result.events).toEqual([pushArgs, ['sleep', 20_000], pushArgs]);
-    expect(result.gh).toEqual([]);
+    expect(result.forge).toEqual([]);
   });
 
   it('refuses publication when the successful retry does not read back as HEAD', () => {
@@ -92,6 +91,6 @@ describe('publish-pr push retry', () => {
     expect(result.stdout).toBe('');
     expect(result.stderr).toBe(`publish-pr: pushed ${result.head} to upstream refs/heads/feature, but the remote reads different\n`);
     expect(result.events).toEqual([pushArgs, ['sleep', 20_000], pushArgs, readArgs]);
-    expect(result.gh).toEqual([]);
+    expect(result.forge).toEqual([]);
   });
 });

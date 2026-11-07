@@ -3,6 +3,36 @@ import { fileURLToPath } from 'node:url';
 import { createSqlStateDocumentStore } from './state-documents';
 import type { IDatabase } from './adapters/types';
 import type { StateScope } from '@archon/workflows/state-document-store';
+import type { StateLeaseRuns } from '@archon/workflows/state-document-conformance';
+
+/** Lease holders as bare run rows; the state store reads only their status. */
+export function sqlStateLeaseRuns(db: Pick<IDatabase, 'query'>): StateLeaseRuns {
+  return {
+    create: async () => {
+      const id = crypto.randomUUID();
+      await db.query(
+        `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+          VALUES ($1, 'cli', $2)`,
+        [id, id]
+      );
+      await db.query(
+        `INSERT INTO remote_agent_workflow_runs (id, workflow_name, conversation_id, user_message)
+          VALUES ($1, 'lease', $2, '')`,
+        [id, id]
+      );
+      return id;
+    },
+    setStatus: async (id, status) => {
+      await db.query('UPDATE remote_agent_workflow_runs SET status = $2 WHERE id = $1', [
+        id,
+        status,
+      ]);
+    },
+    remove: async id => {
+      await db.query('DELETE FROM remote_agent_workflow_runs WHERE id = $1', [id]);
+    },
+  };
+}
 
 const processScope: StateScope = { kind: 'project', key: 'process/race' };
 

@@ -66,6 +66,19 @@ test('a second resume recomputes output invalidated before a rejected node start
     if (sql.startsWith('SELECT step_name, event_type, data')) {
       return createQueryResult(rows.filter(row => params?.includes(row.event_type)));
     }
+    // Every exec invocation reads the run's node-state events for its node-outcome listing.
+    if (sql.startsWith('SELECT * FROM remote_agent_workflow_events')) {
+      return createQueryResult(
+        rows
+          .filter(row => params?.includes(row.event_type))
+          .map((row, index) => ({
+            ...row,
+            id: `event-${String(index)}`,
+            workflow_run_id: params?.[0],
+            created_at: new Date().toISOString(),
+          }))
+      );
+    }
     throw new Error(`Unexpected test query: ${sql}`);
   });
   const run: WorkflowRun = {

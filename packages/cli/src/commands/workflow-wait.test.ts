@@ -150,6 +150,34 @@ describe('workflowWaitCommand', () => {
     expect(printed).not.toContain('workflow resume');
   });
 
+  it('leads with the recommendation and says what each option does', async () => {
+    mockWaitForRunAttention.mockResolvedValueOnce({
+      kind: 'attention',
+      attention: {
+        kind: 'attention',
+        runId: FULL_ID,
+        nodeId: 'ask',
+        occurrence: 'pause-8',
+        message: 'Merge it?',
+        form: 'select',
+        options: [
+          { id: 'merge', label: 'Merge it', does: 'Squash-merges the pull request.' },
+          { id: 'hold' },
+        ],
+        recommendation: { option: 'merge', why: 'Review is ready.', confidence: 'high' },
+      },
+    });
+
+    const code = await workflowWaitCommand(createTestWorkflowHost(), FULL_ID, undefined, '/repo');
+
+    expect(code).toBe(0);
+    const printed = consoleSpy.mock.calls.flat().join(' ');
+    expect(printed).toContain('Recommended: merge (high confidence). Review is ready.');
+    expect(printed).toContain(
+      `Merge it (merge): Squash-merges the pull request. \`archon workflow respond ${FULL_ID} merge [text]\``
+    );
+  });
+
   it('exits 3 with the observed status when the deadline passes', async () => {
     mockWaitForRunAttention.mockResolvedValueOnce({
       kind: 'deadline',

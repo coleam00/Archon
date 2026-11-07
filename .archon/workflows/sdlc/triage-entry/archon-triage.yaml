@@ -2,7 +2,7 @@ name: archon-triage
 description: |
   Ground one work item against the current repository before deciding what kind
   of work it needs, judge whether it is a contract a run can start from, then route
-  it to investigate, plan, deliver, continue an open PR, or no action
+  it to investigate, plan, deliver, continue an open PR, split, or no action
   (archon-triage-block). Advisory: it leaves the checkout unchanged, and writes
   labels only when asked to publish. When the item is blocked or needs contract
   work, the run pauses as one attention item carrying the question. The answer

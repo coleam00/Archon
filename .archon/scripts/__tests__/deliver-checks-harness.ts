@@ -1,11 +1,11 @@
 /**
  * Runs a deliver pack script as the engine does (a Bun subprocess reading
- * `INPUTS_*`) against a fake `gh` and a fake or real `archon forge`.
+ * `INPUTS_*`) against a fake or real `archon forge`.
  *
- * The fake `gh` is a preload that replaces `Bun.spawnSync` for `gh` argv only, so
- * it behaves the same on every platform. It keeps one mutable pull request and
- * one comment list, so a write and the read-back that follows it see the same
- * state — which is what makes an unverified write observable here at all.
+ * By default the forge is a stateful fake: a preload that replaces `Bun.spawnSync`
+ * for `archon forge` argv only, so it behaves the same on every platform. It keeps
+ * one mutable pull request, one issue, the tracker's other issues and their
+ * comments, so a write and the read-back that follows it see the same state.
  */
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,8 +33,8 @@ export function hostCli(): string[] {
 export const PR = { repo: { host: 'ghe.example.com', path: 'example/repo' }, number: 42 };
 export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 
-/** One row of `gh api .../issues/<n>/comments`. */
-export interface GhCommentRow {
+/** One conversation comment on the tracker. */
+export interface TrackerComment {
   readonly id: number;
   readonly body: string;
   /** The issue it is on; omitted for the pull request. */
@@ -43,8 +43,8 @@ export interface GhCommentRow {
   readonly author?: string;
 }
 
-/** The pull request `gh pr view --json` reports, before any write in the run. */
-export interface GhPr {
+/** The pull request the fake forge reports, before any write in the run. */
+export interface TrackerPr {
   readonly title?: string;
   readonly body?: string;
   readonly isDraft?: boolean;
@@ -52,57 +52,34 @@ export interface GhPr {
   readonly headRefName?: string;
   readonly headRefOid?: string;
   readonly baseRefName?: string;
-  /** The head repository's owner; omitted, the head is in the `--repo` repository. */
+  /** The head repository's owner; omitted, the head is in the pull request's repository. */
   readonly headRepositoryOwner?: { readonly login: string };
 }
 
-export interface GhFake {
+/** The starting state of the stateful fake forge. */
+export interface TrackerFake {
   readonly issueLabels?: readonly string[];
   readonly repositoryLabels?: readonly string[];
-  /** stderr for a refused `gh pr ready`; omit for a flip that succeeds. */
+  /** A refusal message for `pr.ready` and `pr.draft`; omit for a flip that succeeds. */
   readonly readyFail?: string;
-  /** The pull request every `gh pr view`/`gh pr list` read reports. */
-  readonly pr?: GhPr;
-  /** No pull request matches `gh pr list --head` until one is created. */
+  /** The pull request every `pr.view` reports. */
+  readonly pr?: TrackerPr;
+  /** No pull request matches a head lookup until one is created. */
   readonly noOpenPr?: boolean;
-  /** Existing issue comments, in listing order. */
-  readonly comments?: readonly GhCommentRow[];
-  /** stderr for a refused write (`pr create`, `pr edit`, or a comment write). */
+  /** Existing comments, in listing order. */
+  readonly comments?: readonly TrackerComment[];
+  /** A refusal message for every write. */
   readonly writeFail?: string;
-  /** Drop the write instead of applying it, so the read-back disagrees. */
+  /** Drop every write instead of applying it, so the plugin's read-back disagrees. */
   readonly writeLost?: boolean;
-  /**
-   * The HTTP failures the first comment writes answer with, one per write, before
-   * writes succeed again. A `landed` failure applies the write and still fails, as a
-   * gateway timeout can after the forge has accepted the request.
-   */
-  readonly commentWriteFaults?: readonly GhHttpFault[];
-  /** Which comment listings, counted from 0, fail with no HTTP response, as a dropped connection does. */
-  readonly commentListDrops?: readonly number[];
-  /** Which comment listings, counted from 0, lag behind and show no comments. */
-  readonly commentListLags?: readonly number[];
-  /**
-   * Existing tracker issues; `issue create` appends to them. `gh api` reads them
-   * too, beside the one issue `issue` describes.
-   */
-  readonly issues?: readonly GhIssue[];
-  /** The issue `gh api repos/<path>/issues/<n>` reads; number 7 by default. Labels come from `issueLabels`. */
-  readonly issue?: GhApiIssue;
-  /** stderr for a failed `gh auth status --active --hostname`, for every host or per host; omit for an authenticated gh. */
-  readonly authFail?: string | Readonly<Record<string, string>>;
-  /** stderr for a refused repository read, keyed by host/path. */
-  readonly repoReadFail?: Readonly<Record<string, string>>;
+  /** Existing tracker issues; `workitem.create` appends to them. */
+  readonly issues?: readonly TrackerIssue[];
+  /** The issue the run is about; number 7 by default. Labels come from `issueLabels`. */
+  readonly issue?: TrackerSubject;
 }
 
-/** One failed HTTP response, as `gh api --include` reports it. */
-export interface GhHttpFault {
-  readonly status: number;
-  readonly headers?: Readonly<Record<string, string>>;
-  readonly landed?: boolean;
-}
-
-/** The issue facts `gh api .../issues/<n>` reports. */
-export interface GhApiIssue {
+/** The issue the run is about. */
+export interface TrackerSubject {
   readonly number?: number;
   readonly title?: string;
   readonly body?: string;
@@ -111,37 +88,31 @@ export interface GhApiIssue {
   readonly state?: 'open' | 'closed';
   /** Why a closed issue was closed. */
   readonly state_reason?: string;
-  /**
-   * The edit history `gh api graphql` reports; never edited when omitted. A null
-   * `createdBody` is a creation revision that cannot be recovered (deleted).
-   * `firstEditedBody` is an oldest revision made after creation, so not the creation body.
-   */
-  readonly history?: {
-    readonly createdBody?: string | null;
-    readonly firstEditedBody?: string;
-    readonly createdTitle?: string;
-    /** Every revision, newest first, as a full history read reports them. */
-    readonly edits?: readonly { readonly editedAt: string; readonly diff: string }[];
-  };
 }
 
-/** One tracker issue the fake gh knows. */
-export interface GhIssue {
+/** One other issue the fake forge knows. */
+export interface TrackerIssue {
   readonly number: number;
   readonly title: string;
   readonly body: string;
   readonly state: 'OPEN' | 'CLOSED';
-  /** A pull request, which `gh issue view` also resolves by number. */
+  /** A pull request, which shares the issue numbering. */
   readonly pull?: boolean;
 }
 
 export type ForgeFake =
+  /** The stateful fake forge, seeded from `tracker`. The default. */
+  | { readonly kind: 'state' }
   /** No `ARCHON_CLI_COMMAND` at all. */
   | { readonly kind: 'no-host' }
   /** The real CLI with a scratch Archon home whose config holds this `forge:` section. */
   | { readonly kind: 'home'; readonly config: Readonly<Record<string, unknown>> }
-  /** This exact host command, as the CLI and server would publish it. */
-  | { readonly kind: 'command'; readonly argv: readonly string[] }
+  /**
+   * This exact host command, as the CLI and server would publish it. With
+   * `fakeForge`, its `forge` operations are answered by the stateful fake forge and
+   * every other command reaches it.
+   */
+  | { readonly kind: 'command'; readonly argv: readonly string[]; readonly fakeForge?: boolean }
   /** A fake CLI that prints this document, or fails when `response` is omitted. */
   | {
       readonly kind: 'fake';
@@ -157,254 +128,220 @@ export interface ScriptRun {
   readonly code: number;
   readonly stdout: string;
   readonly stderr: string;
-  /** Every `gh` argv, space-joined, in call order. */
-  readonly gh: readonly string[];
-  /** Every `archon` argv the fake CLI received. */
+  /** Every `archon` argv the fake forge received. */
   readonly forge: readonly string[];
-  /** Every JSON request body the fake CLI was handed through `--data-file`. */
+  /** Every JSON request body the fake forge was handed through `--data-file`. */
   readonly forgeRequests: readonly string[];
-  /** Every issue the fake gh created, in order. */
-  readonly createdIssues: readonly GhIssue[];
-  /** Every comment the fake gh wrote, with the issue or pull request it is on. */
+  /** Every issue the fake forge created, in order. */
+  readonly createdIssues: readonly TrackerIssue[];
+  /** Every comment the fake forge wrote, with the issue or pull request it is on. */
   readonly comments: readonly { readonly issue: number; readonly body: string }[];
-  /** Every issue state change the fake gh received. */
+  /** Every issue close the fake forge received. */
   readonly closes: readonly { readonly number: number; readonly state: string; readonly state_reason: string }[];
-  /** Every issue or pull request body the fake gh was asked to write, in order. */
+  /** Every issue or pull request body the fake forge was asked to write, in order. */
   readonly bodies: readonly string[];
   /** The run's artifact directory, for a script that writes one. */
   readonly artifacts: string;
 }
 
+/** Fails the test when the script spawned `gh`: no pack script may call it. */
+function refuseGhSpawns(ghLog: string): void {
+  const spawned = existsSync(ghLog) ? readFileSync(ghLog, 'utf8').trim() : '';
+  if (spawned !== '') throw new Error(`the pack script spawned gh: ${spawned.split('\n').join('; ')}`);
+}
+
+/** A Bun preload that records and refuses every `gh` spawn. */
+function ghGuardPreload(ghLog: string): string {
+  return `{
+const guarded = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  if (argv[0] !== 'gh') return guarded(argv, settings);
+  require('node:fs').appendFileSync(${JSON.stringify(ghLog)}, argv.slice(1).join(' ') + '\\n');
+  return { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('pack scripts never call gh') };
+} });
+}
+`;
+}
+
 /**
- * A Bun preload that fakes `gh` for one script run and logs every gh argv to
- * `ghLog`.
+ * A Bun preload that answers `archon forge <op>` from one in-memory tracker, logging
+ * each argv to `forgeLog` and each request to `requestLog`. Every write reads back as
+ * the plugin's does: `writeFail` refuses it, `writeLost` reports a failed read-back.
  */
-function fakeGhPreload(fake: GhFake, ghLog: string): string {
+function fakeForgePreload(fake: TrackerFake, logs: { forge: string; requests: string; side: string }): string {
   return `import { appendFileSync, readFileSync } from 'node:fs';
+// \`comments\` stays at the top level: a test's own preload may read it. Everything
+// else is block-scoped, so a test preload can reuse any other name.
+const comments = (${JSON.stringify(fake.comments ?? [])}).map(row => ({ ...row }));
+{
 const fake = ${JSON.stringify(fake)};
+const logs = ${JSON.stringify(logs)};
 const original = Bun.spawnSync.bind(Bun);
 const pr = {
   number: 42, title: 'A title', body: 'A body', isDraft: true, state: 'OPEN',
   headRefName: 'feature', headRefOid: 'deadbeef', baseRefName: 'dev',
   maintainerCanModify: null, ...(fake.pr ?? {}),
 };
-let comments = (fake.comments ?? []).map(row => ({ ...row }));
 const subject = { number: 7, title: 'An issue', body: 'An issue body', author: 'someone', state: 'open', ...(fake.issue ?? {}) };
 const issues = (fake.issues ?? []).map(row => ({ ...row }));
 let exists = fake.noOpenPr !== true;
 let nextId = 900;
-const faults = [...(fake.commentWriteFaults ?? [])];
-const listDrops = new Set(fake.commentListDrops ?? []);
-const listLags = new Set(fake.commentListLags ?? []);
-let listings = 0;
 const labels = new Set(fake.repositoryLabels ?? ['operator', 'archon-blocked', 'area']);
 let issueLabels = [...(fake.issueLabels ?? ['operator', 'archon-blocked'])];
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  if (argv[0] !== 'gh') return original(argv, settings);
-  const text = argv.slice(1).join(' ');
-  appendFileSync(${JSON.stringify(ghLog)}, text + '\\n');
-  // gh appends an update notice to stderr on successful calls too. \`gh api --include\`
-  // prints the response's status line and headers before its body, failed or not.
-  const result = (exitCode, stdout = '', stderr = 'gh: A new release of gh is available', status = exitCode === 0 ? 200 : 422, headers = {}) =>
-    ({ exitCode, stdout: Buffer.from(argv.includes('--include') ? ['HTTP/2.0 ' + String(status), ...Object.entries(headers).map(([name, value]) => name + ': ' + value), '', stdout].join('\\r\\n') : stdout), stderr: Buffer.from(stderr) });
-  const selector = argv[argv.indexOf('--repo') + 1] ?? 'github.com/owner/repo';
-  const host = selector.split('/')[0];
-  const path = selector.split('/').slice(1).join('/');
-  const owner = path.split('/')[0];
-  const name = path.split('/')[1];
-  const project = () => {
-    const fields = argv[argv.indexOf('--json') + 1].split(',');
-    const row = {
-      ...pr,
-      url: 'https://' + host + '/' + path + '/pull/' + String(pr.number),
-      headRepository: { name },
-      headRepositoryOwner: pr.headRepositoryOwner ?? { login: owner },
-    };
-    return Object.fromEntries(fields.map(field => [field, row[field]]));
+const side = (kind, value) => appendFileSync(logs.side + '.' + kind, JSON.stringify(value) + '\\n');
+const done = value => ({ ok: true, value });
+const refused = (op, message) => ({ ok: false, op, outcome: 'refused', message });
+function write(op, apply, value) {
+  if (fake.writeFail !== undefined) return refused(op, fake.writeFail);
+  if (fake.writeLost) return { ok: false, op, outcome: 'verification_failed', message: 'the write did not read back' };
+  apply();
+  return done({ outcome: 'applied', ...value() });
+}
+function record(repo) {
+  const owner = pr.headRepositoryOwner?.login;
+  return {
+    schemaVersion: 1, repo, number: pr.number,
+    url: 'https://' + repo.host + '/' + repo.path + '/pull/' + String(pr.number),
+    head: pr.headRefName, base: pr.baseRefName, is_draft: pr.isDraft, state: pr.state.toLowerCase(),
+    head_repo: owner === undefined ? repo : { host: repo.host, path: owner + '/' + repo.path.split('/')[1] },
+    head_revision: pr.headRefOid, base_revision: null, maintainer_can_modify: pr.maintainerCanModify,
   };
-  if (text.startsWith('auth status --active --hostname ')) {
-    const failure = typeof fake.authFail === 'string' ? fake.authFail : fake.authFail?.[argv[5]];
-    return failure === undefined ? result(0) : result(1, '', failure);
+}
+const issueUrl = (repo, n) => 'https://' + repo.host + '/' + repo.path + '/issues/' + String(n);
+function commentUrl(repo, row) {
+  const item = row.issue === undefined ? '/pull/' + String(pr.number) : '/issues/' + String(row.issue);
+  return 'https://' + repo.host + '/' + repo.path + item + '#issuecomment-' + String(row.id);
+}
+function view(ref) {
+  if (ref.number === subject.number) {
+    return done({
+      ref, kind: 'issue', title: subject.title, body: subject.body, state: subject.state,
+      url: issueUrl(ref.repo, subject.number), labels: [...new Set(issueLabels)].map(name => ({ name })),
+      ...(subject.author === undefined ? {} : { author: subject.author === null ? null : { login: subject.author } }),
+    });
   }
-  if (argv.length === 5 && argv[1] === 'api' && argv[2] === '--hostname' && argv[4].split('/').length === 3 && argv[4].startsWith('repos/')) {
-    const failure = fake.repoReadFail?.[argv[3] + '/' + argv[4].slice('repos/'.length)];
-    return failure === undefined ? result(0, '{}') : result(1, '', failure);
-  }
-  if (text.startsWith('label list')) return result(0, JSON.stringify([...labels].map(name => ({ name }))));
-  if (text.startsWith('label create')) { if (fake.writeFail) return result(1, '', fake.writeFail); labels.add(argv[3]); return result(0); }
-  if (text.startsWith('issue edit')) {
-    if (fake.writeFail) return result(1, '', fake.writeFail);
-    if (!fake.writeLost) for (let index = 0; index < argv.length; index++) {
-      if (argv[index] === '--add-label') issueLabels.push(argv[index + 1]);
-      if (argv[index] === '--remove-label') issueLabels = issueLabels.filter(name => name !== argv[index + 1]);
-    }
-    return result(0);
-  }
-  if (text.startsWith('issue ')) {
-    const issueUrl = (n) => 'https://' + host + '/' + path + '/issues/' + String(n);
-    if (text.startsWith('issue view')) {
-      const wanted = Number(argv[3].split('/').pop());
-      const row = issues.find(candidate => candidate.number === wanted);
-      if (row === undefined) return result(1, '', 'GraphQL: Could not resolve to an issue');
-      const url = row.pull ? issueUrl(row.number).replace('/issues/', '/pull/') : issueUrl(row.number);
-      return result(0, JSON.stringify({ title: row.title, state: row.state, url }));
-    }
-    if (text.startsWith('issue create')) {
-      if (fake.writeFail) return result(1, '', fake.writeFail);
+  const other = issues.find(row => row.number === ref.number);
+  if (other === undefined) return refused('workitem.view', 'not found');
+  const url = issueUrl(ref.repo, other.number);
+  return done({
+    ref, kind: other.pull ? 'pr' : 'issue', title: other.title, body: other.body,
+    state: other.state.toLowerCase(), url: other.pull ? url.replace('/issues/', '/pull/') : url,
+    labels: [], author: { login: 'someone' },
+  });
+}
+function upsert(op, repo, onIssue, marker, body) {
+  if (body.split(/\\r?\\n/, 1)[0] !== marker) return refused(op, 'the body must begin with its marker');
+  const marked = comments.filter(row => row.issue === onIssue && row.body.split(/\\r?\\n/, 1)[0] === marker);
+  if (marked.length > 1) return refused(op, 'more than one comment carries the marker');
+  let row = marked[0];
+  if (row !== undefined && row.body === body) return done({ outcome: 'applied', changed: false, comment: { url: commentUrl(repo, row) } });
+  return write(op, () => {
+    if (row !== undefined) row.body = body;
+    else { row = { id: nextId++, body, ...(onIssue === undefined ? {} : { issue: onIssue }) }; comments.push(row); }
+    side('comments', { issue: onIssue ?? pr.number, body });
+  }, () => ({ comment: { url: commentUrl(repo, row) } }));
+}
+function answer(op, request) {
+  switch (op) {
+    case 'workitem.view': return view(request.ref);
+    case 'repo.labels.list': return done({ repo: request.repo, labels: [...labels].map(name => ({ name })) });
+    case 'repo.label.ensure': return write(op, () => labels.add(request.name), () => ({}));
+    case 'workitem.label.add': return write(op, () => issueLabels.push(request.name), () => ({}));
+    case 'workitem.label.remove': return write(op, () => { issueLabels = issueLabels.filter(name => name !== request.name); }, () => ({}));
+    case 'workitem.create': {
+      const marked = issues.filter(row => !row.pull && row.body.split(/\\r?\\n/, 1)[0] === request.marker);
+      if (marked.length > 1) return refused(op, 'more than one issue carries the marker');
+      const found = marked[0];
+      if (found !== undefined) {
+        return done({ outcome: 'applied', changed: false, workitem: { kind: 'issue', ref: { repo: request.repo, number: found.number }, url: issueUrl(request.repo, found.number) } });
+      }
       const number = 100 + issues.length;
-      issues.push({
-        number,
-        title: fake.writeLost ? 'different' : argv[argv.indexOf('--title') + 1],
-        body: readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8'),
-        state: 'OPEN',
-      });
-      appendFileSync(${JSON.stringify(ghLog)} + '.issues', JSON.stringify(issues[issues.length - 1]) + '\\n');
-      return result(0, issueUrl(number));
+      return write(op, () => {
+        issues.push({ number, title: request.title, body: request.body, state: 'OPEN' });
+        side('issues', issues[issues.length - 1]);
+      }, () => ({ workitem: { kind: 'issue', ref: { repo: request.repo, number }, url: issueUrl(request.repo, number) } }));
     }
-  }
-  // Real gh refuses this combination before any request (gh 2.92).
-  if (argv.includes('--slurp') && (argv.includes('--jq') || argv.includes('--template')))
-    return result(1, '', 'the \`--slurp\` option is not supported with \`--jq\` or \`--template\`');
-  if (text.startsWith('pr ready')) {
-    if (fake.readyFail !== undefined) return result(1, '', fake.readyFail);
-    if (!fake.writeLost) pr.isDraft = argv.includes('--undo');
-    return result(0, 'ready');
-  }
-  if (text.startsWith('pr create')) {
-    if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-    if (!fake.writeLost) {
-      pr.isDraft = argv.includes('--draft');
-      pr.title = argv[argv.indexOf('--title') + 1];
-      pr.body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
-      pr.headRefName = (argv[argv.indexOf('--head') + 1] ?? pr.headRefName).split(':').pop();
-      pr.baseRefName = argv[argv.indexOf('--base') + 1] ?? pr.baseRefName;
+    case 'workitem.close': {
+      if (subject.state === 'closed') {
+        return subject.state_reason === request.reason
+          ? done({ outcome: 'applied', changed: false, workitem: { state: 'closed' }, reason: request.reason })
+          : refused(op, 'the issue is already closed for another reason');
+      }
+      return write(op, () => {
+        side('closes', { number: subject.number, state: 'closed', state_reason: request.reason });
+        subject.state = 'closed';
+        subject.state_reason = request.reason;
+      }, () => ({ workitem: { state: 'closed' }, reason: request.reason }));
+    }
+    case 'workitem.edit-body': return write(op, () => { side('bodies', request.body); subject.body = request.body; }, () => ({}));
+    case 'workitem.comment.upsert': {
+      const onIssue = request.subject.kind === 'pr' ? undefined : request.subject.ref.number;
+      return upsert(op, request.subject.ref.repo, onIssue, request.marker, request.body);
+    }
+    case 'comment.upsert': return upsert(op, request.ref.repo, undefined, request.marker, request.body);
+    case 'workitem.comments': {
+      const ref = request.subject.ref;
+      const onIssue = request.subject.kind === 'pr' ? undefined : ref.number;
+      return done({
+        workitem: { ref },
+        comments: comments.filter(row => row.issue === onIssue).map(row => ({
+          id: String(row.id), url: commentUrl(ref.repo, row), body: row.body,
+          author: row.author === undefined ? null : { login: row.author },
+        })),
+      });
+    }
+    case 'pr.view': {
+      const selector = request.selector;
+      if (selector.kind === 'head') {
+        const found = exists && (selector.state === 'any' || pr.state === 'OPEN') && pr.headRefName === selector.head;
+        return done(found ? { pr: record(selector.repo), title: pr.title, body: pr.body } : null);
+      }
+      return done({ pr: record(selector.ref.repo), title: pr.title, body: pr.body });
+    }
+    case 'pr.create': return write(op, () => {
+      pr.isDraft = request.draft;
+      pr.title = request.title;
+      pr.body = request.body;
+      pr.headRefName = request.head;
+      pr.headRefOid = request.headRevision;
+      pr.baseRefName = request.base;
       pr.state = 'OPEN';
       exists = true;
+    }, () => ({ pr: record(request.repo) }));
+    case 'pr.edit-body': return write(op, () => { side('bodies', request.body); pr.body = request.body; }, () => ({ pr: record(request.ref.repo) }));
+    case 'pr.ready':
+    case 'pr.draft': {
+      if (fake.readyFail !== undefined) return refused(op, fake.readyFail);
+      return write(op, () => { pr.isDraft = op === 'pr.draft'; }, () => ({ pr: record(request.ref.repo) }));
     }
-    return result(0, 'https://' + host + '/' + path + '/pull/' + String(pr.number));
+    default: return refused(op, 'the fake forge has no ' + op);
   }
-  if (text.startsWith('pr edit')) {
-    if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-    const body = readFileSync(argv[argv.indexOf('--body-file') + 1], 'utf8');
-    appendFileSync(${JSON.stringify(ghLog)} + '.bodies', JSON.stringify(body) + '\\n');
-    if (!fake.writeLost) pr.body = body;
-    return result(0, '');
-  }
-  if (text.startsWith('pr list')) {
-    // gh applies the head and state filters server side.
-    const state = argv.includes('--state') ? argv[argv.indexOf('--state') + 1] : 'open';
-    const listed = exists && (state === 'all' || pr.state === 'OPEN') && pr.headRefName === argv[argv.indexOf('--head') + 1];
-    return result(0, JSON.stringify(listed ? [project()] : []));
-  }
-  if (text.startsWith('pr view') && argv.includes('--jq')) return result(0, String(pr.headRefOid));
-  if (text.startsWith('pr view')) return result(0, JSON.stringify(project()));
-  if (text.startsWith('api graphql')) {
-    const history = fake.issue?.history ?? {};
-    const createdAt = '2026-01-01T00:00:00Z';
-    if (text.includes('userContentEdits(first: 100)')) {
-      const edits = history.edits ?? [];
-      return result(0, JSON.stringify({ data: { repository: { issue: {
-        createdAt, body: subject.body, userContentEdits: { totalCount: edits.length, nodes: edits },
-      } } } }));
-    }
-    const nodes = history.firstEditedBody !== undefined
-      ? [{ editedAt: '2026-02-01T00:00:00Z', diff: history.firstEditedBody }]
-      : history.createdBody === undefined ? []
-      : [{ editedAt: createdAt, diff: history.createdBody }];
-    return result(0, JSON.stringify({ data: { repository: { issue: {
-      createdAt,
-      userContentEdits: { totalCount: nodes.length === 0 ? 0 : 2, nodes },
-      timelineItems: { nodes: history.createdTitle === undefined ? [] : [{ previousTitle: history.createdTitle }] },
-    } } } }));
-  }
-  if (text.startsWith('api')) {
-    const endpoint = argv.find(part => part.startsWith('repos/'));
-    if (endpoint === undefined) return result(95, '', 'unexpected gh api call');
-    // gh api names its host with --hostname and its repository in the endpoint.
-    const apiHost = argv[argv.indexOf('--hostname') + 1];
-    const apiPath = endpoint.split('/').slice(1, 3).join('/');
-    // A comment row without an issue number is on the pull request.
-    const commentUrl = (row) => 'https://' + apiHost + '/' + apiPath + (row.issue === undefined ? '/pull/' + String(pr.number) : '/issues/' + String(row.issue)) + '#issuecomment-' + String(row.id);
-    const issueUrl = (n) => 'https://' + apiHost + '/' + apiPath + '/issues/' + String(n);
-    const method = argv.includes('--method') ? argv[argv.indexOf('--method') + 1] : 'GET';
-    const input = () => JSON.parse(readFileSync(argv[argv.indexOf('--input') + 1], 'utf8'));
-    // The repository's issue list (every state), and an issue create.
-    if (endpoint.split('?')[0].split('/').length === 4 && endpoint.split('?')[0].endsWith('/issues')) {
-      if (method === 'POST') {
-        if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-        const request = input();
-        const number = 100 + issues.length;
-        const row = { number, title: request.title, body: fake.writeLost ? 'different' : request.body, state: 'OPEN' };
-        issues.push(row);
-        appendFileSync(${JSON.stringify(ghLog)} + '.issues', JSON.stringify(row) + '\\n');
-        return result(0, JSON.stringify({ number, html_url: issueUrl(number) }));
-      }
-      const rows = issues.map(row => ({ number: row.number, title: row.title, body: row.body, state: row.state.toLowerCase(), ...(row.pull ? { pull_request: {} } : {}) }));
-      return result(0, JSON.stringify(argv.includes('--slurp') ? [rows] : rows));
-    }
-    if (endpoint.endsWith('/issues/' + String(subject.number))) {
-      if (method === 'PATCH' && argv.includes('--input')) {
-        if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-        appendFileSync(${JSON.stringify(ghLog)} + '.bodies', JSON.stringify(input().body) + '\\n');
-        if (!fake.writeLost) subject.body = input().body;
-      } else if (method === 'PATCH') {
-        if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-        const field = (name) => argv.find(part => part.startsWith(name + '='))?.slice(name.length + 1);
-        const change = { state: field('state'), state_reason: field('state_reason') };
-        appendFileSync(${JSON.stringify(ghLog)} + '.closes', JSON.stringify({ number: subject.number, ...change }) + '\\n');
-        if (!fake.writeLost) { subject.state = change.state; subject.state_reason = change.state_reason; }
-      }
-      return result(0, JSON.stringify({
-        number: subject.number, title: subject.title, body: subject.body, state: subject.state,
-        state_reason: subject.state_reason ?? null,
-        user: subject.author === null ? null : { login: subject.author },
-        html_url: issueUrl(subject.number),
-        labels: [...new Set(issueLabels)].map(name => ({ name })),
-      }));
-    }
-    const other = issues.find(row => endpoint.endsWith('/issues/' + String(row.number)));
-    if (other !== undefined) return result(0, JSON.stringify({
-      number: other.number, title: other.title, body: other.body, state: other.state.toLowerCase(),
-      user: { login: 'someone' },
-      html_url: other.pull ? issueUrl(other.number).replace('/issues/', '/pull/') : issueUrl(other.number),
-      labels: [],
-      ...(other.pull ? { pull_request: {} } : {}),
-    }));
-    const parts = endpoint.split('?')[0].split('/');
-    const commentsOn = parts.at(-1) === 'comments' && parts.at(-3) === 'issues' ? Number(parts.at(-2)) : pr.number;
-    const onIssue = commentsOn === pr.number ? undefined : commentsOn;
-    if (method === 'GET') {
-      const listing = listings++;
-      if (listDrops.has(listing)) return { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('connection reset') };
-      const page = Number(new URLSearchParams(endpoint.split('?')[1] ?? '').get('page') ?? '1');
-      const rows = page === 1 && !listLags.has(listing) ? comments.filter(row => row.issue === onIssue).map(row => ({ id: row.id, body: row.body, html_url: commentUrl(row), ...(row.author === undefined ? {} : { user: { login: row.author } }) })) : [];
-      return result(0, JSON.stringify(rows));
-    }
-    if (fake.writeFail !== undefined) return result(1, '', fake.writeFail);
-    const fault = faults.shift();
-    const failed = () => result(1, JSON.stringify({ message: 'failed' }), 'gh: failed (HTTP ' + String(fault.status) + ')', fault.status, fault.headers);
-    if (fault !== undefined && fault.landed !== true) return failed();
-    const body = input().body;
-    const id = method === 'PATCH' ? Number(endpoint.split('/').pop()) : nextId++;
-    let row = comments.find(entry => entry.id === id);
-    if (!fake.writeLost) {
-      if (row) row.body = body;
-      else { row = { id, body, ...(onIssue === undefined ? {} : { issue: onIssue }) }; comments.push(row); }
-    }
-    appendFileSync(${JSON.stringify(ghLog)} + '.comments', JSON.stringify({ issue: row?.issue ?? onIssue ?? pr.number, body }) + '\\n');
-    if (fault !== undefined) return failed();
-    return result(0, JSON.stringify({ id, body, html_url: commentUrl(row ?? { id, issue: onIssue }) }), undefined, method === 'POST' ? 201 : 200);
-  }
-  return result(95, '', 'unexpected gh call');
+}
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const command = JSON.parse(process.env.ARCHON_CLI_COMMAND || '[]');
+  const forgeCall = command.length > 0 && command.every((part, index) => argv[index] === part) && argv[command.length] === 'forge';
+  if (!forgeCall) return original(argv, settings);
+  const rest = argv.slice(command.length);
+  appendFileSync(logs.forge, rest.join(' ') + '\\n');
+  const op = rest[1];
+  const dataFile = rest.indexOf('--data-file');
+  const raw = dataFile >= 0 ? readFileSync(rest[dataFile + 1], 'utf8') : rest[rest.indexOf('--data') + 1];
+  if (dataFile >= 0) appendFileSync(logs.requests, raw + '\\n');
+  const result = answer(op, JSON.parse(raw));
+  const response = result.ok
+    ? { operationId: 'op-' + op, ok: true, result: { op, value: result.value } }
+    : { operationId: 'op-' + op, ok: false, error: { kind: 'forge_error', message: result.message }, mutation: { op, outcome: result.outcome } };
+  return { exitCode: result.ok ? 0 : 1, stdout: Buffer.from(JSON.stringify(response)), stderr: Buffer.from('') };
 } });
+}
 `;
 }
 
 export interface ScriptOptions {
   /** Additional subprocess preload code; `{ARTIFACTS}` resolves as in inputs. */
   readonly preload?: string;
-  readonly source?: string;
-  readonly gh?: GhFake;
+  /** The stateful fake forge's starting state. */
+  readonly tracker?: TrackerFake;
   readonly forge?: ForgeFake;
   /**
    * `INPUTS_*` values this script reads, beyond the recorded pull request.
@@ -439,7 +376,47 @@ export function packScriptRunner(): PackScriptRunner {
   };
 }
 
+/** The env that points a script's `archon forge` calls at the chosen forge. */
+function forgeEnv(
+  root: string,
+  forge: ForgeFake,
+  logs: { forge: string; requests: string; reads: string }
+): Record<string, string> {
+  if (forge.kind === 'no-host') return { ARCHON_CLI_COMMAND: '' };
+  // Never executed: the preload answers every `forge` call under this command.
+  if (forge.kind === 'state') return { ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, join(root, 'fake-forge')]) };
+  if (forge.kind === 'command') return { ARCHON_CLI_COMMAND: JSON.stringify(forge.argv) };
+  if (forge.kind === 'home') {
+    const home = join(root, 'home');
+    mkdirSync(home);
+    writeFileSync(join(home, 'config.yaml'), JSON.stringify({ forge: forge.config }));
+    return { ARCHON_CLI_COMMAND: JSON.stringify(hostCli()), ARCHON_HOME: home, HOME: home, ARCHON_TELEMETRY_DISABLED: '1' };
+  }
+  const cli = join(root, 'fake-archon.ts');
+  const responses = forge.response === undefined ? null : typeof forge.response === 'string' ? [forge.response] : forge.response;
+  writeFileSync(
+    cli,
+    `import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
+const argv = process.argv.slice(2);
+appendFileSync(${JSON.stringify(logs.forge)}, argv.join(' ') + '\\n');
+const dataFile = argv.indexOf('--data-file');
+if (dataFile >= 0) appendFileSync(${JSON.stringify(logs.requests)}, readFileSync(argv[dataFile + 1], 'utf8') + '\\n');
+const responses = ${JSON.stringify(responses)};
+if (responses === null) { process.stderr.write('plugin unavailable'); process.exitCode = 1; }
+else {
+  const reads = existsSync(${JSON.stringify(logs.reads)}) ? Number(readFileSync(${JSON.stringify(logs.reads)}, 'utf8')) : 0;
+  writeFileSync(${JSON.stringify(logs.reads)}, String(reads + 1));
+  const chosen = JSON.parse(responses[Math.min(reads, responses.length - 1)]);
+  process.stdout.write(JSON.stringify(chosen));
+  process.exitCode = chosen.ok === true ? ${String(forge.okExitCode ?? 0)} : 1;
+}
+`
+  );
+  return { ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, cli]) };
+}
+
 function runPackScriptIn(root: string, relative: string, options: ScriptOptions): ScriptRun {
+  const sideLog = join(root, 'tracker');
   const ghLog = join(root, 'gh.log');
   const forgeLog = join(root, 'forge.log');
   const requestLog = join(root, 'forge-requests');
@@ -455,8 +432,15 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
     mkdirSync(dirname(join(artifacts, name)), { recursive: true });
     writeFileSync(join(artifacts, name), resolveArtifacts(content));
   }
+  const forge = options.forge ?? { kind: 'state' };
+  const stateful = forge.kind === 'state' || (forge.kind === 'command' && forge.fakeForge === true);
   const preload = join(root, 'preload.ts');
-  writeFileSync(preload, fakeGhPreload(options.gh ?? {}, ghLog) + resolveArtifacts(options.preload ?? ''));
+  writeFileSync(
+    preload,
+    ghGuardPreload(ghLog) +
+      (stateful ? fakeForgePreload(options.tracker ?? {}, { forge: forgeLog, requests: requestLog, side: sideLog }) : '') +
+      resolveArtifacts(options.preload ?? '')
+  );
 
   // The engine hands every exec node a typed-artifact listing; an empty one by default.
   const listing = join(root, 'typed-artifacts.json');
@@ -468,53 +452,11 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
     INPUTS_EXPECTED: '[]',
     ARTIFACTS_DIR: artifacts,
     TYPED_ARTIFACTS_FILE: listing,
-    ARCHON_SDLC_FORGE: options.source ?? '',
-    ARCHON_CLI_COMMAND: '',
     ...Object.fromEntries(
       Object.entries(options.inputs ?? {}).map(([key, value]) => [key, resolveArtifacts(value)])
     ),
   };
-  const forge = options.forge ?? { kind: 'fake' };
-  if (forge.kind === 'home') {
-    const home = join(root, 'home');
-    mkdirSync(home);
-    writeFileSync(join(home, 'config.yaml'), JSON.stringify({ forge: forge.config }));
-    Object.assign(env, {
-      ARCHON_CLI_COMMAND: JSON.stringify(hostCli()),
-      ARCHON_HOME: home,
-      HOME: home,
-      ARCHON_TELEMETRY_DISABLED: '1',
-    });
-  } else if (forge.kind === 'command') {
-    env.ARCHON_CLI_COMMAND = JSON.stringify(forge.argv);
-  } else if (forge.kind === 'fake') {
-    const cli = join(root, 'fake-archon.ts');
-    const responses =
-      forge.response === undefined
-        ? undefined
-        : typeof forge.response === 'string'
-          ? [forge.response]
-          : forge.response;
-    writeFileSync(
-      cli,
-      `import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
-const argv = process.argv.slice(2);
-appendFileSync(${JSON.stringify(forgeLog)}, argv.join(' ') + '\\n');
-const dataFile = argv.indexOf('--data-file');
-if (dataFile >= 0) appendFileSync(${JSON.stringify(requestLog)}, readFileSync(argv[dataFile + 1], 'utf8') + '\\n');
-const responses = ${JSON.stringify(responses ?? null)};
-if (responses === null) { process.stderr.write('plugin unavailable'); process.exitCode = 1; }
-else {
-  const reads = existsSync(${JSON.stringify(readsLog)}) ? Number(readFileSync(${JSON.stringify(readsLog)}, 'utf8')) : 0;
-  writeFileSync(${JSON.stringify(readsLog)}, String(reads + 1));
-  const chosen = JSON.parse(responses[Math.min(reads, responses.length - 1)]);
-  process.stdout.write(JSON.stringify(chosen));
-  process.exitCode = chosen.ok === true ? ${String(forge.okExitCode ?? 0)} : 1;
-}
-`
-    );
-    env.ARCHON_CLI_COMMAND = JSON.stringify([process.execPath, cli]);
-  }
+  Object.assign(env, forgeEnv(root, forge, { forge: forgeLog, requests: requestLog, reads: readsLog }));
 
   // Parent env files must not reintroduce workflow inputs omitted by the fixture.
   const result = spawnSync(process.execPath, ['--no-env-file', '--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
@@ -522,6 +464,7 @@ else {
     env,
     encoding: 'utf8',
   });
+  refuseGhSpawns(ghLog);
   const lines = (path: string): string[] =>
     existsSync(path)
       ? readFileSync(path, 'utf8')
@@ -532,13 +475,12 @@ else {
     code: result.status ?? -1,
     stdout: result.stdout ?? '',
     stderr: result.stderr ?? '',
-    gh: lines(ghLog),
     forge: lines(forgeLog),
     forgeRequests: lines(requestLog),
-    createdIssues: lines(`${ghLog}.issues`).map(line => JSON.parse(line) as GhIssue),
-    comments: lines(`${ghLog}.comments`).map(line => JSON.parse(line) as ScriptRun['comments'][number]),
-    closes: lines(`${ghLog}.closes`).map(line => JSON.parse(line) as ScriptRun['closes'][number]),
-    bodies: lines(`${ghLog}.bodies`).map(line => JSON.parse(line) as string),
+    createdIssues: lines(`${sideLog}.issues`).map(line => JSON.parse(line) as TrackerIssue),
+    comments: lines(`${sideLog}.comments`).map(line => JSON.parse(line) as ScriptRun['comments'][number]),
+    closes: lines(`${sideLog}.closes`).map(line => JSON.parse(line) as ScriptRun['closes'][number]),
+    bodies: lines(`${sideLog}.bodies`).map(line => JSON.parse(line) as string),
     artifacts,
   };
 }
@@ -623,4 +565,21 @@ export function forgeFailure(
     error: { kind: 'forge_error', message },
     mutation: { op, target: PR, outcome, ...extra },
   });
+}
+
+/** Every forge operation a run invoked, with the request it sent, in call order. */
+export function forgeCalls(run: Pick<ScriptRun, 'forge' | 'forgeRequests'>): { op: string; request: Record<string, unknown> }[] {
+  return run.forge.map((argv, index) => ({
+    op: argv.split(' ')[1] ?? '',
+    request: JSON.parse(run.forgeRequests[index] ?? '{}') as Record<string, unknown>,
+  }));
+}
+
+/** The labels a run added to, and removed from, the issue numbered `number`. */
+export function labelWrites(run: Pick<ScriptRun, 'forge' | 'forgeRequests'>, number: number): { add: string[]; remove: string[] } {
+  const on = forgeCalls(run).filter(
+    call => (call.request.subject as { ref?: { number?: number } } | undefined)?.ref?.number === number
+  );
+  const names = (op: string): string[] => on.filter(call => call.op === op).map(call => String(call.request.name));
+  return { add: names('workitem.label.add'), remove: names('workitem.label.remove') };
 }

@@ -1,4 +1,5 @@
 import { bashInvocation } from '../../../bash-invocation';
+import type { InvocationListings } from '../../../invocation-listings';
 import { hostSpawnFailure, type RawSubprocessRejection } from '../../../subprocess';
 import { currentAdoptedRunDir } from '../../../workflow-variables';
 import { getLog } from '../../log';
@@ -19,7 +20,7 @@ export async function runGroupUntilBash(
     script: () => string;
     loopUserInput: string;
     loopPrevOutput: string;
-    typedArtifactsFile: string;
+    listings: InvocationListings;
   }
 ): Promise<boolean | LoopGroupBodyResult> {
   const { ctx, node } = run;
@@ -57,7 +58,7 @@ export async function runGroupUntilBash(
           rejectionReason: '',
           issueContext: ctx.issueContext,
           adoptedRunDir: currentAdoptedRunDir(),
-          typedArtifactsFile: bash.typedArtifactsFile,
+          ...bash.listings,
           nodeExecution: ctx.currentExecution ?? null,
         }),
       }

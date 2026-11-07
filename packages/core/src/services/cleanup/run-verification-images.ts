@@ -9,7 +9,7 @@ import {
 } from '@archon/isolation';
 import { createLogger } from '@archon/paths';
 import { noExecutorCanWrite } from '@archon/workflows/run-scratch';
-import type { WorkflowDeps } from '@archon/workflows/deps';
+import type { ReleaseVerificationImages, WorkflowDeps } from '@archon/workflows/deps';
 import {
   isContainerRun,
   isTerminalRunStatus,
@@ -17,14 +17,16 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { FAN_OUT_CANCEL_REASONS, type IWorkflowStore } from '@archon/workflows/store';
 
+/** A supplied factory effect binds the resource owner for calls without a live backend. */
 export function createRunResourceRelease(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
-  release: typeof releaseRunVerificationImages = releaseRunVerificationImages
+  release?: typeof releaseRunVerificationImages
 ): NonNullable<WorkflowDeps['releaseRunResources']> {
-  const usesDocker = release === releaseRunVerificationImages;
+  const hostRelease = release ?? releaseRunVerificationImages;
+  const usesDocker = hostRelease === releaseRunVerificationImages;
   const dockerInstalledAtSetup =
     usesDocker && Bun.which('docker', { PATH: process.env.PATH }) !== null;
-  return async runId => {
+  return async (runId, releaseVerificationImages) => {
     const log = createLogger('cleanup.verification-images');
     try {
       const run = await store.getWorkflowRun(runId);
@@ -44,13 +46,15 @@ export function createRunResourceRelease(
         log.debug({ runId }, 'verification_images.kept_for_resumable_run');
         return;
       }
-      const envId = run.metadata[ISOLATION_ENV_ID_METADATA_KEY];
-      if (isContainerRun(run) && (typeof envId !== 'string' || !envId.trim())) {
-        throw new Error(`Missing container identity for verification image cleanup: ${runId}`);
+      if (isContainerRun(run)) {
+        return await releaseContainerImages(
+          runId,
+          run.metadata[ISOLATION_ENV_ID_METADATA_KEY],
+          releaseVerificationImages ?? release
+        );
       }
       // Docker is optional on host runs, but it may have appeared during execution.
       if (
-        !isContainerRun(run) &&
         usesDocker &&
         !dockerInstalledAtSetup &&
         !Bun.which('docker', { PATH: process.env.PATH })
@@ -58,11 +62,8 @@ export function createRunResourceRelease(
         log.debug({ runId }, 'verification_images.skipped_docker_not_installed');
         return;
       }
-      return await release(
-        runId,
-        isContainerRun(run) && typeof envId === 'string' ? envId : undefined
-      ).catch((err: unknown) => {
-        if (isContainerRun(run) || !(err instanceof VerificationImageInventoryError)) throw err;
+      return await hostRelease(runId, undefined).catch((err: unknown) => {
+        if (!(err instanceof VerificationImageInventoryError)) throw err;
         log.warn({ err, runId }, 'verification_images.inventory_inconclusive');
         const warning =
           `WARNING: Run ${runId} verification image inventory failed; cleanup is inconclusive. ` +
@@ -80,4 +81,18 @@ export function createRunResourceRelease(
       throw err;
     }
   };
+}
+
+async function releaseContainerImages(
+  runId: string,
+  envId: unknown,
+  release: ReleaseVerificationImages | undefined
+): Promise<void> {
+  if (typeof envId !== 'string' || !envId.trim()) {
+    throw new Error(`Missing container identity for verification image cleanup: ${runId}`);
+  }
+  if (!release) {
+    throw new Error(`Missing container resource owner for verification image cleanup: ${runId}`);
+  }
+  await release(runId, envId);
 }

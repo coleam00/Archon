@@ -18,7 +18,7 @@ const TEST_CODE = /(^|[^.\w])(describe|it|test|expect)(\.\w+)*\s*\(|\bdef test_\
  * longer have. Unchanged lines count because a changed test's body can show its
  * `expect(` only in the lines around the edit.
  *
- * A file GitHub reports without a patch (binary, or a diff too large to render) counts
+ * A file the forge reports without a patch (binary, or a diff too large to render) counts
  * only by its path. Its text would mostly exceed what the reader inlines anyway.
  */
 export function holdsTestCode(path: string, patch: string | null): boolean {

@@ -522,6 +522,10 @@ async function createRunContext(
     runChildWorkflow,
     workflowRun,
     workflowName: workflow.name,
+    workflowPack:
+      workflow.pack === undefined
+        ? undefined
+        : { source: workflow.pack.source, key: workflow.pack.key },
     workflowSourceRoots: workflowSourceRoots ?? liveSourceRoots(cwd),
     config,
     workflowProvider,

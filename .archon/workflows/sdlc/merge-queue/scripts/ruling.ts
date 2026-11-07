@@ -1,8 +1,8 @@
 /**
  * Act on a person's answer to the merge queue's attention item.
  *
- * The answer is one of the declared choices, so its effect is read from the choice,
- * never from the answer's text. On a pull request: `merge` records the approval pinned
+ * The answer is one of the declared choices, and the wait returns that choice as the
+ * answer's value, so its effect is read from the choice, never from the answer's text. On a pull request: `merge` records the approval pinned
  * to the head that was asked about, and the next sweep merges it once the gate passes
  * at that head; `return` hands the item back to the build queue with the brief the
  * sweep wrote; `park` stops working it until renewed build readiness or, for an
@@ -12,22 +12,22 @@
  * them as the contract; an enrolled own pull request has no issue body, so its ruling
  * stays on its work item. On a red default branch the only answer is `hold`: the queue
  * merges nothing while the branch is red, which every sweep reads from the forge, so
- * nothing is written. A `merge` then starts a sweep at once, on the run config and input
- * selections this run started with, and a `return` the item's next build-queue round, on
- * this run's config and the build queue's own input defaults; if that launch fails, the
- * next queue run picks the item up as before.
+ * nothing is written. A `merge` then starts a sweep at once through the operator's
+ * merge-queue binding, and a `return` the item's next round through the build-queue
+ * binding; if it does not start, the next queue run picks the item up as before.
  *
- * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE and INPUTS_TEXT, the
- * attention answer; INPUTS_LIMIT, INPUTS_MERGE_METHOD and INPUTS_RETRIAGE_AS, the workflow's inputs.
+ * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE, the chosen choice (the
+ * answer's value), and INPUTS_TEXT, the answer's text; INPUTS_MERGE_QUEUE_BINDING and
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's inputs.
  */
 
-import { withBuild } from '../../.shared/build.ts';
+import { nextRound, withBuild } from '../../.shared/build.ts';
+import { followUp } from '../../.shared/follow-up.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { launchDetached, type MergeQueueSelections } from '../../.shared/launch.ts';
+import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
-import { chosen, rulingHeading } from '../../.shared/queue.ts';
+import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
 const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<
@@ -35,22 +35,14 @@ const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const
   MergeStatus
 >;
 
-/** Act on the answer now; on failure the released item waits for the next queue run. */
-function continueNow(effect: string, item: QualifiedPr, runId: string, selections: MergeQueueSelections): string {
-  if (effect !== 'merge' && effect !== 'return') return '';
-  const repo = { repo_host: item.repo.host, repo_path: item.repo.path };
-  try {
-    const next =
-      effect === 'merge'
-        ? launchDetached('archon-merge-queue', { ...selections, ...repo }, { configFromRun: runId })
-        : // The build queue declares none of the merge queue's selections, so a returned
-          // round runs on the build queue's defaults.
-          launchDetached('archon-build-queue', { ...repo, number: String(item.number) }, { configFromRun: runId });
-    return `; run ${next} acts on it now`;
-  } catch (error) {
-    note(`issue ${String(item.number)}: the follow-up run did not start, so the next queue run picks it up: ${error instanceof Error ? error.message : String(error)}`);
-    return '; the next queue run picks it up';
-  }
+/** Act on the answer now; when that does not start, the released item waits for the next queue run. */
+function continueNow(effect: string, item: QualifiedPr, runId: string): string {
+  if (effect === 'return') return `; ${nextRound(item, runId)}`;
+  if (effect !== 'merge') return '';
+  const { host, path } = item.repo;
+  // A sweep merges whatever waits; the binding names the repository, so it takes no inputs.
+  const key = `merge-sweep:${host}/${path}#${String(item.number)}:${runId}`;
+  return `; ${followUp(text(process.env.INPUTS_MERGE_QUEUE_BINDING), key, {}, 'a sweep')}`;
 }
 
 /**
@@ -70,10 +62,10 @@ function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, a
 function main(): void {
   const asked = nullableJson(process.env.INPUTS_ASKED) as MergeAsked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const id = trimmed(process.env.INPUTS_CHOICE);
+  const answered = nullableJson(process.env.INPUTS_CHOICE) as Choice<string> | null;
+  if (answered === null) throw new Error(PRE_VALUE_ANSWER);
   const words = trimmed(process.env.INPUTS_TEXT);
   if (asked.by === 'base') {
-    chosen(asked.attention, id);
     emit({
       decision: 'hold',
       section: '',
@@ -84,13 +76,8 @@ function main(): void {
 
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-  const choice = chosen(asked.attention, id);
+  const choice = answered as MergeAttention['choices'][number];
   const at = new Date().toISOString();
-  const selections: MergeQueueSelections = {
-    limit: text(process.env.INPUTS_LIMIT),
-    merge_method: text(process.env.INPUTS_MERGE_METHOD),
-    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
-  };
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')
     .join('\n\n');
@@ -123,7 +110,7 @@ function main(): void {
   emit({
     decision: choice.effect,
     section: heading,
-    summary: `PR ${String(asked.pr.number)}: the maintainer chose ${choice.id} (${choice.effect})${continueNow(choice.effect, asked.item, runId, selections)}.`,
+    summary: `PR ${String(asked.pr.number)}: the maintainer chose ${choice.id} (${choice.effect})${continueNow(choice.effect, asked.item, runId)}.`,
   });
 }
 

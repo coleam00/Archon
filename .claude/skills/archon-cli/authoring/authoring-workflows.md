@@ -182,7 +182,7 @@ checked by outcome, through dry-run fixtures (`archon workflow test`) and real r
 never by a test that pins a prompt's wording, the YAML's shape or the route a run
 takes. Do not retest what the engine owns (`when:`, includes, loops, output
 validation). In an Archon checkout, `.archon/workflow-language-constitution.md` and
-`.archon/workflows/sdlc/CONSTITUTION.md` (sections 1 to 5 and 13) state these rules
+`.archon/workflows/sdlc/CONSTITUTION.md` (its sections on agents, scripts and tests) state these rules
 in full.
 
 ## Start simple, then adapt to what runs teach
@@ -230,8 +230,11 @@ will maintain it. Declare Python dependencies inline (`deps:` for `uv`); keep
 Put shared `.ts`, `.js`, or `.py` modules and `.md` documents in
 `<pack>/.shared/` (subfolders are supported). This reserved directory supplies
 modules and documents, never workflow definitions or `script:` targets. Documents
-ship beside the modules in every build, so a script finds one relative to its own
-location and hands its path to a prompt node through `with:`. Missing packaged script targets fail at load time. From `<workflow>/scripts/publish.ts`, Bun can import
+ship beside the modules in every build. Any node reads one through `$PACK_DIR`, the
+pack's directory in the run's source: a prompt or command file names
+`$PACK_DIR/.shared/policy/triage.md`, and `bash:`/`script:` nodes also get `PACK_DIR` in
+their environment. No helper script or `with:` hop is needed; an `include:` cannot pass
+`$PACK_DIR` through `with:`, because the block would resolve it in its own pack. Missing packaged script targets fail at load time. From `<workflow>/scripts/publish.ts`, Bun can import
 `../../.shared/result.ts`. Python files can add
 `str(Path(__file__).resolve().parents[2] / ".shared")` to `sys.path` using
 `pathlib.Path`, then import normally; Archon does not inject `PYTHONPATH`.

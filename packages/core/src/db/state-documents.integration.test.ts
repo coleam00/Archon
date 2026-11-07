@@ -4,6 +4,7 @@ import { Database } from 'bun:sqlite';
 import {
   assertPatchSurvivesInterleavedWrites,
   assertStateProcessRaces,
+  sqlStateLeaseRuns,
 } from './state-documents.process-contract';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -20,6 +21,7 @@ describeStateDocumentConformance('SQLite', async () => {
   const db = new SqliteAdapter(join(root, 'state.db'));
   return {
     store: createSqlStateDocumentStore(() => db),
+    runs: sqlStateLeaseRuns(db),
     backdate: async (scope, name) => {
       await db.query(
         'UPDATE remote_agent_state_revisions SET created_at = $3 WHERE project_key = $1 AND name = $2',

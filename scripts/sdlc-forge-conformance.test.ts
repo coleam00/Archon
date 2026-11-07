@@ -9,7 +9,6 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { ghTokenKeysForHost } from '@archon/paths/github-token-env';
 import {
   cliForgeMetadataRequestSchema,
   cliForgeResponseSchema,
@@ -43,11 +42,9 @@ import {
   REMEDY,
   type ReviewsResult,
 } from '../.archon/workflows/sdlc/.shared/forge';
-import {
-  ghTokenNames,
-  REQUIRED_FORGE_OPERATIONS,
-} from '../.archon/workflows/sdlc/.shared/forge-check';
+import { REQUIRED_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/forge-check';
 import { MERGE_QUEUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/merge';
+import { TEST_VALUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/test-value';
 import { CLOSE_REASONS } from '../.archon/workflows/sdlc/.shared/issue';
 
 const { runPackScript } = packScriptRunner();
@@ -154,8 +151,9 @@ test('the pack projections of the merge and review operations carry typed eviden
   ).toBe('landed');
 });
 
-// Delivery and the merge queue each preflight their own operations; merge-queue.test.ts
-// proves the merge queue's list against the operations it calls.
+// Delivery, the merge queue and the test-value metric each preflight their own
+// operations; merge-queue.test.ts proves the merge queue's list against the operations
+// it calls.
 test('preflight capabilities cover the forge operations the pack calls', () => {
   const root = join(import.meta.dir, '../.archon/workflows/sdlc');
   const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
@@ -169,7 +167,14 @@ test('preflight capabilities cover the forge operations the pack calls', () => {
       )
     );
   expect(used).toContain('checks.state');
-  const preflighted = new Set([...REQUIRED_FORGE_OPERATIONS, ...MERGE_QUEUE_FORGE_OPERATIONS]);
+  // Typed as operation names, so a capability token such as `pr.view:any-state` cannot
+  // enter a preflight list. The build queue's any-state lookup runs no preflight: the
+  // host refuses it on a plugin without the capability, naming it.
+  const preflighted = new Set<ForgeRequest['op']>([
+    ...REQUIRED_FORGE_OPERATIONS,
+    ...MERGE_QUEUE_FORGE_OPERATIONS,
+    ...TEST_VALUE_FORGE_OPERATIONS,
+  ]);
   expect(used.sort()).toEqual([...preflighted].sort());
 });
 
@@ -214,15 +219,9 @@ test('the pack reads host responses with credential attribution and metadata int
   }
 });
 
-test('forge-check names the token env vars @archon/paths assigns to each gh host', () => {
-  for (const host of ['github.com', 'acme.ghe.com', 'git.example.com'])
-    expect(ghTokenNames(host)).toEqual(ghTokenKeysForHost(host));
-});
-
 test("forge-check's metadata request conforms to the CLI host input", () => {
   const run = runPackScript('deliver/scripts/forge-check', {
     cwd: gitCheckout({}, trackTempRoot),
-    source: 'forge',
     forge: {
       kind: 'fake',
       response: [

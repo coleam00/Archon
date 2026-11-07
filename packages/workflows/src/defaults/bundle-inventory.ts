@@ -9,6 +9,7 @@ import {
   type WorkflowResourceOwner,
 } from '../packaged-workflow';
 import { FIXTURES_DIR } from '../fixture-layout';
+import { METRIC_VIEWS_FILE } from '../schemas/metric-view';
 import type { BundledScriptPack } from './bundled-script-pack';
 
 const indexSchema = z
@@ -103,12 +104,12 @@ async function entryType(
   return entry.isSymbolicLink() ? await stat(join(directory, entry.name)) : entry;
 }
 
-// `.shared/` holds a pack's runtime modules and its markdown documents. Other
-// extensions stay out: untracked strays such as `__pycache__/*.pyc` would otherwise
-// be selected and fail generation.
+// `.shared/` holds a pack's runtime modules, its markdown documents and its metric
+// views. Other files stay out: untracked strays such as `__pycache__/*.pyc` would
+// otherwise be selected and fail generation.
 function isSharedFile(name: string): boolean {
   const extension = extname(name);
-  return runtime(extension) !== undefined || extension === '.md';
+  return runtime(extension) !== undefined || extension === '.md' || name === METRIC_VIEWS_FILE;
 }
 
 async function sharedFiles(directory: string): Promise<string[]> {

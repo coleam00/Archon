@@ -96,7 +96,7 @@ assistants:
     # Invalid explicit pins fail instead of falling back.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
-    model: gpt-5.6-terra
+    model: gpt-6.1-terra
     modelReasoningEffort: medium
     webSearchMode: disabled
     additionalDirectories:
@@ -140,7 +140,7 @@ workflows:
 # custom workflows, direct chat (`large`), and title generation (`small`).
 tiers:
   large: { provider: claude, model: opus }
-  medium: { provider: codex, model: gpt-5.6-terra, effort: high }
+  medium: { provider: codex, model: gpt-6.1-terra, effort: high }
   small: { provider: pi, model: minimax-m3 }
 
 # Model aliases — custom refs. Project workflows can name one directly; a bundled
@@ -227,7 +227,7 @@ assistants:
     settingSources:  # Override global settingSources for this repo
       - project
   codex:
-    model: gpt-5.6-terra
+    model: gpt-6.1-terra
     webSearchMode: live
 
 # Commands configuration
@@ -280,7 +280,7 @@ defaults:
 
 # Model tiers and aliases override global entries with the same name (repo > global).
 # tiers:
-#   small: { provider: codex, model: gpt-5.6-luna }
+#   small: { provider: codex, model: gpt-6-luna }
 # aliases:
 #   '@fast': { provider: claude, model: haiku }
 

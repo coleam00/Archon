@@ -17,10 +17,14 @@ export const mockFolderBackendPrepare = mock(
   })
 );
 export const mockFolderBackendDestroy = mock(() => Promise.resolve());
+export const mockFolderBackendReleaseImages = mock(
+  async (_runId: string, _envId: string) => undefined
+);
 export const mockResolveFolderBackend = mock(() => ({
   prepare: mockFolderBackendPrepare,
   resumeEnv: mockFolderBackendPrepare,
   destroy: mockFolderBackendDestroy,
+  releaseVerificationImages: mockFolderBackendReleaseImages,
 }));
 
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)

@@ -19,6 +19,7 @@
  * any node whose provider lacks the `containerExec` capability.
  */
 
+import { releaseRunVerificationImages } from '../container/verification-images';
 import { IsolationFailure } from '../errors';
 import { randomUUID } from 'crypto';
 import type { BranchName } from '@archon/git';
@@ -236,6 +237,10 @@ export class ContainerBackend implements IIsolationBackend {
       envId: row.id,
       overlayMode,
     };
+  }
+
+  async releaseVerificationImages(runId: string, envId: string): Promise<void> {
+    await releaseRunVerificationImages(runId, envId, this.docker);
   }
 
   /**

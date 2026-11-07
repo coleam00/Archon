@@ -16,7 +16,7 @@
  * is theirs and the close throws.
  */
 
-import { forgeSource, samePr, type QualifiedPr } from './forge.ts';
+import { samePr, type QualifiedPr } from './forge.ts';
 import { closeIssue, type IssueView, NotAnIssueError, viewIssue } from './issue.ts';
 import { upsertComment } from './pr.ts';
 
@@ -97,9 +97,8 @@ export function closeComments(item: QualifiedPr, itemUrl: string, closure: Closu
 }
 
 function closeWithComments(item: QualifiedPr, itemUrl: string, closure: Closure): void {
-  const source = forgeSource();
   for (const comment of closeComments(item, itemUrl, closure)) {
-    upsertComment({ kind: 'issue', ref: comment.item }, comment.marker, comment.body, source);
+    upsertComment({ kind: 'issue', ref: comment.item }, comment.marker, comment.body);
   }
   closeIssue(item, closure.kind === 'duplicate' ? 'duplicate' : 'completed');
 }

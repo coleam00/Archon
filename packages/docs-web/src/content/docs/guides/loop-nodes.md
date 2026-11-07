@@ -62,7 +62,8 @@ A loop node iterates its prompt until one of these conditions is met:
 2. **Deterministic bash check** — an `until_bash` script exits with code 0
 3. **Structured field** — the iteration's validated `output_format` payload has the
    `until_field` property set to `true`
-4. **Max iterations reached** — the node fails with a clear error
+4. **Max iterations reached** — the node fails with a clear error, unless it sets
+   [`on_exhausted: complete`](#on_exhausted)
 
 A loop must declare **at least one** of `until` / `until_bash` / `until_field` — none
 is required on its own. They are OR'd: whichever fires first ends the loop, and the
@@ -93,7 +94,8 @@ Declaring more than one is fine and means "whichever fires first ends it".
     #                       # loaded once per run and reused for every iteration.
     #                       # Never combine with `prompt` — the loader rejects both together.
     until: COMPLETE         # Prose completion signal.
-    max_iterations: 10      # Required. Bounds autonomous iterations — node fails if exceeded.
+    max_iterations: 10      # Required. Bounds autonomous iterations; reaching it unmet fails the node.
+    on_exhausted: fail      # Optional. `complete` ends an exhausted loop with its last output.
     fresh_context: true     # Optional. Default: false.
     until_bash: "..."       # Bash script checked after each iteration; exit 0 = complete.
     until_field: done       # Property in this node's `output_format` whose validated
@@ -201,14 +203,61 @@ rejected at load.
 ### `max_iterations`
 
 Bounds autonomous iterations. If the loop reaches this count without meeting any
-declared completion channel, the node **fails** (not succeeds). This prevents runaway
-loops from burning tokens indefinitely.
+declared completion channel, the node **fails** (not succeeds), unless it sets
+[`on_exhausted: complete`](#on_exhausted). Either way the bound prevents runaway loops
+from burning tokens indefinitely.
 
 Only an explicit answer runs an iteration past the bound: a comment on a legacy
 [interactive gate](#interactive-and-gate_message), or an accepted answer to a `loop_group`'s
 [terminal attention wait](#pausing-to-ask-inside-the-body).
 Each accepted answer permits one more iteration, and each further iteration needs
 another accepted answer. A changed question can pause again in the same iteration.
+
+### `on_exhausted`
+
+What reaching `max_iterations` without meeting a completion channel does. The default,
+`fail`, fails the node as described above. `complete` completes the node with the last
+iteration's output instead, in the same shape a normal completion has: `$loop.output` and
+`$loop.output.<field>` read the last iteration's payload. Use it when running out of
+rounds is a normal ending of the work, not a crash.
+
+The node's output carries no extra flag. Tell an exhausted loop apart by its own
+completion field: when the loop ran out, the field its completion channel tests
+(`until_field`, or the value `until_bash` reads) is not met, so a downstream node can
+branch on it. A loop whose only channel is a prose `until` signal has no such field, so
+its downstream cannot tell exhaustion from completion; give it an `until_field` or an
+`until_bash` over a typed output when that matters. In a `loop_group`, the group's output
+is its terminal body node's output, so that node must declare `output_format` with the
+field for `$group.output.<field>` to resolve:
+
+```yaml
+- id: rounds
+  loop_group:
+    until_bash: 'test "$round.output.done" = "true"'
+    max_iterations: 4
+    on_exhausted: complete
+    nodes:
+      - id: work
+        prompt: "Do one round of the work."
+      - id: round
+        depends_on: [work]
+        prompt: "Report whether the work is done."
+        output_format:
+          type: object
+          properties: { done: { type: boolean } }
+          required: [done]
+- id: report
+  depends_on: [rounds]
+  when: "$rounds.output.done == 'false'"
+  bash: echo "stopped at the round limit"
+```
+
+The conversation receives a message saying the loop reached its limit and completed, and
+the node's completion record keeps `maxIterations`, the limit it ran out at.
+Only exhaustion completes: an iteration or body node that fails still fails the node.
+`max_iterations` stays required, and `on_exhausted` never runs an extra iteration. An
+answer that runs an iteration past the bound moves the limit with it, so exhaustion is
+judged at the extended limit. It applies to both `loop:` and `loop_group:`.
 
 Choose based on the work scope:
 - Simple refinement loops: 3–5
@@ -536,7 +585,7 @@ If you need to accumulate results across iterations, write them to files in
 | Scenario | Behavior |
 |----------|----------|
 | Iteration fails | A transient, rate-limited or capacity (`overloaded`) failure retries the iteration. Any other failure fails the node (no more iterations) |
-| Max iterations exceeded | Node fails with descriptive error |
+| Max iterations exceeded | Node fails with descriptive error; with `on_exhausted: complete`, node completes with the last iteration's output |
 | Workflow cancelled | Detected between iterations, node stops |
 | Idle timeout per iteration | The iteration is retried as a transient failure, whether or not its provider produced output first |
 | `retry` configured on node | Applies to each failed iteration; successful iterations are not replayed |
@@ -992,7 +1041,9 @@ iteration`, followed by an excerpt of the output and the `gate_message`.
   iteration with the comment as `$LOOP_USER_INPUT`.
 - On an iteration that did not complete, both forms run another iteration. On the final
   iteration (`max_iterations`), only a comment runs one more; approving with no comment
-  fails the node with `max_iterations`.
+  fails the node with `max_iterations`, or under `on_exhausted: complete` completes it
+  with the paused iteration's text output. A structured payload from that iteration is
+  not kept on this path, so `$loop.output.<field>` is empty.
 
 The rule is the same on every surface: chat `/workflow approve <id> [comment]`,
 `archon workflow approve <id> [comment]`, the HTTP endpoint (omit `comment` to
