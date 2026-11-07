@@ -317,6 +317,19 @@ describe('the discoveries scripts', () => {
     expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ claim: { run_id: 'pass-2' } });
   }, 60_000);
 
+  test('a waiting record stays undecided on its run, and the next pass queues it again', () => {
+    const at = install();
+    runArtifacts(at.outputRoot, RUN, { verdict: [record('on an open PR'), record('fixed')] });
+    const { outcome } = decide(at, { runId: 'pass-1', runs: [RUN] }, refs => [
+      { outcome: 'wait', key: 'open-pr-defect', refs: [refs[0] as string], title: 'On an open PR', reason: 'PR 42 adds this code and is open' },
+      { outcome: 'drop', key: 'fixed-defect', refs: [refs[1] as string], title: 'Fixed', reason: 'fixed at the base' },
+    ]);
+    expect(ok(outcome).waiting).toEqual([{ key: 'open-pr-defect', reason: 'PR 42 adds this code and is open' }]);
+    expect([outcome.createdIssues, outcome.comments]).toEqual([[], []]);
+    expect(state(at, `discoveries/runs/${RUN}`)).toEqual({ version: 1, claim: null, decided: [`${RUN}:review#1`], questions: [] });
+    expect(queued(script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'completed' } }))).toEqual([`${RUN}:review#0`]);
+  }, 60_000);
+
   test('an asked record keeps its run claimed by the asking run, and the answer reaches the next pass', () => {
     const at = install();
     runArtifacts(at.outputRoot, RUN, { verdict: [record('unclear'), record('clear')] });

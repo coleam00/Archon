@@ -52,6 +52,13 @@ inputs:
       `archon trigger fire`, so the round is admitted under that binding's resource,
       capacity and overlap policy, at most once per decision. Empty starts no
       follow-up; the next queue run picks the item up.
+  discoveries_binding:
+    default: ""
+    description: >-
+      The absolute path of the operator's binding config for this repository's
+      discoveries drain. A sweep that merged at least one pull request fires it with
+      `archon trigger fire`, at most once per sweep, so records about the merged code
+      are decided once that code is on the default branch. Empty starts no drain.
 
 returns: record
 
@@ -228,6 +235,19 @@ nodes:
         retriaged: { type: array, items: { type: integer } }
         summary: { type: string }
       required: [retriaged, summary]
+
+  # Starts a discoveries drain through the operator's binding after a sweep that merged.
+  - id: drain
+    script: drain
+    runtime: bun
+    depends_on: [record]
+    with:
+      merged: { from: "$record.output.merged" }
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+      required: [summary]
 
   # A paused run gives its resource slot back, so the next scheduled sweep can merge
   # other pull requests while this one waits.
