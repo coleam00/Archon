@@ -945,6 +945,81 @@ test.each(['worktreeRemoved', 'directoryClean'] as const)(
   }
 );
 
+async function advanceUnpublishedTip(mode: string, prHead: string): Promise<void> {
+  if (mode !== 'head-ahead' && mode !== 'branch-ahead') return;
+  if (mode === 'head-ahead') await git(env.working_path, 'checkout', '--detach', prHead);
+  await writeFile(join(env.working_path, 'unpublished'), 'keep me');
+  await git(env.working_path, 'add', 'unpublished');
+  await git(env.working_path, 'commit', '-qm', 'unpublished');
+  if (mode === 'branch-ahead') await git(env.working_path, 'checkout', '--detach', prHead);
+}
+
+test.each(
+  (['ancestry', 'patch', 'closed'] as const).flatMap(signal =>
+    (['covered', 'head-ahead', 'branch-ahead', 'dirty', 'paused'] as const).map(mode => ({
+      signal,
+      mode,
+    }))
+  )
+)(
+  'legacy $signal cleanup evidence with $mode work: every tip stays protected',
+  async ({ signal, mode }) => {
+    await git(repo, 'remote', 'rename', 'upstream', 'origin');
+    await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    await writeFile(join(env.working_path, 'feature'), 'published work');
+    await git(env.working_path, 'add', 'feature');
+    await git(env.working_path, 'commit', '-qm', 'feature');
+    const prHead = await git(env.working_path, 'rev-parse', 'HEAD');
+    await git(env.working_path, 'push', '-q', 'origin', 'HEAD:refs/heads/published-feature');
+    if (signal === 'ancestry') await git(repo, 'merge', '--ff-only', env.branch_name);
+    if (signal === 'patch') {
+      await writeFile(join(repo, 'main-only'), 'base work');
+      await git(repo, 'add', 'main-only');
+      await git(repo, 'commit', '-qm', 'advance base');
+      await git(repo, 'cherry-pick', prHead);
+      expect(await git(repo, 'rev-parse', 'HEAD')).not.toBe(prHead);
+    }
+    await git(repo, 'push', '-q', 'origin', 'main');
+    await advanceUnpublishedTip(mode, prHead);
+    if (mode === 'dirty') await writeFile(join(env.working_path, 'feature'), 'operator edits');
+    if (mode === 'paused') await seedRunAt(env.working_path, 'paused');
+    const failedRun = mode === 'covered' ? await seedRunAt(env.working_path, 'failed') : null;
+    const branchPr = spyOn(isolationModule, 'getPrState').mockResolvedValue(
+      signal === 'closed' ? { state: 'CLOSED', headSha: prHead } : { state: 'NONE' }
+    );
+    const commitPr = spyOn(isolationModule, 'getPrsForCommit').mockResolvedValue({ state: 'NONE' });
+    try {
+      if (signal === 'closed') {
+        const withoutOptIn = await cleanupMergedWorktrees(codebaseId, repo);
+        expect(withoutOptIn.removed).toEqual([]);
+        expect(await status()).toBe('active');
+      }
+      const result = await cleanupMergedWorktrees(codebaseId, repo, {
+        includeClosed: signal === 'closed',
+      });
+      const reclaimed = mode === 'covered';
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual(reclaimed ? [env.branch_name] : []);
+      expect(existsSync(env.working_path)).toBe(!reclaimed);
+      expect(await status()).toBe(reclaimed ? 'destroyed' : 'active');
+      expect(await git(repo, 'branch', '--list', env.branch_name)).toEqual(
+        reclaimed ? '' : expect.stringContaining(env.branch_name)
+      );
+      if (failedRun)
+        expect(result.releasedFailedRuns).toEqual([
+          {
+            branchName: env.branch_name,
+            runId: failedRun,
+            reason: signal === 'closed' ? 'PR closed' : 'merged',
+          },
+        ]);
+    } finally {
+      branchPr.mockRestore();
+      commitPr.mockRestore();
+    }
+  }
+);
+
 test.each([
   'covered',
   'head-base',
@@ -1112,6 +1187,9 @@ test.each([false, true])(
   async merged => {
     await git(repo, 'remote', 'rename', 'upstream', 'origin');
     await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    await writeFile(join(env.working_path, 'unmerged-feature'), 'not integrated');
+    await git(env.working_path, 'add', 'unmerged-feature');
+    await git(env.working_path, 'commit', '-qm', 'feature outside the base');
     const sharedTip = await git(env.working_path, 'rev-parse', 'HEAD');
     const remoteUrl = 'git@github.com:test/repo.git';
     const originalGhRepo = process.env.GH_REPO;
@@ -1147,7 +1225,7 @@ test.each([false, true])(
       expect(await status()).toBe(merged ? 'destroyed' : 'active');
       if (!merged) {
         expect(result.skipped).toEqual([
-          { branchName: env.branch_name, reason: 'no merged PR covers all local tips' },
+          { branchName: env.branch_name, reason: 'no cleanup evidence covers all local tips' },
         ]);
       }
     } finally {

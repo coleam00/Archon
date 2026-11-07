@@ -289,7 +289,8 @@ archon isolation cleanup [days] (default: 7)
 ## `isolation cleanup --merged` Flow
 
 1. `isolationCleanupMergedCommand` calls `cleanupMergedWorktrees` for each codebase.
-2. `judgeBranchForRemoval` checks the branch-name PR first. A merged PR authorizes
+2. `judgeBranchForRemoval` first checks base ancestry and patch equivalence, requiring
+   coverage of both the branch ref and worktree HEAD. Otherwise it checks the branch-name PR. A merged PR authorizes
    removal only if its head covers every existing local tip: worktree HEAD and
    recorded branch ref (`isRevCoveredBy`). With neither tip left, its state suffices.
 3. If branch lookup cannot prove coverage, `getPrsForCommit` discovers candidates
@@ -300,19 +301,20 @@ archon isolation cleanup [days] (default: 7)
    failure allows later candidates to be tried, but remains an error if none
    proves coverage. Lookup failure produces `pr-unavailable`; both failures keep
    the environment and prevent scheduled stale deletion.
-5. Without merged proof, an open PR produces `open-pr`; otherwise the verdict is
+5. Without eligible proof, an open PR produces `open-pr`; otherwise the verdict is
    `unmerged`, or `unjudgeable` when the branch ref is gone and no PR answers.
    Manual merged cleanup reports all of these. Ordinary `unmerged` can still
    proceed through the scheduled age policy and its unpushed-commit checks.
-6. A `merged` verdict reaches `checkRemoval`: dirty worktrees and running, pending,
-   or paused owners stay. A failed run's lock may be released by merged proof.
+6. A `merged` or explicitly included `pr-closed` verdict reaches `checkRemoval`: dirty worktrees and running, pending,
+   or paused owners stay. A failed run's lock may be released by this settlement.
    `provider.destroy` removes the worktree and local branch, then retires the
    registration. Remote branches are retained with a warning because ownership
    cannot be proved after retirement.
 
-Git ancestry into the base and patch equivalence do not authorize merged cleanup.
-Neither does a closed but unmerged PR, even with the legacy `includeClosed` option;
-that option remains accepted but has no effect. The optional `gh` CLI currently
+Manual `includeClosed` also authorizes closed PRs whose head covers every local tip,
+with a `pr-closed` verdict and `PR closed` release reason. Scheduled cleanup does not
+opt in. If base inspection fails, an eligible PR can independently prove coverage;
+otherwise the error retains the worktree. The optional `gh` CLI currently
 provides GitHub evidence. Missing `gh` or an unsupported remote supplies no PR
 proof; an applicable lookup that fails is unavailable evidence, never an empty
 successful response. No pack branch naming is used.

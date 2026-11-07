@@ -53,6 +53,7 @@ interface MergedSweep {
   repoPath: RepoPath;
   mainRepoPath: string;
   remote: string;
+  includeClosed: boolean;
   prStateCache: Map<string, PrLookup>;
   result: CleanupOperationResult;
 }
@@ -64,9 +65,7 @@ interface MergedSweep {
 export async function cleanupMergedWorktrees(
   codebaseId: string,
   mainRepoPath: string,
-  _options: {
-    /** @deprecated Closed PRs no longer authorize removal. */ includeClosed?: boolean;
-  } = {}
+  options: { includeClosed?: boolean } = {}
 ): Promise<CleanupOperationResult> {
   getRegisteredPlatformPolicies();
   const environments = (await isolationEnvDb.listByCodebase(codebaseId)).filter(
@@ -78,6 +77,7 @@ export async function cleanupMergedWorktrees(
     repoPath,
     mainRepoPath,
     remote,
+    includeClosed: options.includeClosed ?? false,
     prStateCache: new Map<string, PrLookup>(),
     result: {
       errors: [],
@@ -95,11 +95,13 @@ export async function cleanupMergedWorktrees(
       continue;
     }
     const verdict = await judgeMergedEnvironment(env, sweep);
-    if (verdict === 'merged') {
-      await removeMergedEnvironment(env, sweep);
+    if (verdict === 'merged' || verdict === 'pr-closed') {
+      await removeMergedEnvironment(env, verdict, sweep);
     } else if (verdict) {
       const skipReason =
-        verdict === 'unmerged' ? 'no merged PR covers all local tips' : skipReasonFor(verdict);
+        verdict === 'unmerged'
+          ? 'no cleanup evidence covers all local tips'
+          : skipReasonFor(verdict);
       if (skipReason)
         sweep.result.skipped.push({ branchName: env.branch_name, reason: skipReason });
     }
@@ -119,6 +121,7 @@ async function judgeMergedEnvironment(
       branchName: toBranchName(env.branch_name),
       prStateCache: sweep.prStateCache,
       remote: sweep.remote,
+      includeClosed: sweep.includeClosed,
       worktreePath: toWorktreePath(env.working_path),
     });
   } catch (error) {
@@ -137,10 +140,11 @@ async function judgeMergedEnvironment(
 
 async function removeMergedEnvironment(
   env: IsolationEnvironmentRow,
+  verdict: 'merged' | 'pr-closed',
   sweep: MergedSweep
 ): Promise<void> {
   try {
-    const check = await checkRemoval(env, sweep.repoPath, { kind: 'merged' });
+    const check = await checkRemoval(env, sweep.repoPath, { kind: verdict });
     if (check.blocker) {
       sweep.result.skipped.push({ branchName: env.branch_name, reason: check.blocker.display });
       return;

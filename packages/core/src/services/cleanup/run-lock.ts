@@ -45,9 +45,12 @@ function toLiveRunBlocker(run: { id: string; status: string }): LiveRunBlocker {
  * What a cleanup sweep has established about an environment's outcome. A failed
  * run's lock lasts only until one of these holds.
  */
-export type CleanupSettlement = { kind: 'merged' } | { kind: 'stale'; staleDays: number };
+export type CleanupSettlement =
+  | { kind: 'merged' }
+  | { kind: 'pr-closed' }
+  | { kind: 'stale'; staleDays: number };
 
-export type FailedRunReleaseReason = 'merged' | 'stale';
+export type FailedRunReleaseReason = 'merged' | 'PR closed' | 'stale';
 
 export interface ReleasedFailedRun {
   runId: string;
@@ -62,19 +65,20 @@ export type CleanupRunLock =
 
 const RELEASE_REASONS: Record<CleanupSettlement['kind'], FailedRunReleaseReason> = {
   merged: 'merged',
+  'pr-closed': 'PR closed',
   stale: 'stale',
 };
 
 /**
  * The run lock a cleanup sweep must respect. Running, pending, and paused runs
  * always lock. A failed run locks until the sweep's settlement releases it (#4090):
- * a merged PR, or inactivity past the stale window. The run row is left
- * as it is.
+ * Git integration, a merged or explicitly included closed PR, or inactivity past
+ * the stale window. The run row is left as it is.
  *
  * Removal force-deletes a branch Archon created, so age alone never removes an
  * environment whose worktree HEAD or branch holds a commit on no remote, whether
  * or not a run owns it: that work stays until an operator removes it explicitly.
- * The merged verdict already proved one merged PR head covers both.
+ * Merged or closed-PR settlement already proved coverage of both local tips.
  */
 export async function getCleanupRunLock(
   env: { id: string; working_path: string; branch_name: string | null },

@@ -281,13 +281,13 @@ function printCleanupOperationResult(result: CleanupOperationResult): void {
 }
 
 /**
- * Cleanup isolation environments whose local tips are covered by a merged PR
+ * Cleanup worktrees covered by Git integration or an eligible PR
  * Retains remote branches for operator inspection
  */
 export async function isolationCleanupMergedCommand(
   options: { includeClosed?: boolean } = {}
 ): Promise<0 | 1> {
-  console.log('Finding environments covered by merged pull requests...');
+  console.log('Finding worktrees covered by Git integration or eligible pull requests...');
 
   const { codebases } = await listEnvironments();
 

@@ -103,7 +103,7 @@ export async function sweepScheduledEnvironment(
     worktreePath: toWorktreePath(env.working_path),
   });
 
-  if (verdict === 'merged') {
+  if (verdict === 'merged' || verdict === 'pr-closed') {
     await sweepMerged(env, mainRepoPath, sweep);
     return;
   }

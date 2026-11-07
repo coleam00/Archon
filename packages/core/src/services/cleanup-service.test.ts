@@ -659,7 +659,7 @@ describe('runScheduledCleanup', () => {
     ['   ', 'origin'],
     ['  upstream  ', 'upstream'],
   ])(
-    'scheduled cleanup uses remote %p without discovering a default branch',
+    'scheduled cleanup uses remote %p when default-branch discovery fails',
     async (remote, expected) => {
       mockLoadRepoConfig.mockResolvedValue({ worktree: { remote } });
       scheduledSweepFinds(
@@ -677,7 +677,7 @@ describe('runScheduledCleanup', () => {
       expect(report.errors).toEqual([]);
       expect(report.removed).toHaveLength(1);
       expect(mockDestroy).toHaveBeenCalledTimes(1);
-      expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+      expect(mockGetDefaultBranch).toHaveBeenCalled();
       expect(mockLoadRepoConfig).toHaveBeenCalledWith('/workspace/myrepo');
       expect(mockGetPrState).toHaveBeenCalledWith(
         'feature/foo',
