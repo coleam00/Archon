@@ -36,6 +36,7 @@ import {
   type DagResumeSnapshot,
   type WorkflowEventInput,
   type ObservabilityEventInput,
+  type IWorkflowStore,
   type WorkflowEventType,
 } from '@archon/workflows/store';
 
@@ -310,7 +311,7 @@ export async function listActiveWorkflowNodeIds(
 export async function listEventsForRuns(
   workflowRunIds: readonly string[],
   eventTypes: readonly WorkflowEventType[],
-  options: { strict?: boolean } = {}
+  options: Parameters<IWorkflowStore['listEventsForRuns']>[2] = {}
 ): Promise<Map<string, WorkflowEventRow[]>> {
   const byRun = new Map<string, WorkflowEventRow[]>(workflowRunIds.map(id => [id, []]));
   if (workflowRunIds.length === 0 || eventTypes.length === 0) return byRun;

@@ -641,8 +641,8 @@ rates. Tool work and thinking within an attempt are included; durable waits, app
 pauses and wrapper durations are excluded. Concurrent attempts each contribute their own
 duration, so this measures model work rather than scheduler throughput. Only attempts
 physically recorded on the run count; child runs are separate rows in `workflow runs`.
-Running and paused runs show terminal attempts recorded so far, without estimating
-unfinished work.
+Running and paused runs show terminal agent attempts and exclusions for terminal or
+suspended loop attempts recorded so far, without estimating unfinished work.
 
 Only provider-reported output tokens with a positive usable duration enter the calculation.
 `N nodes without token data` counts excluded attempts, including recognizable historical
