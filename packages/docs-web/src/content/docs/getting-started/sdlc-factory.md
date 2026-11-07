@@ -42,14 +42,13 @@ The pack talks to the forge only through `archon forge` and an installed [forge 
 Create `.archon/sdlc/policy/maintainers.json` and commit it to the default branch. The queues read it from the default branch's head on the remote, so a local copy does nothing.
 
 ```json
-["your-login", { "login": "teammate", "merge_queue": "own-prs" }]
+["your-login", "teammate"]
 ```
 
-Each entry is a GitHub login, or an object naming one. With no file, every author is outside. The list decides three things:
+Each entry is a GitHub login. With no file, every author is outside. The list decides two things:
 
 - **Whose issues get triaged.** An issue from anyone else gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label to it.
 - **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. **The login that authors the pack's published review comment must be on the list on the default branch**, or that verdict is ignored. This is the forge plugin's credential identity. Check the published comment's author when choosing which login to list.
-- **Whose own pull requests enroll.** `"merge_queue": "own-prs"` asks to enroll that maintainer's own open, non-draft pull requests in the merge queue. Enrollment needs a forge operation that lists open pull requests by author, which the forge contract does not have yet, so today it refuses and the merge queue notes why; it goes on merging the work items that already exist.
 
 ## 3. Adjust policy and models (optional)
 

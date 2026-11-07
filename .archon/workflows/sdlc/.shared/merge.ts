@@ -13,7 +13,6 @@
 
 import { itemPullRequest } from './build.ts';
 import { invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
-import { isOwnPr } from './own-prs.ts';
 import { viewPr } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
@@ -56,8 +55,7 @@ export type MergeMethod = (typeof MERGE_METHODS)[number];
  * `waiting`: the next sweep decides it. `asking`: a run is paused on its attention item.
  * `merged`: this PR merged; a later build may ready another. `returned`: handed back
  * to the build queue, which owns it until it is ready again. `parked`: the queue
- * stopped working it until renewed build readiness
- * or, for an answered own-PR park, a changed head.
+ * stopped working it until renewed build readiness.
  */
 export type MergeStatus = 'waiting' | 'asking' | 'merged' | 'returned' | 'parked';
 
@@ -88,29 +86,16 @@ export function answeredMergeDecision(effect: MergeEffect): `answered: ${MergeEf
   return `answered: ${effect}`;
 }
 
-/** The head of the latest answered own-PR park, when changed-head recovery applies. */
-export function answeredOwnPrParkHead(doc: WorkItem): string | null {
-  if (!isOwnPr(doc) || doc.facts.merge?.status !== 'parked') return null;
-  const last = doc.facts.merge.decisions.at(-1);
-  return last?.decision === answeredMergeDecision('park') && last.answer !== undefined ? last.head : null;
-}
-
 /**
- * Renewed build readiness waits again after settlement. An answered own-PR park
- * waits only at a different head; an abandoned ask waits once its claim is released.
+ * Renewed build readiness waits again after settlement; an abandoned ask waits once
+ * its claim is released.
  */
-export function mergeWaits(doc: WorkItem, currentHead?: string): boolean {
-  const merge = doc.facts.merge;
-  if (isOwnPr(doc)) {
-    if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
-    const parkedHead = answeredOwnPrParkHead(doc);
-    return parkedHead !== null && currentHead !== undefined && currentHead !== parkedHead;
-  }
+export function mergeWaits(doc: WorkItem): boolean {
   const build = doc.facts.build;
-  const readyAt = build?.status === 'ready' ? build.at : doc.facts.own_pr?.at;
-  if (readyAt === undefined) return false;
+  if (build?.status !== 'ready') return false;
+  const merge = doc.facts.merge;
   if (merge === undefined || merge.status === 'waiting' || merge.status === 'asking') return true;
-  return readyAt > merge.at;
+  return build.at > merge.at;
 }
 
 /**
@@ -134,12 +119,10 @@ export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRe
 
 /**
  * The item's pull request as the build queue resolves it (its latest round's, else the
- * one triage routed it to continue), or the enrolled own pull request, or null.
+ * one triage routed it to continue), or null.
  */
 export function itemPr(doc: WorkItem): QualifiedPr | null {
-  const built = itemPullRequest(doc.facts.build?.rounds ?? [], doc.facts.triage, doc.subject.repo);
-  if (built !== null) return built;
-  return doc.facts.own_pr === undefined ? null : prFromUrl(doc.facts.own_pr.url);
+  return itemPullRequest(doc.facts.build?.rounds ?? [], doc.facts.triage, doc.subject.repo);
 }
 
 /** `https://<host>/<owner>/<name>/pull/<number>`; anything else refuses. */

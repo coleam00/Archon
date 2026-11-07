@@ -7,9 +7,8 @@
  * show fails the record, but only after every decision is written: that pull request is
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
- * back to the build queue with its brief; on an own pull request, which no build round
- * owns, it waits for the next sweep instead, and so does an ask offering a return the
- * item cannot take (an own pull request, or no brief). A run raises at most one attention item: the
+ * back to the build queue with its brief; an ask offering a return with no brief waits
+ * for the next sweep instead. A run raises at most one attention item: the
  * sweep's item for a red default branch first, because it holds every merge, otherwise
  * the first pull request the sweep asked about, in its order. That item keeps its claim
  * while the run waits;
@@ -54,12 +53,9 @@ import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 /**
  * The asked item with the queue's `other`, whose effect is what the item can take: a
- * return for a build-owned pull request with a brief, a park otherwise.
+ * return when the sweep wrote a brief, a park otherwise.
  */
-function withQueueOther(attention: MergeAttention, item: Item, brief: string): MergeAttention {
-  if (item.own_pr === true) {
-    return withOther(attention, 'park', 'Do what the answer text says. The text is recorded as the ruling on this pull request. Stops queue work until a later sweep observes a different head from the head asked about. Nothing goes to the build queue.');
-  }
+function withQueueOther(attention: MergeAttention, brief: string): MergeAttention {
   if (brief.trim() === '') {
     return withOther(attention, 'park', 'Records the answer text as the ruling. Stops queue work until the build queue readies the item again; no build round starts.');
   }
@@ -72,8 +68,6 @@ interface Item {
   readonly url: string;
   readonly facts: PrFacts | null;
   readonly record: MergeRecord | null;
-  /** An enrolled maintainer's own pull request: its work item has no build record of its own. */
-  readonly own_pr?: boolean;
 }
 
 interface Decision {
@@ -102,20 +96,17 @@ function message(error: unknown): string {
 
 /**
  * Why a declared decision cannot be acted on, or null. A return hands the item to the
- * build queue, which needs a brief to start from and cannot work an own pull request no
- * build round owns. An ask needs its question, and the return it offers needs the same:
- * an ask that offers one on an own pull request or with no brief is refused, so the
- * sweep's recommendation is never rewritten into a choice it did not make.
+ * build queue, which needs a brief to start from. An ask needs its question, and the
+ * return it offers needs the same: an ask that offers one with no brief is refused, so
+ * the sweep's recommendation is never rewritten into a choice it did not make.
  */
-function invalidDecision(decision: Decision, item: Item): string | null {
+function invalidDecision(decision: Decision): string | null {
   const pr = `pull request ${String(decision.number)}`;
-  if (decision.action === 'return' && item.own_pr === true) return `the sweep returned own ${pr}, whose work item has no build record of its own`;
   if (decision.action === 'return' && decision.brief.trim() === '') return `the sweep returned ${pr} with no brief`;
   if (decision.action !== 'ask') return null;
   if (decision.attention === null) return `the sweep asked about ${pr} with no question`;
   // An effect lives on a declared choice, so a recommended return is an offered one.
   if (!decision.attention.choices.some(choice => choice.effect === 'return')) return null;
-  if (item.own_pr === true) return `the sweep's question about own ${pr} offers a return, which no build round can take`;
   if (decision.brief.trim() === '') return `the sweep's question about ${pr} offers a return with no brief`;
   return null;
 }
@@ -136,9 +127,8 @@ function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decis
   const decided = new Map<number, Decision>();
   const refused: string[] = [];
   for (const decision of sweep.decisions) {
-    const item = wanted.get(decision.number);
-    if (item === undefined || decided.has(decision.number)) continue;
-    const invalid = invalidDecision(decision, item);
+    if (!wanted.has(decision.number) || decided.has(decision.number)) continue;
+    const invalid = invalidDecision(decision);
     if (invalid === null) {
       decided.set(decision.number, decision.action === 'ask' ? decision : { ...decision, attention: null });
       continue;
@@ -326,7 +316,7 @@ function main(): void {
             pr: itemOf(firstAsk.number).pr,
             head: firstAsk.head,
             brief: firstAsk.brief,
-            attention: withQueueOther(firstAsk.attention as MergeAttention, itemOf(firstAsk.number), firstAsk.brief),
+            attention: withQueueOther(firstAsk.attention as MergeAttention, firstAsk.brief),
           };
   const waitOf = (raised: MergeAsked | null) =>
     raised === null

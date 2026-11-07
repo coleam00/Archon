@@ -125,9 +125,6 @@ The metrics workflows read each pull request through `pr.view` and need the
 plugin that omits the timestamps or lacks those operations makes them refuse, naming
 what is missing.
 
-Own-PR enrollment lists a maintainer's open pull requests by author, which has no forge
-operation yet, so it refuses, naming the missing operation.
-
 Agents read CI job logs with the tools the run has, since the contract has no operation
 for them. A red default branch is always raised as a `merge: base` item: `checks.rerun`
 acts only on a pull request, so the pack never reruns it.
@@ -372,14 +369,8 @@ request, never the state.
 
 - **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` at the
   head of the default branch and records once whether the issue's author is on it.
-  The file is a JSON array whose entries are forge logins, or objects naming one with
-  opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
-  login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
-  open pull requests in the merge queue, except one a work item already names or one
-  from a `build/` branch in the repository itself, so a hand-made pull request on a
-  `build/` branch does not enroll (see Pickup there). Enrollment needs a forge
-  operation the contract does not have yet, so it refuses today (see Forge); the merge
-  queue notes the refusal on stderr and goes on with the items it already has. No file means an empty list, so every author is outside. Any other
+  The file is a JSON array of forge logins: `["alice", "bob"]`. Every listed login is
+  a maintainer. No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
@@ -763,22 +754,7 @@ then the project's file, whose lines win where the two conflict.
   returned or parked it, it waits again. The pull request is the latest one a build
   round recorded, or, when no round recorded one, the one triage routed the item to
   continue. One already merged or closed is recorded without the
-  agent. Before claiming, the run enrolls each open, non-draft pull request by a
-  maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
-  work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
-  a build round recorded, or one triage routed an item to continue, is named by its
-  build item and never enrolls. Neither does one from a `build/` branch in the
-  repository itself, the namespace every build round opens its pull request from, even
-  before the round records it. A hand-made pull request on a `build/` branch therefore
-  does not enroll; name the branch something else. An own-PR
-  item has no build record of its own, so where another would go back to the build queue
-  (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
-  sweep asks instead, naming what is wrong and the command a maintainer can launch, and
-  its question offers no `return`. The record never hands one to the build queue.
-  The queue never starts that run itself. An own-PR item answered `park` or `other`
-  waits again only when its current head differs from its latest merge decision's
-  head. At the same head it stays parked. Merged own-PR items and other kinds of
-  settlement, including unreadable and superseded parks, do not recover this way.
+  agent.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
@@ -790,10 +766,7 @@ then the project's file, whose lines win where the two conflict.
   A failed PR read waits once; a second consecutive failure
   parks the item with the read error recorded until the build queue readies it again.
   Renewed build readiness gives a parked item another first-read wait. A successful
-  read resets that sequence even if later work fails. An unreadable own-PR park stays
-  parked; it is not an answered park. To reconsider an answered own-PR park, facts
-  reads its snapshot before claiming and reuses it in the sweep. A failed recovery
-  read leaves that unclaimed item unchanged and reports the error. If the default branch
+  read resets that sequence even if later work fails. If the default branch
   cannot be read, facts passes its diagnostic and the batch to record without a sweep.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   The queue never pushes, never changes its checkout and never waits for CI. A Ready
@@ -837,9 +810,8 @@ then the project's file, whose lines win where the two conflict.
   reads and fails with the original diagnostic and any settlement write failures.
   Otherwise, the `record` script skips and reports a decision for a pull request this
   run did not claim, because that item belongs to another run. It refuses a
-  `return` without a brief, a `return` for an own pull request, an `ask` without its
-  question, an `ask` that offers a `return` on an own pull request or with a blank
-  brief, and a red default branch the sweep did not raise: the pull
+  `return` without a brief, an `ask` without its question, an `ask` that offers a
+  `return` with a blank brief, and a red default branch the sweep did not raise: the pull
   request waits for the next sweep, and the record fails, naming each, once every
   other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
@@ -863,8 +835,7 @@ then the project's file, whose lines win where the two conflict.
   it. One still open gets `archon-triage` and an `archon-intake` run started detached
   with that label event, recorded as added by `retriage_as`. Intake stays the judge:
   it re-triages only when that login is on the maintainer list, and closes the issue
-  as delivered or keeps it with what is still open. A closed issue and an own pull
-  request, which has no issue, are left alone. A failed read, label write or launch
+  as delivered or keeps it with what is still open. A closed issue is left alone. A failed read, label write or launch
   is named in the node's summary and stops nothing else. Empty `retriage_as`
   re-triages nothing.
 - **Attention.** A run raises at most one attention item: a red default branch, whose
@@ -883,10 +854,7 @@ then the project's file, whose lines win where the two conflict.
   choice's ruling into the issue body as a dated "Current scope" section and hands the
   item back to the build queue, whose next round starts at once through the
   build-queue binding (`build_queue_binding`); `park` stops working it until the build queue readies it
-  again. For an own PR, both `park` and `other` stop queue work until a later sweep
-  observes a different head from the one asked about. The `other` answer stays on
-  the work item as its ruling; it writes no issue body and starts no build round.
-  New CI or review results at the same head do not unpark it. Approval remains pinned
+  again. Approval remains pinned
   to its approved head, subject to the existing conflict-only carry rule. Any other
   ask waits for a later sweep, which decides it again.
 
