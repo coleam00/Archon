@@ -39,7 +39,7 @@ import {
 } from '../test/orchestrator-agent-harness';
 import { reportChatTurn, type ChatTurn } from './chat-turn';
 import { addResultUsage, type TokenUsage } from '@archon/provider-contract';
-import { chatTurnEventProperties } from '@archon/paths';
+import { chatTurnEventProperties } from '@archon/paths/telemetry-events';
 import { handleMessage } from './orchestrator-agent';
 
 // ─── Stale session ID clearing on error_during_execution ────────────────────

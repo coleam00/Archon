@@ -3,7 +3,8 @@ import { describe, expect, test } from 'bun:test';
 import { buildRunTerminalTelemetry, type RunTelemetryEvent } from './run-terminal-telemetry';
 import { buildTerminalRecord, observeRunArtifacts } from './terminal-record';
 import type { TokenUsage } from '@archon/provider-contract';
-import { workflowTerminalEventProperties, WORKFLOW_TERMINAL_EVENT_TYPE } from '@archon/paths';
+import { WORKFLOW_TERMINAL_EVENT_TYPE } from '@archon/paths';
+import { workflowTerminalEventProperties } from '@archon/paths/telemetry-events';
 import { RUN_DISPATCH_METADATA_KEY, TERMINAL_RUN_EVENT_TYPE } from './schemas/workflow-run';
 import { RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
 

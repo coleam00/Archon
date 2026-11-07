@@ -161,12 +161,8 @@ export const mockCaptureApprovalResolved = mock(() => undefined);
 // Tests below derive their expected path from it rather than from a POSIX
 // literal: it makes a path absolute, and on Windows `resolve('/path')` is
 // drive-qualified (`D:\path`).
-export const {
-  canonicalizeProjectPath,
-  getProjectStoragePaths,
-  resolveProjectStorageKey,
-  chatTurnEventProperties,
-} = await import('@archon/paths');
+export const { canonicalizeProjectPath, getProjectStoragePaths, resolveProjectStorageKey } =
+  await import('@archon/paths');
 mock.module('@archon/paths', () => ({
   BUNDLED_IS_BINARY: false,
   BUNDLED_VERSION: 'test',
@@ -179,7 +175,6 @@ mock.module('@archon/paths', () => ({
   getArchonHome: mock(() => '/home/test/.archon'),
   getCredentialKeyPath: mock(() => '/home/test/.archon/credential-key'),
   captureChatTurn: mockCaptureChatTurn,
-  chatTurnEventProperties,
   captureWorkflowNoMatch: mockCaptureWorkflowNoMatch,
   captureCodebaseRegistered: mock(() => undefined),
 }));
