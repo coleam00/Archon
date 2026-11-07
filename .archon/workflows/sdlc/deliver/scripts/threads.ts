@@ -10,7 +10,7 @@
  * The unresolved threads go to `$ARTIFACTS_DIR/threads.md`, quoted as untrusted review
  * data, for the next round's implementer to judge. A pull request with an open thread
  * goes back to draft, so it never stays ready over unjudged review; so does one whose
- * threads this node failed to read or settle, since CI may have marked it ready.
+ * threads this node failed to read or settle, since the hand-off (`ci`) may have marked it ready.
  *
  * Bound inputs (canonical text in env):
  * - INPUTS_PR: the round's pull-request record.

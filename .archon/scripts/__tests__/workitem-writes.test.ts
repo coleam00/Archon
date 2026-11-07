@@ -111,9 +111,9 @@ test('forge failures preserve unknown outcome evidence and never fall back or re
   expect(run.stdout).toBe('');
 });
 
-test('re-triage replaces a changed type and removes a retired size label', () => {
+test('re-triage replaces a changed type', () => {
   const item = { ref: { repo: PR.repo, number: 7 }, kind: 'issue', url: 'https://ghe.example.com/example/repo/issues/7', state: 'open' };
-  const labels = ['operator', 'archon-ready', 'archon-risky', 'archon-type-bug'];
+  const labels = ['operator', 'archon-ready', 'archon-type-bug'];
   const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
   const run = runPackScript('triage/scripts/verdict', {
     inputs: { ...inputs, INPUTS_AREA_LABELS: '[]' },
@@ -125,7 +125,7 @@ test('re-triage replaces a changed type and removes a retired size label', () =>
         applied('repo.label.ensure'),
         applied('repo.label.ensure'),
         ...Array.from({ length: 2 }, () => applied('workitem.label.add')),
-        ...Array.from({ length: 2 }, () => applied('workitem.label.remove')),
+        applied('workitem.label.remove'),
       ],
     },
   });
@@ -139,14 +139,13 @@ test('re-triage replaces a changed type and removes a retired size label', () =>
     ['workitem.label.add', 'archon-size-s'],
     ['workitem.label.add', 'archon-type-feature'],
     ['workitem.label.remove', 'archon-type-bug'],
-    ['workitem.label.remove', 'archon-risky'],
   ]);
   expect(JSON.parse(run.stdout).labels).toEqual(['archon-ready', 'archon-size-s', 'archon-type-feature']);
 });
 
-test('a retired size label is never created and never accepted as an area label', () => {
+test('a pack label is never accepted as an area label', () => {
   const run = runPackScript('triage/scripts/verdict', {
-    inputs: { ...inputs, INPUTS_AREA_LABELS: '["archon-small"]' },
+    inputs: { ...inputs, INPUTS_AREA_LABELS: '["archon-ready"]' },
   });
   expect(run.code).not.toBe(0);
   expect(run.forge).toEqual([]);

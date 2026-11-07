@@ -175,8 +175,9 @@ describe("deliver's round", () => {
           INPUTS_REVIEW_SUMMARY: 'clean',
           INPUTS_REVIEW_CONTRACT_LEFT: '[]',
           INPUTS_PREVIOUS_CONTRACT_LEFT: '',
-          INPUTS_CI: 'green',
-          INPUTS_CI_SUMMARY: 'all passed',
+          INPUTS_SIMPLIFY: 'false',
+          INPUTS_CI: 'ready',
+          INPUTS_CI_SUMMARY: 'marked ready',
           INPUTS_THREADS_OPEN: '0',
           INPUTS_THREADS_SUMMARY: 'no thread open',
           INPUTS_SETTLE_ASK: 'null',
@@ -186,7 +187,7 @@ describe("deliver's round", () => {
       }).stdout
     ) as Round;
 
-  it('delivers on a passing review and green CI', () => {
+  it('delivers on a passing review and a hand-off', () => {
     expect(round({})).toMatchObject({ round: 1, done: true, ready: true, reason: 'delivered', pr_url: PR_URL });
   });
 
@@ -205,10 +206,15 @@ describe("deliver's round", () => {
     expect(ended).toMatchObject({ round: 2, reason: 'implement_blocked', pr_url: PR_URL });
   });
 
-  it('goes again for open findings and a red the change caused, and stops on any other red', () => {
+  it('goes again for open findings, smaller shapes and a red the change caused, and stops on any other red', () => {
     expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI: 'null' })).toMatchObject({
       done: false,
       reason: 'review_open',
+    });
+    expect(round({ INPUTS_SIMPLIFY: 'true', INPUTS_CI: 'null' })).toMatchObject({
+      done: false,
+      reason: 'simplify_open',
+      light_review: true,
     });
     expect(round({ INPUTS_CI: 'pr_caused' })).toMatchObject({ done: false, reason: 'ci_pr_caused' });
     expect(round({ INPUTS_CI: 'other' })).toMatchObject({ done: true, ready: false, reason: 'ci_other' });
