@@ -558,9 +558,22 @@ archon workflow runs --json
 archon workflow runs --json --verbose  # add per-node state and attention to each run
 archon workflow runs --status failed   # filter to one status
 archon workflow runs --limit 50        # cap rows (default 20)
+archon workflow runs --throughput      # effective output tok/s by run and model
+archon workflow runs --throughput --json --verbose
 archon workflow runs --all             # list across all projects
 archon workflow runs --open            # failed runs nothing has adopted or superseded
 ```
+
+`--throughput` adds effective output throughput per listed run and an aggregate grouped
+by exact provider + requested model across **only the listed runs**. It prints the sample's
+run count, including runs without measurements. Project scope, `--all`, `--status`, `--open`
+and `--limit` still select the page (default 20); increase `--limit` to expand the sample.
+This is not an install-wide total. In JSON, each run gains `throughput` with attempt rows
+and a summary; the top-level `throughput` contains `runIds`, `runCount` and `models`.
+`--json --verbose` keeps its node/attention fields and reuses the event read. Throughput
+reads events in batches of up to 20 runs; without the flag, listing costs are unchanged.
+Unreadable history or invalid typed execution metadata fails the opted-in request rather
+than returning a partial report.
 
 With the SQL store, the recent-run list rejects the entire result if a returned row or a
 status-count group contains an unsupported persisted status; it never returns a partial
@@ -609,12 +622,42 @@ archon workflow get <run-id>
 archon workflow get <run-id> --json
 archon workflow get <run-id> --verbose   # add the per-node summary
 archon workflow get <run-id> --json --verbose
+archon workflow get <run-id> --throughput
+archon workflow get <run-id> --throughput --json
 ```
 
 The text view includes the same [recorded usage summary](#workflow-run-name-message)
 for any run status. It reads stored totals without recalculating them or certifying
 completeness. `--json` retains the raw usage values in `metadata`, including nulls or
 malformed historical values; it adds no formatted usage text.
+
+`--throughput` adds **effective output throughput**, not model decode speed, beside the
+usage summary: output tokens divided by execution duration in seconds (`tok/s`). Each
+terminal agent attempt has its own row identified by node path, invocation, loop iteration
+path and attempt ID. Failed attempts count too. Run and model totals divide summed output
+tokens by the summed durations of those same eligible attempts, rather than averaging
+rates. Tool work and thinking within an attempt are included; durable waits, approval
+pauses and wrapper durations are excluded. Concurrent attempts each contribute their own
+duration, so this measures model work rather than scheduler throughput. Only attempts
+physically recorded on the run count; child runs are separate rows in `workflow runs`.
+Running and paused runs show terminal attempts recorded so far, without estimating
+unfinished work.
+
+Only provider-reported output tokens with a positive usable duration enter the calculation.
+`N nodes without token data` counts excluded attempts, including recognizable historical
+agent rows without explicit token-source provenance. Missing or invalid durations have a
+separate exclusion count; missing tokens take precedence so the counts do not overlap.
+Unavailable rates display `unavailable` (JSON `null`); provider-reported zero is `0 tok/s`.
+Historical rows that cannot be identified as agent executions are outside the sample.
+Missing provider/model binding components remain distinct `not recorded` groups. These
+rates inherit the stored counts and their limitations, including Codex's resumed-turn
+first-snapshot accounting edge case; they do not repair old capture errors or establish
+benchmark decode performance.
+
+JSON adds a top-level `throughput` report with `nodes` and `summary`, retaining unrounded
+rates, eligible `outputTokens`/`durationMs`, `measuredExecutions`, `nodesWithoutTokenData`
+and `nodesWithoutDuration`. It combines with `--verbose` and `--events` without replacing
+the existing `nodes`, `events` or metadata usage fields. No new persistence is written.
 
 For a paused gate, human-readable output lists its declared decision IDs and optional
 labels, with an exact `archon workflow respond <run-id> <decision> [text]` command

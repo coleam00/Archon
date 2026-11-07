@@ -335,12 +335,15 @@ export async function withRunDetail<
   Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
 >(
   host: WorkflowHost,
-  runs: Run[]
+  runs: Run[],
+  suppliedEvents?: Map<string, WorkflowEventRow[]>
 ): Promise<(Run & { nodes: NodeSummary[]; attention: RunAttention | null })[]> {
-  const eventsByRun = await host.deps.store.listEventsForRuns(
-    runs.map(run => run.id),
-    NODE_SUMMARY_EVENT_TYPES
-  );
+  const eventsByRun =
+    suppliedEvents ??
+    (await host.deps.store.listEventsForRuns(
+      runs.map(run => run.id),
+      NODE_SUMMARY_EVENT_TYPES
+    ));
   return runs.map(run => ({
     ...run,
     nodes: buildRunNodes(run, eventsByRun.get(run.id) ?? []),

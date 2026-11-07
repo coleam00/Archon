@@ -373,6 +373,13 @@ Examples:
 
 `;
 
+  it('advertises throughput on the two run-history views', () => {
+    expect(scopedHelpOptions(['workflow', 'get'])).toContain('--throughput');
+    expect(scopedHelpOptions(['workflow', 'get'])).toContain('per recorded agent attempt and run');
+    expect(scopedHelpOptions(['workflow', 'runs'])).toContain('--throughput');
+    expect(scopedHelpOptions(['workflow', 'runs'])).toContain('across listed runs');
+  });
+
   it('archon --help matches the supported global index byte-for-byte', () => {
     expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);
   });
