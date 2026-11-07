@@ -263,13 +263,15 @@ export function maybeShowFirstRunNotice(): void {
   }
 
   const message =
-    'Archon collects anonymous usage telemetry — now also the shape of each\n' +
-    'workflow (node-type counts, depth, fan-out, how many commands it uses, a\n' +
+    'Archon collects anonymous usage telemetry — now also cache-read/cache-write\n' +
+    'token counts for direct chat turns, plus whether cache totals are partial\n' +
+    '(numbers only, never message content). Also sent: the shape of each workflow\n' +
+    '(node-type counts, depth, fan-out, how many commands it uses, a\n' +
     'prompt-size bucket) and, for a copy of a bundled workflow, which bundled one\n' +
-    "it came from — never your own workflow's name, description or text. Also\n" +
-    'sent: an anonymous per-run reference (a hash, never the run id), cancelled\n' +
+    "it came from — never your own workflow's name, description or text;\n" +
+    'an anonymous per-run reference (a hash, never the run id), cancelled\n' +
     'runs, how Archon was installed (binary, Docker, or source), the build commit,\n' +
-    'chat activity (platform/provider/model and cache usage, never message content), aggregate\n' +
+    'chat activity (platform/provider/model, never message content), aggregate\n' +
     'usage totals (token counts, cost, durations, loop iterations), approval\n' +
     'decisions (approved/rejected only), deployment shape, a categorical failure\n' +
     'class, workflow name, run outcome, OS/arch, and version.\n' +

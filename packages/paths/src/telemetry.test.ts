@@ -100,7 +100,11 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
     const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
     captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w' });
     expect(writeSpy).toHaveBeenCalledTimes(1);
-    expect(String(writeSpy.mock.calls[0]?.[0])).toContain('cache usage');
+    expect(String(writeSpy.mock.calls[0]?.[0])).toContain(
+      'Archon collects anonymous usage telemetry — now also cache-read/cache-write\n' +
+        'token counts for direct chat turns, plus whether cache totals are partial\n' +
+        '(numbers only, never message content).'
+    );
     expect(NOTICE_STAMP_FILENAME).toBe('telemetry-notice-shown-v8');
     expect(existsSync(stampPath())).toBe(true);
     resetTelemetryForTests();
