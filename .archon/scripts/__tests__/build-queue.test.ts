@@ -228,11 +228,13 @@ function run(
     comments?: readonly TrackerComment[];
     writeLost?: boolean;
     preload?: ScriptOptions['preload'];
+    artifacts?: ScriptOptions['artifacts'];
   } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
     preload: options.preload,
+    artifacts: options.artifacts,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
     tracker: {
       issue: { number: 7, author: 'Maintainer', body: 'The contract.', ...options.issue },
@@ -515,6 +517,37 @@ describe('the build queue scripts', () => {
       },
     });
     expect(buildWaits(doc as WorkItem)).toBe(true);
+  }, 60_000);
+
+  test("the round records the review verdicts the run's delivery published, and still records the round when they cannot be read", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const report = (nodeId: string, path: string, producedAt: string) => ({ nodeId, path, producedAt });
+    const listing = JSON.stringify({
+      artifactsByType: {
+        'review-report': [
+          report('review__publish', 'r1.json', '2026-11-06T10:00:00Z'),
+          report('review__synthesize', 'r2.json', '2026-11-06T10:05:00Z'),
+          report('review__publish', 'r2.json', '2026-11-06T10:06:00Z'),
+        ],
+      },
+      errors: [],
+    });
+    const artifacts = { 'listing.json': listing, 'r1.json': '{"ready":false}', 'r2.json': '{"ready":true}' };
+    const inputs = { ...applyInputs(CONTINUE), TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' };
+    ok(run(at, 'apply', inputs, { artifacts }));
+    expect((stored(at).value as WorkItem).facts.build?.rounds[0]?.reviews).toEqual([
+      { ready: false, at: '2026-11-06T10:00:00Z' },
+      { ready: true, at: '2026-11-06T10:06:00Z' },
+    ]);
+
+    seed(at, triaged(CLAIMED));
+    const unreadable = run(at, 'apply', { ...inputs, TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/missing.json' });
+    expect(unreadable.code).toBe(0);
+    expect(unreadable.stderr).toContain('the round records no review verdicts');
+    const kept = (stored(at).value as WorkItem).facts.build?.rounds[0];
+    expect(kept).toMatchObject({ run_id: 'run-1', reason: 'review_open' });
+    expect(kept?.reviews).toBeUndefined();
   }, 60_000);
 
   test('a continue whose next round fails to start leaves the item waiting for the next queue run', () => {
