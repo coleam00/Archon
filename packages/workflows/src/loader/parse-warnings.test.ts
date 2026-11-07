@@ -464,7 +464,7 @@ describe('unknown key warnings (#2213)', () => {
       expect(pw.some(w => w.includes('unknown key'))).toBe(false);
       expect(pw).toEqual([
         expect.stringContaining("Node 'refine': the prose 'loop_group.until' completion signal"),
-        expect.stringContaining("Node 'refine': loop 'interactive:'"),
+        expect.stringContaining("Node 'refine': 'loop_group.interactive'"),
         expect.stringContaining("Node 'gate': 'approval.on_reject'"),
         expect.stringContaining("Node 'gate': 'approval.capture_response'"),
       ]);
@@ -632,7 +632,7 @@ describe('legacy pause and loop deprecation warnings', () => {
         '      gate_message: continue?',
       ],
       [
-        "Node 'iterate': loop 'interactive:' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'. It keeps running as before until rewritten.",
+        "Node 'iterate': 'loop.interactive' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'. It keeps running as before until rewritten.",
       ],
     ],
     [
@@ -649,7 +649,7 @@ describe('legacy pause and loop deprecation warnings', () => {
         '          prompt: work',
       ],
       [
-        "Node 'iterate': loop 'interactive:' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'. It keeps running as before until rewritten.",
+        "Node 'iterate': 'loop_group.interactive' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'. It keeps running as before until rewritten.",
       ],
     ],
     [
@@ -694,22 +694,58 @@ describe('legacy pause and loop deprecation warnings', () => {
     expect(await discoveredWarnings(['nodes:', ...nodeLines])).toEqual(expected);
   });
 
-  it.each(['loop', 'loop_group'])('does not warn on %s interactive false or absent', mode => {
-    for (const setting of [[], ['      interactive: false']]) {
-      expect(
-        parsedWarnings([
-          'nodes:',
-          '  - id: iterate',
+  it.each(['loop', 'loop_group'])('warns only on authored %s interactive values', mode => {
+    for (const value of [undefined, false, true]) {
+      const warnings = parsedWarnings([
+        'nodes:',
+        '  - id: iterate',
+        `    ${mode}:`,
+        '      until_bash: "exit 0"',
+        '      max_iterations: 3',
+        ...(value === undefined ? [] : [`      interactive: ${value}`]),
+        ...(value === true ? ['      gate_message: ok?'] : []),
+        ...(mode === 'loop'
+          ? ['      prompt: work']
+          : ['      nodes:', '        - id: work', '          prompt: work']),
+      ]);
+      expect(warnings).toEqual(
+        value === undefined
+          ? []
+          : [expect.stringContaining(`Node 'iterate': '${mode}.interactive'`)]
+      );
+    }
+  });
+
+  it.each(['loop', 'loop_group'])('groups authored %s interactive values by path', mode => {
+    const result = parseWorkflowYaml(
+      workflowLines([
+        'nodes:',
+        ...[false, true].flatMap((value, i) => [
+          `  - id: iterate-${i}`,
+          ...(i === 0 ? [] : ['    depends_on: [iterate-0]']),
           `    ${mode}:`,
           '      until_bash: "exit 0"',
           '      max_iterations: 3',
-          ...setting,
+          `      interactive: ${value}`,
+          ...(value ? ['      gate_message: ok?'] : []),
           ...(mode === 'loop'
             ? ['      prompt: work']
             : ['      nodes:', '        - id: work', '          prompt: work']),
-        ])
-      ).toEqual([]);
-    }
+        ]),
+      ])
+    );
+    expect(result.warnings).toEqual([
+      expect.stringContaining(`Nodes 'iterate-0', 'iterate-1': '${mode}.interactive'`),
+    ]);
+    expect(
+      result.workflow.nodes.map(node =>
+        node.kind === 'loop'
+          ? node.loop.interactive
+          : node.kind === 'loop_group'
+            ? node.loop_group.interactive
+            : undefined
+      )
+    ).toEqual([false, true]);
   });
 
   it.each([true, false])('warns on authored capture_response %s with each gate shape', capture => {
@@ -757,7 +793,11 @@ describe('legacy pause and loop deprecation warnings', () => {
         '    depends_on: [second]',
         '    include: reusable',
       ])
-    ).toEqual([expect.stringContaining("Nodes 'first', 'second': loop 'interactive:'")]);
+    ).toEqual([
+      expect.stringMatching(
+        /Node 'first': 'loop\.interactive'.*Node 'second': 'loop_group\.interactive'/
+      ),
+    ]);
   });
 
   it('warns once per file per shape, naming every node that uses it, loop_group bodies included', async () => {

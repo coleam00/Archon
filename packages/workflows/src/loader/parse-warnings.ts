@@ -15,7 +15,7 @@ import {
   nodeFieldDeprecations,
 } from '../schemas/dag-node';
 import type { NestedKeySpec } from '../schemas/dag-node';
-import type { LegacyPauseShape } from '../schemas/field-deprecation';
+import type { DeprecatedField, LegacyPauseShape } from '../schemas/field-deprecation';
 import {
   KNOWN_WORKFLOW_KEYS,
   KNOWN_WORKFLOW_NESTED_KEYS,
@@ -389,8 +389,8 @@ function legacyPauseShapes(node: DagNode, raw: unknown): LegacyPauseShape[] {
     if (capturesResponse) shapes.push('capture_response');
   }
   if (
-    (isLoopNode(node) && node.loop.interactive === true) ||
-    (isLoopGroupNode(node) && node.loop_group.interactive === true)
+    (isLoopNode(node) && node.loop.interactive !== undefined) ||
+    (isLoopGroupNode(node) && node.loop_group.interactive !== undefined)
   )
     shapes.push('interactive_loop');
   return shapes;
@@ -410,7 +410,9 @@ export function collectLegacyPauseWarnings(
   rawNodes: readonly unknown[],
   warnings: string[]
 ): void {
-  const nodeIdsByShape = new Map<LegacyPauseShape, string[]>();
+  const fields = nodeFieldDeprecations();
+  type WarningGroup = { nodeIds: string[]; byField: Map<DeprecatedField, string[]> };
+  const groups = new Map<LegacyPauseShape, WarningGroup>();
   const visit = (
     body: readonly (DagNode | IncludeDirective)[],
     rawBody: readonly unknown[]
@@ -418,7 +420,18 @@ export function collectLegacyPauseWarnings(
     body.forEach((node, i) => {
       if (isIncludeDirective(node)) return;
       for (const shape of legacyPauseShapes(node, rawBody[i])) {
-        nodeIdsByShape.set(shape, [...(nodeIdsByShape.get(shape) ?? []), node.id]);
+        const field = fields.find(
+          field =>
+            field.metadata.kind === 'legacy_pause' &&
+            field.metadata.shape === shape &&
+            (shape !== 'interactive_loop' ||
+              field.path[0] === (isLoopNode(node) ? 'loop' : 'loop_group'))
+        );
+        if (field === undefined) throw new Error(`Missing legacy pause deprecation: ${shape}`);
+        const group: WarningGroup = groups.get(shape) ?? { nodeIds: [], byField: new Map() };
+        group.nodeIds.push(node.id);
+        group.byField.set(field, [...(group.byField.get(field) ?? []), node.id]);
+        groups.set(shape, group);
       }
       if (isLoopGroupNode(node)) {
         const rawGroup = (rawBody[i] as Record<string, unknown> | undefined)?.loop_group;
@@ -432,17 +445,13 @@ export function collectLegacyPauseWarnings(
   };
   visit(nodes, rawNodes);
 
-  const fields = nodeFieldDeprecations();
-  for (const [shape, nodeIds] of nodeIdsByShape) {
-    const field = fields.find(
-      field => field.metadata.kind === 'legacy_pause' && field.metadata.shape === shape
-    );
-    if (field === undefined) throw new Error(`Missing legacy pause deprecation: ${shape}`);
-    const label =
-      nodeIds.length === 1
-        ? `Node '${nodeIds[0]}'`
-        : `Nodes ${nodeIds.map(id => `'${id}'`).join(', ')}`;
-    const message = `${label}: ${field.message} It keeps running as before until rewritten.`;
+  for (const [shape, { nodeIds, byField }] of groups) {
+    const guidance = [...byField].map(([field, ids]) => {
+      const label =
+        ids.length === 1 ? `Node '${ids[0]}'` : `Nodes ${ids.map(id => `'${id}'`).join(', ')}`;
+      return `${label}: ${field.message}`;
+    });
+    const message = `${guidance.join(' ')} It keeps running as before until rewritten.`;
     warnings.push(message);
     getLog().debug({ shape, nodeIds, warning: message }, 'legacy_pause_deprecated');
   }

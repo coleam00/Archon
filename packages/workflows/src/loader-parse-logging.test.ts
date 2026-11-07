@@ -72,7 +72,7 @@ nodes:
     loop_group:
       until: DONE
       max_iterations: 3
-      interactive: true
+      interactive: false
       gate_message: ok?
       nodes:
         - id: nested
@@ -121,6 +121,9 @@ nodes:
       msg: 'legacy_pause_deprecated',
       shape: 'interactive_loop',
       nodeIds: ['prose', 'group'],
+      warning: expect.stringMatching(
+        /Node 'prose': 'loop\.interactive'.*Node 'group': 'loop_group\.interactive'/
+      ),
     }),
     expect.objectContaining({
       level: 20,

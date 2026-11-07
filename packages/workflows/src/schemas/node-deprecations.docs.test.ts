@@ -5,13 +5,7 @@ import { nodeFieldDeprecations } from './dag-node';
 
 const start = '<!-- node-deprecations:start -->';
 const end = '<!-- node-deprecations:end -->';
-const cell = (text: string): string =>
-  text
-    .replaceAll('|', '\\|')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .replaceAll('<', '&lt;')
-    .replaceAll('>', '&gt;');
+const cell = (text: string): string => text.replaceAll('|', '\\|').replace(/\s+/g, ' ').trim();
 
 function nodeDeprecationsTable(): string {
   return [
@@ -19,7 +13,8 @@ function nodeDeprecationsTable(): string {
     '| Field | Deprecated since | Replacement |',
     '| --- | --- | --- |',
     ...nodeFieldDeprecations().map(
-      field => `| \`${field.path.join('.')}\` | ${field.metadata.since} | ${cell(field.message)} |`
+      field =>
+        `| \`${field.path.join('.')}\` | ${field.metadata.since} | \`${cell(field.message)}\` |`
     ),
     end,
   ].join('\n');

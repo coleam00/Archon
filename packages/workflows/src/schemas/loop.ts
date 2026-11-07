@@ -108,7 +108,7 @@ export const loopControlSchema = z
       kind: 'legacy_pause',
       shape: 'interactive_loop',
       subject: path =>
-        `loop '${path[path.length - 1]}:' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated.`,
+        `'${path.join('.')}' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated.`,
       replacement:
         'Write a ' +
         "'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration " +
