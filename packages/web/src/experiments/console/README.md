@@ -59,3 +59,13 @@ Local storage reads are guarded and fall back to these defaults.
 Settings → Alerts has a separate opt-in for Web Push. It requires an authenticated web identity, HTTPS or localhost, notification permission, and a browser with Push API support. Every opted-in browser receives run attention notices for this install. Notification clicks open `/runs/<id>`. On iOS, install the site as a home-screen web app first.
 
 The first subscription quietly baselines existing pauses. Delivery is recorded per destination, after sending. A crash or a partial delivery failure can re-send to browsers that already received the notice; notifications use `tag: runId` so duplicates replace each other. Turning the toggle off deletes the subscription and unsubscribes the browser. The in-tab alert toggle stays independent.
+
+## Design tokens
+
+Use the [console scale in the brand guide](https://archon.diy/brand/#console-design-tokens)
+and Tailwind's default spacing scale, including decimal multipliers.
+`src/index.css` owns the scale; console font tokens inherit line height.
+`bun run lint` checks arbitrary lengths and the generated guide. After editing
+the theme, run `bun run scripts/check-console-tokens.ts --write-docs` from the
+repository root. The guide documents the narrow adjacent-comment syntax for
+one-off layout exceptions.

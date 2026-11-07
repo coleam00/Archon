@@ -71,13 +71,13 @@ export function WorkflowDock({ projectId }: WorkflowDockProps): ReactElement | n
               }}
               className="mb-1.5 flex w-full items-center gap-2 text-left"
             >
-              <span aria-hidden className="font-mono text-[10px] text-text-tertiary">
+              <span aria-hidden className="font-mono text-console-10 text-text-tertiary">
                 {expanded ? '▾' : '▸'}
               </span>
-              <span className="text-[10px] font-semibold uppercase tracking-[0.16em] text-text-secondary">
+              <span className="text-console-10 font-semibold uppercase tracking-console-label-wide text-text-secondary">
                 Running workflows
               </span>
-              <span className="font-mono text-[11px] tabular-nums text-text-tertiary">
+              <span className="font-mono text-console-11 tabular-nums text-text-tertiary">
                 {running.length.toString()}
               </span>
               {!expanded ? (
@@ -115,18 +115,18 @@ function ApprovalDockCard({ run }: { run: Run }): ReactElement {
     <article className="mb-1.5 rounded border border-warning/40 bg-warning/[0.05] p-3">
       <div className="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1">
         <span aria-hidden className="h-2 w-2 shrink-0 animate-pulse rounded-full bg-warning" />
-        <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] text-warning">
+        <span className="shrink-0 text-console-10 font-semibold uppercase tracking-console-label text-warning">
           Waiting for approval
         </span>
         <RunOutcomeBadge outcome={run.outcome} />
-        <span className="text-[13px] font-medium text-text-primary">{run.workflow}</span>
-        <span className="font-mono text-[10px] text-text-tertiary">{shortRunId(run.id)}</span>
+        <span className="text-console-13 font-medium text-text-primary">{run.workflow}</span>
+        <span className="font-mono text-console-10 text-text-tertiary">{shortRunId(run.id)}</span>
         <button
           type="button"
           onClick={() => {
             if (run.projectId !== null) navigate(`/console/p/${run.projectId}/r/${run.id}`);
           }}
-          className="ml-auto shrink-0 font-mono text-[11px] text-text-tertiary transition-colors hover:text-text-primary"
+          className="ml-auto shrink-0 font-mono text-console-11 text-text-tertiary transition-colors hover:text-text-primary"
         >
           Open logs →
         </button>
@@ -158,10 +158,12 @@ function DockCard({ run }: { run: Run }): ReactElement {
       />
       <span className="min-w-0 flex-1">
         <span className="flex items-center gap-2">
-          <span className="truncate text-[13px] font-medium text-text-primary">{run.workflow}</span>
-          <span className="font-mono text-[10px] text-text-tertiary">{shortRunId(run.id)}</span>
+          <span className="truncate text-console-13 font-medium text-text-primary">
+            {run.workflow}
+          </span>
+          <span className="font-mono text-console-10 text-text-tertiary">{shortRunId(run.id)}</span>
         </span>
-        <span className="mt-0.5 flex items-center gap-2 font-mono text-[11px] text-text-tertiary">
+        <span className="mt-0.5 flex items-center gap-2 font-mono text-console-11 text-text-tertiary">
           <span className="text-text-secondary">{runStatusLabel(run)}</span>
           <RunOutcomeBadge outcome={run.outcome} />
           {activeNodes.length > 0 ? (
@@ -174,10 +176,10 @@ function DockCard({ run }: { run: Run }): ReactElement {
           ) : null}
         </span>
       </span>
-      <span className="shrink-0 font-mono text-[11px] tabular-nums text-text-tertiary">
+      <span className="shrink-0 font-mono text-console-11 tabular-nums text-text-tertiary">
         {elapsed}
       </span>
-      <span aria-hidden className="shrink-0 font-mono text-[11px] text-text-tertiary">
+      <span aria-hidden className="shrink-0 font-mono text-console-11 text-text-tertiary">
         ↗
       </span>
     </button>

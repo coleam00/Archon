@@ -120,7 +120,7 @@ function VariantFields({
     case 'opaque':
       return (
         <Field label="Read-only — saved unchanged">
-          <pre className="max-h-[320px] overflow-auto rounded-[8px] border border-border bg-surface-inset p-2 font-mono text-[11px] text-text-secondary">
+          <pre className="max-h-80 overflow-auto rounded-md border border-border bg-surface-inset p-2 font-mono text-console-11 text-text-secondary">
             {JSON.stringify(node.data.fields, null, 2)}
           </pre>
         </Field>
@@ -146,7 +146,7 @@ export function Inspector({
 
   if (node === null) {
     return (
-      <div className="flex h-full items-center justify-center p-6 text-center text-[12.5px] text-text-tertiary">
+      <div className="flex h-full items-center justify-center p-6 text-center text-console-13 text-text-tertiary">
         {selectionCount > 1
           ? `${String(selectionCount)} nodes selected — align, distribute, or copy them from the toolbar.`
           : 'Select a node to edit it.'}
@@ -187,12 +187,12 @@ export function Inspector({
       <div className="flex items-center gap-2">
         <span
           aria-hidden
-          className="h-5 w-[3px] shrink-0 rounded-sm"
+          className="h-5 w-0.75 shrink-0 rounded-sm"
           style={{ background: `var(--node-${node.variant})` }}
         />
-        <span className="text-[13px] font-semibold text-text-primary">{label}</span>
+        <span className="text-console-13 font-semibold text-text-primary">{label}</span>
         {capabilities.pausesRun === true ? (
-          <span className="rounded-full border border-border px-1.5 py-px font-mono text-[9px] uppercase tracking-widest text-text-tertiary">
+          <span className="rounded-full border border-border px-1.5 py-px font-mono text-console-9 uppercase tracking-widest text-text-tertiary">
             pauses
           </span>
         ) : null}
@@ -209,9 +209,9 @@ export function Inspector({
           onKeyDown={(e: KeyboardEvent<HTMLInputElement>): void => {
             if (e.key === 'Enter') commitRename();
           }}
-          className="w-full rounded-[8px] border border-border bg-surface px-2 py-1.5 font-mono text-[12.5px] text-text-primary outline-none focus:border-accent-bright/60"
+          className="w-full rounded-md border border-border bg-surface px-2 py-1.5 font-mono text-console-13 text-text-primary outline-none focus:border-accent-bright/60"
         />
-        {renameError !== null ? <p className="text-[11px] text-error">{renameError}</p> : null}
+        {renameError !== null ? <p className="text-console-11 text-error">{renameError}</p> : null}
       </Field>
 
       <VariantFields node={node} onPatch={onPatch} />
@@ -219,14 +219,14 @@ export function Inspector({
       <hr className="border-border" />
 
       <Field label="Depends on (edit via canvas edges)">
-        <div className="flex min-h-[26px] flex-wrap gap-1">
+        <div className="flex min-h-6.5 flex-wrap gap-1">
           {(node.base.depends_on ?? []).length === 0 ? (
-            <span className="text-[11.5px] text-text-tertiary">no dependencies</span>
+            <span className="text-console-12 text-text-tertiary">no dependencies</span>
           ) : (
             (node.base.depends_on ?? []).map(dep => (
               <span
                 key={dep}
-                className="rounded bg-surface-inset px-1.5 py-0.5 font-mono text-[10.5px] text-text-secondary"
+                className="rounded bg-surface-inset px-1.5 py-0.5 font-mono text-console-11 text-text-secondary"
               >
                 {dep}
               </span>
@@ -308,7 +308,9 @@ function ModelField({
   if (Array.isArray(model)) {
     return (
       <Field label="Model">
-        <span className="font-mono text-[12.5px] text-text-secondary">{modelRefLabel(model)}</span>
+        <span className="font-mono text-console-13 text-text-secondary">
+          {modelRefLabel(model)}
+        </span>
       </Field>
     );
   }

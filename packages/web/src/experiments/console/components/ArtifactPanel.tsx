@@ -39,7 +39,7 @@ export function ArtifactPanel({ runId }: ArtifactPanelProps): ReactElement {
   }, [files, selected]);
 
   if (loading) {
-    return <div className="p-6 text-[12px] text-text-tertiary">Loading artifacts…</div>;
+    return <div className="p-6 text-console-12 text-text-tertiary">Loading artifacts…</div>;
   }
   if (listError !== undefined) {
     // A 404 means the server could not resolve WHERE this run's output lives
@@ -50,13 +50,13 @@ export function ArtifactPanel({ runId }: ArtifactPanelProps): ReactElement {
     if (listError instanceof HttpError && listError.status === 404) {
       return (
         <div className="flex h-full items-center justify-center p-6">
-          <div className="max-w-md text-center text-[13px] text-text-tertiary">
+          <div className="max-w-md text-center text-console-13 text-text-tertiary">
             <p className="text-error">Artifacts unavailable for this run.</p>
             <p className="mt-2">
               Archon could not resolve where this run&apos;s output was written — the run record may
               have been deleted, or its project may no longer be registered.
             </p>
-            <p className="mt-2 font-mono text-[11px]">
+            <p className="mt-2 font-mono text-console-11">
               This is not the same as &ldquo;the run produced nothing&rdquo;.
             </p>
           </div>
@@ -64,7 +64,7 @@ export function ArtifactPanel({ runId }: ArtifactPanelProps): ReactElement {
       );
     }
     return (
-      <div className="p-6 font-mono text-[12px] text-error">
+      <div className="p-6 font-mono text-console-12 text-error">
         Could not list artifacts: {listError.message}
       </div>
     );
@@ -72,9 +72,9 @@ export function ArtifactPanel({ runId }: ArtifactPanelProps): ReactElement {
   if (files === undefined || files.length === 0) {
     return (
       <div className="flex h-full items-center justify-center p-6">
-        <div className="text-center text-[13px] text-text-tertiary">
+        <div className="text-center text-console-13 text-text-tertiary">
           <p>No artifacts written to disk for this run.</p>
-          <p className="mt-2 font-mono text-[11px]">
+          <p className="mt-2 font-mono text-console-11">
             Workflows that emit reports or plans write them to{' '}
             <code className="rounded bg-surface-inset px-1">$ARTIFACTS_DIR</code>.
           </p>
@@ -90,7 +90,7 @@ export function ArtifactPanel({ runId }: ArtifactPanelProps): ReactElement {
         {selected !== null ? (
           <ArtifactViewer runId={runId} path={selected} />
         ) : (
-          <div className="flex h-full items-center justify-center text-[12px] text-text-tertiary">
+          <div className="flex h-full items-center justify-center text-console-12 text-text-tertiary">
             Pick a file from the left.
           </div>
         )}
@@ -109,9 +109,9 @@ function ArtifactSidebar({ files, selected, onSelect }: SidebarProps): ReactElem
   return (
     <nav
       aria-label="Artifacts"
-      className="flex h-full w-[260px] shrink-0 flex-col overflow-y-auto border-r border-border bg-surface-inset"
+      className="flex h-full w-65 shrink-0 flex-col overflow-y-auto border-r border-border bg-surface-inset"
     >
-      <header className="sticky top-0 z-10 border-b border-border bg-surface-inset px-3 py-2 text-[10px] font-semibold uppercase tracking-[0.14em] text-text-tertiary">
+      <header className="sticky top-0 z-10 border-b border-border bg-surface-inset px-3 py-2 text-console-10 font-semibold uppercase tracking-console-label text-text-tertiary">
         Files · {files.length.toString()}
       </header>
       <ul className="flex flex-col gap-px p-2">
@@ -132,13 +132,13 @@ function ArtifactSidebar({ files, selected, onSelect }: SidebarProps): ReactElem
                 }`}
               >
                 <span
-                  className={`truncate font-mono text-[12px] ${
+                  className={`truncate font-mono text-console-12 ${
                     isSelected ? 'text-text-primary' : 'text-text-secondary'
                   }`}
                 >
                   {basename}
                 </span>
-                <span className="flex items-center justify-between gap-2 font-mono text-[10px] text-text-tertiary">
+                <span className="flex items-center justify-between gap-2 font-mono text-console-10 text-text-tertiary">
                   <span className="truncate">{dir ?? '·'}</span>
                   <span className="shrink-0 tabular-nums">{formatSize(f.size)}</span>
                 </span>
@@ -193,7 +193,7 @@ function ArtifactViewer({ runId, path }: ViewerProps): ReactElement {
   return (
     <>
       <header className="flex shrink-0 items-center justify-between border-b border-border bg-surface px-6 py-2">
-        <span className="truncate font-mono text-[12px] text-text-primary">{path}</span>
+        <span className="truncate font-mono text-console-12 text-text-primary">{path}</span>
         <a
           href={`/api/artifacts/${encodeURIComponent(runId)}/${path
             .split('/')
@@ -201,24 +201,24 @@ function ArtifactViewer({ runId, path }: ViewerProps): ReactElement {
             .join('/')}`}
           target="_blank"
           rel="noreferrer"
-          className="shrink-0 font-mono text-[10px] text-text-tertiary transition-colors hover:text-text-primary"
+          className="shrink-0 font-mono text-console-10 text-text-tertiary transition-colors hover:text-text-primary"
         >
           open raw ↗
         </a>
       </header>
       <div className="min-h-0 flex-1 overflow-y-auto px-6 py-4">
         {loading ? (
-          <p className="font-mono text-[12px] text-text-tertiary">Loading…</p>
+          <p className="font-mono text-console-12 text-text-tertiary">Loading…</p>
         ) : error !== null ? (
-          <p className="font-mono text-[12px] text-error">{error}</p>
+          <p className="font-mono text-console-12 text-error">{error}</p>
         ) : content === null ? null : isMarkdown ? (
-          <div className="chat-markdown max-w-[820px] text-[13px] leading-relaxed text-text-primary">
+          <div className="chat-markdown max-w-205 text-console-13 leading-relaxed text-text-primary">
             <ReactMarkdown remarkPlugins={REMARK_PLUGINS} rehypePlugins={REHYPE_PLUGINS}>
               {content}
             </ReactMarkdown>
           </div>
         ) : (
-          <pre className="max-w-[1100px] whitespace-pre-wrap break-words font-mono text-[12px] leading-relaxed text-text-primary">
+          <pre className="max-w-275 whitespace-pre-wrap break-words font-mono text-console-12 leading-relaxed text-text-primary">
             {content}
           </pre>
         )}

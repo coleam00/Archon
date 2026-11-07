@@ -109,20 +109,20 @@ export function ChatComposer({
 
   return (
     <div
-      className="shrink-0 border-t border-border bg-surface px-[30px] py-[14px]"
+      className="shrink-0 border-t border-border bg-surface px-7.5 py-3.5"
       title={disabledReason}
     >
-      <div className="mx-auto max-w-[940px]">
+      <div className="mx-auto max-w-235">
         {files.length > 0 ? (
-          <div className="mb-[10px] flex flex-wrap gap-[6px]">
+          <div className="mb-2.5 flex flex-wrap gap-1.5">
             {files.map(f => (
               <span
                 key={f.id}
-                className="flex items-center gap-[6px] rounded-[8px] border bg-[color:var(--surface-elevated)] py-[4px] pl-[9px] pr-[5px] text-[11.5px]"
+                className="flex items-center gap-1.5 rounded-md border bg-[color:var(--surface-elevated)] py-1 pl-2.25 pr-1.25 text-console-12"
                 style={{ borderColor: 'var(--border-bright)' }}
               >
-                <span className="max-w-[180px] truncate text-text-primary">{f.file.name}</span>
-                <span className="font-mono text-[10px] text-text-tertiary">
+                <span className="max-w-45 truncate text-text-primary">{f.file.name}</span>
+                <span className="font-mono text-console-10 text-text-tertiary">
                   {formatBytes(f.file.size)}
                 </span>
                 <button
@@ -131,9 +131,9 @@ export function ChatComposer({
                     removeFile(f.id);
                   }}
                   aria-label={`Remove ${f.file.name}`}
-                  className="rounded p-[1px] text-text-tertiary transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary"
+                  className="rounded p-px text-text-tertiary transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary"
                 >
-                  <span aria-hidden className="text-[11px] leading-none">
+                  <span aria-hidden className="text-console-11 leading-none">
                     ✕
                   </span>
                 </button>
@@ -142,13 +142,13 @@ export function ChatComposer({
           </div>
         ) : null}
         {fileError !== null ? (
-          <div className="mb-[8px] font-mono text-[11px] text-error">{fileError}</div>
+          <div className="mb-2 font-mono text-console-11 text-error">{fileError}</div>
         ) : null}
         <div
-          className="flex items-end gap-[10px] rounded-[14px] border bg-[color:var(--surface-elevated)] py-[8px] pl-[14px] pr-[8px] transition-[border-color,box-shadow] focus-within:border-[color:color-mix(in_oklch,var(--brand-magenta),transparent_40%)] focus-within:shadow-[0_0_0_4px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]"
+          className="flex items-end gap-2.5 rounded-xl border bg-[color:var(--surface-elevated)] py-2 pl-3.5 pr-2 transition-[border-color,box-shadow] focus-within:border-[color:color-mix(in_oklch,var(--brand-magenta),transparent_40%)] focus-within:shadow-[0_0_0_4px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]"
           style={{ borderColor: 'var(--border-bright)' }}
         >
-          <div className="flex shrink-0 items-end gap-[6px] pb-[7px] text-text-tertiary">
+          <div className="flex shrink-0 items-end gap-1.5 pb-1.75 text-text-tertiary">
             <button
               type="button"
               onClick={() => {
@@ -157,7 +157,7 @@ export function ChatComposer({
               aria-label="Attach files"
               disabled={disabled || files.length >= MAX_FILES}
               title="Attach files"
-              className="flex h-[22px] w-[22px] cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
+              className="flex h-5.5 w-5.5 cursor-pointer items-center justify-center rounded-md transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
             >
               <Paperclip className="h-5 w-5" />
             </button>
@@ -177,7 +177,7 @@ export function ChatComposer({
               aria-label="Commands"
               disabled
               title="Commands (coming soon)"
-              className="flex h-[22px] items-center justify-center rounded-md px-[2px] text-[17px] leading-none transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
+              className="flex h-5.5 items-center justify-center rounded-md px-0.5 text-console-17 leading-none transition-colors hover:bg-[color:var(--surface-hover)] hover:text-text-primary disabled:cursor-default disabled:opacity-50"
             >
               /
             </button>
@@ -192,7 +192,7 @@ export function ChatComposer({
             onKeyDown={onKeyDown}
             rows={1}
             placeholder={disabled ? (disabledReason ?? 'Waiting…') : 'Message the agent…'}
-            className="min-h-0 flex-1 resize-none bg-transparent py-[7px] text-[14.5px] leading-[1.5] text-text-primary placeholder:text-text-tertiary focus:outline-none disabled:opacity-50"
+            className="min-h-0 flex-1 resize-none bg-transparent py-1.75 text-console-15 leading-[1.5] text-text-primary placeholder:text-text-tertiary focus:outline-none disabled:opacity-50"
             style={{ maxHeight: `${MAX_HEIGHT.toString()}px` }}
           />
           <button
@@ -200,26 +200,26 @@ export function ChatComposer({
             onClick={submit}
             disabled={disabled || value.trim().length === 0}
             title="Send · Enter"
-            className="brand-bar flex h-[36px] shrink-0 items-center gap-[7px] rounded-[10px] px-[15px] text-[13px] font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-[filter,transform] hover:brightness-110 active:translate-y-[1px] disabled:opacity-45 disabled:shadow-none disabled:hover:brightness-100"
+            className="brand-bar flex h-9 shrink-0 items-center gap-1.75 rounded-lg px-3.75 text-console-13 font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-[filter,transform] hover:brightness-110 active:translate-y-px disabled:opacity-45 disabled:shadow-none disabled:hover:brightness-100"
           >
             Send
-            <span aria-hidden className="font-mono text-[10px] opacity-70">
+            <span aria-hidden className="font-mono text-console-10 opacity-70">
               ↵
             </span>
           </button>
         </div>
-        <div className="mt-[9px] flex items-center justify-between px-[2px] font-mono text-[11px] text-text-tertiary">
+        <div className="mt-2.25 flex items-center justify-between px-0.5 font-mono text-console-11 text-text-tertiary">
           <span />
           <span>
             <span
-              className="mr-1 inline-flex items-center rounded border px-[5px] py-[1px] font-mono text-[10.5px] text-text-secondary"
+              className="mr-1 inline-flex items-center rounded border px-1.25 py-px font-mono text-console-11 text-text-secondary"
               style={{ borderColor: 'var(--border-bright)' }}
             >
               ↵
             </span>
             send{' '}
             <span
-              className="ml-1 inline-flex items-center rounded border px-[5px] py-[1px] font-mono text-[10.5px] text-text-secondary"
+              className="ml-1 inline-flex items-center rounded border px-1.25 py-px font-mono text-console-11 text-text-secondary"
               style={{ borderColor: 'var(--border-bright)' }}
             >
               ⇧↵

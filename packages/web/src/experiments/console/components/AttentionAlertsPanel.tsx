@@ -35,7 +35,7 @@ export function AttentionAlertsPanel(): ReactElement {
 
   return (
     <SettingsSection title="Alerts">
-      <div className="flex flex-col gap-3 text-[12px]">
+      <div className="flex flex-col gap-3 text-console-12">
         <label className="flex cursor-pointer select-none items-start gap-2 text-text-secondary">
           <input
             type="checkbox"
@@ -103,7 +103,7 @@ function NotificationStatus({ access }: { access: NotificationAccess }): ReactEl
           <button
             type="button"
             onClick={requestNotificationAccess}
-            className="shrink-0 rounded border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
+            className="shrink-0 rounded border border-border px-2.5 py-1 text-console-11 text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary"
           >
             Allow notifications
           </button>

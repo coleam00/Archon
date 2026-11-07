@@ -29,7 +29,7 @@ export function ProjectViewTabs({ projectId, active }: ProjectViewTabsProps): Re
             key={key}
             to={`/console/p/${projectId}${suffix}`}
             aria-current={isActive ? 'page' : undefined}
-            className={`relative rounded px-2 py-1 text-[11px] font-medium uppercase tracking-wider transition-colors ${
+            className={`relative rounded px-2 py-1 text-console-11 font-medium uppercase tracking-wider transition-colors ${
               isActive
                 ? 'bg-surface-elevated text-text-primary'
                 : 'text-text-tertiary hover:text-text-primary'

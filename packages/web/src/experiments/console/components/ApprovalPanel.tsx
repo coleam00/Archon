@@ -45,7 +45,7 @@ export function ApprovalPanel({ run }: ApprovalPanelProps): ReactElement {
     const childRunIds =
       attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
     return (
-      <p className="mt-2 rounded border border-warning/30 bg-warning/[0.06] p-3 text-[12px] text-warning">
+      <p className="mt-2 rounded border border-warning/30 bg-warning/[0.06] p-3 text-console-12 text-warning">
         Waiting on sub-runs: {childRunIds.join(', ')}. Review the child runs to continue.
       </p>
     );
@@ -148,7 +148,7 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
       onKeyDown={stopPropagation}
     >
       {run.approval?.message.length ? (
-        <p className="mb-2 text-[12px] uppercase tracking-[0.12em] text-warning">
+        <p className="mb-2 text-console-12 uppercase tracking-console-label text-warning">
           {run.approval.message}
         </p>
       ) : null}
@@ -170,7 +170,7 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
             }
             disabled={busy}
             autoFocus
-            className="min-w-0 flex-1 rounded border border-border bg-surface-inset px-3 py-1.5 text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none disabled:opacity-50"
+            className="min-w-0 flex-1 rounded border border-border bg-surface-inset px-3 py-1.5 text-console-13 text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none disabled:opacity-50"
           />
           {canApprove && (
             <button
@@ -178,11 +178,11 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
               data-keymap-approve
               onClick={() => void respond('approve', comment)}
               disabled={busy}
-              className="flex shrink-0 items-center gap-1 rounded border border-success/40 bg-success/15 px-3 text-[12px] font-medium text-success transition-colors hover:bg-success/25 disabled:opacity-50"
+              className="flex shrink-0 items-center gap-1 rounded border border-success/40 bg-success/15 px-3 text-console-12 font-medium text-success transition-colors hover:bg-success/25 disabled:opacity-50"
               title={`${approveLabel} · Enter`}
             >
               {approveLabel}
-              <span aria-hidden className="font-mono text-[10px] opacity-70">
+              <span aria-hidden className="font-mono text-console-10 opacity-70">
                 ↵
               </span>
             </button>
@@ -197,7 +197,7 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
                 setError(null);
               }}
               disabled={busy}
-              className="shrink-0 rounded border border-error/30 px-3 text-[12px] text-error transition-colors hover:bg-error/10 disabled:opacity-40"
+              className="shrink-0 rounded border border-error/30 px-3 text-console-12 text-error transition-colors hover:bg-error/10 disabled:opacity-40"
               title={`${decisionLabel(d.id, d.label)} this run`}
             >
               {decisionLabel(d.id, d.label)}
@@ -206,7 +206,7 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
         </div>
       ) : (
         <div className="flex flex-col gap-2">
-          <label className="font-mono text-[10px] uppercase tracking-[0.14em] text-error">
+          <label className="font-mono text-console-10 uppercase tracking-console-label text-error">
             {decisionLabel(mode, secondaryDecisions.find(d => d.id === mode)?.label)} — text
             required
           </label>
@@ -221,10 +221,10 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
             rows={3}
             disabled={busy}
             autoFocus
-            className="w-full resize-none rounded border border-error/30 bg-surface-inset px-3 py-2 text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-error/60 focus:outline-none disabled:opacity-50"
+            className="w-full resize-none rounded border border-error/30 bg-surface-inset px-3 py-2 text-console-13 text-text-primary placeholder:text-text-tertiary focus:border-error/60 focus:outline-none disabled:opacity-50"
           />
           <div className="flex items-center justify-between gap-2">
-            <span className="font-mono text-[10px] text-text-tertiary">
+            <span className="font-mono text-console-10 text-text-tertiary">
               ⌘↵ confirm · esc cancel
             </span>
             <div className="flex items-center gap-2">
@@ -236,7 +236,7 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
                   setError(null);
                 }}
                 disabled={busy}
-                className="rounded px-3 py-1 text-[12px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40"
+                className="rounded px-3 py-1 text-console-12 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-40"
               >
                 Cancel
               </button>
@@ -246,12 +246,12 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
                   if (text.trim().length > 0) void respond(mode, text);
                 }}
                 disabled={busy || text.trim().length === 0}
-                className="flex items-center gap-1 rounded border border-error/40 bg-error/15 px-3 py-1 text-[12px] font-medium text-error transition-colors hover:bg-error/25 disabled:opacity-40"
+                className="flex items-center gap-1 rounded border border-error/40 bg-error/15 px-3 py-1 text-console-12 font-medium text-error transition-colors hover:bg-error/25 disabled:opacity-40"
               >
                 {busy
                   ? 'Sending…'
                   : `${decisionLabel(mode, secondaryDecisions.find(d => d.id === mode)?.label)} run`}
-                <span aria-hidden className="font-mono text-[10px] opacity-70">
+                <span aria-hidden className="font-mono text-console-10 opacity-70">
                   ⌘↵
                 </span>
               </button>
@@ -260,7 +260,7 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
         </div>
       )}
 
-      {error !== null ? <p className="mt-1 font-mono text-[11px] text-error">{error}</p> : null}
+      {error !== null ? <p className="mt-1 font-mono text-console-11 text-error">{error}</p> : null}
     </div>
   );
 }
