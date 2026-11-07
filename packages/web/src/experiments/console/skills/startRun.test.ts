@@ -96,8 +96,17 @@ describe('startRun — declared inputs (#2554)', () => {
     const form = runCall().init?.body as FormData;
     expect(form).toBeInstanceOf(FormData);
     expect(JSON.parse(String(form.get('inputs')))).toEqual({ diff: 'D1' });
+    expect(form.get('conversationId')).toBe('web-test-1');
     expect(form.get('message')).toBe('go');
-    expect(form.getAll('files')).toHaveLength(1);
+    expect(Array.from(form.keys()).sort()).toEqual([
+      'conversationId',
+      'files',
+      'inputs',
+      'message',
+    ]);
+    expect(form.getAll('files').map(file => (typeof file === 'string' ? file : file.name))).toEqual(
+      ['a.txt']
+    );
     expect(new Headers(runCall().init?.headers).has('Content-Type')).toBe(false);
   });
 

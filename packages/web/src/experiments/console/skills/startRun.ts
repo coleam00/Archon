@@ -7,10 +7,11 @@ type WorkflowRunLaunchJson =
   paths['/api/workflows/{name}/run']['post']['requestBody']['content']['application/json'];
 type WorkflowRunLaunchMultipart =
   paths['/api/workflows/{name}/run']['post']['requestBody']['content']['multipart/form-data'];
-type WorkflowRunFormFields = Pick<
+type WorkflowRunBody = Pick<
   WorkflowRunLaunchJson,
-  keyof WorkflowRunLaunchJson & keyof WorkflowRunLaunchMultipart
+  'conversationId' | 'message' | 'inputs' | 'tiers' | 'aliases'
 >;
+type WorkflowRunFormFields = Pick<WorkflowRunLaunchMultipart, keyof WorkflowRunBody>;
 
 /**
  * Start a run: hides the legacy conversation coupling from the console UI.
@@ -48,7 +49,7 @@ export async function startRun({
     ...(hasInputs ? { inputs } : {}),
     ...(hasTiers ? { tiers } : {}),
     ...(hasAliases ? { aliases } : {}),
-  } satisfies WorkflowRunLaunchJson;
+  } satisfies WorkflowRunBody;
 
   await requestJson('/api/workflows/{name}/run', 'post', {
     params: { name: workflow },
@@ -56,16 +57,24 @@ export async function startRun({
   });
 }
 
-function buildRunForm(body: WorkflowRunFormFields, files: File[]): FormData {
+function buildRunForm(body: WorkflowRunBody, files: File[]): FormData {
   // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
-  for (const [key, value] of Object.entries(body)) {
+  const fields = {
+    conversationId: body.conversationId,
+    message: body.message,
+    inputs: JSON.stringify(body.inputs),
+    tiers: JSON.stringify(body.tiers),
+    aliases: JSON.stringify(body.aliases),
+  } satisfies WorkflowRunFormFields;
+  for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) {
-      form.append(key, typeof value === 'string' ? value : JSON.stringify(value));
+      form.append(key, value);
     }
   }
+  const filesKey = 'files' satisfies keyof WorkflowRunLaunchMultipart;
   for (const file of files) {
-    form.append('files', file, file.name);
+    form.append(filesKey, file, file.name);
   }
   return form;
 }

@@ -31,7 +31,8 @@ for (const declaration of [
   `import type { components as Other } from '@/lib/api'; type Independent = Other['schemas']['TierEntry'];`,
 ]) {
   test(`rejects independent declarations: ${declaration}`, () => {
-    expect(check(declaration).length).toBeGreaterThan(0);
+    const name = declaration === 'type A = B; type B = A;' ? 'A' : 'Independent';
+    expect(check(declaration)).toContainEqual(expect.stringContaining(` ${name}:`));
   });
 }
 

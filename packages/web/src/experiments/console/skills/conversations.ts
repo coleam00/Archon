@@ -63,9 +63,12 @@ export async function sendMessage(
   // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
   const fields = { message } satisfies SendMessageMultipart;
-  form.append('message', fields.message);
+  for (const [key, value] of Object.entries(fields)) {
+    form.append(key, value);
+  }
+  const filesKey = 'files' satisfies keyof SendMessageMultipart;
   for (const file of files) {
-    form.append('files', file, file.name);
+    form.append(filesKey, file, file.name);
   }
   const res = await fetch(url, { method: 'POST', body: form });
   if (!res.ok) {
