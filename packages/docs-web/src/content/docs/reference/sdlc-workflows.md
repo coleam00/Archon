@@ -99,7 +99,7 @@ Files the issues a large item splits into, when triage routed the item `split`. 
 
 **When to use it**: Your issues include PRDs, epics or lists of tasks too large to build as one work item. Add the binding the SDLC pack README's "Split queue" section shows; the pack installs none. By hand: `archon workflow run archon-split --input repo_host=github.com --input repo_path=acme/widgets --input number=42`.
 
-**What it produces**: The filed issues, which come back through intake, a comment on the item listing them, and the queue's record on its work item (`facts.split`: status, kind and filed issues, or the route and reason when the item was built whole).
+**What it produces**: The filed issues, which come back through intake, a comment on the item listing them, and the queue's record on its work item (`facts.split`: status, kind and filed issues, or the route when the item was built whole).
 
 #### `archon-worktree-cleanup`
 

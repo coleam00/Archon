@@ -14,7 +14,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { artifactsDir, emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
-import { SPLIT_PICKUP } from '../../.shared/split.ts';
+import { filedIssues, SPLIT_PICKUP } from '../../.shared/split.ts';
 import { claimNamed, claimNext } from '../../.shared/workitem.ts';
 
 function main(): void {
@@ -40,7 +40,7 @@ function main(): void {
     path: issue.state === 'closed' ? 'closed' : 'slice',
     item: doc.subject,
     url: issue.url,
-    filed: doc.facts.split?.issues ?? [],
+    filed: filedIssues(doc.facts.split),
     reason: [...doc.history].reverse().find(entry => entry.stage === 'intake' && entry.outcome === 'split')?.summary ?? '',
   });
 }

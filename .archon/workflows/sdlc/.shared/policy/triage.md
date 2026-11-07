@@ -43,7 +43,9 @@ after it, and where the two conflict, the project's line wins.
   must wait on real use of what is already delivered. The later ones are recorded on
   the item as a short plan, each with what the earlier work must show before it is
   filed, and a later split files them. A parent's kind does not change because part of
-  it is already delivered.
+  it is already delivered. An item a split already filed issues from is never built
+  whole: its split comment lists them, and a re-triage routes it `split` again, which
+  files the next phase, or leaves it waiting.
 - **PRDs.** A PRD is a hypothesis-driven release: it says that shipping something will
   change something observable, and the work is how to find out. Tell it by what the
   item asks for, not by its headings or title. It is ready only when it states all

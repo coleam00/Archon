@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
-import { SPLIT_KINDS, splitMarker } from '../../workflows/sdlc/.shared/split';
+import { filedIssues, SPLIT_KINDS, splitMarker } from '../../workflows/sdlc/.shared/split';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { mirrorLabels, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { gitCheckout, hostCli, labelWrites, PACK, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
@@ -152,7 +152,7 @@ describe('split publish', () => {
     // A bundle is closed with its list; it gets no PRD label.
     expect(run.closes).toEqual([{ number: 7, state: 'closed', state_reason: 'completed' }]);
     expect(labelWrites(run, 7).add).not.toContain('archon-prd');
-    expect(stored(at).facts.split?.issues.map(issue => issue.number)).toEqual([100, 101]);
+    expect(filedIssues(stored(at).facts.split).map(issue => issue.number)).toEqual([100, 101]);
   });
 
   test('an epic stays open', () => {
@@ -190,7 +190,8 @@ describe('split publish', () => {
     expect(run.comments).toEqual([{ issue: 7, body: expect.stringContaining('Measure first.') }]);
     expect(labelWrites(run, 7)).toEqual({ add: ['archon-plan'], remove: ['archon-split'] });
     const doc = stored(at);
-    expect(doc).toMatchObject({ stage: 'plan', claim: null, facts: { split: { status: 'whole', route: 'plan', reason: 'Measure first.' } } });
+    expect(doc).toMatchObject({ stage: 'plan', claim: null, facts: { split: { status: 'whole', route: 'plan' } } });
+    expect(doc.history.at(-1)).toMatchObject({ stage: 'split', outcome: 'whole', summary: 'Measure first.' });
     // Intake's mirror of the document agrees with the labels publish wrote.
     expect(mirrorLabels(doc)).toContain('archon-plan');
     expect(mirrorLabels(doc)).not.toContain('archon-split');

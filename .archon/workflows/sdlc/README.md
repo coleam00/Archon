@@ -708,8 +708,9 @@ window, whether it is split or built whole. A PRD missing any of them gets
   filed issues from refuses a `whole` answer, since those pieces may be in flight.
 - **Record.** The work item's `facts.split` holds the status (`filing`, `done`,
   `whole` or `closed`), whether the item is a `prd`, an `epic` or a `bundle`, every
-  issue filed from it by key, and the existing issues it adopted with why. A `whole`
-  record holds the route and the reason instead.
+  issue filed from it by key and title, and the existing issues it adopted with why,
+  kept across phases. A `whole` record holds only the route; the reason is in its
+  history entry and the comment.
 - **The filed issues** come back through intake like any other issue. They are opened
   by the install's own identity, so intake trusts them only when that login is on the
   maintainer list.

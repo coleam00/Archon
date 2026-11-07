@@ -31,6 +31,8 @@ import { ROUTE_LABEL, writeLabels } from '../../.shared/labels.ts';
 import { upsertComment } from '../../.shared/pr.ts';
 import {
   type AdoptedIssue,
+  adoptedIssues,
+  filedIssues,
   type SplitIssue,
   type SplitKind,
   type SplitRecord,
@@ -70,7 +72,7 @@ const LEAD: Record<SplitKind, string> = {
 };
 
 function filedOn(doc: WorkItem | null): readonly SplitIssue[] {
-  return doc?.facts.split?.issues ?? [];
+  return filedIssues(doc?.facts.split);
 }
 
 function finish(doc: WorkItem, record: SplitRecord, runId: string, outcome: string, summary: string): WorkItem {
@@ -83,14 +85,8 @@ function finish(doc: WorkItem, record: SplitRecord, runId: string, outcome: stri
   };
 }
 
-function comment(
-  kind: SplitKind,
-  issues: readonly SplitIssue[],
-  titles: ReadonlyMap<string, string>,
-  adopted: readonly AdoptedIssue[],
-  later: readonly Later[]
-): string {
-  const listed = issues.map(entry => `- #${String(entry.number)} ${titles.get(entry.key) ?? entry.key}`);
+function comment(kind: SplitKind, issues: readonly SplitIssue[], adopted: readonly AdoptedIssue[], later: readonly Later[]): string {
+  const listed = issues.map(entry => `- #${String(entry.number)} ${entry.title}`);
   const tracked = adopted.map(entry => `- #${String(entry.number)} ${entry.why}`);
   const planned = later.map(entry => `- ${entry.title}. Filed once the earlier work shows: ${entry.signal}`);
   return [
@@ -126,18 +122,21 @@ function publish(
   const keys = planned.map(entry => entry.key);
   const twice = keys.find((key, index) => keys.indexOf(key) !== index);
   if (twice !== undefined) throw new Error(`nothing was filed: key ${twice} is listed twice`);
+  const before = readWorkItem(item.number)?.facts.split;
   // viewIssue refuses a number that is not an issue of the repository.
-  const adopted: AdoptedIssue[] = existing.map(entry => {
+  const listed: AdoptedIssue[] = existing.map(entry => {
     const view = viewIssue({ repo: item.repo, number: entry.number });
     if (view.state !== 'open') throw new Error(`nothing was filed: existing issue ${String(entry.number)} is ${view.state}, not open`);
     return { number: entry.number, url: view.url, why: entry.why };
   });
-  let issues = filedOn(readWorkItem(item.number));
+  // An earlier phase's adoptions stay unless this phase lists the issue again.
+  const adopted = [...adoptedIssues(before).filter(entry => !listed.some(next => next.number === entry.number)), ...listed];
+  let issues = filedIssues(before);
   for (const entry of planned) {
     if (issues.some(filed => filed.key === entry.key)) continue;
     const marker = splitMarker(item.number, entry.key);
     const created = createIssue(item.repo, entry.title, `${marker}\n\n${entry.body.trim()}`, marker);
-    const filed = { key: entry.key, number: created.issue.number, url: created.url };
+    const filed = { key: entry.key, number: created.issue.number, url: created.url, title: entry.title };
     const doc = updateClaimed(item, runId, current => ({
       ...current,
       facts: { ...current.facts, split: recorded([...filedOn(current), filed]) },
@@ -145,8 +144,7 @@ function publish(
     issues = filedOn(doc);
   }
 
-  const titles = new Map(planned.map(entry => [entry.key, entry.title]));
-  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(kind, issues, titles, adopted, later));
+  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(kind, issues, adopted, later));
   if (kind === 'prd') writeLabels(item, ['archon-prd'], []);
   if (kind === 'bundle') closeIssue(item, 'completed');
 
@@ -168,7 +166,7 @@ function buildWhole(item: QualifiedPr, runId: string, route: WholeRoute, reason:
   upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, [COMMENT_MARKER, lead, reason].join('\n\n'));
   writeLabels(item, [ROUTE_LABEL[route]], ['archon-split']);
   updateClaimed(item, runId, current => ({
-    ...finish(current, { status: 'whole', route, reason, issues: [], at, run_id: runId }, runId, 'whole', reason),
+    ...finish(current, { status: 'whole', route, at, run_id: runId }, runId, 'whole', reason),
     stage: route,
   }));
   emit({ path: 'slice', item: item.number, kind: 'whole', issues: [], adopted: [], summary: `Issue ${String(item.number)}: built whole at ${route}; ${reason}` });
