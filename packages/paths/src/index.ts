@@ -144,6 +144,8 @@ export {
   captureWorkflowTerminal,
 } from './telemetry';
 export {
+  chatTurnEventProperties,
+  workflowTerminalEventProperties,
   WORKFLOW_TERMINAL_EVENT_TYPE,
   classifyWorkflowForTelemetry,
   TELEMETRY_SCHEMA_VERSION,
@@ -152,6 +154,7 @@ export type {
   WorkflowInvokedProperties,
   ArchonStartedProperties,
   ChatTurnProperties,
+  TelemetryUsageProperties,
   DeploymentShapeProperties,
   WorkflowTerminalProperties,
   WorkflowShapeProperties,
