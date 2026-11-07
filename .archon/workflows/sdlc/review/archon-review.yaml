@@ -1,4 +1,4 @@
-name: archon-review-block
+name: archon-review
 description: |
   Review a change through parallel specialist lenses and produce one evidence-based
   verdict. On every round but a light one, a quick route agent picks the lenses
@@ -25,9 +25,9 @@ description: |
   For a fork PR, fetch its head first, then use a fresh review branch with
   `--from <PR head SHA>`.
 
-  The graph of archon-review, as a building block for a workflow that composes the
-  stage and owns what follows its ending. It never pauses for a person: run
-  archon-review, which adds that pause, by hand.
+  Use when: changes need judging — "review this PR", "review my changes",
+  "is this ready to merge".
+  NOT for: fixing findings (implement) or writing code.
 
 model: ['@reviewer', medium]
 

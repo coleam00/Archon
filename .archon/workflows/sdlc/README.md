@@ -143,7 +143,7 @@ Agents read CI job logs with the tools the run has, since the contract has no op
 for them. A red default branch is always raised as a `merge: base` item: `checks.rerun`
 acts only on a pull request, so the pack never reruns it.
 
-`archon-ship-block`, `archon-deliver-block`, `archon-upkeep` and `archon-pr` start with a `forge` node
+`archon-ship`, `archon-deliver`, `archon-upkeep` and `archon-pr` start with a `forge` node
 ([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the plugin can act
 after worktree setup and before any agent spends: host metadata must advertise every
 operation in `REQUIRED_FORGE_OPERATIONS` in `.shared/forge-check.ts`, then one
@@ -190,9 +190,9 @@ declared and resolves those threads. Every pack label is declared in `.shared/la
 labels through its `writeLabels`, which adds and removes them as a delta so labels
 another writer adds survive, on both sources. No delivery node files
 discoveries: the run's terminal report relays them to the operator, and
-[`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver-block` and
-`archon-ship-block` that is the `report` node, which also runs when a node fails, so a
-workflow that includes `archon-deliver-block` runs after a failed delivery and must gate
+[`archon-discoveries`](#discoveries) drains them where a project runs it. In `archon-deliver` and
+`archon-ship` that is the `report` node, which also runs when a node fails, so a
+workflow that includes `archon-deliver` runs after a failed delivery and must gate
 on `$deliver.output.ready`. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the forge, and fails unless the result reads back — so "the write
@@ -313,27 +313,32 @@ binary's embedded bundle as from a source checkout. The agent reads the default 
 the project's file, and no script opens either. The default is a file rather than text in the prompt, so a node
 whose decision names no policy carries none of it.
 
-## A stage pauses where nothing takes it forward
+## A stage run by hand ends with its outcome
 
 Each stage a person runs, `archon-deliver`, `archon-plan`, `archon-triage`,
-`archon-review` and `archon-ship`, is a public entry around a `-block` workflow that
-holds the stage's graph. The entry runs the block and then
-[`archon-attention`](attention/archon-attention.yaml), whose one `decide` agent judges
-whether the ending has a next step. When it has none (a delivery that ended not
-ready, a plan or triage stopped on a question for a person, a review that is Ready on
-a draft pull request), the run pauses as one `select` attention item labelled
-`stage: <workflow>`. It says what ended and why it matters, the agent's
-recommendation with its confidence and evidence, the choices and what each does, what
-waiting costs, and the links. The run continues on the answer: `rerun` runs the block
-again with the item and the person's note added to its work, `ready` takes the pull
-request out of draft, and `finish` keeps the outcome as it stands. The entry returns
-the block's typed outcome as its last pass left it. A stage that fails raises no item:
-the run fails at the failed node, as the block alone would.
+`archon-review` and `archon-ship`, is one workflow under that name, and the workflows
+that compose a stage include the same file: the queues, intake, upkeep, the review
+eval, and `archon-ship` and `archon-deliver` themselves. A stage never pauses for a
+person. A run started by hand ends with the stage's typed outcome as the run's result:
+`ready` (`delivered` for ship) says whether the stage got there, and the report says
+why not. A stage that fails fails the run at the failed node.
 
-A workflow that composes a stage includes its `-block`: the queues, intake, upkeep,
-the review eval, and `archon-ship-block` and `archon-deliver-block` themselves. The
-composer owns what follows the stage's ending and asks through its own attention item
-when it needs a person, so one decision never raises two items.
+To take a stage that ended not ready further, start it again on the same checkout
+with your note as the message:
+
+```bash
+archon workflow run archon-deliver --adopt <run-id> "the flaky test is out of scope; skip it"
+```
+
+`--adopt` starts the new run in the prior run's worktree and branch, so a delivery
+picks up its pull request where it stopped. The prior run's artifacts are at
+`$ADOPTED_RUN_DIR`; name the report you want built on in the note, or pass it as an
+input, such as `--input prior_report=<path>` for review. Repeat any `--input` the
+first run had. A review that is Ready on a draft pull request leaves the draft as it
+is; take it out of draft on the forge.
+
+A composer owns what follows a stage's ending and asks through its own attention item
+when it needs a person, such as the build queue's `build:` items.
 
 ## Models per stage
 
@@ -350,7 +355,7 @@ always used. A user who sets nothing gets the same models as before.
 | `@reviewer` | every agent node of review (scope, lenses, synthesis) and simplify | each node's tier |
 | `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code` and `ux`, `medium` for the rest) |
 
-Review's lens router stays on `small`, and the queue, attention and delivery judges
+Review's lens router stays on `small`, and the queue and delivery judges
 keep their tiers. Moving those means rebinding the tier.
 
 Set an alias for every run with `archon ai alias set @reviewer codex gpt-6.1-sol`, or in
@@ -533,7 +538,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   browser is reproduced with the playwright-cli skill, which the prompt names rather
   than a `skills:` entry, because a provider that cannot load named skills refuses a
   whole run that declares one.
-- **Rounds.** One round is one included `archon-ship-block` run. The `answer` agent reads how
+- **Rounds.** One round is one included `archon-ship` run. The `answer` agent reads how
   it ended and decides: `done` when the pull request's latest review says Ready at its
   head commit and no check no round can run is still outstanding (a dated scope section records such a check as met; otherwise it asks for it once), `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
@@ -601,7 +606,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   answer.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
-item and a continuation waits for the next run. Each run includes `archon-ship-block`, which
+item and a continuation waits for the next run. Each run includes `archon-ship`, which
 changes its checkout, so every run needs its own worktree:
 
 ```json

@@ -1,4 +1,4 @@
-name: archon-triage-block
+name: archon-triage
 description: |
   Ground one work item against the current repository before deciding what kind
   of work it needs. Reconciles tracker history, current code, moved branches,
@@ -9,9 +9,10 @@ description: |
   Advisory: it leaves the checkout unchanged, and writes labels only when asked
   to publish.
 
-  The graph of archon-triage, as a building block for a workflow that composes the
-  stage and owns what follows its ending. It never pauses for a person: run
-  archon-triage, which adds that pause, by hand.
+  Use when: an issue, plan, report, or request may be stale or may prescribe an
+  unverified solution — "triage this issue", "what does this need next", "is
+  this ready to build".
+  NOT for: performing the investigation, writing the plan, or delivering work.
 
 model: ['@triage', medium]
 
@@ -31,6 +32,12 @@ inputs:
 # prompt declared, after the boundary has verified the tuple is legal.
 returns: verdict
 outcome_field: ready
+
+# Read-only: a run of its own uses the launch checkout beside any other run and
+# creates no worktree. A composer's run owns both, so including it drops them.
+worktree:
+  enabled: false
+mutates_checkout: false
 
 nodes:
   - id: triage
