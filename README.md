@@ -198,7 +198,7 @@ Archon sends a few anonymous events so maintainers can see which workflows get r
 - A random install UUID stored at `$ARCHON_HOME/telemetry-id` (`~/.archon/telemetry-id` by default, `/.archon/telemetry-id` in Docker). Nothing else.
 - A `schema_version` number on every event, bumped whenever this list changes.
 
-Workflow runs and direct-chat turns both report optional `cache_read_tokens`, `cache_write_tokens`, and true-only `cache_partial`. An unreported axis is absent; a reported zero stays zero. When `cache_partial` is true, cache totals are floors because some contributing results did not report cache usage. The updated first-run notice appears once again for existing installs to disclose direct-chat cache capture.
+Workflow runs and direct-chat turns both report optional `cache_read_tokens`, `cache_write_tokens`, and true-only `cache_partial`. An unreported axis is absent; a reported zero stays zero. When `cache_partial` is true, cache totals are floors because some contributing results did not report cache usage. When telemetry is enabled and stderr is a terminal, the updated first-run notice appears once again for existing installs to disclose direct-chat cache capture. Headless installs show no notice; see [telemetry settings](https://archon.diy/reference/configuration/#telemetry) for capture details and opt-outs.
 
 **What's *not* collected:** your code, prompts, messages, custom workflow names, workflow descriptions, git remotes, file paths, usernames, tokens, AI output, error message text, your IP address, your geographic location. None of it.
 
