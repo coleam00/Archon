@@ -15,40 +15,46 @@ import {
 } from '../context';
 import { completedOutput, type DryRunStubValue } from '../stubs';
 
+function resolveChildRunStub(
+  node: WorkflowNode,
+  outputs: Map<string, NodeOutput>,
+  ctx: DryRunContext
+): { stub: DryRunStubValue; state: 'completed' | 'stubbed' } | undefined {
+  if (node.fan_out !== undefined) {
+    const shellContext = bindingShellContext(ctx, outputs);
+    const resolvedItems = resolveFanOutItems(node, shellContext, node.fan_out);
+    if ('error' in resolvedItems) throw new Error(resolvedItems.error);
+    const resolvedInputs = resolveFanOutStaticInputs(node, shellContext, ctx.inputs);
+    if ('error' in resolvedInputs) throw new Error(resolvedInputs.error);
+    if (resolvedItems.items.length === 0) return { stub: [], state: 'completed' };
+  }
+  // Only authored stubs can stand in for child runs; generated placeholders cannot.
+  if (!Object.hasOwn(ctx.stubs, node.id)) return undefined;
+  const stub = stubFor(node, ctx);
+  if (stub === undefined) return undefined;
+  if (node.fan_out !== undefined && !Array.isArray(stub)) {
+    throw new Error(`Stub for fan-out workflow node '${node.id}' must be a JSON array`);
+  }
+  if (node.fan_out === undefined && node.with !== undefined) {
+    resolveNodeBindings(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
+  }
+  return { stub, state: 'stubbed' };
+}
+
 export function simulateChildRunNode(
   node: WorkflowNode | ComposeFanOutNode,
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext,
   iteration?: number
 ): void {
-  let emptyFanOut = false;
-  if (isWorkflowNode(node) && node.fan_out !== undefined) {
-    const shellContext = bindingShellContext(ctx, outputs);
-    const resolvedItems = resolveFanOutItems(node, shellContext, node.fan_out);
-    if ('error' in resolvedItems) throw new Error(resolvedItems.error);
-    const resolvedInputs = resolveFanOutStaticInputs(node, shellContext, ctx.inputs);
-    if ('error' in resolvedInputs) throw new Error(resolvedInputs.error);
-    emptyFanOut = resolvedItems.items.length === 0;
-  }
-  // Only authored stubs can stand in for child runs; generated placeholders cannot.
-  const childStub: DryRunStubValue | undefined = emptyFanOut
-    ? []
-    : isWorkflowNode(node) && Object.hasOwn(ctx.stubs, node.id)
-      ? stubFor(node, ctx)
-      : undefined;
-  if (isWorkflowNode(node) && childStub !== undefined) {
-    if (node.fan_out !== undefined && !Array.isArray(childStub)) {
-      throw new Error(`Stub for fan-out workflow node '${node.id}' must be a JSON array`);
-    }
-    if (node.fan_out === undefined && node.with !== undefined) {
-      resolveNodeBindings(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
-    }
-    const hydrated = completedOutput(node, childStub);
+  const result = isWorkflowNode(node) ? resolveChildRunStub(node, outputs, ctx) : undefined;
+  if (result !== undefined) {
+    const hydrated = completedOutput(node, result.stub);
     outputs.set(node.id, hydrated);
     ctx.trace.push({
       nodeId: node.id,
       nodeType: nodeType(node),
-      state: emptyFanOut ? 'completed' : 'stubbed',
+      state: result.state,
       output: hydrated.output,
       ...(iteration ? { iteration } : {}),
     });

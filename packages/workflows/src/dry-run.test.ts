@@ -339,7 +339,7 @@ describe('dry-run outcomes and trace', () => {
             { id: 'after', prompt: 'Results: $spread.output', depends_on: ['spread'] },
           ],
         }),
-        stubs: { pick: items, ...(items.length ? { spread: children } : {}), after: 'done' },
+        stubs: { pick: [...items], ...(items.length ? { spread: children } : {}), after: 'done' },
       });
       const expected = JSON.stringify(items.length ? children : []);
       expect(result.outcome).toBe('completed');
@@ -436,9 +436,9 @@ describe('dry-run outcomes and trace', () => {
     }
   );
 
-  test.each([{}, { fan: [] }])(
+  test.each([false, true])(
     'fails loud on a reachable composed fan-out node even with stubs (%j)',
-    async stubs => {
+    async authoredStub => {
       const workflow = makeTestWorkflow({
         name: 'compose-fan',
         nodes: [
@@ -452,7 +452,7 @@ describe('dry-run outcomes and trace', () => {
       });
       const result = await dryRunWorkflow({
         workflow,
-        stubs,
+        stubs: authoredStub ? { fan: [] } : {},
       });
       expect(result.outcome).toBe('failed');
       expect(result.trace[0]?.nodeType).toBe('compose_fan_out');
