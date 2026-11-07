@@ -102,9 +102,9 @@ Work through these questions in order, with the user where marked:
    expected outcome. Prove red paths red before trusting them. Fixtures prove the
    paths that dry-run can execute. A reachable `workflow:` child uses an authored
    stub instead of launching a run. For `workflow:` + `fan_out:`, supply an array
-   of per-child results in item order; empty items complete with `[]` without a
-   stub. Composed `include:` + `fan_out:` remains unsupported even with a stub,
-   so prove that path with a small real acceptance run. See
+   with one result per item, in item order; a count mismatch fails. Empty items
+   complete with `[]` without a stub. Composed `include:` + `fan_out:` remains
+   unsupported even with a stub, so prove that path with a small real acceptance run. See
    [Deterministic dry-run](https://archon.diy/reference/cli/#deterministic-dry-run)
    for stub formats and limits.
 9. **Validate** before any real run. None of these steps spends on a model:

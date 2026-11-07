@@ -399,6 +399,41 @@ describe('dry-run outcomes and trace', () => {
     }
   );
 
+  test.each([0, 1, 5])(
+    'a fan-out rejects %s stub results for three resolved items',
+    async count => {
+      const result = await dryRunWorkflow({
+        workflow: makeTestWorkflow({
+          name: 'parent',
+          nodes: [
+            { id: 'pick', prompt: 'items' },
+            {
+              id: 'spread',
+              workflow: 'other',
+              depends_on: ['pick'],
+              fan_out: { items: '$pick.output' },
+            },
+            { id: 'after', prompt: 'Results: $spread.output', depends_on: ['spread'] },
+          ],
+        }),
+        stubs: {
+          pick: ['a', 'b', 'c'],
+          spread: Array.from({ length: count }, () => ({ approved: true })),
+          after: 'must not run',
+        },
+      });
+      expect(result.outcome).toBe('failed');
+      expect(result.trace[1]).toMatchObject({
+        nodeId: 'spread',
+        state: 'failed',
+        reason: expect.stringContaining(
+          `must contain one result per item (expected 3, received ${count})`
+        ),
+      });
+      expect(result.trace[2]).toMatchObject({ nodeId: 'after', state: 'skipped' });
+    }
+  );
+
   test.each(['broken', '{}', '$missing.output.items'])(
     'a fan-out resolves and validates items before accepting a stub (%s)',
     async items => {

@@ -20,20 +20,29 @@ function resolveChildRunStub(
   outputs: Map<string, NodeOutput>,
   ctx: DryRunContext
 ): { stub: DryRunStubValue; state: 'completed' | 'stubbed' } | undefined {
+  let itemCount: number | undefined;
   if (node.fan_out !== undefined) {
     const shellContext = bindingShellContext(ctx, outputs);
     const resolvedItems = resolveFanOutItems(node, shellContext, node.fan_out);
     if ('error' in resolvedItems) throw new Error(resolvedItems.error);
     const resolvedInputs = resolveFanOutStaticInputs(node, shellContext, ctx.inputs);
     if ('error' in resolvedInputs) throw new Error(resolvedInputs.error);
-    if (resolvedItems.items.length === 0) return { stub: [], state: 'completed' };
+    itemCount = resolvedItems.items.length;
+    if (itemCount === 0) return { stub: [], state: 'completed' };
   }
   // Only authored stubs can stand in for child runs; generated placeholders cannot.
   if (!Object.hasOwn(ctx.stubs, node.id)) return undefined;
   const stub = stubFor(node, ctx);
   if (stub === undefined) return undefined;
-  if (node.fan_out !== undefined && !Array.isArray(stub)) {
-    throw new Error(`Stub for fan-out workflow node '${node.id}' must be a JSON array`);
+  if (itemCount !== undefined) {
+    if (!Array.isArray(stub)) {
+      throw new Error(`Stub for fan-out workflow node '${node.id}' must be a JSON array`);
+    }
+    if (stub.length !== itemCount) {
+      throw new Error(
+        `Stub for fan-out workflow node '${node.id}' must contain one result per item (expected ${itemCount}, received ${stub.length})`
+      );
+    }
   }
   if (node.fan_out === undefined && node.with !== undefined) {
     resolveNodeBindings(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
