@@ -24,8 +24,12 @@ import { record } from './forge.ts';
 import { readTyped } from './typed.ts';
 import type { WorkItem } from './workitem.ts';
 
-/** The deliver loop's review nodes, as a build-queue run names their typed outputs. */
-const REVIEW_NODES: ReadonlySet<string> = new Set(['review__publish', 'rereview__publish']);
+/**
+ * The deliver loop's published review verdicts, as a build-queue run names their typed
+ * outputs: each review include's id joined to the review block's `publish` node. A
+ * conformance test derives this set from the deliver and review block YAML.
+ */
+export const REVIEW_NODES: ReadonlySet<string> = new Set(['review__publish', 'rereview__publish']);
 const REVIEW_TYPE = 'review-report';
 /** The share of pull requests needing this many rounds or more is reported. */
 const MANY_ROUNDS = 5;

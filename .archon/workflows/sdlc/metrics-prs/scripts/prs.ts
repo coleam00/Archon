@@ -32,6 +32,7 @@ try {
   const { factory, skipped } = factoryPrs(readPrFacts(runsByUrl.keys()));
   // The backfill for rounds recorded without their verdicts: every run of a project
   // keeps its artifacts beside this run's, under its run id, until they are cleaned up.
+  // Not the round's recorded `artifacts`: a round recorded at a release has none.
   const runs = dirname(artifactsDir());
   const backfill = (runId: string) => backfillRunReviews(join(runs, runId));
   const reviews = reviewRoundRecords(factory, runsByUrl, prBuildRounds(items), droppedRoundPrs(items), backfill);

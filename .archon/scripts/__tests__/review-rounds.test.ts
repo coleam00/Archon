@@ -4,18 +4,20 @@
  * than counted short.
  */
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { BuildRound, ReviewVerdict } from '../../workflows/sdlc/.shared/build';
 import type { PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
 import {
+  REVIEW_NODES,
   backfillRunReviews,
   reviewRoundRecords,
   roundsToReady,
   runReviews,
   type RunReviews,
 } from '../../workflows/sdlc/.shared/review-rounds';
+import { PACK } from './deliver-checks-harness';
 import { trackTempRoots } from './temp-roots';
 
 const tracked = trackTempRoots();
@@ -58,7 +60,32 @@ describe('roundsToReady', () => {
   });
 });
 
+interface Node {
+  readonly id: string;
+  readonly include?: string;
+  readonly script?: string;
+  readonly output_type?: string;
+  readonly loop_group?: { readonly nodes: readonly Node[] };
+}
+
+function nodesOf(path: string): Node[] {
+  const workflow = Bun.YAML.parse(readFileSync(join(PACK, path), 'utf8')) as { nodes: Node[] };
+  const walk = (nodes: readonly Node[]): Node[] => nodes.flatMap(node => [node, ...walk(node.loop_group?.nodes ?? [])]);
+  return walk(workflow.nodes);
+}
+
 describe('runReviews', () => {
+  it('selects the published verdict of every review the deliver loop includes', () => {
+    const reviews = nodesOf('deliver/archon-deliver-block.yaml').filter(node => node.include === 'archon-review-block');
+    // synthesize's verdict is the agent's; the published one is the script node that writes it to the pull request.
+    const published = nodesOf('review/archon-review-block.yaml').filter(
+      node => node.output_type === 'review-report' && node.script !== undefined
+    );
+    expect(reviews.length).toBeGreaterThan(0);
+    expect(published).toHaveLength(1);
+    expect([...REVIEW_NODES].sort()).toEqual(reviews.map(review => `${review.id}__${published[0]?.id}`).sort());
+  });
+
   it("records the review and rereview publish verdicts from the run's listing, not synthesize's", () => {
     const artifacts = tracked(mkdtempSync(join(tmpdir(), 'review-rounds-')));
     const entry = (id: string, nodeId: string, ready: boolean, producedAt: string) => {
