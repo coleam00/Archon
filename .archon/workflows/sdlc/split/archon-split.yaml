@@ -20,8 +20,13 @@ description: |
 
 inputs:
   repo_host:
-    description: The forge host of the repository whose work items the queue splits.
+    default: ""
+    description: >-
+      The forge host of the repository whose work items the queue splits. The queue
+      reads each item's repository from its work item, so it needs neither input;
+      bindings may still pass both.
   repo_path:
+    default: ""
     description: The owner/name path of that repository.
   number:
     default: ""

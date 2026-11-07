@@ -12,8 +12,12 @@ description: |
   issue body as a dated "Current scope" section. Every decision is recorded on the
   item's work item.
 
+  A person can also say what to build in the run's message instead of naming a number:
+  one agent resolves the message to an issue to claim, a choice between issues, or new
+  work it files and hands to intake. New work is never built in the run that filed it.
+
   Use when: a trigger binding the operator installed starts it (see the SDLC pack
-  README, "Build queue").
+  README, "Build queue"), or a person names the item, by number or in words.
   NOT for: triaging an item (archon-intake), delivering one item by hand
   (archon-ship), or merging (archon-merge-queue).
 
@@ -21,15 +25,20 @@ requires: [github]
 
 inputs:
   repo_host:
-    description: The forge host of the repository whose work items the queue builds.
+    default: ""
+    description: >-
+      The forge host of the repository whose work items the queue builds. Empty, with
+      repo_path empty too, resolves the repository from the checkout's git remotes.
   repo_path:
+    default: ""
     description: The owner/name path of that repository.
   number:
     default: ""
     description: >-
-      The issue to build. Empty claims the waiting item that sorts first. A number
-      claims that item, and refuses the run with the reason when it cannot: it has no
-      work item, another run holds it, or it does not wait for the build queue.
+      The issue to build. Empty claims the item the run's message names, or with no
+      message the waiting item that sorts first. A number claims that item, and refuses
+      the run with the reason when it cannot: it has no work item, another run holds it,
+      or it does not wait for the build queue.
   orders_only:
     default: "false"
     description: >-
@@ -62,15 +71,88 @@ inputs:
 returns: apply
 
 nodes:
-  # Claims the item and writes the issue's body to build/issue.md, so every agent
-  # reads the same text.
-  - id: facts
-    script: facts
+  - id: start
+    script: start
     runtime: bun
     output_format:
       type: object
       properties:
-        path: { type: string, enum: [idle, closed, route] }
+        repo:
+          type: object
+          properties:
+            host: { type: string }
+            path: { type: string }
+          required: [host, path]
+        # Whether the run's message names the work: number is empty and it has one.
+        message: { type: boolean }
+      required: [repo, message]
+
+  - id: interpret
+    command: interpret
+    depends_on: [start]
+    when: "$start.output.message == true"
+    model: large
+    mutates_checkout: false
+    with:
+      repo: "$start.output.repo.host/$start.output.repo.path"
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [build, choose, intake, none] }
+        number: { type: [integer, 'null'], minimum: 1 }
+        options:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              id: { type: string, pattern: '^issue-[0-9]+$' }
+              label: { type: string, pattern: '\S' }
+              does: { type: string, pattern: '\S' }
+              value:
+                type: object
+                additionalProperties: false
+                properties:
+                  number: { type: integer, minimum: 1 }
+                required: [number]
+            required: [id, label, does, value]
+        issue:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            title: { type: string, pattern: '\S' }
+            body: { type: string, pattern: '\S' }
+          required: [title, body]
+        reason: { type: string, pattern: '\S' }
+      required: [decision, number, options, issue, reason]
+
+  - id: pick
+    depends_on: [interpret]
+    when: "$interpret.output.decision == 'choose'"
+    wait:
+      attention: "$interpret.output.reason"
+      form: select
+      options: "$interpret.output.options"
+      labels:
+        build: message
+
+  # Claims the item and writes the issue's body to build/issue.md, so every agent
+  # reads the same text. With a message it claims the item interpret or the pick
+  # resolved, refuses with interpret's reason when it resolved none, and claims
+  # nothing when the message is new work for intake.
+  - id: facts
+    script: facts
+    runtime: bun
+    depends_on: [start, interpret, pick]
+    trigger_rule: none_failed_min_one_success
+    with:
+      repo: { from: "$start.output.repo" }
+      interpreted: { from: "$interpret.output", if_skipped: null }
+      picked: { from: "$pick.output.value", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, closed, route, handoff] }
         item:
           type: [object, 'null']
           properties:
@@ -253,15 +335,31 @@ nodes:
         attention: *attention
       required: [decision, brief, push, reason, ask_class, attention]
 
+  # Files the new work the message described and starts intake on it.
+  - id: handoff
+    script: handoff
+    runtime: bun
+    depends_on: [start, interpret, facts]
+    when: "$facts.output.path == 'handoff'"
+    with:
+      repo: { from: "$start.output.repo" }
+      issue: { from: "$interpret.output.issue" }
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+      required: [summary]
+
   # Checks the decision, performs the writes it declared and reads each one back:
   # the push, then the work item.
   - id: apply
     script: apply
     runtime: bun
-    depends_on: [facts, route, answer]
+    depends_on: [facts, route, answer, handoff]
     trigger_rule: none_failed_min_one_success
     with:
       path: "$facts.output.path"
+      handoff: { from: "$handoff.output.summary", if_skipped: "" }
       item: { from: "$facts.output.item" }
       pull_request: { from: "$facts.output.pull_request" }
       route: { from: "$route.output", if_skipped: null }
@@ -270,7 +368,7 @@ nodes:
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [idle, parked, ready, continue, asked, launch] }
+        decision: { type: string, enum: [idle, handoff, parked, ready, continue, asked, launch] }
         summary: { type: string }
         # The attention message; empty when nothing is asked.
         attention: { type: string }
@@ -344,12 +442,13 @@ nodes:
 
   - id: revisit
     command: revisit
-    depends_on: [blocked]
+    depends_on: [start, blocked]
     when: "$blocked.output.blocked_count > 0"
     model: medium
     mutates_checkout: false
     with:
       blocked: { from: "$blocked.output.blocked" }
+      repo: "$start.output.repo.host/$start.output.repo.path"
     output_format:
       type: object
       properties:
@@ -367,8 +466,9 @@ nodes:
   - id: retriage
     script: retriage
     runtime: bun
-    depends_on: [blocked, revisit]
+    depends_on: [start, blocked, revisit]
     with:
+      repo: { from: "$start.output.repo" }
       blocked: { from: "$blocked.output.blocked" }
       retriage: { from: "$revisit.output.retriage" }
     output_format:

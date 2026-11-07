@@ -159,13 +159,16 @@ test('preflight capabilities cover the forge operations the pack calls', () => {
   const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
     .filter(file => file !== '.shared/forge-check.ts' && file !== '.shared/merge.ts')
     .map(file => readFileSync(join(root, file), 'utf8'));
-  const used = forgeRequestSchema.options
+  const used: ForgeRequest['op'][] = forgeRequestSchema.options
     .map(schema => schema.shape.op.value)
     .filter(op =>
       sources.some(text =>
         [`'${op}'`, `"${op}"`, `\`${op}\``, `forge ${op} `].some(token => text.includes(token))
       )
-    );
+    )
+    // `resolve` runs no preflight: a workflow calls it first, only when its repo inputs
+    // are empty, so the host's refusal already comes before any spend.
+    .filter(op => op !== 'resolve');
   expect(used).toContain('checks.state');
   // Typed as operation names, so a capability token such as `pr.view:any-state` cannot
   // enter a preflight list. The build queue's any-state lookup runs no preflight: the

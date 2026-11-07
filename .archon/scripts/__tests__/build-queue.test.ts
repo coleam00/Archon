@@ -220,7 +220,7 @@ function stored(at: Install): { revision: number; value: WorkItem | null } {
 
 function run(
   at: Install,
-  script: 'facts' | 'blocked' | 'apply' | 'checkout' | 'ruling' | 'retriage',
+  script: 'start' | 'facts' | 'handoff' | 'blocked' | 'apply' | 'checkout' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
   options: {
     issue?: TrackerSubject;
@@ -247,6 +247,7 @@ function run(
       WORKFLOW_ID: 'run-1',
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
+      INPUTS_REPO: JSON.stringify(PR.repo),
       INPUTS_ROUND_LIMIT: '3',
       ...inputs,
     },
@@ -443,6 +444,70 @@ describe('the build queue scripts', () => {
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
     expect(ok(run(at, 'facts', cancelled))).toMatchObject({ pull_request: null, continues: null });
     expect(stored(at).value?.facts.build).toBeUndefined();
+  }, 60_000);
+
+  test("with no repo inputs the run works on the repository the forge resolves the checkout's remote to", () => {
+    const at = install();
+    const inferred = { INPUTS_REPO_HOST: '', INPUTS_REPO_PATH: '', INPUTS_NUMBER: '', ARGUMENTS: 'build the retry fix' };
+    expect(ok(run(at, 'start', inferred))).toEqual({ repo: PR.repo, message: true });
+    // A sole remote with a second URL is still one remote; git fetches from the first.
+    spawnSync('git', ['config', '--add', 'remote.upstream.url', 'https://ghe.example.com/mirror/repo.git'], { cwd: at.checkout });
+    expect(ok(run(at, 'start', inferred)).repo).toEqual(PR.repo);
+    // An explicit input wins, and a run that names a number ignores its message.
+    expect(ok(run(at, 'start', { INPUTS_NUMBER: '7', INPUTS_REPO_PATH: 'example/other', ARGUMENTS: 'build it' }))).toEqual({
+      repo: { host: PR.repo.host, path: 'example/other' },
+      message: false,
+    });
+    // Among several remotes, origin is the checkout's repository; without one, nothing is guessed.
+    spawnSync('git', ['remote', 'add', 'fork', 'https://ghe.example.com/someone/repo.git'], { cwd: at.checkout });
+    expect(run(at, 'start', inferred).stderr).toContain('several git remotes and none is origin');
+    spawnSync('git', ['remote', 'rename', 'fork', 'origin'], { cwd: at.checkout });
+    expect(ok(run(at, 'start', inferred)).repo).toEqual({ host: PR.repo.host, path: 'someone/repo' });
+    spawnSync('git', ['remote', 'set-url', 'origin', '/srv/local/repo.git'], { cwd: at.checkout });
+    const none = run(at, 'start', inferred);
+    expect(none.code).not.toBe(0);
+    expect(none.stderr).toContain('git remote origin does not resolve to a repository');
+  }, 60_000);
+
+  test("facts claims the issue the message resolved to, and refuses with interpret's reason when it resolved none", () => {
+    const at = install();
+    seed(at, triaged());
+    const interpreted = (decision: string, number: number | null) =>
+      JSON.stringify({ decision, number, options: [], issue: null, reason: 'no open issue is about a retry fix' });
+    const none = run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('none', null), INPUTS_PICKED: 'null' });
+    expect(none.code).not.toBe(0);
+    expect(none.stderr).toContain('the message names nothing to build: no open issue is about a retry fix');
+    expect(stored(at).value?.claim).toBeNull();
+    // New work claims nothing, so intake triages it before any queue builds it.
+    expect(ok(run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('intake', null), INPUTS_PICKED: 'null' }))).toMatchObject({ path: 'handoff', item: null });
+    expect(stored(at).value?.claim).toBeNull();
+    // A pick the person made names the item; a named issue intake never recorded is refused.
+    const picked = run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('choose', null), INPUTS_PICKED: '{"number":8}' });
+    expect(picked.stderr).toContain('issue 8 has no work item');
+    // The project's work/7 belonging to another repository is refused before any claim.
+    const foreign = run(at, 'facts', {
+      ...SELECTED,
+      INPUTS_REPO: JSON.stringify({ host: PR.repo.host, path: 'someone/repo' }),
+      INPUTS_INTERPRETED: interpreted('build', 7),
+      INPUTS_PICKED: 'null',
+    });
+    expect(foreign.stderr).toContain("issue 7's work item is ghe.example.com/example/repo's, not ghe.example.com/someone/repo's");
+    expect(stored(at).value?.claim).toBeNull();
+    expect(ok(run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('build', 7), INPUTS_PICKED: 'null' }))).toMatchObject({ path: 'route', item: SUBJECT });
+    expect(stored(at).value?.claim).toMatchObject({ run_id: 'run-1' });
+  }, 60_000);
+
+  test('new work from a message is filed once and handed to intake, never built in the run', () => {
+    const at = install();
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const inputs = { INPUTS_ISSUE: JSON.stringify({ title: 'Retry the fetch', body: 'From a pasted brief.' }), ARCHON_CALL_LOG: calls };
+    const handed = run(at, 'handoff', inputs);
+    expect(ok(handed).summary).toContain('https://ghe.example.com/example/repo/issues/100');
+    const filed = forgeCalls(handed).filter(call => call.op === 'workitem.create');
+    expect(filed).toHaveLength(1);
+    expect(filed[0]?.request).toMatchObject({ repo: PR.repo, title: 'Retry the fetch', marker: '<!-- archon-build-queue-request: run-1 -->' });
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=100', '--detach']));
   }, 60_000);
 
   test('items intake has not routed, and items the queue finished, are never picked up', () => {

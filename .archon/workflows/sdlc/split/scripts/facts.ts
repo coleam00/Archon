@@ -20,9 +20,6 @@ import { claimNamed, claimNext } from '../../.shared/workitem.ts';
 function main(): void {
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-  if (trimmed(process.env.INPUTS_REPO_HOST) === '' || trimmed(process.env.INPUTS_REPO_PATH) === '') {
-    throw new Error('repo_host and repo_path are required');
-  }
   const at = new Date().toISOString();
   const named = trimmed(process.env.INPUTS_NUMBER);
   const number = Number(named);

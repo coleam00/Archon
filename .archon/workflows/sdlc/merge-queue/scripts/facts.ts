@@ -30,6 +30,7 @@ import {
   withMerge,
 } from '../../.shared/merge.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
+import { workflowRepo } from '../../.shared/remote.ts';
 import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
@@ -138,8 +139,7 @@ function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: r
 function main(): void {
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
   const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
-  const repo = { host: trimmed(process.env.INPUTS_REPO_HOST), path: trimmed(process.env.INPUTS_REPO_PATH) };
-  if (repo.host === '' || repo.path === '') throw new Error('repo_host and repo_path are required');
+  const repo = workflowRepo();
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 

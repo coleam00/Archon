@@ -20,19 +20,15 @@ import {
   type RequestAction,
 } from '../../.shared/workitem.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
+import { workflowRepo } from '../../.shared/remote.ts';
 
 function main(): void {
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '')
     throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-  const repo = {
-    host: trimmed(process.env.INPUTS_REPO_HOST),
-    path: trimmed(process.env.INPUTS_REPO_PATH),
-  };
   const number = Number(trimmed(process.env.INPUTS_NUMBER));
-  if (repo.host === '' || repo.path === '' || !Number.isInteger(number) || number <= 0) {
-    throw new Error('repo_host, repo_path and a positive issue number are required');
-  }
+  if (!Number.isInteger(number) || number <= 0) throw new Error('a positive issue number is required');
+  const repo = workflowRepo();
   const action = trimmed(process.env.INPUTS_ACTION) as RequestAction;
   if (!REQUEST_ACTIONS.includes(action)) {
     throw new Error(`action must be one of ${REQUEST_ACTIONS.join(', ')}, not "${action}"`);
