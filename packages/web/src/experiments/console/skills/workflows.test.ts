@@ -45,10 +45,6 @@ describe('listWorkflows — declared inputs survive the wire mapping (#2554)', (
   });
 
   test("carries a workflow's declared inputs through to the console primitive", async () => {
-    // The console's run form depends on this field surviving `listWorkflows`, and the
-    // wire shape here is hand-rolled — it once omitted `inputs` entirely and still
-    // compiled, because a missing optional property satisfies the parameter type. This
-    // is the regression guard the compiler cannot be.
     globalThis.fetch = ((_input: RequestInfo | URL, _init?: RequestInit) =>
       Promise.resolve(
         new Response(

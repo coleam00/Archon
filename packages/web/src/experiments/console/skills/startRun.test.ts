@@ -10,14 +10,9 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { HttpError } from '../lib/http';
 import { startRun } from './startRun';
 
-interface Captured {
-  url: string;
-  init: RequestInit | undefined;
-}
-
 const originalFetch = globalThis.fetch;
 const originalWindow = globalThis.window;
-let calls: Captured[] = [];
+let calls: { url: string; init: RequestInit | undefined }[] = [];
 
 function stubFetch(
   runStatus = 200,
@@ -40,7 +35,7 @@ function stubFetch(
 }
 
 /** The run dispatch is the second call; the first creates the conversation. */
-function runCall(): Captured {
+function runCall(): (typeof calls)[number] {
   const call = calls.find(c => c.url.includes('/run'));
   if (call === undefined) throw new Error('no run dispatch captured');
   return call;

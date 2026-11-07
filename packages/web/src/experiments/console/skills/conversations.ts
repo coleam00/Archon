@@ -1,5 +1,5 @@
 import type { paths } from '../../../lib/api.generated';
-import { requestJson, HttpError } from '../lib/http';
+import { requestJson, buildApiUrl, HttpError } from '../lib/http';
 import { toConversationSummary, type ConversationSummary } from '../primitives/conversation';
 
 /**
@@ -22,27 +22,22 @@ import { toConversationSummary, type ConversationSummary } from '../primitives/c
  *     multipart when files are attached (mirrors startRun's multipart path).
  */
 
-interface CreateConversationResponse {
-  conversationId: string;
-  id: string;
-}
+type CreateConversationResponse =
+  paths['/api/conversations']['post']['responses'][200]['content']['application/json'];
 
 export async function createConversation(
   projectId: string,
   message?: string
 ): Promise<CreateConversationResponse> {
-  return requestJson<CreateConversationResponse>('/api/conversations', {
-    method: 'POST',
-    body: JSON.stringify(
-      message !== undefined ? { codebaseId: projectId, message } : { codebaseId: projectId }
-    ),
+  return requestJson('/api/conversations', 'post', {
+    body: message !== undefined ? { codebaseId: projectId, message } : { codebaseId: projectId },
   });
 }
 
 export async function listConversations(projectId: string): Promise<ConversationSummary[]> {
-  const raw = await requestJson<Parameters<typeof toConversationSummary>[0][]>(
-    `/api/conversations?codebaseId=${encodeURIComponent(projectId)}&mine=true`
-  );
+  const raw = await requestJson('/api/conversations', 'get', {
+    query: { codebaseId: projectId, mine: 'true' },
+  });
   return raw.map(toConversationSummary);
 }
 
@@ -54,34 +49,48 @@ export async function sendMessage(
   message: string,
   files?: File[]
 ): Promise<void> {
-  const url = `/api/conversations/${encodeURIComponent(conversationPlatformId)}/message`;
+  const params = { id: conversationPlatformId };
+  const url = buildApiUrl('/api/conversations/{id}/message', 'post', { params });
 
   if (files === undefined || files.length === 0) {
-    await requestJson<{ accepted: boolean; status: string }>(url, {
-      method: 'POST',
-      body: JSON.stringify({ message } satisfies SendMessageJson),
+    await requestJson('/api/conversations/{id}/message', 'post', {
+      params,
+      body: { message } satisfies SendMessageJson,
     });
     return;
   }
 
   // Multipart path: don't set Content-Type — the browser adds the boundary.
   const form = new FormData();
-  form.append('message', message);
+  const fields = { message } satisfies SendMessageMultipart;
+  form.append('message', fields.message);
   for (const file of files) {
     form.append('files', file, file.name);
   }
   const res = await fetch(url, { method: 'POST', body: form });
   if (!res.ok) {
     const text = await res.text().catch(() => '');
-    let parsed: { error?: string } = {};
+    let parsed: unknown;
     try {
-      parsed = JSON.parse(text) as { error?: string };
+      parsed = JSON.parse(text);
     } catch {
       /* not JSON */
     }
-    const raw = parsed.error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
+    const error: SendMessageError['error'] | undefined =
+      typeof parsed === 'object' &&
+      parsed !== null &&
+      'error' in parsed &&
+      typeof parsed.error === 'string'
+        ? parsed.error
+        : undefined;
+    const raw = error ?? (text.length > 0 ? text : `HTTP ${res.status.toString()}`);
     const msg = raw.length > 200 ? `${raw.slice(0, 200)}...` : raw;
     const path = new URL(url, window.location.origin).pathname;
     throw new HttpError(res.status, path, msg);
   }
 }
+
+type SendMessageMultipart =
+  paths['/api/conversations/{id}/message']['post']['requestBody']['content']['multipart/form-data'];
+type SendMessageError =
+  paths['/api/conversations/{id}/message']['post']['responses'][400]['content']['application/json'];

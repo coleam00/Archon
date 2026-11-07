@@ -21,10 +21,9 @@ export type ProviderOAuthPoll = components['schemas']['ProviderOAuthPollResponse
 
 /** Begin a subscription (OAuth) login — held server-side by the oauth-bridge. */
 export function startProviderOAuth(provider: string): Promise<ProviderOAuthStart> {
-  return requestJson<ProviderOAuthStart>(
-    `/api/auth/providers/${encodeURIComponent(provider)}/oauth/start`,
-    { method: 'POST' }
-  );
+  return requestJson('/api/auth/providers/{provider}/oauth/start', 'post', {
+    params: { provider },
+  });
 }
 
 /**
@@ -37,22 +36,17 @@ export function pollProviderOAuth(
   sessionId: string,
   code?: string
 ): Promise<ProviderOAuthPoll> {
-  return requestJson<ProviderOAuthPoll>(
-    `/api/auth/providers/${encodeURIComponent(provider)}/oauth/poll`,
-    {
-      method: 'POST',
-      body: JSON.stringify(
-        (code
-          ? { sessionId, code }
-          : { sessionId }) satisfies components['schemas']['ProviderOAuthPollBody']
-      ),
-    }
-  );
+  return requestJson('/api/auth/providers/{provider}/oauth/poll', 'post', {
+    params: { provider },
+    body: (code
+      ? { sessionId, code }
+      : { sessionId }) satisfies components['schemas']['ProviderOAuthPollBody'],
+  });
 }
 
 /** GET /api/auth/providers — 401s when there's no web identity (panel reads as "hide"). */
 export function listProviderKeys(): Promise<ProviderKeyList> {
-  return requestJson<ProviderKeyList>('/api/auth/providers');
+  return requestJson('/api/auth/providers', 'get');
 }
 
 /** PUT /api/auth/providers/:provider — stores the key encrypted; returns no secret. */
@@ -61,11 +55,11 @@ export function setProviderKey(
   apiKey: string,
   label?: string
 ): Promise<ProviderKeySetResult> {
-  return requestJson<ProviderKeySetResult>(`/api/auth/providers/${encodeURIComponent(provider)}`, {
-    method: 'PUT',
-    body: JSON.stringify(
-      (label ? { apiKey, label } : { apiKey }) satisfies components['schemas']['ProviderKeySetBody']
-    ),
+  return requestJson('/api/auth/providers/{provider}', 'put', {
+    params: { provider },
+    body: (label
+      ? { apiKey, label }
+      : { apiKey }) satisfies components['schemas']['ProviderKeySetBody'],
   });
 }
 
@@ -73,10 +67,7 @@ export function setProviderKey(
 export function deleteProviderKey(
   provider: string
 ): Promise<components['schemas']['ProviderKeyDeleteResponse']> {
-  return requestJson<components['schemas']['ProviderKeyDeleteResponse']>(
-    `/api/auth/providers/${encodeURIComponent(provider)}`,
-    {
-      method: 'DELETE',
-    }
-  );
+  return requestJson('/api/auth/providers/{provider}', 'delete', {
+    params: { provider },
+  });
 }

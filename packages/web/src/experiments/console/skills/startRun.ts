@@ -1,6 +1,16 @@
+import type { StartRunArgs } from '../primitives/launch';
+export type { StartRunArgs } from '../primitives/launch';
 import type { paths } from '../../../lib/api.generated';
 import { requestJson } from '../lib/http';
-import type { TierName } from '../lib/tiers';
+
+type WorkflowRunLaunchJson =
+  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['application/json'];
+type WorkflowRunLaunchMultipart =
+  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['multipart/form-data'];
+type WorkflowRunFormFields = Pick<
+  WorkflowRunLaunchJson,
+  keyof WorkflowRunLaunchJson & keyof WorkflowRunLaunchMultipart
+>;
 
 /**
  * Start a run: hides the legacy conversation coupling from the console UI.
@@ -16,37 +26,7 @@ import type { TierName } from '../lib/tiers';
  *
  *      With files attached the dispatch route accepts multipart/form-data,
  *      mirroring /api/conversations/:id/message. Without files we use JSON.
- *
- * The word "conversation" appears nowhere in the console outside this file.
  */
-export interface StartRunArgs {
-  projectId: string;
-  workflow: string;
-  message: string;
-  files?: File[];
-  /**
-   * Values for the workflow's declared `inputs:` (#2554), keyed by input name.
-   * Omitted names take their declared default; a missing required input is refused by
-   * the server before any worktree, clone, or AI cost.
-   */
-  inputs?: Record<string, string>;
-  tiers?: Partial<Record<TierName, string>>;
-  aliases?: Record<string, string>;
-}
-
-type WorkflowRunLaunchJson =
-  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['application/json'];
-type WorkflowRunLaunchMultipart =
-  paths['/api/workflows/{name}/run']['post']['requestBody']['content']['multipart/form-data'];
-type WorkflowRunFormFields = Pick<
-  WorkflowRunLaunchJson,
-  keyof WorkflowRunLaunchJson & keyof WorkflowRunLaunchMultipart
->;
-
-interface CreateConversationResponse {
-  conversationId: string;
-}
-
 export async function startRun({
   projectId,
   workflow,
@@ -56,12 +36,7 @@ export async function startRun({
   tiers,
   aliases,
 }: StartRunArgs): Promise<void> {
-  const conv = await requestJson<CreateConversationResponse>('/api/conversations', {
-    method: 'POST',
-    body: JSON.stringify({ codebaseId: projectId }),
-  });
-
-  const url = `/api/workflows/${encodeURIComponent(workflow)}/run`;
+  const conv = await requestJson('/api/conversations', 'post', { body: { codebaseId: projectId } });
 
   const hasInputs = inputs !== undefined && Object.keys(inputs).length > 0;
   const hasTiers = tiers !== undefined && Object.keys(tiers).length > 0;
@@ -75,10 +50,9 @@ export async function startRun({
     ...(hasAliases ? { aliases } : {}),
   } satisfies WorkflowRunLaunchJson;
 
-  await requestJson<{ accepted: boolean; status: string }>(url, {
-    method: 'POST',
-    body:
-      files !== undefined && files.length > 0 ? buildRunForm(body, files) : JSON.stringify(body),
+  await requestJson('/api/workflows/{name}/run', 'post', {
+    params: { name: workflow },
+    body: files !== undefined && files.length > 0 ? buildRunForm(body, files) : body,
   });
 }
 
