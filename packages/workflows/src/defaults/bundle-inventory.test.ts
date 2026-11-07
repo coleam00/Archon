@@ -81,14 +81,15 @@ async function writeTree(root: string, files: Record<string, string>): Promise<v
   }
 }
 
-test('a workflow folder without YAML holds no bundled workflow', async () => {
+test('a selected workflow folder without YAML fails generation', async () => {
   const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-no-yaml-')));
   await writeTree(root, {
     'workflows/selected/flow/main.yaml': 'name: main\n',
-    'workflows/selected/docs/README.md': 'documentation',
+    'workflows/selected/flow-renamed/commands/step.md': 'step',
   });
-  const selected = await collectBundleSources(join(root, 'workflows'), ['selected']);
-  expect(selected.map(file => file.relativePath)).toEqual(['workflows/selected/flow/main.yaml']);
+  await expect(collectBundleSources(join(root, 'workflows'), ['selected'])).rejects.toThrow(
+    "Packaged workflow 'selected/flow-renamed' must contain exactly one .yaml or .yml file (found 0)."
+  );
 });
 
 test('a workflow folder with two YAML files fails with the discovery error', async () => {

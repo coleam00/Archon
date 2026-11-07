@@ -1,7 +1,7 @@
 /**
  * The packaged-workflow layout, `<root>/<pack>/<workflow>/<file>.yaml`: which packs a
  * workflows root holds, and what each workflow folder of a pack holds (a workflow,
- * nothing, or a load error). Discovery, the server's by-name lookup and the bundle
+ * no YAML, or a load error). Discovery, the server's by-name lookup and the bundle
  * inventory all read the tree through this module so they cannot disagree about it.
  * Nothing here parses: each reader reads and parses the located file on its own terms.
  */
@@ -59,9 +59,11 @@ export interface PackWorkflowLocation {
   readonly filename: string;
 }
 
-/** What one `<workflow>/` folder of a pack holds, when it holds anything. */
+/** What one `<workflow>/` folder of a pack holds. */
 export type PackWorkflowFolder =
   | PackWorkflowLocation
+  /** No YAML (tests, docs, assets): no workflow. Discovery skips it; the bundle inventory rejects it. */
+  | { readonly kind: 'empty'; readonly folder: string }
   | {
       readonly kind: 'error';
       readonly folder: string;
@@ -171,9 +173,7 @@ async function readPackWorkflowFolder(
     return { kind: 'error', folder, error, yamlFiles: Array.isArray(yamlFiles) ? yamlFiles : [] };
   }
   if (!Array.isArray(yamlFiles)) return { kind: 'error', folder, error: yamlFiles, yamlFiles: [] };
-  // A folder with no YAML (tests, docs, assets) holds no workflow. Two or more is an
-  // ambiguous workflow folder, and stays an error.
-  if (yamlFiles.length === 0) return undefined;
+  if (yamlFiles.length === 0) return { kind: 'empty', folder };
   if (yamlFiles.length !== 1) {
     const error: WorkflowLoadError = {
       filename: folderLabel,

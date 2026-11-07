@@ -246,6 +246,7 @@ export async function loadPackWorkflows(
     workflowPack = error;
   }
   for (const entry of listing.folders) {
+    if (entry.kind === 'empty') continue;
     if (entry.kind === 'error') {
       errors.push(entry.error);
       continue;

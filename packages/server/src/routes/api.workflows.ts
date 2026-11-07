@@ -459,12 +459,12 @@ async function deleteWorkflowFiles(
   name: string,
   target: WorkflowTarget
 ): Promise<Response> {
-  const packaged = await findPackagedWorkflowAt(target.dir, name);
-  if (packaged !== null) {
+  const existing = await findWorkflowAt(target.dir, name);
+  if (existing?.packaged === true) {
     if (isBundledWorkflowsRoot(target.dir)) {
       return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
     }
-    await rm(dirname(packaged.absolutePath), { recursive: true });
+    await rm(dirname(existing.absolutePath), { recursive: true });
     return c.json({ deleted: true, name });
   }
   if (await unlinkWorkflowFiles(target.dir, name)) return c.json({ deleted: true, name });

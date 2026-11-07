@@ -177,6 +177,13 @@ async function collectPack(workflowsRoot: string, pack: string, add: AddSource):
   if ('error' in listing) throw loadError(listing.error);
   for (const entry of listing.folders) {
     if (entry.kind === 'error') throw loadError(entry.error);
+    // Discovery skips a folder with no YAML; a selected bundled pack must not, or a
+    // renamed or deleted YAML would ship a binary silently missing that workflow.
+    if (entry.kind === 'empty') {
+      throw new Error(
+        `Packaged workflow '${pack}/${entry.folder}' must contain exactly one .yaml or .yml file (found 0).`
+      );
+    }
     await collectWorkflow(scope, entry);
   }
 }

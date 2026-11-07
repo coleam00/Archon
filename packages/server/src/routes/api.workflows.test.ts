@@ -3,7 +3,7 @@ import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { access, mkdir, readFile, rm, writeFile, symlink as fsSymlink } from 'fs/promises';
+import { access, chmod, mkdir, readFile, rm, writeFile, symlink as fsSymlink } from 'fs/promises';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import * as archonPaths from '@archon/paths';
@@ -971,6 +971,72 @@ describe('GET /api/workflows/:name', () => {
     }
   });
 
+  test("opens a packaged workflow whose name a malformed folder's YAML stem shares", async () => {
+    const testDir = join(tmpdir(), `wf-get-stem-shared-${Date.now()}`);
+    const packRoot = join(testDir, '.archon', 'workflows', 'team');
+    await mkdir(join(packRoot, 'flow'), { recursive: true });
+    await mkdir(join(packRoot, 'crowded'), { recursive: true });
+    await writeFile(join(packRoot, 'flow', 'flow.yaml'), 'name: flow\nnodes: []\n');
+    await writeFile(join(packRoot, 'crowded', 'flow.yaml'), 'name: flow\nnodes: []\n');
+    await writeFile(join(packRoot, 'crowded', 'two.yaml'), 'name: two\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+
+      const response = await app.request(`/api/workflows/flow?cwd=${testDir}`);
+      expect(response.status).toBe(200);
+      const body = (await response.json()) as { filename: string };
+      expect(body.filename).toBe('team/flow/flow.yaml');
+    } finally {
+      await removeTempTree(testDir);
+    }
+  });
+
+  test('a malformed packaged folder does not answer to other workflow names', async () => {
+    const testDir = join(tmpdir(), `wf-get-beside-malformed-${Date.now()}`);
+    const packRoot = join(testDir, '.archon', 'workflows', 'author-pack');
+    await mkdir(join(packRoot, 'good'), { recursive: true });
+    await mkdir(join(packRoot, 'crowded'), { recursive: true });
+    await writeFile(join(packRoot, 'good', 'good.yaml'), 'name: good\nnodes: []\n');
+    await writeFile(join(packRoot, 'crowded', 'one.yaml'), 'name: one\nnodes: []\n');
+    await writeFile(join(packRoot, 'crowded', 'two.yaml'), 'name: two\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      expect((await app.request(`/api/workflows/good?cwd=${testDir}`)).status).toBe(200);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      expect((await app.request(`/api/workflows/absent-flow?cwd=${testDir}`)).status).toBe(404);
+    } finally {
+      await removeTempTree(testDir);
+    }
+  });
+
+  test('fails the lookup when a packaged workflow folder cannot be read', async () => {
+    const testDir = join(tmpdir(), `wf-get-unreadable-folder-${Date.now()}`);
+    const lockedDir = join(testDir, '.archon', 'workflows', 'author-pack', 'locked');
+    await mkdir(lockedDir, { recursive: true });
+    await writeFile(join(lockedDir, 'test.yaml'), 'name: test\nnodes: []\n');
+    await chmod(lockedDir, 0o000);
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`);
+      expect(response.status).toBe(500);
+      const body = (await response.json()) as { error: string };
+      expect(body.error).toBe('Failed to read workflow');
+    } finally {
+      await chmod(lockedDir, 0o755);
+      await removeTempTree(testDir);
+    }
+  });
+
   test('classifies a package in the app workflow root as bundled', async () => {
     const testDir = join(tmpdir(), `wf-get-source-bundle-${Date.now()}`);
     const workflowsRoot = join(testDir, '.archon', 'workflows');
@@ -1658,6 +1724,33 @@ describe('DELETE /api/workflows/:name', () => {
         "Packaged workflow 'author-pack/test' must contain exactly one .yaml or .yml file (found 2)."
       );
       await access(flatPath);
+      await access(join(packageDir, 'one.yaml'));
+      await access(join(packageDir, 'two.yaml'));
+    } finally {
+      await removeTempTree(testDir);
+    }
+  });
+
+  test('deletes a flat workflow that answers to the name beside a malformed packaged folder', async () => {
+    const testDir = join(tmpdir(), `wf-delete-flat-beside-malformed-${Date.now()}`);
+    const workflowsRoot = join(testDir, '.archon', 'workflows');
+    const packageDir = join(workflowsRoot, 'author-pack', 'test');
+    const flatPath = join(workflowsRoot, 'test.yaml');
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'one.yaml'), 'name: one\nnodes: []\n');
+    await writeFile(join(packageDir, 'two.yaml'), 'name: two\nnodes: []\n');
+    await writeFile(flatPath, 'name: test\nnodes: []\n');
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`, {
+        method: 'DELETE',
+      });
+
+      expect(response.status).toBe(200);
+      await expect(access(flatPath)).rejects.toThrow();
       await access(join(packageDir, 'one.yaml'));
       await access(join(packageDir, 'two.yaml'));
     } finally {
