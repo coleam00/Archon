@@ -304,7 +304,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--dry-run` | Simulate deterministic DAG control flow in memory. Creates no run, worktree, session, event, artifact, or provider request. |
 | `--stubs <path>` | YAML mapping of node ids to scalar or structured outputs for `--dry-run`. Relative paths resolve from `--cwd`. |
 | `--stubs-init <path>` | Write a stub scaffold for the expanded workflow and exit. Omits child-workflow nodes; add their stubs manually as described [below](#deterministic-dry-run). Refuses to overwrite an existing file. Relative paths resolve from `--cwd`. |
-| `--default-stubs` | Fill reachable AI, bash, and script nodes omitted from `--stubs` with schema-valid placeholders. Never substitutes for child-workflow stubs. Explicit stubs still win; without this flag, a missing reachable stub remains an error unless the node declares `trigger_rule: all_done`. |
+| `--default-stubs` | Fill reachable AI, bash, and script nodes omitted from `--stubs` with schema-valid placeholders. Never substitutes for child-workflow stubs. Explicit stubs still win; without this flag, a missing reachable AI, bash, or script stub remains an error unless that node declares `trigger_rule: all_done`. Child-workflow stubs must be authored unless fan-out items resolve to `[]`. |
 | `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
 | `--pause-at-gates` | During `--dry-run`, stop at the first deprecated `approval:` gate instead of auto-approving it. An [attention wait](/reference/workflow-language/#attention-waits) needs no flag: it pauses the simulation unless the stubs answer it. |
 

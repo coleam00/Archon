@@ -116,12 +116,16 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--stubs-init <path>',
-    description: 'Write a complete dry-run stub scaffold and exit',
+    description:
+      'Write a dry-run stub scaffold and exit; omits child workflows.\n' +
+      'Child stubs must be authored unless fan-out items resolve to [].',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
     spec: '--default-stubs',
-    description: 'Fill missing reached nodes with validated placeholders during --dry-run',
+    description:
+      'Fill missing reached AI, bash, and script nodes with validated placeholders during --dry-run.\n' +
+      'Child stubs must be authored unless fan-out items resolve to [].',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
