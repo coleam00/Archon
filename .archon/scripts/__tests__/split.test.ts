@@ -142,6 +142,25 @@ describe('split publish', () => {
     expect(publish(at, { kind: 'prd' }, { issues: [...first.createdIssues] }).createdIssues).toEqual([]);
   });
 
+  test('a record from before titles were kept lists its issues by number, once', () => {
+    const at = install();
+    seed(at, doc => ({
+      ...doc,
+      facts: {
+        ...doc.facts,
+        split: { status: 'done', kind: 'prd', issues: [{ key: 'measure', number: 100, url: 'u' }], adopted: [], at: AT, run_id: 'old-run' },
+      },
+    }));
+    const filed: TrackerIssue = { number: 100, title: 'Measure the signal', body: `${splitMarker(7, 'measure')}\n\nThe contract.`, state: 'OPEN' };
+    // The agent adopts the issue this item's own split filed.
+    const run = publish(at, { kind: 'prd' }, { issues: [filed], existing: [{ number: 100, why: 'owns the phase' }], planned: [] });
+    ok(run);
+    const body = run.comments[0]?.body ?? '';
+    expect(body).toEndWith('- #100');
+    expect(body).not.toContain('undefined');
+    expect(body).not.toContain('owns the phase');
+  });
+
   test('an issue filed before a stop, but not recorded, is recovered by its marker', () => {
     const at = install();
     seed(at);
