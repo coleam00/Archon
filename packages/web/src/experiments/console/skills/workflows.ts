@@ -12,7 +12,7 @@ export type {
   InstalledPackWorkflow,
   WorkflowLoad,
 } from '../primitives/workflow';
-import { requestJson, buildApiUrl } from '../lib/http';
+import { requestJson } from '../lib/http';
 import { toWorkflow, type WorkflowSource } from '../primitives/workflow';
 import type { WorkflowGraphNode } from '../primitives/workflow-graph';
 import type { BuilderWorkflowDefinition } from '../builder/types';
@@ -61,12 +61,6 @@ export async function getWorkflowGraph(name: string, cwd?: string): Promise<Work
   );
 }
 
-// ---------------------------------------------------------------------------
-// PR-3 connected-mode CRUD verbs. The single-name endpoints below are the live
-// seam the builder's BuilderConnected route saves through. URL/body shaping is
-// extracted into pure builders so it can be unit-tested without `fetch`.
-// ---------------------------------------------------------------------------
-
 /**
  * Where a loaded workflow lives. Read-only for `bundled` and `installed` (see `isReadOnlySource`).
  * Re-exported from `primitives/workflow` (single source of truth) so the union
@@ -81,16 +75,6 @@ export function isInstalledPackWorkflow(load: WorkflowLoad): load is InstalledPa
 export type WorkflowSaveSource = NonNullable<QueryParams<'/api/workflows/{name}', 'put'>['source']>;
 export type GetWorkflowResponse = components['schemas']['GetWorkflowResponse'];
 export type ValidateWorkflowResponse = components['schemas']['ValidateWorkflowResponse'];
-
-/** Build the single-name GET/PUT/DELETE path with an encoded `?cwd=` query. */
-export function buildWorkflowPath(name: string, cwd: string): string {
-  return buildApiUrl('/api/workflows/{name}', 'get', { params: { name }, query: { cwd } });
-}
-
-/** Build the PUT/DELETE path, appending `&source=` to the cwd query. */
-export function buildSavePath(name: string, cwd: string, source: WorkflowSaveSource): string {
-  return buildApiUrl('/api/workflows/{name}', 'put', { params: { name }, query: { cwd, source } });
-}
 
 /**
  * Load a single workflow definition by name for the selected project.

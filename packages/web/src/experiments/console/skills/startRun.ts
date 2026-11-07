@@ -11,7 +11,6 @@ type WorkflowRunBody = Pick<
   WorkflowRunLaunchJson,
   'conversationId' | 'message' | 'inputs' | 'tiers' | 'aliases'
 >;
-type WorkflowRunFormFields = Pick<WorkflowRunLaunchMultipart, keyof WorkflowRunBody>;
 
 /**
  * Start a run: hides the legacy conversation coupling from the console UI.
@@ -66,7 +65,7 @@ function buildRunForm(body: WorkflowRunBody, files: File[]): FormData {
     inputs: JSON.stringify(body.inputs),
     tiers: JSON.stringify(body.tiers),
     aliases: JSON.stringify(body.aliases),
-  } satisfies WorkflowRunFormFields;
+  } satisfies { [Key in keyof Required<WorkflowRunBody>]: WorkflowRunLaunchMultipart[Key] };
   for (const [key, value] of Object.entries(fields)) {
     if (value !== undefined) {
       form.append(key, value);
