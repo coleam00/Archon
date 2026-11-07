@@ -38,6 +38,8 @@ interface AssistantBuffer {
 export class MessagePersistence {
   private assistantBuffer = new Map<string, AssistantBuffer>();
   private dbIdMap = new Map<string, string>(); // platform_conversation_id → DB UUID
+  /** The latest flush per conversation; each flush runs after the one before it settles. */
+  private flushes = new Map<string, Promise<void>>();
 
   constructor(private emitEvent: (conversationId: string, event: string) => Promise<void>) {}
 
@@ -188,6 +190,25 @@ export class MessagePersistence {
    * structure as the live streaming view (text+tools interleaving).
    */
   async flush(conversationId: string): Promise<void> {
+    // Flushes for one conversation run one after another. An earlier flush (overflow or
+    // periodic) may already have taken the segments and still be writing them. Waiting
+    // for it means the lock-release flush resolves only once those rows are committed,
+    // so the unlock event the web client refetches on never arrives before them.
+    // With none in flight, start now: taking the segments must stay synchronous so text
+    // appended during the write lands in a fresh buffer.
+    const previous = this.flushes.get(conversationId);
+    const current = previous
+      ? previous.catch(() => undefined).then(() => this.flushNow(conversationId))
+      : this.flushNow(conversationId);
+    this.flushes.set(conversationId, current);
+    try {
+      await current;
+    } finally {
+      if (this.flushes.get(conversationId) === current) this.flushes.delete(conversationId);
+    }
+  }
+
+  private async flushNow(conversationId: string): Promise<void> {
     const ready = this.takeReadySegments(conversationId);
     if (ready.length === 0) return;
 
