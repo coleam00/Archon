@@ -3,10 +3,11 @@ import { describe, test, expect, mock, spyOn } from 'bun:test';
 import { OpenAPIHono } from '@hono/zod-openapi';
 import type { ConversationLockManager } from '@archon/core';
 import type { WebAdapter } from '../adapters/web';
-import { access, chmod, mkdir, readFile, rm, writeFile, symlink as fsSymlink } from 'fs/promises';
+import { access, mkdir, readFile, rm, writeFile, symlink as fsSymlink } from 'fs/promises';
 import { dirname, join } from 'path';
 import { tmpdir } from 'os';
 import * as archonPaths from '@archon/paths';
+import * as packLayout from '@archon/workflows/pack-layout';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { validationErrorHook } from './openapi-defaults';
 import { makeTestWorkflow, makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
@@ -1017,10 +1018,21 @@ describe('GET /api/workflows/:name', () => {
 
   test('fails the lookup when a packaged workflow folder cannot be read', async () => {
     const testDir = join(tmpdir(), `wf-get-unreadable-folder-${Date.now()}`);
-    const lockedDir = join(testDir, '.archon', 'workflows', 'author-pack', 'locked');
-    await mkdir(lockedDir, { recursive: true });
-    await writeFile(join(lockedDir, 'test.yaml'), 'name: test\nnodes: []\n');
-    await chmod(lockedDir, 0o000);
+    const packDir = join(testDir, '.archon', 'workflows', 'author-pack');
+    await mkdir(join(packDir, 'locked'), { recursive: true });
+    // Permission bits cannot make a directory unreadable on Windows or as root, so the
+    // folder read failure is injected at the pack-layout seam.
+    const denied = Object.assign(new Error('permission denied'), { code: 'EACCES' });
+    const readFoldersSpy = spyOn(packLayout, 'readPackWorkflowFolders').mockResolvedValue({
+      folders: [
+        {
+          kind: 'error',
+          folder: 'locked',
+          error: packLayout.fileSystemError('author-pack/locked', 'Directory read', denied),
+          yamlFiles: [],
+        },
+      ],
+    });
 
     try {
       const app = createTestApp();
@@ -1031,8 +1043,9 @@ describe('GET /api/workflows/:name', () => {
       expect(response.status).toBe(500);
       const body = (await response.json()) as { error: string };
       expect(body.error).toBe('Failed to read workflow');
+      expect(readFoldersSpy).toHaveBeenCalled();
     } finally {
-      await chmod(lockedDir, 0o755);
+      readFoldersSpy.mockRestore();
       await removeTempTree(testDir);
     }
   });
@@ -1344,6 +1357,39 @@ describe('PUT /api/workflows/:name', () => {
       expect(await readFile(second, 'utf-8')).toBe(secondContent);
     } finally {
       await rm(testDir, { recursive: true, force: true });
+    }
+  });
+
+  test('refuses to save when the name matches a malformed packaged workflow folder', async () => {
+    const testDir = join(tmpdir(), `wf-put-crowded-packaged-${Date.now()}`);
+    const workflowsRoot = join(testDir, '.archon', 'workflows');
+    const packageDir = join(workflowsRoot, 'author-pack', 'test');
+    const firstContent = 'name: one\nnodes: []\n';
+    const secondContent = 'name: two\nnodes: []\n';
+    await mkdir(packageDir, { recursive: true });
+    await writeFile(join(packageDir, 'one.yaml'), firstContent);
+    await writeFile(join(packageDir, 'two.yaml'), secondContent);
+
+    try {
+      const app = createTestApp();
+      registerApiRoutes(app, {} as WebAdapter, {} as ConversationLockManager);
+      mockListCodebases.mockImplementationOnce(async () => [{ default_cwd: testDir }]);
+
+      const response = await app.request(`/api/workflows/test?cwd=${testDir}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ definition: { name: 'test', nodes: [] } }),
+      });
+      expect(response.status).toBe(500);
+      const body = (await response.json()) as { detail?: string };
+      expect(body.detail).toBe(
+        "Packaged workflow 'author-pack/test' must contain exactly one .yaml or .yml file (found 2)."
+      );
+      await expect(access(join(workflowsRoot, 'test.yaml'))).rejects.toThrow();
+      expect(await readFile(join(packageDir, 'one.yaml'), 'utf-8')).toBe(firstContent);
+      expect(await readFile(join(packageDir, 'two.yaml'), 'utf-8')).toBe(secondContent);
+    } finally {
+      await removeTempTree(testDir);
     }
   });
 
