@@ -32,6 +32,7 @@ outcome:
     - { key: stub-known-defect, outcome: track, url: "https://github.com/example/repo/issues/3#issuecomment-1" }
   dropped: [{ key: stub-fixed-defect, reason: "stub: fixed at the base" }]
   asked: []
+  waiting: []
   question: ""
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
