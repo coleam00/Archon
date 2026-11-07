@@ -109,7 +109,7 @@ export function ChatComposer({
 
   return (
     <div
-      className="shrink-0 border-t border-border bg-surface px-7.5 py-3.5"
+      className="shrink-0 border-t border-border bg-surface px-4 py-3.5 sm:px-7.5"
       title={disabledReason}
     >
       <div className="mx-auto max-w-235">
