@@ -158,7 +158,7 @@ describe("ship's continued pull request", () => {
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; contract_left: string[] | null; summary: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; contract_left: string[] | null; summary: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -214,7 +214,6 @@ describe("deliver's round", () => {
     expect(round({ INPUTS_SIMPLIFY: 'true', INPUTS_CI: 'null' })).toMatchObject({
       done: false,
       reason: 'simplify_open',
-      light_review: true,
     });
     expect(round({ INPUTS_CI: 'pr_caused' })).toMatchObject({ done: false, reason: 'ci_pr_caused' });
     expect(round({ INPUTS_CI: 'other' })).toMatchObject({ done: true, ready: false, reason: 'ci_other' });

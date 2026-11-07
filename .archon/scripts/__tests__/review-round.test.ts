@@ -63,13 +63,12 @@ function round(
   cwd: string,
   head: string,
   cursor?: string,
-  extra: { light?: boolean; part?: string } = {}
+  extra: { part?: string } = {}
 ): ScriptRun {
   return runPackScript('review/scripts/review-round', {
     cwd,
     inputs: {
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
-      INPUTS_LIGHT: extra.light ? 'true' : 'false',
       INPUTS_PART: extra.part ?? '',
       ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)),
     },
@@ -85,20 +84,16 @@ function round(
 
 describe('review-round', () => {
 
-  // The route agent adds every other lens a continuation earns; the code lens is
-  // the one this round always reruns, whatever an earlier round ran.
-  it("continues from the previous round's reviewed commit with the code lens alone", () => {
+  it("continues from the previous round's reviewed commit", () => {
     const { cwd, older, newer } = history();
     const part = { delivers: 1, parts: [{ part: 2, items: ['later'] }] };
     const run = round(cwd, newer, older, { part: JSON.stringify(part) });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: true,
-      light: false,
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
-      seams: false, code: true, tests: false, errors: false, docs: false, ux: false,
       part,
     });
   });

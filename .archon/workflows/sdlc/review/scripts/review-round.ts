@@ -14,11 +14,10 @@
  * the delta run backwards or cover commits the previous round never read, so the
  * round refuses instead.
  *
- * A first round's lenses are the route agent's call. A continuation reruns the
- * general code lens on the delta; the route agent adds every lens whose finding the
- * previous report leaves open or whose area the delta touches. A light
- * continuation, which follows a correction for CI or simplify rather than for review, runs
- * the code lens alone and does not route.
+ * This node runs first, so it is the one owner of both commits: scope, route,
+ * synthesis and publish read them from its output. Which lenses run is the route
+ * agent's call; the only fact this node adds to it is `continuation`, on which the
+ * code lens always reruns to verify the prior findings.
  *
  * The prior report is a declared input an outside caller can fill with a path
  * from an earlier run, so its existence is checked here too: a continuation that
@@ -30,14 +29,13 @@
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PRIOR_REPORT: the previous round's report path, or empty for round one.
- * - INPUTS_LIGHT: "true" when this continuation follows a CI or simplify correction.
  * - INPUTS_PART: the run's part assignment as JSON, or empty for the whole contract.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { FULL_REVIEW_RISKS, type ReviewLens } from '../../.shared/review-policy.ts';
+import { FULL_REVIEW_RISKS } from '../../.shared/review-policy.ts';
 import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 
 /**
@@ -54,14 +52,6 @@ function partAssignment(value: string | undefined): unknown {
 
 /** Where publish-review records the commit a published report reviewed. */
 const REVIEWED_HEAD = 'reviewed-head';
-const NO_LENSES: Record<ReviewLens, boolean> = {
-  seams: false,
-  code: false,
-  tests: false,
-  errors: false,
-  docs: false,
-  ux: false,
-};
 
 function isFile(path: string): boolean {
   try {
@@ -85,7 +75,7 @@ try {
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
   const head = nodeStartCommit();
   if (prior === '') {
-    emit({ continuation: false, light: false, head, cursor: '', risks: FULL_REVIEW_RISKS, ...NO_LENSES, part });
+    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, part });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
@@ -100,8 +90,7 @@ try {
         `the checkout is at ${head}, which does not descend from ${cursor}, the commit the previous round reviewed; reviewing it would diff backwards or skip commits`
       );
     }
-    const light = trimmed(process.env.INPUTS_LIGHT) === 'true';
-    emit({ continuation: true, light, head, cursor, risks: FULL_REVIEW_RISKS, ...NO_LENSES, code: true, part });
+    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, part });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

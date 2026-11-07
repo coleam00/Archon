@@ -3,9 +3,6 @@
  * `max_iterations` is the round cap: a round that would repeat at the cap leaves `done`
  * false and the loop completes with it, which `outcome` reports as `round_cap`.
  * Everything else is read from the round's own typed outputs; nothing here judges.
- * It also says whether the next round's review is light: after a correction for CI
- * or for simplify alone, the general code reviewer alone on the delta; otherwise the
- * code lens and the lenses the route agent selects, on the delta.
  *
  * Bound inputs (canonical text; a skipped producer arrives as "null"):
  * - INPUTS_PREVIOUS / INPUTS_PRIOR_REPORT / INPUTS_PREVIOUS_PR_URL: the previous round's
@@ -86,8 +83,6 @@ emit({
   reason,
   // A round whose implementer stopped opens no pull request; an earlier round's stands.
   pr_url: prUrl === 'null' ? text(process.env.INPUTS_PREVIOUS_PR_URL) : prUrl,
-  // A correction for CI or for simplify alone gets a light review: the code lens alone, on the delta.
-  light_review: reason === 'ci_pr_caused' || reason === 'simplify_open',
   // The next round's review continues from the last published report, if any.
   prior_report:
     reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,

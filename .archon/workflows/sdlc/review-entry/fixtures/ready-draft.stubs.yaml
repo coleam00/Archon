@@ -2,10 +2,9 @@
 # draft, so nothing hands it on. The run pauses as one attention item whose choices
 # take the pull request out of draft or leave it; settle accepts `ready` because the
 # agent named the pull request.
-stage__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","seams":false,"code":false,"tests":false,"errors":false,"docs":false,"ux":false,"part":null}'
+stage__mode: '{"continuation":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","part":null}'
 stage__route: { seams: false, code: true, tests: false, errors: false, docs: false, ux: false, reason: "stub: a small change" }
 stage__scope:
-  head_matches: true
   pr: { repo: { host: github.com, path: example/repo }, number: 1 }
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 stage__code: "0 findings"
@@ -16,6 +15,7 @@ stage__synthesize:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
+  coverage_gaps: []
 stage__publish:
   ready: true
   action: none
@@ -46,5 +46,5 @@ fixture:
   inputs:
     scope: "https://github.com/example/repo/pull/1"
   expect: paused
-  reached: [stage__result, attend__settle]
+  reached: [stage__settle, attend__settle]
 exec-code: true

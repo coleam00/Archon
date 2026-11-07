@@ -7,9 +7,9 @@
  * verdict passes through unchanged either way: publication is not what makes a
  * review true.
  *
- * A report goes public only about the commit its round fixed at the start
- * (review-round): the checkout must still be at it and the pull request's remote
- * head must be it. The head is checked before the scope agent's declaration, so a
+ * This is the review's one head check. A report goes public only about the
+ * commit its round fixed at the start (review-round): the checkout must still be
+ * at it and the pull request's remote head must be it. The head is checked before the scope agent's declaration, so a
  * correction that was never pushed is named as that rather than as a scope
  * mismatch. Any mismatch refuses, so a verdict about one commit can never
  * stand as the verdict on another. This node stamps that commit and the certified
@@ -94,7 +94,7 @@ try {
     const remote = viewPr(pr).pr.head_revision;
     if (remote !== head) {
       throw new Error(
-        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: the commits under review were not pushed`
+        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: push the commits under review, or review from a checkout of the pull request's head`
       );
     }
   }
