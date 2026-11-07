@@ -180,14 +180,23 @@ async function readPackWorkflowFolder(
   if (!Array.isArray(yamlFiles)) return { kind: 'error', folder, error: yamlFiles, yamlFiles: [] };
   if (yamlFiles.length === 0) return { kind: 'empty', folder };
   if (yamlFiles.length !== 1) {
-    const error: WorkflowLoadError = {
-      filename: folderLabel,
-      error: `Packaged workflow '${folderLabel}' must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`,
-      errorType: 'validation_error',
+    return {
+      kind: 'error',
+      folder,
+      error: yamlCountError(folderLabel, yamlFiles.length),
+      yamlFiles,
     };
-    return { kind: 'error', folder, error, yamlFiles };
   }
   return { kind: 'workflow', folder, path, filename: yamlFiles[0] };
+}
+
+/** A packaged workflow folder must hold exactly one YAML file; `found` is how many it holds. */
+export function yamlCountError(folderLabel: string, found: number): WorkflowLoadError {
+  return {
+    filename: folderLabel,
+    error: `Packaged workflow '${folderLabel}' must contain exactly one .yaml or .yml file (found ${found}).`,
+    errorType: 'validation_error',
+  };
 }
 
 async function listYamlFiles(dir: string, label: string): Promise<string[] | WorkflowLoadError> {

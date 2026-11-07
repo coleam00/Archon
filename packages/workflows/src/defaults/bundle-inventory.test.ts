@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { yamlCountError } from '../workflow-discovery/pack-layout';
 import { collectBundleSources, readBundleContent, readBundleIndex } from './bundle-inventory';
 
 const track = trackTempRoots();
@@ -88,7 +89,7 @@ test('a selected workflow folder without YAML fails generation', async () => {
     'workflows/selected/flow-renamed/commands/step.md': 'step',
   });
   await expect(collectBundleSources(join(root, 'workflows'), ['selected'])).rejects.toThrow(
-    "Packaged workflow 'selected/flow-renamed' must contain exactly one .yaml or .yml file (found 0)."
+    yamlCountError('selected/flow-renamed', 0).error
   );
 });
 
@@ -99,6 +100,6 @@ test('a workflow folder with two YAML files fails with the discovery error', asy
     'workflows/selected/crowded/two.yaml': 'name: two\n',
   });
   await expect(collectBundleSources(join(root, 'workflows'), ['selected'])).rejects.toThrow(
-    "Packaged workflow 'selected/crowded' must contain exactly one .yaml or .yml file (found 2)."
+    yamlCountError('selected/crowded', 2).error
   );
 });

@@ -12,6 +12,7 @@ import {
   loadErrorToError,
   readPackWorkflowFolders,
   type PackWorkflowLocation,
+  yamlCountError,
 } from '../workflow-discovery/pack-layout';
 import { METRIC_VIEWS_FILE } from '../schemas/metric-view';
 import type { BundledScriptPack } from './bundled-script-pack';
@@ -179,11 +180,8 @@ async function collectPack(workflowsRoot: string, pack: string, add: AddSource):
     if (entry.kind === 'error') throw loadErrorToError(entry.error);
     // Discovery skips a folder with no YAML; a selected bundled pack must not, or a
     // renamed or deleted YAML would ship a binary silently missing that workflow.
-    if (entry.kind === 'empty') {
-      throw new Error(
-        `Packaged workflow '${pack}/${entry.folder}' must contain exactly one .yaml or .yml file (found 0).`
-      );
-    }
+    if (entry.kind === 'empty')
+      throw loadErrorToError(yamlCountError(`${pack}/${entry.folder}`, 0));
     await collectWorkflow(scope, entry);
   }
 }
