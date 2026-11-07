@@ -10,8 +10,7 @@ description: |
 
   Use when: changes need judging — "review this PR", "review my changes",
   "is this ready to merge".
-  NOT for: fixing findings (implement), running the project's checks (validate),
-  or writing code.
+  NOT for: fixing findings (implement) or writing code.
 
 inputs:
   scope:
@@ -34,8 +33,8 @@ inputs:
   light:
     default: "false"
     description: >-
-      "true" when this continuation follows a correction for CI rather than for
-      review: the general code lens alone reviews the delta.
+      "true" when this continuation follows a correction for CI or simplify rather
+      than for review: the general code lens alone reviews the delta.
   part:
     default: ""
     description: >-

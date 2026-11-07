@@ -42,22 +42,28 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-CI is the project's full validation; implementers run only focused checks. Whether
-CI is green is judgment, so one agent prompt owns it (`deliver/commands/ci.md`), run
-once a round's review passes. It never judges a stale head (it pushes the
-checkout's `HEAD` when the pull request is behind it), refuses a head that
-conflicts with its base, marks the pull request ready (a
-project whose CI skips drafts starts it then), waits however long CI takes, and
-answers green, pr_caused, or other. On anything but green it puts the pull request
-back to draft before it answers, so a red PR never stays ready. A red the change
-caused, or a conflict with the base, goes back to the implementer in the next
-round, which merges the base on a conflict, and that correction is reviewed before
-CI runs again. A flake or infrastructure failure outside the change gets one re-run
-of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
-the run not ready, and a defect outside the change becomes a discovery.
+CI is the project's full validation; implementers run only focused checks.
+Delivery never waits for it: the merge queue judges CI at the head before it merges
+(see [Merge queue](#merge-queue)). Once a round's review passes and simplify names
+nothing, one agent prompt hands the pull request off (`deliver/commands/ci.md`). It
+never hands off a stale head (it pushes the checkout's `HEAD` when the pull request
+is behind it), refuses a head that conflicts with its base, reads the checks once,
+marks the pull request ready (a project whose CI skips drafts starts it then), and
+answers ready, pr_caused, or other. A check already red because of the change, or a
+conflict with the base, goes back to the implementer in the next round, which
+merges the base on a conflict, and that correction is reviewed before the next
+hand-off; the pull request stays a draft. Pending checks and red outside the change
+are the merge queue's. A project with no CI gets the full validation from this
+agent instead.
+
+Simplify runs beside each round's review, so the implementer of the next round
+adopts or declines its smaller shapes together with the review's findings. A round
+whose review passes but whose simplify pass named smaller shapes ends
+`simplify_open`, and the next round's light review checks that correction. A later
+round's simplify judges only a delta that is large or reshapes the code.
 
 Unresolved review threads on the pull request are work too, whoever opened them: a
-person, a review bot, or no one in a project without outside reviewers. After CI,
+person, a review bot, or no one in a project without outside reviewers. After the hand-off,
 each round's `threads` node lists the unresolved threads in `threads.md`, quoted as
 untrusted review data, and puts a ready pull request back to draft while any is
 open, so the round ends `threads_open` instead of ready. The next round's
@@ -70,7 +76,7 @@ with a reply saying so; it belongs in its own issue. So is a thread a dated ruli
 in the issue body already decided: `settle-threads` reads the work order and the
 issue's "Current scope" sections, and its reply names the ruling. A thread no agent
 can settle ends the run `ask`.
-`settle-threads` runs before CI and a failed one skips it, so the pull request stays
+`settle-threads` runs before the hand-off and a failed one skips it, so the pull request stays
 the draft the previous round left; a failed `threads` node puts it back to draft
 before the run fails. The
 pack's own review verdict is unchanged: threads gate delivery, not the review.
@@ -80,10 +86,10 @@ comment's first lines are stamped by `publish-review` from the round's certified
 output ([`.shared/review-comment.ts`](.shared/review-comment.ts)): the reviewed commit
 and the verdict, which the merge queue's gate reads, and the contract coverage
 (`complete` only when the review left nothing open), which the sweep reads before it
-lets a merge close the issue. CI never
+lets a merge close the issue. The hand-off never
 marks ready a head carrying commits the round's review did not cover. Commits pushed
 after a run ends, by a fixer or by hand, are reviewed by a continuation delivery of
-that pull request, whose first round reviews the whole change before CI marks it
+that pull request, whose first round reviews the whole change before the hand-off marks it
 ready again, or by `archon-review` given the earlier round's `review/report.md` as
 `prior_report`.
 
@@ -124,9 +130,6 @@ The metrics workflows read each pull request through `pr.view` and need the
 `timestamps` it reports; the test-value judge reads `pr.files` and `repo.file`. A
 plugin that omits the timestamps or lacks those operations makes them refuse, naming
 what is missing.
-
-Own-PR enrollment lists a maintainer's open pull requests by author, which has no forge
-operation yet, so it refuses, naming the missing operation.
 
 Agents read CI job logs with the tools the run has, since the contract has no operation
 for them. A red default branch is always raised as a `merge: base` item: `checks.rerun`
@@ -186,12 +189,11 @@ on `$deliver.output.ready`. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the forge, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in
-the forge contract. Three agents write directly: the structure pass's implementer
-pushes its own commit to the pull request's branch with `git`, and CI pushes a
-head that was left behind before it judges anything, ending `other` if it cannot;
+the forge contract. Two agents write directly: `ci` pushes a head that was left
+behind with `git` before it judges anything, ending `other` if it cannot, and marks
+the pull request ready, or back to draft when it sends the change back; and
 `update-pr-body` edits the description, because judging which claims are stale and
-rewriting them is the whole job; and `ci` marks the pull request ready and back to
-draft around its CI wait. The last two act through `archon forge`, after the `forge`
+rewriting them is the whole job. Their forge writes go through `archon forge`, after the `forge`
 node checked the plugin can. PR publication reads the agent-authored
 `pr-body.md` and `pr-description.md` content through certified artifact pointers;
 the publisher owns the writes and verifies the description edit.
@@ -336,7 +338,7 @@ always used. A user who sets nothing gets the same models as before.
 | `@triage` | triage | `medium` |
 | `@planner` | plan | `large` |
 | `@investigator` | investigate | `medium` |
-| `@implementer` | implement, including delivery's reshape | `large` |
+| `@implementer` | implement | `large` |
 | `@reviewer` | every agent node of review (scope, lenses, synthesis) and simplify | each node's tier |
 | `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code` and `ux`, `medium` for the rest) |
 
@@ -372,14 +374,8 @@ request, never the state.
 
 - **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` at the
   head of the default branch and records once whether the issue's author is on it.
-  The file is a JSON array whose entries are forge logins, or objects naming one with
-  opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
-  login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
-  open pull requests in the merge queue, except one a work item already names or one
-  from a `build/` branch in the repository itself, so a hand-made pull request on a
-  `build/` branch does not enroll (see Pickup there). Enrollment needs a forge
-  operation the contract does not have yet, so it refuses today (see Forge); the merge
-  queue notes the refusal on stderr and goes on with the items it already has. No file means an empty list, so every author is outside. Any other
+  The file is a JSON array of forge logins: `["alice", "bob"]`. Every listed login is
+  a maintainer. No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
@@ -475,7 +471,7 @@ The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 `{"kind": "label.changed", "actions": ["added"], "predicates": [{"field": "label.name",
 "in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate", "archon-split"]}]}`, and two
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
-The predicate only saves runs; intake ignores any other label. A binding installed before the investigate label was renamed still lists `archon-issue`: replace it with `archon-investigate` in that binding, and in any build-queue binding that selects on it, because `label.name` predicates match exactly.
+The predicate only saves runs; intake ignores any other label.
 
 ## Build queue
 
@@ -521,7 +517,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   it ended and decides: `done` when the pull request's latest review says Ready at its
   head commit and no check no round can run is still outstanding (a dated scope section records such a check as met; otherwise it asks for it once), `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
-  step), or `ask`. Before any `continue`, it compares the whole change with the contract's shape, and asks when a correction would add machinery the contract does not name. It never continues a pull request that changed nothing material since its last review, no commits or only cosmetic edits; that round ends as done or ask by the same rules. A Ready, green pull request whose only remaining check no round can run is asked about once rather than continued. It declares the pull request when the round left commits unpushed.
+  step), or `ask`. Before any `continue`, it compares the whole change with the contract's shape, and asks when a correction would add machinery the contract does not name. It never continues a pull request that changed nothing material since its last review, no commits or only cosmetic edits; that round ends as done or ask by the same rules. A Ready pull request whose only remaining check no round can run is asked about once rather than continued. It declares the pull request when the round left commits unpushed.
   A `continue` starts the item's next round at once by firing the operator's
   build-queue binding (`build_queue_binding`) with the item's `number`, keyed so one
   run starts at most one next round per item. The binding's resource, capacity and
@@ -763,22 +759,7 @@ then the project's file, whose lines win where the two conflict.
   returned or parked it, it waits again. The pull request is the latest one a build
   round recorded, or, when no round recorded one, the one triage routed the item to
   continue. One already merged or closed is recorded without the
-  agent. Before claiming, the run enrolls each open, non-draft pull request by a
-  maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
-  work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
-  a build round recorded, or one triage routed an item to continue, is named by its
-  build item and never enrolls. Neither does one from a `build/` branch in the
-  repository itself, the namespace every build round opens its pull request from, even
-  before the round records it. A hand-made pull request on a `build/` branch therefore
-  does not enroll; name the branch something else. An own-PR
-  item has no build record of its own, so where another would go back to the build queue
-  (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
-  sweep asks instead, naming what is wrong and the command a maintainer can launch, and
-  its question offers no `return`. The record never hands one to the build queue.
-  The queue never starts that run itself. An own-PR item answered `park` or `other`
-  waits again only when its current head differs from its latest merge decision's
-  head. At the same head it stays parked. Merged own-PR items and other kinds of
-  settlement, including unreadable and superseded parks, do not recover this way.
+  agent.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
@@ -790,10 +771,7 @@ then the project's file, whose lines win where the two conflict.
   A failed PR read waits once; a second consecutive failure
   parks the item with the read error recorded until the build queue readies it again.
   Renewed build readiness gives a parked item another first-read wait. A successful
-  read resets that sequence even if later work fails. An unreadable own-PR park stays
-  parked; it is not an answered park. To reconsider an answered own-PR park, facts
-  reads its snapshot before claiming and reuses it in the sweep. A failed recovery
-  read leaves that unclaimed item unchanged and reports the error. If the default branch
+  read resets that sequence even if later work fails. If the default branch
   cannot be read, facts passes its diagnostic and the batch to record without a sweep.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   The queue never pushes, never changes its checkout and never waits for CI. A Ready
@@ -837,9 +815,8 @@ then the project's file, whose lines win where the two conflict.
   reads and fails with the original diagnostic and any settlement write failures.
   Otherwise, the `record` script skips and reports a decision for a pull request this
   run did not claim, because that item belongs to another run. It refuses a
-  `return` without a brief, a `return` for an own pull request, an `ask` without its
-  question, an `ask` that offers a `return` on an own pull request or with a blank
-  brief, and a red default branch the sweep did not raise: the pull
+  `return` without a brief, an `ask` without its question, an `ask` that offers a
+  `return` with a blank brief, and a red default branch the sweep did not raise: the pull
   request waits for the next sweep, and the record fails, naming each, once every
   other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
@@ -863,8 +840,7 @@ then the project's file, whose lines win where the two conflict.
   it. One still open gets `archon-triage` and an `archon-intake` run started detached
   with that label event, recorded as added by `retriage_as`. Intake stays the judge:
   it re-triages only when that login is on the maintainer list, and closes the issue
-  as delivered or keeps it with what is still open. A closed issue and an own pull
-  request, which has no issue, are left alone. A failed read, label write or launch
+  as delivered or keeps it with what is still open. A closed issue is left alone. A failed read, label write or launch
   is named in the node's summary and stops nothing else. Empty `retriage_as`
   re-triages nothing.
 - **Discoveries drain.** When `discoveries_binding` names the operator's
@@ -890,10 +866,7 @@ then the project's file, whose lines win where the two conflict.
   choice's ruling into the issue body as a dated "Current scope" section and hands the
   item back to the build queue, whose next round starts at once through the
   build-queue binding (`build_queue_binding`); `park` stops working it until the build queue readies it
-  again. For an own PR, both `park` and `other` stop queue work until a later sweep
-  observes a different head from the one asked about. The `other` answer stays on
-  the work item as its ruling; it writes no issue body and starts no build round.
-  New CI or review results at the same head do not unpark it. Approval remains pinned
+  again. Approval remains pinned
   to its approved head, subject to the existing conflict-only carry rule. Any other
   ask waits for a later sweep, which decides it again.
 

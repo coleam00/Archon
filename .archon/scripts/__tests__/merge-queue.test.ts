@@ -67,23 +67,6 @@ function merge(status: MergeRecord['status'], at = LATER): MergeRecord {
   return { status, pr: PR, approval: null, decisions: [], at };
 }
 
-function parkedOwn() {
-  return {
-    ...newWorkItem(PR, AT),
-    facts: {
-      own_pr: { url: PR_URL, at: AT },
-      merge: {
-        ...merge('parked'),
-        approval: { head: HEAD, at: AT },
-        decisions: [{
-          at: LATER, run_id: 'old-run', decision: 'answered: park', reason: 'hold', links: [], head: HEAD, reran: false,
-          answer: { choice: 'park', text: 'repair it', at: LATER },
-        }],
-      },
-    },
-  } satisfies WorkItem;
-}
-
 const FACTS: PrFacts = {
   pr: PR,
   url: PR_URL,
@@ -186,11 +169,11 @@ function git(cwd: string, ...args: string[]): void {
 }
 
 /** A checkout whose remote's default branch lists `Maintainer`, and an empty Archon home. */
-function install(maintainers = '["Maintainer"]'): Install {
+function install(): Install {
   const checkout = gitCheckout({}, track);
   git(checkout, 'checkout', '-q', 'dev');
   mkdirSync(join(checkout, '.archon/sdlc/policy'), { recursive: true });
-  writeFileSync(join(checkout, '.archon/sdlc/policy/maintainers.json'), `${maintainers}\n`);
+  writeFileSync(join(checkout, '.archon/sdlc/policy/maintainers.json'), '["Maintainer"]\n');
   git(checkout, 'add', '.archon/sdlc/policy/maintainers.json');
   git(checkout, 'commit', '-q', '-m', 'maintainers');
   git(checkout, 'push', '-q', 'upstream', 'HEAD:dev');
@@ -419,142 +402,11 @@ const BASE_RED = {
 };
 
 describe('the merge queue scripts', () => {
-  for (const choice of ['park']) {
-    test(`an own PR answered ${choice} waits again only after its head changes`, () => {
-      const at = install();
-      const own = { ...newWorkItem(PR, AT), ...CLAIMED, facts: { own_pr: { url: PR_URL, at: AT } } };
-      seed(at, own);
-      const attention = { ...ATTENTION, choices: ATTENTION.choices.filter(entry => entry.effect !== 'return') };
-      const askAt = (head: string) => {
-        const inputs = recordInputs([decision({ action: 'ask', head, attention })]);
-        const recorded = ok(run(at, 'record', {
-          ...inputs,
-          INPUTS_ITEMS: JSON.stringify([{ item: PR, pr: PR, url: PR_URL, facts: { ...FACTS, head_revision: head }, record: null, own_pr: true }]),
-        }, { pr: { headRefOid: head } })) as { asked: { attention: MergeAttention } };
-        // The queue owns `other`'s text; the sweep writes what its own `park` does.
-        if (choice === 'other') expect(recorded.asked.attention.choices.find(entry => entry.id === 'other')?.does).toContain('different head');
-        const askedJson = JSON.stringify(recorded.asked);
-        const ruled = run(at, 'ruling', { INPUTS_ASKED: askedJson, INPUTS_CHOICE: choiceOf(askedJson, choice), INPUTS_TEXT: 'repair it' });
-        expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
-        expect(ruled.bodies).toEqual([]);
-      };
-      askAt(HEAD);
-      const parked = stored(at, PR.number);
-      expect(parked.value?.facts.merge?.decisions.at(-1)).toMatchObject({ decision: 'answered: park', head: HEAD, answer: { choice, text: 'repair it' } });
-      expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'idle' });
-      expect(stored(at, PR.number)).toEqual(parked);
-      const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD } });
-      expect(ok(picked)).toMatchObject({ path: 'sweep', items: [{ item: PR, own_pr: true, facts: { head_revision: OLD } }] });
-      expect(forgeCalls(picked).filter(call => call.includes('snapshot'))).toHaveLength(1);
-      askAt(OLD);
-      const parkedAgain = stored(at, PR.number);
-      expect(ok(run(at, 'facts', {}, { pr: { headRefOid: OLD } }))).toMatchObject({ path: 'idle' });
-      expect(stored(at, PR.number)).toEqual(parkedAgain);
-      expect(parkedAgain.value?.facts.build).toBeUndefined();
-    }, 60_000);
-  }
-
-  for (const failure of ['read']) {
-    test(`a failed recovery ${failure} leaves the parked item untouched while other work proceeds`, () => {
-      const at = install();
-      const parked = parkedOwn();
-      const url = failure === 'read' ? PR_URL : 'invalid';
-      seed(at, { ...parked, facts: { ...parked.facts, own_pr: { url, at: AT } } });
-      seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: OTHER_URL })) }), subject: OTHER });
-      const before = stored(at, PR.number);
-      const picked = run(at, 'facts', {}, { pr: { unreadable: [PR.number] } });
-      expect(picked.code).toBe(0);
-      expect(picked.stderr).toContain(url);
-      expect(picked.stderr.match(/cannot reconsider/g)).toHaveLength(1);
-      expect(JSON.parse(picked.stdout)).toMatchObject({ path: 'sweep', items: [{ item: OTHER }], settled: [] });
-      expect(stored(at, PR.number)).toEqual(before);
-      // Only the other item's read completes: the parked item's read fails or never starts.
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(1);
-    }, 60_000);
-  }
-
-  test('recovery preserves pinned approval and limits claims in pickup order', () => {
-    const at = install();
-    seed(at, parkedOwn());
-    // Untriaged like an own PR, so the pickup order falls through to the oldest first.
-    seed(at, { ...item(), subject: OTHER, created_at: LATER, facts: { build: BUILT } });
-    const sameHead = parkedOwn();
-    seed(at, {
-      ...sameHead,
-      created_at: '2026-10-15T00:00:00.000Z',
-      subject: { ...PR, number: 1 },
-      facts: {
-        own_pr: { url: PR_URL.replace(/42$/, '1'), at: AT },
-        merge: { ...sameHead.facts.merge, decisions: [{ ...sameHead.facts.merge.decisions[0], head: OLD }] },
-      },
-    });
-    const picked = run(at, 'facts', { INPUTS_LIMIT: '1' }, { pr: { headRefOid: OLD } });
-    expect(ok(picked)).toMatchObject({ items: [{ item: PR, record: { approval: { head: HEAD, at: AT } }, facts: { head_revision: OLD } }] });
-    expect(stored(at, OTHER.number).value?.claim).toBeNull();
-    expect(stored(at, 1).value?.claim).toBeNull();
-    expect(stored(at, PR.number).value?.claim?.run_id).toBe('run-1');
-    expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(2);
-  }, 60_000);
-
-  // A failed owner can resume, so only a cancelled one gives its claim up.
-  for (const status of ['running', 'failed', 'cancelled']) {
-    test(`recovery respects a ${status} claim owner`, () => {
-      const at = install();
-      seed(at, { ...parkedOwn(), claim: { run_id: 'owner', at: AT, requests: [] } });
-      const picked = run(at, 'facts', { INTAKE_RUN_STATUSES: JSON.stringify({ owner: status }) }, { pr: { headRefOid: OLD } });
-      const released = status === 'cancelled';
-      expect({ code: picked.code, stderr: picked.stderr }).toEqual({ code: 0, stderr: '' });
-      expect(JSON.parse(picked.stdout)).toMatchObject({ path: released ? 'sweep' : 'idle' });
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(released ? 1 : 0);
-      expect(stored(at, PR.number).value?.claim?.run_id).toBe(released ? 'run-1' : 'owner');
-    }, 60_000);
-  }
-
-  for (const concurrent of ['edit', 'claimed']) {
-    test(`recovery rechecks a concurrent ${concurrent} before retrying a conditional claim`, () => {
-      const at = install();
-      const parked = parkedOwn();
-      seed(at, parked);
-      const changed: WorkItem = {
-        ...parked,
-        trust: 'maintainer',
-        ...(concurrent === 'claimed' ? { claim: { run_id: 'other-owner', at: AT, requests: [] } } : {}),
-        facts: parked.facts,
-      };
-      const preload = `
-const beforeClaim = Bun.spawnSync.bind(Bun);
-let raced = false;
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  const state = argv.indexOf('state');
-  if (!raced && state >= 0 && argv[state + 1] === 'put' && argv[state + 2] === 'work/42') {
-    raced = true;
-    const result = beforeClaim(argv, { ...settings, stdin: Buffer.from(${JSON.stringify(JSON.stringify(changed))}) });
-    if (result.exitCode !== 0) throw new Error('concurrent write failed: ' + result.stderr.toString());
-  }
-  return beforeClaim(argv, settings);
-} });`;
-      const picked = run(at, 'facts', {}, { pr: { headRefOid: OLD }, preload });
-      const recovers = concurrent === 'edit';
-      expect(ok(picked)).toMatchObject({ path: recovers ? 'sweep' : 'idle' });
-      const after = stored(at, PR.number).value!;
-      expect(after.trust).toBe('maintainer');
-      expect(after.facts).toEqual(changed.facts);
-      expect(after.claim?.run_id).toBe(recovers ? 'run-1' : 'other-owner');
-      expect(forgeCalls(picked).filter(call => call === 'snapshot')).toHaveLength(1);
-    }, 60_000);
-  }
-
   test('a red default branch with no queued pull request still reaches the sweep, so its question can be raised', () => {
     const at = install();
     const output = ok(run(at, 'facts', {}, { pr: { baseChecks: 'red' } })) as { path: string; items: unknown[]; base: { checks: { state: string } } };
     expect(output).toMatchObject({ path: 'sweep', items: [], base_error: '', base: { checks: { state: 'red' } } });
     expect(ok(run(at, 'facts', { WORKFLOW_ID: 'run-2' }))).toMatchObject({ path: 'idle', base_error: '' });
-  }, 60_000);
-
-  test('without the opt-in, nobody\'s pull requests are enrolled', () => {
-    const at = install();
-    const picked = run(at, 'facts', {});
-    expect(ok(picked)).toMatchObject({ path: 'idle' });
   }, 60_000);
 
   test('an item whose pull request merged before the sweep is settled without it', () => {
@@ -570,8 +422,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   test('a ready item whose only pull request is the one triage routed it to continue is swept', () => {
     const at = install();
     seed(at, item({ ...BUILT, rounds: [] }, undefined, { facts: { triage: { ...TRIAGE, pull_request: 42 }, build: { ...BUILT, rounds: [] } } }));
-    const output = ok(run(at, 'facts', {})) as { items: { pr: { number: number }; own_pr: boolean }[]; settled: unknown[] };
-    expect(output.items.map(entry => [entry.pr.number, entry.own_pr])).toEqual([[42, false]]);
+    const output = ok(run(at, 'facts', {})) as { items: { pr: { number: number } }[]; settled: unknown[] };
+    expect(output.items.map(entry => entry.pr.number)).toEqual([42]);
     expect(output.settled).toEqual([]);
     expect(stored(at, 42).value).toBeNull();
   }, 60_000);
@@ -603,13 +455,10 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     seed(at, { ...item(builtFor(44)), subject: { repo: PR.repo, number: 9 } });
     seed(at, { ...item(builtFor(45)), subject: { repo: PR.repo, number: 10 } });
     seed(at, { ...item(builtFor(46)), subject: { repo: PR.repo, number: 11 } });
-    const own = parkedOwn();
-    seed(at, { ...own, facts: { ...own.facts, merge: { ...own.facts.merge, status: 'waiting' } } });
     const picked = run(at, 'facts', {}, { pr: { baseUnreadable: true, merged: [43], closed: [44], unreadable: [45] } });
     const output = ok(picked) as Record<string, unknown> & { settled: MergeSettled[] };
     expect(output).toMatchObject({ path: 'record', base: null, items: [
       { item: { repo: PR.repo, number: 11 }, pr: { repo: PR.repo, number: 46 }, facts: { head_revision: HEAD } },
-      { item: PR, pr: PR, own_pr: true, facts: { head_revision: HEAD } },
     ] });
     expect(output.settled.map(done => [done.item.number, done.status, done.decision]).sort()).toEqual([
       [7, 'parked', 'parked'], [8, 'merged', 'merged'], [9, 'parked', 'parked'], [10, 'waiting', UNREADABLE],
@@ -619,7 +468,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
       competing = { ...stored(at).value!, claim: { ...CLAIMED.claim, run_id: 'other-run' } };
       seed(at, competing);
     }
-    const companions = [11, PR.number].map(number => stored(at, number));
+    const companions = [11].map(number => stored(at, number));
     const recorded = run(at, 'record', recordFacts(output), { pr: { unreadable: true } });
     expect(recorded.code).toBe(1);
     expect(recorded.stdout).toBe('');
@@ -631,7 +480,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
         status: done.status, pr: done.pr, decisions: [{ decision: done.decision, reason: done.reason }],
       } } });
     }
-    expect([11, PR.number].map(number => stored(at, number))).toEqual(companions);
+    expect([11].map(number => stored(at, number))).toEqual(companions);
     if (loseClaim) {
       expect(stored(at).value).toEqual(competing);
       expect(recorded.stderr).toContain('work/7 is no longer claimed by this run');
@@ -1012,40 +861,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(existsSync(calls) ? readFileSync(calls, 'utf8') : '').not.toContain('"trigger"');
   }, 60_000);
 
-  test.each([
-    { recommended: 'merge', brief: '', name: 'merge with an empty brief' },
-    { recommended: 'return', brief: '', name: 'return with an empty brief' },
-    { recommended: 'return', brief: ' \n ', name: 'return with a whitespace-only brief' },
-    { recommended: 'return', brief: 'Rework PR 42.', name: 'return with a nonblank brief' },
-  ])("an own pull request's ask offering a return and recommending $name is refused: it waits for the next sweep", ({ recommended, brief }) => {
-    const at = install();
-    seed(at, item(BUILT, undefined, CLAIMED));
-    const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
-    const attention = { ...ATTENTION, recommendation: { ...ATTENTION.recommendation, choice: recommended } };
-    const inputs = recordInputs([decision({ action: 'ask', class: 'unclear', attention, brief })]);
-    const refused = run(at, 'record', { ...inputs, INPUTS_ITEMS: own });
-    const refusal = "the sweep's question about own pull request 42 offers a return, which no build round can take";
-    expect(refused.code).not.toBe(0);
-    expect(refused.stderr).toContain(`${refusal}; it waits for the next sweep`);
-    const doc = stored(at).value as WorkItem;
-    expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
-    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain(refusal);
-  }, 60_000);
-
-  test('an own pull request is never handed to the build queue: a return waits for the next sweep instead', () => {
-    const at = install();
-    seed(at, item(BUILT, undefined, CLAIMED));
-    const own = JSON.stringify(JSON.parse(ITEMS).map((entry: Record<string, unknown>) => ({ ...entry, own_pr: true })));
-    const inputs = recordInputs([decision({ action: 'return', brief: 'fix the red test', reason: 'CI red in its own test' })]);
-    const held = run(at, 'record', { ...inputs, INPUTS_ITEMS: own });
-    expect(held.code).not.toBe(0);
-    expect(held.stderr).toContain('the sweep returned own pull request 42, whose work item has no build record of its own; it waits for the next sweep');
-    const doc = stored(at).value as WorkItem;
-    expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' }, build: { status: 'ready' } } });
-    expect(doc.facts.merge?.decisions.at(-1)?.reason).toContain('the sweep returned own pull request 42, whose work item has no build record of its own');
-    expect(buildWaits(doc)).toBe(false);
-  }, 60_000);
-
   test('a red default branch takes the run\'s one question, and the pull request\'s ask waits for the next sweep', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
@@ -1067,16 +882,16 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ reason: 'CI pending' }] } } });
   }, 60_000);
 
-  test('an issue its merged pull request left open goes back to intake; a closed issue, an own pull request and an unmerged one do not, and one failure stops nothing', () => {
+  test('an issue its merged pull request left open goes back to intake; a closed issue and an unmerged one do not, and one failure stops nothing', () => {
     const at = install();
     const issue = (number: number) => ({ repo: PR.repo, number });
     const listed = (number: number, pr: number) => ({ item: issue(number), pr: issue(pr), url: PR_URL.replace(/42$/, String(pr)), facts: FACTS, record: null });
     const inputs = {
-      // Issue 9 cannot be read, issue 8 the merge closed, PR 45 is an own pull request, and PR 46 did not merge.
-      INPUTS_ITEMS: JSON.stringify([listed(9, 44), listed(8, 43), { ...listed(45, 45), own_pr: true }, listed(10, 46)]),
+      // Issue 9 cannot be read, issue 8 the merge closed, and PR 46 did not merge.
+      INPUTS_ITEMS: JSON.stringify([listed(9, 44), listed(8, 43), listed(10, 46)]),
       // Issue 7's pull request was found merged before the sweep.
       INPUTS_SETTLED: JSON.stringify([{ item: SUBJECT, pr: PR, status: 'merged', decision: 'merged', reason: 'merged before this sweep' }]),
-      INPUTS_MERGED: JSON.stringify([44, 43, 45]),
+      INPUTS_MERGED: JSON.stringify([44, 43]),
     };
     const issues: TrackerIssue[] = [
       { number: 8, title: 'Done', body: 'Closes it.', state: 'CLOSED' },
@@ -1089,7 +904,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(output.retriaged).toEqual([7]);
     expect(output.summary).toStartWith('Sent 1 of 3 merged issue(s) back to intake.');
     expect(output.summary).toContain('issue 9: not re-triaged');
-    expect(output.summary).not.toContain('issue 45');
     expect(output.summary).toContain('issue 8: closed after PR 43 merged');
     expect(sent.stderr).toContain('merge-queue retriage: issue 9: not re-triaged');
     expect(labelWrites(sent, 7).add).toEqual(['archon-triage']);
@@ -1166,17 +980,6 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next' } } });
     expect(doc.facts.build?.brief).toContain('rework PR 42');
     expect(doc.facts.build?.brief).toContain(heading);
-  }, 60_000);
-
-  test("an answer on an own pull request writes no issue body and still applies its effect", () => {
-    const at = install();
-    const own = { repo: PR.repo, number: PR.number };
-    seed(at, { ...item(undefined, merge('asking'), CLAIMED), subject: own });
-    const asked = JSON.stringify({ by: 'pr', item: own, pr: PR, head: HEAD, brief: '', attention: withOther(ATTENTION, 'park') });
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: choiceOf(asked, 'other'), INPUTS_TEXT: 'I will fix R1 on the branch.' });
-    expect(ok(ruled)).toMatchObject({ decision: 'park', section: '' });
-    expect(ruled.bodies).toEqual([]);
-    expect(stored(at, PR.number).value?.facts.merge?.decisions.at(-1)?.answer?.text).toBe('I will fix R1 on the branch.');
   }, 60_000);
 
   test("an 'other' answer returns the pull request with its text as the ruling", () => {
@@ -1312,14 +1115,5 @@ describe('the merge queue on the forge', () => {
     expect(gated.code).toBe(1);
     expect(JSON.parse(gated.stdout).refusals).toEqual(['CI at its head is red (test)']);
     expect(merges(gated)).toEqual([]);
-  }, 60_000);
-
-  test("a maintainer's own-PR opt-in is noted as not enrolled, and the existing work is still read", () => {
-    const at = install('[{ "login": "Maintainer", "merge_queue": "own-prs" }]');
-    seed(at, item());
-    const picked = run(at, 'facts', {});
-    expect(picked.code).toBe(0);
-    expect(picked.stderr).toContain('needs the forge operation pr.list');
-    expect((JSON.parse(picked.stdout) as { items: { item: { number: number } }[] }).items.map(entry => entry.item.number)).toEqual([7]);
   }, 60_000);
 });

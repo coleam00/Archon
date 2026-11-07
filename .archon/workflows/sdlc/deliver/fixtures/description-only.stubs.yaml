@@ -40,7 +40,7 @@ review__publish:
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 threads: { open: 0, summary: "stub: no review thread is unresolved" }
-ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
+ci: { state: ready, summary: "stub: no check red at the head; marked ready" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed

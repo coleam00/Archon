@@ -3,7 +3,7 @@
  * and why. The `report` node relays it as the workflow's return.
  *
  * The last round's typed ending is the result: ready when its review converged and
- * the CI agent saw green and marked the pull request ready, otherwise the reason the
+ * the CI agent handed the pull request off ready, otherwise the reason the
  * rounds stopped, in the deciding node's words. A last round that is not `done` means
  * the loop ran out at its `max_iterations`, which is the `round_cap` ending. Either way it lists the contract
  * items the latest review left open, then lists the discoveries the run recorded for
