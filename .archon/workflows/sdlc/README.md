@@ -66,8 +66,10 @@ with evidence; `settle-threads` checks each disposition at the pushed head and
 writes the reply, and `threads` posts the replies, resolves those threads, and reads
 the pull request back. A thread about code the pull request doesn't change or make
 reachable, such as one that arrived with a merge of the default branch, is settled
-with a reply saying so; it belongs in its own issue. A thread no agent can settle
-ends the run `ask`.
+with a reply saying so; it belongs in its own issue. So is a thread a dated ruling
+in the issue body already decided: `settle-threads` reads the work order and the
+issue's "Current scope" sections, and its reply names the ruling. A thread no agent
+can settle ends the run `ask`.
 `settle-threads` runs before CI and a failed one skips it, so the pull request stays
 the draft the previous round left; a failed `threads` node puts it back to draft
 before the run fails. The

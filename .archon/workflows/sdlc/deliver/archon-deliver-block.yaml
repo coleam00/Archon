@@ -226,6 +226,8 @@ nodes:
           when: "$LOOP_PREV.threads.output.open > 0"
           with:
             pr: "$pr.output"
+            # The contract, so a thread a dated ruling already settled is declined, not asked again.
+            work_order: "$INPUTS.work"
           output_format:
             type: object
             properties:

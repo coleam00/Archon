@@ -21,7 +21,6 @@ describe('validate check selection', () => {
       'merge-sweep-contract',
       'type-check',
       'lint',
-      'mock-modules',
       'ratchet',
       'format',
       'installer',
