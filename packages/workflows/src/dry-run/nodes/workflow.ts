@@ -34,15 +34,13 @@ function resolveChildRunStub(
   if (!Object.hasOwn(ctx.stubs, node.id)) return undefined;
   const stub = stubFor(node, ctx);
   if (stub === undefined) return undefined;
-  if (itemCount !== undefined) {
-    if (!Array.isArray(stub)) {
-      throw new Error(`Stub for fan-out workflow node '${node.id}' must be a JSON array`);
-    }
-    if (stub.length !== itemCount) {
-      throw new Error(
-        `Stub for fan-out workflow node '${node.id}' must contain one result per item (expected ${itemCount}, received ${stub.length})`
-      );
-    }
+  if (itemCount !== undefined && !Array.isArray(stub)) {
+    throw new Error(`Stub for fan-out workflow node '${node.id}' must be a JSON array`);
+  }
+  if (itemCount !== undefined && Array.isArray(stub) && stub.length !== itemCount) {
+    throw new Error(
+      `Stub for fan-out workflow node '${node.id}' must contain one result per item (expected ${itemCount}, received ${stub.length})`
+    );
   }
   if (node.fan_out === undefined && node.with !== undefined) {
     resolveNodeBindings(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
