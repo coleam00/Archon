@@ -13,11 +13,7 @@ import { TERMINAL_RUN_EVENT_TYPES } from '../schemas/workflow-run';
 import { WORKTREE_SETUP_EVENT_TYPES } from '../schemas/worktree-setup';
 
 export const NODE_LIFECYCLE_EVENT_TYPES = [
-  NODE_EXECUTION_EVENT_TYPES.started,
-  NODE_EXECUTION_EVENT_TYPES.suspended,
-  NODE_EXECUTION_EVENT_TYPES.completed,
-  NODE_EXECUTION_EVENT_TYPES.failed,
-  NODE_EXECUTION_EVENT_TYPES.skipped,
+  ...Object.values(NODE_EXECUTION_EVENT_TYPES),
   'node_skipped_prior_success',
 ] as const;
 

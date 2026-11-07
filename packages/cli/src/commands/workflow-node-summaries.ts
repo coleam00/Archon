@@ -230,6 +230,7 @@ function nextNodeSummary(
     case 'node_skipped_prior_success':
       return priorSuccessSummary(nodeId, record, existing);
   }
+  return record.eventType satisfies never;
 }
 
 function failedNodeSummary(

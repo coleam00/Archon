@@ -95,10 +95,10 @@ export type SerializedNodeData = z.infer<typeof serializedNodeDataSchema>;
 
 export const NODE_EXECUTION_EVENT_TYPES = {
   started: 'node_started',
+  suspended: 'node_suspended',
   completed: 'node_completed',
   failed: 'node_failed',
   skipped: 'node_skipped',
-  suspended: 'node_suspended',
 } as const satisfies Record<NodeExecutionRecord['lifecycle']['status'], string>;
 export interface SerializedNodeEvent {
   workflow_run_id: string;
