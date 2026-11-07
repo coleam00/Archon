@@ -17,6 +17,10 @@ const trackTempRoot = trackTempRoots();
 const ANSWERED = forgeOperation('pr.view', null);
 const ARCHON_HOME = join(tmpdir(), 'archon-home-elsewhere');
 
+function refusal(kind: string, message: string): string {
+  return JSON.stringify({ operationId: 'op-labels', ok: false, error: { kind, message } });
+}
+
 function check(
   options: ScriptOptions & {
     mirror?: boolean;
@@ -51,19 +55,12 @@ function check(
   }
   return runPackScript(`${entry}/scripts/forge-check`, {
     cwd,
-    source: 'forge',
     ...rest,
     inputs: { ARCHON_HOME, ...rest.inputs },
   });
 }
 
-describe('forge-check refuses a run whose forge source cannot act', () => {
-  it('uses gh when no source is selected', () => {
-    const run = check({ source: '' });
-    expect(JSON.parse(run.stdout)).toEqual({ source: 'gh' });
-    expect(run.forge).toEqual([]);
-  });
-
+describe('forge-check refuses a run whose forge plugin cannot act', () => {
   it('accepts a capable installed plugin through host discovery and authenticated dispatch', () => {
     const plugin = `
       if (process.argv.includes('metadata')) {
@@ -92,10 +89,8 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
       inputs: { GH_TOKEN: 'accepted' },
     });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-    expect(JSON.parse(run.stdout)).toEqual({ source: 'forge' });
-    expect(run.stderr).toContain('Read access is verified; write access is not');
-    expect(run.stderr).toContain('source: GH_TOKEN');
-    expect(run.gh).toEqual([]);
+    expect(run.stdout).toContain('Read access is verified; write access is not');
+    expect(run.stdout).toContain('source: GH_TOKEN');
   });
 
   it('refuses a plugin missing checks.state before the authenticated read', () => {
@@ -107,43 +102,19 @@ describe('forge-check refuses a run whose forge source cannot act', () => {
     expect(run.stderr).toContain('missing: checks.state');
     expect(run.forge).toHaveLength(1);
     expect(run.forge[0]).toContain('forge metadata');
-    expect(run.gh).toEqual([]);
   });
 
-  it('passes gh when one remote host is authenticated and another is not', () => {
+  it('passes when one remote fails its read and a mirror answers, reporting the failure', () => {
     const run = check({
-      source: 'gh',
       mirror: true,
-      gh: { authFail: { 'ghe.example.com': 'token expired' } },
+      forge: {
+        kind: 'fake',
+        response: [refusal('process_failed', 'token expired'), ANSWERED],
+      },
     });
     expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-    expect(run.stderr).toContain('ghe.example.com/example/repo: token expired');
-    expect(run.stderr).toContain('gh source answered for mirror.example.com/example/repo');
-    expect(run.gh).toEqual([
-      'auth status --active --hostname ghe.example.com',
-      'auth status --active --hostname mirror.example.com',
-      'api --hostname mirror.example.com repos/example/repo',
-    ]);
-  });
-
-  it('checks every gh repository and reports a later mirror failure', () => {
-    const run = check({
-      source: 'gh',
-      mirror: true,
-      gh: { repoReadFail: { 'mirror.example.com/example/repo': 'mirror denied' } },
-    });
-    expect(run.code).toBe(0);
-    expect(run.stderr).toContain('gh source answered for ghe.example.com/example/repo');
-    expect(run.stderr).toContain('mirror.example.com/example/repo: mirror denied');
-  });
-
-  it('refuses an unknown source, naming both values', () => {
-    const run = check({ source: 'gitlab' });
-    expect(run.code).not.toBe(0);
-    expect(run.stderr).toContain(
-      'ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "gitlab"'
-    );
-    expect(run.gh).toEqual([]);
-    expect(run.forge).toEqual([]);
+    expect(run.forge).toHaveLength(4);
+    expect(run.stdout).toContain('ghe.example.com/example/repo: forge pr.view failed');
+    expect(run.stdout).toContain('forge answered for mirror.example.com/example/repo');
   });
 });

@@ -11,7 +11,7 @@
  * only when the run was launched with publish=true and the target is a tracker
  * issue does this verify the item's identity on the tracker, apply the labels, and
  * read them back. Area labels are never created: the prompt may only pick labels
- * the repository already has. Publishing uses the selected forge source.
+ * the repository already has. Publishing goes through the forge plugin.
  */
 
 import type { Closure } from '../../.shared/close.ts';

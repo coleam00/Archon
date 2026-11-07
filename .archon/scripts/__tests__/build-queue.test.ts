@@ -23,8 +23,8 @@ import {
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
 import {
-  type GhApiIssue, type GhCommentRow, type GhPr, type ScriptOptions, type ScriptRun,
-  forgePrRecord, gitCheckout, hostCli, PACK, packScriptRunner, PR,
+  type TrackerSubject, type TrackerComment, type TrackerPr, type ScriptOptions, type ScriptRun,
+  forgeCalls, forgePrRecord, gitCheckout, hostCli, labelWrites, PACK, packScriptRunner, PR,
 } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -108,7 +108,7 @@ describe('the build record', () => {
     expect(
       buildWaits({ ...retriaged, facts: { ...retriaged.facts, triage: { ...TRIAGE, at: '2026-10-16T02:00:00.000Z' } } })
     ).toBe(true);
-    for (const stage of ['new', 'needs_maintainer', 'needs_contract', 'blocked', 'close'] as const) {
+    for (const stage of ['new', 'needs_maintainer', 'split', 'needs_contract', 'blocked', 'close'] as const) {
       expect(buildWaits(triaged({ stage }))).toBe(false);
     }
   });
@@ -223,20 +223,18 @@ function run(
   script: 'facts' | 'blocked' | 'apply' | 'checkout' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
   options: {
-    issue?: GhApiIssue;
-    pr?: GhPr;
-    comments?: readonly GhCommentRow[];
+    issue?: TrackerSubject;
+    pr?: TrackerPr;
+    comments?: readonly TrackerComment[];
     writeLost?: boolean;
-    source?: ScriptOptions['source'];
     preload?: ScriptOptions['preload'];
   } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
-    source: options.source,
     preload: options.preload,
-    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-    gh: {
+    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+    tracker: {
       issue: { number: 7, author: 'Maintainer', body: 'The contract.', ...options.issue },
       issueLabels: ['archon-ready'],
       repositoryLabels: [],
@@ -299,12 +297,11 @@ const HEAD_B = 'b'.repeat(40);
 const READY_CASES = ['matching', 'prewrite', 'raced'] as const;
 type ReadyCase = (typeof READY_CASES)[number];
 
-function readyPreload(source: 'gh' | 'forge', scenario: ReadyCase): string {
+function readyPreload(scenario: ReadyCase): string {
   return `
 import { writeFileSync } from 'node:fs';
 import { forgeOperation } from ${JSON.stringify(resolve(import.meta.dir, 'deliver-checks-harness.ts'))};
 const scenario = ${JSON.stringify(scenario)};
-const selected = ${JSON.stringify(source)};
 const current = ${JSON.stringify(forgePrRecord({ head_revision: HEAD_A }))};
 const calls = [];
 const writes = [];
@@ -312,25 +309,13 @@ const delegate = Bun.spawnSync.bind(Bun);
 const save = () => writeFileSync('{ARTIFACTS}/ready-state.json', JSON.stringify({ current, calls, writes }));
 const response = op => {
   save();
-  const ghRow = {
-    number: current.number, url: current.url, state: current.state.toUpperCase(),
-    isDraft: current.is_draft, headRefOid: current.head_revision,
-    headRefName: current.head, baseRefName: current.base,
-    headRepository: { name: 'repo' }, headRepositoryOwner: { login: 'example' },
-    maintainerCanModify: null,
-  };
-  const stdout = selected === 'forge'
-    ? forgeOperation(op, op === 'pr.view' ? { pr: current } : { target: { repo: current.repo, number: current.number }, outcome: 'applied', changed: true, pr: current })
-    : op === 'pr.view' ? JSON.stringify(ghRow) : '';
+  const stdout = forgeOperation(op, op === 'pr.view' ? { pr: current } : { target: { repo: current.repo, number: current.number }, outcome: 'applied', changed: true, pr: current });
   return { exitCode: 0, stdout: Buffer.from(stdout), stderr: Buffer.from('') };
 };
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  const isGh = argv[0] === 'gh' && argv[1] === 'pr';
   const forgeAt = argv.indexOf('forge');
-  const isForge = forgeAt >= 0 && ['pr.view', 'pr.ready', 'pr.draft'].includes(argv[forgeAt + 1]);
-  if (!isGh && !isForge) return delegate(argv, settings);
-  if ((selected === 'gh') !== isGh) throw new Error('unexpected forge source');
-  const op = isGh ? argv[2] === 'view' ? 'pr.view' : argv.includes('--undo') ? 'pr.draft' : 'pr.ready' : argv[forgeAt + 1];
+  if (forgeAt < 0 || !['pr.view', 'pr.ready', 'pr.draft'].includes(argv[forgeAt + 1])) return delegate(argv, settings);
+  const op = argv[forgeAt + 1];
   calls.push(op);
   if (scenario === 'prewrite') current.head_revision = '${HEAD_B}';
   if (op === 'pr.ready') {
@@ -352,33 +337,31 @@ interface ReadyObservation {
 
 describe('the build queue scripts', () => {
   describe('the ready transition', () => {
-    for (const source of ['gh', 'forge'] as const) {
-      test.each([...READY_CASES])(`${source}: %s`, scenario => {
-        const at = install();
-        seed(at, triaged(CLAIMED));
-        const before = stored(at);
-        const result = run(at, 'apply', {
-          INPUTS_PATH: 'route',
-          INPUTS_ITEM: JSON.stringify(SUBJECT),
-          INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: HEAD_A, reason: 'reviewed', brief: '', attention: null }),
-          INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord({ head_revision: HEAD_A })),
-          INPUTS_ENDING: 'null',
-          INPUTS_ANSWER: 'null',
-        }, { source, preload: readyPreload(source, scenario) });
-        const observed = JSON.parse(readFileSync(join(result.artifacts, 'ready-state.json'), 'utf8')) as ReadyObservation;
-        if (scenario === 'matching') {
-          expect(ok(result).summary).toContain(`marked ready at ${HEAD_A}`);
-          expect(observed.current).toMatchObject({ head_revision: HEAD_A, is_draft: false });
-          expect(observed.writes).toEqual(['pr.ready']);
-          expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', decisions: [{ decision: 'ready' }] } } });
-          return;
-        }
-        expect(result.code).not.toBe(0);
-        expect(stored(at)).toEqual(before);
-        expect(observed.writes).toEqual(scenario === 'prewrite' ? [] : ['pr.ready', 'pr.draft']);
-        expect(observed.current.is_draft).toBe(true);
-      });
-    }
+    test.each([...READY_CASES])('%s', scenario => {
+      const at = install();
+      seed(at, triaged(CLAIMED));
+      const before = stored(at);
+      const result = run(at, 'apply', {
+        INPUTS_PATH: 'route',
+        INPUTS_ITEM: JSON.stringify(SUBJECT),
+        INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: HEAD_A, reason: 'reviewed', brief: '', attention: null }),
+        INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord({ head_revision: HEAD_A })),
+        INPUTS_ENDING: 'null',
+        INPUTS_ANSWER: 'null',
+      }, { preload: readyPreload(scenario) });
+      const observed = JSON.parse(readFileSync(join(result.artifacts, 'ready-state.json'), 'utf8')) as ReadyObservation;
+      if (scenario === 'matching') {
+        expect(ok(result).summary).toContain(`marked ready at ${HEAD_A}`);
+        expect(observed.current).toMatchObject({ head_revision: HEAD_A, is_draft: false });
+        expect(observed.writes).toEqual(['pr.ready']);
+        expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', decisions: [{ decision: 'ready' }] } } });
+        return;
+      }
+      expect(result.code).not.toBe(0);
+      expect(stored(at)).toEqual(before);
+      expect(observed.writes).toEqual(scenario === 'prewrite' ? [] : ['pr.ready', 'pr.draft']);
+      expect(observed.current.is_draft).toBe(true);
+    });
   });
 
   test("facts claims a triaged item without taking intake's requests, and writes the issue the agents read", () => {
@@ -409,9 +392,9 @@ describe('the build queue scripts', () => {
     const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
     const doc = triaged({}, record({ status: 'parked', rounds: [unresolved] }));
     seed(at, { ...doc, facts: { ...doc.facts, triage: { ...TRIAGE, at: '2026-10-16T03:00:00.000Z', pull_request: 42 } } });
-    const result = run(at, 'facts', {}, { source: 'gh' });
+    const result = run(at, 'facts', {});
     expect(ok(result)).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: 'build/7-an-issue-run-1' });
-    expect(result.gh.some(call => call.startsWith('pr view 42'))).toBe(true);
+    expect(forgeCalls(result).some(call => call.op === 'pr.view')).toBe(true);
   });
 
   test("facts puts an item with an open pull request on that pull request's branch, and names a first round's branch after the issue", () => {
@@ -445,14 +428,17 @@ describe('the build queue scripts', () => {
     const branch = 'build/7-an-issue-run-1';
     const cancelled = { INTAKE_RUN_STATUSES: '{"run-1":"cancelled"}', WORKFLOW_ID: 'run-2' };
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
-    // The run's pull request was closed before the release; it is still the run's round.
-    const picked = ok(run(at, 'facts', cancelled, { pr: { state: 'CLOSED', headRefName: branch } }));
+    expect(ok(run(at, 'facts', cancelled, { pr: { headRefName: branch } }))).toMatchObject({ continues: 42 });
     expect(stored(at).value?.facts.build?.rounds).toEqual([
       expect.objectContaining({ run_id: 'run-1', delivered: false, reason: 'ended_undecided', pr_url: 'https://ghe.example.com/example/repo/pull/42' }),
     ]);
-    expect(picked).toMatchObject({ pull_request: { number: 42 }, branch: 'build/7-an-issue-run-2' });
+    // The run's pull request was closed before the release; it is still the run's round.
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
-    expect(ok(run(at, 'facts', cancelled, { pr: { headRefName: branch } }))).toMatchObject({ continues: 42 });
+    const picked = ok(run(at, 'facts', cancelled, { pr: { state: 'CLOSED', headRefName: branch } }));
+    expect(stored(at).value?.facts.build?.rounds).toEqual([
+      expect.objectContaining({ run_id: 'run-1', reason: 'ended_undecided', pr_url: 'https://ghe.example.com/example/repo/pull/42' }),
+    ]);
+    expect(picked).toMatchObject({ pull_request: { number: 42 }, continues: null, branch: 'build/7-an-issue-run-2' });
     // A run whose branch opened no pull request leaves no round.
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
     expect(ok(run(at, 'facts', cancelled))).toMatchObject({ pull_request: null, continues: null });
@@ -485,7 +471,7 @@ describe('the build queue scripts', () => {
 
     const sent = retriage([{ number: 7, reason: '#5 merged' }]);
     expect(ok(sent)).toMatchObject({ retriaged: [7] });
-    expect(sent.gh).toContain(`issue edit 7 --repo ${PR.repo.host}/${PR.repo.path} --add-label archon-triage`);
+    expect(labelWrites(sent, 7).add).toEqual(['archon-triage']);
     const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
     expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=7', 'action=added', 'label=archon-triage', 'label_actor=maintainer', '--detach']));
     expect(ok(run(at, 'blocked', { WORKFLOW_ID: 'run-2', INPUTS_RETRIAGE_AS: 'maintainer' })).blocked).toEqual([]);
@@ -714,7 +700,7 @@ describe('the build queue scripts', () => {
       { writeLost: true }
     );
     expect(lost.code).not.toBe(0);
-    expect(lost.stderr).toContain('does not read back with the section');
+    expect(lost.stderr).toContain('workitem.edit-body verification_failed');
     expect(stored(at).revision).toBe(before);
   }, 60_000);
 });
@@ -768,8 +754,7 @@ describe('the build queue checkout', () => {
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
 
-    // On the forge source the review is read through `archon forge`; gh holds no comments,
-    // so a non-null baseline can only come from the forge.
+    // The review is read through `archon forge`, from this preload's comments.
     const forgeComments = [{ id: '1', body: review.body, url: 'https://ghe.example.com/example/repo/pull/42#issuecomment-1', author: { host: PR.repo.host, id: '1', login: 'Maintainer' } }];
     const forge = `
 const harness = Bun.spawnSync.bind(Bun);
@@ -783,7 +768,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   return { exitCode: value === null ? 1 : 0, stdout: Buffer.from(JSON.stringify(body)), stderr: Buffer.from('') };
 } });
 `;
-    expect(emitted(run(at, 'checkout', inputs, { source: 'forge', preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42 });
+    expect(emitted(run(at, 'checkout', inputs, { preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42 });
   }, 60_000);
 
   test('a round route declares fresh stays on the base and tells ship none, and route cannot name a pull request facts did not offer', () => {

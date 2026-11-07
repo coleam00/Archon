@@ -481,6 +481,7 @@ These routes record the decision and return. The server's continuation scheduler
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/runs/attention` | List attention queue items or count them with `countBy` |
+| GET | `/api/runs/attention/stream` | Stream the attention queue as server-sent events; `Last-Event-ID` resumes ([stream over HTTP](/getting-started/operate/#stream-over-http)) |
 | GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
 

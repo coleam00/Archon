@@ -709,6 +709,7 @@ export class SqliteAdapter implements IDatabase {
       CREATE INDEX IF NOT EXISTS idx_workflow_runs_status ON remote_agent_workflow_runs(status);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_run_id ON remote_agent_workflow_events(workflow_run_id);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_type ON remote_agent_workflow_events(event_type);
+      CREATE INDEX IF NOT EXISTS idx_workflow_events_run_type ON remote_agent_workflow_events(workflow_run_id, event_type);
       CREATE INDEX IF NOT EXISTS idx_workflow_events_created_at ON remote_agent_workflow_events(created_at);
       -- Metric completions (listMetricRecords). Its predicate must equal the query's.
       CREATE INDEX IF NOT EXISTS idx_workflow_events_metrics ON remote_agent_workflow_events(created_at)

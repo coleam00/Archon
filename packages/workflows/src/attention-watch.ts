@@ -51,6 +51,7 @@ import {
 import {
   executionClaim,
   WorkflowEventCursorError,
+  workflowEventCursor,
   type IWorkflowStore,
   type WorkflowEventCursor,
   type WorkflowEventPage,
@@ -66,9 +67,7 @@ const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_BOOKMARK_INTERVAL_MS = 30_000;
 const RUNNING_PAGE_LIMIT = 100;
 
-const cursorSchema = z.custom<WorkflowEventCursor>(
-  value => typeof value === 'string' && value.length > 0
-);
+const cursorSchema = z.string().min(1).transform(workflowEventCursor);
 /** What a run is part of, from its row; both null when the stream could not read the row. */
 const runContextFields = { workflow: z.string().nullable(), parentRunId: z.string().nullable() };
 const lineBase = {

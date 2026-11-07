@@ -60,6 +60,7 @@ const NO_LENSES: Record<ReviewLens, boolean> = {
   tests: false,
   errors: false,
   docs: false,
+  ux: false,
 };
 
 function isFile(path: string): boolean {

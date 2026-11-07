@@ -10,7 +10,7 @@ description: |
   the base on a conflict and judges each thread; the round then answers and
   resolves the threads it settled. Every other ending is not ready, with
   its reason. A red PR never stays ready, nor one with an open thread. Threads are
-  read through gh; on the forge source the report records them as not checked. Each
+  read, answered and resolved through the forge plugin. Each
   round's pr step publishes description content the round prepared before its
   review reads the PR, and the description is corrected and linked once the
   rounds end; the report relays discoveries to the operator on every ending,
@@ -61,16 +61,11 @@ returns: report
 outcome_field: ready
 
 nodes:
-  # Refuses the run before any agent spends when the selected forge source cannot
-  # act: no plugin for the host, no usable credential, or an unauthenticated gh.
+  # Refuses the run before any agent spends when the forge plugin cannot
+  # act: no plugin for the host, or no usable credential.
   - id: forge
     script: forge-check
     runtime: bun
-    output_format:
-      type: object
-      properties:
-        source: { type: string, enum: [gh, forge] }
-      required: [source]
 
   # One round: implement → draft PR → review → (simplify → reshape → rereview) →
   # settle-threads → CI → threads. Open review findings, an unresolved review thread, or a red CI the change
@@ -231,6 +226,8 @@ nodes:
           when: "$LOOP_PREV.threads.output.open > 0"
           with:
             pr: "$pr.output"
+            # The contract, so a thread a dated ruling already settled is declined, not asked again.
+            work_order: "$INPUTS.work"
           output_format:
             type: object
             properties:
@@ -259,7 +256,6 @@ nodes:
           trigger_rule: none_failed_min_one_success
           with:
             pr: "$pr.output"
-            source: "$forge.output.source"
           # `&&` short-circuits, so a skipped node's output is never read.
           when: "$review.output.ready == true && $simplify.output.findings == false || $review.output.ready == true && $simplify.output.findings == true && $rereview.output.ready == true"
           output_format:
@@ -351,7 +347,6 @@ nodes:
     with:
       pr: "$rounds.output.pr_url"
       contract_left: "$rounds.output.contract_left"
-      source: "$forge.output.source"
     output_format:
       type: object
       properties:
@@ -368,7 +363,6 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       rounds: { from: "$rounds.output" }
-      source: "$forge.output.source"
 
   # The workflow's terminal report on every ending. A node failure skips `outcome`
   # (never fails it), so `all_done` still runs this node and the binding reads null.
