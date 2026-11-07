@@ -219,7 +219,7 @@ describe('workflow wake native schedule', () => {
     ]);
     await expect(
       installMacosNativeSchedule(workflowWakeScheduleConfig(10), runtime)
-    ).rejects.toThrow('different configuration');
+    ).rejects.toThrow(/different configuration.*PATH.*remove/);
     expect(await removeMacosNativeSchedule(originalId, runtime)).toBe(true);
     expect(commands[2]).toEqual(['/bin/launchctl', 'bootout', 'gui/501', installed]);
     expect(await removeMacosNativeSchedule(originalId, runtime)).toBe(false);

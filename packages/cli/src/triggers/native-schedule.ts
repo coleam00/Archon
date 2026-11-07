@@ -144,13 +144,20 @@ function resolveRuntime(options: NativeScheduleOptions): {
   };
 }
 
+/** The installed job differs from the one rendered now, often because PATH changed. */
+function differentConfiguration(path: string): Error {
+  return new Error(
+    `Refusing to replace an existing native schedule with different configuration: ${path}. ` +
+      "The job records the installing shell's PATH, so a different PATH or an upgrade changes it. " +
+      'Run `archon trigger schedule remove`, then `install`, from the shell whose PATH the job should use.'
+  );
+}
+
 async function writeOwnedConfiguration(path: string, contents: string): Promise<boolean> {
   try {
     const existing = await readFile(path, 'utf8');
     if (existing !== contents) {
-      throw new Error(
-        `Refusing to replace an existing native schedule with different configuration: ${path}`
-      );
+      throw differentConfiguration(path);
     }
     return false;
   } catch (error) {
@@ -165,9 +172,7 @@ async function writeOwnedConfiguration(path: string, contents: string): Promise<
     if ((error as NodeJS.ErrnoException).code !== 'EEXIST') throw error;
     const existing = await readFile(path, 'utf8');
     if (existing !== contents) {
-      throw new Error(
-        `Refusing to replace an existing native schedule with different configuration: ${path}`
-      );
+      throw differentConfiguration(path);
     }
     return false;
   } finally {
