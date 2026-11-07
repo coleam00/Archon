@@ -1,5 +1,11 @@
 import { readNodeRecordEvent, type NodeRecordEventEnvelope } from './node-record-reader';
 import type { NodeExecutionMetadata } from './schemas/node-execution';
+import type { WorkflowEventType } from './store';
+
+export const THROUGHPUT_EVENT_TYPES = [
+  'node_completed',
+  'node_failed',
+] as const satisfies readonly WorkflowEventType[];
 
 export interface ThroughputSummary {
   outputTokens: number;
@@ -79,7 +85,7 @@ function sample(metadata: NodeExecutionMetadata | undefined): Sample {
 }
 
 function nodeThroughput(event: NodeRecordEventEnvelope): NodeThroughput | null {
-  if (event.event_type !== 'node_completed' && event.event_type !== 'node_failed') return null;
+  if (!THROUGHPUT_EVENT_TYPES.some(type => type === event.event_type)) return null;
   const record = readNodeRecordEvent(event);
   if (!record) return null;
   const metadata = record.metadata;

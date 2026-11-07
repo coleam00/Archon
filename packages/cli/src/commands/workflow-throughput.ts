@@ -3,6 +3,7 @@ import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event'
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   runThroughput,
+  THROUGHPUT_EVENT_TYPES,
   throughputAcrossRuns,
   type RunThroughput,
   type ThroughputSummary,
@@ -62,7 +63,7 @@ export async function listedRunThroughput<
     const ids = runs.slice(start, start + 20).map(run => run.id);
     const fetched = await host.deps.store.listEventsForRuns(
       ids,
-      verbose ? NODE_SUMMARY_EVENT_TYPES : ['node_completed', 'node_failed']
+      verbose ? NODE_SUMMARY_EVENT_TYPES : THROUGHPUT_EVENT_TYPES
     );
     for (const id of ids) events.set(id, fetched.get(id) ?? []);
   }
