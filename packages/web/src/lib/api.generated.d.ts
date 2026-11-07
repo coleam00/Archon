@@ -3762,6 +3762,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/artifacts/{runId}/{filename}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read a workflow artifact file */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+          /** @description The complete relative filename encoded as one path value, including slash characters. */
+          filename: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Artifact file contents */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'text/plain': string;
+            'text/markdown': string;
+          };
+        };
+        /** @description Invalid artifact path or filename */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Run or artifact not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/config': {
     parameters: {
       query?: never;
@@ -5080,14 +5148,34 @@ export interface components {
     };
     UpdateUserTiersBody: {
       tiers: {
-        small?: components['schemas']['TierEntry'] & unknown;
-        medium?: components['schemas']['TierEntry'] & unknown;
-        large?: components['schemas']['TierEntry'] & unknown;
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateUserAliasesBody: {
       aliases: {
-        [key: string]: components['schemas']['TierEntry'] & unknown;
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateUserDefaultBody: {
@@ -8152,14 +8240,34 @@ export interface components {
     };
     UpdateTiersBody: {
       tiers: {
-        small?: components['schemas']['TierEntry'] & unknown;
-        medium?: components['schemas']['TierEntry'] & unknown;
-        large?: components['schemas']['TierEntry'] & unknown;
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateAliasesBody: {
       aliases: {
-        [key: string]: components['schemas']['TierEntry'] & unknown;
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     ProviderListResponse: {
