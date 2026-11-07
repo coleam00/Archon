@@ -1,4 +1,4 @@
-# Dry-run fixture: the item's open pull request 42 is already reviewed Ready with no red check
+# Dry-run fixture: the item's open pull request 42 is already reviewed Ready with no red check the change caused
 # at its head, with only its draft state left. Route declares ready; no round runs,
 # and apply takes the pull request out of draft.
 facts:
@@ -20,7 +20,7 @@ route:
   continues: null
   ready_head: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
   brief: "stub: already delivered"
-  reason: "stub: Ready at the head, no check red"
+  reason: "stub: Ready at the head, no red check the change caused"
   attention: null
 apply:
   decision: ready

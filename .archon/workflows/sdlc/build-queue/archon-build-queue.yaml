@@ -4,8 +4,8 @@ description: |
   request and stops only for decisions that belong to a person. Each run claims the
   best waiting item with intake's claim, or the one the number input names. One
   agent routes it (and proves a bug's symptom first) and launches archon-ship from a
-  brief, or marks a pull request already reviewed Ready with no red check ready without
-  another round; one agent answers how that round ended; and after several rounds that each
+  brief, or marks a pull request already reviewed Ready, with no red check the change
+  caused, ready without another round; one agent answers how that round ended; and after several rounds that each
   found new defects, one agent decides whether to ask the scope question instead of
   running another. A clear case acts on its own. Anything unclear pauses as one
   attention item whose answer is a declared choice; the ruling is written into the
@@ -129,8 +129,8 @@ nodes:
         # supersedes it and the round starts fresh from the new branch. Null otherwise.
         continues: { type: [integer, 'null'] }
         # On ready, the full head SHA the pull request is already reviewed Ready at,
-        # with no red check; apply takes it out of draft only while its head is still
-        # this commit. Null otherwise.
+        # with no red check the change caused; apply takes it out of draft only while
+        # its head is still this commit. Null otherwise.
         ready_head: { type: [string, 'null'] }
         # The brief archon-ship starts from on launch; on ask, the brief a continue
         # choice launches.
