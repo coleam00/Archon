@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,7 +6,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { checkCredentialStatuses } from '@archon/provider-contract/conformance';
 import { resolvePiAuth } from './auth';
 import { PiProvider } from './provider';
-import { ensurePiOAuthFlowsRegistered, resetOAuthFlowRegistrationForTest } from './sdk-setup';
+import * as sdkSetup from './sdk-setup';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { ModelsError } from '@earendil-works/pi-ai';
 
@@ -96,21 +96,43 @@ describe('Pi native credentials', () => {
       await new PiProvider().checkCredential({ env: {}, signal: new AbortController().signal })
     ).toEqual({ state: 'usable', source: 'native' });
   });
-  test('a login check registers bundled OAuth flows before reading a stored credential', async () => {
-    resetOAuthFlowRegistrationForTest();
+  test('a login check finishes OAuth registration before reading a stored grant', async () => {
+    sdkSetup.resetOAuthFlowRegistrationForTest();
     writeFileSync(
       join(root, 'auth.json'),
-      JSON.stringify({ anthropic: { type: 'api_key', key: secret } })
+      JSON.stringify({
+        anthropic: {
+          type: 'oauth',
+          access: secret,
+          refresh: 'refresh-token',
+          expires: Date.now() + 3_600_000,
+        },
+      })
     );
-    // The registration cache is once per process. If the check did not fill it,
-    // this later registrar is still the first caller and runs.
-    const lateRegistrar = mock(async () => undefined);
+    // Hold the registration promise open. create() is the first read of the
+    // stored grant, so it must not start until that promise settles.
+    let releaseRegistration = (): void => {};
+    const gate = new Promise<void>(resolve => {
+      releaseRegistration = resolve;
+    });
+    const realRegister = sdkSetup.ensurePiOAuthFlowsRegistered;
+    const register = spyOn(sdkSetup, 'ensurePiOAuthFlowsRegistered').mockImplementation(() =>
+      realRegister().then(() => gate)
+    );
+    const realCreate = ModelRuntime.create.bind(ModelRuntime);
+    const create = spyOn(ModelRuntime, 'create').mockImplementation(options => realCreate(options));
+    const status = check();
     try {
-      expect(await check()).toEqual({ state: 'usable', source: 'native' });
-      await ensurePiOAuthFlowsRegistered(lateRegistrar);
-      expect(lateRegistrar).not.toHaveBeenCalled();
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(register).toHaveBeenCalled();
+      expect(create).not.toHaveBeenCalled();
+      releaseRegistration();
+      expect(await status).toEqual({ state: 'usable', source: 'native' });
     } finally {
-      resetOAuthFlowRegistrationForTest();
+      releaseRegistration();
+      create.mockRestore();
+      register.mockRestore();
+      sdkSetup.resetOAuthFlowRegistrationForTest();
     }
   });
   test('a request env key overrides a stored OAuth grant', async () => {
