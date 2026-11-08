@@ -8,6 +8,8 @@
  *   pi-bedrock <binary>                       a Bedrock query with dummy AWS keys reaches a
  *                                            local stub endpoint and fails with its credential
  *                                            error, not a module-load error
+ *   pi-oauth <binary>                         a credential check on a stored xAI OAuth grant,
+ *                                            with no turn run first, reports it usable
  */
 import { mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -149,14 +151,54 @@ async function smokePiBedrock(binary: string): Promise<void> {
   }
 }
 
+/**
+ * pi-ai loads each subscription OAuth flow through a computed-specifier import a compiled
+ * binary cannot embed, so a stored OAuth grant only resolves once `sdk-setup.ts` has
+ * registered the bundled flows. A credential check is the doctor and preflight path, which
+ * never runs a turn first, so it has to register them itself.
+ */
+async function smokePiOAuth(binary: string): Promise<void> {
+  const path = resolve(binary);
+  const descriptor = await inspectProviderPlugin(path);
+  if (descriptor.id !== 'pi') throw new Error(`${binary} is provider '${descriptor.id}'`);
+  const agentDir = await mkdtemp(join(tmpdir(), 'archon-pi-oauth-smoke-'));
+  try {
+    await writeFile(
+      join(agentDir, 'auth.json'),
+      JSON.stringify({
+        xai: {
+          type: 'oauth',
+          access: 'archon-smoke-dummy-access',
+          refresh: 'archon-smoke-dummy-refresh',
+          expires: Date.now() + 3_600_000,
+        },
+      })
+    );
+    const provider = processProviderRegistration(descriptor, [path]).factory();
+    const status = await provider.checkCredential({
+      model: 'xai/grok-4.3',
+      // An inherited XAI_API_KEY would satisfy the check without the stored grant.
+      env: { PI_CODING_AGENT_DIR: agentDir, XAI_API_KEY: '' },
+      signal: AbortSignal.timeout(60_000),
+    });
+    console.log('Credential status:', JSON.stringify(status));
+    if (status.state !== 'usable') {
+      throw new Error(`Pi OAuth grant was not usable: ${JSON.stringify(status)}`);
+    }
+  } finally {
+    await removeTempTree(agentDir);
+  }
+}
+
 if (import.meta.main) {
   const [mode, ...args] = process.argv.slice(2);
   if (mode === 'initialize' && args[0]) await smokeInitialize(args[0], args.slice(1));
   else if (mode === 'claude-code' && args.length === 2) await smokeClaudeCode(args[0], args[1]);
   else if (mode === 'pi-bedrock' && args.length === 1) await smokePiBedrock(args[0]);
+  else if (mode === 'pi-oauth' && args.length === 1) await smokePiOAuth(args[0]);
   else {
     throw new Error(
-      'Usage: provider-plugin-smoke.ts initialize <version> <binary>... | claude-code <missing|installed> <binary> | pi-bedrock <binary>'
+      'Usage: provider-plugin-smoke.ts initialize <version> <binary>... | claude-code <missing|installed> <binary> | pi-bedrock <binary> | pi-oauth <binary>'
     );
   }
 }
