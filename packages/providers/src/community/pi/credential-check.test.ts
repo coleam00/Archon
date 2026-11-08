@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -6,6 +6,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { checkCredentialStatuses } from '@archon/provider-contract/conformance';
 import { resolvePiAuth } from './auth';
 import { PiProvider } from './provider';
+import { ensurePiOAuthFlowsRegistered, resetOAuthFlowRegistrationForTest } from './sdk-setup';
 import { ModelRuntime } from '@earendil-works/pi-coding-agent';
 import { ModelsError } from '@earendil-works/pi-ai';
 
@@ -94,6 +95,23 @@ describe('Pi native credentials', () => {
     expect(
       await new PiProvider().checkCredential({ env: {}, signal: new AbortController().signal })
     ).toEqual({ state: 'usable', source: 'native' });
+  });
+  test('a login check registers bundled OAuth flows before reading a stored credential', async () => {
+    resetOAuthFlowRegistrationForTest();
+    writeFileSync(
+      join(root, 'auth.json'),
+      JSON.stringify({ anthropic: { type: 'api_key', key: secret } })
+    );
+    // The registration cache is once per process. If the check did not fill it,
+    // this later registrar is still the first caller and runs.
+    const lateRegistrar = mock(async () => undefined);
+    try {
+      expect(await check()).toEqual({ state: 'usable', source: 'native' });
+      await ensurePiOAuthFlowsRegistered(lateRegistrar);
+      expect(lateRegistrar).not.toHaveBeenCalled();
+    } finally {
+      resetOAuthFlowRegistrationForTest();
+    }
   });
   test('a request env key overrides a stored OAuth grant', async () => {
     writeFileSync(
