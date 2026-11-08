@@ -180,7 +180,7 @@ Pi (`@earendil-works/pi-coding-agent`) is a coding-agent harness the Archon core
 
 Add Pi with `archon provider add pi`. The provider embeds the Pi SDK, so you need the Pi CLI only to log in with `pi /login` or to refresh the model catalog. Source installs include the provider already. Install the CLI with `npm install -g @earendil-works/pi-coding-agent`.
 
-`archon setup` can configure Pi: pick **Pi**, choose a backend and paste its key. Setup writes the key to `~/.archon/.env` and the model to `~/.archon/config.yaml`.
+`archon setup` can configure Pi: pick **Pi**, choose a backend, then either use the login Pi already has from `pi /login` or paste a key. Setup writes the model to `~/.archon/config.yaml`, and a pasted key to the `.env` file `--scope` selects (`~/.archon/.env` by default).
 
 ### Authenticate Pi
 

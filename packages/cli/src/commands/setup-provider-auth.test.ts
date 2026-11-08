@@ -2,8 +2,13 @@ import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
 import { existsSync, readFileSync, mkdtempSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
+import * as prompts from '@clack/prompts';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { detectClaudeExecutablePath, writeHomePiModelConfig } from './setup-provider-auth';
+import {
+  collectPiConfig,
+  detectClaudeExecutablePath,
+  writeHomePiModelConfig,
+} from './setup-provider-auth';
 import * as providerAuth from './setup-provider-auth';
 
 describe('detectClaudeExecutablePath probe order', () => {
@@ -150,5 +155,54 @@ describe('writeHomePiModelConfig', () => {
     writeHomePiModelConfig('openai/gpt-4o');
     const content = readFileSync(join(tmpDir, 'config.yaml'), 'utf-8');
     expect(content).toContain('pi:');
+  });
+});
+
+describe('collectPiConfig', () => {
+  const spies: { mockRestore(): void }[] = [];
+
+  // Answers the backend question with xAI, then the auth question with `auth`.
+  // Any further select rejects, so a new question fails the test instead of
+  // opening a real prompt.
+  function answer(auth: 'piLogin' | 'apiKey'): void {
+    spies.push(
+      spyOn(prompts, 'select')
+        .mockRejectedValue(new Error('unexpected select'))
+        .mockResolvedValueOnce('xai')
+        .mockResolvedValueOnce(auth)
+    );
+  }
+
+  afterEach(() => {
+    for (const spy of spies.splice(0)) spy.mockRestore();
+  });
+
+  it('skips the key prompt and writes no key when Pi already has a login', async () => {
+    answer('piLogin');
+    // Resolves instead of opening a real prompt, so a regression fails fast.
+    const password = spyOn(prompts, 'password').mockResolvedValue('');
+    spies.push(password);
+
+    expect(await collectPiConfig()).toEqual({ model: 'xai/grok-3' });
+    expect(password).not.toHaveBeenCalled();
+  });
+
+  it('returns the key and its env var when the user provides one', async () => {
+    answer('apiKey');
+    spies.push(spyOn(prompts, 'password').mockResolvedValue('  xai-key  '));
+
+    expect(await collectPiConfig()).toEqual({
+      model: 'xai/grok-3',
+      apiKey: 'xai-key',
+      apiKeyEnvVar: 'XAI_API_KEY',
+    });
+  });
+
+  it('treats an empty key as skipped instead of crashing', async () => {
+    answer('apiKey');
+    // clack 1.x resolves `undefined` when Enter is pressed on an empty password.
+    spies.push(spyOn(prompts, 'password').mockResolvedValue(undefined as unknown as string));
+
+    expect(await collectPiConfig()).toEqual({ model: 'xai/grok-3' });
   });
 });

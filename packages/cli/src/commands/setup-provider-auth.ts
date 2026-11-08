@@ -188,7 +188,11 @@ function tryReadCodexAuth(): CodexTokens | null {
 }
 
 /**
- * Collect Pi backend selection and optional API key.
+ * Collect Pi backend selection and how Pi authenticates to it.
+ *
+ * Pi reads its own `auth.json` (written by `pi /login`), so a user who has
+ * already logged in needs no key in Archon's `.env`. The key prompt is only
+ * shown when the user says they want to provide one.
  *
  * The wizard configures one Pi backend per run; users with multiple backends
  * can re-run setup or hand-edit `.env` and `~/.archon/config.yaml`.
@@ -214,6 +218,21 @@ export async function collectPiConfig(): Promise<{
   }
   const model = PI_DEFAULT_MODELS[backendChoice] ?? `${backendChoice}/default`;
 
+  const authType = await select({
+    message: `How do you want Pi to authenticate with ${backend.label}?`,
+    options: [
+      {
+        value: 'piLogin',
+        label: "Use Pi's own login from `pi /login`",
+        hint: 'Uses the credential Pi already keeps in its auth.json',
+      },
+      { value: 'apiKey', label: `Provide ${backend.envVar}` },
+    ],
+  });
+
+  if (isCancel(authType)) cancelSetup();
+  if (authType === 'piLogin') return { model };
+
   const apiKey = await password({
     message: `Enter ${backend.envVar} (press Enter to skip — you can set it later):`,
     // Empty input is allowed; users can configure the key later by hand.
@@ -222,7 +241,9 @@ export async function collectPiConfig(): Promise<{
 
   if (isCancel(apiKey)) cancelSetup();
 
-  const key = apiKey.trim();
+  // clack's password prompt resolves `undefined`, not '', when Enter is
+  // pressed on an empty field.
+  const key = (apiKey ?? '').trim();
 
   return {
     model,
