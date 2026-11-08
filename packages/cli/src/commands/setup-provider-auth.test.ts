@@ -4,6 +4,7 @@ import { join } from 'path';
 import { tmpdir } from 'os';
 import * as prompts from '@clack/prompts';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { PiProvider } from '@archon/providers/community/pi';
 import {
   collectPiConfig,
   detectClaudeExecutablePath,
@@ -187,6 +188,53 @@ describe('collectPiConfig', () => {
     expect(password).not.toHaveBeenCalled();
   });
 
+  it("leaves the chosen model to Pi's stored login for that backend", async () => {
+    const piDir = mkdtempSync(join(tmpdir(), 'archon-setup-pi-login-'));
+    const envKeys = ['PI_CODING_AGENT_DIR', 'ARCHON_PI_AUTH_PATH', 'OPENROUTER_API_KEY'] as const;
+    const saved = Object.fromEntries(envKeys.map(key => [key, process.env[key]]));
+    try {
+      for (const key of envKeys) delete process.env[key];
+      process.env.PI_CODING_AGENT_DIR = piDir;
+      // The entry Pi's OpenRouter login writes.
+      writeFileSync(
+        join(piDir, 'auth.json'),
+        JSON.stringify({
+          openrouter: {
+            type: 'oauth',
+            access: 'stored',
+            refresh: '',
+            expires: Number.MAX_SAFE_INTEGER,
+          },
+        })
+      );
+      spies.push(
+        spyOn(prompts, 'select')
+          .mockRejectedValue(new Error('unexpected select'))
+          .mockResolvedValueOnce('openrouter')
+          .mockResolvedValueOnce('piLogin')
+      );
+      const password = spyOn(prompts, 'password').mockResolvedValue('');
+      spies.push(password);
+
+      const config = await collectPiConfig();
+      expect(config).toEqual({ model: 'openrouter/qwen/qwen3-coder' });
+      expect(password).not.toHaveBeenCalled();
+      expect(
+        await new PiProvider().checkCredential({
+          model: config.model,
+          env: {},
+          signal: new AbortController().signal,
+        })
+      ).toEqual({ state: 'usable', source: 'native' });
+    } finally {
+      for (const key of envKeys) {
+        if (saved[key] === undefined) delete process.env[key];
+        else process.env[key] = saved[key];
+      }
+      await removeTempTree(piDir);
+    }
+  });
+
   it('returns the key and its env var when the user provides one', async () => {
     answer('apiKey');
     spies.push(spyOn(prompts, 'password').mockResolvedValue('  xai-key  '));
@@ -196,6 +244,21 @@ describe('collectPiConfig', () => {
       apiKey: 'xai-key',
       apiKeyEnvVar: 'XAI_API_KEY',
     });
+  });
+
+  it('hints that a Claude subscription login through Pi is not supported', async () => {
+    const select = spyOn(prompts, 'select')
+      .mockRejectedValue(new Error('unexpected select'))
+      .mockResolvedValueOnce('anthropic')
+      .mockResolvedValueOnce('piLogin');
+    spies.push(select);
+
+    expect(await collectPiConfig()).toEqual({ model: 'anthropic/claude-haiku-4-5' });
+    const authQuestion = select.mock.calls[1]?.[0] as {
+      options: { value: string; hint?: string }[];
+    };
+    const piLogin = authQuestion.options.find(o => o.value === 'piLogin');
+    expect(piLogin?.hint).toContain('`provider: claude`');
   });
 
   it('treats an empty key as skipped instead of crashing', async () => {

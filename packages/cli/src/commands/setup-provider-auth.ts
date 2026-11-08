@@ -224,7 +224,10 @@ export async function collectPiConfig(): Promise<{
       {
         value: 'piLogin',
         label: "Use Pi's own login from `pi /login`",
-        hint: 'Uses the credential Pi already keeps in its auth.json',
+        hint:
+          backend.id === 'anthropic'
+            ? 'API key in auth.json only. A Claude Pro/Max login through Pi is not supported; use `provider: claude` for that'
+            : 'Uses the credential Pi already keeps in its auth.json',
       },
       { value: 'apiKey', label: `Provide ${backend.envVar}` },
     ],

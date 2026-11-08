@@ -130,9 +130,7 @@ export function generateEnvContent(config: SetupConfig): string {
     lines.push([config.ai.piApiKeyEnvVar, config.ai.piApiKey]);
     lines.push('');
   } else if (config.ai.pi) {
-    lines.push(
-      "# Pi configured — uses Pi's login from `pi /login`, or set the backend API key here"
-    );
+    lines.push('# Pi configured — log in with `pi /login`, or set the backend API key here');
     lines.push('# e.g. ANTHROPIC_API_KEY=sk-ant-...');
     lines.push('');
   } else {
