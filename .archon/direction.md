@@ -1,6 +1,6 @@
 # Archon Direction
 
-The project's product-direction document, for maintainers and agents alike: PR/issue triage (the maintainer-standup workflow consults it to flag polite-decline candidates), grounding for agent runs, and a direction sidecar any workflow can read.
+The project's product-direction document, for maintainers and agents alike: PR/issue triage, grounding for agent runs, and a direction sidecar any workflow can read.
 
 This file is **committed and shared by all maintainers**. Edit deliberately — direction calls live here so that PR triage stays consistent across runs and across maintainers. When declining a PR, cite the specific clause (e.g., `direction.md §single-tenant-per-install`).
 
