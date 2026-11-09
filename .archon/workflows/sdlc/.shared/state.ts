@@ -133,6 +133,14 @@ export function stateDocuments(prefix: string): (Stored & { readonly name: strin
   });
 }
 
+/** The Archon user a run was started as or for, as `archon workflow get` reports it; null when it records none. */
+export function runUser(runId: string): string | null {
+  const result = archon(['workflow', 'get', runId, '--json']);
+  const value = record(result.value);
+  if (result.code !== 0 || value === undefined) throw failed(`workflow get ${runId}`, result);
+  return typeof value.user_id === 'string' && value.user_id !== '' ? value.user_id : null;
+}
+
 /**
  * This project's runs, newest first, as `archon workflow runs --json` lists them.
  * Refuses a listing that fell back to every project's runs: draining another
