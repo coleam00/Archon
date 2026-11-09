@@ -53,6 +53,14 @@ import {
   LOOP_PREV_ATOM_PATTERN,
   parse,
 } from '../packages/web/src/experiments/console/builder/validation/when-grammar';
+import { INPUTS_SCOPE } from '../packages/workflows/src/reference-scopes';
+import { INPUT_NAME_SOURCE, parseWholeInputsRef } from '../packages/workflows/src/output-ref';
+import {
+  INPUTS_SCOPE as WEB_INPUTS_SCOPE,
+  INPUTS_REF_PREFIX,
+  INPUT_NAME_SOURCE as WEB_INPUT_NAME_SOURCE,
+  WHOLE_INPUTS_REF_PATTERN,
+} from '../packages/web/src/lib/input-ref';
 import { findOutputRefs } from '../packages/web/src/lib/node-ref';
 import {
   LOOP_COMPLETION_CHANNELS,
@@ -442,6 +450,33 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
         expect(webGroupShape(expr, allowLoopPrev)).toEqual(engineGroupShape(expr, allowLoopPrev));
       });
     }
+  }
+});
+
+describe('input reference parity: all web consumers share the engine spelling', () => {
+  test('the shared web scope, display prefix and input-name grammar match the engine', () => {
+    expect(WEB_INPUTS_SCOPE).toBe(INPUTS_SCOPE);
+    expect(INPUTS_REF_PREFIX).toBe(`$${INPUTS_SCOPE}.`);
+    expect(WEB_INPUT_NAME_SOURCE).toBe(INPUT_NAME_SOURCE);
+  });
+
+  for (const ref of [
+    '$INPUTS.resume_at',
+    ' $INPUTS.my-input ',
+    '$INPUTS.baseBranch',
+    '$INPUTS._name1',
+    '$INPUTS.output',
+    '$INPUTS.1bad',
+    '$INPUTS.',
+    '$INPUTS.name.field',
+    '$INPUTSX.name',
+    '$inputs.name',
+    'prefix $INPUTS.name',
+    '$INPUTS.name suffix',
+  ]) {
+    test(`whole-value input reference agrees on ${JSON.stringify(ref)}`, () => {
+      expect(WHOLE_INPUTS_REF_PATTERN.exec(ref.trim())?.[1]).toBe(parseWholeInputsRef(ref));
+    });
   }
 });
 

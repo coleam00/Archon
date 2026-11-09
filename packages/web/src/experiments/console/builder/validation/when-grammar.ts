@@ -19,6 +19,7 @@
  *
  * No React, no logging — errors surface via the `ParseResult` return value.
  */
+import { INPUTS_SCOPE, INPUTS_REF_PREFIX, INPUT_NAME_SOURCE } from '@/lib/input-ref';
 import { NODE_ID_SOURCE } from '@/lib/node-ref';
 import type { AtomNode, ParseResult, WhenAst, WhenOp } from '../types/when';
 
@@ -26,23 +27,6 @@ import type { AtomNode, ParseResult, WhenAst, WhenOp } from '../types/when';
 const SEGMENT_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_]*`;
 
 const OUTPUT_PATH_SOURCE = `${SEGMENT_SOURCE}(?:\\.${SEGMENT_SOURCE})*`;
-
-/**
- * The reserved scope name for workflow inputs (the engine's `INPUTS_SCOPE`).
- * It can never be a node id — the engine's node schema rejects it outright — so
- * binding the name to the input scope here cannot shadow a real node.
- */
-const INPUTS_SCOPE = 'INPUTS';
-
-/**
- * An input name, as the engine's `with:` key validator defines it
- * (`INPUT_NAME_PATTERN` in packages/workflows/src/schemas/node-bindings.ts).
- *
- * Identical to `NODE_ID_SOURCE` today, and kept separate anyway: they are
- * different vocabularies that happen to coincide, and writing the coincidence
- * into the code would hide a future widening of one from the reader.
- */
-const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
 
 /**
  * Single-atom pattern, mirroring the engine's `WHEN_ATOM_PATTERN`:
@@ -268,8 +252,8 @@ export function parse(input: string, allowLoopPrev = false): ParseResult {
 }
 
 /** The wire spelling of an atom's left-hand side. */
-function formatRef(atom: AtomNode): string {
-  if (atom.kind === 'input') return `$${INPUTS_SCOPE}.${atom.name}`;
+export function formatRef(atom: AtomNode): string {
+  if (atom.kind === 'input') return `${INPUTS_REF_PREFIX}${atom.name}`;
   if (atom.kind === 'loop_prev') {
     return `$LOOP_PREV.${atom.nodeId}.output${atom.field === undefined ? '' : `.${atom.field}`}`;
   }
