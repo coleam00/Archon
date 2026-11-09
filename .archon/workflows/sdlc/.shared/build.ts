@@ -77,6 +77,12 @@ export interface BuildRound {
   readonly summary: string;
   readonly artifacts: string;
   /**
+   * The route the round took, as the queue's route agent declared it; its
+   * `output_format` owns the vocabulary. Absent on a round recorded before rounds
+   * carried it, or recorded at a release.
+   */
+  readonly route?: string;
+  /**
    * Every review verdict the round's delivery published, oldest first. Absent on a round
    * recorded before rounds carried them, recorded at a release, or whose run's
    * typed-artifact listing could not be read.

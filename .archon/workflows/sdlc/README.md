@@ -341,7 +341,9 @@ whose decision names no policy carries none of it.
 Each stage a person runs, `archon-deliver`, `archon-plan`, `archon-triage`,
 `archon-review` and `archon-ship`, is one workflow under that name, and the workflows
 that compose a stage include the same file: the queues, intake, upkeep, the review
-eval, and `archon-ship` and `archon-deliver` themselves. Triage is the one exception:
+eval, and `archon-ship` and `archon-deliver` themselves. `archon-ship` is its triage
+followed by `archon-build`, the routed work, which the build queue includes on its own
+because intake already triaged its items. Triage is the one exception:
 `archon-triage` runs read-only in the launch checkout, and since an included workflow
 cannot carry run settings, it is a one-node include of `archon-triage-block`, which
 ship and intake include. A stage never pauses for a
@@ -574,13 +576,21 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   Intake stays the judge: a run's request re-triages a maintainer's item or a
   promoted one and never promotes an outside item, and its verdict decides whether
   the item now waits for the build queue. Every listed item records the revisit.
-- **Route.** The `route` agent checks that the issue body is a contract (the six
-  elements, with its dated "Current scope" sections), proves a bug's symptom before
-  its first round, and writes the brief `archon-ship` starts from. A bug that needs a
+- **Route.** The `route` agent is the one judge before a round spends: intake triaged
+  the item, and the round does not triage it again. It checks that the issue body is a
+  contract (the six elements, with its dated "Current scope" sections) and that
+  triage's verdict still holds on the current checkout, asking for a re-triage when it
+  does not. It proves a bug's symptom before its first round, declares the round's
+  route, and writes the brief the round starts from. The route is triage's on the
+  item's first round; a later round that continues its pull request is `continue`,
+  and goes back to `plan` only when a review asked for a different design or the scope
+  changed. A bug that needs a
   browser is reproduced with the playwright-cli skill, which the prompt names rather
   than a `skills:` entry, because a provider that cannot load named skills refuses a
   whole run that declares one.
-- **Rounds.** One round is one included `archon-ship` run. The `answer` agent reads how
+- **Rounds.** One round is one included [`archon-build`](build-route/archon-build.yaml), which
+  is `archon-ship` after its triage: investigate or plan when the route needs it, then
+  the delivery tail. The `answer` agent reads how
   it ended and decides: `done` when the pull request's latest review says Ready at its
   head commit and no check no round can run is still outstanding (a dated scope section records such a check as met; otherwise it asks for it once), `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
@@ -593,10 +603,9 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   Facts reports the open pull request in the item's repository as the candidate, and
   the `route` agent declares whether the round continues it: unless a dated scope
   section or a recorded answer supersedes it. A continued pull request goes to
-  `archon-ship` as `pull_request`, and delivery finishes it whichever route triage
+  the round as `pull_request`, and delivery finishes it whichever route the round
   takes, pushing onto its head so the same pull request updates. A superseded one is
-  never checked out or pushed to: ship gets `none`, so its triage cannot route the
-  round back onto it. The round starts fresh, refusing a checkout that is not on the
+  never checked out or pushed to. The round starts fresh, refusing a checkout that is not on the
   default branch, and its brief asks for the old
   pull request to be closed as superseded once the replacement opens. A round that failed
   after publishing still records its pull request. A round that continues none opens its
@@ -606,7 +615,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   merged, is recorded as the run's round with reason `ended_undecided`, and the next round sees it as its
   candidate. A closed or
   merged pull request, or one from a fork, is asked about; a round launched anyway
-  never continues it, since ship gets `none` for it too.
+  never continues it.
 - **Round cap.** When a round ends wanting another and `round_limit` rounds (default 3)
   have run since the item's scope last changed, by a re-triage or a maintainer's
   answer, the `answer` agent also compares their reviews. Each round finding new
@@ -644,11 +653,11 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
 - **Record.** The work item's `facts.build` holds the item's status, which says who
   owns it: the build queue (`next`, `asking`), the merge queue (`ready`), or no queue
   (`parked`). It also holds the brief its next round
-  starts from, its last ten rounds and its last twenty decisions with any maintainer's
-  answer.
+  starts from, its last ten rounds, each with the route it took, and its last twenty
+  decisions with any maintainer's answer.
 
 The pack installs no binding. A schedule keeps items moving, because a run works one
-item and a continuation waits for the next run. Each run includes `archon-ship`, which
+item and a continuation waits for the next run. Each run includes `archon-build`, which
 changes its checkout, so every run needs its own worktree:
 
 ```json
