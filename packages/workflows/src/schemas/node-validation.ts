@@ -4,6 +4,8 @@
  * shares. Mode selection itself, and its errors, stay in dag-node.ts beside the mode table.
  */
 import { z } from 'zod';
+import { approvalConfigSchema } from './gate-node';
+import { deprecationReplacement, fieldDeprecation } from './field-deprecation';
 import { isValidCommandName } from '../command-validation';
 import {
   declaredFieldsFromSchema,
@@ -191,14 +193,6 @@ function validateLoopUntilField(data: DagNodeFields, ctx: z.RefinementCtx): void
   }
 }
 
-/**
- * 'decisions' (#2707 step 1, the new authoring surface) and 'on_reject' (the
- * deprecated legacy mechanism) are mutually exclusive: mixing them would
- * leave it ambiguous which mechanism resolves the gate. Validated here
- * rather than via a superRefine on approvalConfigSchema itself, which would
- * wrap it in a ZodEffects and erase the precise `.shape` KNOWN_NODE_NESTED_KEYS
- * relies on for compile-time-checked child keys (see approvalConfigSchema's doc).
- */
 function validateApprovalNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
   const decisions = data.approval?.decisions;
   if (decisions === undefined) return;
@@ -207,8 +201,10 @@ function validateApprovalNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
     addIssue(
       ctx,
       "'approval.decisions' and 'approval.on_reject' are mutually exclusive. " +
-        "'on_reject' is deprecated — wire a rework node with a " +
-        "\"when: \\\"$<this gate's id>.output.decision == 'reject'\\\"\" edge and declare 'decisions' instead.",
+        deprecationReplacement(fieldDeprecation(approvalConfigSchema.shape.on_reject), [
+          'approval',
+          'on_reject',
+        ]),
       path
     );
     return;

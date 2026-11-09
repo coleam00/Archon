@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { deprecatedField } from './field-deprecation';
 import { AGENT_ID_REGEX, dagNodeBaseSchema } from './dag-node-base';
 
 /** Schema for the `on_reject` sub-object on approval nodes. */
@@ -45,32 +46,59 @@ export function getApprovalDecisions(approval: {
   return approval.decisions ?? [{ id: 'approve' }, { id: 'reject' }];
 }
 
-/**
- * Schema for the `approval:` config object. Named (rather than inlined at both
- * use sites) so its shape is reachable for the unknown-key check in the loader.
- *
- * `decisions` and `on_reject` are mutually exclusive: `on_reject` is the
- * deprecated legacy mechanism (a stored rework template with a private
- * attempt counter, kept working byte-for-byte for backward compatibility —
- * see `decisionOptionSchema`'s doc); `decisions` is its replacement (ordinary
- * structured `{decision,text}` output, with any rework/revise flow wired by
- * the author as an explicit `when:` edge to their own node). Declaring both
- * would leave it ambiguous which mechanism resolves the gate — validated in
- * `dagNodeSchema`'s superRefine (`validateApprovalNode`, node-validation.ts), not
- * here, so this stays a plain `z.object` and keeps its precise `.shape` for
- * `KNOWN_NODE_NESTED_KEYS`'s compile-time-checked child-key map (a
- * `.superRefine()`-wrapped schema would erase that precision — see
- * `loopGroupShape`'s cast in dag-node.ts for what that costs).
- */
-export const approvalConfigSchema = z.object({
-  message: z.string().min(1, "'approval.message' must not be empty"),
-  decisions: z
-    .array(approvalDecisionConfigSchema)
-    .min(1, "'approval.decisions' must declare at least one decision")
-    .optional(),
-  capture_response: z.boolean().optional(),
-  on_reject: approvalOnRejectSchema.optional(),
-});
+/** Authored legacy gates remain accepted; normalization owns their compatibility behavior. */
+export const approvalConfigSchema = deprecatedField(
+  z.object({
+    message: z.string().min(1, "'approval.message' must not be empty"),
+    decisions: deprecatedField(
+      z
+        .array(approvalDecisionConfigSchema)
+        .min(1, "'approval.decisions' must declare at least one decision")
+        .optional(),
+      {
+        since: '0.12.0',
+        kind: 'legacy_pause',
+        shape: 'decisions',
+        subject: path => `'${path.join('.')}' is deprecated.`,
+        replacement:
+          "Write 'wait: { attention: <message>, form: select, " +
+          "options: <the same decisions> }' instead; the output is the same {decision, text}.",
+      }
+    ),
+    capture_response: deprecatedField(z.boolean().optional(), {
+      since: '0.10.0',
+      kind: 'legacy_pause',
+      shape: 'capture_response',
+      subject: path => `'${path.join('.')}' is deprecated.`,
+      replacement:
+        "An attention wait always records the answer; the next node reads '$<id>.output.text'.",
+    }),
+    on_reject: deprecatedField(approvalOnRejectSchema.optional(), {
+      since: '0.10.0',
+      kind: 'legacy_pause',
+      shape: 'on_reject',
+      subject: path => `'${path.join('.')}' and '$REJECTION_REASON' are deprecated.`,
+      replacement:
+        "Write 'wait: { attention: " +
+        "<message>, form: approval }' followed by a rework node with " +
+        "when: \"$<id>.output.decision == 'reject'\" that reads '$<id>.output.text'. To repeat " +
+        "the rework, write a 'loop_group' whose body ends in the wait; the rework node comes " +
+        "first and reads '$LOOP_PREV.<id>.output.text'.",
+    }),
+  }),
+  {
+    since: '0.12.0',
+    kind: 'legacy_pause',
+    shape: 'approval',
+    subject: path => `'${path.join('.')}:' is deprecated.`,
+    replacement:
+      "Write 'wait: { attention: <message>, form: approval }' " +
+      "instead; the next node reads '$<id>.output.decision' and '$<id>.output.text'. A legacy " +
+      "reject cancels the run, while an attention wait continues with decision 'reject', so add " +
+      "a 'cancel:' node with when: \"$<id>.output.decision == 'reject'\" where rejecting " +
+      'should end the run.',
+  }
+);
 
 /**
  * A decision a resolved gate node can produce. `rework` carries the legacy
