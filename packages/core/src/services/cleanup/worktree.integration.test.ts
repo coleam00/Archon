@@ -1167,6 +1167,7 @@ test.each([
   'commit-pulls',
 ] as const)('cleanup retains and reports failed PR inspection: %s', async failure => {
   await git(repo, 'remote', 'rename', 'upstream', 'origin');
+  await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
   await writeFile(join(env.working_path, 'feature'), 'unmerged work');
   await git(env.working_path, 'add', 'feature');
   await git(env.working_path, 'commit', '-qm', 'feature');
