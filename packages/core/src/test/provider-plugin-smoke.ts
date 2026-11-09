@@ -206,10 +206,14 @@ const PI_OAUTH_DOCTOR_MODELS = [
   { model: 'openai-codex/gpt-5.5', grant: 'openai-codex' },
 ] as const;
 
-const PI_DOCTOR_USABLE_LINES = [
-  '✓ pi: Pi backend credentials: Backend credential status: usable',
-  '✓ Assistant login: pi: usable',
-];
+/** The two Pi checks doctor prints, each as its line prefix and its usable line. */
+const PI_DOCTOR_CHECKS = [
+  {
+    prefix: 'pi: Pi backend credentials: Backend credential status:',
+    usable: '✓ pi: Pi backend credentials: Backend credential status: usable',
+  },
+  { prefix: 'Assistant login: pi:', usable: '✓ Assistant login: pi: usable' },
+] as const;
 
 /**
  * Write the plugin and its receipt the way `archon provider add` lays them out, so the
@@ -261,8 +265,9 @@ interface DoctorCase {
 
 /**
  * One `archon doctor` run with `grant` stored or not. A stored grant must make both
- * doctor lines usable; with an empty auth.json neither may be, so a pass cannot come
- * from anywhere else.
+ * doctor lines usable. With an empty auth.json both lines must still be printed and
+ * neither may be usable, so neither a pass from elsewhere nor a doctor run that never
+ * reached the Pi checks gets through.
  * The exit status is reported so a timeout is not misread as a missing line.
  */
 async function checkDoctorCase(run: DoctorCase): Promise<void> {
@@ -286,10 +291,13 @@ async function checkDoctorCase(run: DoctorCase): Promise<void> {
   console.log(`--- archon doctor, ${label} ---`);
   console.log(stdout);
   if (stderr.trim()) console.log(stderr);
-  for (const line of PI_DOCTOR_USABLE_LINES) {
-    if (stdout.includes(line) !== run.stored) {
+  for (const check of PI_DOCTOR_CHECKS) {
+    if (!run.stored && !stdout.includes(check.prefix)) {
+      throw new Error(`archon doctor for ${label} did not report '${check.prefix}'`);
+    }
+    if (stdout.includes(check.usable) !== run.stored) {
       throw new Error(
-        `archon doctor for ${label} ${run.stored ? 'did not report' : 'reported'} '${line}'`
+        `archon doctor for ${label} ${run.stored ? 'did not report' : 'reported'} '${check.usable}'`
       );
     }
   }
