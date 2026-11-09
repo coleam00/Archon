@@ -2,10 +2,14 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { GitFailure } from '@archon/git';
 import type * as Isolation from '@archon/isolation';
-import { cleanupStaleWorktrees } from '../cleanup-service';
+import { cleanupStaleWorktrees, runScheduledCleanup } from '../cleanup-service';
 import { cleanupMergedWorktrees, type CleanupOperationResult } from './merged-sweep';
 import {
   NO_PR,
+  daysAgo,
+  sweptWorktreeEnv,
+  scheduledSweepFinds,
+  mockGetLastCommitDate,
   prAt,
   worktreeEnv,
   makeEnvironmentWithAge,
@@ -331,14 +335,39 @@ describe('cleanupMergedWorktrees', () => {
     ]);
   });
 
-  test('PR coverage can settle work when default-branch discovery fails', async () => {
-    mergedSweepFinds(worktreeEnv('covered'));
-    mockGetPrState.mockResolvedValue(prAt('MERGED'));
-    mockGetDefaultBranch.mockRejectedValue(new Error('remote does not advertise HEAD'));
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
-    expect(result.removed).toEqual(['covered']);
-    expect(mockGetDefaultBranch).toHaveBeenCalled();
-  });
+  test.each(
+    (['manual', 'scheduled'] as const).flatMap(sweep =>
+      (['base', 'ancestry', 'branch-patch', 'head-patch'] as const).map(stage => ({ sweep, stage }))
+    )
+  )(
+    '$sweep cleanup keeps and reports a $stage failure despite a covering PR',
+    async ({ sweep, stage }) => {
+      mergedSweepFinds(worktreeEnv('covered'));
+      scheduledSweepFinds(sweptWorktreeEnv('covered', { created_at: daysAgo(30) }));
+      mockWorktreeExists.mockResolvedValue(true);
+      mockGetPrState.mockResolvedValue(prAt('MERGED'));
+      const error = new Error('https://user:secret@example.com');
+      if (stage === 'base') mockGetDefaultBranch.mockRejectedValue(error);
+      else if (stage === 'ancestry') mockIsBranchMerged.mockRejectedValue(error);
+      else {
+        mockIsBranchMerged.mockResolvedValue(stage === 'head-patch');
+        mockIsPatchEquivalent.mockRejectedValue(error);
+      }
+      const result =
+        sweep === 'manual'
+          ? await cleanupMergedWorktrees('codebase-1', '/workspace/repo')
+          : await runScheduledCleanup();
+      expect(result.removed).toEqual([]);
+      expect(result.errors.map(entry => entry.error)).toEqual([
+        sweep === 'manual'
+          ? 'merge check failed: Git integration check failed'
+          : 'Git integration check failed',
+      ]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockGetLastCommitDate).not.toHaveBeenCalled();
+      expect(mockGetPrState).not.toHaveBeenCalled();
+    }
+  );
 
   test.each(['CLOSED', 'MERGED'] as const)(
     'preserves associated %s evidence when the branch ref is gone',
@@ -430,9 +459,16 @@ describe('commit-associated PR cleanup', () => {
     }
   );
 
-  test.each(['branch', 'commit'] as const)(
-    'tries later proof after a failed %s candidate comparison',
-    async source => {
+  test.each(
+    (['manual', 'scheduled'] as const).flatMap(sweep =>
+      (['branch', 'commit'] as const).flatMap(source =>
+        (['HEAD', 'branch'] as const).map(tip => ({ sweep, source, tip }))
+      )
+    )
+  )(
+    '$sweep cleanup stops after a failed $source candidate $tip comparison',
+    async ({ sweep, source, tip }) => {
+      scheduledSweepFinds(sweptWorktreeEnv('local-feature', { created_at: daysAgo(30) }));
       if (source === 'branch')
         mockGetPrState.mockResolvedValue({ state: 'MERGED', headSha: 'missing-head' });
       else
@@ -443,13 +479,24 @@ describe('commit-associated PR cleanup', () => {
             { state: 'MERGED', headSha: 'covering-head' },
           ],
         });
-      mockIsRevCoveredBy.mockImplementation(async (_path, _rev, head) => {
-        if (head === 'missing-head') throw new Error('cannot fetch missing head');
+      mockIsRevCoveredBy.mockImplementation(async (_path, rev, head) => {
+        if (head === 'missing-head' && (tip === 'HEAD' ? rev === 'HEAD' : rev !== 'HEAD'))
+          throw new Error('cannot fetch missing head');
         return true;
       });
-      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
-      expect(result.removed).toEqual(['local-feature']);
-      expect(result.errors).toEqual([]);
+      const result =
+        sweep === 'manual'
+          ? await cleanupMergedWorktrees('codebase-1', '/workspace/repo')
+          : await runScheduledCleanup();
+      expect(result.removed).toEqual([]);
+      expect(result.errors.map(entry => entry.error)).toEqual([
+        sweep === 'manual'
+          ? 'merge check failed: PR coverage check failed'
+          : 'PR coverage check failed',
+      ]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockGetLastCommitDate).not.toHaveBeenCalled();
+      expect(mockIsRevCoveredBy.mock.calls.every(call => call[2] === 'missing-head')).toBe(true);
     }
   );
 
@@ -500,31 +547,6 @@ describe('commit-associated PR cleanup', () => {
     );
     expect(logs).toContain(stage);
     expect(logs).not.toContain('secret');
-  });
-
-  test('preserves a failed comparison when later candidates do not prove coverage', async () => {
-    mockGetPrsForCommit.mockResolvedValue({
-      state: 'FOUND',
-      prs: [
-        { state: 'MERGED', headSha: 'missing-head' },
-        { state: 'MERGED', headSha: 'wrong-head' },
-      ],
-    });
-    mockIsRevCoveredBy.mockImplementation(async (_path, _rev, head) => {
-      if (head === 'missing-head') throw new Error('cannot fetch missing head');
-      return false;
-    });
-    const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
-    expect(result.removed).toEqual([]);
-    expect(result.errors).toEqual([
-      { branchName: 'local-feature', error: 'merge check failed: PR coverage check failed' },
-    ]);
-    expect(mockIsRevCoveredBy).toHaveBeenCalledWith(
-      '/workspace/repo/worktrees/local-feature',
-      'HEAD',
-      'wrong-head',
-      'origin'
-    );
   });
 
   test('tries later candidates, requiring both tips against the same merged head', async () => {

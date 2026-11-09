@@ -1720,9 +1720,8 @@ Coverage from different PR heads is never combined. With no local tips remaining
 a merged branch PR can settle the registration on its own.
 
 Missing PR heads are fetched by SHA from the configured remote. A failed comparison
-does not prevent checking later candidates; if none proves coverage, the error is
-reported and the environment stays. A failed PR lookup (auth, rate limit, unknown
-commit, or unreadable response) keeps the environment and reports
+stops the judgment, reports the error, and keeps the environment. A failed PR lookup
+(auth, rate limit, unknown commit, or unreadable response) keeps the environment and reports
 `PR state lookup failed`. The optional `gh` CLI currently supplies GitHub PR evidence;
 without it, or on unsupported remotes, merged cleanup retains unproven environments.
 
@@ -1732,8 +1731,8 @@ reported as `merge state unverifiable`. The scheduled sweep uses the same merged
 judgment and keeps unavailable or failed inspections out of its stale sweep.
 Ordinary unmerged work can still reach scheduled stale cleanup, subject to its age
 and unpushed-commit checks. Git integration checks use `worktree.baseBranch` or default-branch discovery.
-An eligible PR can independently prove coverage if base inspection fails; without
-that proof, the inspection error retains the worktree.
+A base inspection failure stops the judgment and retains the worktree, even when
+a PR could otherwise prove coverage.
 
 Cleanup does not coordinate with direct Git commits or other operator edits. Do not
 modify a worktree or its branch while cleanup runs; a commit after inspection can

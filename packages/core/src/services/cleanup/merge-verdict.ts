@@ -75,12 +75,10 @@ export async function judgeBranchForRemoval(input: MergeJudgmentInput): Promise<
     refExists: await localBranchExists(input.repoPath, input.branchName),
     hasWorktree: await worktreeExists(input.worktreePath),
   };
-  let inspectionError: Error | undefined;
   try {
     if (await gitProvesMerged(input, tips)) return 'merged';
   } catch {
-    // PR coverage can independently settle work when base inspection is unavailable.
-    inspectionError = new Error('Git integration check failed');
+    throw new Error('Git integration check failed');
   }
   const { repoPath, branchName, prStateCache, remote, worktreePath } = input;
   async function candidateVerdict(candidate: PrLookup): Promise<'merged' | 'pr-closed' | null> {
@@ -99,10 +97,7 @@ export async function judgeBranchForRemoval(input: MergeJudgmentInput): Promise<
         return null;
       return candidate.state === 'CLOSED' ? 'pr-closed' : 'merged';
     } catch (error) {
-      // A later PR may prove coverage independently. Unresolved errors must not
-      // fall through to the scheduled age sweep as ordinary unmerged work.
-      inspectionError ??= coverageError(error);
-      return null;
+      throw coverageError(error);
     }
   }
   const pr = await getPrState(branchName, repoPath, prStateCache, remote);
@@ -129,7 +124,6 @@ export async function judgeBranchForRemoval(input: MergeJudgmentInput): Promise<
     const verdict = await judgeCandidates(candidates.prs);
     if (verdict) return verdict;
   }
-  if (inspectionError) throw inspectionError;
   if (hasOpenPr) return 'open-pr';
   return hasClosedPr || pr.state !== 'NONE' || tips.refExists ? 'unmerged' : 'unjudgeable';
 }

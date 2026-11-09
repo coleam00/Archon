@@ -659,7 +659,7 @@ describe('runScheduledCleanup', () => {
     ['   ', 'origin'],
     ['  upstream  ', 'upstream'],
   ])(
-    'scheduled cleanup uses remote %p when default-branch discovery fails',
+    'scheduled cleanup retains work when default-branch discovery fails for remote %p',
     async (remote, expected) => {
       mockLoadRepoConfig.mockResolvedValue({ worktree: { remote } });
       scheduledSweepFinds(
@@ -674,23 +674,13 @@ describe('runScheduledCleanup', () => {
 
       const report = await runScheduledCleanup();
 
-      expect(report.errors).toEqual([]);
-      expect(report.removed).toHaveLength(1);
-      expect(mockDestroy).toHaveBeenCalledTimes(1);
-      expect(mockGetDefaultBranch).toHaveBeenCalled();
+      expect(report.errors).toEqual([{ id: 'env-1', error: 'Git integration check failed' }]);
+      expect(report.removed).toEqual([]);
+      expect(mockDestroy).not.toHaveBeenCalled();
+      expect(mockGetDefaultBranch).toHaveBeenCalledWith('/workspace/myrepo', expected);
       expect(mockLoadRepoConfig).toHaveBeenCalledWith('/workspace/myrepo');
-      expect(mockGetPrState).toHaveBeenCalledWith(
-        'feature/foo',
-        '/workspace/myrepo',
-        expect.any(Map),
-        expected
-      );
-      expect(mockIsRevCoveredBy).toHaveBeenCalledWith(
-        '/workspace/myrepo',
-        'refs/heads/feature/foo',
-        PR_HEAD_SHA,
-        expected
-      );
+      expect(mockGetPrState).not.toHaveBeenCalled();
+      expect(mockIsRevCoveredBy).not.toHaveBeenCalled();
     }
   );
 
