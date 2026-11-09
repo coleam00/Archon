@@ -53,8 +53,8 @@ answers ready, pr_caused, or other. A check already red because of the change, o
 conflict with the base, goes back to the implementer in the next round, which
 merges the base on a conflict, and that correction is reviewed before the next
 hand-off; the pull request stays a draft. Pending checks and red outside the change
-are the merge queue's. A project with no CI gets the full validation from this
-agent instead.
+are the merge queue's. A project with no CI sets [`ci: none`](#pack-settings), and
+this agent runs the full validation instead and records it for the merge gate.
 
 Simplify runs beside each round's review, so the implementer of the next round
 adopts or declines its smaller shapes together with the review's findings. A round
@@ -97,6 +97,28 @@ The rule is not "never defend against what has not happened" — the two Keep ca
 above have not happened either, and both are worth their few lines. The question is
 whether the guard is protecting *this node's own action*, or restating something
 that was already true when the node started.
+
+## Pack settings
+
+The pack declares its settings in [`.pack/pack.yaml`](.pack/pack.yaml). A project sets
+them in `.archon/packs/sdlc.yaml`, under `settings:`, committed so isolated runs see it:
+
+```yaml
+settings:
+  ci: none
+```
+
+- **`ci`**: what the merge gate trusts at a pull request's head besides a Ready review
+  verdict.
+  - `forge` (default): green checks on the forge at the head. Any CI provider that
+    reports checks or commit statuses to the forge counts. No checks at all refuses,
+    and the sweep asks once, naming the setting and the branch's CI triggers.
+  - `none`: for a project with no CI. Delivery's CI agent runs the project's full
+    validation itself and declares the commit it ran on and whether it passed; the
+    build queue records it on the item's build round, and the gate requires a passing
+    validation at exactly the head it merges. A push after the validation, or a failed
+    one, refuses until a later round validates the head again. This trusts the agent's
+    report of the run, which is weaker than CI.
 
 ## Forge
 
@@ -854,8 +876,9 @@ then the project's file, whose lines win where the two conflict.
   conflict resolutions, and the verdict is Ready at the later head; any doubt voids it.
 - **Gate.** The sweep merges only through
   [`gate.ts`](merge-queue/scripts/gate.ts), which reads the pull request and the
-  default branch fresh and refuses unless the verdict says Ready for the head, CI is
-  green at the head, the default branch's CI is not red (pending does not hold a
+  default branch fresh and refuses unless the verdict says Ready for the head, what the
+  [`ci` setting](#pack-settings) trusts passes at the head (green CI, or a passing
+  validation recorded at that head), the default branch's CI is not red (pending does not hold a
   merge), and the pull request is open, not a draft, into the default branch, at the
   head the sweep named, and that head contains the default branch's head or the forge
   reports it merges cleanly. Open review threads are the sweep's judgment. It merges

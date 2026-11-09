@@ -31,7 +31,10 @@ reference covers launching and tending the queues by hand.
   `maintainers.json`. The merge queue counts only a review comment a listed
   maintainer wrote; with no trusted review, no verdict is Ready and nothing merges.
 - The merge gate requires green CI at the pull request's head. A repository with no
-  CI checks reads as `none`, not green, so nothing merges there.
+  CI checks reads as `none`, not green, so nothing merges there until the project sets
+  `ci: none` in `.archon/packs/sdlc.yaml` (the pack README, "Pack settings"): delivery
+  then runs the full validation itself, and the gate requires it to have passed at the
+  head instead.
 - Policy documents at `.archon/sdlc/policy/<topic>.md` add to the pack's defaults
   rather than replacing them. Where a line in the project's file conflicts with the
   default, the project's line wins.
@@ -153,6 +156,7 @@ because the item is no longer claimed by it. Launch a fresh run with
 
 A sweep claims every waiting item up to `limit` and merges what policy allows, one
 at a time, through a gate that requires a Ready verdict for the head, green CI there
+(or, under `ci: none`, a passing recorded validation)
 and a default branch whose CI is not red. A pull request that merges cleanly into the
 default branch merges, even when it is behind, so one sweep can land many. The queue
 never pushes or waits for CI: a conflict goes back to the build queue, and the default

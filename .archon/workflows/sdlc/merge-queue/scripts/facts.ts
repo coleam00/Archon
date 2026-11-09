@@ -3,7 +3,8 @@
  *
  * Live claims, in intake's order, every item the build queue finished, up to `limit`,
  * and reads each pull request in one snapshot: its head, the trusted review
- * verdict, CI and review threads at that head, and whether it merges cleanly. An item
+ * verdict, CI and review threads at that head, and whether it merges cleanly, beside
+ * the latest validation the item's build rounds recorded. An item
  * whose pull request is already merged or closed, or that names none, is settled without
  * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
  * read with the reason, without stopping the rest of the batch. Successful reads reset
@@ -15,11 +16,14 @@
 import { join } from 'node:path';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
+import { latestValidation, type Validation } from '../../.shared/build.ts';
 import {
   itemPr,
   MERGE_METHODS,
+  type CiMode,
   MERGE_PICKUP,
   type MergeMethod,
+  parseCiMode,
   type MergeRecord,
   type MergeSettled,
   type PrFacts,
@@ -40,6 +44,8 @@ interface Item {
   readonly url: string;
   readonly facts: PrFacts;
   readonly record: MergeRecord | null;
+  /** The latest validation its build rounds recorded, which the gate trusts under `ci: none`. */
+  readonly validation: Validation | null;
 }
 
 function positive(name: string, value: string): number {
@@ -111,7 +117,13 @@ function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem 
   }));
 }
 
-function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: readonly MergeSettled[], gate: string): void {
+function emitFacts(
+  repo: QualifiedPr['repo'],
+  items: readonly Item[],
+  settled: readonly MergeSettled[],
+  gate: string,
+  ci: CiMode
+): void {
   // The default branch is read on every run: a red one after the last merge needs the
   // sweep's question even when no pull request waits.
   let inspection: { base: ReturnType<typeof readBase>; error: '' } | { base: null; error: string };
@@ -133,12 +145,14 @@ function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: r
     items,
     settled,
     gate,
+    ci,
   });
 }
 
 function main(): void {
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
   const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
+  const ci = parseCiMode(trimmed(process.env.INPUTS_CI));
   const repo = workflowRepo();
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
@@ -173,6 +187,7 @@ function main(): void {
       url: facts.url,
       facts,
       record: current.facts.merge ?? null,
+      validation: latestValidation(current),
     });
   }
   const gate = [
@@ -180,10 +195,12 @@ function main(): void {
     join(import.meta.dir, 'gate.ts'),
     '--method',
     method,
+    '--ci',
+    ci,
   ]
     .map(quoted)
     .join(' ');
-  emitFacts(repo, items, settled, gate);
+  emitFacts(repo, items, settled, gate, ci);
 }
 
 try {

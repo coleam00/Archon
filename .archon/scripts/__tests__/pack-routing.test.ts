@@ -176,7 +176,7 @@ describe("deliver's round", () => {
           INPUTS_REVIEW_CONTRACT_LEFT: '[]',
           INPUTS_PREVIOUS_CONTRACT_LEFT: '',
           INPUTS_SIMPLIFY: 'false',
-          INPUTS_CI: 'ready',
+          INPUTS_CI_STATE: 'ready',
           INPUTS_CI_SUMMARY: 'marked ready',
           INPUTS_THREADS_OPEN: '0',
           INPUTS_THREADS_SUMMARY: 'no thread open',
@@ -207,21 +207,21 @@ describe("deliver's round", () => {
   });
 
   it('goes again for open findings, smaller shapes and a red the change caused, and stops on any other red', () => {
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI: 'null' })).toMatchObject({
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI_STATE: 'null' })).toMatchObject({
       done: false,
       reason: 'review_open',
     });
-    expect(round({ INPUTS_SIMPLIFY: 'true', INPUTS_CI: 'null' })).toMatchObject({
+    expect(round({ INPUTS_SIMPLIFY: 'true', INPUTS_CI_STATE: 'null' })).toMatchObject({
       done: false,
       reason: 'simplify_open',
     });
-    expect(round({ INPUTS_CI: 'pr_caused' })).toMatchObject({ done: false, reason: 'ci_pr_caused' });
-    expect(round({ INPUTS_CI: 'other' })).toMatchObject({ done: true, ready: false, reason: 'ci_other' });
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'replan', INPUTS_CI: 'null' })).toMatchObject({
+    expect(round({ INPUTS_CI_STATE: 'pr_caused' })).toMatchObject({ done: false, reason: 'ci_pr_caused' });
+    expect(round({ INPUTS_CI_STATE: 'other' })).toMatchObject({ done: true, ready: false, reason: 'ci_other' });
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'replan', INPUTS_CI_STATE: 'null' })).toMatchObject({
       done: true,
       reason: 'replan',
     });
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'ask', INPUTS_CI: 'null' })).toMatchObject({
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'ask', INPUTS_CI_STATE: 'null' })).toMatchObject({
       done: true,
       ready: false,
       reason: 'ask',
@@ -239,6 +239,6 @@ describe("deliver's round", () => {
     expect(asked).toMatchObject({ done: true, ready: false, reason: 'ask' });
     expect(asked.summary).toContain('a person decides the API name');
     // A CI red decides the round before the threads do.
-    expect(round({ INPUTS_THREADS_OPEN: '1', INPUTS_CI: 'other' })).toMatchObject({ reason: 'ci_other' });
+    expect(round({ INPUTS_THREADS_OPEN: '1', INPUTS_CI_STATE: 'other' })).toMatchObject({ reason: 'ci_other' });
   });
 });
