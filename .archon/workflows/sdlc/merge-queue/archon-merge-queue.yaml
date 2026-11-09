@@ -51,7 +51,7 @@ inputs:
     default: ""
     description: >-
       The absolute path of the operator's timer-binding config for this repository's
-      build queue. A return answer fires it for the item's next round with
+      build queue. A sweep's return or a return answer fires it for the item's next round with
       `archon trigger fire`, so the round is admitted under that binding's resource,
       capacity and overlap policy, at most once per decision. Empty starts no
       follow-up; the next queue run picks the item up.

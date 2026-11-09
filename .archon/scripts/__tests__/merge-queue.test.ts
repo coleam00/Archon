@@ -774,11 +774,18 @@ describe('the merge queue scripts', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
     const brief = 'PR 42 has an unresolved review thread: address it.';
-    ok(run(at, 'record', recordInputs([decision({ action: 'return', brief, reason: 'one open thread' })])));
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const inputs = { ...recordInputs([decision({ action: 'return', brief, reason: 'one open thread' })]), INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json', ARCHON_CALL_LOG: calls };
+    ok(run(at, 'record', inputs));
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'returned' }, build: { status: 'next', brief } } });
     expect(buildWaits(doc)).toBe(true);
     expect(mergeWaits(doc)).toBe(false);
+    // The returned round starts at once through the build queue's binding, keyed by the item and this run.
+    const fires = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[0] === 'trigger');
+    expect(fires.map(argv => argv.slice(0, 6))).toEqual([
+      ['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-round:ghe.example.com/example/repo#7:run-1'],
+    ]);
   }, 60_000);
 
   test('an ask keeps the claim and raises one attention item with every field and the declared choices', () => {

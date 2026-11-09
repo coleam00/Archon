@@ -7,7 +7,8 @@
  * show fails the record, but only after every decision is written: that pull request is
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
- * back to the build queue with its brief; an ask offering a return with no brief waits
+ * back to the build queue with its brief and starts its next round through the
+ * build-queue binding; an ask offering a return with no brief waits
  * for the next sweep instead. A run raises at most one attention item: the
  * sweep's item for a red default branch first, because it holds every merge, otherwise
  * the first pull request the sweep asked about, in its order. That item keeps its claim
@@ -23,10 +24,11 @@
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
  * from facts; INPUTS_SWEEP,
- * the sweep's whole output, "null" when it was skipped.
+ * the sweep's whole output, "null" when it was skipped; the workflow's
+ * INPUTS_BUILD_QUEUE_BINDING.
  */
 
-import { withBuild } from '../../.shared/build.ts';
+import { nextRound, withBuild } from '../../.shared/build.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
@@ -253,12 +255,16 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
     writes.lines.push(`PR ${String(decision.number)}: ${label}, with no work item to record it on`);
     return false;
   }
-  return write(writes, item.item, `PR ${String(decision.number)}`, label, doc => {
+  const name = `PR ${String(decision.number)}`;
+  const written = write(writes, item.item, name, label, doc => {
     const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr, release: !raised });
     if (status !== 'returned') return recorded;
     const returned = { ...entry, decision: 'returned by the merge queue' };
     return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief, release: true });
   });
+  // The claim is released, so the round the fire starts can claim the item.
+  if (written && status === 'returned') writes.lines.push(`${name}: ${nextRound(item.item, runId)}`);
+  return written;
 }
 
 function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
