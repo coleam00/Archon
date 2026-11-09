@@ -2,7 +2,15 @@ import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
 import { runDetailPath, type Run } from '../primitives/run';
-import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import {
+  shortRunId,
+  formatElapsed,
+  elapsedSince,
+  formatCost,
+  formatDateTime,
+  ensureUtc,
+  relativeTime,
+} from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
@@ -59,10 +67,10 @@ export function RecentRunRow({
     navigate(`/console/p/${run.projectId}?${params.toString()}`);
   };
 
-  // Design v2 row grid: status | body | (project) | id | duration | cost | CLI.
+  // Row grid: status | body | (project) | id | duration + start | cost | CLI.
   const gridCols = showProject
-    ? 'grid-cols-[220px_minmax(0,1fr)_140px_84px_70px_auto_auto]'
-    : 'grid-cols-[220px_minmax(0,1fr)_84px_70px_auto_auto]';
+    ? 'grid-cols-[220px_minmax(0,1fr)_140px_84px_auto_auto_auto]'
+    : 'grid-cols-[220px_minmax(0,1fr)_84px_auto_auto_auto]';
 
   const renderStatus = (): ReactElement => (
     <span className="flex items-center gap-[9px]">
@@ -122,6 +130,13 @@ export function RecentRunRow({
       </span>
       <span className="text-right font-mono text-[12px] tabular-nums text-text-secondary">
         {elapsed}
+        <time
+          className="ml-2 whitespace-nowrap text-text-tertiary"
+          dateTime={ensureUtc(run.startedAt)}
+          title={`Started ${formatDateTime(run.startedAt)}`}
+        >
+          {relativeTime(run.startedAt)}
+        </time>
       </span>
       <span
         className="text-right font-mono text-[12px] tabular-nums text-text-primary"
@@ -164,7 +179,7 @@ export function RecentRunRow({
       {/* trailing: origin + hover actions + CLI */}
       <span className="flex items-center justify-end gap-1.5">
         {/* Origin + quick actions reveal on hover; the resting row matches the
-            design (status · body · id · duration · cost · CLI). */}
+            design (status · body · id · duration + start · cost · CLI). */}
         <span className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
           <OriginBadge origin={run.origin} />
           {canRerun ? (
