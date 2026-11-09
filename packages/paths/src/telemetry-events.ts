@@ -14,7 +14,7 @@ import type { WORKFLOW_SOURCES } from './workflow-source';
  * Bumped when the captured property set changes (documented in README). 7 is
  * skipped: a fork shipping this embedded key already sends it.
  */
-export const TELEMETRY_SCHEMA_VERSION = 12;
+export const TELEMETRY_SCHEMA_VERSION = 13;
 
 /**
  * Privacy invariants attached to EVERY telemetry event by the transport, not
@@ -206,9 +206,27 @@ export interface ArchonStartedProperties extends DeploymentShapeProperties {
   surface: 'cli' | 'server';
 }
 
+export interface TelemetryUsageProperties {
+  /** Provider-reported cost (USD) for the run or turn. */
+  costUsd?: number;
+  /** Provider-reported gross input tokens for the run or turn. */
+  tokensIn?: number;
+  tokensOut?: number;
+  /** Cache-read input tokens; absent when no contribution reported the axis. */
+  cacheReadTokens?: number;
+  /** Cache-write input tokens; absent when no contribution reported the axis. */
+  cacheWriteTokens?: number;
+  /**
+   * True when the two cache totals above are a FLOOR because at least one contributing
+   * result did not report that axis. Without it a narrowed total would be indistinguishable
+   * from a complete one and would bias aggregate cache figures low (#2662).
+   */
+  cachePartialTokens?: true;
+}
+
 /**
  * One completed direct-chat AI turn (NOT workflow execution — workflows emit
- * `workflow_invoked` instead). Carries only platform + provider; never
+ * `workflow_invoked` instead). Carries categorical context and numeric usage; never
  * message content, conversation ids, or prompt/response data.
  *
  * `platform`/`provider` are open strings because this leaf package cannot
@@ -217,17 +235,13 @@ export interface ArchonStartedProperties extends DeploymentShapeProperties {
  * `aiClient.getType()`) — both are structurally categorical (fixed literals
  * per adapter/provider implementation), never user input.
  */
-export interface ChatTurnProperties {
+export interface ChatTurnProperties extends TelemetryUsageProperties {
   platform?: string;
   provider?: string;
   /** Resolved model ref — passed through {@link sanitizeModelForTelemetry}. */
   model?: string;
   outcome: 'completed' | 'failed';
   durationMs?: number;
-  /** Provider-reported aggregate usage for the turn. Numbers only. */
-  costUsd?: number;
-  tokensIn?: number;
-  tokensOut?: number;
 }
 
 /**
@@ -297,9 +311,9 @@ export type WorkflowNodeType =
  * `workflow_cancelled`. Sent once per committed terminal transition by the run
  * store (see `buildRunTerminalTelemetry` in `@archon/workflows`), so every path
  * that ends a run reports it — plus `run_not_created` from the executor when no
- * run row could be written.
+ * run row could be written. Usage covers every resumed segment, including child spend.
  */
-export interface WorkflowTerminalProperties {
+export interface WorkflowTerminalProperties extends TelemetryUsageProperties {
   outcome: 'completed' | 'failed' | 'cancelled';
   /** Run row id, hashed into `run_ref` here; never sent raw. Absent without a row. */
   runId?: string;
@@ -323,21 +337,6 @@ export interface WorkflowTerminalProperties {
   errorClass?: WorkflowErrorClass;
   /** Type of the first failed node. */
   failedNodeType?: WorkflowNodeType;
-  /** Provider-reported cost (USD) across every segment, a child's spend included. */
-  costUsd?: number;
-  /** Provider-reported gross input tokens across every segment. */
-  tokensIn?: number;
-  tokensOut?: number;
-  /** Cache-read input tokens; absent when no contribution reported the axis. */
-  cacheReadTokens?: number;
-  /** Cache-write input tokens; absent when no contribution reported the axis. */
-  cacheWriteTokens?: number;
-  /**
-   * True when the two cache totals above are a FLOOR because at least one contributing
-   * node did not report that axis. Without it a narrowed total would be indistinguishable
-   * from a complete one and would bias aggregate cache figures low (#2662).
-   */
-  cachePartialTokens?: true;
   /** Completed loop iterations across every segment. */
   loopIterations?: number;
 }
@@ -439,6 +438,9 @@ export function chatTurnEventProperties(props: ChatTurnProperties): EventPropert
       cost_usd: props.costUsd,
       tokens_in: props.tokensIn,
       tokens_out: props.tokensOut,
+      cache_read_tokens: props.cacheReadTokens,
+      cache_write_tokens: props.cacheWriteTokens,
+      cache_partial: props.cachePartialTokens ? true : undefined,
     }),
   };
 }
