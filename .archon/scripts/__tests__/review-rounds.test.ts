@@ -77,9 +77,9 @@ function nodesOf(path: string): Node[] {
 
 describe('REVIEW_NODES', () => {
   it('names the published verdict of every review the deliver loop includes', () => {
-    const reviews = nodesOf('deliver/archon-deliver-block.yaml').filter(node => node.include === 'archon-review-block');
+    const reviews = nodesOf('deliver/archon-deliver.yaml').filter(node => node.include === 'archon-review');
     // synthesize's verdict is the agent's; the published one is the script node that writes it to the pull request.
-    const published = nodesOf('review/archon-review-block.yaml').filter(
+    const published = nodesOf('review/archon-review.yaml').filter(
       node => node.output_type === 'review-report' && node.script !== undefined
     );
     expect(reviews.length).toBeGreaterThan(0);
