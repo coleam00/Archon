@@ -1174,6 +1174,40 @@ The pack installs no binding. A native schedule refreshes the records daily:
 }
 ```
 
+### Issues, by route
+
+A pull request is the factory's product; a closed issue is its purpose. `archon-metrics-prs`
+also records each issue the build queue worked, read from its work item alone:
+
+| Metric | Kind | Unit | One record per issue |
+|---|---|---|---|
+| `sdlc.issues_built` | count | `issues` | at its first build round |
+| `sdlc.issues_merged` | count | `issues` | when the merge queue recorded its pull request merged |
+| `sdlc.issue_lead_time` | score | `hours` | from intake's first record of the issue to that merge; the value is the mean |
+| `sdlc.issue_build_rounds` | score | `rounds` | the build rounds a merged issue took |
+| `sdlc.issue_asks` | score | `asks` | the questions a person answered on a merged issue, in the build and merge queues |
+
+Each record names its issue as the subject and the build-queue runs that worked it as its
+producing runs, so `archon metrics sdlc.issues_merged --json` reports what those runs cost.
+
+Every record is also written under its route: `sdlc.issues_merged.plan`,
+`sdlc.issue_asks.investigate` and so on, for `investigate`, `plan`, `deliver` and
+`continue`. A metric record has no field to split by, so the route is in the name. An
+issue's route is the one its first recorded build round took. A round recorded before
+rounds carried their route has none; the item's intake stage stands in while it is still
+a route, and otherwise the issue counts only in the totals. Judge a route by its share
+merged, its cost and its asks:
+
+```bash
+archon metrics sdlc.issues_merged.plan --since 30d
+archon metrics sdlc.issues_built.plan --since 30d
+archon metrics sdlc.issue_asks.plan --compare <when this checkout picked up a pack change>
+```
+
+A work item keeps its last ten build rounds and its last twenty decisions per queue, so an
+issue past either undercounts its rounds or asks, and one whose first round fell out can
+move to its next round's route.
+
 ### Review rounds
 
 `archon-metrics-prs` also records, for each merged factory pull request, how many review

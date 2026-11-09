@@ -1,16 +1,20 @@
 /**
  * The pack's overview cards name only metrics its scripts emit, with the kinds the card
  * shapes read: a misspelled or renamed metric would otherwise show "not recorded" forever.
+ * And the issue metrics count what the work item says.
  */
 import { expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { issueMetricRecords } from '../../workflows/sdlc/.shared/factory-issues';
 import { prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
 import { reviewRoundRecords } from '../../workflows/sdlc/.shared/review-rounds';
 import { judgeSlots, scoreCalibration, testValueRecords } from '../../workflows/sdlc/.shared/test-value';
+import { newWorkItem, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 
 const PR = 'https://github.example.com/acme/widgets/pull/1';
 const RUN = 'aaaaaaaa-0000-4000-8000-000000000001';
+const OTHER_RUN = 'bbbbbbbb-0000-4000-8000-000000000002';
 const AT = '2026-10-05T12:00:00Z';
 
 function pr(number: number, facts: Partial<PrFacts>): PrFacts {
@@ -26,6 +30,46 @@ function pr(number: number, facts: Partial<PrFacts>): PrFacts {
   };
 }
 
+/** An issue intake saw at AT, built in two rounds on the plan route, merged a day later after one answered ask. */
+function mergedIssue(): WorkItem {
+  const merged = '2026-10-06T12:00:00Z';
+  const round = { run_id: RUN, at: AT, delivered: true, reason: 'delivered', pr_url: PR, summary: '', artifacts: '' };
+  const decision = { at: AT, run_id: RUN, decision: 'ask scope', reason: 'r', links: [] };
+  return {
+    ...newWorkItem({ repo: { host: 'github.example.com', path: 'acme/widgets' }, number: 7 }, AT),
+    stage: 'close',
+    facts: {
+      build: {
+        status: 'ready',
+        brief: '',
+        rounds: [{ ...round, route: 'plan' }, { ...round, run_id: OTHER_RUN, route: 'continue' }],
+        decisions: [{ ...decision, answer: { choice: 'go', text: '', at: AT } }, { ...decision, decision: 'ready' }],
+        at: AT,
+      },
+      merge: { status: 'merged', pr: null, approval: null, decisions: [], at: merged },
+    },
+  };
+}
+
+it('a merged issue records its outcome in total and under the route its first round took', () => {
+  const records = issueMetricRecords([mergedIssue(), newWorkItem({ repo: { host: 'h', path: 'o/r' }, number: 8 }, AT)]);
+  const values = Object.fromEntries(records.map(record => [record.name, record.value]));
+  expect(values).toEqual({
+    'sdlc.issues_built': 1,
+    'sdlc.issues_built.plan': 1,
+    'sdlc.issues_merged': 1,
+    'sdlc.issues_merged.plan': 1,
+    'sdlc.issue_lead_time': 24,
+    'sdlc.issue_lead_time.plan': 24,
+    'sdlc.issue_build_rounds': 2,
+    'sdlc.issue_build_rounds.plan': 2,
+    'sdlc.issue_asks': 1,
+    'sdlc.issue_asks.plan': 1,
+  });
+  expect(new Set(records.map(record => record.subject))).toEqual(new Set(['github.example.com/acme/widgets#7']));
+  expect(records[0]?.runs).toEqual([RUN, OTHER_RUN]);
+});
+
 /** Every record the pack's emitters make, from inputs that reach each of their branches. */
 function emitted(): Map<string, { kind: unknown; calibrates: unknown }> {
   const prs = [pr(1, { state: 'MERGED', mergedAt: AT }), pr(2, { state: 'CLOSED', closedAt: AT })];
@@ -40,6 +84,7 @@ function emitted(): Map<string, { kind: unknown; calibrates: unknown }> {
     ...reviewRoundRecords(prs, runsByUrl, reviewed, new Set(), () => ({ ok: false, problem: 'unused' })).metrics,
     ...testValueRecords(judged, 'judge:abc').metrics,
     ...scoreCalibration(judgeSlots([labeled], [{ tests: [verdict] }]), 'judge:abc').metrics,
+    ...issueMetricRecords([mergedIssue()]),
   ];
   return new Map(records.map(record => [String(record.name), { kind: record.kind, calibrates: record.calibrates }]));
 }
