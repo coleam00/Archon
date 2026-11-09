@@ -282,7 +282,7 @@ describe('triage', () => {
 // parseQualifiedPr. A value the schema admits but the parser refuses passes the provider's
 // structured output and fails publication after the whole review ran.
 test("archon-review's scope pr schema admits exactly what parseQualifiedPr accepts", () => {
-  const schema = outputFormat('review/archon-review-block.yaml', 'scope');
+  const schema = outputFormat('review/archon-review.yaml', 'scope');
   const repo = { host: 'github.com', path: 'coleam00/Archon' };
   const report = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
   const candidates = [

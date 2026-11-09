@@ -235,7 +235,7 @@ it('a description-only round publishes prepared content before review and finish
     providers: providerRegistry,
     loadDefaults: false,
   });
-  const entry = catalog.workflows.find(row => row.workflow.name === 'archon-deliver-block');
+  const entry = catalog.workflows.find(row => row.workflow.name === 'archon-deliver');
   if (!entry) throw new Error(JSON.stringify(catalog.errors));
   const fixturePath = join(
     REPO_ROOT,

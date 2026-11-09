@@ -43,9 +43,9 @@ describe('lens-outcomes', () => {
 
 // The review block restates the lens set in its route schema, its lens nodes' `when`
 // gates and the barrier's `depends_on`; REVIEW_LENSES owns it.
-describe('archon-review-block lens wiring', () => {
+describe('archon-review lens wiring', () => {
   const block = Bun.YAML.parse(
-    readFileSync(resolve(import.meta.dir, '../../workflows/sdlc/review/archon-review-block.yaml'), 'utf8')
+    readFileSync(resolve(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml'), 'utf8')
   ) as { nodes: { id: string; when?: string; depends_on?: string[]; output_format?: { properties: object; required: string[] } }[] };
   const node = (id: string) => block.nodes.find(n => n.id === id);
 

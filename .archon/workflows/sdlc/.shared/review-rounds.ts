@@ -25,8 +25,8 @@ import type { WorkItem } from './workitem.ts';
 
 /**
  * The deliver loop's published review verdicts, as a build-queue run names their typed
- * outputs: each review include's id joined to the review block's `publish` node. A
- * conformance test derives this set from the deliver and review block YAML.
+ * outputs: each review include's id joined to archon-review's `publish` node. A
+ * conformance test derives this set from the archon-deliver and archon-review YAML.
  */
 export const REVIEW_NODES: ReadonlySet<string> = new Set(['review__publish']);
 const REVIEW_TYPE = 'review-report';

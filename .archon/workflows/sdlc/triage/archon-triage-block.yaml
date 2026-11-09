@@ -9,9 +9,8 @@ description: |
   Advisory: it leaves the checkout unchanged, and writes labels only when asked
   to publish.
 
-  The graph of archon-triage, as a building block for a workflow that composes the
-  stage and owns what follows its ending. It never pauses for a person: run
-  archon-triage, which adds that pause, by hand.
+  The graph of archon-triage, for a workflow that composes triage in its own run.
+  It declares no run settings, so a composer's worktree choice stands.
 
 model: ['@triage', medium]
 
