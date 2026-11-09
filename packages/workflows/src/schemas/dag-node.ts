@@ -16,6 +16,7 @@
  * import order decide whether the mode table below can read it.
  */
 import { z } from 'zod';
+import { deprecatedFields } from './field-deprecation';
 import { agentDefinitionSchema } from '@archon/provider-contract';
 export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
 import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
@@ -584,4 +585,9 @@ function rejectTopLevelLoopSettings(
       params: { nodeId: id },
     });
   }
+}
+
+/** Resolve after initialization: loop_group's body schema references dagNodeSchema. */
+export function nodeFieldDeprecations() {
+  return deprecatedFields(dagNodeFlatSchema);
 }
