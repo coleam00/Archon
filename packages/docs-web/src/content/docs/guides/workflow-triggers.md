@@ -141,7 +141,7 @@ The command returns a durable receipt and disposition, then runs accepted work i
 archon trigger schedule install --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-Archon installs only jobs in the `com.archon.trigger.*` namespace. The plist contains the absolute executable and arguments, working directory, and `ARCHON_HOME`. It does not copy provider credentials or other environment variables. Scheduled runs use the same native provider configuration and credentials available to the configured user.
+Archon installs only jobs in the `com.archon.trigger.*` namespace. The plist contains the absolute executable and arguments, working directory, `ARCHON_HOME`, and the `PATH` of the shell that ran `install`, so scheduled runs find `bun`, `uv`, `gh`, git credential helpers, and provider CLIs where your terminal finds them. launchd's default `PATH` is only `/usr/bin:/bin:/usr/sbin:/sbin`. The plist does not copy provider credentials or other environment variables. Scheduled runs use the same native provider configuration and credentials available to the configured user, so a credential that exists only as a variable in your shell is not there: keep it where the provider stores its login, or in Archon's config.
 
 Use `archon trigger list` to find recent native or webhook receipts, then inspect a receipt or resource-start request by its UUID:
 
@@ -155,7 +155,7 @@ Remove future firings with the same configuration file:
 archon trigger schedule remove --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-Removing a schedule does not cancel work that Archon already accepted. To change its interval or startup behavior, remove the existing job before installing the updated configuration.
+Removing a schedule does not cancel work that Archon already accepted. To change its interval or startup behavior, or to record a changed `PATH`, remove the existing job before installing again. A schedule installed before Archon recorded `PATH` needs the same remove and install once; until then its runs cannot find tools outside launchd's default `PATH`.
 
 ### macOS scheduling limits
 
@@ -167,7 +167,7 @@ For plain schedules, use the trigger workflow to read the current source state w
 
 ## Drive the same commands from Linux or Windows
 
-Archon does not install or manage Linux or Windows scheduler definitions. Configure the host scheduler to run the same one-shot command with an absolute executable path, an absolute config path, the configured working directory, and `ARCHON_HOME`:
+Archon does not install or manage Linux or Windows scheduler definitions. Configure the host scheduler to run the same one-shot command with an absolute executable path, an absolute config path, the configured working directory, `ARCHON_HOME`, and a `PATH` that contains the tools your workflows run, such as `bun`, `uv`, `gh`, and provider CLIs:
 
 ```text
 /opt/archon/bin/archon trigger fire --config /home/alice/.archon/triggers/repository-refresh.json
@@ -443,7 +443,7 @@ Save `/srv/archon/polled-orders.json` using your own `runAsUserId` from `archon 
 }
 ```
 
-The configuration still requires `schedule`, but `fire` does not install or run that schedule. Schedule the poll script itself, rather than `trigger schedule install`, which fires without event values. Set `ARCHON_HOME` and `ORDERS_URL` for the scheduled user, and use absolute executable paths:
+The configuration still requires `schedule`, but `fire` does not install or run that schedule. Schedule the poll script itself, rather than `trigger schedule install`, which fires without event values. Set `ARCHON_HOME`, `ORDERS_URL`, and a `PATH` containing the tools your workflows run for the scheduled user, and use absolute executable paths:
 
 ```bash
 #!/bin/sh
