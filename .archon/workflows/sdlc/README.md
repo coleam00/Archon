@@ -337,8 +337,9 @@ archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out
 `--adopt` starts the new run in the prior run's worktree and branch, so a delivery
 picks up its pull request where it stopped. The prior run's artifacts stay in the
 `artifactsDir` that `archon workflow artifacts <run-id> --json` reports: name a report
-by that path in the note, or pass it as an input, such as
-`--input prior_report=<artifactsDir>/review/report.md` for review. Repeat any other
+by that path in the note. A review continues only from an input: pass
+`--input prior_report=<artifactsDir>/review/report.md`, or it reviews the whole change
+again. Repeat any other
 `--input` the first run had. `archon-triage` runs in the launch checkout and has no
 worktree to adopt: run it again the same way without `--adopt`. A review that is Ready
 on a draft pull request leaves the draft as it is; take it out of draft on the forge.

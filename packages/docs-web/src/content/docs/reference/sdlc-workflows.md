@@ -33,7 +33,7 @@ Grounds an issue or request against the current repository before spending on it
 archon workflow run archon-ship --branch fix/login-crash "#142"
 ```
 
-**What it produces**: A PR marked ready for review once its review passes, for the merge queue to judge its CI, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The run's result says whether it delivered; when it did not, such as on a question triage or the plan could not settle, an unrooted cause, or a delivery that ended not ready, [continue it with a note](#continuing-a-stage-that-ended-not-ready). The workflow never merges. Merge a pull request it opened yourself; the merge queue merges only what the build queue finished.
+**What it produces**: A PR marked ready for review once its review passes, for the merge queue to judge its CI, or an explained stop, with a PR it opened left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The run's result says whether it delivered; when it did not, such as on a question triage or the plan could not settle, an unrooted cause, or a delivery that ended not ready, [continue it with a note](#continuing-a-stage-that-ended-not-ready). The workflow never merges. Merge a pull request it opened yourself; the merge queue merges only what the build queue finished.
 
 `--input pull_request=<number>` has delivery finish that open PR whichever route reaches delivery; a run that stops before delivery leaves it as it was, and a run whose triage names a different PR to continue fails before delivery. `--input branch=<name>` passes through to `archon-deliver`.
 
@@ -241,7 +241,7 @@ archon metrics sdlc.tests_unprotective
 archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out of scope; skip it"
 ```
 
-[`--adopt`](/reference/cli/#continuing-an-existing-estate) starts the new run in the prior run's worktree and branch, so a delivery continues its pull request. The prior run's artifacts stay in the directory `archon workflow artifacts <run-id> --json` reports as `artifactsDir`: name a report by that path in your note, or pass it as an input, such as `--input prior_report=<artifactsDir>/review/report.md` for `archon-review`. Repeat any other `--input` the first run had. `archon-triage` runs in the launch checkout and has no worktree to adopt, so run it again the same way without `--adopt`. The queues compose these same workflows and raise their own attention items when they need you.
+[`--adopt`](/reference/cli/#continuing-an-existing-estate) starts the new run in the prior run's worktree and branch, so a delivery continues its pull request. The prior run's artifacts stay in the directory `archon workflow artifacts <run-id> --json` reports as `artifactsDir`: name a report by that path in your note. A review continues only from an input: pass `--input prior_report=<artifactsDir>/review/report.md` to `archon-review`, or it reviews the whole change again. Repeat any other `--input` the first run had. `archon-triage` runs in the launch checkout and has no worktree to adopt, so run it again the same way without `--adopt`. The queues compose these same workflows and raise their own attention items when they need you.
 
 ## Summary
 
