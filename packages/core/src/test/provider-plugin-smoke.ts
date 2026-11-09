@@ -206,6 +206,9 @@ const PI_OAUTH_DOCTOR_MODELS = [
   { model: 'openai-codex/gpt-5.5', grant: 'openai-codex' },
 ] as const;
 
+/** Doctor's database line when it opened the temp home's SQLite, not an inherited PostgreSQL. */
+const DOCTOR_TEMP_SQLITE_LINE = '✓ Database: reachable (sqlite)';
+
 /** The two Pi checks doctor prints, each as its line prefix and its usable line. */
 const PI_DOCTOR_CHECKS = [
   {
@@ -291,6 +294,9 @@ async function checkDoctorCase(run: DoctorCase): Promise<void> {
   console.log(`--- archon doctor, ${label} ---`);
   console.log(stdout);
   if (stderr.trim()) console.log(stderr);
+  if (!stdout.includes(DOCTOR_TEMP_SQLITE_LINE)) {
+    throw new Error(`archon doctor for ${label} did not report '${DOCTOR_TEMP_SQLITE_LINE}'`);
+  }
   for (const check of PI_DOCTOR_CHECKS) {
     if (!run.stored && !stdout.includes(check.prefix)) {
       throw new Error(`archon doctor for ${label} did not report '${check.prefix}'`);
@@ -316,12 +322,17 @@ async function smokePiOAuthDoctor(archon: string, binary: string): Promise<void>
     await mkdir(agentDir, { recursive: true });
     await mkdir(cwd, { recursive: true });
     await installPiPlugin(join(archonHome, 'plugins'), binary);
-    // An inherited key would satisfy the check without the stored grant under test.
+    // An inherited key would satisfy the check without the stored grant under test. An
+    // inherited DATABASE_URL, or a Docker marker that replaces ARCHON_HOME with /.archon,
+    // would send doctor's writes outside the temp home.
     const env = {
       ...process.env,
       XAI_API_KEY: '',
       OPENAI_API_KEY: '',
       ARCHON_PI_AUTH_PATH: '',
+      DATABASE_URL: '',
+      ARCHON_DOCKER: '',
+      WORKSPACE_PATH: '',
       ARCHON_HOME: archonHome,
       PI_CODING_AGENT_DIR: agentDir,
       DO_NOT_TRACK: '1',
