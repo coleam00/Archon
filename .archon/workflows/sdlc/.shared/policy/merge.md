@@ -12,7 +12,10 @@ branch's CI is not red, whatever this document says. The queue never pushes, so 
 means someone pushed after the review, and the pull request goes back to be reviewed.
 An open review thread holds the merge only when it raises a defect in what the pull
 request changes. A thread on code the pull request doesn't change or make reachable,
-such as one that arrived with a merge of the default branch, doesn't hold it.
+such as one that arrived with a merge of the default branch, doesn't hold it. Nor does
+a request for a guard, a check or a test against an input or state no supported path
+produces. Judge each claim in a thread on its own: a thread that also raises a defect
+still holds the merge.
 
 ## Clear: the queue merges
 
