@@ -316,9 +316,13 @@ Options:
   --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
   --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
   --stubs <path>             YAML node-output map for --dry-run
-  --stubs-init <path>        Write a complete dry-run stub scaffold and exit
-  --default-stubs            Fill missing reached nodes with validated placeholders during --dry-run
-  --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
+  --stubs-init <path>        Write a dry-run stub scaffold and exit; omits child workflows.
+                             Reached child workflows need authored stubs unless fan-out items resolve to [].
+  --default-stubs            Fill missing reached AI, bash, and script nodes with validated placeholders during --dry-run.
+                             With --exec-code, unstubbed bash/script nodes execute locally instead. Explicit stubs win.
+                             Reached child workflows need authored stubs unless fan-out items resolve to [].
+  --exec-code                Execute trusted unstubbed bash/script nodes locally during --dry-run, even with --default-stubs.
+                             Explicit stubs win; default is no code execution.
   --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
   --providers <ids>          Add comma-separated maintained providers, skipping the setup provider question
   --spawn                    Open setup wizard in a new terminal window (for setup command)
