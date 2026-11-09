@@ -3,8 +3,8 @@ import { useSearchParams } from 'react-router';
 import { DETAIL_VIEWS, type DetailView, type NodeFilterOption } from '../components/StreamToolbar';
 
 const VIEW_KEY = 'archon.console.detailView';
-const NODE_KEY = 'archon.console.runNodeFilter';
-const NODE_SCOPE_KEY = 'archon.console.runNodeFilterScope';
+const NODE_KEY = 'archon.console.runNodeSelection';
+const LEGACY_NODE_KEY = 'archon.console.runNodeFilter';
 
 function readPreference(key: string): string | null {
   try {
@@ -26,25 +26,18 @@ function parseView(value: string | null): DetailView {
   return DETAIL_VIEWS.find(view => view === value) ?? 'log';
 }
 
-// Existing node=all links mean all nodes. The scope disambiguates the valid node ID all.
-function readNode(value: string | null, scope: string | null): string | null {
-  return value === 'all' && scope !== 'single' ? null : value;
-}
-
-function setNode(params: URLSearchParams, node: string | null): void {
-  params.set('node', node ?? 'all');
-  if (node === 'all') params.set('nodeScope', 'single');
-  else params.delete('nodeScope');
+function readStoredNode(): string | null {
+  const selection = readPreference(NODE_KEY);
+  if (selection !== null) return selection || null;
+  const legacy = readPreference(LEGACY_NODE_KEY);
+  return legacy === 'all' ? null : legacy;
 }
 
 export function useRunDetailSelection(nodeOptions: NodeFilterOption[], loaded: boolean) {
   const [params, setParams] = useSearchParams();
   const view = parseView(params.get('view') ?? readPreference(VIEW_KEY));
   const explicitNode = params.get('node');
-  const requestedNode =
-    explicitNode !== null
-      ? readNode(explicitNode, params.get('nodeScope'))
-      : readNode(readPreference(NODE_KEY), readPreference(NODE_SCOPE_KEY));
+  const requestedNode = explicitNode !== null ? explicitNode || null : readStoredNode();
   const node =
     explicitNode === null &&
     loaded &&
@@ -54,17 +47,16 @@ export function useRunDetailSelection(nodeOptions: NodeFilterOption[], loaded: b
       : requestedNode;
 
   useLayoutEffect(() => {
-    if (params.get('view') !== view || (loaded && explicitNode !== (node ?? 'all'))) {
+    if (params.get('view') !== view || (loaded && explicitNode !== (node ?? ''))) {
       const next = new URLSearchParams(params);
       next.set('view', view);
       // Validate a stored node before promoting it to an explicit URL selection.
-      if (explicitNode !== null || loaded) setNode(next, node);
+      if (explicitNode !== null || loaded) next.set('node', node ?? '');
       setParams(next, { replace: true });
     }
     writePreference(VIEW_KEY, view);
     if (loaded) {
-      writePreference(NODE_KEY, node ?? 'all');
-      writePreference(NODE_SCOPE_KEY, node === 'all' ? 'single' : '');
+      writePreference(NODE_KEY, node ?? '');
     }
   }, [params, setParams, view, node, loaded, explicitNode]);
 
@@ -73,7 +65,7 @@ export function useRunDetailSelection(nodeOptions: NodeFilterOption[], loaded: b
       if (nextView === view && nextNode === node) return;
       const next = new URLSearchParams(params);
       next.set('view', nextView);
-      setNode(next, nextNode);
+      next.set('node', nextNode ?? '');
       setParams(next);
     },
     [params, setParams, view, node]

@@ -33,7 +33,8 @@ let router: ReturnType<typeof createMemoryRouter>;
 const container = document.createElement('div');
 const base = '/console/r/run-1';
 const viewKey = 'archon.console.detailView';
-const nodeKey = 'archon.console.runNodeFilter';
+const nodeKey = 'archon.console.runNodeSelection';
+const legacyNodeKey = 'archon.console.runNodeFilter';
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
@@ -119,7 +120,7 @@ function query(): URLSearchParams {
 }
 
 test('tab and node changes push history; Back and Forward restore the URL selection', async () => {
-  await open(`${base}?view=log&node=all&keep=yes`);
+  await open(`${base}?view=log&node=&keep=yes`);
   await tab('Graph');
   expect(query().get('view')).toBe('graph');
   activeTab('Graph');
@@ -150,22 +151,25 @@ test('tab and node changes push history; Back and Forward restore the URL select
   expect(container.querySelector('select')?.value).toBe('outcome');
 });
 
-test('bare links restore Artifacts and normalize with replace, leaving no extra Back entry', async () => {
-  localStorage.setItem(viewKey, 'artifacts');
-  localStorage.setItem(nodeKey, 'outcome');
-  await open(base);
-  activeTab('Artifacts');
-  expect(query().get('view')).toBe('artifacts');
-  expect(query().get('node')).toBe('outcome');
-  await act(async () => router.navigate(-1));
-  expect(container.textContent).toBe('Previous page');
-});
+test.each([nodeKey, legacyNodeKey])(
+  'bare links restore Artifacts and %s with replace, leaving no extra Back entry',
+  async key => {
+    localStorage.setItem(viewKey, 'artifacts');
+    localStorage.setItem(key, 'outcome');
+    await open(base);
+    activeTab('Artifacts');
+    expect(query().get('view')).toBe('artifacts');
+    expect(query().get('node')).toBe('outcome');
+    await act(async () => router.navigate(-1));
+    expect(container.textContent).toBe('Previous page');
+  }
+);
 
 test.each([...DETAIL_VIEWS])(
   'a shared %s link overrides stored defaults and survives remount',
   async view => {
     localStorage.setItem(viewKey, view === 'log' ? 'graph' : 'log');
-    localStorage.setItem(nodeKey, 'all');
+    localStorage.setItem(legacyNodeKey, 'all');
     await open(`${base}?view=${view}&node=outcome`);
     activeTab(DETAIL_VIEW_LABELS[view]);
     expect(query().get('node')).toBe('outcome');
@@ -183,14 +187,14 @@ test.each([...DETAIL_VIEWS])(
 test('an obsolete stored node is reset in the URL without adding history', async () => {
   localStorage.setItem(nodeKey, 'another-workflow');
   await open(base);
-  expect(query().get('node')).toBe('all');
+  expect(query().get('node')).toBe('');
   expect(container.querySelector('select')?.value).toBe('');
   await act(async () => router.navigate(-1));
   expect(container.textContent).toBe('Previous page');
 });
 
 test('keyboard tabs use the same history as toolbar tabs; reselecting the active tab adds no entry', async () => {
-  await open(`${base}?view=log&node=all`);
+  await open(`${base}?view=log&node=`);
   await act(async () => {
     dom.dispatchEvent(new dom.KeyboardEvent('keydown', { key: '2', bubbles: true }));
   });
@@ -219,7 +223,7 @@ test('graph node clicks select Log and that node together in one history entry',
   set('workflow-graph:review:/project', [
     { id: 'outcome', kind: 'prompt', dependsOn: [] },
   ] satisfies WorkflowGraphNode[]);
-  await open(`${base}?view=graph&node=all`);
+  await open(`${base}?view=graph&node=`);
   const button = container.querySelector<HTMLButtonElement>('button[title^="outcome ·"]');
   if (!button) throw new Error('Missing graph node');
   await act(async () => {
@@ -232,7 +236,7 @@ test('graph node clicks select Log and that node together in one history entry',
   expect(container.querySelector('select')?.value).toBe('outcome');
   await act(async () => router.navigate(-1));
   activeTab('Graph');
-  expect(query().get('node')).toBe('all');
+  expect(query().get('node')).toBe('');
 });
 
 test('a linked node survives the initial run load', async () => {
@@ -256,7 +260,7 @@ test('a linked node survives the initial run load', async () => {
 });
 
 test('selecting Artifacts remembers the default for a subsequent bare link', async () => {
-  await open(`${base}?view=log&node=all`);
+  await open(`${base}?view=log&node=`);
   await tab('Artifacts');
   await act(async () => root?.unmount());
   router.dispose();
@@ -302,7 +306,7 @@ test.each(['pending', 'completed', 'failed'] as const)(
       container.querySelector('button[title^="outcome ·"]')?.getAttribute('aria-pressed')
     ).toBe('false');
     expect(container.querySelector('svg path')).not.toBeNull();
-    await act(async () => router.navigate(`${base}?view=graph&node=all`));
+    await act(async () => router.navigate(`${base}?view=graph&node=`));
     expect(container.querySelector('button[title^="verify ·"]')?.getAttribute('aria-pressed')).toBe(
       'false'
     );
@@ -314,7 +318,7 @@ test.each(['link', 'graph click'])(
   async entry => {
     seedGraph();
     await open(
-      `${base}?view=${entry === 'link' ? 'log' : 'graph'}&node=${entry === 'link' ? 'verify' : 'all'}`
+      `${base}?view=${entry === 'link' ? 'log' : 'graph'}&node=${entry === 'link' ? 'verify' : ''}`
     );
     if (entry === 'graph click') {
       const button = container.querySelector<HTMLButtonElement>('button[title^="verify ·"]');
@@ -362,8 +366,8 @@ test('an obsolete stored node is validated after a delayed run load', async () =
   expect(container.textContent).toBe('Loading run…');
   expect(query().has('node')).toBe(false);
   await act(async () => respond?.(Response.json(detailFixture)));
-  expect(query().get('node')).toBe('all');
-  expect(localStorage.getItem(nodeKey)).toBe('all');
+  expect(query().get('node')).toBe('');
+  expect(localStorage.getItem(nodeKey)).toBe('');
   await act(async () => router.navigate(-1));
   expect(container.textContent).toBe('Previous page');
 });
@@ -382,13 +386,15 @@ test('the node named all is distinct from all nodes across graph, log, history a
     ],
     nodes: [...detailFixture.run.nodes, { node_id: 'all', state: 'completed' }],
   });
-  await open(`${base}?view=graph&node=all`);
+  localStorage.setItem(legacyNodeKey, 'all');
+  localStorage.setItem(viewKey, 'graph');
+  await open(base);
+  expect(query().get('node')).toBe('');
   const graphNode = () => container.querySelector<HTMLButtonElement>('button[title^="all ·"]');
   expect(graphNode()?.getAttribute('aria-pressed')).toBe('false');
   await act(async () => graphNode()?.click());
   activeTab('Log');
   expect(query().get('node')).toBe('all');
-  expect(query().get('nodeScope')).toBe('single');
   expect(container.querySelector('#node-transition-all')).not.toBeNull();
   expect(container.querySelector('#node-transition-outcome')).toBeNull();
   const select = container.querySelector('select');
@@ -407,7 +413,7 @@ test('the node named all is distinct from all nodes across graph, log, history a
   await act(async () => root?.unmount());
   router.dispose();
   await open(base);
-  expect(query().get('nodeScope')).toBe('single');
+  expect(query().get('node')).toBe('all');
   expect(container.querySelector('select')?.value).toBe('all');
   const restored = container.querySelector('select');
   if (!restored) throw new Error('Missing restored filter');
@@ -417,19 +423,28 @@ test('the node named all is distinct from all nodes across graph, log, history a
     event.initEvent('change', true, true);
     restored.dispatchEvent(event);
   });
-  expect(query().has('nodeScope')).toBe(false);
+  expect(query().get('node')).toBe('');
   expect(container.querySelector('#node-transition-outcome')).not.toBeNull();
+  await act(async () => root?.unmount());
+  router.dispose();
+  await open(base);
+  expect(query().get('node')).toBe('');
+  expect(container.querySelector('select')?.value).toBe('');
+  expect(container.querySelector('#node-transition-all')).not.toBeNull();
+  expect(container.querySelector('#node-transition-outcome')).not.toBeNull();
+  const allNodes = container.querySelector('select');
+  if (!allNodes) throw new Error('Missing all-nodes filter');
   await act(async () => {
-    restored.value = 'all';
+    allNodes.value = 'all';
     const event = document.createEvent('Event');
     event.initEvent('change', true, true);
-    restored.dispatchEvent(event);
+    allNodes.dispatchEvent(event);
   });
-  expect(query().get('nodeScope')).toBe('single');
+  expect(query().get('node')).toBe('all');
   expect(container.querySelector('#node-transition-outcome')).toBeNull();
   await act(async () => root?.unmount());
   router.dispose();
-  await open(`${base}?view=graph&node=all&nodeScope=single`);
+  await open(`${base}?view=graph&node=all`);
   expect(graphNode()?.getAttribute('aria-pressed')).toBe('true');
   await tab('Log');
   expect(container.querySelector('#node-transition-all')).not.toBeNull();
