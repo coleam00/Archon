@@ -75,25 +75,56 @@ export async function judgeBranchForRemoval(input: MergeJudgmentInput): Promise<
     refExists: await localBranchExists(input.repoPath, input.branchName),
     hasWorktree: await worktreeExists(input.worktreePath),
   };
-  const errors: Error[] = [];
+  let inspectionError: Error | undefined;
   try {
     if (await gitProvesMerged(input, tips)) return 'merged';
   } catch {
     // PR coverage can independently settle work when base inspection is unavailable.
-    errors.push(new Error('Git integration check failed'));
+    inspectionError = new Error('Git integration check failed');
   }
-  const { repoPath, branchName, prStateCache, remote } = input;
+  const { repoPath, branchName, prStateCache, remote, worktreePath } = input;
+  async function candidateVerdict(candidate: PrLookup): Promise<'merged' | 'pr-closed' | null> {
+    if (candidate.state !== 'MERGED' && !(candidate.state === 'CLOSED' && input.includeClosed))
+      return null;
+    try {
+      if (
+        tips.hasWorktree &&
+        !(await isRevCoveredBy(worktreePath, 'HEAD', candidate.headSha, remote))
+      )
+        return null;
+      if (
+        tips.refExists &&
+        !(await isRevCoveredBy(repoPath, `refs/heads/${branchName}`, candidate.headSha, remote))
+      )
+        return null;
+      return candidate.state === 'CLOSED' ? 'pr-closed' : 'merged';
+    } catch (error) {
+      // A later PR may prove coverage independently. Unresolved errors must not
+      // fall through to the scheduled age sweep as ordinary unmerged work.
+      inspectionError ??= coverageError(error);
+      return null;
+    }
+  }
   const pr = await getPrState(branchName, repoPath, prStateCache, remote);
   if (pr.state === 'UNAVAILABLE') return 'pr-unavailable';
-  const branchVerdict = await candidateVerdict(input, tips, pr, errors);
+  const branchVerdict = await candidateVerdict(pr);
   if (branchVerdict) return branchVerdict;
-  const commitVerdict = await judgeByCommit(input, tips, errors);
-  if (commitVerdict === 'merged' || commitVerdict === 'pr-closed') return commitVerdict;
-  if (commitVerdict === 'pr-unavailable') return commitVerdict;
-  if (errors.length) throw errors[0];
-  if (pr.state === 'OPEN' || commitVerdict === 'open-pr') return 'open-pr';
-  if (commitVerdict === 'unmerged') return commitVerdict;
-  return pr.state !== 'NONE' || tips.refExists ? 'unmerged' : 'unjudgeable';
+  let hasOpenPr = pr.state === 'OPEN';
+  let hasClosedPr = pr.state === 'CLOSED';
+  for (const sha of await resolveTips(input, tips)) {
+    const candidates = await getPrsForCommit(sha, repoPath, remote);
+    if (candidates.state === 'UNAVAILABLE') return 'pr-unavailable';
+    if (candidates.state === 'NONE') continue;
+    for (const candidate of candidates.prs) {
+      const verdict = await candidateVerdict(candidate);
+      if (verdict) return verdict;
+      hasOpenPr ||= candidate.state === 'OPEN';
+      hasClosedPr ||= candidate.state === 'CLOSED';
+    }
+  }
+  if (inspectionError) throw inspectionError;
+  if (hasOpenPr) return 'open-pr';
+  return hasClosedPr || pr.state !== 'NONE' || tips.refExists ? 'unmerged' : 'unjudgeable';
 }
 
 async function gitProvesMerged(input: MergeJudgmentInput, tips: LocalTips): Promise<boolean> {
@@ -128,48 +159,6 @@ async function resolveTips(input: MergeJudgmentInput, tips: LocalTips): Promise<
   return new Set(shas);
 }
 
-async function judgeByCommit(
-  input: MergeJudgmentInput,
-  tips: LocalTips,
-  errors: Error[]
-): Promise<MergeVerdict | null> {
-  const { repoPath, remote } = input;
-  let hasOpenPr = false;
-  let hasClosedPr = false;
-  for (const sha of await resolveTips(input, tips)) {
-    const candidates = await getPrsForCommit(sha, repoPath, remote);
-    if (candidates.state === 'UNAVAILABLE') return 'pr-unavailable';
-    if (candidates.state === 'NONE') continue;
-    hasClosedPr ||= candidates.prs.some(pr => pr.state === 'CLOSED');
-    for (const candidate of candidates.prs) {
-      const verdict = await candidateVerdict(input, tips, candidate, errors);
-      if (verdict) return verdict;
-      hasOpenPr ||= candidate.state === 'OPEN';
-    }
-  }
-  if (hasOpenPr) return 'open-pr';
-  return hasClosedPr ? 'unmerged' : null;
-}
-
-async function candidateVerdict(
-  input: MergeJudgmentInput,
-  tips: LocalTips,
-  candidate: PrLookup,
-  errors: Error[]
-): Promise<'merged' | 'pr-closed' | null> {
-  if (candidate.state !== 'MERGED' && !(candidate.state === 'CLOSED' && input.includeClosed))
-    return null;
-  try {
-    if (!(await prCoversTips(input, tips, candidate.headSha))) return null;
-    return candidate.state === 'CLOSED' ? 'pr-closed' : 'merged';
-  } catch (error) {
-    // A later PR may prove coverage independently; an unresolved failure must not
-    // fall through to the scheduled age sweep as ordinary unmerged work.
-    errors.push(coverageError(error));
-    return null;
-  }
-}
-
 function coverageError(error: unknown): Error {
   let diagnostic = 'PR coverage check failed';
   if (error instanceof GitFailure) {
@@ -179,20 +168,6 @@ function coverageError(error: unknown): Error {
       diagnostic += ` (exit code ${error.code})`;
   }
   return new Error(diagnostic);
-}
-
-async function prCoversTips(
-  input: MergeJudgmentInput,
-  tips: LocalTips,
-  headSha: string
-): Promise<boolean> {
-  const { repoPath, branchName, remote, worktreePath } = input;
-  // Fetch/comparison failures throw: an unanswered inspection must keep the environment.
-  if (tips.hasWorktree && !(await isRevCoveredBy(worktreePath, 'HEAD', headSha, remote)))
-    return false;
-  return (
-    !tips.refExists || (await isRevCoveredBy(repoPath, `refs/heads/${branchName}`, headSha, remote))
-  );
 }
 
 /** The operator-facing reason a kept environment is worth reporting, or null when it is ordinary unmerged work. */

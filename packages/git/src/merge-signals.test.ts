@@ -86,6 +86,40 @@ describe('merge signals against real git', () => {
     expect(await isPatchEquivalent(repo, feature, main)).toBe(false);
   });
 
+  test.each(['merge-tip', 'past-merge', 'integrated'] as const)(
+    'patch equivalence checks unpublished merge commits: %s',
+    async mode => {
+      const repo = toRepoPath(repoOnMain());
+      git(repo, 'checkout', '-q', '-b', 'feature');
+      commit(repo, 'left.txt', 'left\n');
+      const left = git(repo, 'rev-parse', 'HEAD');
+      git(repo, 'checkout', '-q', 'main');
+      commit(repo, 'right.txt', 'right\n');
+      git(repo, 'checkout', '-q', 'feature');
+      git(repo, 'merge', '-q', '--no-ff', 'main', '-m', 'local merge');
+      writeFileSync(join(repo, 'resolution.txt'), 'unpublished resolution\n');
+      git(repo, 'add', 'resolution.txt');
+      git(repo, 'commit', '-q', '--amend', '--no-edit');
+      if (mode === 'past-merge') commit(repo, 'later.txt', 'later\n');
+      const tip = git(repo, 'rev-parse', 'feature');
+      git(repo, 'checkout', '-q', 'main');
+      git(repo, 'merge', '-q', '--no-ff', left, '-m', 'published merge');
+      if (mode === 'past-merge') git(repo, 'cherry-pick', tip);
+      expect(
+        git(repo, 'cherry', 'main', 'feature')
+          .split('\n')
+          .filter(Boolean)
+          .every(line => line.startsWith('-'))
+      ).toBe(true);
+      if (mode === 'integrated')
+        git(repo, 'merge', '-q', '--no-ff', 'feature', '-m', 'integrate resolution');
+
+      expect(await isPatchEquivalent(repo, toBranchName('feature'), 'main')).toBe(
+        mode === 'integrated'
+      );
+    }
+  );
+
   test('isPatchEquivalent fails outright once the local branch ref is gone', async () => {
     const repoPath = repoWithSquashMergedFeature();
     git(repoPath, 'branch', '-D', 'feature');

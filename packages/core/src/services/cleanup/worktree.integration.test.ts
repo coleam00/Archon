@@ -954,6 +954,52 @@ async function advanceUnpublishedTip(mode: string, prHead: string): Promise<void
   if (mode === 'branch-ahead') await git(env.working_path, 'checkout', '--detach', prHead);
 }
 
+test.each(['both', 'head-only', 'branch-only'] as const)(
+  'cleanup retains unpublished merge resolution at local tip: %s',
+  async mode => {
+    await git(repo, 'remote', 'rename', 'upstream', 'origin');
+    await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
+    await writeFile(join(env.working_path, 'left'), 'left');
+    await git(env.working_path, 'add', 'left');
+    await git(env.working_path, 'commit', '-qm', 'left');
+    const left = await git(env.working_path, 'rev-parse', 'HEAD');
+    await writeFile(join(repo, 'right'), 'right');
+    await git(repo, 'add', 'right');
+    await git(repo, 'commit', '-qm', 'right');
+    await git(env.working_path, 'merge', '--no-ff', 'main', '-m', 'local merge');
+    await writeFile(join(env.working_path, 'resolution'), 'unpublished resolution');
+    await git(env.working_path, 'add', 'resolution');
+    await git(env.working_path, 'commit', '--amend', '--no-edit');
+    await git(repo, 'merge', '--no-ff', left, '-m', 'published merge');
+    await git(repo, 'push', '-q', 'origin', 'main');
+    expect(await git(repo, 'cherry', 'origin/main', env.branch_name)).toBe('');
+    if (mode === 'head-only') {
+      await git(env.working_path, 'checkout', '--detach', 'HEAD');
+      await git(repo, 'branch', '-f', env.branch_name, 'main');
+    }
+    if (mode === 'branch-only') await git(env.working_path, 'checkout', '--detach', 'main');
+    const branchTip = await git(repo, 'rev-parse', env.branch_name);
+    const headTip = await git(env.working_path, 'rev-parse', 'HEAD');
+    const branchPr = spyOn(isolationModule, 'getPrState').mockResolvedValue({ state: 'NONE' });
+    const commitPr = spyOn(isolationModule, 'getPrsForCommit').mockResolvedValue({ state: 'NONE' });
+    try {
+      const result = await cleanupMergedWorktrees(codebaseId, repo);
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual([]);
+      expect(result.skipped).toContainEqual({
+        branchName: env.branch_name,
+        reason: 'no cleanup evidence covers all local tips',
+      });
+      expect(await status()).toBe('active');
+      expect(await git(repo, 'rev-parse', env.branch_name)).toBe(branchTip);
+      expect(await git(env.working_path, 'rev-parse', 'HEAD')).toBe(headTip);
+    } finally {
+      branchPr.mockRestore();
+      commitPr.mockRestore();
+    }
+  }
+);
+
 test.each(
   (['ancestry', 'patch', 'closed'] as const).flatMap(signal =>
     (['covered', 'head-ahead', 'branch-ahead', 'dirty', 'paused'] as const).map(mode => ({

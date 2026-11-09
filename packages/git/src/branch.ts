@@ -311,8 +311,9 @@ export async function isBranchMerged(
  *   - `- <sha>` means the patch IS already in upstream (squash-merged / cherry-picked)
  *   - `+ <sha>` means the patch is NOT in upstream (genuinely unmerged)
  *
- * Returns true if every reported commit is patch-equivalent (or if there are no
- * commits to compare). Returns false if any commit is unmerged.
+ * Returns true if every reported commit is patch-equivalent and no merge commit
+ * lies outside the base history. `git cherry` omits merge commits, which can hold
+ * unpublished conflict resolutions even when every parent is already integrated.
  *
  * A confirmed non-repository returns false unless the caller requires errors
  * to surface. Other failures always propagate.
@@ -328,8 +329,13 @@ export async function isPatchEquivalent(
       timeout: 15000,
     });
     const lines = stdout.split('\n').filter(line => line.trim());
-    if (lines.length === 0) return true;
-    return lines.every(line => line.startsWith('-'));
+    if (lines.some(line => !line.startsWith('-'))) return false;
+    const { stdout: merges } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'rev-list', '--merges', '--max-count=1', branchName, `^${baseRef}`],
+      { timeout: 15000 }
+    );
+    return merges.trim().length === 0;
   } catch (error) {
     const err = error as Error & { code?: string; stderr?: string };
     if (

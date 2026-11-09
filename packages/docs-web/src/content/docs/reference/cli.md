@@ -1704,7 +1704,9 @@ archon isolation cleanup --merged
 ```
 
 Merged cleanup accepts ancestry into the configured base branch or patch equivalence
-through `git cherry`. Both the recorded branch ref and worktree HEAD must be covered.
+through `git cherry`. Patch equivalence cannot cover a tip with merge commits outside
+that base's history, because `git cherry` omits their conflict resolutions. Both the
+recorded branch ref and worktree HEAD must be covered.
 When Git cannot prove integration, one merged PR head must cover every existing local
 tip: each must equal that head or be an ancestor of it. Pass `--include-closed` to
 also accept a closed but unmerged PR with the same coverage check.
