@@ -48,9 +48,13 @@ export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blo
 export const TRUSTS = ['maintainer', 'outside'] as const;
 export type Trust = (typeof TRUSTS)[number];
 export const INTAKE_PATHS = ['quiet', 'closed', 'outside', 'triage'] as const;
-export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added'] as const;
+/**
+ * What a request records: a forge event, or `retriage`, a pack run's own request to
+ * re-triage the item, recorded by that run, whose `run_id` it carries.
+ */
+export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added', 'retriage'] as const;
 export type RequestAction = (typeof REQUEST_ACTIONS)[number];
-/** One event intake has not yet processed. A label request carries who added the label. */
+/** One request intake has not yet processed. A label request carries who added the label. */
 export interface IntakeRequest {
   readonly at: string;
   readonly run_id: string;
@@ -195,18 +199,19 @@ export function newest<T>(entries: readonly T[]): T[] {
   return entries.slice(-KEPT);
 }
 
-function isLabelRequest(request: IntakeRequest): boolean {
-  return request.action === 'added';
+/** A label request or a run's re-triage request: what a decision reads. */
+function decides(request: { readonly action?: unknown }): boolean {
+  return request.action === 'added' || request.action === 'retriage';
 }
 
 /**
- * Only label requests carry anything a decision reads; any other request just makes
- * the item a candidate, and the pickup reads the live issue. So one of those is kept,
- * however often an author edits.
+ * Only label and re-triage requests carry anything a decision reads; any other request
+ * just makes the item a candidate, and the pickup reads the live issue. So one of those
+ * is kept, however often an author edits.
  */
 function queued(requests: readonly IntakeRequest[]): IntakeRequest[] {
-  const other = requests.filter(request => !isLabelRequest(request)).at(-1);
-  return newest(requests.filter(request => isLabelRequest(request) || request === other));
+  const other = requests.filter(request => !decides(request)).at(-1);
+  return newest(requests.filter(request => decides(request) || request === other));
 }
 
 export function newWorkItem(subject: QualifiedPr, at: string): WorkItem {
@@ -392,6 +397,13 @@ export function isMaintainer(login: string | null, maintainers: ReadonlySet<stri
   return login !== null && login !== '' && maintainers.has(login.toLowerCase());
 }
 
+/** Whether a pack run asked to re-triage the item; each request is noted by its run. */
+function runAsked(requests: readonly IntakeRequest[], noted: (outcome: string, summary: string) => void): boolean {
+  const asked = requests.filter(request => request.action === 'retriage');
+  for (const request of asked) noted('retriage', `run ${request.run_id} asked for a re-triage`);
+  return asked.length > 0;
+}
+
 /**
  * Decide what the claimed item needs, from the document, its claimed requests and
  * the live issue. Pure: the outcome node applies the result.
@@ -454,9 +466,11 @@ export function decideIntake(
     promoted = null;
   }
 
-  let retriage = false;
-  let promotedNow = false;
-  for (const request of doc.claim?.requests ?? []) {
+  // A run's request re-triages a maintainer's item or a promoted one, and a maintainer's
+  // label re-triages or promotes; nothing else starts triage.
+  const requests = doc.claim?.requests ?? [];
+  let retriage = runAsked(requests, noted);
+  for (const request of requests) {
     const label = request.label;
     if (request.action !== 'added' || label === null || !isRequestLabel(label)) continue;
     // The pack writes the work item before any label, so a label already in the
@@ -496,7 +510,7 @@ export function decideIntake(
       label,
       pin: { body_digest: issue.digest },
     };
-    promotedNow = true;
+    retriage = true;
     noted('promoted', `${label} added by ${request.actor} promotes this outside item`);
   }
 
@@ -504,11 +518,12 @@ export function decideIntake(
   if (trust === 'maintainer') {
     return doc.facts.triage === undefined || retriage ? triage() : quiet();
   }
-  if (promotedNow) return triage();
+  // Promotion pins the current body, so an item promoted by this pickup passes here;
+  // a run's request on an item no maintainer promoted promotes nothing.
   if (!promotedAt(promoted, issue.digest)) {
     return { ...quiet('needs_maintainer'), path: 'outside' };
   }
-  return quiet();
+  return retriage ? triage() : quiet();
 }
 
 /**
@@ -593,12 +608,7 @@ export function enqueue(subject: QualifiedPr, request: IntakeRequest): void {
     if (statePut(name, created, stored.revision) === 'ok') return;
   }
   const waiting = record(stored.value)?.requests;
-  if (
-    !isLabelRequest(request) &&
-    Array.isArray(waiting) &&
-    waiting.some(entry => record(entry)?.action !== 'added')
-  )
-    return;
+  if (!decides(request) && Array.isArray(waiting) && waiting.some(entry => !decides(record(entry) ?? {}))) return;
   stateAppend(name, '/requests', request);
 }
 

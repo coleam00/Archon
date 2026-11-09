@@ -433,14 +433,11 @@ export function gateRefusals(facts: PrFacts, head: string, base: { readonly head
 
 /**
  * Merge at exactly `head`; the forge refuses when the head has moved since it was read.
- * A merge the plugin cannot verify throws its outcome, which fails the gate with
- * nothing read back.
+ * An applied merge was read back by the forge, which returns the commit it landed as.
+ * A merge the plugin cannot verify throws its outcome, which fails the gate.
  */
-export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): void {
-  invokeForge('pr.merge', { ref: { repo: pr.repo, number: pr.number }, method, conditions: { head } });
-}
-
-/** The merge commit of a pull request that reads back merged at `head`; null otherwise. */
-export function mergeCommitAt(facts: PrFacts, head: string): string | null {
-  return facts.state === 'merged' && facts.head_revision === head ? facts.merge_commit : null;
+export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): string | null {
+  const merged = invokeForge('pr.merge', { ref: { repo: pr.repo, number: pr.number }, method, conditions: { head } });
+  const commit = record(merged?.landed)?.commit;
+  return typeof commit === 'string' ? commit : null;
 }

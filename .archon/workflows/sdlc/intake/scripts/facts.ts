@@ -39,9 +39,10 @@ function main(): void {
   const subject = { repo, number };
   const label = trimmed(process.env.INPUTS_LABEL);
   // Intake works issues. A pull request's event, or a label that asks for nothing,
-  // records no request; the run still picks up whatever waits.
+  // records no request; the run still picks up whatever waits. A run that asks for a
+  // re-triage recorded its own request before starting this pickup.
   const kind = trimmed(process.env.INPUTS_KIND);
-  if (kind === 'issue' && (action !== 'added' || isRequestLabel(label))) {
+  if (kind === 'issue' && action !== 'retriage' && (action !== 'added' || isRequestLabel(label))) {
     const request: IntakeRequest = {
       at,
       run_id: runId,

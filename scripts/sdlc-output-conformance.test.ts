@@ -126,7 +126,7 @@ test('blocked pickup emits identified items admitted by its workflow schema', ()
     runPackScript('build-queue/scripts/blocked', {
       cwd: at.checkout,
       forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
-      inputs: { ...at.env, INPUTS_NUMBER: '', INPUTS_RETRIAGE_AS: 'maintainer' },
+      inputs: { ...at.env, INPUTS_NUMBER: '', INPUTS_REVISIT_BLOCKED: 'true' },
     }),
     'build-queue/archon-build-queue.yaml',
     'blocked'

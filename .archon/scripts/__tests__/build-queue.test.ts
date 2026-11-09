@@ -521,27 +521,27 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.claim).toBeNull();
   }, 60_000);
 
-  test('a blocked item judged unblocked gets archon-triage and an intake run, and is not listed again until its revisit is due', () => {
+  test("a blocked item judged unblocked gets the run's re-triage request and one intake pickup, and is not listed again until its revisit is due", () => {
     const at = install();
     seed(at, triaged({ stage: 'blocked' }));
-    const blocked = ok(run(at, 'blocked', { INPUTS_RETRIAGE_AS: 'maintainer' })).blocked;
+    const blocked = ok(run(at, 'blocked', { INPUTS_REVISIT_BLOCKED: 'true' })).blocked;
     expect(blocked).toEqual([{ number: 7, summary: '' }]);
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const retriage = (judged: unknown[]) =>
       run(at, 'retriage', {
         INPUTS_BLOCKED: JSON.stringify(blocked),
         INPUTS_RETRIAGE: JSON.stringify(judged),
-        INPUTS_RETRIAGE_AS: 'maintainer',
         ARCHON_CALL_LOG: calls,
       });
     expect(retriage([{ number: 9, reason: 'r' }]).stderr).toContain('issue 9, which it was not given');
 
     const sent = retriage([{ number: 7, reason: '#5 merged' }]);
     expect(ok(sent)).toMatchObject({ retriaged: [7] });
-    expect(labelWrites(sent, 7).add).toEqual(['archon-triage']);
+    expect(labelWrites(sent, 7).add).toEqual([]);
+    expect(stored(at).value?.requests).toEqual([expect.objectContaining({ action: 'retriage', run_id: 'run-1', actor: null })]);
     const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
-    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=7', 'action=added', 'label=archon-triage', 'label_actor=maintainer', '--detach']));
-    expect(ok(run(at, 'blocked', { WORKFLOW_ID: 'run-2', INPUTS_RETRIAGE_AS: 'maintainer' })).blocked).toEqual([]);
+    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=7', 'action=retriage', '--detach']));
+    expect(ok(run(at, 'blocked', { WORKFLOW_ID: 'run-2', INPUTS_REVISIT_BLOCKED: 'true' })).blocked).toEqual([]);
   }, 60_000);
 
   test('a closed issue is parked without an agent', () => {
