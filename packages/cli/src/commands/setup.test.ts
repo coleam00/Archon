@@ -435,6 +435,44 @@ describe('setup with a Pi login over a saved key', () => {
   });
 });
 
+describe('setup with a Pi login over a key it cannot remove', () => {
+  it('stops before the platform questions when the user backs out, writing nothing', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-setup-pi-shell-key-'));
+    const home = join(root, 'home');
+    const savedHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = home;
+    const policies = spyOn(platformRegistry, 'getRegisteredPlatformPolicies').mockReturnValue([]);
+    const collect = spyOn(setupAi, 'collectAIConfig').mockResolvedValue({
+      claude: false,
+      codex: false,
+      pi: true,
+      piModel: 'xai/grok-4.7',
+      piApiKeyEnvVar: 'XAI_API_KEY',
+      piLogin: true,
+      defaultAssistant: 'pi',
+    });
+    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+    const confirm = spyOn(prompts, 'confirm').mockResolvedValue(false);
+    const note = spyOn(prompts, 'note').mockImplementation(() => undefined);
+    try {
+      expect(
+        await setupCommand({ repoPath: root, inheritedEnv: { XAI_API_KEY: 'shell-key' } })
+      ).toBe(0);
+      expect(note).toHaveBeenCalledWith(
+        expect.stringContaining('XAI_API_KEY is set in:\n  - your shell environment'),
+        "Pi's login will not be used yet"
+      );
+      expect(platforms).not.toHaveBeenCalled();
+      expect(existsSync(join(home, '.env'))).toBe(false);
+    } finally {
+      for (const spy of [collect, platforms, confirm, note, policies]) spy.mockRestore();
+      if (savedHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = savedHome;
+      await removeTempTree(root);
+    }
+  });
+});
+
 describe('setup model preferences', () => {
   it('persists the Pi model before writing the default assistant and chat model', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-setup-models-'));

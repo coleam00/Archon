@@ -113,7 +113,7 @@ async function resolveSavedKey(
 /** The key is somewhere setup does not write: say where, and continue only if the user agrees. */
 async function confirmExternalKeys(envVar: string, sources: string[]): Promise<void> {
   note(
-    `${envVar} is also set in:\n${sources.map(source => `  - ${source}`).join('\n')}\n\nArchon uses that key instead of Pi's login until it is removed there. Setup does not change these, and it cannot see codebase env vars set in the Web UI or per-user keys, which also take precedence.`,
+    `${envVar} is set in:\n${sources.map(source => `  - ${source}`).join('\n')}\n\nArchon uses that key instead of Pi's login until it is removed there. Setup does not change these, and it cannot see codebase env vars set in the Web UI or per-user keys, which also take precedence.`,
     "Pi's login will not be used yet"
   );
   const proceed = await confirm({

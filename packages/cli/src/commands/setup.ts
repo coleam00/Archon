@@ -168,6 +168,10 @@ async function runSetup(options: SetupOptions): Promise<void> {
   const mode = await selectSetupMode(existing, force);
   const s = spinner();
   const ai = await collectAIConfig(options);
+  const inheritedEnv = options.inheritedEnv ?? process.env;
+  // Right after the Pi answers, so a conflict is settled before the platform questions
+  // and cancelling here doesn't throw away the platform and bot-name answers.
+  const replaceKeys = await reconcilePiCredential(ai, target, inheritedEnv);
   let config: SetupConfig;
   if (mode === 'add') {
     config = await collectAdditionalConfig(ai, existing, force, s);
@@ -177,12 +181,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
     await collectPlatformCredentials(config, platforms);
     config.botDisplayName = await collectBotDisplayName();
   }
-  const writeResult = await writeConfiguration(
-    config,
-    target,
-    options.inheritedEnv ?? process.env,
-    s
-  );
+  const writeResult = await writeConfiguration(config, target, inheritedEnv, replaceKeys, s);
 
   await writePiModelPreference(config.ai);
   await writeInstallDefaults(config.ai);
@@ -328,11 +327,11 @@ async function writeConfiguration(
   config: SetupConfig,
   target: Parameters<typeof reconcileGitHubAuth>[1],
   inheritedEnv: NodeJS.ProcessEnv,
+  replaceKeys: readonly string[],
   s: ReturnType<typeof spinner>
 ): Promise<ReturnType<typeof writeScopedEnv>> {
   const { scope, force, repoPath, targetEnvPath } = target;
   const githubAuth = await reconcileGitHubAuth(config, target);
-  const replaceKeys = await reconcilePiCredential(config.ai, target, inheritedEnv);
 
   s.start('Writing configuration...');
 
