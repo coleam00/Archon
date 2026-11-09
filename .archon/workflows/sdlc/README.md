@@ -59,7 +59,7 @@ agent instead.
 Simplify runs beside each round's review, so the implementer of the next round
 adopts or declines its smaller shapes together with the review's findings. A round
 whose review passes but whose simplify pass named smaller shapes ends
-`simplify_open`, and the next round's light review checks that correction. A later
+`simplify_open`, and the next round's review checks that correction on its delta. A later
 round's simplify judges only a delta that is large or reshapes the code.
 
 Unresolved review threads on the pull request are work too, whoever opened them: a
@@ -347,7 +347,7 @@ always used. A user who sets nothing gets the same models as before.
 | `@planner` | plan | `large` |
 | `@investigator` | investigate | `medium` |
 | `@implementer` | implement | `large` |
-| `@reviewer` | every agent node of review (scope, lenses, synthesis) and simplify | each node's tier |
+| `@reviewer` | every agent node of review (scope, lenses, synthesis, verifiers) and simplify | each node's tier |
 | `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code` and `ux`, `medium` for the rest) |
 
 Review's lens router stays on `small`, and the queue, attention and delivery judges

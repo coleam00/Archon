@@ -812,7 +812,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
       },
     });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('the commits under review were not pushed');
+    expect(result.stderr).toContain('push the commits under review');
     expect(result.stderr).not.toContain('delivery recorded');
   });
 

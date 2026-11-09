@@ -303,7 +303,7 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     }
     return {
       parserAccepts,
-      schemaAccepts: validateStructuredOutput({ head_matches: true, pr, report }, schema).valid,
+      schemaAccepts: validateStructuredOutput({ pr, report }, schema).valid,
     };
   });
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
