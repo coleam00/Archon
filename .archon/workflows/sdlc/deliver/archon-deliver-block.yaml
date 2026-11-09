@@ -48,6 +48,12 @@ inputs:
       The part of an approved multi-part plan this delivery is, forwarded
       unchanged to every review in the rounds. archon-review's `part` input
       owns its shape. Empty delivers the whole contract.
+  ci:
+    default: "forge"
+    description: >-
+      The pack's `ci` setting, as the caller passes it. `none` has the CI agent run the
+      project's full validation itself and record it for the merge gate; `forge` leaves
+      validation to the forge's checks.
   # Error review can be forced on or off; `auto` leaves it to review's route agent.
   errors:
     default: "auto"
@@ -230,13 +236,25 @@ nodes:
           trigger_rule: none_failed_min_one_success
           with:
             pr: "$pr.output"
+            ci: "$INPUTS.ci"
           when: "$review.output.ready == true && $simplify.output.findings == false"
+          # The build queue records the latest `validation` on the item's build round,
+          # where the merge gate reads it under `ci: none`.
+          output_type: ci-report
           output_format:
             type: object
             properties:
               state: { type: string, enum: [ready, pr_caused, other] }
               summary: { type: string, pattern: '\S' }
-            required: [state, summary]
+              # The full validation this agent ran, at the head it ran on; null when it ran none.
+              validation:
+                type: [object, 'null']
+                additionalProperties: false
+                properties:
+                  head: { type: string, pattern: '^[0-9a-f]{40}$' }
+                  passed: { type: boolean }
+                required: [head, passed]
+            required: [state, summary, validation]
 
         # Posts and resolves settle-threads' answers, then reads what is still open,
         # after CI so threads posted during the round count.
@@ -276,7 +294,7 @@ nodes:
             review_summary: { from: "$review.output.findings_summary", if_skipped: null }
             review_contract_left: { from: "$review.output.contract_left", if_skipped: null }
             simplify: { from: "$simplify.output.findings", if_skipped: null }
-            ci: { from: "$ci.output.state", if_skipped: null }
+            ci_state: { from: "$ci.output.state", if_skipped: null }
             ci_summary: { from: "$ci.output.summary", if_skipped: null }
             threads_open: { from: "$threads.output.open", if_skipped: null }
             threads_summary: { from: "$threads.output.summary", if_skipped: null }

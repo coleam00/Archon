@@ -291,6 +291,7 @@ nodes:
       target: "$route.output.brief"
       pull_request: "$checkout.output.pull_request"
       branch: "$facts.output.branch"
+      ci: "$INPUTS.ci"
 
   - id: answer
     command: answer

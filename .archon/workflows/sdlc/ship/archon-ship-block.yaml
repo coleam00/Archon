@@ -16,6 +16,9 @@ inputs:
     description: >-
       What to take through the pipeline — an issue, document, plan, report, or
       free-form request. When empty, the run's trigger message is the target.
+  ci:
+    default: "forge"
+    description: The pack's `ci` setting, forwarded unchanged to delivery.
   errors:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
@@ -124,6 +127,7 @@ nodes:
   - id: deliver
     include: archon-deliver-block
     with:
+      ci: "$INPUTS.ci"
       errors: "$INPUTS.errors"
       part: "$INPUTS.part"
       work: >-

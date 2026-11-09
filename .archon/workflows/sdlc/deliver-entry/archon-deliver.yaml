@@ -67,6 +67,7 @@ nodes:
             branch: "$INPUTS.branch"
             part: "$INPUTS.part"
             errors: "$INPUTS.errors"
+            ci: "$INPUTS.ci"
             work: |-
               $INPUTS.work
               $LOOP_PREV.attend__settle.output.brief

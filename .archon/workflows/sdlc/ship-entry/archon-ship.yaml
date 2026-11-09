@@ -72,6 +72,7 @@ nodes:
           include: archon-ship-block
           depends_on: [go]
           with:
+            ci: "$INPUTS.ci"
             errors: "$INPUTS.errors"
             part: "$INPUTS.part"
             publish: "$INPUTS.publish"

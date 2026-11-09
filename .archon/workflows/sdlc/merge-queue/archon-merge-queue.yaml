@@ -4,7 +4,8 @@ description: |
   for decisions that belong to a person. Each run claims every waiting item with
   intake's claim, up to limit. One sweep agent decides each pull request and merges
   what policy allows, one at a time, through a gate script that refuses unless the
-  trusted review verdict says Ready at the head, CI is green there, the head contains
+  trusted review verdict says Ready at the head, what the pack's ci setting trusts
+  passes there (green checks, or a recorded validation), the head contains
   the default branch or merges into it cleanly, and the default branch's CI is not
   red, and merges pinned to that head. The queue never pushes and never waits for CI:
   a conflict, a stale verdict or red the change caused goes back to the build queue,
@@ -87,7 +88,9 @@ nodes:
         settled: { type: array, items: { type: object } }
         # The gate command the sweep runs to merge.
         gate: { type: string }
-      required: [path, base, base_error, items, settled, gate]
+        # The pack's ci setting: what the gate trusts at a head besides the verdict.
+        ci: { type: string, enum: [forge, none] }
+      required: [path, base, base_error, items, settled, gate, ci]
 
   - id: sweep
     command: sweep
@@ -98,6 +101,7 @@ nodes:
       base: { from: "$facts.output.base" }
       items: { from: "$facts.output.items" }
       gate: "$facts.output.gate"
+      ci: "$facts.output.ci"
     output_format:
       type: object
       properties:

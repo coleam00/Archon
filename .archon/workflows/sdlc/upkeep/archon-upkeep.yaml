@@ -77,6 +77,7 @@ nodes:
   - id: deliver
     include: archon-deliver-block
     with:
+      ci: "$INPUTS.ci"
       errors: "$INPUTS.errors"
       work: >-
         Apply the dependency update specified in

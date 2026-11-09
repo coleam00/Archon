@@ -11,7 +11,7 @@
  * operations in `MERGE_QUEUE_FORGE_OPERATIONS`.
  */
 
-import { itemPullRequest } from './build.ts';
+import { itemPullRequest, type Validation } from './build.ts';
 import { invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
 import { viewPr } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
@@ -49,6 +49,21 @@ export type MergeAsked =
     }
   | { readonly by: Extract<MergeAskedBy, 'base'>; readonly attention: BaseAttention };
 export const MERGE_METHODS = ['squash', 'merge'] as const;
+/** The pack's `ci` setting; `.pack/pack.yaml` declares the same values. */
+export const CI_MODES = ['forge', 'none'] as const;
+export type CiMode = (typeof CI_MODES)[number];
+
+/** What the gate trusts at the head besides the verdict: forge checks, or a recorded validation. */
+export type CiTrust =
+  | { readonly mode: Extract<CiMode, 'forge'> }
+  | { readonly mode: Extract<CiMode, 'none'>; readonly validation: Validation | null };
+
+/** The `ci` setting as a run reads it; anything else refuses. */
+export function parseCiMode(value: string): CiMode {
+  const mode = CI_MODES.find(candidate => candidate === value);
+  if (mode === undefined) throw new Error(`the ci setting must be one of ${CI_MODES.join(', ')}, not "${value}"`);
+  return mode;
+}
 export type MergeMethod = (typeof MERGE_METHODS)[number];
 
 /**
@@ -394,18 +409,38 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFac
   };
 }
 
+/** Why what the `ci` setting trusts does not pass at `head`, or null when it does. */
+function ciRefusal(checks: Checks, head: string, ci: CiTrust): string | null {
+  if (ci.mode === 'forge') {
+    if (checks.state === 'green') return null;
+    const named = [...checks.failing, ...checks.pending];
+    return `CI at its head is ${checks.state}${named.length === 0 ? '' : ` (${named.join(', ')})`}`;
+  }
+  const { validation } = ci;
+  if (validation === null) return 'no validation is recorded for it';
+  if (validation.head !== head) return `its validation is for ${validation.head}, not ${head}`;
+  return validation.passed ? null : `its validation at ${head} failed`;
+}
+
 /**
  * Why the pull request may not merge at `head`; empty when it may. The facts the
- * queue's contract names are a Ready verdict given at the head and green CI there, on a
- * default branch whose CI is not red. The queue never pushes, so a verdict for another
- * commit means someone else pushed after the review. Pending CI on the default branch
+ * queue's contract names are a Ready verdict given at the head and what the project's
+ * `ci` setting trusts there, on a default branch whose CI is not red: green forge checks
+ * under `forge`, a passing validation delivery recorded at that same head under `none`.
+ * The queue never pushes, so a verdict for another commit
+ * means someone else pushed after the review. Pending CI on the default branch
  * does not hold a merge: the next sweep reads its result. Whether an open review thread
  * holds the merge is the sweep's judgment, from the thread facts it reads. The rest keep
  * the merge on an open, non-draft pull request into the default branch at exactly the
  * commit that was judged, and that commit either containing the default branch's head
  * or merging into it with no conflict.
  */
-export function gateRefusals(facts: PrFacts, head: string, base: { readonly head: string; readonly checks: Checks }): string[] {
+export function gateRefusals(
+  facts: PrFacts,
+  head: string,
+  base: { readonly head: string; readonly checks: Checks },
+  ci: CiTrust
+): string[] {
   const refusals: string[] = [];
   if (facts.state !== 'open') refusals.push(`it is ${facts.state}`);
   if (facts.is_draft) refusals.push('it is a draft');
@@ -421,10 +456,8 @@ export function gateRefusals(facts: PrFacts, head: string, base: { readonly head
   const { verdict } = facts;
   if (verdict.state !== 'ready') refusals.push(`its review verdict is ${verdict.state}`);
   else if (verdict.reviewed !== head) refusals.push(`its review verdict is for ${String(verdict.reviewed)}, not ${head}`);
-  if (facts.checks.state !== 'green') {
-    const named = [...facts.checks.failing, ...facts.checks.pending];
-    refusals.push(`CI at its head is ${facts.checks.state}${named.length === 0 ? '' : ` (${named.join(', ')})`}`);
-  }
+  const unvalidated = ciRefusal(facts.checks, head, ci);
+  if (unvalidated !== null) refusals.push(unvalidated);
   if (base.checks.state === 'red') {
     refusals.push(`the default branch ${facts.default_branch} is red at ${base.head} (${base.checks.failing.join(', ')})`);
   }

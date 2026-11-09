@@ -8,7 +8,8 @@
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
  * its claim until the ruling node records the answer. The round carries the review
- * verdicts its delivery published, read from this run's typed-artifact listing. A continue then starts the item's
+ * verdicts its delivery published and the latest validation its CI agent ran, read from
+ * this run's typed-artifact listing. A continue then starts the item's
  * next round at once through the operator's build-queue binding; if it does not start,
  * the item waits for the next queue run.
  *
@@ -26,12 +27,14 @@ import {
   type BuildRound,
   type BuildStatus,
   nextRound,
+  type Validation,
   withBuild,
 } from '../../.shared/build.ts';
 import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
+import { readTyped } from '../../.shared/typed.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
 import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
@@ -193,6 +196,26 @@ function reviewsOf(): Pick<BuildRound, 'reviews'> {
   return {};
 }
 
+/**
+ * The latest full validation this run's CI agent ran, for the round's record. A listing
+ * that cannot be read leaves it out, noted: under `ci: none` the gate then refuses the
+ * pull request until a later round records one.
+ */
+function validationOf(): Pick<BuildRound, 'validation'> {
+  const read = readTyped<{ validation: Validation | null }>(
+    process.env.TYPED_ARTIFACTS_FILE,
+    artifactsDir(),
+    'ci-report'
+  );
+  const problem = read.listingProblem ?? read.problems[0];
+  if (problem !== undefined) {
+    note(`the round records no validation: ${problem}`);
+    return {};
+  }
+  const validation = read.values.filter(report => report.validation !== null).at(-1)?.validation;
+  return validation == null ? {} : { validation };
+}
+
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
   // Neither path has an item, so nothing is written or asked.
@@ -212,7 +235,9 @@ function main(): void {
   const ending = nullableJson(process.env.INPUTS_ENDING) as ShipReport | null;
   const at = new Date().toISOString();
   const round: BuildRound | null =
-    ending === null ? null : { run_id: runId, at, ...ending, artifacts: artifactsDir(), ...reviewsOf() };
+    ending === null
+      ? null
+      : { run_id: runId, at, ...ending, artifacts: artifactsDir(), ...reviewsOf(), ...validationOf() };
   const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
   const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
   const decision = decide(path, route, answer);

@@ -63,6 +63,16 @@ export interface ReviewVerdict {
 }
 
 /**
+ * A full validation the delivery's CI agent ran itself, at the commit it ran on, as its
+ * typed `ci-report` declared it. Under the pack's `ci: none` setting the merge gate
+ * trusts this instead of forge checks.
+ */
+export interface Validation {
+  readonly head: string;
+  readonly passed: boolean;
+}
+
+/**
  * One build round, as its terminal report ended it. `run_id` is the build-queue run that
  * delivered it; the ship work runs inside that run through `include:`.
  */
@@ -80,6 +90,8 @@ export interface BuildRound {
    * typed-artifact listing could not be read.
    */
   readonly reviews?: readonly ReviewVerdict[];
+  /** The latest validation the round's delivery ran; absent when it ran none. */
+  readonly validation?: Validation;
 }
 
 /**
@@ -175,6 +187,11 @@ export function countedRounds(doc: WorkItem): number {
   const triaged = doc.facts.triage?.at ?? '';
   const since = answered > triaged ? answered : triaged;
   return build.rounds.filter(round => round.at > since).length;
+}
+
+/** The latest validation any of the item's build rounds recorded, or null. */
+export function latestValidation(doc: WorkItem): Validation | null {
+  return doc.facts.build?.rounds.filter(round => round.validation !== undefined).at(-1)?.validation ?? null;
 }
 
 /**

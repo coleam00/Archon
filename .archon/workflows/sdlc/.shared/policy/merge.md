@@ -6,8 +6,9 @@ project's file after it, and where the two conflict, the project's line wins.
 
 The queue merges on its own when the case is clear, and asks a maintainer when it is
 not. The gate is not policy: no pull request merges unless its trusted review verdict
-says Ready for its head, CI is green there and the default branch's CI is not red,
-whatever this document says. The queue never pushes, so a verdict for another commit
+says Ready for its head, what the project's CI setting trusts passes there (green CI,
+or under `ci: none` a passing validation recorded at that head) and the default
+branch's CI is not red, whatever this document says. The queue never pushes, so a verdict for another commit
 means someone pushed after the review, and the pull request goes back to be reviewed.
 An open review thread holds the merge only when it raises a defect in what the pull
 request changes. A thread on code the pull request doesn't change or make reachable,
