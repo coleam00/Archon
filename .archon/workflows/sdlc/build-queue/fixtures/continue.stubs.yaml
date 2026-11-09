@@ -2,6 +2,9 @@
 # repository, and ship's triage routes `deliver`, not `continue`. The pull request
 # facts resolved still reaches delivery through ship's real `continues` script: the
 # implementer and prepare are both told to finish it.
+start:
+  repo: { host: github.com, path: example/repo }
+  message: false
 facts:
   path: route
   item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }

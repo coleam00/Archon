@@ -11,7 +11,8 @@
  * next round at once through the operator's build-queue binding; if it does not start,
  * the item waits for the next queue run.
  *
- * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
+ * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_HANDOFF, the handoff's
+ * summary, empty when it was skipped; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
  * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
@@ -180,16 +181,15 @@ function afterWrite(summary: string, wrote: string | null, decision: Decision, i
 
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
+  // Neither path has an item, so nothing is written or asked.
+  const noItem = { attention: '', options: [], recommendation: null, class: '', asked: null };
   if (path === 'idle') {
-    emit({
-      decision: 'idle',
-      summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
-      attention: '',
-      options: [],
-      recommendation: null,
-      class: '',
-      asked: null,
-    });
+    const summary = idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID)));
+    emit({ decision: 'idle', summary, ...noItem });
+    return;
+  }
+  if (path === 'handoff') {
+    emit({ decision: 'handoff', summary: text(process.env.INPUTS_HANDOFF), ...noItem });
     return;
   }
   const runId = text(process.env.WORKFLOW_ID);

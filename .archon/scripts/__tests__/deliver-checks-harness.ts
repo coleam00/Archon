@@ -244,6 +244,12 @@ function upsert(op, repo, onIssue, marker, body) {
 function answer(op, request) {
   switch (op) {
     case 'workitem.view': return view(request.ref);
+    case 'resolve': {
+      const url = /^https:\\/\\/([^/]+)\\/(.+?)(?:\\.git)?$/.exec(request.remote);
+      return done(url === null
+        ? { kind: 'none', forge: 'none' }
+        : { kind: 'resolved', forge: 'fake', repo: { host: url[1], path: url[2] }, plugin: { name: 'fake', version: '1' } });
+    }
     case 'repo.labels.list': return done({ repo: request.repo, labels: [...labels].map(name => ({ name })) });
     case 'repo.label.ensure': return write(op, () => labels.add(request.name), () => ({}));
     case 'workitem.label.add': return write(op, () => issueLabels.push(request.name), () => ({}));

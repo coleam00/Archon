@@ -1,6 +1,9 @@
 # Dry-run fixture: the item's open pull request 42 is already reviewed Ready with no red check the change caused
 # at its head, with only its draft state left. Route declares ready; no round runs,
 # and apply takes the pull request out of draft.
+start:
+  repo: { host: github.com, path: example/repo }
+  message: false
 facts:
   path: route
   item: { repo: { host: github.com, path: example/repo }, number: 7 }

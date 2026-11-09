@@ -415,6 +415,7 @@ describe('discoveries', () => {
           ),
           INPUTS_REPO_HOST: PR.repo.host,
           INPUTS_REPO_PATH: PR.repo.path,
+          INPUTS_REPO: JSON.stringify(PR.repo),
           INPUTS_SINCE: '',
           INPUTS_UNTIL: '',
           INPUTS_LIMIT: '20',

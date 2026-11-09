@@ -5,8 +5,8 @@
  * as added by `retriage_as`; intake decides whether the item is now ready. Every listed
  * item records the revisit, so the next one waits its turn.
  *
- * Bound inputs: INPUTS_BLOCKED from blocked, INPUTS_RETRIAGE from revisit, and the
- * workflow inputs INPUTS_REPO_HOST, INPUTS_REPO_PATH and INPUTS_RETRIAGE_AS.
+ * Bound inputs: INPUTS_REPO from start, INPUTS_BLOCKED from blocked, INPUTS_RETRIAGE
+ * from revisit, and the workflow input INPUTS_RETRIAGE_AS.
  */
 
 import { type BlockedItem, recordRevisit } from '../../.shared/build.ts';
@@ -17,7 +17,7 @@ import { writeLabels } from '../../.shared/labels.ts';
 function main(): void {
   const blocked = nullableJson(process.env.INPUTS_BLOCKED) as BlockedItem[];
   const judged = nullableJson(process.env.INPUTS_RETRIAGE) as { number: number; reason: string }[];
-  const repo = { host: trimmed(process.env.INPUTS_REPO_HOST), path: trimmed(process.env.INPUTS_REPO_PATH) };
+  const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
   const actor = trimmed(process.env.INPUTS_RETRIAGE_AS);
   const runId = text(process.env.WORKFLOW_ID);
   const listed = new Set(blocked.map(item => item.number));

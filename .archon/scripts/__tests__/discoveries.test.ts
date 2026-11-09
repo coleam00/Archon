@@ -173,6 +173,7 @@ function script(at: Install, name: Script, pass: Pass, inputs: Record<string, st
       RUN_LISTING: listing(at, pass.runs),
       INPUTS_REPO_HOST: REPO.host,
       INPUTS_REPO_PATH: REPO.path,
+      INPUTS_REPO: JSON.stringify(REPO),
       INPUTS_SINCE: '',
       INPUTS_UNTIL: '',
       INPUTS_LIMIT: '20',

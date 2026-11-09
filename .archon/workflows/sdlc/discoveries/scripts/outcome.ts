@@ -12,8 +12,7 @@
  * them again.
  *
  * Bound inputs: INPUTS_PATH from facts; INPUTS_DECISIONS and INPUTS_SUMMARY from the
- * agent, `null` when it did not run; the workflow's INPUTS_REPO_HOST and
- * INPUTS_REPO_PATH.
+ * agent, `null` when it did not run; INPUTS_REPO, the repository facts resolved.
  */
 
 import { readFileSync } from 'node:fs';
@@ -58,10 +57,7 @@ function main(): void {
     emit({ summary: IDLE, written: [], dropped: [], asked: [], waiting: [], question: '' });
     return;
   }
-  const repo = {
-    host: trimmed(process.env.INPUTS_REPO_HOST),
-    path: trimmed(process.env.INPUTS_REPO_PATH),
-  };
+  const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
   const queue = JSON.parse(readFileSync(join(artifactsDir(), 'drain', 'queue.json'), 'utf8')) as Queue;
   const decisions = (nullableJson(process.env.INPUTS_DECISIONS) ?? []) as AgentDecision[];
   const summary = text(process.env.INPUTS_SUMMARY);

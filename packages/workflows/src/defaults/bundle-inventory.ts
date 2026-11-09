@@ -8,7 +8,12 @@ import {
   PACK_SHARED_DIRECTORY,
   type WorkflowResourceOwner,
 } from '../packaged-workflow';
-import { FIXTURES_DIR } from '../fixture-layout';
+import {
+  loadErrorToError,
+  readPackWorkflowFolders,
+  type PackWorkflowLocation,
+  yamlCountError,
+} from '../workflow-discovery/pack-layout';
 import { METRIC_VIEWS_FILE } from '../schemas/metric-view';
 import type { BundledScriptPack } from './bundled-script-pack';
 
@@ -169,8 +174,15 @@ async function collectPack(workflowsRoot: string, pack: string, add: AddSource):
     throw new Error(`Indexed bundle pack "${pack}" directory not found: ${packRoot}`);
   const scope: PackScope = { workflowsRoot, pack, packRoot, add };
   await collectSharedFiles(scope);
-  for (const entry of await readdir(packRoot, { withFileTypes: true })) {
-    if (await isWorkflowDirectory(packRoot, entry)) await collectWorkflow(scope, entry.name);
+  const listing = await readPackWorkflowFolders(packRoot, pack);
+  if ('error' in listing) throw loadErrorToError(listing.error);
+  for (const entry of listing.folders) {
+    if (entry.kind === 'error') throw loadErrorToError(entry.error);
+    // Discovery skips a folder with no YAML; a selected bundled pack must not, or a
+    // renamed or deleted YAML would ship a binary silently missing that workflow.
+    if (entry.kind === 'empty')
+      throw loadErrorToError(yamlCountError(`${pack}/${entry.folder}`, 0));
+    await collectWorkflow(scope, entry);
   }
 }
 
@@ -189,16 +201,12 @@ async function collectSharedFiles({ pack, packRoot, add }: PackScope): Promise<v
   }
 }
 
-async function isWorkflowDirectory(packRoot: string, entry: Dirent): Promise<boolean> {
-  if (entry.name === PACK_SHARED_DIRECTORY || entry.name === FIXTURES_DIR) return false;
-  return (await entryType(packRoot, entry)).isDirectory();
-}
-
-async function collectWorkflow(scope: PackScope, workflow: string): Promise<void> {
-  const { workflowsRoot, pack, packRoot, add } = scope;
-  validateName(workflow, `${pack}/${workflow}`);
-  const directory = join(packRoot, workflow);
-  const path = join(directory, await workflowYamlFile(directory, `${pack}/${workflow}`));
+async function collectWorkflow(
+  scope: PackScope,
+  { folder: workflow, path: directory, filename }: PackWorkflowLocation
+): Promise<void> {
+  const { workflowsRoot, pack, add } = scope;
+  const path = join(directory, filename);
   const name = basename(path, extname(path));
   validateName(name, path);
   add({
@@ -210,17 +218,6 @@ async function collectWorkflow(scope: PackScope, workflow: string): Promise<void
   });
   await collectCommands(scope, workflow);
   await collectScripts(scope, workflow);
-}
-
-async function workflowYamlFile(directory: string, reference: string): Promise<string> {
-  const yamlFiles = (await readdir(directory)).filter(name =>
-    ['.yaml', '.yml'].includes(extname(name))
-  );
-  if (yamlFiles.length !== 1)
-    throw new Error(
-      `Packaged workflow "${reference}" must contain exactly one .yaml or .yml file (found ${yamlFiles.length}).`
-    );
-  return yamlFiles[0];
 }
 
 function bundledOwner(pack: string, workflow: string): WorkflowResourceOwner {

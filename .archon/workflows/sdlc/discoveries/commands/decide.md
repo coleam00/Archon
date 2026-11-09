@@ -2,7 +2,7 @@
 
 Finished runs recorded discoveries: defects and gaps they proved outside their own change. Decide what becomes of each one, once. You judge and author; the next node performs exactly the writes you declare and nothing else. You write nothing to the tracker, the repository or the state store yourself, and the checkout must be exactly as you found it when you finish.
 
-The repository: `$INPUTS.repo_host/$INPUTS.repo_path`. The base commit every claim is checked against: `$INPUTS.base_sha`.
+The repository: `$INPUTS.repo`. The base commit every claim is checked against: `$INPUTS.base_sha`.
 
 ## Read first
 
@@ -17,7 +17,7 @@ For every record in the queue:
 
 1. **Verify the claim at the base.** Read the code the evidence cites with `git show $INPUTS.base_sha:<path>` and `git grep <pattern> $INPUTS.base_sha`. Never check out, switch, reset or edit anything. A record's file:line evidence was true when its run wrote it; the base may have moved since. Do not run tests or probes: a claim you cannot settle by reading is unverified. A claim that does not hold at the base may be about an open pull request's change, such as code it adds or a guard it removes: look for that pull request with `gh pr list` before you drop the claim as fixed or unverified.
 2. **Apply earlier answers.** A question in the run's `questions` that has an answer decides the refs it covers: follow the answer rather than asking again.
-3. **Search the tracker**, read-only: open and recently closed issues and pull requests that may already cover it. On GitHub, `gh issue list --repo $INPUTS.repo_host/$INPUTS.repo_path --state all --search "<terms>"` and `gh pr list` with the same flags. Read an issue and its comments (`gh issue view <n> --comments` with the same `--repo`) before you say it covers a record or that nothing does: the evidence an issue already holds is often in a comment, not its body. An issue this workflow filed starts with the marker `<!-- archon-discovery <key> -->`; one that describes the same defect is the same discovery, however differently it is worded.
+3. **Search the tracker**, read-only: open and recently closed issues and pull requests that may already cover it. On GitHub, `gh issue list --repo $INPUTS.repo --state all --search "<terms>"` and `gh pr list` with the same flags. Read an issue and its comments (`gh issue view <n> --comments` with the same `--repo`) before you say it covers a record or that nothing does: the evidence an issue already holds is often in a comment, not its body. An issue this workflow filed starts with the marker `<!-- archon-discovery <key> -->`; one that describes the same defect is the same discovery, however differently it is worded.
 4. **Merge duplicates.** Records from different runs, or several records in one run, that describe one defect are one decision: list every one of their refs under it. The policy says when separate defects may share one filed issue.
 5. **Decide** under the policy.
 

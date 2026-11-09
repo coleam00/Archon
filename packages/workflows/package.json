@@ -37,6 +37,7 @@
     "./script-discovery": "./src/script-discovery.ts",
     "./command-validation": "./src/command-validation.ts",
     "./fixture-layout": "./src/fixture-layout.ts",
+    "./pack-layout": "./src/workflow-discovery/pack-layout.ts",
     "./defaults": "./src/defaults/bundled-defaults.ts",
     "./validator": "./src/validator.ts",
     "./validation-config": "./src/validation-config.ts",
