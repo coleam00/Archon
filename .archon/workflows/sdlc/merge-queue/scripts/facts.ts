@@ -15,7 +15,7 @@
 
 import { join } from 'node:path';
 import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { latestValidation, type Validation } from '../../.shared/build.ts';
 import {
   itemPr,
@@ -154,8 +154,7 @@ function main(): void {
   const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
   const ci = parseCiMode(trimmed(process.env.INPUTS_CI));
   const repo = workflowRepo();
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
 
   requireMergeSource(repo);
   const snapshot = snapshotReader(readMaintainers(repo));

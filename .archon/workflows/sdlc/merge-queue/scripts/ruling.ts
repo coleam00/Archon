@@ -22,7 +22,7 @@
 import { nextRound, withBuild } from '../../.shared/build.ts';
 import { followUp } from '../../.shared/follow-up.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
 import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
@@ -66,8 +66,7 @@ function main(): void {
     return;
   }
 
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const choice = answered as MergeAttention['choices'][number];
   const at = new Date().toISOString();
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]

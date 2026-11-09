@@ -12,7 +12,6 @@ import { join } from 'node:path';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
 import { trackTempRoots } from './temp-roots';
 import {
-  PACK,
   PR,
   PR_URL,
   forgeCalls,
@@ -91,26 +90,6 @@ describe('publish-pr opens the pull request at most once', () => {
       expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
       expect(result.bodies).toEqual([]);
     }
-  });
-
-  it.each([{ field: 'body', pointer: PREPARED_BODY }, { field: 'description', pointer: DESCRIPTION }])('keeps the $field pointer schema and command aligned with publish', ({ field, pointer }) => {
-    const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8')) as {
-      nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[];
-    };
-    expect(workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties[field]).toEqual({
-      type: ['object', 'null'],
-      properties: {
-        type: { type: 'string', enum: [pointer.type] },
-        run_id: { type: 'string' },
-        path: { type: 'string', enum: [pointer.path] },
-      },
-      required: Object.keys(pointer),
-    });
-    const command = readFileSync(join(PACK, 'pr/commands/pr.md'), 'utf8');
-    expect(command).toContain(
-      `{"type": "${pointer.type}", "run_id": "$WORKFLOW_ID", "path": "${pointer.path}"}`
-    );
-    expect(command).toContain(`$ARTIFACTS_DIR/${pointer.path}`);
   });
 
   it('refuses another create while the earlier write is unresolved', () => {

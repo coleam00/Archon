@@ -26,7 +26,7 @@ import {
   itemPullRequest,
 } from '../../.shared/build.ts';
 import { type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
-import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { openOrderMembers } from '../../.shared/order.ts';
 import { viewPr } from '../../.shared/pr.ts';
@@ -167,8 +167,7 @@ function pickup(): Pickup {
 
 function main(): void {
   const limit = positive('round_limit', trimmed(process.env.INPUTS_ROUND_LIMIT));
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
 
   const named = namedItem();
   if (named === 'order' || named === 'handoff') {

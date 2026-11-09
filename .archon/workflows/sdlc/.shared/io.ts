@@ -54,6 +54,18 @@ export function nullableJson(value: string | undefined): unknown {
 }
 
 /**
+ * This run's id. The engine supplies it to every exec node, so its absence is a bug in
+ * the engine rather than a state a script should report on.
+ */
+export function workflowRunId(): string {
+  const value = process.env.WORKFLOW_ID;
+  if (value === undefined || value === '') {
+    throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  }
+  return value;
+}
+
+/**
  * This run's artifact directory.
  *
  * The engine supplies it to every exec node, so its absence is a bug in the engine
