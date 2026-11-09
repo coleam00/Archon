@@ -1,0 +1,14 @@
+# CodeRabbit reviews every pull request. On the SDLC pack (`.archon/`) its default
+# suggestions pull against the pack's rules: agents judge, scripts read facts and act at
+# a boundary, and the pack keeps no speculative guards or tests. These instructions hold
+# its pack review to that bar; the pack's own review still judges every change.
+language: en-US
+reviews:
+  path_instructions:
+    - path: ".archon/**"
+      instructions: |
+        This is a workflow pack. Read .archon/workflows/sdlc/CONSTITUTION.md before commenting.
+        - Agent nodes (prompt files under commands/) judge. Scripts read facts and perform writes at a boundary. Do not suggest moving a judgment the prompt asks the agent to make into script validation, parsing or classification.
+        - Do not suggest validation, guards, retries, fallbacks or defensive checks unless you can name a concrete input or state the change can actually reach that leads to a wrong write, a wrong merge or lost data.
+        - Do not suggest tests outside a script's writes and gates: no tests that pin wording, constants, prompt decisions, internal structure, or inputs that cannot occur.
+        - Do comment on prose that no longer matches the code or other docs, on real contract bugs, and on unsafe writes.

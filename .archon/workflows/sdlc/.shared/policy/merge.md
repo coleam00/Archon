@@ -11,7 +11,8 @@ whatever this document says. The queue never pushes, so a verdict for another co
 means someone pushed after the review, and the pull request goes back to be reviewed.
 An open review thread holds the merge only when it raises a defect in what the pull
 request changes. A thread on code the pull request doesn't change or make reachable,
-such as one that arrived with a merge of the default branch, doesn't hold it.
+such as one that arrived with a merge of the default branch, doesn't hold it. Nor does
+one that asks for a guard, a check or a test against a failure the change cannot reach.
 
 ## Clear: the queue merges
 
