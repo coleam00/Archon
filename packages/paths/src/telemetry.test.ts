@@ -2,7 +2,7 @@ import { describe, test, expect, beforeEach, afterEach, spyOn, jest } from 'bun:
 import { tmpdir } from 'os';
 import { setImmediate } from 'node:timers/promises';
 import { join } from 'path';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'fs';
 
 import {
   captureWorkflowInvoked,
@@ -15,6 +15,7 @@ import {
   captureWorkflowTerminal,
   resetTelemetryForTests,
 } from './telemetry';
+import { removeTempTree } from './test-utils';
 import { NOTICE_STAMP_FILENAME } from './telemetry-consent';
 import { runRefForTelemetry, TELEMETRY_SCHEMA_VERSION } from './telemetry-events';
 import { shutdownTelemetry } from './telemetry-transport';
@@ -63,11 +64,11 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
     resetTelemetryForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     Object.defineProperty(process.stderr, 'isTTY', { value: originalIsTTY, configurable: true });
     restoreEnv(saved);
     resetTelemetryForTests();
-    rmSync(tmpHome, { recursive: true, force: true });
+    await removeTempTree(tmpHome);
   });
 
   function setTTY(value: boolean): void {
@@ -90,6 +91,41 @@ describe('first-run notice (via captureWorkflowInvoked)', () => {
     expect(writeSpy).toHaveBeenCalledTimes(1);
     expect(String(writeSpy.mock.calls[0]?.[0])).toContain('anonymous usage telemetry');
     expect(existsSync(stampPath())).toBe(true);
+    writeSpy.mockRestore();
+  });
+
+  test('renews the notice for v7 installs and honors the v8 stamp across processes', () => {
+    writeFileSync(join(tmpHome, 'telemetry-notice-shown-v7'), 'old');
+    setTTY(true);
+    const writeSpy = spyOn(process.stderr, 'write').mockImplementation(() => true);
+    captureWorkflowInvoked({ runId: 'run-1', isChild: false, workflowName: 'w' });
+    expect(writeSpy).toHaveBeenCalledTimes(1);
+    expect(String(writeSpy.mock.calls[0]?.[0])).toContain(
+      'Archon collects anonymous usage telemetry — now also cache-read/cache-write\n' +
+        'token counts for direct chat turns, plus whether cache totals are partial\n' +
+        '(numbers only, never message content).'
+    );
+    const notice = String(writeSpy.mock.calls[0]?.[0]).replace(/\s+/g, ' ');
+    for (const disclosure of [
+      'the shape of each workflow (node-type counts, depth, fan-out, how many commands it uses, a prompt-size bucket)',
+      "for a copy of a bundled workflow, which bundled one it came from — never your own workflow's name, description or text",
+      'an anonymous per-run reference (a hash, never the run id), cancelled runs',
+      'how Archon was installed (binary, Docker, or source), the build commit',
+      'chat activity (platform/provider/model, never message content)',
+      'aggregate usage totals (token counts, cost, durations, loop iterations)',
+      'approval decisions (approved/rejected only), deployment shape, a categorical failure class',
+      'workflow name, run outcome, OS/arch, and version',
+      'Still no code, prompts, file paths, IP, or personal data',
+      'see README "Telemetry"',
+      'Opt out anytime: DO_NOT_TRACK=1 or ARCHON_TELEMETRY_DISABLED=1',
+    ]) {
+      expect(notice).toContain(disclosure);
+    }
+    expect(NOTICE_STAMP_FILENAME).toBe('telemetry-notice-shown-v8');
+    expect(existsSync(stampPath())).toBe(true);
+    resetTelemetryForTests();
+    captureWorkflowInvoked({ runId: 'run-2', isChild: false, workflowName: 'w' });
+    expect(writeSpy).toHaveBeenCalledTimes(1);
     writeSpy.mockRestore();
   });
 
@@ -226,10 +262,10 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     resetTelemetryForTests();
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     restoreEnv(saved);
     resetTelemetryForTests();
-    rmSync(tmpHome, { recursive: true, force: true });
+    await removeTempTree(tmpHome);
   });
 
   test('captureArchonStarted does not throw (disabled)', () => {
@@ -439,7 +475,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     expect(props.$ip).toBe('');
   });
 
-  test('captureChatTurn serializes v4 usage fields to snake_case wire keys (enabled)', async () => {
+  test('captureChatTurn serializes usage and cache fields to snake_case wire keys (enabled)', async () => {
     const events = await captureTelemetry(() => {
       captureChatTurn({
         platform: 'web',
@@ -450,9 +486,18 @@ describe('new capture functions are fire-and-forget no-throw', () => {
         costUsd: 0.03,
         tokensIn: 900,
         tokensOut: 210,
+        cacheReadTokens: 700,
+        cacheWriteTokens: 0,
+        cachePartialTokens: true,
       });
     });
     const props = eventProperties(events, 'chat_turn_handled');
+    expect(props).toMatchObject({
+      cache_read_tokens: 700,
+      cache_write_tokens: 0,
+      cache_partial: true,
+      schema_version: 13,
+    });
     expect(props.model).toBe('sonnet');
     expect(props.duration_ms).toBe(5120);
     expect(props.cost_usd).toBe(0.03);

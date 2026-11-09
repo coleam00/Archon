@@ -1,5 +1,4 @@
 // @archon-test-isolated
-import { buildRunTerminalTelemetry } from './run-terminal-telemetry';
 import { describe, it, expect, beforeEach, afterEach, mock, type Mock } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -78,15 +77,8 @@ describe('executeDagWorkflow options type contract', () => {
 // under the same block name. Both packages compile their anchors through their
 // normal TypeScript projects.
 //
-// Two hand-mapped hops are deliberately OUTSIDE the guard, both in telemetry:
-//   - `captureChatTurn` (@archon/core orchestrator-agent) maps usage for the
-//     direct-chat path, carrying gross totals only;
-//   - `@archon/paths` remaps `buildRunUsageProps`'s output a fourth time on the
-//     way to PostHog, and sits at the root of the dependency order, so it cannot
-//     import `TokenUsage` and no anchor can fire there.
-// A new axis therefore reaches PostHog only if someone follows it past this
-// block. Tracked separately; this block covers the first hop, where the
-// `TokenUsage` axes are still named.
+// Terminal projection through the PostHog wire is guarded in run-terminal-telemetry.test.ts;
+// direct-chat projection through the wire is guarded in core/orchestrator/chat-turn.test.ts.
 //
 // What this guard does NOT do: make a new *site* loud. No type can require an
 // author to register the hand-mapped seam they just wrote. The maps below are
@@ -167,17 +159,6 @@ describe('TokenUsage axis seam guard', () => {
     cost: null,
   };
 
-  /** Terminal telemetry props — a third spelling, remapped again inside @archon/paths. */
-  const TELEMETRY_AXIS_KEYS: SeamAxisKeys = {
-    input: 'tokensIn',
-    output: 'tokensOut',
-    cacheRead: 'cacheReadTokens',
-    cacheWrite: 'cacheWriteTokens',
-    cachePartial: 'cachePartialTokens',
-    total: null,
-    cost: null,
-  };
-
   /**
    * Assert that every axis `keys` declares carried arrived under its declared key
    * with the specimen's value, AND that every axis it declares `null` really is
@@ -250,9 +231,8 @@ describe('TokenUsage axis seam guard', () => {
   });
 
   /**
-   * One AI node whose provider reports the specimen. Four seams read off this
-   * single run: the node event, the run metadata, the telemetry props, and the
-   * JSONL transcript row.
+   * One AI node whose provider reports the specimen. The node event, run metadata
+   * and JSONL transcript row all read from this run.
    */
   async function runSpecimenDag(outcome: 'completed' | 'failed' = 'completed'): Promise<{
     store: MockWorkflowStore;
@@ -336,28 +316,6 @@ describe('TokenUsage axis seam guard', () => {
       childOutcomeFromRun(
         makeWorkflowRun('axis-child', { status: 'completed', metadata: written[0] })
       ).tokens as unknown as Record<string, unknown>
-    );
-  });
-
-  it('terminal telemetry props carry every axis they claim', () => {
-    // The run store projects terminal telemetry from the cumulative usage fold, so
-    // this hop starts at that fold's output rather than at a DAG run.
-    const { cost: _cost, total: _total, ...tokens } = AXIS_SPECIMEN;
-    const props = buildRunTerminalTelemetry({
-      run: {
-        id: 'axis-run',
-        workflow_name: 'axis',
-        parent_run_id: null,
-        status: 'completed',
-        metadata: {},
-      },
-      events: [],
-      usage: { costUsd: AXIS_SPECIMEN.cost, tokens },
-    });
-    expectSeamCarriesAxes(
-      'telemetry props',
-      TELEMETRY_AXIS_KEYS,
-      props as unknown as Record<string, unknown>
     );
   });
 

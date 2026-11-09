@@ -1,3 +1,4 @@
+import { resolveFanOutItems, resolveFanOutStaticInputs } from '../../dag/nodes/fan-out-shared';
 import { resolveNodeBindings } from '../../dag/references';
 import {
   isWorkflowNode,
@@ -12,7 +13,40 @@ import {
   stubFor,
   type DryRunContext,
 } from '../context';
-import { completedOutput } from '../stubs';
+import { completedOutput, type DryRunStubValue } from '../stubs';
+
+function resolveChildRunStub(
+  node: WorkflowNode,
+  outputs: Map<string, NodeOutput>,
+  ctx: DryRunContext
+): { stub: DryRunStubValue; state: 'completed' | 'stubbed' } | undefined {
+  let itemCount: number | undefined;
+  if (node.fan_out !== undefined) {
+    const shellContext = bindingShellContext(ctx, outputs);
+    const resolvedItems = resolveFanOutItems(node, shellContext, node.fan_out);
+    if ('error' in resolvedItems) throw new Error(resolvedItems.error);
+    const resolvedInputs = resolveFanOutStaticInputs(node, shellContext, ctx.inputs);
+    if ('error' in resolvedInputs) throw new Error(resolvedInputs.error);
+    itemCount = resolvedItems.items.length;
+    if (itemCount === 0) return { stub: [], state: 'completed' };
+  }
+  // Only authored stubs can stand in for child runs; generated placeholders cannot.
+  if (!Object.hasOwn(ctx.stubs, node.id)) return undefined;
+  const stub = stubFor(node, ctx);
+  if (stub === undefined) return undefined;
+  if (itemCount !== undefined && !Array.isArray(stub)) {
+    throw new Error(`Stub for fan-out workflow node '${node.id}' must be a JSON array`);
+  }
+  if (itemCount !== undefined && Array.isArray(stub) && stub.length !== itemCount) {
+    throw new Error(
+      `Stub for fan-out workflow node '${node.id}' must contain one result per item (expected ${itemCount}, received ${stub.length})`
+    );
+  }
+  if (node.fan_out === undefined && node.with !== undefined) {
+    resolveNodeBindings(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
+  }
+  return { stub, state: 'stubbed' };
+}
 
 export function simulateChildRunNode(
   node: WorkflowNode | ComposeFanOutNode,
@@ -20,26 +54,14 @@ export function simulateChildRunNode(
   ctx: DryRunContext,
   iteration?: number
 ): void {
-  // A child run is its own governance object, so a dry run never simulates it, but
-  // an authored stub can declare its terminal output like any other node's. A
-  // --default-stubs placeholder cannot stand in for a whole child run, so only an
-  // authored stub counts. The node's own `with:` bindings still resolve first, so a
-  // binding a real launch would fail on fails here too. A fan-out has no single
-  // child output to stub.
-  const childStub =
-    isWorkflowNode(node) && !node.fan_out && Object.hasOwn(ctx.stubs, node.id)
-      ? stubFor(node, ctx)
-      : undefined;
-  if (isWorkflowNode(node) && childStub !== undefined) {
-    if (node.with !== undefined) {
-      resolveNodeBindings(node.id, node.with, bindingShellContext(ctx, outputs), ctx.inputs);
-    }
-    const hydrated = completedOutput(node, childStub);
+  const result = isWorkflowNode(node) ? resolveChildRunStub(node, outputs, ctx) : undefined;
+  if (result !== undefined) {
+    const hydrated = completedOutput(node, result.stub);
     outputs.set(node.id, hydrated);
     ctx.trace.push({
       nodeId: node.id,
       nodeType: nodeType(node),
-      state: 'stubbed',
+      state: result.state,
       output: hydrated.output,
       ...(iteration ? { iteration } : {}),
     });

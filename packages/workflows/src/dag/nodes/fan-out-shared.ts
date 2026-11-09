@@ -48,9 +48,9 @@ export function resolveFanOutItems(
 
 export function resolveFanOutStaticInputs(
   node: Pick<WorkflowNode, 'id' | 'with'>,
-  ctx: ShellInputContext
+  ctx: ShellInputContext,
+  parentInputs: Record<string, JsonValue> | undefined = resolveRunInputs(ctx.workflowRun)
 ): { inputs: Record<string, JsonValue> } | { error: string } {
-  const parentInputs = resolveRunInputs(ctx.workflowRun);
   try {
     return {
       inputs: Object.fromEntries(

@@ -93,18 +93,18 @@ export const serializedNodeDataSchema = z.object({
 });
 export type SerializedNodeData = z.infer<typeof serializedNodeDataSchema>;
 
-const executionEventTypes = {
+export const NODE_EXECUTION_EVENT_TYPES = {
   started: 'node_started',
+  suspended: 'node_suspended',
   completed: 'node_completed',
   failed: 'node_failed',
   skipped: 'node_skipped',
-  suspended: 'node_suspended',
 } as const satisfies Record<NodeExecutionRecord['lifecycle']['status'], string>;
 export interface SerializedNodeEvent {
   workflow_run_id: string;
   step_name: string;
   event_type:
-    | (typeof executionEventTypes)[keyof typeof executionEventTypes]
+    | (typeof NODE_EXECUTION_EVENT_TYPES)[keyof typeof NODE_EXECUTION_EVENT_TYPES]
     | 'node_skipped_prior_success'
     | 'node_always_run_reset'
     | 'node_prior_cache_invalidated';
@@ -221,7 +221,7 @@ export function serializeNodeStateRecord(record: NodeStateRecord): SerializedNod
   if ('cache' in record) return { ...identity, ...serializeCacheDecision(record) };
   return {
     ...identity,
-    event_type: executionEventTypes[record.lifecycle.status],
+    event_type: NODE_EXECUTION_EVENT_TYPES[record.lifecycle.status],
     data: serializeExecutionData(record),
   };
 }
