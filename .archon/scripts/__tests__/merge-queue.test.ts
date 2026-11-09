@@ -297,7 +297,7 @@ const REVIEWED: TrackerComment = { id: 1, author: 'Maintainer', body: reviewComm
 
 function run(
   at: Install,
-  script: 'facts' | 'gate' | 'record' | 'ruling' | 'retriage',
+  script: 'facts' | 'gate' | 'record' | 'ruling' | 'retriage' | 'drain',
   inputs: Record<string, string>,
   options: { pr?: FakePr; comments?: readonly TrackerComment[]; args?: readonly string[]; artifacts?: Record<string, string>; preload?: string; issues?: readonly TrackerIssue[] } = {}
 ): ScriptRun {
@@ -921,6 +921,23 @@ describe('the merge queue scripts', () => {
     expect(ok(quiet)).toMatchObject({ retriaged: [] });
     expect(quiet.forge).toEqual([]);
     expect(existsSync(unset)).toBe(false);
+  }, 60_000);
+
+  test('a sweep that merged starts one discoveries drain through the binding; no merge or no binding starts none', () => {
+    const at = install();
+    const binding = { INPUTS_DISCOVERIES_BINDING: '/bindings/discoveries.json' };
+    const fires = (inputs: Record<string, string>): string[][] => {
+      const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+      ok(run(at, 'drain', { ...inputs, ARCHON_CALL_LOG: calls }));
+      if (!existsSync(calls)) return [];
+      return readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[0] === 'trigger');
+    };
+    const fired = fires({ ...binding, INPUTS_MERGED: '[42, 43]' });
+    expect(fired.map(argv => argv.slice(0, 6))).toEqual([
+      ['trigger', 'fire', '--config', '/bindings/discoveries.json', '--delivery-id', 'discoveries-drain:run-1'],
+    ]);
+    expect(fires({ ...binding, INPUTS_MERGED: '[]' })).toEqual([]);
+    expect(fires({ INPUTS_DISCOVERIES_BINDING: '', INPUTS_MERGED: '[42]' })).toEqual([]);
   }, 60_000);
 
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });

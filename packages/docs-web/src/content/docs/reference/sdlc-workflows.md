@@ -87,9 +87,9 @@ The stage after the build queue, started by a schedule binding. Each run claims 
 
 #### `archon-discoveries`
 
-Drains the discoveries finished runs recorded outside their own scope. One agent verifies each one against the default branch, merges duplicates across runs and with earlier decisions, and decides: file an issue with a full brief, track it on the open issue that already covers it, drop it with a reason, or ask a maintainer. Scripts perform only the writes it declared.
+Drains the discoveries finished runs recorded outside their own scope. One agent verifies each one against the default branch, merges duplicates across runs and with earlier decisions, and decides: file an issue with a full brief, track it on the open issue that already covers it, drop it with a reason, ask a maintainer, or wait when the code it is about is still on an open pull request, so a later pass decides it after that pull request merges or closes. Scripts perform only the writes it declared.
 
-**When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
+**When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it. Naming its binding in the merge queue's `discoveries_binding` input also starts a pass after each sweep that merged a pull request.
 
 **What it produces**: Filed issues and evidence comments, and one state document per drained run (`archon state list --prefix discoveries/runs/`) recording which of its records were decided and any question asked with its answer, so a record is decided once.
 

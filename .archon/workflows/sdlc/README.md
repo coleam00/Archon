@@ -863,6 +863,13 @@ then the project's file, whose lines win where the two conflict.
   as delivered or keeps it with what is still open. A closed issue is left alone. A failed read, label write or launch
   is named in the node's summary and stops nothing else. Empty `retriage_as`
   re-triages nothing.
+- **Discoveries drain.** When `discoveries_binding` names the operator's
+  [discoveries](#discoveries) binding, a sweep the forge shows merged at least one pull
+  request fires it with `archon trigger fire`, keyed by the run, so one sweep starts at
+  most one drain. The drain then decides records about the merged code now that it is
+  on the default branch. A sweep that merged nothing fires nothing. A drain that does
+  not start is named in the node's summary and fails nothing. Empty
+  `discoveries_binding` starts no drain.
 - **Attention.** A run raises at most one attention item: a red default branch, whose
   one choice holds merges until it is green, or else the first pull request the sweep
   asked about, labelled `merge: base` or `merge: pr`. It carries the build queue's
@@ -923,6 +930,8 @@ a CLI-only host needs `archon trigger drain` scheduled). A scheduled tick that f
 sweep running also waits in line instead of being dropped. With `"overlap": "skip"`
 the answer's sweep would be skipped and the next scheduled sweep would merge the pull
 request. Without the inputs, follow-ups wait for the next scheduled run.
+`discoveries_binding` names the discoveries binding, so a sweep that merged starts a
+drain (see [Discoveries](#discoveries)).
 
 ## Discoveries
 
@@ -951,7 +960,10 @@ terminal report lists.
   judged again against the tracker. Each discovery ends in one decision: `file` an
   issue with a full brief, `track` it on the open issue that already covers it (with
   one marked evidence comment per key, only when it adds something), `drop` it with a
-  reason, or `ask` a maintainer.
+  reason, or `ask` a maintainer. A discovery about code that is still on an open pull
+  request, and so not at the default branch yet, can `wait`: nothing is written, and
+  its record stays undecided until a later pass, after that pull request merged or
+  closed, decides it.
 - **Writes.** The `outcome` script checks before any write that every queued record is
   decided exactly once and that a tracking issue is open. Then it makes the public
   writes. A filed issue's body begins with `<!-- archon-discovery <key> -->`, and the
@@ -970,7 +982,11 @@ terminal report lists.
 The pack installs no binding, so the workflow runs only when started by hand until an
 operator adds one. A native schedule starts a pass every few hours; `overlap: skip`
 skips a start while a pass still runs, and a pass paused on a question gives its slot
-back:
+back. Naming the same binding file as the merge queue's `discoveries_binding` also
+starts a pass after each sweep that merged a pull request, when the records about the
+merged code can first be decided ([Merge queue](#merge-queue)). A fired pass that finds
+one already running is skipped like a scheduled one, and the next merging sweep or
+scheduled tick starts it:
 
 ```json
 {
