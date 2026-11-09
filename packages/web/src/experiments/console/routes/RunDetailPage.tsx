@@ -262,7 +262,7 @@ interface RunGraphViewProps {
   projectId: string | undefined;
   project: Project | null | undefined;
   projectError: Error | undefined;
-  selectedNodeId: string;
+  selectedNodeId: string | null;
   onNodeSelect: (nodeId: string) => void;
 }
 
@@ -515,6 +515,67 @@ export function RunDetailPage(): ReactElement {
     />
   );
 
+  const content = {
+    log: (
+      <div className="relative min-h-0 flex-1">
+        <div
+          ref={scrollRef}
+          onScroll={handleScroll}
+          onScrollEnd={handleScrollEnd}
+          className="h-full overflow-y-auto"
+        >
+          <div ref={contentRef} className="w-full px-6">
+            <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
+
+            <div className="py-4">
+              <RunStartedLine run={run} />
+
+              <div className="mt-2">
+                <RunStream
+                  messages={messageList}
+                  events={events}
+                  nodes={nodes}
+                  providerEvents={providerEvents}
+                  showToolCalls={showToolCalls}
+                  showSystem={showSystem}
+                  selectedNodeId={selectedNodeId}
+                />
+              </div>
+
+              <RunFinishedLine run={run} />
+
+              <ApprovalGate run={run} />
+            </div>
+          </div>
+        </div>
+        <JumpToBottom visible={!atBottom} onClick={scrollToBottom} />
+      </div>
+    ),
+    graph: (
+      <>
+        <div className="px-6">{toolbar}</div>
+        <RunGraphView
+          run={run}
+          nodes={nodes}
+          projectId={projectId}
+          project={project}
+          projectError={projectError}
+          selectedNodeId={selectedNodeId}
+          onNodeSelect={(nodeId): void => {
+            pendingNodeIdRef.current = nodeId;
+            select('log', nodeId);
+          }}
+        />
+      </>
+    ),
+    artifacts: (
+      <>
+        <div className="px-6">{toolbar}</div>
+        <ArtifactPanel runId={runId} />
+      </>
+    ),
+  } satisfies Record<DetailView, ReactElement>;
+
   return (
     <StreamContextProvider value={{ runStartedAt: run.startedAt }}>
       <section className="flex h-full flex-col">
@@ -524,64 +585,7 @@ export function RunDetailPage(): ReactElement {
           projectName={project?.name ?? detail.run.projectName ?? 'All runs'}
         />
 
-        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
-          {view === 'log' ? (
-            <div className="relative min-h-0 flex-1">
-              <div
-                ref={scrollRef}
-                onScroll={handleScroll}
-                onScrollEnd={handleScrollEnd}
-                className="h-full overflow-y-auto"
-              >
-                <div ref={contentRef} className="w-full px-6">
-                  <div className="sticky top-0 z-10 -mx-6 bg-surface px-6">{toolbar}</div>
-
-                  <div className="py-4">
-                    <RunStartedLine run={run} />
-
-                    <div className="mt-2">
-                      <RunStream
-                        messages={messageList}
-                        events={events}
-                        nodes={nodes}
-                        providerEvents={providerEvents}
-                        showToolCalls={showToolCalls}
-                        showSystem={showSystem}
-                        selectedNodeId={selectedNodeId}
-                      />
-                    </div>
-
-                    <RunFinishedLine run={run} />
-
-                    <ApprovalGate run={run} />
-                  </div>
-                </div>
-              </div>
-              <JumpToBottom visible={!atBottom} onClick={scrollToBottom} />
-            </div>
-          ) : view === 'graph' ? (
-            <>
-              <div className="px-6">{toolbar}</div>
-              <RunGraphView
-                run={run}
-                nodes={nodes}
-                projectId={projectId}
-                project={project}
-                projectError={projectError}
-                selectedNodeId={selectedNodeId}
-                onNodeSelect={(nodeId): void => {
-                  pendingNodeIdRef.current = nodeId;
-                  select('log', nodeId);
-                }}
-              />
-            </>
-          ) : (
-            <>
-              <div className="px-6">{toolbar}</div>
-              <ArtifactPanel runId={runId} />
-            </>
-          )}
-        </div>
+        <div className="flex min-h-0 flex-1 flex-col overflow-hidden">{content[view]}</div>
 
         <RunActionBar run={run} />
       </section>

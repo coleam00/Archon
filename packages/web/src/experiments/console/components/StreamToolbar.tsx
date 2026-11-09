@@ -2,6 +2,11 @@ import type { ReactElement, ReactNode } from 'react';
 
 export const DETAIL_VIEWS = ['log', 'graph', 'artifacts'] as const;
 export type DetailView = (typeof DETAIL_VIEWS)[number];
+export const DETAIL_VIEW_LABELS = {
+  log: 'Log',
+  graph: 'Graph',
+  artifacts: 'Artifacts',
+} satisfies Record<DetailView, string>;
 
 export interface NodeFilterOption {
   id: string;
@@ -20,9 +25,9 @@ interface StreamToolbarProps {
   artifactCount: number | null;
   /** Nodes with stream transitions. */
   nodeOptions: NodeFilterOption[];
-  /** `'all'` or a nodeId. */
-  selectedNodeId: string;
-  onSelectNode: (next: string) => void;
+  /** null selects all nodes. */
+  selectedNodeId: string | null;
+  onSelectNode: (next: string | null) => void;
 }
 
 // Compact native select styled with brand tokens — mirrors AssistantConfigPanel's
@@ -126,28 +131,15 @@ export function StreamToolbar({
   return (
     <div className="flex items-center gap-3 border-b border-border/60 bg-surface py-2 text-[11px]">
       <div className="flex items-center gap-1">
-        <Tab
-          label="Log"
-          active={isLog}
-          onClick={() => {
-            onChangeView('log');
-          }}
-        />
-        <Tab
-          label="Graph"
-          active={view === 'graph'}
-          onClick={() => {
-            onChangeView('graph');
-          }}
-        />
-        <Tab
-          label="Artifacts"
-          count={artifactCount}
-          active={view === 'artifacts'}
-          onClick={() => {
-            onChangeView('artifacts');
-          }}
-        />
+        {DETAIL_VIEWS.map(tab => (
+          <Tab
+            key={tab}
+            label={DETAIL_VIEW_LABELS[tab]}
+            count={tab === 'artifacts' ? artifactCount : undefined}
+            active={view === tab}
+            onClick={() => onChangeView(tab)}
+          />
+        ))}
       </div>
 
       {isLog ? (
@@ -158,20 +150,20 @@ export function StreamToolbar({
 
       {isLog ? (
         <div className="ml-auto flex items-center gap-[18px] font-mono text-[12px]">
-          {nodeOptions.length > 0 || selectedNodeId !== 'all' ? (
+          {nodeOptions.length > 0 || selectedNodeId !== null ? (
             <label className="flex items-center gap-1.5 text-text-secondary">
               <span className="text-text-tertiary">Node</span>
               <SelectShell>
                 <select
-                  value={selectedNodeId}
+                  value={selectedNodeId ?? ''}
                   onChange={e => {
-                    onSelectNode(e.target.value);
+                    onSelectNode(e.target.value || null);
                   }}
                   className={SELECT_CLASS}
                   aria-label="Filter stream by node"
                 >
-                  <option value="all">All nodes</option>
-                  {selectedNodeId !== 'all' && !nodeOptions.some(o => o.id === selectedNodeId) ? (
+                  <option value="">All nodes</option>
+                  {selectedNodeId !== null && !nodeOptions.some(o => o.id === selectedNodeId) ? (
                     <option value={selectedNodeId}>{selectedNodeId}</option>
                   ) : null}
                   {nodeOptions.map(o => (

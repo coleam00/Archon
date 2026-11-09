@@ -9,7 +9,7 @@ import { toRun } from './console/primitives/run';
 import { toRunEvent } from './console/primitives/event';
 import type { Project } from './console/primitives/project';
 import type { WorkflowGraphNode } from './console/primitives/workflow-graph';
-import { DETAIL_VIEWS } from './console/components/StreamToolbar';
+import { DETAIL_VIEWS, DETAIL_VIEW_LABELS } from './console/components/StreamToolbar';
 import { RunDetailPage } from './console/routes/RunDetailPage';
 
 const dom = new Window({ url: 'http://localhost' });
@@ -144,7 +144,7 @@ test('tab and node changes push history; Back and Forward restore the URL select
   expect(query().get('keep')).toBe('yes');
   expect(localStorage.getItem(nodeKey)).toBe('outcome');
   await act(async () => router.navigate(-1));
-  expect(container.querySelector('select')?.value).toBe('all');
+  expect(container.querySelector('select')?.value).toBe('');
   expect(container.querySelector('#node-transition-other')).not.toBeNull();
   await act(async () => router.navigate(1));
   expect(container.querySelector('select')?.value).toBe('outcome');
@@ -167,7 +167,7 @@ test.each([...DETAIL_VIEWS])(
     localStorage.setItem(viewKey, view === 'log' ? 'graph' : 'log');
     localStorage.setItem(nodeKey, 'all');
     await open(`${base}?view=${view}&node=outcome`);
-    activeTab(view === 'log' ? 'Log' : view === 'graph' ? 'Graph' : 'Artifacts');
+    activeTab(DETAIL_VIEW_LABELS[view]);
     expect(query().get('node')).toBe('outcome');
     await tab('Log');
     expect(container.querySelector('select')?.value).toBe('outcome');
@@ -184,7 +184,7 @@ test('an obsolete stored node is reset in the URL without adding history', async
   localStorage.setItem(nodeKey, 'another-workflow');
   await open(base);
   expect(query().get('node')).toBe('all');
-  expect(container.querySelector('select')?.value).toBe('all');
+  expect(container.querySelector('select')?.value).toBe('');
   await act(async () => router.navigate(-1));
   expect(container.textContent).toBe('Previous page');
 });
@@ -366,4 +366,72 @@ test('an obsolete stored node is validated after a delayed run load', async () =
   expect(localStorage.getItem(nodeKey)).toBe('all');
   await act(async () => router.navigate(-1));
   expect(container.textContent).toBe('Previous page');
+});
+
+test('the node named all is distinct from all nodes across graph, log, history and preferences', async () => {
+  seedGraph();
+  set('workflow-graph:review:/project', [
+    { id: 'all', kind: 'prompt', dependsOn: [] },
+    { id: 'outcome', kind: 'prompt', dependsOn: ['all'] },
+  ] satisfies WorkflowGraphNode[]);
+  set(K.run('run-1'), {
+    run: { ...toRun(detailFixture.run), projectId: 'project-1' },
+    events: [
+      ...detailFixture.events.map(toRunEvent),
+      toRunEvent({ ...detailFixture.events[0], id: 'all-event', step_name: 'all' }),
+    ],
+    nodes: [...detailFixture.run.nodes, { node_id: 'all', state: 'completed' }],
+  });
+  await open(`${base}?view=graph&node=all`);
+  const graphNode = () => container.querySelector<HTMLButtonElement>('button[title^="all ·"]');
+  expect(graphNode()?.getAttribute('aria-pressed')).toBe('false');
+  await act(async () => graphNode()?.click());
+  activeTab('Log');
+  expect(query().get('node')).toBe('all');
+  expect(query().get('nodeScope')).toBe('single');
+  expect(container.querySelector('#node-transition-all')).not.toBeNull();
+  expect(container.querySelector('#node-transition-outcome')).toBeNull();
+  const select = container.querySelector('select');
+  if (!select) throw new Error('Missing node filter');
+  expect([...select.options].map(o => o.value)).toEqual(['', 'outcome', 'all']);
+  expect(select.value).toBe('all');
+  await tab('Graph');
+  expect(graphNode()?.getAttribute('aria-pressed')).toBe('true');
+  await act(async () => router.navigate(-1));
+  activeTab('Log');
+  await act(async () => router.navigate(-1));
+  expect(graphNode()?.getAttribute('aria-pressed')).toBe('false');
+  await act(async () => router.navigate(1));
+  activeTab('Log');
+  expect(container.querySelector('#node-transition-outcome')).toBeNull();
+  await act(async () => root?.unmount());
+  router.dispose();
+  await open(base);
+  expect(query().get('nodeScope')).toBe('single');
+  expect(container.querySelector('select')?.value).toBe('all');
+  const restored = container.querySelector('select');
+  if (!restored) throw new Error('Missing restored filter');
+  await act(async () => {
+    restored.value = '';
+    const event = document.createEvent('Event');
+    event.initEvent('change', true, true);
+    restored.dispatchEvent(event);
+  });
+  expect(query().has('nodeScope')).toBe(false);
+  expect(container.querySelector('#node-transition-outcome')).not.toBeNull();
+  await act(async () => {
+    restored.value = 'all';
+    const event = document.createEvent('Event');
+    event.initEvent('change', true, true);
+    restored.dispatchEvent(event);
+  });
+  expect(query().get('nodeScope')).toBe('single');
+  expect(container.querySelector('#node-transition-outcome')).toBeNull();
+  await act(async () => root?.unmount());
+  router.dispose();
+  await open(`${base}?view=graph&node=all&nodeScope=single`);
+  expect(graphNode()?.getAttribute('aria-pressed')).toBe('true');
+  await tab('Log');
+  expect(container.querySelector('#node-transition-all')).not.toBeNull();
+  expect(container.querySelector('#node-transition-outcome')).toBeNull();
 });

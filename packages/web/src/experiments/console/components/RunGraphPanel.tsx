@@ -18,7 +18,7 @@ interface RunGraphPanelProps {
   nodes: readonly RunNodeState[];
   /** False once the run's owner is not observed live: running nodes stop pulsing. */
   live: boolean;
-  selectedNodeId: string;
+  selectedNodeId: string | null;
   /** The node the main stream should scroll to when a graph node is clicked. */
   onNodeSelect?: (nodeId: string) => void;
 }

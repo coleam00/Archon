@@ -28,8 +28,8 @@ interface RunStreamProps {
   providerEvents: RunProviderEvents;
   showToolCalls: boolean;
   showSystem: boolean;
-  /** `'all'` shows every node; otherwise restrict the stream to one node's entries. */
-  selectedNodeId: string;
+  /** null shows every node; otherwise restrict the stream to one node's entries. */
+  selectedNodeId: string | null;
 }
 
 /**
@@ -335,7 +335,7 @@ export function RunStream({
   // message-inline tools of a run with no recorded tool events) still resolve to a
   // node when filtering.
   const nodeWindow = useMemo<{ start: number; end: number } | null>(() => {
-    if (selectedNodeId === 'all') return null;
+    if (selectedNodeId === null) return null;
     const idx = nodeRuns.findIndex(r => r.nodeId === selectedNodeId);
     if (idx === -1) return null;
     const start = new Date(nodeRuns[idx].startedAt).getTime();
@@ -351,7 +351,7 @@ export function RunStream({
     // match by identity; every node-blind entry (prose, artifacts, system rows,
     // legacy message-inline tools) falls back to the node's time window so a
     // node's whole slice of the timeline stays visible.
-    if (selectedNodeId !== 'all') {
+    if (selectedNodeId !== null) {
       if (e.kind === 'node') return e.node.nodeId === selectedNodeId;
       if (e.kind === 'hook') return e.nodeId === selectedNodeId;
       if (e.kind === 'tool' && e.nodeId !== null) return e.nodeId === selectedNodeId;
