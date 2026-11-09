@@ -169,8 +169,9 @@ nodes:
             # checks against this PR's remote head before publishing.
             scope: "$pr.output"
             # A later round reviews only the delta since the previous round's
-            # published report: the code lens, plus any lens route adds for new
-            # ground the delta reaches in its area.
+            # published report: the code lens, every lens with a blocker that
+            # report left open, and any lens route adds for new ground the delta
+            # reaches in its area.
             prior_report: "$LOOP_PREV.round.output.prior_report"
             work_order: "$INPUTS.work"
             part: "$INPUTS.part"

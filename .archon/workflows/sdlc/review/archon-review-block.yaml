@@ -71,7 +71,8 @@ nodes:
   # commits from here; publish refuses a report about any other commit. A
   # caller's pull-request record names the PR, never the commit: its head
   # revision goes stale with every push after the PR opens. The node also turns
-  # the input into the routable fact the code lens gates on: an include's inputs
+  # the input into the routable facts the lens gates read: on a continuation the
+  # code lens and every lens an open prior blocker names rerun. An include's inputs
   # are substituted as text at load time and cannot be compared in a `when:`. For
   # the same reason it carries the part assignment, so synthesis reads a value
   # certified against its schema, not raw text.
@@ -89,6 +90,15 @@ nodes:
         # The previous round's reviewed commit; empty on a first round.
         cursor: { type: string }
         risks: { type: string, minLength: 1 }
+        # Lenses this continuation reruns whatever route answers: code, and each
+        # lens an open blocker in the previous round's findings.json names. All
+        # false on a first round.
+        seams: { type: boolean }
+        code: { type: boolean }
+        tests: { type: boolean }
+        errors: { type: boolean }
+        docs: { type: boolean }
+        ux: { type: boolean }
         # The run's part assignment, null when the run delivers the whole contract.
         # This schema is the one owner of the shape; ship and deliver forward the
         # input as-is.
@@ -108,7 +118,7 @@ nodes:
                   items: { type: array, minItems: 1, items: { type: string, pattern: '\S' } }
                 required: [part, items]
           required: [delivers, parts]
-      required: [continuation, head, cursor, risks, part]
+      required: [continuation, head, cursor, risks, seams, code, tests, errors, docs, ux, part]
 
   # Every review node writes under review/, and a fresh run's artifacts directory
   # has none. Agents told to create it have skipped that step, so the declared
@@ -153,10 +163,11 @@ nodes:
           required: [type, run_id, path]
       required: [pr, report]
 
-  # The one owner of lens selection. After scope resolves the diff, a small model
+  # The one judge of lens selection. After scope resolves the diff, a small model
   # reads its summary and the work order and answers, with seams on by default. On
-  # a continuation the code lens reruns whatever route answers, and route adds
-  # another lens only for new ground the delta reaches in that lens's area.
+  # a continuation the lenses mode names rerun whatever route answers (facts, not
+  # judgment), and route adds another lens only for new ground the delta reaches in
+  # that lens's area.
   - id: route
     command: route-review
     model: small
@@ -185,7 +196,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [mode, route]
-    when: "$route.output.seams == true"
+    when: "$mode.output.seams == true || $route.output.seams == true"
 
   - id: code
     model: ['@review-code', '@reviewer', large]
@@ -193,7 +204,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [mode, route]
-    when: "$mode.output.continuation == true || $route.output.code == true"
+    when: "$mode.output.code == true || $route.output.code == true"
 
   - id: tests
     model: ['@review-tests', '@reviewer', medium]
@@ -201,7 +212,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [mode, route]
-    when: "$route.output.tests == true"
+    when: "$mode.output.tests == true || $route.output.tests == true"
 
   - id: errors
     model: ['@review-errors', '@reviewer', medium]
@@ -209,7 +220,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [mode, route]
-    when: "$route.output.errors == true"
+    when: "$mode.output.errors == true || $route.output.errors == true"
 
   - id: docs
     model: ['@review-docs', '@reviewer', medium]
@@ -217,7 +228,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [mode, route]
-    when: "$route.output.docs == true"
+    when: "$mode.output.docs == true || $route.output.docs == true"
 
   - id: ux
     model: ['@review-ux', '@reviewer', large]
@@ -225,7 +236,7 @@ nodes:
     context: fresh
     mutates_checkout: false
     depends_on: [mode, route]
-    when: "$route.output.ux == true"
+    when: "$mode.output.ux == true || $route.output.ux == true"
 
   # all_done lets this barrier settle after unselected lenses, or a lens whose
   # retries were exhausted, and report how each of this round's lenses ended

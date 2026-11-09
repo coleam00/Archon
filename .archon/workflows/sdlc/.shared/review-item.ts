@@ -91,7 +91,11 @@ export function readItem(dir: string): ItemRecord {
 }
 
 export function readFindings(dir: string): Finding[] {
-  const file = join(dir, FINDINGS_FILE);
+  return readFindingsFile(join(dir, FINDINGS_FILE));
+}
+
+/** One `findings.json` at any path, such as the one beside a previous round's report. */
+export function readFindingsFile(file: string): Finding[] {
   const raw: unknown = JSON.parse(readFileSync(file, 'utf8'));
   const isFinding = (record: unknown): record is Finding =>
     texts(record, 'id', 'severity', 'claim', 'status') &&

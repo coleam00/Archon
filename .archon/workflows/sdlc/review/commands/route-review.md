@@ -13,14 +13,15 @@ one watches this run; your structured answer is all the next nodes read.
   not the whole repository.
 - Whether this round continues an earlier review: `$mode.output.continuation`. On a
   continuation, scope.md's diff is the correction delta since the previous round's
-  reviewed commit, and the code lens reviews it whatever you answer: it judges every
-  prior finding, whichever lens raised it. Select another lens only when the delta
-  reaches new ground in that lens's area that the earlier rounds never saw: a new
-  type, contract or boundary for `seams`; new behavior a test should protect for
-  `tests`; a new catch, fallback or retry for `errors`; a new user-facing command,
+  reviewed commit. The lens booleans in **$mode.output** that are `true` review it
+  whatever you answer: the code lens, and every lens that raised a blocker the
+  previous round left open, which verifies its findings were fixed and that the fix
+  caused nothing new in its area. For every other lens, select it only when the delta reaches new
+  ground in that lens's area that the earlier rounds never saw: a new type,
+  contract or boundary for `seams`; new behavior a test should protect for `tests`;
+  a new catch, fallback or retry for `errors`; a new user-facing command,
   configuration key, flag or behavior for `docs`; a new page or interaction for
-  `ux`. A lens that owned a prior finding does not rerun for that reason: the code
-  lens verifies it. The defaults below, seams on among them, describe a first round.
+  `ux`. The defaults below, seams on among them, describe a first round.
 
 Lenses:
 
