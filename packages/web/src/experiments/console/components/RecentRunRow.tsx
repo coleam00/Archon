@@ -1,16 +1,9 @@
 import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
+import { RelativeRunStart } from './RelativeRunStart';
 import { runDetailPath, type Run } from '../primitives/run';
-import {
-  shortRunId,
-  formatElapsed,
-  elapsedSince,
-  formatCost,
-  formatDateTime,
-  ensureUtc,
-  relativeTime,
-} from '../lib/format';
+import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
@@ -28,8 +21,8 @@ const STATUS_GLYPH: Record<string, string> = {
 };
 
 /**
- * Compact one-liner row for terminal-state runs (completed / failed /
- * cancelled). ~36px tall, monospace, data-heavy. Scans like a log.
+ * Compact row for terminal-state runs (completed / failed / cancelled).
+ * Wraps on narrow screens and scans like a log on desktop.
  *
  * Failed rows keep the error-red glyph and status text so they still catch
  * the eye in a sea of muted completed rows.
@@ -69,11 +62,11 @@ export function RecentRunRow({
 
   // Row grid: status | body | (project) | id | duration + start | cost | CLI.
   const gridCols = showProject
-    ? 'grid-cols-[220px_minmax(0,1fr)_140px_84px_auto_auto_auto]'
-    : 'grid-cols-[220px_minmax(0,1fr)_84px_auto_auto_auto]';
+    ? 'md:grid-cols-[220px_minmax(0,1fr)_140px_84px_auto_auto_auto]'
+    : 'md:grid-cols-[220px_minmax(0,1fr)_84px_auto_auto_auto]';
 
   const renderStatus = (): ReactElement => (
-    <span className="flex items-center gap-[9px]">
+    <span className="flex w-full items-center gap-[9px] md:w-auto">
       {run.status === 'failed' ? (
         <span aria-hidden className={`text-[12px] leading-none ${statusTextClass.failed}`}>
           {glyph}
@@ -99,8 +92,8 @@ export function RecentRunRow({
 
   const renderRunSummary = (): ReactElement => (
     <>
-      <span className="flex min-w-0 items-baseline gap-2.5">
-        <span className="shrink-0 truncate font-mono text-[13px] font-bold text-text-primary">
+      <span className="flex w-full min-w-0 items-baseline gap-2.5 md:w-auto">
+        <span className="min-w-0 truncate font-mono text-[13px] font-bold text-text-primary">
           {run.workflow}
         </span>
         {run.parentRunId ? (
@@ -128,15 +121,12 @@ export function RecentRunRow({
       <span className="text-right font-mono text-[12px] text-text-tertiary">
         {shortRunId(run.id)}
       </span>
-      <span className="text-right font-mono text-[12px] tabular-nums text-text-secondary">
+      <span className="whitespace-nowrap text-right font-mono text-[12px] tabular-nums text-text-secondary">
         {elapsed}
-        <time
+        <RelativeRunStart
           className="ml-2 whitespace-nowrap text-text-tertiary"
-          dateTime={ensureUtc(run.startedAt)}
-          title={`Started ${formatDateTime(run.startedAt)}`}
-        >
-          {relativeTime(run.startedAt)}
-        </time>
+          startedAt={run.startedAt}
+        />
       </span>
       <span
         className="text-right font-mono text-[12px] tabular-nums text-text-primary"
@@ -168,7 +158,7 @@ export function RecentRunRow({
             }
           : undefined
       }
-      className={`group grid items-center gap-[18px] border-b border-border/40 px-[18px] py-[13px] transition-colors last:border-b-0 hover:bg-surface-hover ${gridCols} ${
+      className={`group flex flex-wrap items-center gap-x-3 gap-y-2 md:grid md:gap-[18px] border-b border-border/40 px-[18px] py-[13px] transition-colors last:border-b-0 hover:bg-surface-hover ${gridCols} ${
         selected ? 'bg-surface-hover ring-2 ring-inset ring-accent-bright/40' : ''
       } ${canOpen ? 'cursor-pointer' : ''}`}
     >
@@ -177,7 +167,7 @@ export function RecentRunRow({
       {renderRunSummary()}
 
       {/* trailing: origin + hover actions + CLI */}
-      <span className="flex items-center justify-end gap-1.5">
+      <span className="ml-auto flex items-center justify-end gap-1.5 md:ml-0">
         {/* Origin + quick actions reveal on hover; the resting row matches the
             design (status · body · id · duration + start · cost · CLI). */}
         <span className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">

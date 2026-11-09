@@ -5,19 +5,12 @@ import { StatusStrip } from './StatusStrip';
 import { RunningDot } from './LiveDot';
 import { OwnerObservationHint } from './OwnerObservationHint';
 import { OriginBadge } from './OriginBadge';
+import { RelativeRunStart } from './RelativeRunStart';
 import { ApprovalPanel } from './ApprovalPanel';
 import { AttentionAnswerPanel, isLegacyAttention } from './AttentionAnswerPanel';
 import { ApprovalContext } from './ApprovalContext';
 import { runDetailPath, type Run } from '../primitives/run';
-import {
-  shortRunId,
-  formatElapsed,
-  elapsedSince,
-  formatCost,
-  formatDateTime,
-  ensureUtc,
-  relativeTime,
-} from '../lib/format';
+import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { isRunLive, runElapsedLabel, statusTextClass, runStatusLabel } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
@@ -180,13 +173,10 @@ function RunCardHeader({
         <span className="font-mono text-[11px] tabular-nums text-text-tertiary">
           {runElapsedLabel(run, elapsed)}
         </span>
-        <time
+        <RelativeRunStart
           className="whitespace-nowrap font-mono text-[11px] text-text-tertiary"
-          dateTime={ensureUtc(run.startedAt)}
-          title={`Started ${formatDateTime(run.startedAt)}`}
-        >
-          {relativeTime(run.startedAt)}
-        </time>
+          startedAt={run.startedAt}
+        />
         {ideWorkingPath !== null ? (
           <OpenInIdeButton workingPath={ideWorkingPath} ideEnv={ideEnv} />
         ) : null}
