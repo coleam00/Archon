@@ -20,7 +20,6 @@
  */
 
 import {
-  type ApplyDecision,
   type AskedBy,
   type BuildAttention,
   type BuildRound,
@@ -182,7 +181,7 @@ function afterWrite(summary: string, wrote: string | null, decision: Decision, i
 }
 
 /** The summary of a path with no item, so nothing is written or asked; null on an item's path. */
-function noItemSummary(path: string): { decision: ApplyDecision; summary: string } | null {
+function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string } | null {
   switch (path) {
     case 'idle':
       return {
@@ -238,7 +237,7 @@ function main(): void {
     ...(asking?.attention.links ?? []),
   ];
   const result = {
-    decision: decision.kind satisfies ApplyDecision,
+    decision: decision.kind,
     summary: summaryOf(item, decision),
     ...askFields(wait),
     class: asking?.by ?? '',
