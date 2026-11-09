@@ -63,13 +63,13 @@ function round(
   cwd: string,
   head: string,
   cursor?: string,
-  extra: { light?: boolean; part?: string } = {}
+  extra: { part?: string; findings?: unknown[] | null } = {}
 ): ScriptRun {
+  const findings = extra.findings === undefined ? [] : extra.findings;
   return runPackScript('review/scripts/review-round', {
     cwd,
     inputs: {
       INPUTS_PRIOR_REPORT: cursor === undefined ? '' : '{ARTIFACTS}/review/report.md',
-      INPUTS_LIGHT: extra.light ? 'true' : 'false',
       INPUTS_PART: extra.part ?? '',
       ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)),
     },
@@ -79,28 +79,42 @@ function round(
         : {
             'review/report.md': 'Round 1',
             'review/reviewed-head': `${cursor}\n`,
+            ...(findings === null ? {} : { 'review/findings.json': JSON.stringify(findings) }),
           },
   });
 }
 
 describe('review-round', () => {
 
-  // The route agent adds every other lens a continuation earns; the code lens is
-  // the one this round always reruns, whatever an earlier round ran.
-  it("continues from the previous round's reviewed commit with the code lens alone", () => {
+  it("continues from the previous round's reviewed commit with code and every lens owing a blocker", () => {
     const { cwd, older, newer } = history();
     const part = { delivers: 1, parts: [{ part: 2, items: ['later'] }] };
-    const run = round(cwd, newer, older, { part: JSON.stringify(part) });
+    const finding = (id: string, severity: string, status: string, sources: string[]): object => ({
+      id, severity, status, sources, claim: id, round: 1, ...(severity === 'blocking' ? { action: 'correct' } : {}),
+    });
+    const findings = [
+      finding('R1', 'blocking', 'open', ['seams', 'contract']),
+      finding('R2', 'note', 'open', ['tests']),
+      finding('R3', 'blocking', 'fixed', ['errors']),
+    ];
+    const run = round(cwd, newer, older, { part: JSON.stringify(part), findings });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
       continuation: true,
-      light: false,
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
-      seams: false, code: true, tests: false, errors: false, docs: false, ux: false,
+      seams: true, code: true, tests: false, errors: false, docs: false, ux: false,
       part,
     });
+  });
+
+  it("refuses a continuation whose previous report has no findings.json beside it", () => {
+    const { cwd, older, newer } = history();
+    const run = round(cwd, newer, older, { findings: null });
+    expect(run.code).not.toBe(0);
+    expect(run.stdout).toBe('');
+    expect(run.stderr).toContain('findings.json');
   });
 
   it('refuses a head that is an ancestor of the commit the previous round reviewed', () => {

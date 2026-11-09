@@ -14,30 +14,35 @@
  * the delta run backwards or cover commits the previous round never read, so the
  * round refuses instead.
  *
- * A first round's lenses are the route agent's call. A continuation reruns the
- * general code lens on the delta; the route agent adds every lens whose finding the
- * previous report leaves open or whose area the delta touches. A light
- * continuation, which follows a correction for CI or simplify rather than for review, runs
- * the code lens alone and does not route.
+ * This node runs first, so it is the one owner of both commits: scope, route,
+ * synthesis and publish read them from its output. It also emits one boolean per
+ * lens, the facts a continuation's lens gates need: the code lens always reruns,
+ * and so does every lens that a blocker still open in the previous round's
+ * `findings.json` names in its `sources`, to verify the correction fixed it and
+ * caused nothing new in its area. An open note does not rerun its lens: no
+ * correction owes it a fix. A first round emits all six false. Whether any other
+ * lens runs is the route agent's judgment.
  *
  * The prior report is a declared input an outside caller can fill with a path
  * from an earlier run, so its existence is checked here too: a continuation that
  * cannot read the report it continues from would review nothing and say it
- * reviewed everything.
+ * reviewed everything. The `findings.json` beside it is read through its shared
+ * reader, so a missing or malformed record refuses the round rather than
+ * silently skipping a lens that owes a verification.
  *
  * The part assignment passes through unchanged: the node's `output_format` owns
  * its shape, so the engine refuses a malformed one before lenses or synthesis read it.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PRIOR_REPORT: the previous round's report path, or empty for round one.
- * - INPUTS_LIGHT: "true" when this continuation follows a CI or simplify correction.
  * - INPUTS_PART: the run's part assignment as JSON, or empty for the whole contract.
  */
 
 import { existsSync, readFileSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { FULL_REVIEW_RISKS, type ReviewLens } from '../../.shared/review-policy.ts';
+import { readFindingsFile } from '../../.shared/review-item.ts';
+import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
 import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 
 /**
@@ -54,14 +59,20 @@ function partAssignment(value: string | undefined): unknown {
 
 /** Where publish-review records the commit a published report reviewed. */
 const REVIEWED_HEAD = 'reviewed-head';
-const NO_LENSES: Record<ReviewLens, boolean> = {
-  seams: false,
-  code: false,
-  tests: false,
-  errors: false,
-  docs: false,
-  ux: false,
-};
+
+/** One boolean per lens, true for each lens named in `rerun`. */
+function lensFlags(rerun: ReadonlySet<string>): Record<ReviewLens, boolean> {
+  return Object.fromEntries(REVIEW_LENSES.map(lens => [lens, rerun.has(lens)])) as Record<ReviewLens, boolean>;
+}
+
+/** The code lens, and every lens a blocker still open in the previous round names. */
+function owingLenses(findingsFile: string): Set<string> {
+  const owing = new Set<string>(['code']);
+  for (const finding of readFindingsFile(findingsFile)) {
+    if (finding.severity === 'blocking' && finding.status === 'open') for (const source of finding.sources) owing.add(source);
+  }
+  return owing;
+}
 
 function isFile(path: string): boolean {
   try {
@@ -85,7 +96,7 @@ try {
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
   const head = nodeStartCommit();
   if (prior === '') {
-    emit({ continuation: false, light: false, head, cursor: '', risks: FULL_REVIEW_RISKS, ...NO_LENSES, part });
+    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, ...lensFlags(new Set()), part });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
@@ -100,8 +111,8 @@ try {
         `the checkout is at ${head}, which does not descend from ${cursor}, the commit the previous round reviewed; reviewing it would diff backwards or skip commits`
       );
     }
-    const light = trimmed(process.env.INPUTS_LIGHT) === 'true';
-    emit({ continuation: true, light, head, cursor, risks: FULL_REVIEW_RISKS, ...NO_LENSES, code: true, part });
+    const rerun = lensFlags(owingLenses(join(dirname(prior), 'findings.json')));
+    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, ...rerun, part });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

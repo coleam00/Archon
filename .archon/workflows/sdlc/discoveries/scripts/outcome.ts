@@ -8,7 +8,8 @@
  * again never files or comments twice. Last, each run's document records the refs this
  * pass decided and the questions it asked, and its claim is released, except on a run
  * with an asked record: it stays claimed by this run until the question is answered and
- * the run ends.
+ * the run ends. A `wait` writes nothing: its refs stay undecided, so a later pass queues
+ * them again.
  *
  * Bound inputs: INPUTS_PATH from facts; INPUTS_DECISIONS and INPUTS_SUMMARY from the
  * agent, `null` when it did not run; INPUTS_REPO, the repository facts resolved.
@@ -53,7 +54,7 @@ function issueBody(decision: AgentDecision & { outcome: 'file' }, sha: string): 
 function main(): void {
   const idle = trimmed(process.env.INPUTS_PATH) === 'idle';
   if (idle) {
-    emit({ summary: IDLE, written: [], dropped: [], asked: [], question: '' });
+    emit({ summary: IDLE, written: [], dropped: [], asked: [], waiting: [], question: '' });
     return;
   }
   const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
@@ -81,6 +82,9 @@ function main(): void {
   }
   const dropped = decisions.flatMap(decision =>
     decision.outcome === 'drop' ? [{ key: decision.key, reason: decision.reason }] : []
+  );
+  const waiting = decisions.flatMap(decision =>
+    decision.outcome === 'wait' ? [{ key: decision.key, reason: decision.reason }] : []
   );
   const asked = decisions.filter(
     (decision): decision is AgentDecision & { outcome: 'ask' } => decision.outcome === 'ask'
@@ -118,7 +122,9 @@ function main(): void {
     const document = parseRunDocument(name, read.value);
     if (document?.claim?.run_id !== self) throw new Error(`${name} is no longer claimed by this run`);
     const ofRun = (refs: readonly string[]): string[] => refs.filter(ref => refRun(ref) === run.id);
-    const decided = decisions.filter(decision => decision.outcome !== 'ask').flatMap(decision => ofRun(decision.refs));
+    const decided = decisions
+      .filter(decision => decision.outcome !== 'ask' && decision.outcome !== 'wait')
+      .flatMap(decision => ofRun(decision.refs));
     const questions: Question[] = asked
       .filter(decision => ofRun(decision.refs).length > 0)
       .map(decision => ({
@@ -149,6 +155,7 @@ function main(): void {
     written,
     dropped,
     asked: asked.map(decision => decision.key),
+    waiting,
     question: asked
       .map(
         (decision, index) =>

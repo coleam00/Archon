@@ -30,11 +30,6 @@ inputs:
       The accepted outcome and scope boundaries for this change. Delivery passes
       the same work order implementation received. Standalone review may leave
       this empty and use the PR's problem, outcome, and explicit scope instead.
-  light:
-    default: "false"
-    description: >-
-      "true" when this continuation follows a correction for CI or simplify rather
-      than for review: the general code lens alone reviews the delta.
   part:
     default: ""
     description: >-
@@ -71,7 +66,6 @@ nodes:
           with:
             scope: "$INPUTS.scope"
             prior_report: "$INPUTS.prior_report"
-            light: "$INPUTS.light"
             part: "$INPUTS.part"
             errors: "$INPUTS.errors"
             work_order: |-
