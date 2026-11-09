@@ -96,20 +96,17 @@ export function backfillRunReviews(runDir: string): RunReviews {
 
 /** The 1-based round from which every verdict is ready, or null when the latest is not. */
 export function roundsToReady(verdicts: readonly ReviewVerdict[]): number | null {
-  const ordered = [...verdicts].sort((left, right) => left.at.localeCompare(right.at));
+  const ordered = [...verdicts].sort((left, right) => Date.parse(left.at) - Date.parse(right.at));
   if (ordered.at(-1)?.ready !== true) return null;
   return ordered.map(verdict => verdict.ready).lastIndexOf(false) + 2;
 }
 
-/** Every pull request a build round recorded, with the rounds that carry it, one per run. */
+/** Every pull request a build round recorded, with the rounds that carry it. */
 export function prBuildRounds(items: readonly WorkItem[]): Map<string, BuildRound[]> {
   const rounds = new Map<string, BuildRound[]>();
   for (const item of items) {
     for (const round of item.facts.build?.rounds ?? []) {
-      if (round.pr_url === '') continue;
-      const carried = rounds.get(round.pr_url) ?? [];
-      if (!carried.some(other => other.run_id === round.run_id)) carried.push(round);
-      rounds.set(round.pr_url, carried);
+      if (round.pr_url !== '') rounds.set(round.pr_url, [...(rounds.get(round.pr_url) ?? []), round]);
     }
   }
   return rounds;
@@ -117,15 +114,15 @@ export function prBuildRounds(items: readonly WorkItem[]): Map<string, BuildRoun
 
 /**
  * The pull requests whose early build rounds the work item may have dropped: an item
- * keeps only its latest rounds, so when it is at that cap and its oldest kept round
- * carries the pull request, older rounds may have carried it too.
+ * keeps only its latest rounds, so when it is at that cap any pull request its rounds
+ * carry may have had older rounds.
  */
 export function droppedRoundPrs(items: readonly WorkItem[]): Set<string> {
   const urls = new Set<string>();
   for (const item of items) {
     const rounds = item.facts.build?.rounds ?? [];
-    const oldest = rounds[0]?.pr_url ?? '';
-    if (rounds.length >= KEPT_ROUNDS && oldest !== '') urls.add(oldest);
+    if (rounds.length < KEPT_ROUNDS) continue;
+    for (const round of rounds) if (round.pr_url !== '') urls.add(round.pr_url);
   }
   return urls;
 }

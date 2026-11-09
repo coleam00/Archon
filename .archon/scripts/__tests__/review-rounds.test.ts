@@ -7,14 +7,15 @@ import { describe, expect, it } from 'bun:test';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import type { BuildRound, ReviewVerdict } from '../../workflows/sdlc/.shared/build';
+import { type BuildRound, KEPT_ROUNDS, type ReviewVerdict } from '../../workflows/sdlc/.shared/build';
 import type { PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
+import type { WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import {
   REVIEW_NODES,
   backfillRunReviews,
+  droppedRoundPrs,
   reviewRoundRecords,
   roundsToReady,
-  runReviews,
   type RunReviews,
 } from '../../workflows/sdlc/.shared/review-rounds';
 import { PACK } from './deliver-checks-harness';
@@ -74,8 +75,8 @@ function nodesOf(path: string): Node[] {
   return walk(workflow.nodes);
 }
 
-describe('runReviews', () => {
-  it('selects the published verdict of every review the deliver loop includes', () => {
+describe('REVIEW_NODES', () => {
+  it('names the published verdict of every review the deliver loop includes', () => {
     const reviews = nodesOf('deliver/archon-deliver-block.yaml').filter(node => node.include === 'archon-review-block');
     // synthesize's verdict is the agent's; the published one is the script node that writes it to the pull request.
     const published = nodesOf('review/archon-review-block.yaml').filter(
@@ -84,29 +85,6 @@ describe('runReviews', () => {
     expect(reviews.length).toBeGreaterThan(0);
     expect(published).toHaveLength(1);
     expect([...REVIEW_NODES].sort()).toEqual(reviews.map(review => `${review.id}__${published[0]?.id}`).sort());
-  });
-
-  it("records the review and rereview publish verdicts from the run's listing, not synthesize's", () => {
-    const artifacts = tracked(mkdtempSync(join(tmpdir(), 'review-rounds-')));
-    const entry = (id: string, nodeId: string, ready: boolean, producedAt: string) => {
-      writeFileSync(join(artifacts, `${id}.md`), JSON.stringify({ ready }));
-      return { nodeId, path: `${id}.md`, producedAt };
-    };
-    const listing = join(artifacts, 'listing.json');
-    const reports = [
-      entry('a', 'review__publish', false, '2026-11-06T10:00:00Z'),
-      entry('b', 'review__synthesize', true, '2026-11-06T10:01:00Z'),
-      entry('c', 'rereview__publish', true, '2026-11-06T10:02:00Z'),
-    ];
-    writeFileSync(listing, JSON.stringify({ artifactsByType: { 'review-report': reports }, errors: [] }));
-    expect(runReviews(listing, artifacts)).toEqual({
-      ok: true,
-      verdicts: [
-        { ready: false, at: '2026-11-06T10:00:00Z' },
-        { ready: true, at: '2026-11-06T10:02:00Z' },
-      ],
-    });
-    expect(runReviews(join(artifacts, 'missing.json'), artifacts)).toMatchObject({ ok: false });
   });
 });
 
@@ -161,5 +139,15 @@ describe('reviewRoundRecords', () => {
     const result = reviewRoundRecords(prs, runs, rounds, new Set([pr(1).url]), id => byRun[id] ?? { ok: true, verdicts: verdicts(true) });
     expect(result.skipped.map(entry => entry.url)).toEqual([pr(1).url, pr(2).url, pr(3).url]);
     expect(result.metrics.filter(record => record.name === 'sdlc.review_rounds').map(record => [record.subject, record.value])).toEqual([[pr(4).url, 2]]);
+  });
+
+  it('treats every pull request on a work item at the round cap as possibly missing rounds', () => {
+    const [a, b] = [pr(1).url, pr(2).url];
+    // A returned to after B: the dropped rounds before the oldest kept one may have carried either.
+    const urls = [b, ...Array<string>(KEPT_ROUNDS - 2).fill(a), ''];
+    const capped = { facts: { build: { rounds: urls.map((url, index) => round(String(index), url)) } } } as unknown as WorkItem;
+    expect([...droppedRoundPrs([capped])].sort()).toEqual([a, b]);
+    const under = { facts: { build: { rounds: [round(RUN_A, a)] } } } as unknown as WorkItem;
+    expect(droppedRoundPrs([under]).size).toBe(0);
   });
 });

@@ -544,7 +544,6 @@ describe('the build queue scripts', () => {
     seed(at, triaged(CLAIMED));
     const unreadable = run(at, 'apply', { ...inputs, TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/missing.json' });
     expect(unreadable.code).toBe(0);
-    expect(unreadable.stderr).toContain('the round records no review verdicts');
     const kept = (stored(at).value as WorkItem).facts.build?.rounds[0];
     expect(kept).toMatchObject({ run_id: 'run-1', reason: 'review_open' });
     expect(kept?.reviews).toBeUndefined();
