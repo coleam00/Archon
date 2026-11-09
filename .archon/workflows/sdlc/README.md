@@ -512,7 +512,12 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   script writes as a [work order](#work-orders) and the run claims none of;
   `intake`, for new work no issue covers, such as a pasted
   brief or a file, which the `handoff` script files as an issue and hands to
-  `archon-intake` detached, so the run builds nothing; or `none`, which refuses the run
+  `archon-intake` detached, so the run builds nothing (a message that explicitly asks
+  for several issues to be built together, such as "build #122 and #123 in one pull
+  request", files one combined issue carrying each original's contract, listed in a
+  `Delivered together` section whose issues the delivery's pull request references
+  and closes with it; the agent never groups issues the message did not ask to
+  group); or `none`, which refuses the run
   with the agent's reason. Scripts claim, write and file only what the agent declared; nothing
   reads the message's text. A run with a `number` ignores its message, and a scheduled
   run has none, so it picks up as before.
@@ -668,6 +673,12 @@ as it was. A member intake has never seen gets an `archon-intake` run started
 detached. The run claims none of the members, and the run's summary lists the order,
 the members sent to intake and the unresolved parts. The scheduled build queue, with
 `orders_only` on, builds them over its next runs.
+
+Members are built separately, one pull request each. To build several issues as one
+item instead, say so in the message ("build #123 and #130 together"): the run files a
+combined issue for intake rather than writing an order (see "A message" above). The
+originals keep their own work items, so with `orders_only` off the queue can still
+pick one up on its own; park or close them, or keep `orders_only` on.
 
 The operator, or their agent, can also write the document by hand:
 

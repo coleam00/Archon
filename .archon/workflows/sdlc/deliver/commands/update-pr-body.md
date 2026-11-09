@@ -44,8 +44,9 @@ answer: report it, and never repeat it through another tool.
    item left open, saying no review judged coverage, or naming the ruling that
    keeps the issue open. An item left open as an operator check names the check
    the operator runs. Keep at most one "Left open" section, current, and remove
-   it on `Closes`. Change no other reference, and add none when the description
-   links no issue.
+   it on `Closes`. When that issue's body has a `Delivered together` section, each
+   issue it lists gets the same reference as the issue, beside it. Change no other
+   reference, and add none when the description links no issue.
 5. When something changed, apply the complete description: write the request
    `{"ref":<ref>,"body":<description>}` to `$ARTIFACTS_DIR/pr-body-final.json` and
    pass it to `pr.edit-body` with `--data-file`. When nothing changed, edit nothing.
