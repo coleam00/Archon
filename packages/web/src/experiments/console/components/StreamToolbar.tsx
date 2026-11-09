@@ -1,6 +1,7 @@
 import type { ReactElement, ReactNode } from 'react';
 
-export type DetailView = 'log' | 'graph' | 'artifacts';
+export const DETAIL_VIEWS = ['log', 'graph', 'artifacts'] as const;
+export type DetailView = (typeof DETAIL_VIEWS)[number];
 
 export interface NodeFilterOption {
   id: string;
@@ -17,7 +18,7 @@ interface StreamToolbarProps {
   toolCallCount: number;
   messageCount: number;
   artifactCount: number | null;
-  /** Distinct nodes in the run; empty hides the node filter. */
+  /** Nodes with stream transitions. */
   nodeOptions: NodeFilterOption[];
   /** `'all'` or a nodeId. */
   selectedNodeId: string;
@@ -157,7 +158,7 @@ export function StreamToolbar({
 
       {isLog ? (
         <div className="ml-auto flex items-center gap-[18px] font-mono text-[12px]">
-          {nodeOptions.length > 0 ? (
+          {nodeOptions.length > 0 || selectedNodeId !== 'all' ? (
             <label className="flex items-center gap-1.5 text-text-secondary">
               <span className="text-text-tertiary">Node</span>
               <SelectShell>
@@ -170,6 +171,9 @@ export function StreamToolbar({
                   aria-label="Filter stream by node"
                 >
                   <option value="all">All nodes</option>
+                  {selectedNodeId !== 'all' && !nodeOptions.some(o => o.id === selectedNodeId) ? (
+                    <option value={selectedNodeId}>{selectedNodeId}</option>
+                  ) : null}
                   {nodeOptions.map(o => (
                     <option key={o.id} value={o.id}>
                       {o.name}

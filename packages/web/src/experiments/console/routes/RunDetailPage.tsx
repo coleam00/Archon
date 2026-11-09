@@ -262,6 +262,7 @@ interface RunGraphViewProps {
   projectId: string | undefined;
   project: Project | null | undefined;
   projectError: Error | undefined;
+  selectedNodeId: string;
   onNodeSelect: (nodeId: string) => void;
 }
 
@@ -272,6 +273,7 @@ function RunGraphView({
   projectId,
   project,
   projectError,
+  selectedNodeId,
   onNodeSelect,
 }: RunGraphViewProps): ReactElement {
   if (project !== undefined && project !== null) {
@@ -281,6 +283,7 @@ function RunGraphView({
         projectCwd={project.path}
         nodes={nodes}
         live={isRunLive(run)}
+        selectedNodeId={selectedNodeId}
         onNodeSelect={onNodeSelect}
       />
     );
@@ -565,6 +568,7 @@ export function RunDetailPage(): ReactElement {
                 projectId={projectId}
                 project={project}
                 projectError={projectError}
+                selectedNodeId={selectedNodeId}
                 onNodeSelect={(nodeId): void => {
                   pendingNodeIdRef.current = nodeId;
                   select('log', nodeId);

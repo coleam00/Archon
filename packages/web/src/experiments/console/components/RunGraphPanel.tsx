@@ -18,6 +18,7 @@ interface RunGraphPanelProps {
   nodes: readonly RunNodeState[];
   /** False once the run's owner is not observed live: running nodes stop pulsing. */
   live: boolean;
+  selectedNodeId: string;
   /** The node the main stream should scroll to when a graph node is clicked. */
   onNodeSelect?: (nodeId: string) => void;
 }
@@ -189,6 +190,7 @@ export function RunGraphPanel({
   projectCwd,
   nodes: nodeStates,
   live,
+  selectedNodeId,
   onNodeSelect,
 }: RunGraphPanelProps): ReactElement {
   const { data: rawNodes, error } = useEntity<WorkflowGraphNode[]>(
@@ -251,6 +253,7 @@ export function RunGraphPanel({
             key={n.id}
             node={n}
             live={live}
+            selected={n.id === selectedNodeId}
             onClick={() => {
               onNodeSelect?.(n.id);
             }}
@@ -264,10 +267,11 @@ export function RunGraphPanel({
 interface GraphNodeProps {
   node: LaidOutNode;
   live: boolean;
+  selected: boolean;
   onClick: () => void;
 }
 
-function GraphNode({ node, live, onClick }: GraphNodeProps): ReactElement {
+function GraphNode({ node, live, selected, onClick }: GraphNodeProps): ReactElement {
   const running = node.status === 'running';
   const failed = node.status === 'failed';
   const dimmed = node.status === 'pending' || node.status === 'skipped';
@@ -278,17 +282,21 @@ function GraphNode({ node, live, onClick }: GraphNodeProps): ReactElement {
     height: NODE_H,
     backgroundColor: statusFill(node.status),
     borderColor: statusBorder(node.status),
-    boxShadow: failed ? '0 0 0 3px color-mix(in oklch, var(--error), transparent 94%)' : undefined,
+    boxShadow:
+      failed && !selected
+        ? '0 0 0 3px color-mix(in oklch, var(--error), transparent 94%)'
+        : undefined,
   };
 
   return (
     <button
       type="button"
       onClick={onClick}
+      aria-pressed={selected}
       title={`${node.id} · ${node.kind} · ${node.status}`}
       className={`absolute flex items-center gap-2.5 overflow-hidden rounded-[9px] border px-3.5 text-left transition-colors hover:brightness-110 ${
         running && live ? 'animate-pulse' : ''
-      } ${dimmed ? 'opacity-60' : ''}`}
+      } ${dimmed && !selected ? 'opacity-60' : ''} ${selected ? 'ring-2 ring-accent-bright ring-offset-2 ring-offset-surface' : ''}`}
       style={style}
     >
       <span

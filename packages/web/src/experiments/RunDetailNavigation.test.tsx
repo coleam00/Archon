@@ -9,6 +9,7 @@ import { toRun } from './console/primitives/run';
 import { toRunEvent } from './console/primitives/event';
 import type { Project } from './console/primitives/project';
 import type { WorkflowGraphNode } from './console/primitives/workflow-graph';
+import { DETAIL_VIEWS } from './console/components/StreamToolbar';
 import { RunDetailPage } from './console/routes/RunDetailPage';
 
 const dom = new Window({ url: 'http://localhost' });
@@ -160,7 +161,7 @@ test('bare links restore Artifacts and normalize with replace, leaving no extra 
   expect(container.textContent).toBe('Previous page');
 });
 
-test.each(['log', 'graph', 'artifacts'])(
+test.each([...DETAIL_VIEWS])(
   'a shared %s link overrides stored defaults and survives remount',
   async view => {
     localStorage.setItem(viewKey, view === 'log' ? 'graph' : 'log');
@@ -252,4 +253,117 @@ test('a linked node survives the initial run load', async () => {
   await act(async () => respond?.(Response.json(detailFixture)));
   expect(container.querySelector('select')?.value).toBe('outcome');
   expect(query().get('node')).toBe('outcome');
+});
+
+test('selecting Artifacts remembers the default for a subsequent bare link', async () => {
+  await open(`${base}?view=log&node=all`);
+  await tab('Artifacts');
+  await act(async () => root?.unmount());
+  router.dispose();
+  await open(base);
+  activeTab('Artifacts');
+  expect(query().get('view')).toBe('artifacts');
+});
+
+function seedGraph(state: 'pending' | 'completed' | 'failed' = 'pending'): void {
+  set(K.run('run-1'), {
+    run: { ...toRun(detailFixture.run), projectId: 'project-1' },
+    events: detailFixture.events.map(toRunEvent),
+    nodes: [...detailFixture.run.nodes, { node_id: 'verify', state }],
+  });
+  set(K.project('project-1'), {
+    id: 'project-1',
+    name: 'Project',
+    path: '/project',
+    kind: 'folder',
+    defaultBranch: null,
+    repositoryUrl: null,
+    lastSyncedAt: null,
+  } satisfies Project);
+  set('workflow-graph:review:/project', [
+    { id: 'outcome', kind: 'prompt', dependsOn: [] },
+    { id: 'verify', kind: 'prompt', dependsOn: ['outcome'] },
+  ] satisfies WorkflowGraphNode[]);
+}
+
+test.each(['pending', 'completed', 'failed'] as const)(
+  'a shared Graph link visibly selects its %s node while retaining topology',
+  async state => {
+    seedGraph(state);
+    await open(`${base}?view=graph&node=verify`);
+    expect(query().get('node')).toBe('verify');
+    expect(container.querySelector('button[title^="verify ·"]')?.getAttribute('aria-pressed')).toBe(
+      'true'
+    );
+    expect(container.querySelector('button[title^="verify ·"]')?.classList.contains('ring-2')).toBe(
+      true
+    );
+    expect(
+      container.querySelector('button[title^="outcome ·"]')?.getAttribute('aria-pressed')
+    ).toBe('false');
+    expect(container.querySelector('svg path')).not.toBeNull();
+    await act(async () => router.navigate(`${base}?view=graph&node=all`));
+    expect(container.querySelector('button[title^="verify ·"]')?.getAttribute('aria-pressed')).toBe(
+      'false'
+    );
+  }
+);
+
+test.each(['link', 'graph click'])(
+  'a pending node selected by %s survives until its stream arrives',
+  async entry => {
+    seedGraph();
+    await open(
+      `${base}?view=${entry === 'link' ? 'log' : 'graph'}&node=${entry === 'link' ? 'verify' : 'all'}`
+    );
+    if (entry === 'graph click') {
+      const button = container.querySelector<HTMLButtonElement>('button[title^="verify ·"]');
+      if (!button) throw new Error('Missing pending graph node');
+      await act(async () => button.click());
+    }
+    activeTab('Log');
+    expect(query().get('node')).toBe('verify');
+    expect(container.querySelector('select')?.value).toBe('verify');
+    expect(container.querySelector('#node-transition-outcome')).toBeNull();
+    await act(async () => {
+      set(K.run('run-1'), {
+        run: { ...toRun(detailFixture.run), projectId: 'project-1' },
+        events: [
+          ...detailFixture.events.map(toRunEvent),
+          toRunEvent({
+            ...detailFixture.events[0],
+            id: 'verify-event',
+            step_name: 'verify',
+          }),
+        ],
+        nodes: [...detailFixture.run.nodes, { node_id: 'verify', state: 'completed' }],
+      });
+    });
+    expect(query().get('node')).toBe('verify');
+    expect(container.querySelector('#node-transition-verify')).not.toBeNull();
+    expect(container.querySelector('#node-transition-outcome')).toBeNull();
+  }
+);
+
+test('an obsolete stored node is validated after a delayed run load', async () => {
+  localStorage.setItem(nodeKey, 'another-workflow');
+  invalidate(K.run('run-1'));
+  const providerFetch = globalThis.fetch;
+  let respond: ((response: Response) => void) | undefined;
+  const response = new Promise<Response>(resolve => {
+    respond = resolve;
+  });
+  globalThis.fetch = Object.assign(
+    (input: RequestInfo | URL, init?: RequestInit) =>
+      String(input) === '/api/workflows/runs/run-1' ? response : providerFetch(input, init),
+    { preconnect: originalFetch.preconnect }
+  );
+  await open(base);
+  expect(container.textContent).toBe('Loading run…');
+  expect(query().has('node')).toBe(false);
+  await act(async () => respond?.(Response.json(detailFixture)));
+  expect(query().get('node')).toBe('all');
+  expect(localStorage.getItem(nodeKey)).toBe('all');
+  await act(async () => router.navigate(-1));
+  expect(container.textContent).toBe('Previous page');
 });

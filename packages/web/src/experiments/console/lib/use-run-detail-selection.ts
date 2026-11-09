@@ -1,6 +1,6 @@
 import { useCallback, useLayoutEffect } from 'react';
 import { useSearchParams } from 'react-router';
-import type { DetailView, NodeFilterOption } from '../components/StreamToolbar';
+import { DETAIL_VIEWS, type DetailView, type NodeFilterOption } from '../components/StreamToolbar';
 
 const VIEW_KEY = 'archon.console.detailView';
 const NODE_KEY = 'archon.console.runNodeFilter';
@@ -22,28 +22,33 @@ function writePreference(key: string, value: string): void {
 }
 
 function parseView(value: string | null): DetailView {
-  return value === 'graph' || value === 'artifacts' ? value : 'log';
+  return DETAIL_VIEWS.find(view => view === value) ?? 'log';
 }
 
 export function useRunDetailSelection(nodeOptions: NodeFilterOption[], loaded: boolean) {
   const [params, setParams] = useSearchParams();
   const view = parseView(params.get('view') ?? readPreference(VIEW_KEY));
-  const requestedNode = params.get('node') ?? readPreference(NODE_KEY) ?? 'all';
+  const explicitNode = params.get('node');
+  const requestedNode = explicitNode ?? readPreference(NODE_KEY) ?? 'all';
   const node =
-    loaded && requestedNode !== 'all' && !nodeOptions.some(option => option.id === requestedNode)
+    explicitNode === null &&
+    loaded &&
+    requestedNode !== 'all' &&
+    !nodeOptions.some(option => option.id === requestedNode)
       ? 'all'
       : requestedNode;
 
   useLayoutEffect(() => {
-    if (params.get('view') !== view || params.get('node') !== node) {
+    if (params.get('view') !== view || (loaded && explicitNode !== node)) {
       const next = new URLSearchParams(params);
       next.set('view', view);
-      next.set('node', node);
+      // Validate a stored node before promoting it to an explicit URL selection.
+      if (explicitNode !== null || loaded) next.set('node', node);
       setParams(next, { replace: true });
     }
     writePreference(VIEW_KEY, view);
     if (loaded) writePreference(NODE_KEY, node);
-  }, [params, setParams, view, node, loaded]);
+  }, [params, setParams, view, node, loaded, explicitNode]);
 
   const select = useCallback(
     (nextView: DetailView, nextNode: string): void => {
