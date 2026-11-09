@@ -89,7 +89,7 @@ nodes:
         # The gate command the sweep runs to merge.
         gate: { type: string }
         # The pack's ci setting: what the gate trusts at a head besides the verdict.
-        ci: { type: string, enum: [forge, none] }
+        ci: { type: string }
       required: [path, base, base_error, items, settled, gate, ci]
 
   - id: sweep
