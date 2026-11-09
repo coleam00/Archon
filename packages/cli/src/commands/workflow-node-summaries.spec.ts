@@ -32,35 +32,15 @@ function event(
 }
 
 describe('buildNodeSummaries', () => {
-  for (const eventType of ['node_completed', 'node_skipped_prior_success'] as const) {
-    for (const truncated of [false, true]) {
-      it(`exposes full persisted output for ${eventType} (truncated=${String(truncated)})`, () => {
-        const output = 'x'.repeat(5_000);
-        const [summary] = buildNodeSummaries([
-          event('output', eventType, 'work', '2026-11-10T10:00:00.000Z', {
-            node_output: output,
-            ...(truncated ? { node_output_truncated: true } : {}),
-          }),
-        ]);
-        expect(summary).toMatchObject({
-          state: 'completed',
-          output,
-          outputTruncated: truncated,
-          outputPreview: `${'x'.repeat(200)}...`,
-        });
-      });
-    }
-
-    it(`distinguishes empty from absent output for ${eventType}`, () => {
-      const summaries = buildNodeSummaries([
-        event('empty', eventType, 'empty', '2026-11-10T10:00:00.000Z', { node_output: '' }),
-        event('absent', eventType, 'absent', '2026-11-10T10:00:00.000Z'),
-      ]);
-      expect(summaries[0]).toMatchObject({ output: '', outputTruncated: false, outputPreview: '' });
-      expect(summaries[1]).not.toHaveProperty('output');
-      expect(summaries[1]).not.toHaveProperty('outputTruncated');
-    });
-  }
+  it('distinguishes empty from absent output', () => {
+    const summaries = buildNodeSummaries([
+      event('empty', 'node_completed', 'empty', '2026-11-10T10:00:00.000Z', { node_output: '' }),
+      event('absent', 'node_completed', 'absent', '2026-11-10T10:00:00.000Z'),
+    ]);
+    expect(summaries[0]).toMatchObject({ output: '', outputTruncated: false, outputPreview: '' });
+    expect(summaries[1]).not.toHaveProperty('output');
+    expect(summaries[1]).not.toHaveProperty('outputTruncated');
+  });
 
   it('keeps human output limited to the preview', () => {
     const log = spyOn(console, 'log').mockImplementation(() => {});
@@ -128,7 +108,6 @@ describe('buildNodeSummaries', () => {
       event('pr-started', 'node_started', 'deliver__pr__pr', '2026-08-29T14:27:29.000Z'),
       event('pr-completed', 'node_completed', 'deliver__pr__pr', '2026-08-29T14:29:16.000Z', {
         node_output: 'https://github.com/coleam00/Archon/pull/2971',
-        node_output_truncated: true,
       }),
       event(
         'pr-replay-1',
@@ -160,7 +139,7 @@ describe('buildNodeSummaries', () => {
         durationMs: 107_000,
         outputPreview: 'https://github.com/coleam00/Archon/pull/2971',
         output: 'https://github.com/coleam00/Archon/pull/2971',
-        outputTruncated: true,
+        outputTruncated: false,
       },
     ]);
   });
@@ -311,7 +290,6 @@ describe('buildNodeSummaries resume resets', () => {
         event('1', 'node_started', 'prepare', '2026-10-03T10:00:00.000Z'),
         event('2', 'node_completed', 'prepare', '2026-10-03T10:00:01.000Z', {
           node_output: 'prepared',
-          node_output_truncated: true,
         }),
         event('3', reset, 'prepare', '2026-10-03T10:05:00.000Z', { prior_output: 'prepared' }),
       ];

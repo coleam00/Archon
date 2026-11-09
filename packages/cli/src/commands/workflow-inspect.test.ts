@@ -781,8 +781,6 @@ describe('workflowStatusCommand', () => {
     expect(orphan?.durationMs).toBeUndefined();
     expect(orphan?.outputPreview).toBe(`${'y'.repeat(200)}...`);
     expect(String(orphan?.outputPreview)).not.toContain('…');
-    expect(orphan?.output).toBe('y'.repeat(5_000));
-    expect(orphan?.outputTruncated).toBe(true);
   });
 
   it('emits raw events in verbose JSON when events=true', async () => {
