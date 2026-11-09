@@ -1,3 +1,4 @@
+import { throughputEvents } from '../test-support/throughput-fixtures';
 import {
   mockCanonicalizeProjectPath,
   mockListDashboardRuns,
@@ -867,6 +868,97 @@ describe('workflowGetCommand', () => {
   afterEach(() => {
     consoleSpy.mockRestore();
     stdoutSpy.mockRestore();
+  });
+
+  it.each([
+    [false, false, false],
+    [true, false, false],
+    [true, true, false],
+    [true, true, true],
+  ])(
+    'shows effective throughput with json=%s verbose=%s events=%s using the existing event read',
+    async (json, verbose, rawEvents) => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const eventsDb = await import('@archon/core/db/workflow-events');
+      (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'run-throughput',
+        workflow_name: 'work',
+        status: 'completed',
+        metadata: {},
+        started_at: new Date(),
+        checkout_baseline: null,
+      });
+      const events = throughputEvents('run-throughput');
+      const read = eventsDb.listWorkflowEvents as ReturnType<typeof mock>;
+      read.mockClear();
+      read.mockResolvedValueOnce(events);
+      expect(
+        await workflowGetCommand(
+          createTestWorkflowHost(),
+          'run-throughput',
+          json,
+          verbose,
+          undefined,
+          rawEvents,
+          true
+        )
+      ).toBe(0);
+      expect(read).toHaveBeenCalledTimes(1);
+      if (json) {
+        const result = JSON.parse(firstJsonPayload(stdoutSpy));
+        expect(result.throughput.summary.effectiveTokensPerSecond).toBe(100);
+        expect(result.throughput.summary.nodesWithoutTokenData).toBe(1);
+        expect(
+          result.throughput.nodes.map(
+            (node: { effectiveTokensPerSecond: number | null }) => node.effectiveTokensPerSecond
+          )
+        ).toEqual([100, 100, null]);
+        if (verbose) expect(rawEvents ? result.events : result.nodes).toHaveLength(4);
+        expect(result.metadata).toEqual({});
+      } else {
+        const text = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
+        expect(text).toContain(
+          'Effective output throughput (recorded agent executions; not decode speed)'
+        );
+        expect(text).toContain('Run: 100.00 tok/s; 1 nodes without token data');
+        expect(text).toContain('claude/large: 100.00 tok/s');
+        expect(text).toContain('codex/small: 100.00 tok/s');
+        expect(text).toContain('unavailable (without token data)');
+        expect(text).toContain(
+          `attempt ${String(events[0]?.data.attempt && (events[0].data.attempt as { id: string }).id)}`
+        );
+      }
+    }
+  );
+
+  it('fails the throughput view with the run identity and malformed metadata diagnostic', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-invalid',
+      workflow_name: 'work',
+      status: 'running',
+      metadata: {},
+      started_at: new Date(),
+    });
+    const events = throughputEvents('run-invalid');
+    delete events[0]!.data.invocation;
+    (eventsDb.listWorkflowEvents as ReturnType<typeof mock>).mockResolvedValueOnce(events);
+    expect(
+      await workflowGetCommand(
+        createTestWorkflowHost(),
+        'run-invalid',
+        true,
+        false,
+        undefined,
+        false,
+        true
+      )
+    ).toBe(1);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+      ok: false,
+      error: 'Cannot compute throughput for run run-invalid: Node execution metadata is incomplete',
+    });
   });
 
   it.each([0, 20, 21])(

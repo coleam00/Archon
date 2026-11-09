@@ -1147,7 +1147,7 @@ describe('workflow get arguments', () => {
 
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
-      'Usage: archon workflow get <run-id> [--json] [--verbose] [--events]'
+      'Usage: archon workflow get <run-id> [--json] [--verbose] [--events] [--throughput]'
     );
     expect(result.stdout).toBe('');
   });

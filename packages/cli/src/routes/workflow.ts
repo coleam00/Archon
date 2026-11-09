@@ -127,7 +127,10 @@ export async function runWorkflowGet(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   const getRunId = positionals[2];
   if (!getRunId || positionals[3] !== undefined) {
-    return await fail(json, 'Usage: archon workflow get <run-id> [--json] [--verbose] [--events]');
+    return await fail(
+      json,
+      'Usage: archon workflow get <run-id> [--json] [--verbose] [--events] [--throughput]'
+    );
   }
   // Propagate the command's exit code so `get <id> && ...` and CI
   // pipelines see a non-zero status when the run is missing.
@@ -137,7 +140,8 @@ export async function runWorkflowGet(route: WorkflowRoute): Promise<number> {
     json,
     values.verbose as boolean | undefined,
     effectiveCwd,
-    values.events as boolean | undefined
+    values.events as boolean | undefined,
+    values.throughput as boolean | undefined
   );
 }
 
@@ -224,6 +228,7 @@ export async function runWorkflowRuns(route: WorkflowRoute): Promise<number> {
     limit,
     open: values.open as boolean | undefined,
     verbose: values.verbose as boolean | undefined,
+    throughput: values.throughput as boolean | undefined,
   });
 }
 

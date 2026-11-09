@@ -35,6 +35,10 @@ export const workflowHelp: HelpGroup = {
       description: 'List recent runs (all statuses) for this project',
       scopedFlags: [
         {
+          spec: '--throughput',
+          description: 'Show effective output tok/s per run and model across listed runs',
+        },
+        {
           spec: '--verbose, -v',
           description: "With --json: add each run's per-node state and attention",
         },
@@ -45,6 +49,12 @@ export const workflowHelp: HelpGroup = {
       subcommand: 'get',
       spec: 'workflow get <run-id>',
       description: 'Show detail for a single run (any status)',
+      scopedFlags: [
+        {
+          spec: '--throughput',
+          description: 'Show effective output tok/s per recorded agent attempt and run',
+        },
+      ],
     },
     {
       command: 'workflow',
