@@ -7,7 +7,8 @@
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
- * its claim until the ruling node records the answer. A continue then starts the item's
+ * its claim until the ruling node records the answer. The round carries the review
+ * verdicts its delivery published, read from this run's typed-artifact listing. A continue then starts the item's
  * next round at once through the operator's build-queue binding; if it does not start,
  * the item waits for the next queue run.
  *
@@ -29,9 +30,10 @@ import {
 } from '../../.shared/build.ts';
 import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
+import { runReviews } from '../../.shared/review-rounds.ts';
 import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
@@ -179,6 +181,18 @@ function afterWrite(summary: string, wrote: string | null, decision: Decision, i
   return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
 }
 
+/**
+ * The review verdicts this run's delivery published, for the round's record. A listing
+ * that cannot be read leaves them out, noted: the round is still recorded, and the
+ * review-round metric reads its run's artifacts instead or skips its pull request.
+ */
+function reviewsOf(): Pick<BuildRound, 'reviews'> {
+  const read = runReviews(process.env.TYPED_ARTIFACTS_FILE, artifactsDir());
+  if (read.ok) return { reviews: read.verdicts };
+  note(`the round records no review verdicts: ${read.problem}`);
+  return {};
+}
+
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
   // Neither path has an item, so nothing is written or asked.
@@ -198,7 +212,7 @@ function main(): void {
   const ending = nullableJson(process.env.INPUTS_ENDING) as ShipReport | null;
   const at = new Date().toISOString();
   const round: BuildRound | null =
-    ending === null ? null : { run_id: runId, at, ...ending, artifacts: artifactsDir() };
+    ending === null ? null : { run_id: runId, at, ...ending, artifacts: artifactsDir(), ...reviewsOf() };
   const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
   const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
   const decision = decide(path, route, answer);
