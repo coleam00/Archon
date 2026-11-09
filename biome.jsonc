@@ -16,7 +16,6 @@
       "!packages/chat-contract/schema",
       "!**/*.generated.ts",
       "!.archon/commands",
-      "!.archon/maintainer-standup",
       "!.archon/workflows/**/commands",
       "!.archon/workflows/**/fixtures",
       "!.agents",
