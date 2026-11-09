@@ -4,10 +4,7 @@ description: |
   of work it needs, judge whether it is a contract a run can start from, then route
   it to investigate, plan, deliver, continue an open PR, split, or no action
   (archon-triage-block). Advisory: it leaves the checkout unchanged, and writes
-  labels only when asked to publish. When the item is blocked or needs contract
-  work, the run pauses as one attention item carrying the question. The answer
-  triages again with the person's note, or ends the run with the verdict as it
-  stands.
+  labels only when asked to publish.
 
   Use when: an issue, plan, report, or request may be stale or may prescribe an
   unverified solution — "triage this issue", "what does this need next", "is
@@ -26,53 +23,19 @@ inputs:
       Write the derived labels to the tracker item — true or false. Off by
       default; the run then records the labels it would apply.
 
-returns: result
+returns: triage
 outcome_field: ready
 
-# Read-only: runs in the launch checkout beside any other run, and creates no worktree.
+# Read-only: runs in the launch checkout beside any other run, and creates no
+# worktree. These are run settings, which an included workflow cannot carry, so
+# this file exists to hold them; composers include archon-triage-block.
 worktree:
   enabled: false
 mutates_checkout: false
 
 nodes:
-  # One pass is the triage and its attention block (see archon-attention). Each
-  # answer to the item permits one more pass.
-  - id: cycle
-    loop_group:
-      max_iterations: 1
-      fresh_context: true
-      until_bash: 'done=$attend.output.done; test "$done" = true'
-      nodes:
-        - id: go
-          bash: "true"
-          when: "$LOOP_PREV.attend__ask.output.decision == '' || $LOOP_PREV.attend__ask.output.decision == 'rerun'"
-
-        - id: stage
-          include: archon-triage-block
-          depends_on: [go]
-          with:
-            publish: "$INPUTS.publish"
-            target: |-
-              $INPUTS.target
-              $LOOP_PREV.attend__settle.output.brief
-              $LOOP_PREV.attend__ask.output.text
-
-        - id: attend
-          include: archon-attention
-          depends_on: [stage]
-          trigger_rule: all_done
-          with:
-            stage: archon-triage
-            outcome: "$stage.output"
-
-  - id: result
-    depends_on: [cycle]
-    runtime: bun
-    script: console.log(JSON.stringify(JSON.parse(process.env.INPUTS_CYCLE).outcome))
+  - id: triage
+    include: archon-triage-block
     with:
-      cycle: "$cycle.output"
-    output_format:
-      type: object
-      properties:
-        ready: { type: boolean }
-      required: [ready]
+      target: "$INPUTS.target"
+      publish: "$INPUTS.publish"

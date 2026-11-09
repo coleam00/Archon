@@ -301,7 +301,7 @@ nodes:
       required: [head, reviewed, pull_request]
 
   - id: ship
-    include: archon-ship-block
+    include: archon-ship
     depends_on: [facts, route, checkout]
     when: "$route.output.decision == 'launch'"
     with:
