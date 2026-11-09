@@ -1,3 +1,4 @@
+import { INPUTS_SCOPE } from '../reference-scopes';
 import type { DagNode, IncludeDirective, WorkflowDefinition } from '../schemas';
 import { INPUT_NAME_SOURCE, inputEnvKey } from '../schemas';
 import { canonicalValueText, parseWholeInputsRef, type JsonValue } from '../output-ref';
@@ -13,7 +14,7 @@ import { IncludeExpansionError } from './expansion-error';
  * by schemas/node-bindings.ts) so a key that validates can never fail to match here — see the
  * re-export's comment for why the drift between the two is silent in one direction.
  */
-const INPUTS_REF = new RegExp(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, 'g');
+const INPUTS_REF = new RegExp(String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})`, 'g');
 
 /**
  * Apply an include node's input mapping to every inline text surface in the cloned node.

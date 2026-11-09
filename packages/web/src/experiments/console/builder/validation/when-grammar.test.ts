@@ -278,3 +278,33 @@ test('round-trips canonical nested paths while keeping shorthand and inputs sing
   expect(parse("$review.proposal.action == 'add'").ok).toBe(false);
   expect(parse("$INPUTS.proposal.action == 'add'").ok).toBe(false);
 });
+
+describe('when-grammar loop context', () => {
+  test('decomposes and round-trips previous output without losing its scope', () => {
+    const expressions = [
+      "$LOOP_PREV.work.output == 'done'",
+      '$LOOP_PREV.check-work.output.result.count >= -0.5',
+      "$LOOP_PREV.work.output == 'x && y' && $INPUTS.mode == 'fast' || $check.output == true",
+    ];
+    for (const expression of expressions) {
+      const result = parse(expression, true);
+      expect(result.ok).toBe(true);
+      if (result.ok) {
+        expect(result.ast.or[0][0].kind).toBe('loop_prev');
+        expect(format(result.ast)).toBe(expression);
+      }
+    }
+    expect(parse(expressions[0], true)).toEqual({
+      ok: true,
+      ast: { or: [[{ kind: 'loop_prev', nodeId: 'work', op: '==', value: 'done' }]] },
+    });
+  });
+
+  test('requires loop context and rejects ordinary references to the reserved scope', () => {
+    expect(parse("$LOOP_PREV.work.output == 'done'").ok).toBe(false);
+    for (const allowLoopPrev of [false, true]) {
+      expect(parse("$LOOP_PREV.output == 'x'", allowLoopPrev).ok).toBe(false);
+      expect(parse("$LOOP_PREV.output.x == 'x'", allowLoopPrev).ok).toBe(false);
+    }
+  });
+});

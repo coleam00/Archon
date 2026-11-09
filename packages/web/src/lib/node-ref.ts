@@ -15,6 +15,8 @@
  * a divergence fails the repository's test run rather than shipping.
  */
 
+import { INPUTS_SCOPE } from './input-ref';
+
 /**
  * A node id: letters, digits, underscore and hyphen, no leading digit.
  *
@@ -47,7 +49,7 @@ export function findOutputRefs(text: string): Set<string> {
     const id = match[1];
     // `$INPUTS.output` names the workflow input `output`, not a node. The engine
     // gives that reserved scope precedence after the same lexical match.
-    if (id !== undefined && id !== 'INPUTS') refs.add(id);
+    if (id !== undefined && id !== INPUTS_SCOPE) refs.add(id);
   }
   return refs;
 }
