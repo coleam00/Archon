@@ -24,10 +24,12 @@ export interface PiCredentialTarget {
   targetEnvPath: string;
 }
 
+/** A dotenv file's values, or none when the file does not exist. */
 function readEnvFile(path: string): Record<string, string> {
   return existsSync(path) ? parseDotenv(readFileSync(path, 'utf8')) : {};
 }
 
+/** A parsed YAML file, or undefined when it is missing or unparseable; the latter is reported. */
 function readYamlFile(path: string, envVar: string): unknown {
   if (!existsSync(path)) return undefined;
   try {
@@ -38,10 +40,12 @@ function readYamlFile(path: string, envVar: string): unknown {
   }
 }
 
+/** Whether a value would act as a key: an empty or blank string does not. */
 function nonEmpty(value: unknown): boolean {
   return typeof value === 'string' && value.trim() !== '';
 }
 
+/** The value at `path` + `envVar` in parsed config, or undefined when any level is missing. */
 function configEnvValue(config: unknown, path: readonly string[], envVar: string): unknown {
   let node: unknown = config;
   for (const key of [...path, envVar]) {
@@ -166,6 +170,7 @@ export async function reconcilePiCredential(
   return [];
 }
 
+/** Look for the key outside the file setup writes, and stop unless the user agrees to go on. */
 async function confirmExternalSources(
   envVar: string,
   target: PiCredentialTarget,

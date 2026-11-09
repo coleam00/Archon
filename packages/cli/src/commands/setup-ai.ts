@@ -286,6 +286,11 @@ export async function selectSetupProviders(
   return ids;
 }
 
+/**
+ * Ask which providers to add, install their plugins, and collect each one's authentication
+ * and the default assistant. Installing plugins is the only write; env and config values
+ * are returned for the caller to save.
+ */
 export async function collectAIConfig(
   options: Pick<SetupOptions, 'providers' | 'repoPath'>,
   install: (ids: readonly string[]) => Promise<void> = ids =>

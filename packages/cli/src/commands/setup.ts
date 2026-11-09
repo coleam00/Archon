@@ -150,6 +150,11 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
   }
 }
 
+/**
+ * The wizard in order: add providers and collect answers, settle credential conflicts,
+ * write the env file and config, then finish the project steps. Every credential conflict
+ * is settled before the env file is written, so cancelling one leaves that file unchanged.
+ */
 async function runSetup(options: SetupOptions): Promise<void> {
   if (options.spawn) {
     await openSetupTerminal(options);
@@ -323,6 +328,10 @@ async function collectPlatformCredentials(
   }
 }
 
+/**
+ * Settle GitHub auth against the saved env files, then write the scoped env file. Saved
+ * values for `replaceKeys` are dropped first so the user's Pi choice takes effect.
+ */
 async function writeConfiguration(
   config: SetupConfig,
   target: Parameters<typeof reconcileGitHubAuth>[1],
@@ -365,6 +374,7 @@ async function writeConfiguration(
   return writeResult;
 }
 
+/** Save the chosen Pi model; a failure only warns, since the env file is already written. */
 async function writePiModelPreference(ai: SetupConfig['ai']): Promise<void> {
   if (!ai.pi || !ai.piModel) return;
   try {
