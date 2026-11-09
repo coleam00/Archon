@@ -12,15 +12,14 @@
  * next round at once through the operator's build-queue binding; if it does not start,
  * the item waits for the next queue run.
  *
- * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_HANDOFF, the handoff's
- * summary, empty when it was skipped; INPUTS_ROUTE,
+ * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ORDER and INPUTS_HANDOFF,
+ * the order's and the handoff's summaries, empty when skipped; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
  * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
 import {
-  type ApplyDecision,
   type AskedBy,
   type BuildAttention,
   type BuildRound,
@@ -181,6 +180,23 @@ function afterWrite(summary: string, wrote: string | null, decision: Decision, i
   return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
 }
 
+/** The summary of a path with no item, so nothing is written or asked; null on an item's path. */
+function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string } | null {
+  switch (path) {
+    case 'idle':
+      return {
+        decision: path,
+        summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
+      };
+    case 'order':
+      return { decision: path, summary: text(process.env.INPUTS_ORDER) };
+    case 'handoff':
+      return { decision: path, summary: text(process.env.INPUTS_HANDOFF) };
+    default:
+      return null;
+  }
+}
+
 /**
  * The review verdicts this run's delivery published, for the round's record. A listing
  * that cannot be read leaves them out, noted: the round is still recorded, and the
@@ -195,15 +211,9 @@ function reviewsOf(): Pick<BuildRound, 'reviews'> {
 
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
-  // Neither path has an item, so nothing is written or asked.
-  const noItem = { attention: '', options: [], recommendation: null, class: '', asked: null };
-  if (path === 'idle') {
-    const summary = idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID)));
-    emit({ decision: 'idle', summary, ...noItem });
-    return;
-  }
-  if (path === 'handoff') {
-    emit({ decision: 'handoff', summary: text(process.env.INPUTS_HANDOFF), ...noItem });
+  const noItem = noItemSummary(path);
+  if (noItem !== null) {
+    emit({ ...noItem, attention: '', options: [], recommendation: null, class: '', asked: null });
     return;
   }
   const runId = text(process.env.WORKFLOW_ID);
@@ -227,7 +237,7 @@ function main(): void {
     ...(asking?.attention.links ?? []),
   ];
   const result = {
-    decision: decision.kind satisfies ApplyDecision,
+    decision: decision.kind,
     summary: summaryOf(item, decision),
     ...askFields(wait),
     class: asking?.by ?? '',

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -148,5 +148,49 @@ describe('build-queue pickup with work orders', () => {
   test('on, a named item is claimed though no open order holds it, so its follow-up rounds still start', () => {
     const env = store({ 'work/7': waiting(7) });
     expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true', INPUTS_NUMBER: '7' }, 'run-1', 7))).toBe(7);
+  }, 60_000);
+});
+
+describe('a work order from the run\'s message', () => {
+  /** Run the order script as run `run-1`, started as `user-1`. */
+  function writeOrder(env: Record<string, string>, declared: unknown, calls: string): ScriptRun {
+    return runPackScript('build-queue/scripts/order', {
+      cwd: env.INTAKE_STATE_CWD,
+      forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+      inputs: {
+        ...env,
+        WORKFLOW_ID: 'run-1',
+        RUN_LISTING: JSON.stringify([{ id: 'run-1', user_id: 'user-1' }]),
+        ARCHON_CALL_LOG: calls,
+        INPUTS_REPO: JSON.stringify(PR.repo),
+        INPUTS_ORDER: JSON.stringify(declared),
+      },
+    });
+  }
+
+  test('is written open, approved by the run\'s user, claims nothing, and sends an unseen member to intake', () => {
+    const env = store({ 'work/7': waiting(7) });
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const result = writeOrder(env, { id: 'next', members: [7, 8], unresolved: [] }, calls);
+    expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(inStore(env, () => stateGet('work-order/next').value)).toMatchObject({
+      version: 1,
+      members: [7, 8],
+      approved: { by: 'user-1' },
+      status: 'open',
+      done_at: null,
+    });
+    expect(inStore(env, () => stateGet('work/7').value)).toMatchObject({ claim: null });
+    const launches = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[1] === 'run');
+    expect(launches).toHaveLength(1);
+    expect(launches[0]).toEqual(expect.arrayContaining(['archon-intake', 'number=8']));
+  }, 60_000);
+
+  test('an id that exists is refused and the approved order is left as it was', () => {
+    const env = store({ 'work-order/next': order([7]) });
+    const before = inStore(env, () => stateGet('work-order/next'));
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    expect(writeOrder(env, { id: 'next', members: [8, 9], unresolved: [] }, calls).code).not.toBe(0);
+    expect(inStore(env, () => stateGet('work-order/next'))).toEqual(before);
   }, 60_000);
 });

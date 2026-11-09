@@ -13,8 +13,9 @@ description: |
   item's work item.
 
   A person can also say what to build in the run's message instead of naming a number:
-  one agent resolves the message to an issue to claim, a choice between issues, or new
-  work it files and hands to intake. New work is never built in the run that filed it.
+  one agent resolves the message to an issue to claim, a choice between issues, a work
+  order for several issues, which the run writes and the scheduled queue builds, or new
+  work it files and hands to intake. Neither is built in the run that wrote it.
 
   Use when: a trigger binding the operator installed starts it (see the SDLC pack
   README, "Build queue"), or a person names the item, by number or in words.
@@ -98,7 +99,7 @@ nodes:
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [build, choose, intake, none] }
+        decision: { type: string, enum: [build, choose, order, intake, none] }
         number: { type: [integer, 'null'], minimum: 1 }
         options:
           type: array
@@ -116,6 +117,22 @@ nodes:
                   number: { type: integer, minimum: 1 }
                 required: [number]
             required: [id, label, does, value]
+        order:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+            members: { type: array, minItems: 2, items: { type: integer, minimum: 1 } }
+            unresolved:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  named: { type: string, pattern: '\S' }
+                  why: { type: string, pattern: '\S' }
+                required: [named, why]
+          required: [id, members, unresolved]
         issue:
           type: [object, 'null']
           additionalProperties: false
@@ -124,7 +141,7 @@ nodes:
             body: { type: string, pattern: '\S' }
           required: [title, body]
         reason: { type: string, pattern: '\S' }
-      required: [decision, number, options, issue, reason]
+      required: [decision, number, options, order, issue, reason]
 
   - id: pick
     depends_on: [interpret]
@@ -139,7 +156,7 @@ nodes:
   # Claims the item and writes the issue's body to build/issue.md, so every agent
   # reads the same text. With a message it claims the item interpret or the pick
   # resolved, refuses with interpret's reason when it resolved none, and claims
-  # nothing when the message is new work for intake.
+  # nothing when the message is a work order or new work for intake.
   - id: facts
     script: facts
     runtime: bun
@@ -152,7 +169,7 @@ nodes:
     output_format:
       type: object
       properties:
-        path: { type: string, enum: [idle, closed, route, handoff] }
+        path: { type: string, enum: [idle, closed, route, order, handoff] }
         item:
           type: [object, 'null']
           properties:
@@ -350,15 +367,32 @@ nodes:
         summary: { type: string }
       required: [summary]
 
+  # Writes the work order the message named and starts intake on each member it has
+  # not seen. The scheduled build queue builds the members; this run claims none.
+  - id: order
+    script: order
+    runtime: bun
+    depends_on: [start, interpret, facts]
+    when: "$facts.output.path == 'order'"
+    with:
+      repo: { from: "$start.output.repo" }
+      order: { from: "$interpret.output.order" }
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+      required: [summary]
+
   # Checks the decision, performs the writes it declared and reads each one back:
   # the push, then the work item.
   - id: apply
     script: apply
     runtime: bun
-    depends_on: [facts, route, answer, handoff]
+    depends_on: [facts, route, answer, order, handoff]
     trigger_rule: none_failed_min_one_success
     with:
       path: "$facts.output.path"
+      order: { from: "$order.output.summary", if_skipped: "" }
       handoff: { from: "$handoff.output.summary", if_skipped: "" }
       item: { from: "$facts.output.item" }
       pull_request: { from: "$facts.output.pull_request" }
@@ -368,7 +402,7 @@ nodes:
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [idle, handoff, parked, ready, continue, asked, launch] }
+        decision: { type: string, enum: [idle, order, handoff, parked, ready, continue, asked, launch] }
         summary: { type: string }
         # The attention message; empty when nothing is asked.
         attention: { type: string }

@@ -4,7 +4,8 @@
  * It claims the waiting item that sorts first with intake's claim and order, or the
  * item the `number` input names, or the one the run's message resolved to, and writes
  * only that claim. A message interpret resolved to nothing refuses the run with its
- * reason; one it resolved to new work claims nothing and goes to `handoff`. With `orders_only` on it
+ * reason; one it resolved to a work order or to new work claims nothing and goes to
+ * `order` or `handoff`. With `orders_only` on it
  * first marks done each open work order whose members all finished. A named item that cannot
  * be claimed refuses the run with the reason. A closed issue goes to `closed`, which
  * apply parks without an agent.
@@ -49,7 +50,7 @@ function positive(name: string, value: unknown): number {
 
 /** What interpret declared about the run's message; null when the run had none. */
 interface Interpreted {
-  readonly decision: 'build' | 'choose' | 'intake' | 'none';
+  readonly decision: 'build' | 'choose' | 'order' | 'intake' | 'none';
   readonly number: number | null;
   readonly reason: string;
 }
@@ -57,9 +58,9 @@ interface Interpreted {
 /**
  * The item the run names: the `number` input, else the item interpret resolved the
  * message to, or the one the person picked from its options. Null names none, so the
- * run picks up the waiting item that sorts first; `handoff` claims nothing.
+ * run picks up the waiting item that sorts first; `order` and `handoff` claim nothing.
  */
-function namedItem(): number | null | 'handoff' {
+function namedItem(): number | null | 'order' | 'handoff' {
   const number = trimmed(process.env.INPUTS_NUMBER);
   if (number !== '') return positive('number', number);
   const interpreted = nullableJson(process.env.INPUTS_INTERPRETED) as Interpreted | null;
@@ -71,6 +72,8 @@ function namedItem(): number | null | 'handoff' {
       const picked = nullableJson(process.env.INPUTS_PICKED) as { number?: unknown } | null;
       return positive('the picked issue number', picked?.number);
     }
+    case 'order':
+      return 'order';
     case 'intake':
       return 'handoff';
     case 'none':
@@ -168,8 +171,8 @@ function main(): void {
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
   const named = namedItem();
-  if (named === 'handoff') {
-    emit({ path: 'handoff', ...NOTHING, ...NO_ITEM_PR });
+  if (named === 'order' || named === 'handoff') {
+    emit({ path: named, ...NOTHING, ...NO_ITEM_PR });
     return;
   }
   if (named !== null) requireRunRepo(named);

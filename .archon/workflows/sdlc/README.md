@@ -517,16 +517,22 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   run holds it, or its stage and build status show it does not wait.
 - **A message.** A run with no `number` and a message, such as
   `archon workflow run archon-build-queue "build the retry fix"`, has the `interpret`
-  agent resolve the message with the tracker's CLI to one of four typed decisions:
+  agent resolve the message with the tracker's CLI to one of five typed decisions:
   `build` one issue, which the run then claims as a named item; `choose` between
   several, which pauses as a `select` attention item labelled `build: message` and
-  claims the issue picked; `intake`, for new work no issue covers, such as a pasted
+  claims the issue picked; `order`, for several issues to build, which the `order`
+  script writes as a [work order](#work-orders) and the run claims none of;
+  `intake`, for new work no issue covers, such as a pasted
   brief or a file, which the `handoff` script files as an issue and hands to
-  `archon-intake` detached, so the run builds nothing; or `none`, which refuses the run
-  with the agent's reason. Scripts claim and file only what the agent declared; nothing
+  `archon-intake` detached, so the run builds nothing (a message that explicitly asks
+  for several issues to be built together, such as "build #122 and #123 in one pull
+  request", files one combined issue carrying each original's contract, listed in a
+  `Delivered together` section whose issues the delivery's pull request references
+  and closes with it; the agent never groups issues the message did not ask to
+  group); or `none`, which refuses the run
+  with the agent's reason. Scripts claim, write and file only what the agent declared; nothing
   reads the message's text. A run with a `number` ignores its message, and a scheduled
-  run has none, so it picks up as before. Several items to build at once are refused
-  for now: name one per run.
+  run has none, so it picks up as before.
 - **Blocked items.** Intake's blocked verdict can go stale while work lands in
   parallel: a blocker's outcome can arrive another way while its issue is still open.
   When `retriage_as` names a maintainer login, a run that names no item also revisits
@@ -663,8 +669,30 @@ way, so a member's follow-up rounds still start. The default, `"false"`, picks f
 every waiting item.
 
 An order is one state document, `work-order/<id>`, in the project's state scope, whose
-key is the repository's `owner/repo`. The operator, or their agent, writes it; nothing
-in the pack proposes one yet:
+key is the repository's `owner/repo`. The easiest way to write one is to name its
+members in a build-queue run's message:
+
+```bash
+archon workflow run archon-build-queue "build #123, #130 and the Pi login fixes" --detach
+```
+
+The `interpret` agent resolves the message to issues and declares the order's `id`,
+its `members` and the parts of the message it could not resolve, with why. The `order`
+script writes the document as `open`, approved by the run's Archon user (its id, which
+`archon user list` names) at the time of the write. The write is conditional on the
+document not existing, so an `id` already taken refuses the run and leaves that order
+as it was. A member intake has never seen gets an `archon-intake` run started
+detached. The run claims none of the members, and the run's summary lists the order,
+the members sent to intake and the unresolved parts. The scheduled build queue, with
+`orders_only` on, builds them over its next runs.
+
+Members are built separately, one pull request each. To build several issues as one
+item instead, say so in the message ("build #123 and #130 together"): the run files a
+combined issue for intake rather than writing an order (see "A message" above). The
+originals keep their own work items, so with `orders_only` off the queue can still
+pick one up on its own; park or close them, or keep `orders_only` on.
+
+The operator, or their agent, can also write the document by hand:
 
 ```bash
 printf '%s' '{
