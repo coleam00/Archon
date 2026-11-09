@@ -9,6 +9,6 @@ reviews:
       instructions: |
         This is a workflow pack. Read .archon/workflows/sdlc/CONSTITUTION.md before commenting.
         - Agent nodes (prompt files under commands/) judge. Scripts read facts and perform writes at a boundary. Do not suggest moving a judgment the prompt asks the agent to make into script validation, parsing or classification.
-        - Do not suggest validation, guards, retries, fallbacks or defensive checks unless you can name a concrete input or state the change can actually reach that leads to a wrong write, a wrong merge or lost data.
-        - Do not suggest tests outside a script's writes and gates: no tests that pin wording, constants, prompt decisions, internal structure, or inputs that cannot occur.
+        - Do not suggest validation, guards, retries, fallbacks or defensive checks unless you can name a concrete input or state the change can actually reach that leads to a wrong write, a wrong merge, lost data, or a false fact handed to an agent (such as a failed read reported as empty).
+        - Do not suggest tests outside a script's tool boundary (what it reads from or writes to the forge, git or the work item, and the gates it enforces): no tests that pin wording, constants, prompt decisions, internal structure, or inputs that cannot occur.
         - Do comment on prose that no longer matches the code or other docs, on real contract bugs, and on unsafe writes.

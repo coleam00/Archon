@@ -68,8 +68,8 @@ each round's `threads` node lists the unresolved threads in `threads.md`, quoted
 untrusted review data, and puts a ready pull request back to draft while any is
 open, so the round ends `threads_open` instead of ready. The next round's
 implementer judges each thread by the review's bar, fixing it or declining it
-with evidence (a guard, check or test against a failure the change cannot reach is
-declined); `settle-threads` checks each disposition at the pushed head and
+with evidence (a guard, check or test against an input or state no supported path
+produces is declined); `settle-threads` checks each disposition at the pushed head and
 writes the reply, and `threads` posts the replies, resolves those threads, and reads
 the pull request back. A thread about code the pull request doesn't change or make
 reachable, such as one that arrived with a merge of the default branch, is settled
