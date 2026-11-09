@@ -31,7 +31,8 @@ function main(): void {
   if (by === null) throw new Error(`the run records no user to approve ${name}; write it with archon state put`);
   const order: WorkOrder = parseWorkOrder({
     version: 1,
-    members: declared.members,
+    // A member named twice is one member, and gets one intake run.
+    members: [...new Set(declared.members)],
     approved: { by, at: new Date().toISOString() },
     status: 'open',
     done_at: null,
