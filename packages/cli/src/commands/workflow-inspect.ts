@@ -1,3 +1,5 @@
+import type { RunThroughput } from '@archon/workflows/throughput';
+import { printRunThroughput } from './workflow-throughput';
 import { existsSync, readdirSync, type Dirent } from 'node:fs';
 import * as archonPaths from '@archon/paths';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -437,6 +439,7 @@ export function printRunDetail(
     events: WorkflowEventRow[];
     verbose: boolean | undefined;
     requestedBy?: RequestedBy;
+    throughput?: RunThroughput;
   }
 ): void {
   const { transcriptPath, terminalRecord, leaveBehind, events, verbose } = detail;
@@ -450,6 +453,7 @@ export function printRunDetail(
   if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
   for (const line of formatRunUsage(run.metadata)) console.log(line);
+  printRunThroughput(detail.throughput);
   printRunPauseLines(run);
   // Only a failed run's stop reason describes how it ended. A run can leave 'failed'
   // with the key still set (cancelWorkflowRun abandons a failed run without touching

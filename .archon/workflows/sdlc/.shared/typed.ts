@@ -18,6 +18,7 @@ export interface ListedArtifact {
   readonly path: string;
   readonly nodeId?: string;
   readonly loopGroupPath?: readonly { readonly groupId: string; readonly iteration: number }[];
+  readonly producedAt?: string;
 }
 
 export interface TypedRead<T> {

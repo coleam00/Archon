@@ -303,9 +303,9 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--conversation-id <id>` | Correlation id for the run's messages. It creates no conversation and no `persist_session` scope. |
 | `--dry-run` | Simulate deterministic DAG control flow in memory. Creates no run, worktree, session, event, artifact, or provider request. |
 | `--stubs <path>` | YAML mapping of node ids to scalar or structured outputs for `--dry-run`. Relative paths resolve from `--cwd`. |
-| `--stubs-init <path>` | Write a complete stub scaffold for the expanded workflow and exit. Refuses to overwrite an existing file. Relative paths resolve from `--cwd`. |
-| `--default-stubs` | Fill reachable nodes omitted from `--stubs` with schema-valid placeholders. Explicit stubs still win; without this flag, a missing reachable stub remains an error unless the node declares `trigger_rule: all_done`. |
-| `--exec-code` | During `--dry-run`, execute trusted `bash:`/`script:` nodes locally instead of requiring stubs. Default is no code execution. |
+| `--stubs-init <path>` | Write a stub scaffold for the expanded workflow and exit. Omits child-workflow nodes; add their stubs manually as described [below](#deterministic-dry-run). Refuses to overwrite an existing file. Relative paths resolve from `--cwd`. |
+| `--default-stubs` | Fill reachable AI, bash, and script nodes omitted from `--stubs` with schema-valid placeholders. Never substitutes for child-workflow stubs. With `--exec-code`, unstubbed bash/script nodes execute locally instead of receiving placeholders. Explicit stubs still win; without either flag, a missing reachable AI, bash, or script stub remains an error unless that node declares `trigger_rule: all_done`. Reached child-workflow nodes require authored stubs unless fan-out items resolve to `[]`; skipped branches need no stubs. |
+| `--exec-code` | During `--dry-run`, execute trusted unstubbed `bash:`/`script:` nodes locally, even with `--default-stubs`. Explicit stubs still win. Default is no code execution. |
 | `--pause-at-gates` | During `--dry-run`, stop at the first deprecated `approval:` gate instead of auto-approving it. An [attention wait](/reference/workflow-language/#attention-waits) needs no flag: it pauses the simulation unless the stubs answer it. |
 
 Fresh CLI runs do not create a chat conversation, message history, or title. Execution output stays in stdout and the run's transcript, events, and artifacts. Resuming a run with an existing chat origin keeps recording into that conversation.
@@ -397,30 +397,32 @@ archon workflow run archon-triage --cwd /path/to/repo \
   --dry-run --stubs stubs.yaml --json | jq '.trace, .outcome, .authoredOutcome'
 ```
 
-Generate a starting fixture when a composed workflow has many nodes, then keep only the values that drive the path you want to test:
+Generate a starting stub file when a composed workflow has many nodes, then keep the values that drive the path you want to test and manually add any required child-workflow stubs:
 
 ```bash
 archon workflow run archon-deliver --cwd /path/to/repo \
-  --dry-run --stubs-init fixtures/deliver.yaml
+  --dry-run --stubs-init stubs.yaml
 
-# After editing the load-bearing values in the generated YAML:
+# After editing the generated YAML and adding required child-workflow stubs:
 archon workflow run archon-deliver --cwd /path/to/repo \
-  --dry-run --stubs fixtures/deliver.yaml --default-stubs
+  --dry-run --stubs stubs.yaml --default-stubs
 ```
 
-The scaffold is derived from the already-expanded workflow, so included top-level nodes use their flattened ids (for example, `review__classify`). Body nodes of a `loop_group` keep their bare ids even inside an included block; only the group node gets the `<includeId>__` prefix. Prefer `--stubs-init` over hand-writing keys: the scaffold is the authoritative source for both spellings. Structured `output_format` values are emitted as YAML objects with native booleans, numbers, arrays, and nested required properties. Loop completion fields are generated as `true`. If Archon cannot prove that a generated value satisfies its JSON Schema, scaffold generation fails before creating the file.
+The scaffold is derived from the already-expanded workflow, so included top-level nodes use their flattened ids (for example, `review__classify`). Body nodes of a `loop_group` keep their bare ids even inside an included block; only the group node gets the `<includeId>__` prefix. The scaffold omits runtime `workflow:` nodes, including fan-outs. Add those entries manually: use the node's YAML `id` for a top-level child and prefix it with the enclosing include id for an included child (for example, `review__review-each`). Nested includes add each enclosing prefix in order (for example, `delivery__review__review-each`). Structured `output_format` values are emitted as YAML objects with native booleans, numbers, arrays, and nested required properties. Loop completion fields are generated as `true`. If Archon cannot prove that a generated value satisfies its JSON Schema, scaffold generation fails before creating the file.
 
 The stub file must contain one YAML mapping. Each value can be a string, object, array, number, boolean, or `null`. Strings become output text; when a node declares `output_format`, a string must contain one JSON document matching that schema. Objects, arrays, numbers, booleans, and `null` are preserved as structured output and serialized as JSON for output text, so downstream `$classify.output.severity` references behave like live structured producers. Authored values must satisfy the node's `output_format` when declared. An explicit `null` is an authored value, not a missing stub. Coverage is strict by default: a reachable AI, bash, or script node without a stub fails the simulation and appears in `missingStubs`.
 
-The one exception is a `trigger_rule: all_done` join, which runs after its dependencies settle regardless of their result. An interaction in a loop body is an exception: a prior body failure prevents it from starting, even with `all_done` (see [loop failure behavior](/guides/loop-nodes/#how-it-works)). A reachable join gets a generated placeholder and is listed in both `missingStubs` and `toleratedMissingStubs`, and the absent stub alone never fails the simulation or a `workflow test` fixture. It is only listed in `toleratedMissingStubs` once that placeholder exists: a node whose `output_format` cannot produce one still fails, and stays out of the tolerated list. A `loop:` node carrying the same trigger rule is tolerated on the same terms, with one addition: the placeholder must also end the loop, which it does by satisfying the node's own completion channel, so a tolerated loop always completes on its first iteration. If a loop's only completion channel is `until:`, the generated output must carry that sentinel as its final line. A string schema can supply it through `const`, `default`, or `enum`; if the generated output does not carry the sentinel, the node fails and stays out of the tolerated list.
+Reached runtime `workflow:` sub-runs require an authored stub instead of being launched; skipped branches need no stubs. `--default-stubs` cannot stand in for child runs. For `workflow:` + `fan_out:`, supply a YAML array with one result per item, in item order, for example `review-each: [{ approved: true }, { approved: false }]` for two items. A non-array stub or a result count that differs from the resolved item count fails. Item expressions and static `with:` inputs resolve before the stub is accepted. When items resolve to `[]`, the node completes with `[]` without consuming or requiring a stub. Composed `include:` + `fan_out:` nodes remain unsupported in dry-run, even with a stub.
 
-Add `--default-stubs` to fill only omitted reachable nodes with the same schema-aware placeholders used by scaffold generation; explicit values always take precedence. Without `--exec-code`, a reachable `bash:` or `script:` node that arrived through `include:` needs a stub like any other: a stubbed node never runs its body, so the caller's `with:` values are never delivered to it. With `--exec-code` it can run unstubbed and reads those values as described below. Supplied stubs for unknown or unreachable nodes appear in `unusedStubs`, while generated placeholders do not. Whole-output references retain their normal lenient behavior, while invalid strict `$node.output.field` references fail the consuming node exactly as they do in a real run. See [Node Output References](/reference/variables/#node-output-references).
+For AI, bash, and script nodes, the exception to strict stub coverage is a `trigger_rule: all_done` join, which runs after its dependencies settle regardless of their result. An interaction in a loop body is an exception: a prior body failure prevents it from starting, even with `all_done` (see [loop failure behavior](/guides/loop-nodes/#how-it-works)). A reachable join gets a generated placeholder and is listed in both `missingStubs` and `toleratedMissingStubs`, and the absent stub alone never fails the simulation or a `workflow test` fixture. It is only listed in `toleratedMissingStubs` once that placeholder exists: a node whose `output_format` cannot produce one still fails, and stays out of the tolerated list. A `loop:` node carrying the same trigger rule is tolerated on the same terms, with one addition: the placeholder must also end the loop, which it does by satisfying the node's own completion channel, so a tolerated loop always completes on its first iteration. If a loop's only completion channel is `until:`, the generated output must carry that sentinel as its final line. A string schema can supply it through `const`, `default`, or `enum`; if the generated output does not carry the sentinel, the node fails and stays out of the tolerated list.
+
+Add `--default-stubs` to fill omitted reachable AI, bash, and script nodes with the same schema-aware placeholders used by scaffold generation. With `--exec-code`, unstubbed bash/script nodes execute locally instead of receiving placeholders. Explicit values always take precedence. Reached child-workflow nodes still require authored stubs unless fan-out items resolve to `[]`; skipped branches need no stubs. Without `--exec-code`, a reachable `bash:` or `script:` node that arrived through `include:` needs a stub like any other: a stubbed node never runs its body, so the caller's `with:` values are never delivered to it. With `--exec-code` it can run unstubbed and reads those values as described below. Supplied stubs for unknown or unreachable nodes appear in `unusedStubs`, while generated placeholders do not. Whole-output references retain their normal lenient behavior, while invalid strict `$node.output.field` references fail the consuming node exactly as they do in a real run. See [Node Output References](/reference/variables/#node-output-references).
 
 A workflow's declared `inputs:` resolve exactly as in a real run: omitted inputs take their declared `default:`, `--input name=value` binds a value (visible in the trace's resolved text), and a missing **required** input or an **undeclared** name fails at the invocation gate with the same errors a real run gives, before any trace output. With `--exec-code`, bash and script nodes also receive the same `INPUTS_<UPPER_SNAKE>` environment variables a real run delivers: run-level inputs, an included block's own inputs, and a script node's `with:` bindings.
 
 With `--exec-code`, child processes inherit Archon's process environment, then apply file-configured `env`, registered-project environment values, and per-run `env` overrides from `--config`, in that order (later values win). Node input variables and engine-owned variables such as `ARTIFACTS_DIR` take precedence over those layers. Registered-project values come from the project resolved for the invocation's working directory. See [configuration](/reference/configuration/) for file configuration and [managed environment variables](/reference/security/#secrets-handling) for stored credentials. Executable fixtures use the same layers, without per-run CLI overrides.
 
-By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. An executed node that declares `output_format` is certified exactly as in a real run: stdout must be one JSON document that satisfies the schema, and downstream `$node.output.field` references read that certified value. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends. A dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Runtime `workflow:` sub-runs are reported as unsupported instead of being launched. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
+By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. An executed node that declares `output_format` is certified exactly as in a real run: stdout must be one JSON document that satisfies the schema, and downstream `$node.output.field` references read that certified value. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends. A dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, `--resume`, and `--detach`.
 
 The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, and safe output. The result reports two independent facts. `outcome` is the simulation execution result (`completed`, `failed`, `paused`, or `cancelled`) and still controls the CLI exit code. `authoredOutcome` is `succeeded`, `failed`, or `null`, derived only when the workflow declares `returns:` plus a boolean `outcome_field:` and the return node has a schema-valid structured result supplied by a stub or produced by code executed with `--exec-code`. Generated placeholders from `--default-stubs` or an unstubbed `all_done` node do not invent an authored verdict. A completed simulation can therefore report a failed authored outcome. Human output labels these as `Simulation outcome:` and `Authored outcome:`; simulation JSON always includes both fields. `--stubs-init --json` does not run a simulation and instead returns a scaffold acknowledgement with `workflow`, `stubsPath`, and `nodeCount`.
 
@@ -558,9 +560,22 @@ archon workflow runs --json
 archon workflow runs --json --verbose  # add per-node state and attention to each run
 archon workflow runs --status failed   # filter to one status
 archon workflow runs --limit 50        # cap rows (default 20)
+archon workflow runs --throughput      # effective output tok/s by run and model
+archon workflow runs --throughput --json --verbose
 archon workflow runs --all             # list across all projects
 archon workflow runs --open            # failed runs nothing has adopted or superseded
 ```
+
+`--throughput` adds effective output throughput per listed run and an aggregate grouped
+by exact provider + requested model across **only the listed runs**. It prints the sample's
+run count, including runs without measurements. Project scope, `--all`, `--status`, `--open`
+and `--limit` still select the page (default 20); increase `--limit` to expand the sample.
+This is not an install-wide total. In JSON, each run gains `throughput` with attempt rows
+and a summary; the top-level `throughput` contains `runIds`, `runCount` and `models`.
+`--json --verbose` keeps its node/attention fields and reuses the event read. Throughput
+reads events in batches of up to 20 runs; without the flag, listing costs are unchanged.
+Unreadable history or invalid typed execution metadata fails the opted-in request rather
+than returning a partial report.
 
 With the SQL store, the recent-run list rejects the entire result if a returned row or a
 status-count group contains an unsupported persisted status; it never returns a partial
@@ -595,8 +610,9 @@ is always `null` because lifecycle events do not own a truthful declared DAG tot
   work with overdue provider tools or reported subtasks), or `unreadable`.
   It is read from the run row alone.
 
-The node events for every listed run are read in one query, so the cost does not grow with
-one query per run.
+Without `--throughput`, the node events for every listed run are read in one query.
+With `--throughput`, events are read in batches of 20 runs as described above, and the
+same reads supply the verbose node summaries.
 
 The listing shows short 8-character run ids. `workflow run --adopt` and `--supersedes` also resolve unique prefixes within the launch project and reject ambiguous prefixes. Full IDs select the exact run; adoption still requires the same project, and `--chat-project-id` restricts both flags to the selected project. Every `<run-id>` command below (`get`, `artifacts`, `logs`, `wait`, `resume`, `cancel`, `abandon`, `approve`, `reject`) accepts these short ids when run from the project directory: a unique prefix resolves to the full id, an ambiguous prefix errors, and full ids keep working from any git repository or registered project folder. Short ids from `--all` rows belonging to *other* projects cannot be resolved; use the full id from `--json` for those.
 
@@ -609,12 +625,50 @@ archon workflow get <run-id>
 archon workflow get <run-id> --json
 archon workflow get <run-id> --verbose   # add the per-node summary
 archon workflow get <run-id> --json --verbose
+archon workflow get <run-id> --throughput
+archon workflow get <run-id> --throughput --json
 ```
 
 The text view includes the same [recorded usage summary](#workflow-run-name-message)
 for any run status. It reads stored totals without recalculating them or certifying
 completeness. `--json` retains the raw usage values in `metadata`, including nulls or
 malformed historical values; it adds no formatted usage text.
+
+`--throughput` adds **effective output throughput**, not model decode speed, beside the
+usage summary: output tokens divided by execution duration in seconds (`tok/s`). Each
+terminal agent attempt has its own row identified by node path, invocation, loop iteration
+path and attempt ID. Failed attempts count too. Run and model totals divide summed output
+tokens by the summed durations of those same eligible attempts, rather than averaging
+rates. Tool work and thinking within an attempt are included; durable waits, approval
+pauses and wrapper durations are excluded. Concurrent attempts each contribute their own
+duration, so this measures model work rather than scheduler throughput. Only attempts
+physically recorded on the run count; child runs are separate rows in `workflow runs`.
+Running and paused runs show terminal agent attempts and exclusions for terminal or
+suspended loop attempts recorded so far, without estimating unfinished work.
+
+Only provider-reported output tokens with a positive usable duration enter the calculation.
+`N nodes without token data` counts excluded attempts, including recognizable historical
+agent rows without explicit token-source provenance. Missing or invalid durations have a
+separate exclusion count; missing tokens take precedence so the counts do not overlap.
+Unavailable rates display `unavailable` (JSON `null`); provider-reported zero is `0 tok/s`.
+All own terminal and suspended `loop:` attempts are excluded and counted as
+`N loop nodes not measured` on run and model summaries (`loopNodesNotMeasured` in JSON). Their persisted durations can
+include approval pauses, and the records do not distinguish safe durations. This exclusion
+takes precedence over missing tokens or duration. A suspended attempt that later completes
+or fails counts once; feedback that starts a new attempt counts separately. Historical
+aggregate restatements do not count as attempts. Historical rows that cannot be identified as agent or loop executions
+are outside the sample.
+Historical rows retain their recorded provider and requested model (`model_usage.requested`,
+then `model`); resolved-only model names are not substituted. Typed execution bindings
+remain authoritative. Missing provider/model binding components remain distinct
+`not recorded` groups. These rates inherit the stored counts and their limitations, including Codex's resumed-turn
+first-snapshot accounting edge case; they do not repair old capture errors or establish
+benchmark decode performance.
+
+JSON adds a top-level `throughput` report with `nodes` and `summary`, retaining unrounded
+rates, eligible `outputTokens`/`durationMs`, `measuredExecutions`, `nodesWithoutTokenData`,
+`nodesWithoutDuration` and `loopNodesNotMeasured`. It combines with `--verbose` and
+`--events` without replacing the existing `nodes`, `events` or metadata usage fields. No new persistence is written.
 
 For a paused gate, human-readable output lists its declared decision IDs and optional
 labels, with an exact `archon workflow respond <run-id> <decision> [text]` command
@@ -1463,11 +1517,11 @@ archon workflow wake schedule install --interval 5 --json
 archon workflow wake schedule remove --json
 ```
 
-The launch interval is a positive integer in seconds, defaulting to 5. It starts the job again if it has exited; the watch process polls every five seconds. The job invokes `workflow wake --watch --json` as one long-lived process, runs at load, and records an absolute executable, working directory, and `ARCHON_HOME`. Reinstalling identical configuration verifies that its launchd job is registered and fails if registration cannot be verified. Remove then install to change its interval or executable, or to upgrade an existing one-shot wake schedule to watch mode. Native installation is macOS-only; see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits) for login, sleep, environment, and scheduler caveats.
+The launch interval is a positive integer in seconds, defaulting to 5. It starts the job again if it has exited; the watch process polls every five seconds. The job invokes `workflow wake --watch --json` as one long-lived process, runs at load, and records an absolute executable, working directory, `ARCHON_HOME`, and the installing shell's `PATH`. Reinstalling identical configuration verifies that its launchd job is registered and fails if registration cannot be verified. Remove then install to change its interval, executable, or `PATH`, to add `PATH` to a schedule installed before it was recorded, or to upgrade an existing one-shot wake schedule to watch mode. Native installation is macOS-only; see [workflow trigger scheduling](/guides/workflow-triggers/#macos-scheduling-limits) for login, sleep, environment, and scheduler caveats.
 
-On Linux, use a long-lived systemd user service with `ExecStart=/absolute/path/to/archon workflow wake --watch --json`, `Environment=ARCHON_HOME=/absolute/path/to/.archon`, and `Restart=on-failure`. Enable it with `systemctl --user enable --now <name>.service`.
+On Linux, use a long-lived systemd user service with `ExecStart=/absolute/path/to/archon workflow wake --watch --json`, `Environment=ARCHON_HOME=/absolute/path/to/.archon`, an `Environment=PATH=...` that contains the tools your workflows run (systemd's default `PATH` usually lacks `~/.bun/bin`), and `Restart=on-failure`. Enable it with `systemctl --user enable --now <name>.service`.
 
-On Windows Task Scheduler, select the absolute Archon executable, set arguments to `workflow wake --watch --json`, and start the task at login. Disable the task's execution time limit and select “Do not start a new instance” if it is already running. Set `ARCHON_HOME` in the task's environment or invoke a wrapper that sets it, and use that home as the working directory.
+On Windows Task Scheduler, select the absolute Archon executable, set arguments to `workflow wake --watch --json`, and start the task at login. Disable the task's execution time limit and select “Do not start a new instance” if it is already running. Set `ARCHON_HOME`, and a `PATH` that contains the tools your workflows run, in the task's environment or in a wrapper that sets them, and use that home as the working directory.
 
 ### `workflow signal`
 

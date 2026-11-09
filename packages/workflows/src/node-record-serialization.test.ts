@@ -17,6 +17,7 @@ import {
   serializeNodeTranscript,
 } from './node-record-serialization';
 import { nodeExecutionMetadataSchema, type NodeExecutionRecord } from './schemas/node-execution';
+import { NODE_LIFECYCLE_EVENT_TYPES } from './store';
 
 const record = (): NodeExecutionRecord => ({
   runId: 'run-1',
@@ -71,6 +72,44 @@ const record = (): NodeExecutionRecord => ({
 });
 
 describe('node record serializers', () => {
+  const lifecycles = {
+    started: { status: 'started' },
+    suspended: { status: 'suspended', point: 'wait' },
+    completed: { status: 'completed' },
+    failed: { status: 'failed', error: 'body failed' },
+    skipped: {
+      status: 'skipped',
+      reason: 'trigger_rule',
+      cause: { kind: 'upstream_failed', origin: 'peer' },
+    },
+  } satisfies {
+    [Status in NodeExecutionRecord['lifecycle']['status']]: Extract<
+      NodeExecutionRecord['lifecycle'],
+      { status: Status }
+    >;
+  };
+
+  it.each(Object.values(lifecycles))(
+    'admits and reconstructs $status execution events',
+    lifecycle => {
+      const source = { ...record(), lifecycle };
+      const durable = serializeNodeStateRecord(source);
+      expect(NODE_LIFECYCLE_EVENT_TYPES.some(type => type === durable.event_type)).toBe(true);
+      expect(readNodeRecordEvent(durable)?.metadata?.lifecycle).toEqual(lifecycle);
+    }
+  );
+
+  it('preserves persisted lifecycle selection order', () => {
+    expect(NODE_LIFECYCLE_EVENT_TYPES).toEqual([
+      'node_started',
+      'node_suspended',
+      'node_completed',
+      'node_failed',
+      'node_skipped',
+      'node_skipped_prior_success',
+    ]);
+  });
+
   it('persists and reads every schema-owned metadata field', () => {
     const source = record();
     const durable = serializeNodeStateRecord(source);

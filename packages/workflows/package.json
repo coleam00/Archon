@@ -64,6 +64,7 @@
     "./logger": "./src/logger.ts",
     "./container-context": "./src/container-context.ts",
     "./structured-output": "./src/structured-output.ts",
+    "./throughput": "./src/throughput.ts",
     "./metrics": "./src/metrics.ts",
     "./metric-views": "./src/metric-views.ts",
     "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",

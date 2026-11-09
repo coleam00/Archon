@@ -208,9 +208,9 @@ archon workflow run archon-upkeep "Address the undici advisory"
 
 #### `archon-metrics-prs`
 
-Records the outcomes of the pull requests the build queue opened as metrics: `sdlc.prs_opened`, `sdlc.prs_merged`, `sdlc.prs_abandoned` and `sdlc.pr_merge_rate`. Each record is attributed to the build-queue runs that built its pull request, so `archon metrics --compare` splits pull requests by when those runs started. Pull requests a round only continued count in no metric. It reads each pull request through the forge plugin's `pr.view`, and refuses with a plugin whose `pr.view` reports no timestamps.
+Records the outcomes of the pull requests the build queue opened as metrics: `sdlc.prs_opened`, `sdlc.prs_merged`, `sdlc.prs_abandoned` and `sdlc.pr_merge_rate`. For each merged one it also records the review rounds it took to reach Ready: `sdlc.review_rounds`, `sdlc.review_one_round` and `sdlc.review_five_plus_rounds`, counted from the review verdicts its build runs published; the SDLC pack README's "Metrics" section defines a round. Each record is attributed to the build-queue runs that built its pull request, so `archon metrics --compare` splits pull requests by when those runs started. Pull requests a round only continued count in no metric. It reads each pull request through the forge plugin's `pr.view`, and refuses with a plugin whose `pr.view` reports no timestamps.
 
-**When to use it**: You want current factory PR counts and merge rate, or to compare them before and after a pack change. Run it on demand, or add the schedule binding the SDLC pack README's "Metrics" section shows; the pack installs none.
+**When to use it**: You want current factory PR counts, merge rate and review rounds, or to compare them before and after a pack change. Run it on demand, or add the schedule binding the SDLC pack README's "Metrics" section shows; the pack installs none.
 
 ```bash
 archon workflow run archon-metrics-prs
@@ -262,7 +262,7 @@ archon workflow run archon-deliver --adopt <run-id> "the flaky test is out of sc
 | `archon-deliver` | Decided work to reviewed PR | Yes | Yes |
 | `archon-review` | Review a PR or the working diff | No (comments on a PR) | No |
 | `archon-upkeep` | Update one dependency | Yes | Yes |
-| `archon-metrics-prs` | Count factory PRs and their merge rate | No | No |
+| `archon-metrics-prs` | Count factory PRs, their merge rate and review rounds | No | No |
 | `archon-metrics-test-value` | Count factory tests that protect nothing on their own merits | No | No |
 | `archon-metrics-test-value-calibrate` | Score the test-value judge against hand labels | No | No |
 
