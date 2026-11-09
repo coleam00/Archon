@@ -832,10 +832,16 @@ For both commands, `--json --verbose` adds a `nodes` array. Nodes are ordered by
 first appearance of each node in the deterministically ordered event stream. Every
 entry includes `nodeId` and `state`; nodes with a start event include the original ISO
 `startedAt`, and terminal nodes with both start and end events include `durationMs`.
-Completed nodes may include an `outputPreview`, truncated after 200 characters with
-ASCII `...`, while failed nodes include `error` (or `Unknown error` when none was
-recorded). A node a resume reset for re-running (`always_run`, or a stale cached
-success) reads `pending` until its new attempt starts, matching `terminal_record.nodes`.
+Completed nodes with recorded output include `output` (the full persisted text),
+`outputTruncated` (whether persistence truncated it), and `outputPreview` (the first
+200 characters followed by ASCII `...` when longer). These fields also apply to
+replayed prior successes and to `workflow runs --json --verbose`. Empty output is
+`output: ""`; nodes without recorded output omit these fields. `outputTruncated: true`
+means the persisted text is incomplete, even though `output` returns all of that text.
+Successful bash and script output stays bounded to 32 KiB in persistence; this view
+does not load spill files. Human output keeps the short preview. Failed nodes include
+`error` (or `Unknown error` when none was recorded). A node a resume reset for
+re-running (`always_run`, or a stale cached success) reads `pending` until its new attempt starts, matching `terminal_record.nodes`.
 Nodes whose provider reported a session include `sessionIds`: the full
 session id of each attempt and loop iteration, in order. Human `--verbose` output prints
 them on a `Session:` or `Sessions:` line, so you can continue a node's conversation in

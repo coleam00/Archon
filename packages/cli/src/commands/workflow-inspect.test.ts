@@ -92,7 +92,7 @@ const VERBOSE_EVENTS_FIXTURE: WorkflowEventRow[] = [
     event_type: 'node_completed',
     step_name: 'orphan',
     step_index: 4,
-    data: { node_output: 'y'.repeat(201) },
+    data: { node_output: 'y'.repeat(5_000), node_output_truncated: true },
     created_at: '2026-08-03T10:00:09.000Z',
   },
   {
@@ -781,6 +781,8 @@ describe('workflowStatusCommand', () => {
     expect(orphan?.durationMs).toBeUndefined();
     expect(orphan?.outputPreview).toBe(`${'y'.repeat(200)}...`);
     expect(String(orphan?.outputPreview)).not.toContain('…');
+    expect(orphan?.output).toBe('y'.repeat(5_000));
+    expect(orphan?.outputTruncated).toBe(true);
   });
 
   it('emits raw events in verbose JSON when events=true', async () => {
@@ -2289,6 +2291,15 @@ describe('workflowGetCommand', () => {
       transcript_path?: string | null;
     };
     expect(parsed.nodes).toEqual(EXPECTED_VERBOSE_NODES);
+    expect(parsed.nodes.find(node => node.nodeId === 'orphan')).toMatchObject({
+      output: 'y'.repeat(5_000),
+      outputTruncated: true,
+      outputPreview: `${'y'.repeat(200)}...`,
+    });
+    expect(parsed.nodes.find(node => node.nodeId === 'zeta')).toMatchObject({
+      output: 'x'.repeat(200),
+      outputTruncated: false,
+    });
     expect(parsed.nodes.map(node => node.state)).toEqual(
       buildNodeSummaries(VERBOSE_EVENTS_FIXTURE).map(node => node.state)
     );
