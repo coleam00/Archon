@@ -33,7 +33,7 @@ Grounds an issue or request against the current repository before spending on it
 archon workflow run archon-ship --branch fix/login-crash "#142"
 ```
 
-**What it produces**: A PR marked ready for review once its review passes, for the merge queue to judge its CI, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The run's result says whether it delivered; when it did not, such as on a question triage or the plan could not settle, an unrooted cause, or a delivery that ended not ready, [continue it with a note](#continuing-a-stage-that-ended-not-ready). The workflow never merges: the merge queue merges a pull request it judges ready, or you merge it yourself.
+**What it produces**: A PR marked ready for review once its review passes, for the merge queue to judge its CI, or an explained stop with the PR left in draft. The stop says whether no work is owed (the outcome already holds, or an investigation found the cause outside this repository) or the requested work was not done and why. The run's result says whether it delivered; when it did not, such as on a question triage or the plan could not settle, an unrooted cause, or a delivery that ended not ready, [continue it with a note](#continuing-a-stage-that-ended-not-ready). The workflow never merges. Merge a pull request it opened yourself; the merge queue merges only what the build queue finished.
 
 `--input pull_request=<number>` has delivery finish that open PR whichever route reaches delivery; a run that stops before delivery leaves it as it was, and a run whose triage names a different PR to continue fails before delivery. `--input branch=<name>` passes through to `archon-deliver`.
 
@@ -235,13 +235,13 @@ archon metrics sdlc.tests_unprotective
 
 ## Continuing a stage that ended not ready
 
-`archon-ship`, `archon-triage`, `archon-plan`, `archon-deliver` and `archon-review` never pause for a person when you run them yourself. Each ends with its outcome as the run's result, and `archon workflow get <run-id>` shows it: ready (delivered, for `archon-ship`) or not, with the report saying why. To take one further, start it again in the same checkout with your note as the message:
+`archon-ship`, `archon-triage`, `archon-plan`, `archon-deliver` and `archon-review` never pause for a person when you run them yourself. Each ends with its outcome as the run's result. `archon workflow get <run-id>` shows whether it got there; `archon workflow get <run-id> --json` carries the stage's typed outcome, ready (delivered, for `archon-ship`) or not, in `terminal_record.returns.value`, and `archon workflow artifacts <run-id>` lists the reports that say why. To take one further, start it again in the same checkout with the original item and your note as the message, or repeat the `--input` that named the item, since a message that is only the note becomes the work:
 
 ```bash
-archon workflow run archon-deliver --adopt <run-id> "the flaky test is out of scope; skip it"
+archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out of scope; skip it"
 ```
 
-[`--adopt`](/reference/cli/#continuing-an-existing-estate) starts the new run in the prior run's worktree and branch, so a delivery continues its pull request. The prior run's artifacts are readable at `$ADOPTED_RUN_DIR`: name the report to build on in your note, or pass it as an input, such as `--input prior_report=<path>` for `archon-review`. Repeat any `--input` the first run had. `archon-triage` runs in the launch checkout and has no worktree to adopt, so run it again with the item and your note together as the message, or keep the item in `--input target=<item>` and pass the note as the message. The queues compose these same workflows and raise their own attention items when they need you.
+[`--adopt`](/reference/cli/#continuing-an-existing-estate) starts the new run in the prior run's worktree and branch, so a delivery continues its pull request. The prior run's artifacts stay in the directory `archon workflow artifacts <run-id> --json` reports as `artifactsDir`: name a report by that path in your note, or pass it as an input, such as `--input prior_report=<artifactsDir>/review/report.md` for `archon-review`. Repeat any other `--input` the first run had. `archon-triage` runs in the launch checkout and has no worktree to adopt, so run it again the same way without `--adopt`. The queues compose these same workflows and raise their own attention items when they need you.
 
 ## Summary
 

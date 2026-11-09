@@ -327,20 +327,21 @@ person. A run started by hand ends with the stage's typed outcome as the run's r
 why not. A stage that fails fails the run at the failed node.
 
 To take a stage that ended not ready further, start it again on the same checkout
-with your note as the message:
+with the original item and your note as the message, or repeat the `--input` that
+named the item, since a message that is only the note becomes the work:
 
 ```bash
-archon workflow run archon-deliver --adopt <run-id> "the flaky test is out of scope; skip it"
+archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out of scope; skip it"
 ```
 
 `--adopt` starts the new run in the prior run's worktree and branch, so a delivery
-picks up its pull request where it stopped. The prior run's artifacts are at
-`$ADOPTED_RUN_DIR`; name the report you want built on in the note, or pass it as an
-input, such as `--input prior_report=<path>` for review. Repeat any `--input` the
-first run had. `archon-triage` runs in the launch checkout and has no worktree to
-adopt: run it again with the item and the note, since a message that is only the note
-would become the target. A review that is Ready on a draft pull request leaves the draft as it
-is; take it out of draft on the forge.
+picks up its pull request where it stopped. The prior run's artifacts stay in the
+`artifactsDir` that `archon workflow artifacts <run-id> --json` reports: name a report
+by that path in the note, or pass it as an input, such as
+`--input prior_report=<artifactsDir>/review/report.md` for review. Repeat any other
+`--input` the first run had. `archon-triage` runs in the launch checkout and has no
+worktree to adopt: run it again the same way without `--adopt`. A review that is Ready
+on a draft pull request leaves the draft as it is; take it out of draft on the forge.
 
 A composer owns what follows a stage's ending and asks through its own attention item
 when it needs a person, such as the build queue's `build:` items.
