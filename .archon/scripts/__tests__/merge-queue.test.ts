@@ -758,6 +758,7 @@ describe('the merge queue scripts', () => {
     expect(fires.map(argv => argv.slice(0, 6))).toEqual([
       ['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-round:ghe.example.com/example/repo#7:run-1'],
     ]);
+    expect(inputsOf(fires[0])).toEqual({ number: '7', repo_host: 'ghe.example.com', repo_path: 'example/repo' });
   }, 60_000);
 
   test('an ask keeps the claim and raises one attention item with every field and the declared choices', () => {
