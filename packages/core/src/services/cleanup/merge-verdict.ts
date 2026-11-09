@@ -111,16 +111,23 @@ export async function judgeBranchForRemoval(input: MergeJudgmentInput): Promise<
   if (branchVerdict) return branchVerdict;
   let hasOpenPr = pr.state === 'OPEN';
   let hasClosedPr = pr.state === 'CLOSED';
-  for (const sha of await resolveTips(input, tips)) {
-    const candidates = await getPrsForCommit(sha, repoPath, remote);
-    if (candidates.state === 'UNAVAILABLE') return 'pr-unavailable';
-    if (candidates.state === 'NONE') continue;
-    for (const candidate of candidates.prs) {
+  async function judgeCandidates(
+    candidates: readonly PrLookup[]
+  ): Promise<'merged' | 'pr-closed' | null> {
+    for (const candidate of candidates) {
       const verdict = await candidateVerdict(candidate);
       if (verdict) return verdict;
       hasOpenPr ||= candidate.state === 'OPEN';
       hasClosedPr ||= candidate.state === 'CLOSED';
     }
+    return null;
+  }
+  for (const sha of await resolveTips(input, tips)) {
+    const candidates = await getPrsForCommit(sha, repoPath, remote);
+    if (candidates.state === 'UNAVAILABLE') return 'pr-unavailable';
+    if (candidates.state === 'NONE') continue;
+    const verdict = await judgeCandidates(candidates.prs);
+    if (verdict) return verdict;
   }
   if (inspectionError) throw inspectionError;
   if (hasOpenPr) return 'open-pr';
