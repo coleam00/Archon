@@ -102,3 +102,48 @@ test.each(['running', 'paused'] as const)('the header omits finish time for %s r
   expect(html).not.toContain('Finished');
   expect(html).toContain('01:00:00');
 });
+
+test('a mounted relative start refreshes without new props and stops its timer on unmount', async () => {
+  const { Window } = await import('happy-dom');
+  const { act } = await import('react');
+  const { createRoot } = await import('react-dom/client');
+  const { RelativeRunStart } = await import('./RelativeRunStart');
+  const browser = new Window();
+  const globals = {
+    window: browser,
+    document: browser.document,
+    IS_REACT_ACT_ENVIRONMENT: true,
+  };
+  const descriptors = Object.getOwnPropertyDescriptors(globalThis);
+  for (const [key, value] of Object.entries(globals)) {
+    Object.defineProperty(globalThis, key, { configurable: true, writable: true, value });
+  }
+  const interval = spyOn(globalThis, 'setInterval');
+  const clear = spyOn(globalThis, 'clearInterval');
+  const container = document.createElement('div');
+  const root = createRoot(container);
+  try {
+    await act(async () => {
+      root.render(<RelativeRunStart startedAt="2026-06-13T23:22:53Z" className="" />);
+    });
+    expect(container.textContent).toBe('1h ago');
+    const tick = interval.mock.calls[0]?.[0];
+    clock.mockReturnValue(now + 3_600_000);
+    await act(async () => {
+      if (typeof tick === 'function') tick();
+    });
+    expect(container.textContent).toBe('2h ago');
+    await act(async () => root.unmount());
+    expect(clear).toHaveBeenCalledWith(interval.mock.results[0]?.value);
+  } finally {
+    await act(async () => root.unmount());
+    interval.mockRestore();
+    clear.mockRestore();
+    for (const key of Object.keys(globals)) {
+      const descriptor = descriptors[key];
+      if (descriptor) Object.defineProperty(globalThis, key, descriptor);
+      else Reflect.deleteProperty(globalThis, key);
+    }
+    await browser.happyDOM.close();
+  }
+});

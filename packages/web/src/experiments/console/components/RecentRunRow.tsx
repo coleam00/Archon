@@ -22,7 +22,7 @@ const STATUS_GLYPH: Record<string, string> = {
 
 /**
  * Compact row for terminal-state runs (completed / failed / cancelled).
- * Wraps on narrow screens and scans like a log on desktop.
+ * Wraps to fit the available feed width.
  *
  * Failed rows keep the error-red glyph and status text so they still catch
  * the eye in a sea of muted completed rows.
@@ -60,13 +60,8 @@ export function RecentRunRow({
     navigate(`/console/p/${run.projectId}?${params.toString()}`);
   };
 
-  // Row grid: status | body | (project) | id | duration + start | cost | CLI.
-  const gridCols = showProject
-    ? 'md:grid-cols-[220px_minmax(0,1fr)_140px_84px_auto_auto_auto]'
-    : 'md:grid-cols-[220px_minmax(0,1fr)_84px_auto_auto_auto]';
-
   const renderStatus = (): ReactElement => (
-    <span className="flex w-full items-center gap-[9px] md:w-auto">
+    <span className="flex shrink-0 items-center gap-[9px]">
       {run.status === 'failed' ? (
         <span aria-hidden className={`text-[12px] leading-none ${statusTextClass.failed}`}>
           {glyph}
@@ -92,8 +87,8 @@ export function RecentRunRow({
 
   const renderRunSummary = (): ReactElement => (
     <>
-      <span className="flex w-full min-w-0 items-baseline gap-2.5 md:w-auto">
-        <span className="min-w-0 truncate font-mono text-[13px] font-bold text-text-primary">
+      <span className="flex min-w-0 flex-1 basis-[18rem] items-baseline gap-2.5">
+        <span className="max-w-[60%] shrink-0 truncate font-mono text-[13px] font-bold text-text-primary">
           {run.workflow}
         </span>
         {run.parentRunId ? (
@@ -115,7 +110,9 @@ export function RecentRunRow({
       </span>
 
       {showProject ? (
-        <span className="truncate text-[12px] text-text-secondary">{run.projectName ?? ''}</span>
+        <span className="max-w-[140px] truncate text-[12px] text-text-secondary">
+          {run.projectName ?? ''}
+        </span>
       ) : null}
 
       <span className="text-right font-mono text-[12px] text-text-tertiary">
@@ -158,7 +155,7 @@ export function RecentRunRow({
             }
           : undefined
       }
-      className={`group flex flex-wrap items-center gap-x-3 gap-y-2 md:grid md:gap-[18px] border-b border-border/40 px-[18px] py-[13px] transition-colors last:border-b-0 hover:bg-surface-hover ${gridCols} ${
+      className={`group flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/40 px-[18px] py-[13px] transition-colors last:border-b-0 hover:bg-surface-hover ${
         selected ? 'bg-surface-hover ring-2 ring-inset ring-accent-bright/40' : ''
       } ${canOpen ? 'cursor-pointer' : ''}`}
     >
@@ -167,7 +164,7 @@ export function RecentRunRow({
       {renderRunSummary()}
 
       {/* trailing: origin + hover actions + CLI */}
-      <span className="ml-auto flex items-center justify-end gap-1.5 md:ml-0">
+      <span className="ml-auto flex items-center justify-end gap-1.5">
         {/* Origin + quick actions reveal on hover; the resting row matches the
             design (status · body · id · duration + start · cost · CLI). */}
         <span className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
