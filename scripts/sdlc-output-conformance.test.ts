@@ -303,7 +303,7 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     }
     return {
       parserAccepts,
-      schemaAccepts: validateStructuredOutput({ head_matches: true, pr, report }, schema).valid,
+      schemaAccepts: validateStructuredOutput({ pr, report }, schema).valid,
     };
   });
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
@@ -343,6 +343,7 @@ describe('discoveries', () => {
       { ...base, outcome: 'track', issue: ISSUE, comment: 'More evidence.', reason: 'r' },
       { ...base, outcome: 'drop', reason: 'r' },
       { ...base, outcome: 'ask', question: 'q', recommendation: 'r' },
+      { ...base, outcome: 'wait', reason: 'r' },
     ];
     expect(new Set(examples.map(example => example.outcome))).toEqual(new Set(AGENT_OUTCOMES));
     for (const example of examples) {
