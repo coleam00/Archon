@@ -934,7 +934,7 @@ describe('the merge queue scripts', () => {
     };
     const fired = fires({ ...binding, INPUTS_MERGED: '[42, 43]' });
     expect(fired.map(argv => argv.slice(0, 6))).toEqual([
-      ['trigger', 'fire', '--config', '/bindings/discoveries.json', '--delivery-id', 'discoveries-drain:ghe.example.com/example/repo:run-1'],
+      ['trigger', 'fire', '--config', '/bindings/discoveries.json', '--delivery-id', 'discoveries-drain:run-1'],
     ]);
     expect(fires({ ...binding, INPUTS_MERGED: '[]' })).toEqual([]);
     expect(fires({ INPUTS_DISCOVERIES_BINDING: '', INPUTS_MERGED: '[42]' })).toEqual([]);

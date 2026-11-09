@@ -8,8 +8,7 @@
  * set, starts nothing; a fire the binding does not admit is noted and fails nothing: the
  * next sweep that merges, or the drain's own schedule, starts one.
  *
- * Bound inputs: INPUTS_MERGED from record; the workflow's INPUTS_DISCOVERIES_BINDING,
- * INPUTS_REPO_HOST and INPUTS_REPO_PATH.
+ * Bound inputs: INPUTS_MERGED from record; the workflow's INPUTS_DISCOVERIES_BINDING.
  */
 
 import { followUp } from '../../.shared/follow-up.ts';
@@ -28,10 +27,9 @@ function main(): void {
   }
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-  const repo = `${trimmed(process.env.INPUTS_REPO_HOST)}/${trimmed(process.env.INPUTS_REPO_PATH)}`;
   const later = 'the next sweep that merges, or a scheduled pass, starts one';
   // The binding names the repository, so the drain takes no inputs.
-  emit({ summary: followUp(binding, `discoveries-drain:${repo}:${runId}`, {}, 'a discoveries drain', later) });
+  emit({ summary: followUp(binding, `discoveries-drain:${runId}`, {}, 'a discoveries drain', later) });
 }
 
 try {
