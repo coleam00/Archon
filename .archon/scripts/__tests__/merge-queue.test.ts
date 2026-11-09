@@ -226,6 +226,8 @@ interface FakePr {
   readonly unreadable?: boolean | readonly number[];
   /** The merge is accepted and the pull request stays open, as when the forge queues merges. */
   readonly queuesMerge?: boolean;
+  /** The merge is applied but names no landed commit, which the contract allows. */
+  readonly landsNoCommit?: boolean;
   /** Commits of the default branch the head lacks. */
   readonly behind?: number;
   /** The head conflicts with the default branch. */
@@ -267,7 +269,7 @@ const forgeOp = (op, request) => {
     if (forgePr.queuesMerge) return failed('the pull request reads back open', { op, target: ref, outcome: 'verification_failed', leaveBehind: 'a queued merge' });
     forgePr.state = 'MERGED';
     forgePr.mergeCommit = '3333333333333333333333333333333333333333';
-    return out(true, { target: ref, outcome: 'applied', changed: true, method: request.method, conditions: request.conditions, enforcedConditions: ['head'], landed: { commit: forgePr.mergeCommit, tree: null, parents: null } });
+    return out(true, { target: ref, outcome: 'applied', changed: true, method: request.method, conditions: request.conditions, enforcedConditions: ['head'], landed: { commit: forgePr.landsNoCommit ? null : forgePr.mergeCommit, tree: null, parents: null } });
   }
   if (unreadable()) return failed('HTTP 502');
   if (op === 'pr.view') {
@@ -998,6 +1000,13 @@ describe('the merge queue facts and gate', () => {
     const gated = on(install(), 'gate', { args, pr: { queuesMerge: true } });
     expect(gated.code).not.toBe(0);
     expect(gated.stderr).toContain('forge pr.merge verification_failed');
+    expect(merges(gated)).toHaveLength(1);
+  }, 60_000);
+
+  test('an applied merge that names no landed commit fails the gate rather than reading like a refusal', () => {
+    const gated = on(install(), 'gate', { args, pr: { landsNoCommit: true } });
+    expect(gated.code).not.toBe(0);
+    expect(gated.stderr).toContain('named no landed commit');
     expect(merges(gated)).toHaveLength(1);
   }, 60_000);
 

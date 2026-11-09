@@ -467,10 +467,15 @@ export function gateRefusals(
 /**
  * Merge at exactly `head`; the forge refuses when the head has moved since it was read.
  * An applied merge was read back by the forge, which returns the commit it landed as.
- * A merge the plugin cannot verify throws its outcome, which fails the gate.
+ * A merge the plugin cannot verify throws its outcome, which fails the gate, and so does
+ * an applied one that names no landed commit: the contract allows a null commit, and
+ * nothing then shows the merge landed.
  */
-export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): string | null {
+export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): string {
   const merged = invokeForge('pr.merge', { ref: { repo: pr.repo, number: pr.number }, method, conditions: { head } });
   const commit = record(merged?.landed)?.commit;
-  return typeof commit === 'string' ? commit : null;
+  if (typeof commit !== 'string') {
+    throw new Error(`forge pr.merge applied the merge of ${pr.repo.path}#${String(pr.number)} at ${head} but named no landed commit`);
+  }
+  return commit;
 }
