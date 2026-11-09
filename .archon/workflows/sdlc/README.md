@@ -915,7 +915,10 @@ then the project's file, whose lines win where the two conflict.
   `facts.merge` (status `waiting`, `asking`, `merged`, `returned` or `parked`, any
   approval pinned to the head it approved, and
   the last twenty decisions), and a return sets the build record to `next` with the
-  brief, so the build queue picks it up.
+  brief. The item's next round then starts at once through the build-queue binding
+  (`build_queue_binding`), keyed by the item and the run, so a re-run of the same record
+  starts it at most once; a round that does not start is named in the summary, and
+  the next build-queue run picks the item up.
 - **Merged issues.** A pull request that links its issue with `Refs #N` merges
   without closing it, and the issue keeps its intake stage, so the build queue could
   claim it again. When `retriage_as` names a maintainer login, `retriage` reads the
