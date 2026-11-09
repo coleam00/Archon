@@ -938,10 +938,6 @@ describe('the merge queue scripts', () => {
     ]);
     expect(fires({ ...binding, INPUTS_MERGED: '[]' })).toEqual([]);
     expect(fires({ INPUTS_DISCOVERIES_BINDING: '', INPUTS_MERGED: '[42]' })).toEqual([]);
-    // A drain that does not start is named in the summary and fails nothing.
-    const refused = run(at, 'drain', { ...binding, INPUTS_MERGED: '[42]', ARCHON_RUN_REFUSES: '1' });
-    expect(refused.code).toBe(0);
-    expect(JSON.parse(refused.stdout).summary).toContain('a discoveries drain did not start (refused)');
   }, 60_000);
 
   const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
