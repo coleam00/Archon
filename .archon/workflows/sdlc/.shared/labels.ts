@@ -22,6 +22,14 @@ export const PACK_LABELS = {
     color: 'C5DEF5',
     description: 'Triage: ready; an investigation comes before delivery',
   },
+  'archon-split': {
+    color: 'BFDADC',
+    description: 'Triage: ready; a large item to split into issues, because one work item would not work',
+  },
+  'archon-prd': {
+    color: '006B75',
+    description: 'Split: a PRD split into issues; open until its hypothesis has a verdict',
+  },
   'archon-needs-contract': {
     color: 'D93F0B',
     description: "Triage: one of the contract's six elements is missing",
@@ -58,36 +66,22 @@ export const PACK_LABELS = {
 
 export type PackLabel = keyof typeof PACK_LABELS;
 
+export const PACK_LABEL_NAMES = Object.keys(PACK_LABELS) as PackLabel[];
+
 export function isPackLabel(name: string): name is PackLabel {
   return Object.hasOwn(PACK_LABELS, name);
-}
-
-// Labels an earlier version of the pack wrote. A write removes them from the item
-// and never creates them, so re-triaging an item clears its old size label, and
-// intake's next write on an item clears archon-issue, the investigate route's old name.
-const RETIRED_LABELS = ['archon-small', 'archon-risky', 'archon-large', 'archon-issue'] as const;
-
-/** A label the pack owns on an item: one it writes now, or one it retired. */
-export type OwnedLabel = PackLabel | (typeof RETIRED_LABELS)[number];
-
-export const OWNED_LABEL_NAMES: readonly OwnedLabel[] = [
-  ...(Object.keys(PACK_LABELS) as PackLabel[]),
-  ...RETIRED_LABELS,
-];
-
-export function isOwnedLabel(name: string): name is OwnedLabel {
-  return (OWNED_LABEL_NAMES as readonly string[]).includes(name);
 }
 
 export type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
 export type WorkType = 'bug' | 'feature' | 'refactor' | 'maintenance' | 'docs' | 'question';
 export type Size = 's' | 'm' | 'l';
-export type Route = 'investigate' | 'plan' | 'deliver' | 'continue';
+export type Route = 'investigate' | 'plan' | 'deliver' | 'continue' | 'split';
 
 // Exactly one state label per item. A READY item's label names the route the run
 // takes on it: archon-ready delivers (a new pull request, or the open one it
-// continues), archon-plan plans then delivers, and archon-investigate investigates
-// then delivers.
+// continues), archon-plan plans then delivers, archon-investigate investigates
+// then delivers, and archon-split files the issues a large item splits into when
+// building it as one work item would not work.
 export const STATE_LABEL = {
   NEEDS_CONTRACT_WORK: 'archon-needs-contract',
   BLOCKED: 'archon-blocked',
@@ -98,6 +92,7 @@ export const ROUTE_LABEL = {
   continue: 'archon-ready',
   plan: 'archon-plan',
   investigate: 'archon-investigate',
+  split: 'archon-split',
 } as const satisfies Record<Route, PackLabel>;
 // Of triage's five fields only type and size become labels, the two a person
 // filters by; complexity, importance and urgency stay in the verdict.
@@ -158,7 +153,7 @@ export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size):
 export function writeLabels(
   item: QualifiedPr,
   add: readonly string[],
-  remove: readonly OwnedLabel[]
+  remove: readonly PackLabel[]
 ): string[] {
   // Single add and remove operations, never a whole-set write, so labels another
   // writer adds concurrently survive. Each forge write reads itself back, and a write

@@ -6,8 +6,7 @@
  * gets `archon-triage` and a detached intake run with that label event, recorded as
  * added by `retriage_as`; intake decides whether the work is delivered or something is
  * still open. The issue's state is read from the tracker after the merge, so one the
- * merge closed is left alone. An enrolled own pull request's work item is the pull
- * request itself: it has no issue. Empty `retriage_as` re-triages nothing.
+ * merge closed is left alone. Empty `retriage_as` re-triages nothing.
  *
  * A failed read, label write or launch is reported for that issue and the rest still
  * go; the merge record is already written.
@@ -16,7 +15,7 @@
  * and the workflow input INPUTS_RETRIAGE_AS.
  */
 
-import { type QualifiedPr, samePr } from '../../.shared/forge.ts';
+import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { launchDetached } from '../../.shared/launch.ts';
@@ -54,7 +53,7 @@ function main(): void {
   const done = [
     ...items.filter(entry => merged.has(entry.pr.number)),
     ...settled.filter(entry => entry.status === 'merged'),
-  ].flatMap(({ item, pr }) => (item === null || pr === null || samePr(item, pr) ? [] : [{ issue: item, pr }]));
+  ].flatMap(({ item, pr }) => (item === null || pr === null ? [] : [{ issue: item, pr }]));
 
   const retriaged: number[] = [];
   const lines: string[] = [];

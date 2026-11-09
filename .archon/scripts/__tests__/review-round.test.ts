@@ -98,7 +98,7 @@ describe('review-round', () => {
       head: newer,
       cursor: older,
       risks: FULL_REVIEW_RISKS,
-      seams: false, code: true, tests: false, errors: false, docs: false,
+      seams: false, code: true, tests: false, errors: false, docs: false, ux: false,
       part,
     });
   });

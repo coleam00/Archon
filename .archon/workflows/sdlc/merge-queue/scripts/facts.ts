@@ -1,10 +1,8 @@
 /**
  * Claim the merge queue's items and read the facts the sweep decides from.
  *
- * Enrolls listed maintainers' own open pull requests that opted in (`maintainers.ts`), then
- * live claims, in intake's order, every item the build queue finished, up to `limit`,
- * including answered own-PR parks whose head changed, and reads each pull request
- * in one snapshot: its head, the trusted review
+ * Live claims, in intake's order, every item the build queue finished, up to `limit`,
+ * and reads each pull request in one snapshot: its head, the trusted review
  * verdict, CI and review threads at that head, and whether it merges cleanly. An item
  * whose pull request is already merged or closed, or that names none, is settled without
  * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
@@ -16,11 +14,9 @@
 
 import { join } from 'node:path';
 import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
-  answeredOwnPrParkHead,
   itemPr,
-  mergeWaits,
   MERGE_METHODS,
   MERGE_PICKUP,
   type MergeMethod,
@@ -33,8 +29,8 @@ import {
   UNREADABLE,
   withMerge,
 } from '../../.shared/merge.ts';
-import { readMaintainerList } from '../../.shared/maintainers.ts';
-import { enrollOwnPrs, isOwnPr } from '../../.shared/own-prs.ts';
+import { readMaintainers } from '../../.shared/maintainers.ts';
+import { workflowRepo } from '../../.shared/remote.ts';
 import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
@@ -44,8 +40,6 @@ interface Item {
   readonly url: string;
   readonly facts: PrFacts;
   readonly record: MergeRecord | null;
-  /** A maintainer's own pull request the queue enrolled: no issue and no build round behind it. */
-  readonly own_pr: boolean;
 }
 
 function positive(name: string, value: string): number {
@@ -94,41 +88,6 @@ function snapshotReader(maintainers: ReadonlySet<string>): (pr: QualifiedPr) => 
     if (!result.ok) throw result.error;
     return result.facts;
   };
-}
-
-function recoveryPickup(snapshot: (pr: QualifiedPr) => PrFacts): Pickup {
-  const reported = new Set<string>();
-  return {
-    ...MERGE_PICKUP,
-    waits: doc => {
-      if (mergeWaits(doc)) return true;
-      if (answeredOwnPrParkHead(doc) === null) return false;
-      const url = doc.facts.own_pr?.url ?? '';
-      try {
-        const pr = itemPr(doc);
-        if (pr === null) throw new Error('the work item names no pull request');
-        return mergeWaits(doc, snapshot(pr).head_revision);
-      } catch (error) {
-        if (!reported.has(url)) {
-          note(`merge-queue facts: cannot reconsider ${url}: ${error instanceof Error ? error.message : String(error)}`);
-          reported.add(url);
-        }
-        return false;
-      }
-    },
-  };
-}
-
-/**
- * Enrollment only adds work items, so a failed listing must not stop the sweep merging
- * the ones that already exist. Items enrolled before the failure are kept.
- */
-function enrollOrNote(repo: QualifiedPr['repo'], authors: ReadonlySet<string>): void {
-  try {
-    enrollOwnPrs(repo, authors);
-  } catch (error) {
-    note(`merge-queue facts: own-PR enrollment stopped: ${error instanceof Error ? error.message : String(error)}`);
-  }
 }
 
 function unreadableItem(doc: WorkItem, pr: QualifiedPr | null, error: unknown): MergeSettled {
@@ -180,20 +139,15 @@ function emitFacts(repo: QualifiedPr['repo'], items: readonly Item[], settled: r
 function main(): void {
   const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
   const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
-  const repo = { host: trimmed(process.env.INPUTS_REPO_HOST), path: trimmed(process.env.INPUTS_REPO_PATH) };
-  if (repo.host === '' || repo.path === '') throw new Error('repo_host and repo_path are required');
+  const repo = workflowRepo();
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
 
   requireMergeSource(repo);
-  const list = readMaintainerList(repo);
-  const maintainers = list.logins;
-  enrollOrNote(repo, list.ownPrs);
-  const snapshot = snapshotReader(maintainers);
-  const pickup = recoveryPickup(snapshot);
+  const snapshot = snapshotReader(readMaintainers(repo));
   const items: Item[] = [];
   const settled: MergeSettled[] = [];
-  for (const doc of claimAll(limit, runId, pickup)) {
+  for (const doc of claimAll(limit, runId, MERGE_PICKUP)) {
     let pr: QualifiedPr | null = null;
     let facts: PrFacts;
     try {
@@ -219,7 +173,6 @@ function main(): void {
       url: facts.url,
       facts,
       record: current.facts.merge ?? null,
-      own_pr: isOwnPr(doc),
     });
   }
   const gate = [

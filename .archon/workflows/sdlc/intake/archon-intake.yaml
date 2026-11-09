@@ -16,8 +16,12 @@ description: |
 
 inputs:
   repo_host:
-    description: The forge host of the issue's repository (binding field repository.host).
+    default: ""
+    description: >-
+      The forge host of the issue's repository (binding field repository.host).
+      Empty, with repo_path empty too, resolves the repository from the checkout's git remotes.
   repo_path:
+    default: ""
     description: The owner/name path of the issue's repository (binding field repository.path).
   number:
     description: The issue number (binding field subject.number).

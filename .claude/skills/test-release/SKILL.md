@@ -238,7 +238,7 @@ git commit -q --allow-empty -m init
 **Pass criteria:**
 
 - Exit code 0
-- Output lists the bundled `sdlc` pack workflows: archon-triage, archon-investigate, archon-plan, archon-implement, archon-pr, archon-review, archon-validate, archon-deliver, archon-upkeep, archon-ship
+- Output lists the bundled `sdlc` pack workflows: archon-triage, archon-investigate, archon-plan, archon-implement, archon-pr, archon-review, archon-deliver, archon-upkeep, archon-ship
 - No errors about missing workflow files or JSON parse failures
 
 **Common failures:**

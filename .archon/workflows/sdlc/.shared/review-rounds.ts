@@ -3,11 +3,10 @@
  * verdicts its delivery rounds published.
  *
  * A review round is one verdict a delivery round's review published on the pull
- * request: the typed `review-report` output of the deliver loop's `review` node, or of
- * its `rereview` node, which reviews what simplify's reshape changed. The build queue
- * records a run's verdicts on its build round (`reviews`) when it records the round,
- * from the run's own typed-artifact listing. A pull request's rounds are the verdicts
- * of every build round that carried it, oldest first.
+ * request: the typed `review-report` output of the deliver loop's `review` node. The
+ * build queue records a run's verdicts on its build round (`reviews`) when it records
+ * the round, from the run's own typed-artifact listing. A pull request's rounds are the
+ * verdicts of every build round that carried it, oldest first.
  *
  * Rounds to Ready counts up to the verdict from which every later verdict is ready: a
  * Ready review that a later review overturned did not end the review. Only merged pull
@@ -29,7 +28,7 @@ import type { WorkItem } from './workitem.ts';
  * outputs: each review include's id joined to the review block's `publish` node. A
  * conformance test derives this set from the deliver and review block YAML.
  */
-export const REVIEW_NODES: ReadonlySet<string> = new Set(['review__publish', 'rereview__publish']);
+export const REVIEW_NODES: ReadonlySet<string> = new Set(['review__publish']);
 const REVIEW_TYPE = 'review-report';
 /** The share of pull requests needing this many rounds or more is reported. */
 const MANY_ROUNDS = 5;

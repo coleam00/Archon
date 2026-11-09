@@ -2,7 +2,7 @@
 
 Intake recorded each item below as blocked: something had to happen first. Work lands in parallel, so a blocker can be resolved, superseded or made irrelevant while its issue is still open, and an item can stay blocked long after it could move. Judge, for each item, whether it still looks blocked now. You don't re-triage anything yourself: the next node asks intake to re-triage the items you name, and intake decides whether each is ready. You write nothing to the tracker, the repository or the state store, and the checkout must be exactly as you found it.
 
-The items: `$INPUTS.blocked`, issues in `$INPUTS.repo_host/$INPUTS.repo_path`. Each has its issue number and intake's summary of its triage, which names what it waits on.
+The items: `$INPUTS.blocked`, issues in `$INPUTS.repo`. Each has its issue number and intake's summary of its triage, which names what it waits on.
 
 ## Judge each item
 

@@ -1,18 +1,19 @@
 /**
  * Inline one pull request for the test-value judge, which runs with no tools: the
  * project's test-value criteria, every changed file's patch, and the full text of each
- * changed test file at the pull request's head, so a changed test's enclosing
- * `describe` blocks are visible.
+ * changed file that holds test code at the pull request's head, so a changed test's
+ * enclosing `describe` blocks are visible. Test code includes test cases defined
+ * outside test files, such as a shared conformance suite that test files run.
  */
 
 import { invokeForge } from '../../.shared/forge.ts';
 import { refuse, report, trimmed } from '../../.shared/io.ts';
 import { prFromUrl } from '../../.shared/merge.ts';
 import { readCriteria } from '../../.shared/test-value.ts';
+import { holdsTestCode } from './test-code.ts';
 
-/** A test file's full text is inlined up to this size; beyond it the patch alone stands. */
+/** A file holding test code is inlined in full up to this size; beyond it the patch alone stands. */
 const MAX_FULL_TEXT = 120_000;
-const TEST_PATH = /(^|\/)(__tests__|tests?|spec)\/|(\.|_)(test|spec)\.[a-z]+$|(^|\/)test_[^/]+$/;
 
 interface ChangedFile {
   readonly path: string;
@@ -40,7 +41,7 @@ try {
 
   const sections = files.map(file => {
     const parts = [`<patch>\n${file.patch ?? '(no patch: binary or too large)'}\n</patch>`];
-    if (TEST_PATH.test(file.path) && file.status !== 'removed') {
+    if (holdsTestCode(file.path, file.patch) && file.status !== 'removed') {
       // repo.file refuses a file over 1 MB or not UTF-8 with the same error kind as a
       // transient failure, so this pull request's judge refuses rather than inlining a
       // placeholder: the run reports it as skipped instead of judging it on a guess.

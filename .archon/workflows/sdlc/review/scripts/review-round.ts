@@ -17,7 +17,7 @@
  * A first round's lenses are the route agent's call. A continuation reruns the
  * general code lens on the delta; the route agent adds every lens whose finding the
  * previous report leaves open or whose area the delta touches. A light
- * continuation, which follows a correction for CI rather than for review, runs
+ * continuation, which follows a correction for CI or simplify rather than for review, runs
  * the code lens alone and does not route.
  *
  * The prior report is a declared input an outside caller can fill with a path
@@ -30,7 +30,7 @@
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_PRIOR_REPORT: the previous round's report path, or empty for round one.
- * - INPUTS_LIGHT: "true" when this continuation follows a CI correction.
+ * - INPUTS_LIGHT: "true" when this continuation follows a CI or simplify correction.
  * - INPUTS_PART: the run's part assignment as JSON, or empty for the whole contract.
  */
 
@@ -60,6 +60,7 @@ const NO_LENSES: Record<ReviewLens, boolean> = {
   tests: false,
   errors: false,
   docs: false,
+  ux: false,
 };
 
 function isFile(path: string): boolean {

@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { yamlCountError } from '../workflow-discovery/pack-layout';
 import { collectBundleSources, readBundleContent, readBundleIndex } from './bundle-inventory';
 
 const track = trackTempRoots();
@@ -72,4 +73,33 @@ test('the index selects exact runtime files, shared documents and metric views, 
   await expect(readBundleIndex(indexPath)).rejects.toThrow('Duplicate bundle pack');
   await writeFile(indexPath, JSON.stringify({ packs: ['../outside'] }));
   await expect(readBundleIndex(indexPath)).rejects.toThrow('Invalid bundle pack name');
+});
+
+async function writeTree(root: string, files: Record<string, string>): Promise<void> {
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), content);
+  }
+}
+
+test('a selected workflow folder without YAML fails generation', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-no-yaml-')));
+  await writeTree(root, {
+    'workflows/selected/flow/main.yaml': 'name: main\n',
+    'workflows/selected/flow-renamed/commands/step.md': 'step',
+  });
+  await expect(collectBundleSources(join(root, 'workflows'), ['selected'])).rejects.toThrow(
+    yamlCountError('selected/flow-renamed', 0).error
+  );
+});
+
+test('a workflow folder with two YAML files fails with the discovery error', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-crowded-')));
+  await writeTree(root, {
+    'workflows/selected/crowded/one.yaml': 'name: one\n',
+    'workflows/selected/crowded/two.yaml': 'name: two\n',
+  });
+  await expect(collectBundleSources(join(root, 'workflows'), ['selected'])).rejects.toThrow(
+    yamlCountError('selected/crowded', 2).error
+  );
 });

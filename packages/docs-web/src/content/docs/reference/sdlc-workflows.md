@@ -11,7 +11,7 @@ Archon bundles one workflow pack, `sdlc`. It covers the software lifecycle from 
 
 ## How the factory runs
 
-`archon-intake` triages each new issue, `archon-build-queue` works it to a reviewed pull request, `archon-merge-queue` merges it, and `archon-discoveries` files what runs noticed on the way. Anything unclear pauses as one attention item with a recommendation. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs them on your repository; the pack binds no trigger by default.
+`archon-intake` triages each new issue, `archon-split` files the issues a large item splits into when it can't be built as one, `archon-build-queue` works it to a reviewed pull request, `archon-merge-queue` merges it, and `archon-discoveries` files what runs noticed on the way. Anything unclear pauses as one attention item with a recommendation. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs them on your repository; the pack binds no trigger by default.
 
 `archon-ship` itself is a graph of the stage workflows below. Triage picks a route; investigate or plan runs when the route needs it; then the delivery rounds implement, open a draft pull request, review it through specialist lenses, fix the findings and wait for CI. Stages hand each other files in `$ARTIFACTS_DIR`, such as `triage.md`, `plan.md` and `implementation.md`, not conversation history.
 
@@ -51,7 +51,7 @@ The review then treats an item that only later parts list as deferred: it is nei
 
 #### `archon-triage`
 
-Reconciles an issue, plan, or request with the current code, tracker history, and stated direction, judges whether it is a contract a run can start from, then routes it to investigate, plan, deliver, or no action.
+Reconciles an issue, plan, or request with the current code, tracker history, and stated direction, judges whether it is a contract a run can start from, then routes it to investigate, plan, deliver, split, or no action.
 
 **When to use it**: An item may be stale or may prescribe an unverified solution, and you want to know what it needs next before paying for the work.
 
@@ -92,6 +92,14 @@ Drains the discoveries finished runs recorded outside their own scope. One agent
 **When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
 
 **What it produces**: Filed issues and evidence comments, and one state document per drained run (`archon state list --prefix discoveries/runs/`) recording which of its records were decided and any question asked with its answer, so a record is decided once.
+
+#### `archon-split`
+
+Files the issues a large item splits into, when triage routed the item `split`. A large item, such as a PRD, an epic or a bundle of tasks, is built as one work item by default; triage splits it only when building it whole would not work, and says why. Triage passes a PRD only when it states a hypothesis, the signal that proves or disproves it with the command that measures it, and a threshold and window; otherwise it asks for that contract work. One agent checks triage's reason first and can hand the item back to the build queue whole, with why. Otherwise it files only the piece that comes next, each issue a contract of its own: a PRD's current phase, an epic's current increment, or every task of a bundle. Later phases are recorded on the item, each with what the earlier work must show before it is filed. A script files each issue once and comments the list and the plan on the item. A PRD is labelled `archon-prd` and stays open; an epic stays open until its increments merge; a bundle is closed.
+
+**When to use it**: Your issues include PRDs, epics or lists of tasks too large to build as one work item. Add the binding the SDLC pack README's "Split queue" section shows; the pack installs none. By hand: `archon workflow run archon-split --input number=42` from the repository's checkout.
+
+**What it produces**: The filed issues, which come back through intake, a comment on the item listing them, and the queue's record on its work item (`facts.split`: status, kind and filed issues, or the route when the item was built whole).
 
 #### `archon-worktree-cleanup`
 
@@ -161,11 +169,11 @@ archon workflow run archon-deliver --branch feat/export-csv "Deliver the plan in
 
 **What it produces**: A PR marked ready for review, with one canonical review comment.
 
-### Review and validation
+### Review
 
 #### `archon-review`
 
-Reviews a change through specialist lenses and produces one evidence-based verdict. On every round but a light one, a quick route agent picks the lenses the change earns: seams (on unless the change touches no type, contract, state or boundary), code (which uses the configured `large` model tier), tests, errors, and docs. `--input errors=true` or `false` overrides its errors call. A continuation (`--input prior_report=<path>`) runs the general code reviewer, plus every lens the route agent selects because a finding it raised is still open or the delta touches its area, on the correction delta only (code a merge of the base brought in is left out), judging whether each prior finding was resolved or validly declined; `--input light=true` runs the general code reviewer alone. The review also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding. `--input part=<json>` reviews one part of a multi-part plan, as described for `archon-ship`.
+Reviews a change through specialist lenses and produces one evidence-based verdict. On every round but a light one, a quick route agent picks the lenses the change earns: seams (on unless the change touches no type, contract, state or boundary), code (which uses the configured `large` model tier), tests, errors, docs, and ux (for a change a person sees or does in a browser: it starts the app and uses the change, on the `large` tier). `--input errors=true` or `false` overrides its errors call. A continuation (`--input prior_report=<path>`) runs the general code reviewer, plus every lens the route agent selects because a finding it raised is still open or the delta touches its area, on the correction delta only (code a merge of the base brought in is left out), judging whether each prior finding was resolved or validly declined; `--input light=true` runs the general code reviewer alone. The review also holds the change to its stated contract, taken from the PR description or a work order you pass: each stated acceptance item and invariant is met with cited evidence or raised as a blocking finding. `--input part=<json>` reviews one part of a multi-part plan, as described for `archon-ship`.
 
 **When to use it**: A PR or your working diff needs judging. It never edits code. On a PR it posts or edits its review comment, and on a draft PR your `ready` answer marks the PR ready for review.
 
@@ -183,18 +191,6 @@ archon workflow run archon-review --input scope=<PR-URL> --branch <fresh-review-
 Use the fork's actual clone URL, head ref and full head SHA, and choose a review branch absent locally, on the configured remote and from existing worktrees. `--from` only applies to a new branch; `--branch` alone cannot resolve a fork-only ref and would create it from the base. If the checkout commit differs from the PR head, the run stops before routing or any review lens and returns the exact rerun command, including the fetch prerequisite for a fork.
 
 **What it produces**: A synthesized review report when the checkout matches the PR head. When reviewing a PR, the report is posted as one comment and edited in place on re-review. Empty `scope` selects the current branch's open PR first, otherwise the working diff. A Ready verdict on a draft PR pauses the run as one attention item: `ready` takes the PR out of draft, and `finish` leaves it a draft.
-
-#### `archon-validate`
-
-Discovers and runs the project's own checks, such as types, lint, tests, and build, and reports a structured verdict. It judges nothing and fixes nothing.
-
-**When to use it**: You want to know whether your checkout is green.
-
-```bash
-archon workflow run archon-validate --no-worktree
-```
-
-**What it produces**: A structured verdict on the project's checks. Pass `--input scope=<package or check>` to narrow the run.
 
 ### Maintenance
 
@@ -225,7 +221,7 @@ archon metrics sdlc.pr_merge_rate --since 2026-10-01
 
 #### `archon-metrics-test-value`
 
-Judges the tests in each factory pull request merged since a date, one `archon-metrics-test-value-judge` run per pull request, and records `sdlc.tests_added` and `sdlc.tests_unprotective`: how many tests it added or changed, and how many of them no plausible regression would fail. Both counts name the judge's identity. The judge reads each pull request's changed files and test file text through the forge plugin's `pr.files` and `repo.file`; a pull request whose files the plugin cannot read is skipped.
+Judges the tests in each factory pull request merged since a date, one `archon-metrics-test-value-judge` run per pull request, and records `sdlc.tests_added` and `sdlc.tests_unprotective`: how many tests it added or changed, and how many of them protect nothing on their own merits, as tests in the suite rather than against what the pull request promised. Redundancy is judged against the tests the judge is shown: the pull request's changed tests and the files that hold them. Both counts name the judge's identity. The judge reads each pull request's changed files and the text of each file holding test code through the forge plugin's `pr.files` and `repo.file`; a pull request whose files the plugin cannot read is skipped.
 
 **When to use it**: You want to see whether factory pull requests carry tests that protect nothing. Calibrate the judge first with `archon-metrics-test-value-calibrate`, which scores it against hand-labeled pull requests as `sdlc.tests_unprotective_judge_agreement` and `sdlc.tests_unprotective_judge_catch_rate`.
 
@@ -247,6 +243,7 @@ archon metrics sdlc.tests_unprotective
 | `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
 | `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | No |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
+| `archon-split` | File the issues a large item splits into when it can't be built whole (trigger-started) | No | No |
 | `archon-worktree-cleanup` | Remove merged worktrees on a schedule | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
@@ -254,15 +251,14 @@ archon metrics sdlc.tests_unprotective
 | `archon-pr` | Open a PR for committed work | Yes | No |
 | `archon-deliver` | Decided work to reviewed PR | Yes | Yes |
 | `archon-review` | Review a PR or the working diff | No (comments on a PR) | No |
-| `archon-validate` | Run the project's checks | No | No |
 | `archon-upkeep` | Update one dependency | Yes | Yes |
 | `archon-metrics-prs` | Count factory PRs, their merge rate and review rounds | No | No |
-| `archon-metrics-test-value` | Count factory tests that protect no behavior | No | No |
+| `archon-metrics-test-value` | Count factory tests that protect nothing on their own merits | No | No |
 | `archon-metrics-test-value-calibrate` | Score the test-value judge against hand labels | No | No |
 
 ## Workflows that no longer ship
 
-Archon 0.12.0 stopped bundling the older `archon-*` workflows, such as `archon-fix-github-issue`, `archon-idea-to-pr`, `archon-smart-pr-review`, and `archon-assist`. Most have an `sdlc` replacement: use `archon-ship` for issue fixing and idea-to-PR work, `archon-review` for PR review, `archon-plan` followed by `archon-deliver` for plan-to-PR, and `archon-validate` for running checks. For questions, ask in chat.
+Archon 0.12.0 stopped bundling the older `archon-*` workflows, such as `archon-fix-github-issue`, `archon-idea-to-pr`, `archon-smart-pr-review`, and `archon-assist`. Most have an `sdlc` replacement: use `archon-ship` for issue fixing and idea-to-PR work, `archon-review` for PR review, and `archon-plan` followed by `archon-deliver` for plan-to-PR. For questions, ask in chat.
 
 To keep using one of the old workflows, copy its YAML from [`.archon/workflows/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/workflows/defaults) (most are in its `legacy/` folder) into your project's `.archon/workflows/`, and the commands it uses from [`.archon/commands/defaults/` at v0.11.1](https://github.com/coleam00/Archon/tree/v0.11.1/.archon/commands/defaults) into `.archon/commands/`. `archon-idea-to-pr`, `archon-plan-to-pr` and `archon-issue-review-full` also need `archon-review-block.yaml` from the same `legacy/` folder, because they include it. Save that copy under another name, such as `legacy-review-block` (its file name and its `name:`), and point the three workflows' `include:` at it: the `sdlc` pack ships its own `archon-review-block`, and a project or global copy with that name would replace it.
 

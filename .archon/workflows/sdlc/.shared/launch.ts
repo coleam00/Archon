@@ -2,8 +2,8 @@
  * Start another pack workflow detached, from the main checkout: the launching run's
  * worktree can be cleaned up before the new run reads it. Returns the new run's id.
  *
- * Only re-triage still starts intake this way; queue follow-ups go through the
- * operator's trigger bindings (`follow-up.ts`).
+ * Re-triage and the build queue's handoff of new work start intake this way; queue
+ * follow-ups go through the operator's trigger bindings (`follow-up.ts`).
  */
 
 import { dirname } from 'node:path';

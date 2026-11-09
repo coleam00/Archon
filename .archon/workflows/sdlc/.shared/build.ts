@@ -15,14 +15,11 @@ import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
   type Claim,
-  claimable,
-  claimItem,
   type HistoryEntry,
   newest,
   type Pickup,
   parseWorkItem,
   read,
-  releaseIfTerminal,
   type Stage,
   type TriageFacts,
   type WorkItem,
@@ -42,10 +39,10 @@ export type BuildAttention = Attention<BuildEffect>;
 /** The decision each agent can declare; archon-build-queue.yaml declares the same enums. */
 export const ROUTE_DECISIONS = ['launch', 'ask', 'ready'] as const;
 export const ANSWER_DECISIONS = ['done', 'continue', 'ask'] as const;
-export const BUILD_PATHS = ['idle', 'closed', 'route'] as const;
+export const BUILD_PATHS = ['idle', 'closed', 'route', 'handoff'] as const;
 export type BuildPath = (typeof BUILD_PATHS)[number];
 /** What apply reports the run decided; archon-build-queue.yaml declares the same enum. */
-export const APPLY_DECISIONS = ['idle', 'parked', 'ready', 'continue', 'asked', 'launch'] as const;
+export const APPLY_DECISIONS = ['idle', 'handoff', 'parked', 'ready', 'continue', 'asked', 'launch'] as const;
 export type ApplyDecision = (typeof APPLY_DECISIONS)[number];
 /** Which decision raised an attention item: its class label, which the YAML also declares. */
 export const ASKED_BY = ['route', 'stop', 'scope'] as const;
@@ -123,25 +120,6 @@ export function buildWaits(doc: WorkItem): boolean {
 }
 
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
-
-/**
- * Claim the named item for the build queue, releasing a terminal claim on it first as
- * `claimNext` does. Refuses with the facts an operator acts on when it cannot.
- */
-export function claimNamed(number: number, at: string, runId: string): WorkItem {
-  const issue = `issue ${String(number)}`;
-  const found = read(workItemName(number));
-  if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
-  const item = releaseIfTerminal(found, at, runId, BUILD_PICKUP);
-  const won = claimable(item, BUILD_PICKUP) ? claimItem(item, at, runId, BUILD_PICKUP) : null;
-  if (won !== null) return won;
-  const now = read(item.name) ?? item;
-  if (now.doc.claim !== null) throw new Error(`${issue} is claimed by run ${now.doc.claim.run_id}`);
-  // Both conditional writes can lose to concurrent writes that leave the item waiting.
-  if (buildWaits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
-  const status = now.doc.facts.build?.status ?? 'none';
-  throw new Error(`${issue} does not wait for the build queue: stage ${now.doc.stage}, build status ${status}`);
-}
 
 /** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
 export interface BlockedItem {

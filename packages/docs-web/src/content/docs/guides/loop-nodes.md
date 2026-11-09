@@ -180,7 +180,9 @@ of moving a `prompt:` node to a `command:` node.
 
 ### `until`
 
-Deprecated prose completion signal. Prefer `until_bash` for deterministic checks or
+Deprecated prose completion signal. See
+[deprecated node fields](/reference/workflow-language/#deprecated-node-fields)
+for release and migration guidance. Prefer `until_bash` for deterministic checks or
 `until_field` for model judgment. While `until` remains supported, the executor checks
 each iteration's output for:
 

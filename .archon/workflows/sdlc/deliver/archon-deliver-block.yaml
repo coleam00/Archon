@@ -2,14 +2,15 @@ name: archon-deliver-block
 description: |
   The delivery tail, autonomous on its green path. Capped rounds of implement
   (focused checks only; CI is the full validation), draft PR, and a review at the
-  depth its risk earns. Once a review passes, simplify judges the structure once,
-  the implementer adopts or declines its findings, a light review checks what
-  that changed, and one CI agent marks the PR ready on green. Open review findings,
-  an unresolved review thread from anyone, a CI red the change caused, or a conflict
-  with the base send the work back to implement for another round, which merges
-  the base on a conflict and judges each thread; the round then answers and
-  resolves the threads it settled. Every other ending is not ready, with
-  its reason. A red PR never stays ready, nor one with an open thread. Threads are
+  depth its risk earns, beside a simplify pass that judges the structure. Once
+  the review passes and simplify names nothing, one CI agent hands the PR off
+  ready for the merge queue, which judges its CI; delivery never waits for CI.
+  Open review findings, simplify's smaller shapes, an unresolved review thread
+  from anyone, a check already red because of the change, or a conflict with the
+  base send the work back to implement for another round, which merges the base
+  on a conflict and judges each thread; the round then answers and resolves the
+  threads it settled. Every other ending is not ready, with its reason. A PR with
+  an open thread never stays ready. Threads are
   read, answered and resolved through the forge plugin. Each
   round's pr step publishes description content the round prepared before its
   review reads the PR, and the description is corrected and linked once the
@@ -67,12 +68,13 @@ nodes:
     script: forge-check
     runtime: bun
 
-  # One round: implement → draft PR → review → (simplify → reshape → rereview) →
-  # settle-threads → CI → threads. Open review findings, an unresolved review thread, or a red CI the change
-  # caused, start another round. Each
-  # round's implementer is a fresh agent that reads the previous round's review
-  # report and ci.md, and each later round's review reads only its delta. The pr step runs every round, so every round's commits are
-  # pushed before the review reads the pull request's remote head.
+  # One round: implement → draft PR → review ∥ simplify → settle-threads → CI →
+  # threads. Open review findings, simplify's smaller shapes, an unresolved review
+  # thread, or a check the change turned red start another round. Each round's
+  # implementer is a fresh agent that reads the previous round's review report,
+  # shape.md and ci.md, and each later round's review reads only its delta. The pr
+  # step runs every round, so every round's commits are pushed before the review
+  # reads the pull request's remote head.
   - id: rounds
     depends_on: [forge]
     loop_group:
@@ -122,8 +124,14 @@ nodes:
               inside it. Do not reply on or resolve a thread yourself; record its
               disposition under the thread's URL — fixed, with what changed;
               declined, with the evidence; or that it needs a decision this run cannot make,
-              and why — and the round answers and resolves it. Record every disposition — fixed, declined with its
-              reason or evidence, or unrelated — in implementation.md.
+              and why — and the round answers and resolves it. When
+              $ARTIFACTS_DIR/shape.md records smaller shapes, judge each against
+              the work order: adopt every one whose smaller shape keeps the
+              required outcome and the behavior the project supported before this
+              change, and that the project's values back; decline one only with
+              that evidence. Keep the requested outcome and its tests intact.
+              Record every disposition — fixed, adopted, declined with its reason
+              or evidence, or unrelated — in implementation.md.
 
               Content the work order requires in the pull request's description,
               such as evidence, measurements, or results, is part of the work.
@@ -140,7 +148,7 @@ nodes:
               Accepted work order:
               $INPUTS.work
 
-        # Red the change did not cause still goes to review; CI judges it again.
+        # Red the change did not cause still goes to review; the merge queue judges CI.
         - id: pr
           include: archon-pr
           depends_on: [implement]
@@ -163,55 +171,21 @@ nodes:
             # A later round reviews only the delta since the previous round's
             # published report: the code lens, plus every lens route selects for an
             # open prior finding or the delta's area, after review findings; the code
-            # lens alone after a CI fix.
+            # lens alone after a correction for CI or simplify alone.
             prior_report: "$LOOP_PREV.round.output.prior_report"
             light: "$LOOP_PREV.round.output.light_review"
             work_order: "$INPUTS.work"
             part: "$INPUTS.part"
             errors: "$INPUTS.errors"
 
-        # After a review passes, before CI. Once per run: a later round finds the
-        # earlier shape.md and declares no findings (see simplify.md).
+        # Beside the review, so its smaller shapes reach the same correction round as
+        # the review's findings. A later round's pass judges only a large or
+        # reshaping delta (see simplify.md).
         - id: simplify
           include: archon-simplify
-          depends_on: [review]
-          when: "$review.output.ready == true"
+          depends_on: [pr]
           with:
             work_order: "$INPUTS.work"
-
-        - id: reshape
-          include: archon-implement
-          depends_on: [simplify]
-          when: "$simplify.output.findings == true"
-          with:
-            work: >-
-              Judge the smaller shapes recorded in $ARTIFACTS_DIR/shape.md against
-              the accepted work order below. Adopt every finding whose smaller
-              shape keeps the required outcome and the behavior the project
-              supported before this change, and that the project's values back;
-              decline one only with that evidence. Record each disposition in
-              implementation.md. Keep the requested outcome and its tests intact.
-              Then commit and push to the pull request's head branch,
-              $pr.output.head, whatever the green state: CI judges the pushed head
-              next. Name the branch explicitly (`git push <remote>
-              HEAD:refs/heads/<branch>`), never let git pick an upstream, and never
-              force-push.
-
-              Accepted work order:
-              $INPUTS.work
-
-        # Reshape commits after review passed, so its delta is reviewed before CI, by
-        # the light review a CI fix gets: the code lens alone, on the delta.
-        - id: rereview
-          include: archon-review-block
-          depends_on: [reshape]
-          with:
-            scope: "$pr.output"
-            prior_report: "$ARTIFACTS_DIR/review/report.md"
-            light: "true"
-            work_order: "$INPUTS.work"
-            part: "$INPUTS.part"
-            errors: "$INPUTS.errors"
 
         # Review threads are work too, whoever opened them. This round's implementer
         # judged the threads the previous round read; this agent checks each
@@ -221,11 +195,13 @@ nodes:
           model: medium
           context: fresh
           mutates_checkout: false
-          depends_on: [pr, review, rereview]
+          depends_on: [pr, review]
           trigger_rule: none_failed_min_one_success
           when: "$LOOP_PREV.threads.output.open > 0"
           with:
             pr: "$pr.output"
+            # The contract, so a thread a dated ruling already settled is declined, not asked again.
+            work_order: "$INPUTS.work"
           output_format:
             type: object
             properties:
@@ -241,8 +217,9 @@ nodes:
               summary: { type: string, pattern: '\S' }
             required: [answers, ask, summary]
 
-        # CI is the project's full validation: implementers run only focused checks.
-        # Fresh: CI reads the PR, not simplify's or reshape's conversation.
+        # Hands a reviewed pull request off ready, without waiting for CI: the merge
+        # queue judges CI at the head before it merges. A check already red because
+        # of the change goes back to the implementer instead.
         - id: ci
           command: ci
           model: medium
@@ -250,27 +227,24 @@ nodes:
           mutates_checkout: false
           # After settle-threads: a failed settle skips CI, so the pull request the
           # previous round's threads read put back to draft stays a draft.
-          depends_on: [review, simplify, rereview, settle-threads]
+          depends_on: [review, simplify, settle-threads]
           trigger_rule: none_failed_min_one_success
           with:
             pr: "$pr.output"
-          # `&&` short-circuits, so a skipped node's output is never read.
-          when: "$review.output.ready == true && $simplify.output.findings == false || $review.output.ready == true && $simplify.output.findings == true && $rereview.output.ready == true"
+          when: "$review.output.ready == true && $simplify.output.findings == false"
           output_format:
             type: object
             properties:
-              state: { type: string, enum: [green, pr_caused, other] }
-              # Whether the agent re-ran failed jobs it judged other, and how that ended.
-              rerun: { type: string, enum: [none, green, red] }
+              state: { type: string, enum: [ready, pr_caused, other] }
               summary: { type: string, pattern: '\S' }
-            required: [state, rerun, summary]
+            required: [state, summary]
 
         # Posts and resolves settle-threads' answers, then reads what is still open,
         # after CI so threads posted during the round count.
         - id: threads
           script: threads
           runtime: bun
-          depends_on: [pr, review, rereview, ci, settle-threads]
+          depends_on: [pr, review, ci, settle-threads]
           trigger_rule: none_failed_min_one_success
           with:
             pr: "$pr.output"
@@ -287,7 +261,7 @@ nodes:
         - id: round
           script: round
           runtime: bun
-          depends_on: [implement, pr, review, rereview, ci, threads]
+          depends_on: [implement, pr, review, simplify, ci, threads]
           trigger_rule: all_done
           with:
             previous: "$LOOP_PREV.round.output.round"
@@ -302,10 +276,7 @@ nodes:
             review_action: { from: "$review.output.action", if_skipped: null }
             review_summary: { from: "$review.output.findings_summary", if_skipped: null }
             review_contract_left: { from: "$review.output.contract_left", if_skipped: null }
-            rereview_ready: { from: "$rereview.output.ready", if_skipped: null }
-            rereview_action: { from: "$rereview.output.action", if_skipped: null }
-            rereview_summary: { from: "$rereview.output.findings_summary", if_skipped: null }
-            rereview_contract_left: { from: "$rereview.output.contract_left", if_skipped: null }
+            simplify: { from: "$simplify.output.findings", if_skipped: null }
             ci: { from: "$ci.output.state", if_skipped: null }
             ci_summary: { from: "$ci.output.summary", if_skipped: null }
             threads_open: { from: "$threads.output.open", if_skipped: null }
@@ -323,7 +294,7 @@ nodes:
               reason: { type: string }
               pr_url: { type: string }
               prior_report: { type: string }
-              # A correction for CI gets a light review: the code lens alone.
+              # A correction for CI or for simplify alone gets a light review: the code lens alone.
               light_review: { type: boolean }
               # The latest review's `contract_left`; null until a review judged coverage.
               contract_left: { type: [array, 'null'], items: { type: string } }

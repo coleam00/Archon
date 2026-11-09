@@ -92,6 +92,7 @@ function facts(env: Record<string, string>, inputs: Record<string, string>, runI
       WORKFLOW_ID: runId,
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
+      INPUTS_REPO: JSON.stringify(PR.repo),
       INPUTS_ROUND_LIMIT: '3',
       INPUTS_NUMBER: '',
       ...inputs,

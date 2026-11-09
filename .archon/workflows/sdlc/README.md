@@ -42,22 +42,28 @@ checking, and `validate` runs the project's tests against it without checking.
 The preflight alone cost 31 lines and a stub in 17 fixtures, for a node no fixture
 could ever run. All three copies are gone.
 
-CI is the project's full validation; implementers run only focused checks. Whether
-CI is green is judgment, so one agent prompt owns it (`deliver/commands/ci.md`), run
-once a round's review passes. It never judges a stale head (it pushes the
-checkout's `HEAD` when the pull request is behind it), refuses a head that
-conflicts with its base, marks the pull request ready (a
-project whose CI skips drafts starts it then), waits however long CI takes, and
-answers green, pr_caused, or other. On anything but green it puts the pull request
-back to draft before it answers, so a red PR never stays ready. A red the change
-caused, or a conflict with the base, goes back to the implementer in the next
-round, which merges the base on a conflict, and that correction is reviewed before
-CI runs again. A flake or infrastructure failure outside the change gets one re-run
-of its failed jobs before the agent answers, recorded as `rerun`; any other red ends
-the run not ready, and a defect outside the change becomes a discovery.
+CI is the project's full validation; implementers run only focused checks.
+Delivery never waits for it: the merge queue judges CI at the head before it merges
+(see [Merge queue](#merge-queue)). Once a round's review passes and simplify names
+nothing, one agent prompt hands the pull request off (`deliver/commands/ci.md`). It
+never hands off a stale head (it pushes the checkout's `HEAD` when the pull request
+is behind it), refuses a head that conflicts with its base, reads the checks once,
+marks the pull request ready (a project whose CI skips drafts starts it then), and
+answers ready, pr_caused, or other. A check already red because of the change, or a
+conflict with the base, goes back to the implementer in the next round, which
+merges the base on a conflict, and that correction is reviewed before the next
+hand-off; the pull request stays a draft. Pending checks and red outside the change
+are the merge queue's. A project with no CI gets the full validation from this
+agent instead.
+
+Simplify runs beside each round's review, so the implementer of the next round
+adopts or declines its smaller shapes together with the review's findings. A round
+whose review passes but whose simplify pass named smaller shapes ends
+`simplify_open`, and the next round's light review checks that correction. A later
+round's simplify judges only a delta that is large or reshapes the code.
 
 Unresolved review threads on the pull request are work too, whoever opened them: a
-person, a review bot, or no one in a project without outside reviewers. After CI,
+person, a review bot, or no one in a project without outside reviewers. After the hand-off,
 each round's `threads` node lists the unresolved threads in `threads.md`, quoted as
 untrusted review data, and puts a ready pull request back to draft while any is
 open, so the round ends `threads_open` instead of ready. The next round's
@@ -66,9 +72,11 @@ with evidence; `settle-threads` checks each disposition at the pushed head and
 writes the reply, and `threads` posts the replies, resolves those threads, and reads
 the pull request back. A thread about code the pull request doesn't change or make
 reachable, such as one that arrived with a merge of the default branch, is settled
-with a reply saying so; it belongs in its own issue. A thread no agent can settle
-ends the run `ask`.
-`settle-threads` runs before CI and a failed one skips it, so the pull request stays
+with a reply saying so; it belongs in its own issue. So is a thread a dated ruling
+in the issue body already decided: `settle-threads` reads the work order and the
+issue's "Current scope" sections, and its reply names the ruling. A thread no agent
+can settle ends the run `ask`.
+`settle-threads` runs before the hand-off and a failed one skips it, so the pull request stays
 the draft the previous round left; a failed `threads` node puts it back to draft
 before the run fails. The
 pack's own review verdict is unchanged: threads gate delivery, not the review.
@@ -78,10 +86,10 @@ comment's first lines are stamped by `publish-review` from the round's certified
 output ([`.shared/review-comment.ts`](.shared/review-comment.ts)): the reviewed commit
 and the verdict, which the merge queue's gate reads, and the contract coverage
 (`complete` only when the review left nothing open), which the sweep reads before it
-lets a merge close the issue. CI never
+lets a merge close the issue. The hand-off never
 marks ready a head carrying commits the round's review did not cover. Commits pushed
 after a run ends, by a fixer or by hand, are reviewed by a continuation delivery of
-that pull request, whose first round reviews the whole change before CI marks it
+that pull request, whose first round reviews the whole change before the hand-off marks it
 ready again, or by `archon-review` given the earlier round's `review/report.md` as
 `prior_report`.
 
@@ -123,8 +131,13 @@ The metrics workflows read each pull request through `pr.view` and need the
 plugin that omits the timestamps or lacks those operations makes them refuse, naming
 what is missing.
 
-Own-PR enrollment lists a maintainer's open pull requests by author, which has no forge
-operation yet, so it refuses, naming the missing operation.
+The build and merge queues, intake and discoveries take the repository from their `repo_host` and
+`repo_path` inputs, which a binding passes. Left empty, as in a run started by hand
+from a checkout, the repository is the one the forge's `resolve` operation finds for
+the checkout's remote: its only remote, or `origin` among several. A checkout whose
+remote resolves to no repository, or that has several remotes and no `origin`, refuses
+the run and says so. A checkout whose `origin` is a fork works on the fork; set both
+inputs to choose another repository.
 
 Agents read CI job logs with the tools the run has, since the contract has no operation
 for them. A red default branch is always raised as a `merge: base` item: `checks.rerun`
@@ -184,12 +197,11 @@ on `$deliver.output.ready`. Each acts on the values the agent
 before it declared in its typed output, which the engine certified, writes through
 the forge, and fails unless the result reads back — so "the write
 failed" and "the write may have landed" stay different outcomes, in the pack as in
-the forge contract. Three agents write directly: the structure pass's implementer
-pushes its own commit to the pull request's branch with `git`, and CI pushes a
-head that was left behind before it judges anything, ending `other` if it cannot;
+the forge contract. Two agents write directly: `ci` pushes a head that was left
+behind with `git` before it judges anything, ending `other` if it cannot, and marks
+the pull request ready, or back to draft when it sends the change back; and
 `update-pr-body` edits the description, because judging which claims are stale and
-rewriting them is the whole job; and `ci` marks the pull request ready and back to
-draft around its CI wait. The last two act through `archon forge`, after the `forge`
+rewriting them is the whole job. Their forge writes go through `archon forge`, after the `forge`
 node checked the plugin can. PR publication reads the agent-authored
 `pr-body.md` and `pr-description.md` content through certified artifact pointers;
 the publisher owns the writes and verifies the description edit.
@@ -289,8 +301,8 @@ synthesis name `rulings.md`, the answers a project's maintainers have already gi
 read before either stops to ask. The build queue's agents name `build.md`, what
 the queue may decide on its own, and its route and answer agents `rulings.md` too. The
 merge queue's sweep names `merge.md`, which pull requests merge on their own.
-Review's code lens names `ui-check.md`, how it starts the project's app to use a
-user-facing change in a browser through the playwright-cli skill, which its prompt
+Review's code and ux lenses name `ui-check.md`, how they start the project's app to use a
+user-facing change in a browser through the playwright-cli skill, which their prompts
 names rather than a `skills:` entry for the reason the build queue's route does.
 Agents interpret
 them; anything that must be exact, such as label names, stays typed configuration.
@@ -334,9 +346,9 @@ always used. A user who sets nothing gets the same models as before.
 | `@triage` | triage | `medium` |
 | `@planner` | plan | `large` |
 | `@investigator` | investigate | `medium` |
-| `@implementer` | implement, including delivery's reshape | `large` |
+| `@implementer` | implement | `large` |
 | `@reviewer` | every agent node of review (scope, lenses, synthesis) and simplify | each node's tier |
-| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code`, `medium` for the rest) |
+| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier (`large` for `code` and `ux`, `medium` for the rest) |
 
 Review's lens router stays on `small`, and the queue, attention and delivery judges
 keep their tiers. Moving those means rebinding the tier.
@@ -370,14 +382,8 @@ request, never the state.
 
 - **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` at the
   head of the default branch and records once whether the issue's author is on it.
-  The file is a JSON array whose entries are forge logins, or objects naming one with
-  opt-ins: `["alice", { "login": "bob", "merge_queue": "own-prs" }]`. Every listed
-  login is a maintainer. `merge_queue: "own-prs"` also enrolls that maintainer's own
-  open pull requests in the merge queue, except one a work item already names or one
-  from a `build/` branch in the repository itself, so a hand-made pull request on a
-  `build/` branch does not enroll (see Pickup there). Enrollment needs a forge
-  operation the contract does not have yet, so it refuses today (see Forge); the merge
-  queue notes the refusal on stderr and goes on with the items it already has. No file means an empty list, so every author is outside. Any other
+  The file is a JSON array of forge logins: `["alice", "bob"]`. Every listed login is
+  a maintainer. No file means an empty list, so every author is outside. Any other
   shape refuses the run.
 - **Outside items** get `archon-needs-maintainer` and nothing else: no agent node
   runs and nothing is posted.
@@ -471,9 +477,9 @@ it; both share one resource so runs queue rather than overlap:
 
 The label binding is the same with `"bindingId": "intake-labels"`, a selector of
 `{"kind": "label.changed", "actions": ["added"], "predicates": [{"field": "label.name",
-"in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate"]}]}`, and two
+"in": ["archon-triage", "archon-ready", "archon-plan", "archon-investigate", "archon-split"]}]}`, and two
 more mappings: `label` from `label.name` and `label_actor` from `label.actor.login`.
-The predicate only saves runs; intake ignores any other label. A binding installed before the investigate label was renamed still lists `archon-issue`: replace it with `archon-investigate` in that binding, and in any build-queue binding that selects on it, because `label.name` predicates match exactly.
+The predicate only saves runs; intake ignores any other label.
 
 ## Build queue
 
@@ -485,7 +491,8 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
 
 - **Pickup.** A run claims one item with intake's claim and order. An item waits for the build queue when its work item's stage is a READY
   route (`deliver`, `continue`, `plan` or `investigate`) and the queue has not
-  recorded it, or recorded it as waiting for its next round. A re-triage after the
+  recorded it, or recorded it as waiting for its next round. A `split` item is the
+  split queue's, never the build queue's. A re-triage after the
   queue's last decision starts the item over. The build queue's claim takes none of
   the item's intake requests, so an edit or label request recorded while it holds the
   item waits for intake's next pickup. The queue writes no labels; intake's mirror
@@ -496,6 +503,18 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   `--input number=123` with the config that selects Codex. An issue that cannot be
   claimed refuses the run before any agent, with why: it has no work item, another
   run holds it, or its stage and build status show it does not wait.
+- **A message.** A run with no `number` and a message, such as
+  `archon workflow run archon-build-queue "build the retry fix"`, has the `interpret`
+  agent resolve the message with the tracker's CLI to one of four typed decisions:
+  `build` one issue, which the run then claims as a named item; `choose` between
+  several, which pauses as a `select` attention item labelled `build: message` and
+  claims the issue picked; `intake`, for new work no issue covers, such as a pasted
+  brief or a file, which the `handoff` script files as an issue and hands to
+  `archon-intake` detached, so the run builds nothing; or `none`, which refuses the run
+  with the agent's reason. Scripts claim and file only what the agent declared; nothing
+  reads the message's text. A run with a `number` ignores its message, and a scheduled
+  run has none, so it picks up as before. Several items to build at once are refused
+  for now: name one per run.
 - **Blocked items.** Intake's blocked verdict can go stale while work lands in
   parallel: a blocker's outcome can arrive another way while its issue is still open.
   When `retriage_as` names a maintainer login, a run that names no item also revisits
@@ -518,7 +537,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   it ended and decides: `done` when the pull request's latest review says Ready at its
   head commit and no check no round can run is still outstanding (a dated scope section records such a check as met; otherwise it asks for it once), `continue` with a brief when the contract already answers what stopped
   it (a correctable finding, CI red the change caused, a false blocker naming a later
-  step), or `ask`. Before any `continue`, it compares the whole change with the contract's shape, and asks when a correction would add machinery the contract does not name. It never continues a pull request that changed nothing material since its last review, no commits or only cosmetic edits; that round ends as done or ask by the same rules. A Ready, green pull request whose only remaining check no round can run is asked about once rather than continued. It declares the pull request when the round left commits unpushed.
+  step), or `ask`. Before any `continue`, it compares the whole change with the contract's shape, and asks when a correction would add machinery the contract does not name. It never continues a pull request that changed nothing material since its last review, no commits or only cosmetic edits; that round ends as done or ask by the same rules. A Ready pull request whose only remaining check no round can run is asked about once rather than continued. It declares the pull request when the round left commits unpushed.
   A `continue` starts the item's next round at once by firing the operator's
   build-queue binding (`build_queue_binding`) with the item's `number`, keyed so one
   run starts at most one next round per item. The binding's resource, capacity and
@@ -657,6 +676,93 @@ document at its current revision. A malformed order, including an `open` one wit
 `done_at` or a `done` one without, refuses the run with its name, rather than building
 something no order chose.
 
+## Split queue
+
+[`archon-split`](split/archon-split.yaml) breaks a large item into the fewest pieces
+that each prove something on their own, and files only the piece that comes next. A
+large item, such as a PRD, an epic or a bundle of tasks, is built as one work item by
+default. Triage routes it `split` only when building it whole would not work, and its
+summary says why. The default triage policy,
+[`.shared/policy/triage.md`](.shared/policy/triage.md), says when splitting is right,
+how each kind splits, and what a PRD is: a release that tests a hypothesis, held to
+its hypothesis, its signal with the command that measures it, and its threshold and
+window, whether it is split or built whole. A PRD missing any of them gets
+`archon-needs-contract`, naming the gap. A project refines the bar in its own
+`.archon/sdlc/policy/triage.md`.
+
+- **Pickup.** A run claims one item with intake's claim and order. An item waits for
+  the split queue when its stage is `split` and no split finished on it, or a
+  re-triage came after the last one. The `number` input claims that issue instead,
+  and refuses the run with why when it cannot, as the build queue's does. The claim
+  takes none of the item's intake requests.
+- **Slice.** One agent reads the issue (written to `split/prd.md`), triage's reason,
+  the triage policy, the project's direction and current code. It checks triage's
+  judgment first: when one work item would work, it answers `whole` with a build
+  route (`plan` or `deliver`) and why. Otherwise it judges the item a PRD, an epic or
+  a bundle. A PRD splits into phases, each proving a desired outcome; an epic into
+  vertical increments, each leaving the product working; a bundle is not sliced, and
+  every task is filed as written. Only the current phase or increment is filed. Each
+  later one is listed with what the earlier work must show before it is filed. An
+  open issue that already owns a piece is listed as existing instead of being filed
+  again.
+- **Publish.** The `publish` script files each issue with a hidden first line,
+  `<!-- archon-split: <item> <key> -->`. Each filed issue is recorded on the work item
+  before the next is filed, and a key already recorded is never filed again; a key
+  whose issue was filed but not recorded is recovered by its marker. So a run that
+  stops part way, or the next phase's split after a re-triage, files no issue twice.
+  Each existing issue the agent listed is read to prove it is an open issue of the
+  repository. The item then gets one marked comment listing its issues and the later
+  phases. A PRD is labelled `archon-prd` and stays open until its hypothesis has a
+  verdict; an epic stays open until its increments merge; a bundle is closed as
+  completed. The last write records the split done and releases the claim. An issue
+  closed before its split finishes is recorded and files nothing more.
+- **Next phase.** When the earlier work shows its signal, re-triage the item. It
+  routes `split` again, and the agent files the next phase from the plan in the
+  comment, reusing the keys of what is already filed.
+- **Build whole.** On a `whole` answer, the item gets the same marked comment with the
+  agent's reason, its route label in place of `archon-split`, and the last write moves
+  its stage to that route, where the build queue picks it up as one work item.
+  Triage reads that comment on a later re-triage. An item an earlier split already
+  filed issues from refuses a `whole` answer, since those pieces may be in flight.
+- **Record.** The work item's `facts.split` holds the status (`filing`, `done`,
+  `whole` or `closed`), whether the item is a `prd`, an `epic` or a `bundle`, every
+  issue filed from it by key and title, and the existing issues it adopted with why,
+  kept across phases. A `whole` record holds only the route; the reason is in its
+  history entry and the comment.
+- **The filed issues** come back through intake like any other issue. They are opened
+  by the install's own identity, so intake trusts them only when that login is on the
+  maintainer list.
+
+The pack installs no binding. A schedule keeps items moving, as for the build queue.
+The run reads the checkout and writes only to the tracker and the state store, so it
+needs no worktree:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-split-queue",
+  "binding": {
+    "bindingId": "split-queue",
+    "bindingRevision": null,
+    "hostId": "build-host-1",
+    "runAsUserId": "<archon user id>",
+    "resource": "forge:github.com/acme/widgets:split",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/srv/archon/widgets",
+      "workflowName": "archon-split",
+      "inputs": { "repo_host": "github.com", "repo_path": "acme/widgets" },
+      "isolation": { "kind": "default" }
+    }
+  },
+  "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
+}
+```
+
+To split an item as soon as intake routes it, add a label binding on the same
+resource, with intake's label selector narrowed to `archon-split` and the same launch.
+
 ## Merge queue
 
 [`archon-merge-queue`](merge-queue/archon-merge-queue.yaml) merges the pull requests
@@ -673,22 +779,7 @@ then the project's file, whose lines win where the two conflict.
   returned or parked it, it waits again. The pull request is the latest one a build
   round recorded, or, when no round recorded one, the one triage routed the item to
   continue. One already merged or closed is recorded without the
-  agent. Before claiming, the run enrolls each open, non-draft pull request by a
-  maintainer whose `maintainers.json` entry sets `merge_queue: "own-prs"` and that no
-  work item names yet: it gets a work item of its own (`facts.own_pr`). A pull request
-  a build round recorded, or one triage routed an item to continue, is named by its
-  build item and never enrolls. Neither does one from a `build/` branch in the
-  repository itself, the namespace every build round opens its pull request from, even
-  before the round records it. A hand-made pull request on a `build/` branch therefore
-  does not enroll; name the branch something else. An own-PR
-  item has no build record of its own, so where another would go back to the build queue
-  (no verdict, a stale one, a conflict, a holding thread, red CI the change caused) the
-  sweep asks instead, naming what is wrong and the command a maintainer can launch, and
-  its question offers no `return`. The record never hands one to the build queue.
-  The queue never starts that run itself. An own-PR item answered `park` or `other`
-  waits again only when its current head differs from its latest merge decision's
-  head. At the same head it stays parked. Merged own-PR items and other kinds of
-  settlement, including unreadable and superseded parks, do not recover this way.
+  agent.
 - **Facts.** The `facts` script reads each pull request in one GraphQL snapshot: its
   head, how many commits of the default branch it lacks, whether it merges cleanly, CI and unresolved review threads at the
   head, and the review verdict. Only a review comment a listed maintainer wrote
@@ -700,10 +791,7 @@ then the project's file, whose lines win where the two conflict.
   A failed PR read waits once; a second consecutive failure
   parks the item with the read error recorded until the build queue readies it again.
   Renewed build readiness gives a parked item another first-read wait. A successful
-  read resets that sequence even if later work fails. An unreadable own-PR park stays
-  parked; it is not an answered park. To reconsider an answered own-PR park, facts
-  reads its snapshot before claiming and reuses it in the sweep. A failed recovery
-  read leaves that unclaimed item unchanged and reports the error. If the default branch
+  read resets that sequence even if later work fails. If the default branch
   cannot be read, facts passes its diagnostic and the batch to record without a sweep.
 - **Sweep.** One agent decides every pull request and orders them, least risk first.
   The queue never pushes, never changes its checkout and never waits for CI. A Ready
@@ -747,9 +835,8 @@ then the project's file, whose lines win where the two conflict.
   reads and fails with the original diagnostic and any settlement write failures.
   Otherwise, the `record` script skips and reports a decision for a pull request this
   run did not claim, because that item belongs to another run. It refuses a
-  `return` without a brief, a `return` for an own pull request, an `ask` without its
-  question, an `ask` that offers a `return` on an own pull request or with a blank
-  brief, and a red default branch the sweep did not raise: the pull
+  `return` without a brief, an `ask` without its question, an `ask` that offers a
+  `return` with a blank brief, and a red default branch the sweep did not raise: the pull
   request waits for the next sweep, and the record fails, naming each, once every
   other decision is written. A claimed pull request
   the sweep left undecided waits for the next sweep, and an ask with no attention item
@@ -773,8 +860,7 @@ then the project's file, whose lines win where the two conflict.
   it. One still open gets `archon-triage` and an `archon-intake` run started detached
   with that label event, recorded as added by `retriage_as`. Intake stays the judge:
   it re-triages only when that login is on the maintainer list, and closes the issue
-  as delivered or keeps it with what is still open. A closed issue and an own pull
-  request, which has no issue, are left alone. A failed read, label write or launch
+  as delivered or keeps it with what is still open. A closed issue is left alone. A failed read, label write or launch
   is named in the node's summary and stops nothing else. Empty `retriage_as`
   re-triages nothing.
 - **Attention.** A run raises at most one attention item: a red default branch, whose
@@ -793,10 +879,7 @@ then the project's file, whose lines win where the two conflict.
   choice's ruling into the issue body as a dated "Current scope" section and hands the
   item back to the build queue, whose next round starts at once through the
   build-queue binding (`build_queue_binding`); `park` stops working it until the build queue readies it
-  again. For an own PR, both `park` and `other` stop queue work until a later sweep
-  observes a different head from the one asked about. The `other` answer stays on
-  the work item as its ruling; it writes no issue body and starts no build round.
-  New CI or review results at the same head do not unpark it. Approval remains pinned
+  again. Approval remains pinned
   to its approved head, subject to the existing conflict-only carry rule. Any other
   ask waits for a later sweep, which decides it again.
 
@@ -823,7 +906,8 @@ checkout, and the claim keeps two runs off the same item:
         "repo_path": "acme/widgets",
         "merge_queue_binding": "/srv/archon/bindings/widgets-merge-queue.json",
         "build_queue_binding": "/srv/archon/bindings/widgets-build-queue.json"
-      }
+      },
+      "isolation": { "kind": "default" }
     }
   },
   "schedule": { "intervalSeconds": 1800, "runAtLoad": false }
@@ -1005,14 +1089,13 @@ that built it:
 | `sdlc.review_five_plus_rounds` | score | `ratio` | 1 when it needed five rounds or more, else 0 |
 
 A review round is one verdict a delivery round's review published on the pull request:
-the `review-report` output of the deliver loop's `review` node, or of its `rereview`
-node, which reviews what simplify's reshape changed. The build queue records each run's
+the `review-report` output of the deliver loop's `review` node. The build queue records each run's
 verdicts on its build round (`reviews` on the work item) when it records the round, from
 the run's typed-artifact listing, and the metric reads only the work item. Every build
 round that carried the pull request counts, oldest verdict first. Rounds to Ready counts up to the
 verdict from which every later verdict is ready, so a Ready review that a later review
 overturned does not end the count. A pull request Ready on its first review and on every
-review after it, such as the light review after a CI fix, took one round.
+review after it took one round.
 
 Only merged pull requests are measured: an open one can take another round, and a record
 cannot be withdrawn. The node's `review_rounds_distribution` output gives the number of
@@ -1055,7 +1138,7 @@ run per pull request, and records per pull request:
 | Metric | Kind | Unit | Meaning |
 |---|---|---|---|
 | `sdlc.tests_added` | count | `tests` | tests the pull request added or changed, as the judge listed them |
-| `sdlc.tests_unprotective` | count | `tests` | those that no plausible regression would fail |
+| `sdlc.tests_unprotective` | count | `tests` | those that protect nothing on their own merits: no plausible regression fails them that another test the judge was shown would not catch |
 
 Both are the judge's counts: a test the judge leaves out is in neither, and calibration
 scores such omissions as disagreements. Both are attributed to the build-queue runs that
@@ -1063,15 +1146,21 @@ built the pull request, at its merge time, like the PR metrics. A pull request w
 judge run failed has no record and is listed in the node's `skipped` output. Each pull
 request costs one judge run on the `large` tier, so the window sets the cost.
 
-The judge reads the pull request's changed files through `pr.files`, and each changed
-test file's text at the head that list was read at through `repo.file`. The `prs` node
-refuses before any judge runs when the plugin lacks either. A test file the
-forge does not return as text, such as one over 1 MB on GitHub, fails that pull
-request's judge run, so the pull request is listed in `skipped`.
+The judge reads the pull request's changed files through `pr.files`, and the text of
+each changed file that holds test code at the head that list was read at through
+`repo.file`. The `prs` node refuses before any judge runs when the plugin lacks either.
+A file holding test code that the forge does not return as text, such as one over 1 MB
+on GitHub, fails that pull request's judge run, so the pull request is listed in
+`skipped`.
 
 The judge applies the review pack's test lens
 ([`review/commands/review-tests.md`](review/commands/review-tests.md)), read when it runs,
-plus the rules in its own prompt. It has no tools and records no metric of its own.
+for its standard of what a valuable test is. The lens anchors on what a change promises;
+the judge's prompt overrides that anchor and adds its own rules. The judge sees the pull
+request's patches and the full text of the files that hold changed test code, so
+redundancy is judged only against those tests: a duplicate of an unchanged test elsewhere
+in the suite counts as protective. It records no metric of its own. On Claude it runs
+with no tools; Codex does not enforce the restriction and can read the checkout.
 
 **Calibration.** A judged count is only as good as the judge.
 [`archon-metrics-test-value-calibrate`](metrics-test-value-calibrate/archon-metrics-test-value-calibrate.yaml)
@@ -1110,7 +1199,8 @@ model drafted calibrate the judge against itself.
 judge workflow's files and the criteria text it inlines. The engine adds the models that
 ran the judge node, so `archon metrics` reports one entry per judge and model, and never
 averages two. Editing the judge's prompt, the test lens or anything in the judge's
-directory, or remapping the `large` tier to another model, starts a new identity. Run
+directory, including the rule in `scripts/test-code.ts` that picks which files it reads
+in full, or remapping the `large` tier to another model, starts a new identity. Run
 the calibration again before trusting the counts it produces. Compare the agreement the
 two models reached after calibrating with each:
 

@@ -13,8 +13,8 @@ implement__implement:
 pr__forge: { source: forge }
 pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { host: "github.com", path: "example/repo" }, head: "fixture-branch", base: "dev", existing: 42, title: "stub: title", body: null, description: { type: archon_artifact, run_id: "fixture-run", path: "pr-description.md" }, summary: "stub: continue pull request 42" }
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 42, url: "https://github.com/example/repo/pull/42", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
-review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","seams":false,"code":false,"tests":false,"errors":false,"docs":false,"part":null}'
-review__route: { seams: true, code: true, tests: true, errors: false, docs: false, reason: "stub: the change is description content" }
+review__mode: '{"continuation":false,"light":false,"head":"fixturehead","cursor":"","risks":"fixture-owned-policy","seams":false,"code":false,"tests":false,"errors":false,"docs":false,"ux":false,"part":null}'
+review__route: { seams: true, code: true, tests: true, errors: false, docs: false, ux: false, reason: "stub: the change is description content" }
 review__scope:
   head_matches: true
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
@@ -40,7 +40,7 @@ review__publish:
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 threads: { open: 0, summary: "stub: no review thread is unresolved" }
-ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
+ci: { state: ready, summary: "stub: no check red at the head; marked ready" }
 update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   expect: completed

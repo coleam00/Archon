@@ -42,13 +42,16 @@ Lenses:
   leaves it to you.
 - `docs` — stale or missing documentation, when the diff changes shipped
   documentation or a user-facing command, configuration, or behavior.
+- `ux` — whether the change works well for the person using it, when the diff adds
+  or changes something a person sees or does in a browser. Off for every other
+  change.
 
 A small, mechanical change — a version bump, a one-line fix, a rename, a test-only
 tweak — rarely earns errors or docs. Depth follows what a change can break, not its
 size: do not economize on real risk, and do not invent it.
 
 Every round selects at least one lens: when your judgment leaves none, select `code`.
-Declare one boolean per lens (`seams`, `code`, `tests`, `errors`, `docs`) and
+Declare one boolean per lens (`seams`, `code`, `tests`, `errors`, `docs`, `ux`) and
 `reason`: one or two sentences citing what in the diff decided it. If you cannot read
 the diff, select every lens and say so in `reason`; never answer that no lens runs
 because a command failed.
