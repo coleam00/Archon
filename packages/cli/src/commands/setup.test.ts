@@ -15,6 +15,7 @@ import * as platformRegistry from '@archon/core/platforms/registry';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { loadRepoConfig } from '@archon/core/config/config-loader';
 import { collectPlatforms } from './setup-platforms';
+import { parse as parseDotenv } from 'dotenv';
 
 describe('setup platform selection', () => {
   it.each(
@@ -384,6 +385,51 @@ describe('setup docs path target', () => {
         if (!(key in savedEnv)) delete process.env[key];
       }
       Object.assign(process.env, savedEnv);
+      await removeTempTree(root);
+    }
+  });
+});
+
+describe('setup with a Pi login over a saved key', () => {
+  it('removes the saved backend key only after the user agrees, keeping other values', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-setup-pi-login-'));
+    const home = join(root, 'home');
+    const savedHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = home;
+    mkdirSync(home, { recursive: true });
+    writeFileSync(join(home, '.env'), 'XAI_API_KEY=old-key\nCUSTOM_SETTING=keep\n');
+    const policies = spyOn(platformRegistry, 'getRegisteredPlatformPolicies').mockReturnValue([]);
+    const collect = spyOn(setupAi, 'collectAIConfig').mockResolvedValue({
+      claude: false,
+      codex: false,
+      pi: true,
+      piModel: 'xai/grok-4.7',
+      piApiKeyEnvVar: 'XAI_API_KEY',
+      piLogin: true,
+      defaultAssistant: 'pi',
+    });
+    // Setup-mode question first (an env file exists), then the saved-key question.
+    // clack's select is generic over its option values, so the stub needs the cast.
+    const select = spyOn(prompts, 'select').mockImplementation((async (options: {
+      message: string;
+    }) => (options.message.includes('XAI_API_KEY') ? 'remove' : 'add')) as typeof prompts.select);
+    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+    const confirm = spyOn(prompts, 'confirm').mockResolvedValue(false);
+    const note = spyOn(prompts, 'note').mockImplementation(() => undefined);
+    try {
+      expect(await setupCommand({ repoPath: root, inheritedEnv: {} })).toBe(0);
+      const env = readFileSync(join(home, '.env'), 'utf8');
+      expect(parseDotenv(env).XAI_API_KEY).toBeUndefined();
+      expect(parseDotenv(env).CUSTOM_SETTING).toBe('keep');
+      expect(select).toHaveBeenCalledWith(
+        expect.objectContaining({ message: expect.stringContaining('XAI_API_KEY is set in') })
+      );
+      const config = Bun.YAML.parse(readFileSync(join(home, 'config.yaml'), 'utf8'));
+      expect(config).toMatchObject({ assistants: { pi: { model: 'xai/grok-4.7' } } });
+    } finally {
+      for (const spy of [collect, select, platforms, confirm, note, policies]) spy.mockRestore();
+      if (savedHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = savedHome;
       await removeTempTree(root);
     }
   });

@@ -306,6 +306,7 @@ export async function collectAIConfig(
   let piModel: string | undefined;
   let piApiKey: string | undefined;
   let piApiKeyEnvVar: string | undefined;
+  let piLogin: boolean | undefined;
 
   // Collect Claude auth if selected
   if (hasClaude) {
@@ -327,6 +328,7 @@ export async function collectAIConfig(
     piModel = piConfig.model;
     piApiKey = piConfig.apiKey;
     piApiKeyEnvVar = piConfig.apiKeyEnvVar;
+    piLogin = piConfig.piLogin;
   }
 
   const defaultAssistant = await selectDefaultAssistant(selectedProviders);
@@ -351,6 +353,7 @@ export async function collectAIConfig(
     piModel,
     piApiKey,
     piApiKeyEnvVar,
+    piLogin,
     defaultAssistant,
     ...(selectedProviders.length > 0 ? { defaultAssistantSelected: true } : {}),
     ...(defaultModel !== undefined ? { defaultModel } : {}),

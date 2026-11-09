@@ -23,7 +23,7 @@ import {
 } from '@archon/paths';
 import type { SetupConfig } from './setup-shared';
 import { SETUP_PLATFORMS } from './setup-platform-selection';
-import { PI_BACKENDS } from './setup-provider-auth';
+import { PI_BACKENDS, piBackendEnvVar } from './setup-provider-auth';
 
 export const GITHUB_APP_KEYS = [
   ...GITHUB_APP_CREDENTIAL_KEYS,
@@ -84,7 +84,7 @@ export function checkExistingConfig(envPath: string): ExistingConfig | null {
     // so that re-runs after partial configs still surface Pi. Doctor checks only
     // the configured default assistant, so Claude users who share the same key
     // env vars never get a Pi login check.
-    hasPi: PI_BACKENDS.some(b => hasEnvValue(content, b.envVar)),
+    hasPi: PI_BACKENDS.some(b => hasEnvValue(content, piBackendEnvVar(b.id))),
     platforms: {
       github: (githubMode === 'app' || githubMode === 'pat') && githubMode === nonblankGitHubMode,
       telegram: hasEnvValue(content, 'TELEGRAM_BOT_TOKEN'),
@@ -131,7 +131,7 @@ export function generateEnvContent(config: SetupConfig): string {
     lines.push('');
   } else if (config.ai.pi) {
     lines.push('# Pi configured — log in with `pi /login`, or set the backend API key here');
-    lines.push('# e.g. ANTHROPIC_API_KEY=sk-ant-...');
+    lines.push(`# e.g. ${config.ai.piApiKeyEnvVar ?? 'ANTHROPIC_API_KEY'}=...`);
     lines.push('');
   } else {
     lines.push('# Pi not configured');
@@ -394,10 +394,21 @@ function mergeEnvValues(
   return merged;
 }
 
-export function mergeScopedEnv(content: string, existingRaw: string, replaceGitHubAuth: boolean) {
+/**
+ * Merge proposed env content into an existing file. Saved values for `replaceKeys`
+ * are dropped first, so the proposed content decides those keys: a key it includes
+ * is written, a key it leaves out is removed. Every other key keeps the merge rules.
+ */
+export function mergeScopedEnv(
+  content: string,
+  existingRaw: string,
+  replaceGitHubAuth: boolean,
+  replaceKeys: readonly string[] = []
+) {
   const preservedKeys: string[] = [];
   const existing = migrateCodexSetupEnv(parseDotenv(existingRaw));
   const proposed = parseDotenv(content);
+  for (const key of replaceKeys) delete existing[key];
   prepareExistingGitHubAuth(existing, proposed, replaceGitHubAuth);
   preservePrivateKeySource(existing, proposed, preservedKeys);
   const merged = mergeEnvValues(existing, proposed, preservedKeys);
@@ -419,6 +430,8 @@ export function writeScopedEnv(
     repoPath: string;
     force: boolean;
     replaceGitHubAuth?: boolean;
+    /** Keys the user agreed to replace or remove; see `mergeScopedEnv`. */
+    replaceKeys?: readonly string[];
   }
 ): WriteScopedEnvResult {
   const targetPath = resolveScopedEnvPath(options.scope, options.repoPath);
@@ -451,7 +464,12 @@ export function writeScopedEnv(
     // existing-only keys (user customizations) are preserved verbatim, except
     // an old Archon Codex setup, which moves to its new names (#3562).
     const existingRaw = readFileSync(targetPath, 'utf-8');
-    const merged = mergeScopedEnv(content, existingRaw, options.replaceGitHubAuth ?? false);
+    const merged = mergeScopedEnv(
+      content,
+      existingRaw,
+      options.replaceGitHubAuth ?? false,
+      options.replaceKeys
+    );
     preservedKeys.push(...merged.preservedKeys);
     finalContent = merged.content;
   }

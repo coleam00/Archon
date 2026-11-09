@@ -46,6 +46,7 @@ import {
   type SetupOptions,
 } from './setup-shared';
 import { writeHomePiModelConfig } from './setup-provider-auth';
+import { reconcilePiCredential } from './setup-pi-credential';
 import {
   checkExistingConfig,
   generateEnvContent,
@@ -183,9 +184,7 @@ async function runSetup(options: SetupOptions): Promise<void> {
     s
   );
 
-  writePiModelPreference(config.ai);
-  // The Pi writer must run first: it refuses to append once an assistants block
-  // exists, and writeInstallDefaults can materialize that block.
+  await writePiModelPreference(config.ai);
   await writeInstallDefaults(config.ai);
   if (config.ai.defaultAssistant !== undefined) await confirmModelTiers(config.ai.defaultAssistant);
   reportEnvWrite(writeResult);
@@ -333,6 +332,7 @@ async function writeConfiguration(
 ): Promise<ReturnType<typeof writeScopedEnv>> {
   const { scope, force, repoPath, targetEnvPath } = target;
   const githubAuth = await reconcileGitHubAuth(config, target);
+  const replaceKeys = await reconcilePiCredential(config.ai, target, inheritedEnv);
 
   s.start('Writing configuration...');
 
@@ -351,6 +351,7 @@ async function writeConfiguration(
       repoPath,
       force,
       replaceGitHubAuth: githubAuth.replaceGitHubAuth,
+      replaceKeys,
     });
   } catch (error) {
     s.stop('Failed to write configuration');
@@ -365,10 +366,10 @@ async function writeConfiguration(
   return writeResult;
 }
 
-function writePiModelPreference(ai: SetupConfig['ai']): void {
+async function writePiModelPreference(ai: SetupConfig['ai']): Promise<void> {
   if (!ai.pi || !ai.piModel) return;
   try {
-    writeHomePiModelConfig(ai.piModel);
+    await writeHomePiModelConfig(ai.piModel);
   } catch (err) {
     // Non-fatal: env write already succeeded, so the user can hand-edit
     // ~/.archon/config.yaml later. Surface the error so it's not silent.

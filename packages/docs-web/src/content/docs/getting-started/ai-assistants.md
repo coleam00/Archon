@@ -180,7 +180,7 @@ Pi (`@earendil-works/pi-coding-agent`) is a coding-agent harness the Archon core
 
 Add Pi with `archon provider add pi`. The provider embeds the Pi SDK, so you need the Pi CLI only to log in with `pi /login` or to refresh the model catalog. Source installs include the provider already. Install the CLI with `npm install -g @earendil-works/pi-coding-agent`.
 
-`archon setup` can configure Pi: pick **Pi**, choose a backend, then either use the login Pi already has from `pi /login` or paste a key. Setup writes the model to `~/.archon/config.yaml`, and a pasted key to the `.env` file `--scope` selects (`~/.archon/.env` by default).
+`archon setup` can configure Pi: pick **Pi**, choose a backend, then either use the login Pi already has from `pi /login` or paste a key. Setup writes the model to `~/.archon/config.yaml`, and asks first if a different Pi model is already set there. A pasted key goes in the `.env` file `--scope` selects (`~/.archon/.env` by default), and setup asks before replacing a different value already saved for that key. Because Archon uses a backend key from the environment over Pi's login, picking the login while such a key is still set makes setup say where it is: it offers to remove the key from the `.env` file it writes, and asks before going on when the key is in your shell, the other scope's `.env`, or `config.yaml`. Setup can't see codebase env vars set in the Web UI or per-user keys, and those win over Pi's login too.
 
 ### Authenticate Pi
 

@@ -707,6 +707,36 @@ describe('writeScopedEnv (#1303)', () => {
     expect(result.preservedKeys).toContain('NORMAL');
     expect(result.preservedKeys).not.toContain('API_KEY');
   });
+
+  it('replaceKeys drops only the named saved keys before the merge', () => {
+    const target = join(HOME_DIR, '.env');
+    writeFileSync(target, 'XAI_API_KEY=old-key\nOPENAI_API_KEY=keep-me\nCUSTOM=1\n');
+    // A pasted key replaces the saved one.
+    const replaced = writeScopedEnv('XAI_API_KEY=new-key\nOPENAI_API_KEY=ignored\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+      replaceKeys: ['XAI_API_KEY'],
+    });
+    expect(parseDotenv(readFileSync(target, 'utf-8'))).toEqual({
+      XAI_API_KEY: 'new-key',
+      OPENAI_API_KEY: 'keep-me',
+      CUSTOM: '1',
+    });
+    expect(replaced.preservedKeys).toEqual(['OPENAI_API_KEY']);
+    expect(readFileSync(replaced.backupPath ?? '', 'utf-8')).toContain('XAI_API_KEY=old-key');
+    // Content without the key removes it, which is how Pi's login drops a saved key.
+    writeScopedEnv('# Pi configured\n', {
+      scope: 'home',
+      repoPath: REPO_DIR,
+      force: false,
+      replaceKeys: ['XAI_API_KEY'],
+    });
+    expect(parseDotenv(readFileSync(target, 'utf-8'))).toEqual({
+      OPENAI_API_KEY: 'keep-me',
+      CUSTOM: '1',
+    });
+  });
 });
 
 describe('GITHUB_APP_KEYS', () => {
