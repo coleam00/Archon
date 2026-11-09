@@ -1,14 +1,7 @@
-import {
-  useCallback,
-  useEffect,
-  useLayoutEffect,
-  useMemo,
-  useRef,
-  useState,
-  type ReactElement,
-} from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, type ReactElement } from 'react';
 import { useNavigate, useParams } from 'react-router';
 import { useKeymap, type Binding } from '../lib/keymap';
+import { useRunDetailSelection } from '../lib/use-run-detail-selection';
 import { RunDetailHeader } from '../components/RunDetailHeader';
 import { RunStream, runToolCalls } from '../components/RunStream';
 import { RunActionBar } from '../components/RunActionBar';
@@ -51,8 +44,6 @@ type RunDetailView = Awaited<ReturnType<typeof skill.getRun>>;
 const TOGGLE_KEYS = {
   toolCalls: 'archon.console.showToolCalls',
   system: 'archon.console.showSystem',
-  view: 'archon.console.detailView',
-  node: 'archon.console.runNodeFilter',
 } as const;
 
 const NEAR_BOTTOM_PX = 120;
@@ -70,39 +61,6 @@ function readToggle(key: string, defaultOn: boolean): boolean {
 function writeToggle(key: string, value: boolean): void {
   try {
     localStorage.setItem(key, value ? '1' : '0');
-  } catch {
-    /* ignore */
-  }
-}
-
-function readView(): DetailView {
-  try {
-    const stored = localStorage.getItem(TOGGLE_KEYS.view);
-    return stored === 'graph' ? 'graph' : 'log';
-  } catch {
-    return 'log';
-  }
-}
-
-function writeView(v: DetailView): void {
-  try {
-    localStorage.setItem(TOGGLE_KEYS.view, v);
-  } catch {
-    /* ignore */
-  }
-}
-
-function readNodeFilter(): string {
-  try {
-    return localStorage.getItem(TOGGLE_KEYS.node) ?? 'all';
-  } catch {
-    return 'all';
-  }
-}
-
-function writeNodeFilter(v: string): void {
-  try {
-    localStorage.setItem(TOGGLE_KEYS.node, v);
   } catch {
     /* ignore */
   }
@@ -127,7 +85,7 @@ function clickReject(): void {
 interface RunDetailKeymap {
   isPaused: boolean;
   goBack: () => void;
-  setViewPersist: (next: DetailView) => void;
+  selectView: (next: DetailView) => void;
   toggleToolCalls: () => void;
   toggleSystem: () => void;
 }
@@ -135,7 +93,7 @@ interface RunDetailKeymap {
 function useRunDetailKeymap({
   isPaused,
   goBack,
-  setViewPersist,
+  selectView,
   toggleToolCalls,
   toggleSystem,
 }: RunDetailKeymap): void {
@@ -145,21 +103,21 @@ function useRunDetailKeymap({
         keys: ['1'],
         label: 'Log tab',
         run: (): void => {
-          setViewPersist('log');
+          selectView('log');
         },
       },
       {
         keys: ['2'],
         label: 'Graph tab',
         run: (): void => {
-          setViewPersist('graph');
+          selectView('graph');
         },
       },
       {
         keys: ['3'],
         label: 'Artifacts tab',
         run: (): void => {
-          setViewPersist('artifacts');
+          selectView('artifacts');
         },
       },
       { keys: ['t'], label: 'Toggle tool calls', run: toggleToolCalls },
@@ -179,7 +137,7 @@ function useRunDetailKeymap({
       { keys: ['Escape'], label: 'Back to runs', run: goBack },
       { keys: ['h'], label: 'Back to runs', run: goBack },
     ],
-    [isPaused, goBack, setViewPersist, toggleToolCalls, toggleSystem]
+    [isPaused, goBack, selectView, toggleToolCalls, toggleSystem]
   );
   useKeymap({ bindings });
 }
@@ -348,8 +306,6 @@ export function RunDetailPage(): ReactElement {
   const [showSystem, setShowSystem] = useState<boolean>(() =>
     readToggle(TOGGLE_KEYS.system, false)
   );
-  const [view, setView] = useState<DetailView>(() => readView());
-  const [selectedNodeId, setSelectedNodeId] = useState<string>(() => readNodeFilter());
 
   // Hoisted above any early returns so the hook order stays stable.
   const scrollToNode = useCallback((nodeId: string): boolean => {
@@ -396,18 +352,10 @@ export function RunDetailPage(): ReactElement {
     for (const node of nodeOptions) providerEventStore.load(runId, node.id);
   }, [runId, nodeOptions]);
 
-  // Drop a persisted node selection that doesn't apply to this run (e.g. after
-  // navigating to a different workflow). Guarded on the run being loaded so the
-  // empty list during loading can't clobber a still-valid stored selection.
-  // useLayoutEffect (not useEffect) so the reset lands before paint — navigating
-  // to a cached run whose node set lacks the selection never flashes an empty
-  // "Waiting for first event…" frame.
-  useLayoutEffect(() => {
-    if (detail === undefined || detail === null) return;
-    if (selectedNodeId !== 'all' && !nodeOptions.some(o => o.id === selectedNodeId)) {
-      setSelectedNodeId('all');
-    }
-  }, [detail, nodeOptions, selectedNodeId]);
+  const { view, selectedNodeId, select } = useRunDetailSelection(
+    nodeOptions,
+    detail !== undefined && detail !== null
+  );
 
   // Follow intent belongs to user navigation, not post-render geometry. Content
   // growth can make a pinned viewport look detached before an effect measures it.
@@ -486,10 +434,10 @@ export function RunDetailPage(): ReactElement {
     if (projectId !== undefined) navigate(`/console/p/${projectId}`);
     else navigate('/console');
   }, [navigate, projectId]);
-  const setViewPersist = useCallback((next: DetailView): void => {
-    setView(next);
-    writeView(next);
-  }, []);
+  const selectView = useCallback(
+    (next: DetailView): void => select(next, selectedNodeId),
+    [select, selectedNodeId]
+  );
   const toggleToolCalls = useCallback((): void => {
     setShowToolCalls(v => {
       const next = !v;
@@ -507,7 +455,7 @@ export function RunDetailPage(): ReactElement {
   useRunDetailKeymap({
     isPaused,
     goBack,
-    setViewPersist,
+    selectView,
     toggleToolCalls,
     toggleSystem,
   });
@@ -544,7 +492,7 @@ export function RunDetailPage(): ReactElement {
   const toolbar = (
     <StreamToolbar
       view={view}
-      onChangeView={setViewPersist}
+      onChangeView={selectView}
       showToolCalls={showToolCalls}
       onToggleToolCalls={next => {
         setShowToolCalls(next);
@@ -560,10 +508,7 @@ export function RunDetailPage(): ReactElement {
       artifactCount={artifactFiles?.length ?? null}
       nodeOptions={nodeOptions}
       selectedNodeId={selectedNodeId}
-      onSelectNode={next => {
-        setSelectedNodeId(next);
-        writeNodeFilter(next);
-      }}
+      onSelectNode={next => select(view, next)}
     />
   );
 
@@ -622,7 +567,7 @@ export function RunDetailPage(): ReactElement {
                 projectError={projectError}
                 onNodeSelect={(nodeId): void => {
                   pendingNodeIdRef.current = nodeId;
-                  setViewPersist('log');
+                  select('log', nodeId);
                 }}
               />
             </>
