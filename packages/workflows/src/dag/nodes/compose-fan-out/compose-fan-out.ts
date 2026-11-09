@@ -29,11 +29,8 @@ import { getLog } from '../../log';
 import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
-import {
-  planComposeInstances,
-  resolveComposeItems,
-  type ComposeFanOutFailure,
-} from './compose-fan-out-expansion';
+import { resolveFanOutItems } from '../fan-out-shared';
+import { planComposeInstances, type ComposeFanOutFailure } from './compose-fan-out-expansion';
 import { runComposeInstance } from './compose-fan-out-instance';
 import { joinComposeOutcomes } from './compose-fan-out-join';
 
@@ -319,7 +316,7 @@ export async function executeComposeFanOutNode(
   }
   const persistedSnapshots = resumeSnapshot.fanOutSnapshots.get(fanOutScopeName);
 
-  const currentItems = resolveComposeItems(node, ctx, fanOut);
+  const currentItems = resolveFanOutItems(node, ctx, fanOut);
   if ('error' in currentItems && persistedSnapshots === undefined) {
     return failWith({
       error: currentItems.error,

@@ -4,6 +4,7 @@ import { type JsonValue } from '../../../output-ref';
 import type { FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { aggregateProviderFailure } from '../../../executor-shared';
 import type { RunLayersContext } from '../../run-context';
+import { fanOutFailureMarker } from '../fan-out-shared';
 import type { ComposeFanOutFailure } from './compose-fan-out-expansion';
 import type { ComposeInstanceOutcome } from './compose-fan-out-instance';
 
@@ -64,11 +65,10 @@ export function joinComposeOutcomes(
     elements: outcomes.map(o =>
       o.status === 'completed'
         ? ((o.structuredOutput !== undefined ? o.structuredOutput : o.output) as JsonValue)
-        : {
-            archon_failed: true,
-            error: o.error ?? `instance ${o.status}`,
-            status: o.status === 'cancelled' ? 'cancelled' : 'failed',
-          }
+        : fanOutFailureMarker(
+            o.status === 'cancelled' ? 'cancelled' : 'failed',
+            o.error ?? `instance ${o.status}`
+          )
     ),
   };
 }

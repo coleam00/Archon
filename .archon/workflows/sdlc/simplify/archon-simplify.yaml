@@ -3,8 +3,9 @@ description: |
   Judge whether a change delivers its outcome through more structure than it needs,
   and name the smaller shape. Read-only: it judges, it never edits.
 
-  Delivery runs it once per run, after a review round passes and before CI, and
-  hands its findings to the implementer to adopt or decline.
+  Delivery runs it beside each round's review, judging a later round's delta only
+  when it is large or reshapes the code, and hands its findings to the next
+  round's implementer to adopt or decline.
 
   Use when: a change needs its structure judged — "is this overbuilt", "simplify
   review".

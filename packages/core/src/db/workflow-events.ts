@@ -25,6 +25,7 @@ import {
   type ProviderEventRecord,
 } from '@archon/workflows/schemas/provider-event';
 import { toHydratedTimestamp } from './timestamps';
+import { runEventsSql } from './run-events-sql';
 import {
   PROVIDER_EVENT_ROW_TYPES,
   NODE_LIFECYCLE_EVENT_TYPES,
@@ -35,6 +36,7 @@ import {
   type DagResumeSnapshot,
   type WorkflowEventInput,
   type ObservabilityEventInput,
+  type IWorkflowStore,
   type WorkflowEventType,
 } from '@archon/workflows/store';
 
@@ -281,16 +283,12 @@ export async function listActiveWorkflowNodeIds(
   if (workflowRunIds.length === 0) return new Map();
 
   const activeByRun = new Map(workflowRunIds.map(id => [id, new Set<string>()]));
-  const runPlaceholders = workflowRunIds.map((_, index) => `$${String(index + 1)}`);
-  const eventPlaceholders = NODE_LIFECYCLE_EVENT_TYPES.map(
-    (_, index) => `$${String(workflowRunIds.length + index + 1)}`
-  );
   const result = await pool.query<NodeLifecycleEventRow>(
-    `SELECT workflow_run_id, step_name, event_type
-     FROM remote_agent_workflow_events
-     WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
-       AND event_type IN (${eventPlaceholders.join(', ')})
-     ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC`,
+    runEventsSql(
+      'workflow_run_id, step_name, event_type',
+      workflowRunIds.length,
+      NODE_LIFECYCLE_EVENT_TYPES.length
+    ),
     [...workflowRunIds, ...NODE_LIFECYCLE_EVENT_TYPES]
   );
 
@@ -308,28 +306,27 @@ export async function listActiveWorkflowNodeIds(
  * Legacy rows without a sequence precede sequenced rows, ordered by timestamp then id. A
  * run list uses it to report per-node state without one query per run, fetching only the
  * types its fold reads so high-volume rows such as provider events never leave the
- * database.
+ * database. Strict reads reject malformed JSON; default reads retain the polling fallback.
  */
 export async function listEventsForRuns(
   workflowRunIds: readonly string[],
-  eventTypes: readonly WorkflowEventType[]
+  eventTypes: readonly WorkflowEventType[],
+  options: Parameters<IWorkflowStore['listEventsForRuns']>[2] = {}
 ): Promise<Map<string, WorkflowEventRow[]>> {
   const byRun = new Map<string, WorkflowEventRow[]>(workflowRunIds.map(id => [id, []]));
   if (workflowRunIds.length === 0 || eventTypes.length === 0) return byRun;
 
-  const runPlaceholders = workflowRunIds.map((_, index) => `$${String(index + 1)}`);
-  const eventPlaceholders = eventTypes.map(
-    (_, index) => `$${String(workflowRunIds.length + index + 1)}`
-  );
   try {
     const result = await pool.query<WorkflowEventRow>(
-      `SELECT * FROM remote_agent_workflow_events
-       WHERE workflow_run_id IN (${runPlaceholders.join(', ')})
-         AND event_type IN (${eventPlaceholders.join(', ')})
-       ORDER BY workflow_run_id, COALESCE(event_order, 0) ASC, created_at ASC, id ASC`,
+      runEventsSql('*', workflowRunIds.length, eventTypes.length),
       [...workflowRunIds, ...eventTypes]
     );
-    for (const row of result.rows) byRun.get(row.workflow_run_id)?.push(parseEventRow(row));
+    for (const row of result.rows) {
+      const parsed = options.strict
+        ? { ...row, data: typeof row.data === 'string' ? JSON.parse(row.data) : row.data }
+        : parseEventRow(row);
+      byRun.get(row.workflow_run_id)?.push(parsed);
+    }
     return byRun;
   } catch (error) {
     getLog().error({ err: error as Error }, 'db.events_for_runs_list_failed');

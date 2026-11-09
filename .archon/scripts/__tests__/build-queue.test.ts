@@ -23,8 +23,8 @@ import {
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
 import {
-  type GhApiIssue, type GhCommentRow, type GhPr, type ScriptOptions, type ScriptRun,
-  forgePrRecord, gitCheckout, hostCli, PACK, packScriptRunner, PR,
+  type TrackerSubject, type TrackerComment, type TrackerPr, type ScriptOptions, type ScriptRun,
+  forgeCalls, forgePrRecord, gitCheckout, hostCli, labelWrites, PACK, packScriptRunner, PR,
 } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -108,7 +108,7 @@ describe('the build record', () => {
     expect(
       buildWaits({ ...retriaged, facts: { ...retriaged.facts, triage: { ...TRIAGE, at: '2026-10-16T02:00:00.000Z' } } })
     ).toBe(true);
-    for (const stage of ['new', 'needs_maintainer', 'needs_contract', 'blocked', 'close'] as const) {
+    for (const stage of ['new', 'needs_maintainer', 'split', 'needs_contract', 'blocked', 'close'] as const) {
       expect(buildWaits(triaged({ stage }))).toBe(false);
     }
   });
@@ -220,23 +220,23 @@ function stored(at: Install): { revision: number; value: WorkItem | null } {
 
 function run(
   at: Install,
-  script: 'facts' | 'blocked' | 'apply' | 'checkout' | 'ruling' | 'retriage',
+  script: 'start' | 'facts' | 'handoff' | 'blocked' | 'apply' | 'checkout' | 'ruling' | 'retriage',
   inputs: Record<string, string>,
   options: {
-    issue?: GhApiIssue;
-    pr?: GhPr;
-    comments?: readonly GhCommentRow[];
+    issue?: TrackerSubject;
+    pr?: TrackerPr;
+    comments?: readonly TrackerComment[];
     writeLost?: boolean;
-    source?: ScriptOptions['source'];
     preload?: ScriptOptions['preload'];
+    artifacts?: ScriptOptions['artifacts'];
   } = {}
 ): ScriptRun {
   return runPackScript(`build-queue/scripts/${script}`, {
     cwd: at.checkout,
-    source: options.source,
     preload: options.preload,
-    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-    gh: {
+    artifacts: options.artifacts,
+    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+    tracker: {
       issue: { number: 7, author: 'Maintainer', body: 'The contract.', ...options.issue },
       issueLabels: ['archon-ready'],
       repositoryLabels: [],
@@ -249,6 +249,7 @@ function run(
       WORKFLOW_ID: 'run-1',
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
+      INPUTS_REPO: JSON.stringify(PR.repo),
       INPUTS_ROUND_LIMIT: '3',
       ...inputs,
     },
@@ -299,12 +300,11 @@ const HEAD_B = 'b'.repeat(40);
 const READY_CASES = ['matching', 'prewrite', 'raced'] as const;
 type ReadyCase = (typeof READY_CASES)[number];
 
-function readyPreload(source: 'gh' | 'forge', scenario: ReadyCase): string {
+function readyPreload(scenario: ReadyCase): string {
   return `
 import { writeFileSync } from 'node:fs';
 import { forgeOperation } from ${JSON.stringify(resolve(import.meta.dir, 'deliver-checks-harness.ts'))};
 const scenario = ${JSON.stringify(scenario)};
-const selected = ${JSON.stringify(source)};
 const current = ${JSON.stringify(forgePrRecord({ head_revision: HEAD_A }))};
 const calls = [];
 const writes = [];
@@ -312,25 +312,13 @@ const delegate = Bun.spawnSync.bind(Bun);
 const save = () => writeFileSync('{ARTIFACTS}/ready-state.json', JSON.stringify({ current, calls, writes }));
 const response = op => {
   save();
-  const ghRow = {
-    number: current.number, url: current.url, state: current.state.toUpperCase(),
-    isDraft: current.is_draft, headRefOid: current.head_revision,
-    headRefName: current.head, baseRefName: current.base,
-    headRepository: { name: 'repo' }, headRepositoryOwner: { login: 'example' },
-    maintainerCanModify: null,
-  };
-  const stdout = selected === 'forge'
-    ? forgeOperation(op, op === 'pr.view' ? { pr: current } : { target: { repo: current.repo, number: current.number }, outcome: 'applied', changed: true, pr: current })
-    : op === 'pr.view' ? JSON.stringify(ghRow) : '';
+  const stdout = forgeOperation(op, op === 'pr.view' ? { pr: current } : { target: { repo: current.repo, number: current.number }, outcome: 'applied', changed: true, pr: current });
   return { exitCode: 0, stdout: Buffer.from(stdout), stderr: Buffer.from('') };
 };
 Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  const isGh = argv[0] === 'gh' && argv[1] === 'pr';
   const forgeAt = argv.indexOf('forge');
-  const isForge = forgeAt >= 0 && ['pr.view', 'pr.ready', 'pr.draft'].includes(argv[forgeAt + 1]);
-  if (!isGh && !isForge) return delegate(argv, settings);
-  if ((selected === 'gh') !== isGh) throw new Error('unexpected forge source');
-  const op = isGh ? argv[2] === 'view' ? 'pr.view' : argv.includes('--undo') ? 'pr.draft' : 'pr.ready' : argv[forgeAt + 1];
+  if (forgeAt < 0 || !['pr.view', 'pr.ready', 'pr.draft'].includes(argv[forgeAt + 1])) return delegate(argv, settings);
+  const op = argv[forgeAt + 1];
   calls.push(op);
   if (scenario === 'prewrite') current.head_revision = '${HEAD_B}';
   if (op === 'pr.ready') {
@@ -352,33 +340,31 @@ interface ReadyObservation {
 
 describe('the build queue scripts', () => {
   describe('the ready transition', () => {
-    for (const source of ['gh', 'forge'] as const) {
-      test.each([...READY_CASES])(`${source}: %s`, scenario => {
-        const at = install();
-        seed(at, triaged(CLAIMED));
-        const before = stored(at);
-        const result = run(at, 'apply', {
-          INPUTS_PATH: 'route',
-          INPUTS_ITEM: JSON.stringify(SUBJECT),
-          INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: HEAD_A, reason: 'reviewed', brief: '', attention: null }),
-          INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord({ head_revision: HEAD_A })),
-          INPUTS_ENDING: 'null',
-          INPUTS_ANSWER: 'null',
-        }, { source, preload: readyPreload(source, scenario) });
-        const observed = JSON.parse(readFileSync(join(result.artifacts, 'ready-state.json'), 'utf8')) as ReadyObservation;
-        if (scenario === 'matching') {
-          expect(ok(result).summary).toContain(`marked ready at ${HEAD_A}`);
-          expect(observed.current).toMatchObject({ head_revision: HEAD_A, is_draft: false });
-          expect(observed.writes).toEqual(['pr.ready']);
-          expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', decisions: [{ decision: 'ready' }] } } });
-          return;
-        }
-        expect(result.code).not.toBe(0);
-        expect(stored(at)).toEqual(before);
-        expect(observed.writes).toEqual(scenario === 'prewrite' ? [] : ['pr.ready', 'pr.draft']);
-        expect(observed.current.is_draft).toBe(true);
-      });
-    }
+    test.each([...READY_CASES])('%s', scenario => {
+      const at = install();
+      seed(at, triaged(CLAIMED));
+      const before = stored(at);
+      const result = run(at, 'apply', {
+        INPUTS_PATH: 'route',
+        INPUTS_ITEM: JSON.stringify(SUBJECT),
+        INPUTS_ROUTE: JSON.stringify({ decision: 'ready', ready_head: HEAD_A, reason: 'reviewed', brief: '', attention: null }),
+        INPUTS_PULL_REQUEST: JSON.stringify(forgePrRecord({ head_revision: HEAD_A })),
+        INPUTS_ENDING: 'null',
+        INPUTS_ANSWER: 'null',
+      }, { preload: readyPreload(scenario) });
+      const observed = JSON.parse(readFileSync(join(result.artifacts, 'ready-state.json'), 'utf8')) as ReadyObservation;
+      if (scenario === 'matching') {
+        expect(ok(result).summary).toContain(`marked ready at ${HEAD_A}`);
+        expect(observed.current).toMatchObject({ head_revision: HEAD_A, is_draft: false });
+        expect(observed.writes).toEqual(['pr.ready']);
+        expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'ready', decisions: [{ decision: 'ready' }] } } });
+        return;
+      }
+      expect(result.code).not.toBe(0);
+      expect(stored(at)).toEqual(before);
+      expect(observed.writes).toEqual(scenario === 'prewrite' ? [] : ['pr.ready', 'pr.draft']);
+      expect(observed.current.is_draft).toBe(true);
+    });
   });
 
   test("facts claims a triaged item without taking intake's requests, and writes the issue the agents read", () => {
@@ -409,9 +395,9 @@ describe('the build queue scripts', () => {
     const unresolved = { ...round('r2', AT), reason: 'pr_create_unresolved', pr_url: '' };
     const doc = triaged({}, record({ status: 'parked', rounds: [unresolved] }));
     seed(at, { ...doc, facts: { ...doc.facts, triage: { ...TRIAGE, at: '2026-10-16T03:00:00.000Z', pull_request: 42 } } });
-    const result = run(at, 'facts', {}, { source: 'gh' });
+    const result = run(at, 'facts', {});
     expect(ok(result)).toMatchObject({ path: 'route', pull_request: { number: 42, state: 'open' }, continues: 42, branch: 'build/7-an-issue-run-1' });
-    expect(result.gh.some(call => call.startsWith('pr view 42'))).toBe(true);
+    expect(forgeCalls(result).some(call => call.op === 'pr.view')).toBe(true);
   });
 
   test("facts puts an item with an open pull request on that pull request's branch, and names a first round's branch after the issue", () => {
@@ -445,18 +431,85 @@ describe('the build queue scripts', () => {
     const branch = 'build/7-an-issue-run-1';
     const cancelled = { INTAKE_RUN_STATUSES: '{"run-1":"cancelled"}', WORKFLOW_ID: 'run-2' };
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
-    // The run's pull request was closed before the release; it is still the run's round.
-    const picked = ok(run(at, 'facts', cancelled, { pr: { state: 'CLOSED', headRefName: branch } }));
+    expect(ok(run(at, 'facts', cancelled, { pr: { headRefName: branch } }))).toMatchObject({ continues: 42 });
     expect(stored(at).value?.facts.build?.rounds).toEqual([
       expect.objectContaining({ run_id: 'run-1', delivered: false, reason: 'ended_undecided', pr_url: 'https://ghe.example.com/example/repo/pull/42' }),
     ]);
-    expect(picked).toMatchObject({ pull_request: { number: 42 }, branch: 'build/7-an-issue-run-2' });
+    // The run's pull request was closed before the release; it is still the run's round.
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
-    expect(ok(run(at, 'facts', cancelled, { pr: { headRefName: branch } }))).toMatchObject({ continues: 42 });
+    const picked = ok(run(at, 'facts', cancelled, { pr: { state: 'CLOSED', headRefName: branch } }));
+    expect(stored(at).value?.facts.build?.rounds).toEqual([
+      expect.objectContaining({ run_id: 'run-1', reason: 'ended_undecided', pr_url: 'https://ghe.example.com/example/repo/pull/42' }),
+    ]);
+    expect(picked).toMatchObject({ pull_request: { number: 42 }, continues: null, branch: 'build/7-an-issue-run-2' });
     // A run whose branch opened no pull request leaves no round.
     seed(at, triaged({ claim: { run_id: 'run-1', at: AT, requests: [], branch } }));
     expect(ok(run(at, 'facts', cancelled))).toMatchObject({ pull_request: null, continues: null });
     expect(stored(at).value?.facts.build).toBeUndefined();
+  }, 60_000);
+
+  test("with no repo inputs the run works on the repository the forge resolves the checkout's remote to", () => {
+    const at = install();
+    const inferred = { INPUTS_REPO_HOST: '', INPUTS_REPO_PATH: '', INPUTS_NUMBER: '', ARGUMENTS: 'build the retry fix' };
+    expect(ok(run(at, 'start', inferred))).toEqual({ repo: PR.repo, message: true });
+    // A sole remote with a second URL is still one remote; git fetches from the first.
+    spawnSync('git', ['config', '--add', 'remote.upstream.url', 'https://ghe.example.com/mirror/repo.git'], { cwd: at.checkout });
+    expect(ok(run(at, 'start', inferred)).repo).toEqual(PR.repo);
+    // An explicit input wins, and a run that names a number ignores its message.
+    expect(ok(run(at, 'start', { INPUTS_NUMBER: '7', INPUTS_REPO_PATH: 'example/other', ARGUMENTS: 'build it' }))).toEqual({
+      repo: { host: PR.repo.host, path: 'example/other' },
+      message: false,
+    });
+    // Among several remotes, origin is the checkout's repository; without one, nothing is guessed.
+    spawnSync('git', ['remote', 'add', 'fork', 'https://ghe.example.com/someone/repo.git'], { cwd: at.checkout });
+    expect(run(at, 'start', inferred).stderr).toContain('several git remotes and none is origin');
+    spawnSync('git', ['remote', 'rename', 'fork', 'origin'], { cwd: at.checkout });
+    expect(ok(run(at, 'start', inferred)).repo).toEqual({ host: PR.repo.host, path: 'someone/repo' });
+    spawnSync('git', ['remote', 'set-url', 'origin', '/srv/local/repo.git'], { cwd: at.checkout });
+    const none = run(at, 'start', inferred);
+    expect(none.code).not.toBe(0);
+    expect(none.stderr).toContain('git remote origin does not resolve to a repository');
+  }, 60_000);
+
+  test("facts claims the issue the message resolved to, and refuses with interpret's reason when it resolved none", () => {
+    const at = install();
+    seed(at, triaged());
+    const interpreted = (decision: string, number: number | null) =>
+      JSON.stringify({ decision, number, options: [], issue: null, reason: 'no open issue is about a retry fix' });
+    const none = run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('none', null), INPUTS_PICKED: 'null' });
+    expect(none.code).not.toBe(0);
+    expect(none.stderr).toContain('the message names nothing to build: no open issue is about a retry fix');
+    expect(stored(at).value?.claim).toBeNull();
+    // New work claims nothing, so intake triages it before any queue builds it.
+    expect(ok(run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('intake', null), INPUTS_PICKED: 'null' }))).toMatchObject({ path: 'handoff', item: null });
+    expect(stored(at).value?.claim).toBeNull();
+    // A pick the person made names the item; a named issue intake never recorded is refused.
+    const picked = run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('choose', null), INPUTS_PICKED: '{"number":8}' });
+    expect(picked.stderr).toContain('issue 8 has no work item');
+    // The project's work/7 belonging to another repository is refused before any claim.
+    const foreign = run(at, 'facts', {
+      ...SELECTED,
+      INPUTS_REPO: JSON.stringify({ host: PR.repo.host, path: 'someone/repo' }),
+      INPUTS_INTERPRETED: interpreted('build', 7),
+      INPUTS_PICKED: 'null',
+    });
+    expect(foreign.stderr).toContain("issue 7's work item is ghe.example.com/example/repo's, not ghe.example.com/someone/repo's");
+    expect(stored(at).value?.claim).toBeNull();
+    expect(ok(run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted('build', 7), INPUTS_PICKED: 'null' }))).toMatchObject({ path: 'route', item: SUBJECT });
+    expect(stored(at).value?.claim).toMatchObject({ run_id: 'run-1' });
+  }, 60_000);
+
+  test('new work from a message is filed once and handed to intake, never built in the run', () => {
+    const at = install();
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const inputs = { INPUTS_ISSUE: JSON.stringify({ title: 'Retry the fetch', body: 'From a pasted brief.' }), ARCHON_CALL_LOG: calls };
+    const handed = run(at, 'handoff', inputs);
+    expect(ok(handed).summary).toContain('https://ghe.example.com/example/repo/issues/100');
+    const filed = forgeCalls(handed).filter(call => call.op === 'workitem.create');
+    expect(filed).toHaveLength(1);
+    expect(filed[0]?.request).toMatchObject({ repo: PR.repo, title: 'Retry the fetch', marker: '<!-- archon-build-queue-request: run-1 -->' });
+    const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
+    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=100', '--detach']));
   }, 60_000);
 
   test('items intake has not routed, and items the queue finished, are never picked up', () => {
@@ -468,27 +521,27 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.claim).toBeNull();
   }, 60_000);
 
-  test('a blocked item judged unblocked gets archon-triage and an intake run, and is not listed again until its revisit is due', () => {
+  test("a blocked item judged unblocked gets the run's re-triage request and one intake pickup, and is not listed again until its revisit is due", () => {
     const at = install();
     seed(at, triaged({ stage: 'blocked' }));
-    const blocked = ok(run(at, 'blocked', { INPUTS_RETRIAGE_AS: 'maintainer' })).blocked;
+    const blocked = ok(run(at, 'blocked', { INPUTS_REVISIT_BLOCKED: 'true' })).blocked;
     expect(blocked).toEqual([{ number: 7, summary: '' }]);
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const retriage = (judged: unknown[]) =>
       run(at, 'retriage', {
         INPUTS_BLOCKED: JSON.stringify(blocked),
         INPUTS_RETRIAGE: JSON.stringify(judged),
-        INPUTS_RETRIAGE_AS: 'maintainer',
         ARCHON_CALL_LOG: calls,
       });
     expect(retriage([{ number: 9, reason: 'r' }]).stderr).toContain('issue 9, which it was not given');
 
     const sent = retriage([{ number: 7, reason: '#5 merged' }]);
     expect(ok(sent)).toMatchObject({ retriaged: [7] });
-    expect(sent.gh).toContain(`issue edit 7 --repo ${PR.repo.host}/${PR.repo.path} --add-label archon-triage`);
+    expect(labelWrites(sent, 7).add).toEqual([]);
+    expect(stored(at).value?.requests).toEqual([expect.objectContaining({ action: 'retriage', run_id: 'run-1', actor: null })]);
     const launch = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[1] === 'run');
-    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=7', 'action=added', 'label=archon-triage', 'label_actor=maintainer', '--detach']));
-    expect(ok(run(at, 'blocked', { WORKFLOW_ID: 'run-2', INPUTS_RETRIAGE_AS: 'maintainer' })).blocked).toEqual([]);
+    expect(launch).toEqual(expect.arrayContaining(['archon-intake', 'number=7', 'action=retriage', '--detach']));
+    expect(ok(run(at, 'blocked', { WORKFLOW_ID: 'run-2', INPUTS_REVISIT_BLOCKED: 'true' })).blocked).toEqual([]);
   }, 60_000);
 
   test('a closed issue is parked without an agent', () => {
@@ -529,6 +582,49 @@ describe('the build queue scripts', () => {
       },
     });
     expect(buildWaits(doc as WorkItem)).toBe(true);
+  }, 60_000);
+
+  test("the round records the review verdicts the run's delivery published, and still records the round when they cannot be read", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const report = (nodeId: string, path: string, producedAt: string) => ({ nodeId, path, producedAt });
+    const listing = JSON.stringify({
+      artifactsByType: {
+        'review-report': [
+          report('review__publish', 'r1.json', '2026-11-06T10:00:00Z'),
+          report('review__synthesize', 'r2.json', '2026-11-06T10:05:00Z'),
+          report('review__publish', 'r2.json', '2026-11-06T10:06:00Z'),
+        ],
+      },
+      errors: [],
+    });
+    const artifacts = { 'listing.json': listing, 'r1.json': '{"ready":false}', 'r2.json': '{"ready":true}' };
+    const inputs = { ...applyInputs(CONTINUE), TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' };
+    ok(run(at, 'apply', inputs, { artifacts }));
+    expect((stored(at).value as WorkItem).facts.build?.rounds[0]?.reviews).toEqual([
+      { ready: false, at: '2026-11-06T10:00:00Z' },
+      { ready: true, at: '2026-11-06T10:06:00Z' },
+    ]);
+
+    seed(at, triaged(CLAIMED));
+    const unreadable = run(at, 'apply', { ...inputs, TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/missing.json' });
+    expect(unreadable.code).toBe(0);
+    const kept = (stored(at).value as WorkItem).facts.build?.rounds[0];
+    expect(kept).toMatchObject({ run_id: 'run-1', reason: 'review_open' });
+    expect(kept?.reviews).toBeUndefined();
+  }, 60_000);
+
+  test("the round records the latest full validation the run's CI agent ran", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const listing = JSON.stringify({
+      artifactsByType: { 'ci-report': [{ path: 'c1.json' }, { path: 'c2.json' }] },
+      errors: [],
+    });
+    const report = (head: string, passed: boolean) => JSON.stringify({ state: 'ready', summary: 's', validation: { head, passed } });
+    const artifacts = { 'listing.json': listing, 'c1.json': report('a'.repeat(40), false), 'c2.json': report('b'.repeat(40), true) };
+    ok(run(at, 'apply', { ...applyInputs(CONTINUE), TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' }, { artifacts }));
+    expect((stored(at).value as WorkItem).facts.build?.rounds[0]?.validation).toEqual({ head: 'b'.repeat(40), passed: true });
   }, 60_000);
 
   test('a continue whose next round fails to start leaves the item waiting for the next queue run', () => {
@@ -714,7 +810,7 @@ describe('the build queue scripts', () => {
       { writeLost: true }
     );
     expect(lost.code).not.toBe(0);
-    expect(lost.stderr).toContain('does not read back with the section');
+    expect(lost.stderr).toContain('workitem.edit-body verification_failed');
     expect(stored(at).revision).toBe(before);
   }, 60_000);
 });
@@ -768,8 +864,7 @@ describe('the build queue checkout', () => {
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(head);
     expect(git(at.checkout, 'branch', '--show-current')).toBe(branch);
 
-    // On the forge source the review is read through `archon forge`; gh holds no comments,
-    // so a non-null baseline can only come from the forge.
+    // The review is read through `archon forge`, from this preload's comments.
     const forgeComments = [{ id: '1', body: review.body, url: 'https://ghe.example.com/example/repo/pull/42#issuecomment-1', author: { host: PR.repo.host, id: '1', login: 'Maintainer' } }];
     const forge = `
 const harness = Bun.spawnSync.bind(Bun);
@@ -783,7 +878,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   return { exitCode: value === null ? 1 : 0, stdout: Buffer.from(JSON.stringify(body)), stderr: Buffer.from('') };
 } });
 `;
-    expect(emitted(run(at, 'checkout', inputs, { source: 'forge', preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42 });
+    expect(emitted(run(at, 'checkout', inputs, { preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42 });
   }, 60_000);
 
   test('a round route declares fresh stays on the base and tells ship none, and route cannot name a pull request facts did not offer', () => {

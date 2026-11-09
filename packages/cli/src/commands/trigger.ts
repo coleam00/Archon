@@ -450,6 +450,7 @@ async function scheduleTrigger(
       ],
       workingDirectory: config.binding.launch.cwd,
       archonHome: getArchonHome(),
+      path: process.env.PATH ?? '',
       schedule: config.schedule,
     });
   }

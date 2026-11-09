@@ -176,9 +176,11 @@ export interface IWorkflowStore
     runId: string,
     options?: { excludeEventTypes?: readonly string[] }
   ): Promise<WorkflowEventRow[]>;
+  /** Strict reads reject malformed event data instead of returning a partial history. */
   listEventsForRuns(
     runIds: readonly string[],
-    eventTypes: readonly WorkflowEventType[]
+    eventTypes: readonly WorkflowEventType[],
+    options?: { strict?: boolean }
   ): Promise<Map<string, WorkflowEventRow[]>>;
 
   // Run lifecycle

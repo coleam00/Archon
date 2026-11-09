@@ -3,6 +3,7 @@
 # scripts are stubbed; .archon/scripts/__tests__/discoveries.test.ts runs them.
 facts:
   path: decide
+  repo: { host: github.com, path: example/repo }
   base: { branch: dev, sha: "stub-sha" }
 decide:
   decisions:
@@ -32,6 +33,7 @@ outcome:
     - { key: stub-known-defect, outcome: track, url: "https://github.com/example/repo/issues/3#issuecomment-1" }
   dropped: [{ key: stub-fixed-defect, reason: "stub: fixed at the base" }]
   asked: []
+  waiting: []
   question: ""
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }

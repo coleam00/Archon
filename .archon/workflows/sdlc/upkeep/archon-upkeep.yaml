@@ -29,16 +29,11 @@ returns: outcome
 outcome_field: delivered
 
 nodes:
-  # Refuses the run before any agent spends when the selected forge source cannot
-  # act: no plugin for the host, no usable credential, or an unauthenticated gh.
+  # Refuses the run before any agent spends when the forge plugin cannot
+  # act: no plugin for the host, or no usable credential.
   - id: forge
     script: forge-check
     runtime: bun
-    output_format:
-      type: object
-      properties:
-        source: { type: string, enum: [gh, forge] }
-      required: [source]
 
   # The assessment stage is advisory and inline (not a composed package): the
   # judge-and-return shape appears here for the second time after triage — rule
@@ -80,8 +75,9 @@ nodes:
   # The target dependency is the work, so implement's own lockfile rule (update it
   # only for a dependency the work order changes) already covers this order.
   - id: deliver
-    include: archon-deliver-block
+    include: archon-deliver
     with:
+      ci: "$INPUTS.ci"
       errors: "$INPUTS.errors"
       work: >-
         Apply the dependency update specified in

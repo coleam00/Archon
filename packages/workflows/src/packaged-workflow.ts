@@ -14,6 +14,9 @@ import { resolveWorkflowName } from './router';
 
 export const PACK_SHARED_DIRECTORY = '.shared';
 
+/** A pack's settings declaration (`pack-settings.ts`), relative to the pack root. */
+export const PACK_DECLARATION_PATH = '.pack/pack.yaml';
+
 const PACKAGED_RESOURCE_PREFIX = '__archon_pack__';
 const OWNER_SEPARATOR = ':';
 const RESOURCE_SEPARATOR = '::';

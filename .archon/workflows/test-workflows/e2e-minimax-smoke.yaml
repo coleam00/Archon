@@ -42,7 +42,6 @@ nodes:
 
   # 3. Structured output — exercises Pi's best-effort output_format path
   #    (schema appended to prompt + JSON extracted from result text).
-  #    This is the same machinery the maintainer-standup synthesis relies on.
   - id: json
     prompt: |
       Return a JSON object with two fields, no fences and no prose:

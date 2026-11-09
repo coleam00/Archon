@@ -3,6 +3,9 @@
  * engine's node outcomes: only the lens nodes of its own include and iteration count.
  */
 import { describe, expect, it } from 'bun:test';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
+import { REVIEW_LENSES } from '../../workflows/sdlc/.shared/review-policy';
 import { packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -33,7 +36,29 @@ describe('lens-outcomes', () => {
     });
     expect(run.code).toBe(0);
     expect(JSON.parse(run.stdout)).toEqual({
-      seams: 'completed', code: 'failed', tests: 'skipped', errors: 'unreadable', docs: 'unreadable',
+      seams: 'completed', code: 'failed', tests: 'skipped', errors: 'unreadable', docs: 'unreadable', ux: 'unreadable',
     });
+  });
+});
+
+// The review block restates the lens set in its route schema, its lens nodes' `when`
+// gates and the barrier's `depends_on`; REVIEW_LENSES owns it.
+describe('archon-review lens wiring', () => {
+  const block = Bun.YAML.parse(
+    readFileSync(resolve(import.meta.dir, '../../workflows/sdlc/review/archon-review.yaml'), 'utf8')
+  ) as { nodes: { id: string; when?: string; depends_on?: string[]; output_format?: { properties: object; required: string[] } }[] };
+  const node = (id: string) => block.nodes.find(n => n.id === id);
+
+  it('declares every REVIEW_LENSES lens in the route output, as a gated node, and at the barrier', () => {
+    const format = node('route')?.output_format;
+    for (const lens of REVIEW_LENSES) {
+      expect(format?.properties).toHaveProperty(lens);
+      expect(format?.required).toContain(lens);
+    }
+    for (const lens of REVIEW_LENSES) {
+      const gate = node(lens)?.when ?? '';
+      expect([...gate.matchAll(/\$route\.output\.(\w+) == true/g)].map(m => m[1])).toEqual([lens]);
+    }
+    expect(node('review-complete')?.depends_on).toEqual(expect.arrayContaining([...REVIEW_LENSES]));
   });
 });

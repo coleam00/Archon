@@ -5,7 +5,8 @@ description: |
   verifies every record against the default branch, merges duplicates across runs
   and with earlier decisions, and decides each one: file an issue with a full brief,
   track it on the open issue that already covers it (with a marked evidence comment
-  only when it adds something), drop it with a reason, or ask a maintainer. The nodes
+  only when it adds something), drop it with a reason, ask a maintainer, or wait
+  while the code it is about is still on an open pull request. The nodes
   after the agent perform only the writes it declared and read them back. Each
   drained run's state document records the refs decided for it and any question
   asked with its answer, so a record is decided once; a filed issue carries its
@@ -19,8 +20,12 @@ description: |
 
 inputs:
   repo_host:
-    description: The forge host of the repository the runs worked on, such as github.com.
+    default: ""
+    description: >-
+      The forge host of the repository the runs worked on, such as github.com. Empty,
+      with repo_path empty too, resolves the repository from the checkout's git remotes.
   repo_path:
+    default: ""
     description: The owner/name path of that repository.
   since:
     default: ""
@@ -48,13 +53,19 @@ nodes:
       type: object
       properties:
         path: { type: string, enum: [idle, decide] }
+        repo:
+          type: object
+          properties:
+            host: { type: string }
+            path: { type: string }
+          required: [host, path]
         base:
           type: object
           properties:
             branch: { type: string }
             sha: { type: string }
           required: [branch, sha]
-      required: [path, base]
+      required: [path, repo, base]
 
   # Reads code at the base commit with git show and git grep; the checkout stays as
   # it was. The engine fails this node if the agent modifies it.
@@ -66,8 +77,7 @@ nodes:
     mutates_checkout: false
     with:
       base_sha: "$facts.output.base.sha"
-      repo_host: "$INPUTS.repo_host"
-      repo_path: "$INPUTS.repo_path"
+      repo: "$facts.output.repo.host/$facts.output.repo.path"
     output_format:
       type: object
       properties:
@@ -127,6 +137,16 @@ nodes:
                   question: { type: string, pattern: '\S' }
                   recommendation: { type: string, pattern: '\S' }
                 required: [outcome, key, refs, title, question, recommendation]
+              # Not decided this pass: the refs stay queued for a later one.
+              - type: object
+                additionalProperties: false
+                properties:
+                  outcome: { type: string, enum: [wait] }
+                  key: *key
+                  refs: *refs
+                  title: *title
+                  reason: *reason
+                required: [outcome, key, refs, title, reason]
         summary: { type: string }
       required: [decisions, summary]
 
@@ -137,6 +157,7 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       path: "$facts.output.path"
+      repo: { from: "$facts.output.repo" }
       decisions: { from: "$decide.output.decisions", if_skipped: null }
       summary: { from: "$decide.output.summary", if_skipped: null }
     output_format:
@@ -163,9 +184,18 @@ nodes:
               reason: { type: string }
             required: [key, reason]
         asked: { type: array, items: { type: string } }
+        # Discoveries left undecided for a later pass.
+        waiting:
+          type: array
+          items:
+            type: object
+            properties:
+              key: { type: string }
+              reason: { type: string }
+            required: [key, reason]
         # The asked items, numbered with their recommendations; empty when none.
         question: { type: string }
-      required: [summary, written, dropped, asked, question]
+      required: [summary, written, dropped, asked, waiting, question]
 
   # One attention item per pass, whatever the number of questions. A paused run
   # gives its resource slot back, so the next scheduled pass is not blocked.

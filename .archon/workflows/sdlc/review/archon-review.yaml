@@ -1,0 +1,418 @@
+name: archon-review
+description: |
+  Review a change through parallel specialist lenses and produce one evidence-based
+  verdict. Every round, a quick route agent picks the lenses the change earns —
+  seams, code, tests, errors, docs, ux — with seams on unless the change clearly
+  touches no type, contract, state or boundary. Reviews the requested
+  PR; empty scope selects the current branch's open PR first, otherwise the working
+  diff. Every round also holds the change to the accepted contract: each stated
+  acceptance item, invariant, and steering
+  constraint is met with cited evidence or raised as a blocking finding. Given a
+  part assignment, items that only later parts own are deferred, not unmet.
+  Advisory and read-only: it judges, it never edits. Given the previous round's
+  report, the general code reviewer reviews only the correction delta since the
+  reviewed commit, leaving out code a merge of the base brought in, and judges
+  whether each prior finding was resolved or validly declined; the route agent
+  adds another lens only when the delta reaches new ground in that lens's area.
+  When the verdict is not ready, three independent verifiers judge each blocking
+  finding, and one most of them reject is demoted: a pre-existing defect to a
+  discovery, an unreal one to disproved.
+
+  The final report is posted to the PR as one canonical comment, edited in place
+  on re-review, and only when the PR's head is the commit the round reviewed:
+  review the PR from a checkout of its head.
+
+  Use when: changes need judging — "review this PR", "review my changes",
+  "is this ready to merge".
+  NOT for: fixing findings (implement) or writing code.
+
+model: ['@reviewer', medium]
+
+inputs:
+  scope:
+    default: ""
+    description: >-
+      What to review — a PR number/URL or a branch. Empty selects the current
+      branch's open PR first, otherwise the working diff against the merge-base.
+  prior_report:
+    default: ""
+    description: >-
+      Path to the previous review round's report. When set, this round verifies
+      prior findings first and reviews only the delta since the commit that round
+      reviewed, which its publish recorded beside the report.
+  work_order:
+    default: ""
+    description: >-
+      The accepted outcome and scope boundaries for this change. Delivery passes
+      the same work order implementation received. Standalone review may leave
+      this empty and use the PR's problem, outcome, and explicit scope instead.
+  part:
+    default: ""
+    description: >-
+      The part of an approved multi-part plan this change delivers, as JSON
+      naming the delivered part and each part's contract items, quoted:
+      `{"delivers": 1, "parts": [{"part": 1, "items": ["..."]}, {"part": 2, "items": ["..."]}]}`.
+      A contract item that only later parts list is deferred, not unmet.
+      Empty reviews against the whole contract. The `mode` node's
+      `output_format` owns and enforces the shape.
+  # Error review can be forced on or off; `auto` leaves it to the route agent.
+  errors:
+    default: "auto"
+    description: Silent-failure lens — auto, true, or false.
+
+returns: publish
+outcome_field: ready
+
+nodes:
+  # Fixes what this round reviews before anything reads the change: whether it
+  # continues a previous round, the commit under review (the checkout's HEAD as
+  # the engine observed it), and, on a continuation, the previous round's
+  # reviewed commit, which the head must descend from. Every later node reads both
+  # commits from here; publish refuses a report about any other commit. A
+  # caller's pull-request record names the PR, never the commit: its head
+  # revision goes stale with every push after the PR opens. The node also turns
+  # the input into the routable facts the lens gates read: on a continuation the
+  # code lens and every lens an open prior blocker names rerun. An include's inputs
+  # are substituted as text at load time and cannot be compared in a `when:`. For
+  # the same reason it carries the part assignment, so synthesis reads a value
+  # certified against its schema, not raw text.
+  - id: mode
+    script: review-round
+    runtime: bun
+    with:
+      prior_report: "$INPUTS.prior_report"
+      part: "$INPUTS.part"
+    output_format:
+      type: object
+      properties:
+        continuation: { type: boolean }
+        head: { type: string, minLength: 1 }
+        # The previous round's reviewed commit; empty on a first round.
+        cursor: { type: string }
+        risks: { type: string, minLength: 1 }
+        # Lenses this continuation reruns whatever route answers: code, and each
+        # lens an open blocker in the previous round's findings.json names. All
+        # false on a first round.
+        seams: { type: boolean }
+        code: { type: boolean }
+        tests: { type: boolean }
+        errors: { type: boolean }
+        docs: { type: boolean }
+        ux: { type: boolean }
+        # The run's part assignment, null when the run delivers the whole contract.
+        # This schema is the one owner of the shape; ship and deliver forward the
+        # input as-is.
+        part:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            delivers: { type: integer, minimum: 1 }
+            parts:
+              type: array
+              minItems: 1
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  part: { type: integer, minimum: 1 }
+                  items: { type: array, minItems: 1, items: { type: string, pattern: '\S' } }
+                required: [part, items]
+          required: [delivers, parts]
+      required: [continuation, head, cursor, risks, seams, code, tests, errors, docs, ux, part]
+
+  # Every review node writes under review/, and a fresh run's artifacts directory
+  # has none. Agents told to create it have skipped that step, so the declared
+  # scope.md pointer failed and took the whole delivery run down with it. An
+  # earlier round's verifier votes are removed here, so a verifier that fails
+  # this round leaves no vote rather than a stale one.
+  - id: review-dir
+    bash: mkdir -p "$ARTIFACTS_DIR/review" && rm -f "$ARTIFACTS_DIR"/review/verify-*.json
+
+  - id: scope
+    command: review-scope
+    context: fresh
+    mutates_checkout: false
+    depends_on: [review-dir, mode]
+    output_format:
+      type: object
+      properties:
+        # The qualified pull request this round reviewed, or `null` for a working
+        # diff. publish below writes to this record and to nothing else, so the
+        # comment can never land on an ambient branch→PR mapping. The bounds match
+        # parseQualifiedPr in .shared/forge.ts, which publish runs on this value:
+        # non-blank host and path, a positive number.
+        pr:
+          type: [object, 'null']
+          properties:
+            repo:
+              type: object
+              properties:
+                host: { type: string, pattern: '\S' }
+                path: { type: string, pattern: '\S' }
+              required: [host, path]
+            number: { type: integer, minimum: 1 }
+          required: [repo, number]
+        # The engine refuses this node when scope.md is missing or empty, so no
+        # verdict is ever judged without its scope.
+        report:
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [review/scope.md] }
+          required: [type, run_id, path]
+      required: [pr, report]
+
+  # The one judge of lens selection. After scope resolves the diff, a small model
+  # reads its summary and the work order and answers, with seams on by default. On
+  # a continuation the lenses mode names rerun whatever route answers (facts, not
+  # judgment), and route adds another lens only for new ground the delta reaches in
+  # that lens's area.
+  - id: route
+    command: route-review
+    model: small
+    context: fresh
+    mutates_checkout: false
+    depends_on: [mode, scope]
+    output_format:
+      type: object
+      properties:
+        seams: { type: boolean }
+        code: { type: boolean }
+        tests: { type: boolean }
+        errors: { type: boolean }
+        docs: { type: boolean }
+        ux: { type: boolean }
+        reason: { type: string, pattern: '\S' }
+      required: [seams, code, tests, errors, docs, ux, reason]
+
+  # ── Lenses ────────────────────────────────────────────────────────
+  # Every reviewer is read-only by the engine's check, not only by its prompt:
+  # lenses run in parallel in one checkout, so a reviewer that edits it can
+  # mislead the others.
+  - id: seams
+    model: ['@review-seams', '@reviewer', medium]
+    command: review-seams
+    context: fresh
+    mutates_checkout: false
+    depends_on: [mode, route]
+    when: "$mode.output.seams == true || $route.output.seams == true"
+
+  - id: code
+    model: ['@review-code', '@reviewer', large]
+    command: review-code
+    context: fresh
+    mutates_checkout: false
+    depends_on: [mode, route]
+    when: "$mode.output.code == true || $route.output.code == true"
+
+  - id: tests
+    model: ['@review-tests', '@reviewer', medium]
+    command: review-tests
+    context: fresh
+    mutates_checkout: false
+    depends_on: [mode, route]
+    when: "$mode.output.tests == true || $route.output.tests == true"
+
+  - id: errors
+    model: ['@review-errors', '@reviewer', medium]
+    command: review-errors
+    context: fresh
+    mutates_checkout: false
+    depends_on: [mode, route]
+    when: "$mode.output.errors == true || $route.output.errors == true"
+
+  - id: docs
+    model: ['@review-docs', '@reviewer', medium]
+    command: review-docs
+    context: fresh
+    mutates_checkout: false
+    depends_on: [mode, route]
+    when: "$mode.output.docs == true || $route.output.docs == true"
+
+  - id: ux
+    model: ['@review-ux', '@reviewer', large]
+    command: review-ux
+    context: fresh
+    mutates_checkout: false
+    depends_on: [mode, route]
+    when: "$mode.output.ux == true || $route.output.ux == true"
+
+  # all_done lets this barrier settle after unselected lenses, or a lens whose
+  # retries were exhausted, and report how each of this round's lenses ended
+  # (scripts/lens-outcomes.ts). The deciding agent can then tolerate specialist
+  # failures without also tolerating a failed mode/scope preflight: synthesize
+  # separately requires both to have succeeded.
+  - id: review-complete
+    script: lens-outcomes
+    runtime: bun
+    depends_on: [route, seams, code, tests, errors, docs, ux]
+    trigger_rule: all_done
+    # One recorded state per lens; lens-outcomes.ts owns the lens names.
+    output_format:
+      type: object
+      additionalProperties: { type: string }
+
+  # A failed specialist (a provider stream dying mid-review, say) must not kill
+  # the review: synthesize detects the missing completion for a selected lens and
+  # forces ready:false naming the gap, so degradation is disclosed, never silent,
+  # and the next round is the retry. `ready` is a real boolean — the load-bearing field a composing
+  # loop terminates on. Every round receives this round's lens files; a
+  # continuation also receives the complete prior report and correction delta.
+  #
+  # The deciding agent and the lenses start fresh and carry earlier rounds through
+  # the prior report, not a resumed session: a loop body cannot resume a session
+  # from its own earlier iteration, and session resume is not portable across the
+  # bundle's supported providers (Claude Code, Codex, and Pi).
+  #
+  # The verify nodes below judge this node's blocking findings again, and settle
+  # applies their votes: a review bench measured that pass as keeping must-stay
+  # blockers while dropping most of the ones a judge could not tie to a defect.
+  - id: synthesize
+    command: review-synthesize
+    context: fresh
+    mutates_checkout: false
+    output_type: review-report
+    depends_on: [mode, scope, review-complete]
+    output_format:
+      type: object
+      properties:
+        ready:
+          type: boolean
+        action:
+          type: string
+          enum: [none, correct, replan, ask]
+        findings_summary:
+          type: string
+        # The report the verdict rests on, as a certified artifact pointer: the
+        # engine refuses the verdict at this node when the file is missing or
+        # empty, so a caller that continues over it never has to check.
+        report: &report_pointer
+          type: object
+          properties:
+            type: { type: string, enum: [archon_artifact] }
+            run_id: { type: string }
+            path: { type: string, enum: [review/report.md] }
+          required: [type, run_id, path]
+        # Work this review proved but the change does not do. The run's outcome
+        # relays each record; the human-readable copy is discoveries.md.
+        discoveries: &discovery_records
+          type: array
+          items:
+            type: object
+            properties:
+              title: { type: string, pattern: '\S' }
+              claim: { type: string, pattern: '\S' }
+              evidence: { type: array, items: { type: string }, minItems: 1 }
+              relation: { type: string, enum: [unrelated, scope_conflict, note] }
+              source_nodes: { type: array, items: { type: string }, minItems: 1 }
+            required: [title, claim, evidence, relation, source_nodes]
+        # The required outcome and acceptance items the contract coverage does not
+        # mark met, one line each. Empty exactly when it marks all of them met: only
+        # then may the pull request close its issue.
+        contract_left: &contract_left
+          type: array
+          items: { type: string, pattern: '\S' }
+        # Each reason readiness fails other than an open blocking finding: a
+        # selected lens that did not complete, contract items that could not be
+        # read, a missing prior report. `ready` is true exactly when no blocking
+        # finding is open and this list is empty, which is what lets settle
+        # decide readiness again after the verifiers demote a blocker. Only
+        # synthesize declares it; the returned verdict leaves it out.
+        coverage_gaps:
+          type: array
+          items: { type: string, pattern: '\S' }
+      required: [ready, action, findings_summary, report, discoveries, contract_left, coverage_gaps]
+
+  # Three independent verifiers judge each open blocking finding when the verdict
+  # is not ready; a Ready verdict has none to judge. One command serves all three:
+  # `voter` names the file each writes. They never see each other's votes.
+  - id: verify-1
+    model: ['@reviewer', large]
+    command: review-verify
+    context: fresh
+    mutates_checkout: false
+    depends_on: [synthesize]
+    when: "$synthesize.output.ready == false"
+    with: { voter: "1" }
+
+  - id: verify-2
+    model: ['@reviewer', large]
+    command: review-verify
+    context: fresh
+    mutates_checkout: false
+    depends_on: [synthesize]
+    when: "$synthesize.output.ready == false"
+    with: { voter: "2" }
+
+  - id: verify-3
+    model: ['@reviewer', large]
+    command: review-verify
+    context: fresh
+    mutates_checkout: false
+    depends_on: [synthesize]
+    when: "$synthesize.output.ready == false"
+    with: { voter: "3" }
+
+  # Applies the votes and owns the final verdict (scripts/settle-review.ts). A
+  # verifier that failed or wrote no vote upholds every finding: only two
+  # explicit votes against a blocker demote it. all_done lets it settle after a
+  # failed verifier; it still requires synthesize, whose output it binds.
+  - id: settle
+    script: settle-review
+    runtime: bun
+    depends_on: [synthesize, verify-1, verify-2, verify-3]
+    trigger_rule: all_done
+    with:
+      ready: "$synthesize.output.ready"
+      action: "$synthesize.output.action"
+      summary: "$synthesize.output.findings_summary"
+      report_pointer: "$synthesize.output.report"
+      discoveries: { from: "$synthesize.output.discoveries" }
+      contract_left: { from: "$synthesize.output.contract_left" }
+      coverage_gaps: { from: "$synthesize.output.coverage_gaps" }
+    output_format: &review_verdict
+      type: object
+      properties:
+        ready: { type: boolean }
+        action: { type: string, enum: [none, correct, replan, ask] }
+        findings_summary: { type: string }
+        report: *report_pointer
+        discoveries: *discovery_records
+        contract_left: *contract_left
+      required: [ready, action, findings_summary, report, discoveries, contract_left]
+
+  # The reviewer judges and writes the report; this node owns the one public
+  # write, so every round edits the same marked comment instead of appending
+  # another, through the forge plugin. It is also the one head check: the report
+  # goes public only when the checkout and the pull request are both still at the
+  # commit mode fixed. The verdict passes through unchanged: publication is not
+  # what makes a review true.
+  - id: publish
+    script: publish-review
+    runtime: bun
+    depends_on: [settle]
+    with:
+      # Delivery's verified record, when it passed one, is the write target;
+      # the scope agent's declaration names it only for a standalone review.
+      scope: "$INPUTS.scope"
+      pr: "$scope.output.pr"
+      report: "$ARTIFACTS_DIR/review/report.md"
+      head: "$mode.output.head"
+      ready: "$settle.output.ready"
+      action: "$settle.output.action"
+      summary: "$settle.output.findings_summary"
+      report_pointer: "$settle.output.report"
+      discoveries: { from: "$settle.output.discoveries" }
+      contract_left: { from: "$settle.output.contract_left" }
+    output_type: review-report
+    output_format: *review_verdict
+
+  # Reviewers' scratch worktrees are removed by the workflow once every lens and
+  # the deciding agent have settled, whether they succeeded or failed. It waits
+  # for publish too, so a standalone run's first completed sink is the verdict.
+  - id: prune-scratch
+    script: prune-scratch
+    runtime: bun
+    depends_on: [synthesize, publish]
+    trigger_rule: all_done

@@ -2,7 +2,7 @@
  * One direct-chat turn: send the prompt to the provider, stream or batch its reply, and
  * report its telemetry through `reportChatTurn`.
  */
-import { captureChatTurn } from '@archon/paths';
+import { captureChatTurn, type TelemetryUsageProperties } from '@archon/paths';
 import type { IPlatformAdapter, Conversation } from '../types';
 import type { ResultChunk, SendQueryOptions, TokenUsage } from '@archon/providers/types';
 import {
@@ -78,7 +78,7 @@ function resultFailureMessage(msg: ResultChunk, surface: WorkflowCommandSurface)
 
 export function reportChatTurn(
   turn: ChatTurn,
-  props: Omit<Parameters<typeof captureChatTurn>[0], 'costUsd' | 'tokensIn' | 'tokensOut'>
+  props: Omit<Parameters<typeof captureChatTurn>[0], keyof TelemetryUsageProperties>
 ): void {
   turn.reported = true;
   turn.failed = props.outcome === 'failed';
@@ -87,6 +87,9 @@ export function reportChatTurn(
     costUsd: turn.result?.cost,
     tokensIn: turn.result?.tokens?.input,
     tokensOut: turn.result?.tokens?.output,
+    cacheReadTokens: turn.result?.tokens?.cacheRead,
+    cacheWriteTokens: turn.result?.tokens?.cacheWrite,
+    cachePartialTokens: turn.result?.tokens?.cachePartial,
   });
 }
 

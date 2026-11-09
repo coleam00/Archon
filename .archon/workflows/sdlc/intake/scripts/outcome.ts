@@ -16,8 +16,8 @@ import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import {
   type Contract,
   type LabelVerdict,
-  isOwnedLabel,
-  type OwnedLabel,
+  isPackLabel,
+  type PackLabel,
   type Route,
   wantedLabels,
   writeLabels,
@@ -80,7 +80,7 @@ function leftToMaintainer(triage: TriageResult, refused: string): TriageResult {
     closure: null,
     labels: [
       ...wantedLabels(verdict, triage.type.value, triage.size.value),
-      ...triage.labels.filter(name => !isOwnedLabel(name)),
+      ...triage.labels.filter(name => !isPackLabel(name)),
     ],
     summary: `${triage.summary} The close was refused: ${refused}; a maintainer decides.`,
   };
@@ -95,7 +95,7 @@ function labelDelta(
   decision: IntakeDecision,
   triage: TriageResult | null,
   bodyMoved: boolean
-): { add: readonly string[]; remove: OwnedLabel[] } | null {
+): { add: readonly string[]; remove: PackLabel[] } | null {
   if (decision.path === 'closed') return null;
   const add: readonly string[] =
     decision.path === 'triage' && !bodyMoved && triage !== null
@@ -108,7 +108,7 @@ function labelDelta(
   return {
     add,
     remove: decision.labels
-      .filter(isOwnedLabel)
+      .filter(isPackLabel)
       .filter(name => !add.includes(name) && !requested.has(name)),
   };
 }

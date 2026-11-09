@@ -1,4 +1,5 @@
 import {
+  PR_VIEW_ANY_STATE,
   type ForgeError,
   type ForgeMutationRequest,
   type ForgeRequest,
@@ -8,9 +9,10 @@ import {
   mutationTarget,
   mutationAttempt,
 } from '@archon/forge/operations';
-import { githubErrorDetail, parseRemote, type Fetch } from './api';
+import { githubErrorDetail, parseRemote, TransientGitHubError, type Fetch } from './api';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
 import { handleGithubWorkItemComments } from './comments';
+import { handleGithubPrFiles, handleGithubRepoFile } from './files';
 import { handleGithubPrMergeState } from './merge-state';
 import { handleGithubMutation } from './lifecycle';
 import { handleGithubPrReviews, handleGithubPrView } from './pull-requests';
@@ -44,6 +46,7 @@ export const githubPluginMetadata = {
     'repo.labels.list',
     'repo.label.ensure',
     'pr.view',
+    PR_VIEW_ANY_STATE,
     'pr.create',
     'pr.edit-body',
     'pr.ready',
@@ -54,6 +57,8 @@ export const githubPluginMetadata = {
     'pr.reviews',
     'pr.threads',
     'pr.merge-state',
+    'pr.files',
+    'repo.file',
     'pr.thread.reply',
     'pr.thread.resolve',
   ],
@@ -64,6 +69,31 @@ export const githubPluginMetadata = {
 export interface GitHubOperationOptions {
   readonly token: string | undefined;
   readonly fetch?: Fetch;
+  readonly sleep?: (ms: number) => Promise<unknown>;
+}
+
+/** The waits before each repeat of a read; their count is the number of repeats. */
+const READ_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+
+/**
+ * Run a read, repeating it from its start while it fails with a
+ * {@link TransientGitHubError}. A read changes nothing, so a repeat is always
+ * safe; a mutation never comes through here, because a 5xx can arrive after
+ * GitHub applied it. Every other failure, and the last transient one, is thrown.
+ */
+async function readWithRetry(
+  read: () => Promise<ForgeResponse>,
+  sleep: (ms: number) => Promise<unknown>
+): Promise<ForgeResponse> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      return await read();
+    } catch (cause) {
+      const delay = READ_RETRY_DELAYS_MS[attempt];
+      if (!(cause instanceof TransientGitHubError) || delay === undefined) throw cause;
+      await sleep(delay);
+    }
+  }
 }
 
 function failure(operationId: string, error: ForgeError): ForgeResponse {
@@ -86,6 +116,8 @@ const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'pr.reviews': handleGithubPrReviews,
   'pr.threads': handleGithubPrThreads,
   'pr.merge-state': handleGithubPrMergeState,
+  'pr.files': handleGithubPrFiles,
+  'repo.file': handleGithubRepoFile,
   'checks.state': handleGithubChecksState,
   'checks.commit': handleGithubChecksCommit,
 };
@@ -135,7 +167,7 @@ export async function handleGithubOperation(
     // Keyed by the request's own op, the handler takes that request; TypeScript cannot
     // correlate the table's members with the request union on its own.
     const read = readHandlers[request.op] as ReadHandler<ReadOp>;
-    return await read(request, fetchImpl, token);
+    return await readWithRetry(() => read(request, fetchImpl, token), options.sleep ?? Bun.sleep);
   } catch (cause) {
     return failure(request.operationId, githubErrorDetail(cause));
   }

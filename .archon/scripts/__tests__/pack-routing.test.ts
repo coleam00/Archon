@@ -158,7 +158,7 @@ describe("ship's continued pull request", () => {
 });
 
 describe("deliver's round", () => {
-  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; light_review: boolean; contract_left: string[] | null; summary: string }
+  interface Round { round: number; done: boolean; ready: boolean; reason: string; pr_url: string; prior_report: string; contract_left: string[] | null; summary: string }
   const round = (inputs: Record<string, string>): Round =>
     JSON.parse(
       runPackScript('deliver/scripts/round', {
@@ -175,8 +175,9 @@ describe("deliver's round", () => {
           INPUTS_REVIEW_SUMMARY: 'clean',
           INPUTS_REVIEW_CONTRACT_LEFT: '[]',
           INPUTS_PREVIOUS_CONTRACT_LEFT: '',
-          INPUTS_CI: 'green',
-          INPUTS_CI_SUMMARY: 'all passed',
+          INPUTS_SIMPLIFY: 'false',
+          INPUTS_CI_STATE: 'ready',
+          INPUTS_CI_SUMMARY: 'marked ready',
           INPUTS_THREADS_OPEN: '0',
           INPUTS_THREADS_SUMMARY: 'no thread open',
           INPUTS_SETTLE_ASK: 'null',
@@ -186,7 +187,7 @@ describe("deliver's round", () => {
       }).stdout
     ) as Round;
 
-  it('delivers on a passing review and green CI', () => {
+  it('delivers on a passing review and a hand-off', () => {
     expect(round({})).toMatchObject({ round: 1, done: true, ready: true, reason: 'delivered', pr_url: PR_URL });
   });
 
@@ -205,18 +206,22 @@ describe("deliver's round", () => {
     expect(ended).toMatchObject({ round: 2, reason: 'implement_blocked', pr_url: PR_URL });
   });
 
-  it('goes again for open findings and a red the change caused, and stops on any other red', () => {
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI: 'null' })).toMatchObject({
+  it('goes again for open findings, smaller shapes and a red the change caused, and stops on any other red', () => {
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'correct', INPUTS_CI_STATE: 'null' })).toMatchObject({
       done: false,
       reason: 'review_open',
     });
-    expect(round({ INPUTS_CI: 'pr_caused' })).toMatchObject({ done: false, reason: 'ci_pr_caused' });
-    expect(round({ INPUTS_CI: 'other' })).toMatchObject({ done: true, ready: false, reason: 'ci_other' });
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'replan', INPUTS_CI: 'null' })).toMatchObject({
+    expect(round({ INPUTS_SIMPLIFY: 'true', INPUTS_CI_STATE: 'null' })).toMatchObject({
+      done: false,
+      reason: 'simplify_open',
+    });
+    expect(round({ INPUTS_CI_STATE: 'pr_caused' })).toMatchObject({ done: false, reason: 'ci_pr_caused' });
+    expect(round({ INPUTS_CI_STATE: 'other' })).toMatchObject({ done: true, ready: false, reason: 'ci_other' });
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'replan', INPUTS_CI_STATE: 'null' })).toMatchObject({
       done: true,
       reason: 'replan',
     });
-    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'ask', INPUTS_CI: 'null' })).toMatchObject({
+    expect(round({ INPUTS_REVIEW_READY: 'false', INPUTS_REVIEW_ACTION: 'ask', INPUTS_CI_STATE: 'null' })).toMatchObject({
       done: true,
       ready: false,
       reason: 'ask',
@@ -234,6 +239,6 @@ describe("deliver's round", () => {
     expect(asked).toMatchObject({ done: true, ready: false, reason: 'ask' });
     expect(asked.summary).toContain('a person decides the API name');
     // A CI red decides the round before the threads do.
-    expect(round({ INPUTS_THREADS_OPEN: '1', INPUTS_CI: 'other' })).toMatchObject({ reason: 'ci_other' });
+    expect(round({ INPUTS_THREADS_OPEN: '1', INPUTS_CI_STATE: 'other' })).toMatchObject({ reason: 'ci_other' });
   });
 });

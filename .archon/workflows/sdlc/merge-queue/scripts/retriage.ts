@@ -3,24 +3,22 @@
  *
  * A pull request that links its issue with `Refs #N` merges without closing it, and the
  * issue keeps its old stage, so the build queue could claim it again. Each such issue
- * gets `archon-triage` and a detached intake run with that label event, recorded as
- * added by `retriage_as`; intake decides whether the work is delivered or something is
- * still open. The issue's state is read from the tracker after the merge, so one the
- * merge closed is left alone. An enrolled own pull request's work item is the pull
- * request itself: it has no issue. Empty `retriage_as` re-triages nothing.
+ * gets this run's re-triage request and one intake pickup; intake decides whether the
+ * work is delivered or something is still open. The issue's state is read from the
+ * tracker after the merge, so one the merge closed is left alone. Without
+ * `retriage_merged` on, nothing is re-triaged.
  *
- * A failed read, label write or launch is reported for that issue and the rest still
- * go; the merge record is already written.
+ * A failed read, request or launch is reported for that issue and the rest still go;
+ * the merge record is already written.
  *
  * Bound inputs: INPUTS_ITEMS and INPUTS_SETTLED from facts, INPUTS_MERGED from record,
- * and the workflow input INPUTS_RETRIAGE_AS.
+ * and the workflow input INPUTS_RETRIAGE_MERGED.
  */
 
-import { type QualifiedPr, samePr } from '../../.shared/forge.ts';
-import { emit, note, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
+import type { QualifiedPr } from '../../.shared/forge.ts';
+import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
-import { launchDetached } from '../../.shared/launch.ts';
-import { writeLabels } from '../../.shared/labels.ts';
+import { requestRetriage } from '../../.shared/launch.ts';
 import type { MergeSettled } from '../../.shared/merge.ts';
 
 interface Item {
@@ -29,39 +27,32 @@ interface Item {
 }
 
 /** The intake run's id, or null when the issue is closed. */
-function retriage(issue: QualifiedPr, actor: string): string | null {
+function retriage(issue: QualifiedPr, runId: string): string | null {
   if (viewIssue(issue).state !== 'open') return null;
-  writeLabels(issue, ['archon-triage'], []);
-  return launchDetached('archon-intake', {
-    repo_host: issue.repo.host,
-    repo_path: issue.repo.path,
-    number: String(issue.number),
-    action: 'added',
-    label: 'archon-triage',
-    label_actor: actor,
-  });
+  return requestRetriage(issue, runId);
 }
 
 function main(): void {
-  const actor = trimmed(process.env.INPUTS_RETRIAGE_AS);
-  if (actor === '') {
-    emit({ retriaged: [], summary: 'retriage_as is empty; no merged issue is re-triaged.' });
+  if (trimmed(process.env.INPUTS_RETRIAGE_MERGED) !== 'true') {
+    emit({ retriaged: [], summary: 'retriage_merged is off; no merged issue is re-triaged.' });
     return;
   }
+  const runId = text(process.env.WORKFLOW_ID);
+  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
   const merged = new Set((nullableJson(process.env.INPUTS_MERGED) ?? []) as number[]);
   const done = [
     ...items.filter(entry => merged.has(entry.pr.number)),
     ...settled.filter(entry => entry.status === 'merged'),
-  ].flatMap(({ item, pr }) => (item === null || pr === null || samePr(item, pr) ? [] : [{ issue: item, pr }]));
+  ].flatMap(({ item, pr }) => (item === null || pr === null ? [] : [{ issue: item, pr }]));
 
   const retriaged: number[] = [];
   const lines: string[] = [];
   for (const { issue, pr } of done) {
     const name = `issue ${String(issue.number)}`;
     try {
-      const intake = retriage(issue, actor);
+      const intake = retriage(issue, runId);
       if (intake === null) {
         lines.push(`${name}: closed after PR ${String(pr.number)} merged`);
         continue;

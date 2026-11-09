@@ -11,7 +11,7 @@
  * only when the run was launched with publish=true and the target is a tracker
  * issue does this verify the item's identity on the tracker, apply the labels, and
  * read them back. Area labels are never created: the prompt may only pick labels
- * the repository already has. Publishing uses the selected forge source.
+ * the repository already has. Publishing goes through the forge plugin.
  */
 
 import type { Closure } from '../../.shared/close.ts';
@@ -19,8 +19,8 @@ import { record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
 import {
   type Contract,
-  isOwnedLabel,
-  OWNED_LABEL_NAMES,
+  isPackLabel,
+  PACK_LABEL_NAMES,
   type Route,
   type Size,
   type WorkType,
@@ -133,7 +133,7 @@ function main(): void {
     invalid('area_labels must be label names');
     return;
   }
-  if (area.some(isOwnedLabel)) {
+  if (area.some(isPackLabel)) {
     // The state, type and size labels are derived below; a pack label smuggled in
     // as an area label would be added beside the derived ones or removed as stale.
     invalid('area_labels may not name a pack label; those derive from the verdict');
@@ -147,7 +147,7 @@ function main(): void {
     ? writeLabels(
         item,
         [...wanted, ...area],
-        OWNED_LABEL_NAMES.filter(name => !wanted.some(label => label === name))
+        PACK_LABEL_NAMES.filter(name => !wanted.some(label => label === name))
       )
     : [...new Set([...wanted, ...area])].sort();
 

@@ -134,12 +134,11 @@ YAML lists each input with its default and meaning. An input without a default i
 required, and an undeclared name is refused.
 
 ```bash
-archon workflow run archon-intake \
-  --input repo_host=github.com --input repo_path=<owner>/<repo> --input number=42 --detach
+archon workflow run archon-intake --input number=42 --detach
 ```
 
-Inputs and a message can be combined. Queue workflows such as the SDLC pack's take
-inputs only; `queues.md` lists them.
+Inputs and a message can be combined. The SDLC pack's queues take inputs, and the
+build queue also reads a message that says what to build; `queues.md` lists them.
 
 ## Monitoring
 

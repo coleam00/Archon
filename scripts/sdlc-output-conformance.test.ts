@@ -125,8 +125,8 @@ test('blocked pickup emits identified items admitted by its workflow schema', ()
   const output = admitted(
     runPackScript('build-queue/scripts/blocked', {
       cwd: at.checkout,
-      forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-      inputs: { ...at.env, INPUTS_NUMBER: '', INPUTS_RETRIAGE_AS: 'maintainer' },
+      forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+      inputs: { ...at.env, INPUTS_NUMBER: '', INPUTS_REVISIT_BLOCKED: 'true' },
     }),
     'build-queue/archon-build-queue.yaml',
     'blocked'
@@ -282,7 +282,7 @@ describe('triage', () => {
 // parseQualifiedPr. A value the schema admits but the parser refuses passes the provider's
 // structured output and fails publication after the whole review ran.
 test("archon-review's scope pr schema admits exactly what parseQualifiedPr accepts", () => {
-  const schema = outputFormat('review/archon-review-block.yaml', 'scope');
+  const schema = outputFormat('review/archon-review.yaml', 'scope');
   const repo = { host: 'github.com', path: 'coleam00/Archon' };
   const report = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
   const candidates = [
@@ -303,7 +303,7 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     }
     return {
       parserAccepts,
-      schemaAccepts: validateStructuredOutput({ head_matches: true, pr, report }, schema).valid,
+      schemaAccepts: validateStructuredOutput({ pr, report }, schema).valid,
     };
   });
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
@@ -343,6 +343,7 @@ describe('discoveries', () => {
       { ...base, outcome: 'track', issue: ISSUE, comment: 'More evidence.', reason: 'r' },
       { ...base, outcome: 'drop', reason: 'r' },
       { ...base, outcome: 'ask', question: 'q', recommendation: 'r' },
+      { ...base, outcome: 'wait', reason: 'r' },
     ];
     expect(new Set(examples.map(example => example.outcome))).toEqual(new Set(AGENT_OUTCOMES));
     for (const example of examples) {
@@ -396,8 +397,8 @@ describe('discoveries', () => {
     ): ScriptRun =>
       runPackScript(`discoveries/scripts/${name}`, {
         cwd: at.checkout,
-        forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-        gh: { issue: { number: 7, state: 'open' }, issues: [] },
+        forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+        tracker: { issue: { number: 7, state: 'open' }, issues: [] },
         artifacts: files,
         inputs: {
           ...at.env,
@@ -414,6 +415,7 @@ describe('discoveries', () => {
           ),
           INPUTS_REPO_HOST: PR.repo.host,
           INPUTS_REPO_PATH: PR.repo.path,
+          INPUTS_REPO: JSON.stringify(PR.repo),
           INPUTS_SINCE: '',
           INPUTS_UNTIL: '',
           INPUTS_LIMIT: '20',

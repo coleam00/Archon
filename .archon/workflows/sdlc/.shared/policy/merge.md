@@ -6,12 +6,16 @@ project's file after it, and where the two conflict, the project's line wins.
 
 The queue merges on its own when the case is clear, and asks a maintainer when it is
 not. The gate is not policy: no pull request merges unless its trusted review verdict
-says Ready for its head, CI is green there and the default branch's CI is not red,
-whatever this document says. The queue never pushes, so a verdict for another commit
+says Ready for its head, what the project's CI setting trusts passes there (green CI,
+or under `ci: none` a passing validation recorded at that head) and the default
+branch's CI is not red, whatever this document says. The queue never pushes, so a verdict for another commit
 means someone pushed after the review, and the pull request goes back to be reviewed.
 An open review thread holds the merge only when it raises a defect in what the pull
 request changes. A thread on code the pull request doesn't change or make reachable,
-such as one that arrived with a merge of the default branch, doesn't hold it.
+such as one that arrived with a merge of the default branch, doesn't hold it. Nor does
+a request for a guard, a check or a test against an input or state no supported path
+produces. Judge each claim in a thread on its own: a thread that also raises a defect
+still holds the merge.
 
 ## Clear: the queue merges
 
@@ -49,7 +53,8 @@ such as one that arrived with a merge of the default branch, doesn't hold it.
 - **One rerun for red elsewhere.** CI red in code the pull request does not touch gets
   one rerun of the failed jobs. Red again after it counts as the change's.
 - **The default branch comes first.** Each sweep judges its CI before any pull
-  request, and while it is red nothing merges. Red in code no recent merge touched gets
-  one rerun; red after that, or red in code a recent merge touched, is raised to a
-  maintainer, naming the pull requests merged since it was last green, so one can be
-  reverted or fixed forward.
+  request, and while it is red nothing merges. Red on the default branch is always
+  raised to a maintainer, naming the pull requests merged since it was last green, so
+  one can be reverted or fixed forward, or its failed jobs rerun when no recent merge
+  touched the red code. The pack cannot rerun them itself: the forge reruns checks only
+  on a pull request.

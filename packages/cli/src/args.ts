@@ -28,6 +28,7 @@ export const cliArgOptions: CliArgOptions = {
   quiet: { type: 'boolean', short: 'q' },
   verbose: { type: 'boolean', short: 'v' },
   json: { type: 'boolean' },
+  throughput: { type: 'boolean' },
   events: { type: 'boolean' },
   watch: { type: 'boolean' },
   event: { type: 'string' },

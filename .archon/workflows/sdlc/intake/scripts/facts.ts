@@ -20,19 +20,15 @@ import {
   type RequestAction,
 } from '../../.shared/workitem.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
+import { workflowRepo } from '../../.shared/remote.ts';
 
 function main(): void {
   const runId = text(process.env.WORKFLOW_ID);
   if (runId === '')
     throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
-  const repo = {
-    host: trimmed(process.env.INPUTS_REPO_HOST),
-    path: trimmed(process.env.INPUTS_REPO_PATH),
-  };
   const number = Number(trimmed(process.env.INPUTS_NUMBER));
-  if (repo.host === '' || repo.path === '' || !Number.isInteger(number) || number <= 0) {
-    throw new Error('repo_host, repo_path and a positive issue number are required');
-  }
+  if (!Number.isInteger(number) || number <= 0) throw new Error('a positive issue number is required');
+  const repo = workflowRepo();
   const action = trimmed(process.env.INPUTS_ACTION) as RequestAction;
   if (!REQUEST_ACTIONS.includes(action)) {
     throw new Error(`action must be one of ${REQUEST_ACTIONS.join(', ')}, not "${action}"`);
@@ -43,9 +39,10 @@ function main(): void {
   const subject = { repo, number };
   const label = trimmed(process.env.INPUTS_LABEL);
   // Intake works issues. A pull request's event, or a label that asks for nothing,
-  // records no request; the run still picks up whatever waits.
+  // records no request; the run still picks up whatever waits. A run that asks for a
+  // re-triage recorded its own request before starting this pickup.
   const kind = trimmed(process.env.INPUTS_KIND);
-  if (kind === 'issue' && (action !== 'added' || isRequestLabel(label))) {
+  if (kind === 'issue' && action !== 'retriage' && (action !== 'added' || isRequestLabel(label))) {
     const request: IntakeRequest = {
       at,
       run_id: runId,

@@ -12,3 +12,6 @@ first and this file after it.
   item looks closable, recommend what to do: close, keep and route, or ask the author a
   question. Cite the passage of `direction.md` or `engineering.md` the recommendation
   rests on.
+- **Measure first.** When an item's acceptance needs a metric that is not recorded
+  yet, the metric ships and starts recording first, then the change it measures. This
+  holds even when an older baseline exists.

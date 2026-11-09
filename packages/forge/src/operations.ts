@@ -27,6 +27,11 @@ import {
   workItemCommentSchema,
   prMergeStateRequestSchema,
   prMergeStateSchema,
+  prFileSchema,
+  prFilesRequestSchema,
+  prFilesSchema,
+  repoFileRequestSchema,
+  repoFileSchema,
   type ForgeMutationRequest,
 } from './lifecycle';
 
@@ -251,6 +256,18 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
       z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
       z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
       z.object({
+        op: prFilesRequestSchema.shape.op,
+        value: prFilesSchema.extend({
+          files: z.array(
+            prFileSchema.omit({ patch: true }).extend({ patch: contentAuditSchema.nullable() })
+          ),
+        }),
+      }),
+      z.object({
+        op: repoFileRequestSchema.shape.op,
+        value: repoFileSchema.omit({ text: true }).extend({ content: contentAuditSchema }),
+      }),
+      z.object({
         op: z.literal('pr.reviews'),
         value: prReviewsSchema.extend({
           items: z.array(
@@ -302,6 +319,27 @@ export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse 
         },
       },
     };
+  if (result.op === 'pr.files')
+    return {
+      ...response,
+      result: {
+        op: result.op,
+        value: {
+          ...result.value,
+          files: result.value.files.map(({ patch, ...facts }) => ({
+            ...facts,
+            patch: patch === null ? null : bodyAudit(patch),
+          })),
+        },
+      },
+    };
+  if (result.op === 'repo.file') {
+    const { text, ...facts } = result.value;
+    return {
+      ...response,
+      result: { op: result.op, value: { ...facts, content: bodyAudit(text) } },
+    };
+  }
   if (result.op === 'workitem.comments')
     return {
       ...response,

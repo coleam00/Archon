@@ -2132,10 +2132,10 @@ that is after its worktree was created. A `required` setting must be set there, 
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
-reads it against its own declaration. A bundled pack declares no settings, so if a project pack
-folder takes a bundled pack's name and the file sets the project pack's settings, the bundled
-workflows of that name refuse to start ("declares no settings"); the same happens when the
-project and home declarations of one name differ. Give a pack with settings a name of its own.
+reads it against its own declaration. A bundled pack ships its `.pack/pack.yaml` with it, so its
+settings are set the same way. If a project or home pack folder takes another pack's name and
+declares different settings, a workflow whose declaration lacks a setting the file sets refuses
+to start ("unknown setting"). Give a pack with settings of its own a name of its own.
 
 **Layers**, lowest first: the pack's `default:`, then the workflow's own `inputs:` default of the
 same name, then the project's `.archon/packs/<pack>.yaml`, then the run's supplied inputs
@@ -2505,6 +2505,11 @@ Consequences worth planning for:
 | `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
 | `first_success` | never (load error) | Racing: **rejected**, not deferred. See below. Rejected at load rather than silently treated as another join |
 
+Failure markers have `archon_failed: true`, a string `error`, and `status: "failed" | "cancelled"`.
+Collectors check `archon_failed === true`; `error` and `status` alone may also appear in a
+successful payload. The discriminator is reserved, so child payloads must avoid it.
+Paused children stay held until they finish and do not become aggregate slots.
+
 **Every child runs to its own terminal state before the join reduces, under both joins.** A
 child that fails does not stop its siblings, does not stop later items from being spawned,
 and does not change any other child's outcome. `all_success` still fails the node if any
@@ -2817,6 +2822,9 @@ Two hard limits, both enforced at load time before any upstream node can spend:
 Cancellation stops the pool from claiming new items. An in-flight item may still reach its
 own terminal event; under `all_done`, a cancelled slot is represented by the same reserved
 `{ archon_failed: true, error, status: "cancelled" }` marker used by child-run fan-out.
+Failed slots use `status: "failed"`; both statuses follow the
+[reserved failure-marker contract](#join-semantics). An instance with ambiguous
+non-terminal work blocks the join rather than becoming a failure-marker slot.
 Instance and wrapper events are aggregate accounting rows, so their rolled-up usage is not
 counted again during resume. Engine-managed artifact names also carry the enclosing
 `loop_group` iteration path, preventing later iterations from overwriting earlier sidecars.
@@ -3115,7 +3123,7 @@ nodes:
     model: ['@review-seams', '@reviewer', medium]
 ```
 
-A list is how a bundled workflow names the concern each node serves without requiring you to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-5.5`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-5.5`. A run binding of an alias that no config defines must name its provider.
+A list is how a bundled workflow names the concern each node serves without requiring you to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-6.1-sol`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-6.1-sol`. A run binding of an alias that no config defines must name its provider.
 
 Tier and alias refs resolve to a provider, model and optional `effort`. If a workflow or node sets `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
 
@@ -3194,3 +3202,20 @@ Check a workflow before it spends anything:
 - `archon workflow test <name>` replays the fixtures in the workflow's `fixtures/` folder and checks each declared outcome.
 
 [Build your first workflow](/getting-started/first-workflow/) walks through all three. After a run, `archon workflow get <run-id>`, `archon workflow logs <run-id>` and `archon workflow artifacts <run-id>` show what each node did and wrote.
+
+## Deprecated node fields
+
+These fields remain accepted during their compatibility window. They keep their existing behavior; Archon does not rewrite them into attention waits. No removal release is promised here.
+
+<!-- node-deprecations:start -->
+| Field | Deprecated since | Replacement |
+| --- | --- | --- |
+| `loop.until` | 0.10.0 | `the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.` |
+| `loop.interactive` | 0.10.0 | `'loop.interactive' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'.` |
+| `loop_group.until` | 0.10.0 | `the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'value=$body-node.output.field; test "$value" = "true"') (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.` |
+| `loop_group.interactive` | 0.10.0 | `'loop_group.interactive' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'.` |
+| `approval` | 0.12.0 | `'approval:' is deprecated. Write 'wait: { attention: <message>, form: approval }' instead; the next node reads '$<id>.output.decision' and '$<id>.output.text'. A legacy reject cancels the run, while an attention wait continues with decision 'reject', so add a 'cancel:' node with when: "$<id>.output.decision == 'reject'" where rejecting should end the run.` |
+| `approval.decisions` | 0.12.0 | `'approval.decisions' is deprecated. Write 'wait: { attention: <message>, form: select, options: <the same decisions> }' instead; the output is the same {decision, text}.` |
+| `approval.capture_response` | 0.10.0 | `'approval.capture_response' is deprecated. An attention wait always records the answer; the next node reads '$<id>.output.text'.` |
+| `approval.on_reject` | 0.10.0 | `'approval.on_reject' and '$REJECTION_REASON' are deprecated. Write 'wait: { attention: <message>, form: approval }' followed by a rework node with when: "$<id>.output.decision == 'reject'" that reads '$<id>.output.text'. To repeat the rework, write a 'loop_group' whose body ends in the wait; the rework node comes first and reads '$LOOP_PREV.<id>.output.text'.` |
+<!-- node-deprecations:end -->

@@ -11,9 +11,10 @@
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
  *
- * The build and merge queues claim the same documents through the same claim, so an
- * item has one owner at a time across the queues; their records are `facts.build`
- * (./build.ts) and `facts.merge` (./merge.ts).
+ * The build, merge and split queues claim the same documents through the same claim,
+ * so an item has one owner at a time across the queues; their records are
+ * `facts.build` (./build.ts), `facts.merge` (./merge.ts) and `facts.split`
+ * (./split.ts).
  */
 
 import { createHash } from 'node:crypto';
@@ -21,6 +22,7 @@ import { type BuildRecord, withReleasedRound } from './build.ts';
 import type { Closure } from './close.ts';
 import { record, type QualifiedPr } from './forge.ts';
 import type { MergeRecord } from './merge.ts';
+import type { SplitRecord } from './split.ts';
 import { note } from './io.ts';
 import {
   type LabelVerdict,
@@ -46,9 +48,13 @@ export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blo
 export const TRUSTS = ['maintainer', 'outside'] as const;
 export type Trust = (typeof TRUSTS)[number];
 export const INTAKE_PATHS = ['quiet', 'closed', 'outside', 'triage'] as const;
-export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added'] as const;
+/**
+ * What a request records: a forge event, or `retriage`, a pack run's own request to
+ * re-triage the item, recorded by that run, whose `run_id` it carries.
+ */
+export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added', 'retriage'] as const;
 export type RequestAction = (typeof REQUEST_ACTIONS)[number];
-/** One event intake has not yet processed. A label request carries who added the label. */
+/** One request intake has not yet processed. A label request carries who added the label. */
 export interface IntakeRequest {
   readonly at: string;
   readonly run_id: string;
@@ -100,7 +106,7 @@ export interface TriageFacts {
 export interface HistoryEntry {
   readonly at: string;
   /** The queue whose pickup or decision wrote the entry. */
-  readonly stage: 'intake' | 'build' | 'merge';
+  readonly stage: 'intake' | 'build' | 'merge' | 'split';
   readonly run_id: string;
   readonly outcome: string;
   readonly summary: string;
@@ -132,8 +138,7 @@ export interface WorkItem {
     readonly triage?: TriageFacts;
     readonly build?: BuildRecord;
     readonly merge?: MergeRecord;
-    /** A maintainer's own pull request the merge queue enrolled; no build round made it. */
-    readonly own_pr?: { readonly url: string; readonly at: string };
+    readonly split?: SplitRecord;
   };
   readonly history: readonly HistoryEntry[];
 }
@@ -176,6 +181,7 @@ const STAGES = {
   plan: true,
   deliver: true,
   continue: true,
+  split: true,
   needs_contract: true,
   blocked: true,
   close: true,
@@ -193,18 +199,19 @@ export function newest<T>(entries: readonly T[]): T[] {
   return entries.slice(-KEPT);
 }
 
-function isLabelRequest(request: IntakeRequest): boolean {
-  return request.action === 'added';
+/** A label request or a run's re-triage request: what a decision reads. */
+function decides(request: { readonly action?: unknown }): boolean {
+  return request.action === 'added' || request.action === 'retriage';
 }
 
 /**
- * Only label requests carry anything a decision reads; any other request just makes
- * the item a candidate, and the pickup reads the live issue. So one of those is kept,
- * however often an author edits.
+ * Only label and re-triage requests carry anything a decision reads; any other request
+ * just makes the item a candidate, and the pickup reads the live issue. So one of those
+ * is kept, however often an author edits.
  */
 function queued(requests: readonly IntakeRequest[]): IntakeRequest[] {
-  const other = requests.filter(request => !isLabelRequest(request)).at(-1);
-  return newest(requests.filter(request => isLabelRequest(request) || request === other));
+  const other = requests.filter(request => !decides(request)).at(-1);
+  return newest(requests.filter(request => decides(request) || request === other));
 }
 
 export function newWorkItem(subject: QualifiedPr, at: string): WorkItem {
@@ -344,7 +351,15 @@ export function mirrorLabels(doc: WorkItem): PackLabel[] {
   if (doc.stage === 'needs_maintainer') return ['archon-needs-maintainer'];
   const triage = doc.facts.triage;
   if (doc.stage === 'new' || triage === undefined) return [];
-  return wantedLabels(triage.verdict, triage.type.value, triage.size.value);
+  // A re-triage after the split queue's record replaces what that record says here.
+  const split = doc.facts.split !== undefined && doc.facts.split.at >= triage.at ? doc.facts.split : undefined;
+  // An item the split queue handed back whole carries the route it now waits at.
+  const verdict: LabelVerdict =
+    split?.status === 'whole' ? { contract: 'READY', route: split.route } : triage.verdict;
+  const wanted = wantedLabels(verdict, triage.type.value, triage.size.value);
+  // A split PRD stays open, marked as one, until its hypothesis has a verdict.
+  if (doc.stage === 'split' && split?.status === 'done' && split.kind === 'prd') wanted.push('archon-prd');
+  return wanted;
 }
 
 function promotedAt(promoted: Promotion | null, digest: string): boolean {
@@ -371,7 +386,7 @@ export function assertNoSelfPromotion(doc: WorkItem, add: readonly string[]): vo
 // --- the decision ---------------------------------------------------------------
 
 export interface IssueFacts {
-  /** Undefined when the selected source does not report authors. */
+  /** Undefined when the forge plugin does not report authors. */
   readonly author: string | null | undefined;
   readonly labels: readonly string[];
   readonly state: 'open' | 'closed';
@@ -380,6 +395,13 @@ export interface IssueFacts {
 
 export function isMaintainer(login: string | null, maintainers: ReadonlySet<string>): boolean {
   return login !== null && login !== '' && maintainers.has(login.toLowerCase());
+}
+
+/** Whether a pack run asked to re-triage the item; each request is noted by its run. */
+function runAsked(requests: readonly IntakeRequest[], noted: (outcome: string, summary: string) => void): boolean {
+  const asked = requests.filter(request => request.action === 'retriage');
+  for (const request of asked) noted('retriage', `run ${request.run_id} asked for a re-triage`);
+  return asked.length > 0;
 }
 
 /**
@@ -430,7 +452,7 @@ export function decideIntake(
   if (trust === null) {
     if (issue.author === undefined) {
       throw new Error(
-        'the selected forge source does not report issue authors, so trust cannot be decided'
+        'the forge plugin does not report issue authors, so trust cannot be decided'
       );
     }
     trust = isMaintainer(issue.author, maintainers) ? 'maintainer' : 'outside';
@@ -444,9 +466,11 @@ export function decideIntake(
     promoted = null;
   }
 
-  let retriage = false;
-  let promotedNow = false;
-  for (const request of doc.claim?.requests ?? []) {
+  // A run's request re-triages a maintainer's item or a promoted one, and a maintainer's
+  // label re-triages or promotes; nothing else starts triage.
+  const requests = doc.claim?.requests ?? [];
+  let retriage = runAsked(requests, noted);
+  for (const request of requests) {
     const label = request.label;
     if (request.action !== 'added' || label === null || !isRequestLabel(label)) continue;
     // The pack writes the work item before any label, so a label already in the
@@ -486,7 +510,7 @@ export function decideIntake(
       label,
       pin: { body_digest: issue.digest },
     };
-    promotedNow = true;
+    retriage = true;
     noted('promoted', `${label} added by ${request.actor} promotes this outside item`);
   }
 
@@ -494,11 +518,12 @@ export function decideIntake(
   if (trust === 'maintainer') {
     return doc.facts.triage === undefined || retriage ? triage() : quiet();
   }
-  if (promotedNow) return triage();
+  // Promotion pins the current body, so an item promoted by this pickup passes here;
+  // a run's request on an item no maintainer promoted promotes nothing.
   if (!promotedAt(promoted, issue.digest)) {
     return { ...quiet('needs_maintainer'), path: 'outside' };
   }
-  return quiet();
+  return retriage ? triage() : quiet();
 }
 
 /**
@@ -583,12 +608,7 @@ export function enqueue(subject: QualifiedPr, request: IntakeRequest): void {
     if (statePut(name, created, stored.revision) === 'ok') return;
   }
   const waiting = record(stored.value)?.requests;
-  if (
-    !isLabelRequest(request) &&
-    Array.isArray(waiting) &&
-    waiting.some(entry => record(entry)?.action !== 'added')
-  )
-    return;
+  if (!decides(request) && Array.isArray(waiting) && waiting.some(entry => !decides(record(entry) ?? {}))) return;
   stateAppend(name, '/requests', request);
 }
 
@@ -731,6 +751,26 @@ export function claimItem(
   if (!claimable(fresh, pickup)) return null;
   const retried = claimed(fresh, at, runId, pickup);
   return statePut(fresh.name, retried, fresh.revision, 'take') === 'ok' ? retried : null;
+}
+
+/**
+ * Claim the named item for a queue, releasing a terminal claim on it first as
+ * `claimNext` does. Refuses with the facts an operator acts on when it cannot.
+ */
+export function claimNamed(number: number, at: string, runId: string, pickup: Pickup): WorkItem {
+  const issue = `issue ${String(number)}`;
+  const found = read(workItemName(number));
+  if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
+  const item = releaseIfTerminal(found, at, runId, pickup);
+  const won = claimable(item, pickup) ? claimItem(item, at, runId, pickup) : null;
+  if (won !== null) return won;
+  const now = read(item.name) ?? item;
+  if (now.doc.claim !== null) throw new Error(`${issue} is claimed by run ${now.doc.claim.run_id}`);
+  // Both conditional writes can lose to concurrent writes that leave the item waiting.
+  if (pickup.waits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
+  const record = now.doc.facts[pickup.stage];
+  const status = record !== undefined && 'status' in record ? `, ${pickup.stage} status ${record.status}` : '';
+  throw new Error(`${issue} does not wait for the ${pickup.stage} queue: stage ${now.doc.stage}${status}`);
 }
 
 /**

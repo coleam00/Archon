@@ -2,16 +2,14 @@
  * Publish the review report as the pull request's one canonical comment.
  *
  * The reviewer judges and writes the report; this node owns the public write, so
- * every round edits the same marked comment instead of appending another (on `gh`,
- * a landed write that returned a retryable response (5xx, or a rate limit) or no response can leave a second one, and
- * the next upsert refuses). A
- * review whose scope was a working diff has no pull request and publishes
- * nothing. The verdict passes through unchanged either way: publication is not
- * what makes a review true.
+ * every round edits the same marked comment instead of appending another. A review
+ * whose scope was a working diff has no pull request and publishes nothing. The
+ * verdict passes through unchanged either way: publication is not what makes a
+ * review true.
  *
- * A report goes public only about the commit its round fixed at the start
- * (review-round): the checkout must still be at it and the pull request's remote
- * head must be it. The head is checked before the scope agent's declaration, so a
+ * This is the review's one head check. A report goes public only about the
+ * commit its round fixed at the start (review-round): the checkout must still be
+ * at it and the pull request's remote head must be it. The head is checked before the scope agent's declaration, so a
  * correction that was never pushed is named as that rather than as a scope
  * mismatch. Any mismatch refuses, so a verdict about one commit can never
  * stand as the verdict on another. This node stamps that commit and the certified
@@ -36,7 +34,6 @@ import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
 import {
-  forgeSource,
   parseQualifiedPr,
   record,
   sameRepo,
@@ -72,7 +69,6 @@ function label(pr: QualifiedPr | undefined): string {
 }
 
 try {
-  const source = forgeSource();
   const verdict = {
     ready: JSON.parse(text(process.env.INPUTS_READY)) as boolean,
     action: text(process.env.INPUTS_ACTION),
@@ -95,10 +91,10 @@ try {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
   if (pr) {
-    const remote = viewPr(pr, source).pr.head_revision;
+    const remote = viewPr(pr).pr.head_revision;
     if (remote !== head) {
       throw new Error(
-        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: the commits under review were not pushed`
+        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: push the commits under review, or review from a checkout of the pull request's head`
       );
     }
   }
@@ -116,8 +112,7 @@ try {
     const comment = upsertComment(
       { kind: 'pr', ref: pr },
       REVIEW_MARKER,
-      reviewCommentBody(head, verdict.ready, coverage, report),
-      source
+      reviewCommentBody(head, verdict.ready, coverage, report)
     );
     note(`publish-review: canonical review comment at ${comment.url}`);
   }

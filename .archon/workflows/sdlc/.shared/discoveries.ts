@@ -2,8 +2,8 @@
  * The discoveries workflow's state: one document per drained run.
  *
  * `discoveries/runs/<run-id>` is that run's memory and its claim. `decided` lists the
- * refs a pass decided for it, whatever the outcome, so a later pass does not queue them
- * again; `questions` holds what a pass asked a maintainer about it, with the answer once
+ * refs a pass decided for it, whatever the outcome but `wait`, so a later pass does not
+ * queue them again; `questions` holds what a pass asked a maintainer about it, with the answer once
  * there is one, so the next pass decides those refs from it. A run's claim is held while
  * a pass works it, and while one of its questions waits.
  *
@@ -127,7 +127,7 @@ export interface Queue {
 }
 
 /** The deciding agent's outcomes; the decide node's output schema must admit exactly these. */
-export const AGENT_OUTCOMES = ['file', 'track', 'drop', 'ask'] as const;
+export const AGENT_OUTCOMES = ['file', 'track', 'drop', 'ask', 'wait'] as const;
 
 /** What the deciding agent declared for one discovery, as its output schema admits it. */
 export type AgentDecision = {
@@ -145,6 +145,8 @@ export type AgentDecision = {
     }
   | { readonly outcome: 'drop'; readonly reason: string }
   | { readonly outcome: 'ask'; readonly question: string; readonly recommendation: string }
+  /** Left undecided, so a later pass queues its refs again. */
+  | { readonly outcome: 'wait'; readonly reason: string }
 );
 
 /**

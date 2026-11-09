@@ -1,6 +1,6 @@
 {
   "name": "@archon/workflows",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "type": "module",
   "exports": {
     "./schemas/*": "./src/schemas/*.ts",
@@ -37,6 +37,7 @@
     "./script-discovery": "./src/script-discovery.ts",
     "./command-validation": "./src/command-validation.ts",
     "./fixture-layout": "./src/fixture-layout.ts",
+    "./pack-layout": "./src/workflow-discovery/pack-layout.ts",
     "./defaults": "./src/defaults/bundled-defaults.ts",
     "./validator": "./src/validator.ts",
     "./validation-config": "./src/validation-config.ts",
@@ -63,6 +64,7 @@
     "./logger": "./src/logger.ts",
     "./container-context": "./src/container-context.ts",
     "./structured-output": "./src/structured-output.ts",
+    "./throughput": "./src/throughput.ts",
     "./metrics": "./src/metrics.ts",
     "./metric-views": "./src/metric-views.ts",
     "./dag-resume-snapshot": "./src/dag-resume-snapshot.ts",

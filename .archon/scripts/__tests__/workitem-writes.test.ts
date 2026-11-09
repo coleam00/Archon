@@ -23,17 +23,6 @@ const inputs = {
   INPUTS_RELATED: '[]',
   INPUTS_REPORT: '{"path":"triage.md"}',
 };
-test('gh triage applies wanted labels', () => {
-  const triage = runPackScript('triage/scripts/verdict', { source: 'gh', inputs });
-  expect({ code: triage.code, stderr: triage.stderr }).toMatchObject({ code: 0 });
-  expect(JSON.parse(triage.stdout)).toMatchObject({
-    published: true,
-    labels: ['archon-ready', 'archon-size-s', 'archon-type-feature', 'area'],
-  });
-  expect(triage.forge).toEqual([]);
-  expect(triage.gh.some(call => call.includes('--hostname ghe.example.com'))).toBe(true);
-  expect(triage.gh.some(call => call.startsWith('label create nonexistent'))).toBe(false);
-});
 
 test('unpublished and non-tracker triage never invoke either transport', () => {
   for (const patch of [
@@ -41,11 +30,9 @@ test('unpublished and non-tracker triage never invoke either transport', () => {
     { INPUTS_ITEM: '{"repo":{"host":"","path":""},"number":0}' },
   ]) {
     const run = runPackScript('triage/scripts/verdict', {
-      source: 'invalid',
       inputs: { ...inputs, ...patch },
     });
     expect(run.code).toBe(0);
-    expect(run.gh).toEqual([]);
     expect(run.forge).toEqual([]);
     expect(JSON.parse(run.stdout).published).toBe(false);
   }
@@ -56,6 +43,7 @@ test('a ready item is labelled with the route the run takes on it', () => {
     [{ contract: 'READY', route: 'plan' }, 'archon-plan'],
     [{ contract: 'READY', route: 'investigate' }, 'archon-investigate'],
     [{ contract: 'READY', route: 'continue', pull_request: 3 }, 'archon-ready'],
+    [{ contract: 'READY', route: 'split' }, 'archon-split'],
   ] as const) {
     const run = runPackScript('triage/scripts/verdict', {
       inputs: { ...inputs, INPUTS_PUBLISH: 'false', INPUTS_DECISION: JSON.stringify(decision) },
@@ -86,7 +74,6 @@ test('a close verdict keeps the type label, drops the size label, and carries it
 
 test('a published close verdict labels the item and closes nothing; intake owns the close', () => {
   const run = runPackScript('triage/scripts/verdict', {
-    source: 'gh',
     inputs: {
       ...inputs,
       INPUTS_DECISION: JSON.stringify({ contract: 'NO_ACTION', closure: DELIVERED }),
@@ -99,7 +86,6 @@ test('a published close verdict labels the item and closes nothing; intake owns 
 
 test('forge publication fails without label facts rather than assuming no labels', () => {
   const run = runPackScript('triage/scripts/verdict', {
-    source: 'forge',
     inputs,
     forge: {
       kind: 'fake',
@@ -110,83 +96,59 @@ test('forge publication fails without label facts rather than assuming no labels
     },
   });
   expect(run.code).not.toBe(0);
-  expect(run.gh).toEqual([]);
   expect(run.forge).toHaveLength(1);
   expect(run.stderr).toContain('label facts');
 });
 
 test('forge failures preserve unknown outcome evidence and never fall back or retry', () => {
   const run = runPackScript('triage/scripts/verdict', {
-    source: 'forge',
     inputs,
     forge: { kind: 'fake', response: forgeFailure('workitem.view', 'outcome_unknown', 'response lost') },
   });
   expect(run.code).not.toBe(0);
-  expect(run.gh).toEqual([]);
   expect(run.forge).toHaveLength(1);
   expect(run.stderr).toContain('outcome_unknown');
   expect(run.stdout).toBe('');
 });
 
-test('a gh label write is one delta that leaves labels it does not name on the item', () => {
+test('re-triage replaces a changed type', () => {
+  const item = { ref: { repo: PR.repo, number: 7 }, kind: 'issue', url: 'https://ghe.example.com/example/repo/issues/7', state: 'open' };
+  const labels = ['operator', 'archon-ready', 'archon-type-bug'];
+  const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
   const run = runPackScript('triage/scripts/verdict', {
-    source: 'gh',
     inputs: { ...inputs, INPUTS_AREA_LABELS: '[]' },
-    gh: {
-      issueLabels: ['operator', 'archon-blocked', 'archon-size-s', 'archon-type-feature'],
-      repositoryLabels: [
-        'operator',
-        'archon-blocked',
-        'archon-size-s',
-        'archon-type-feature',
-        'archon-ready',
+    forge: {
+      kind: 'fake',
+      response: [
+        forgeOperation('workitem.view', { ...item, title: 't', body: 'b', labels }),
+        forgeOperation('repo.labels.list', { repo: PR.repo, labels: labels.map(name => ({ name })) }),
+        applied('repo.label.ensure'),
+        applied('repo.label.ensure'),
+        ...Array.from({ length: 2 }, () => applied('workitem.label.add')),
+        applied('workitem.label.remove'),
       ],
     },
   });
   expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-  // A delta, not a whole-set write: a label another writer adds before this edit
-  // lands is never named, so it survives.
-  expect(run.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-    'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-ready --remove-label archon-blocked',
+  const writes = run.forge
+    .map((argv, index) => [argv.split(' ')[1], JSON.parse(run.forgeRequests[index] ?? '{}').name])
+    .filter(([op]) => op !== 'workitem.view' && op !== 'repo.labels.list');
+  expect(writes).toEqual([
+    ['repo.label.ensure', 'archon-type-feature'],
+    ['repo.label.ensure', 'archon-size-s'],
+    ['workitem.label.add', 'archon-size-s'],
+    ['workitem.label.add', 'archon-type-feature'],
+    ['workitem.label.remove', 'archon-type-bug'],
   ]);
-  expect(run.gh.filter(call => call.includes('/issues/7')).length).toBe(2);
-  expect(JSON.parse(run.stdout).labels).toEqual([
-    'archon-ready',
-    'archon-size-s',
-    'archon-type-feature',
-  ]);
+  expect(JSON.parse(run.stdout).labels).toEqual(['archon-ready', 'archon-size-s', 'archon-type-feature']);
 });
 
-test('re-triage replaces a changed type and removes a retired size label', () => {
+test('a pack label is never accepted as an area label', () => {
   const run = runPackScript('triage/scripts/verdict', {
-    source: 'gh',
-    inputs: { ...inputs, INPUTS_AREA_LABELS: '[]' },
-    gh: {
-      issueLabels: ['operator', 'archon-ready', 'archon-risky', 'archon-type-bug'],
-      repositoryLabels: ['operator', 'archon-ready', 'archon-risky', 'archon-type-bug'],
-    },
-  });
-  expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-  expect(run.gh.filter(call => call.startsWith('label create'))).toEqual([
-    expect.stringContaining('label create archon-type-feature'),
-    expect.stringContaining('label create archon-size-s'),
-  ]);
-  expect(run.gh.filter(call => call.startsWith('issue edit'))).toEqual([
-    'issue edit 7 --repo ghe.example.com/example/repo --add-label archon-size-s --add-label archon-type-feature --remove-label archon-risky --remove-label archon-type-bug',
-  ]);
-  expect(JSON.parse(run.stdout).labels).toEqual([
-    'archon-ready',
-    'archon-size-s',
-    'archon-type-feature',
-  ]);
-});
-
-test('a retired size label is never created and never accepted as an area label', () => {
-  const run = runPackScript('triage/scripts/verdict', {
-    inputs: { ...inputs, INPUTS_AREA_LABELS: '["archon-small"]' },
+    inputs: { ...inputs, INPUTS_AREA_LABELS: '["archon-ready"]' },
   });
   expect(run.code).not.toBe(0);
-  expect(run.gh).toEqual([]);
+  expect(run.forge).toEqual([]);
   expect(run.stderr).toContain('may not name a pack label');
 });
 
@@ -194,7 +156,6 @@ test('forge triage adds the labels it lacks and removes only the stale one it ow
   const item = { ref: { repo: PR.repo, number: 7 }, kind: 'issue', url: 'https://ghe.example.com/example/repo/issues/7', state: 'open' };
   const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
   const run = runPackScript('triage/scripts/verdict', {
-    source: 'forge',
     inputs,
     forge: {
       kind: 'fake',

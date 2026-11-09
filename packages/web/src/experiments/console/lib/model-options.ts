@@ -70,14 +70,14 @@ export const CLAUDE_MODEL_OPTIONS: readonly ModelOption[] = [
 ];
 
 /**
- * Codex model strings mirroring the current lineup in the repo's config
- * examples (docs/getting-started/ai-assistants.md and CLAUDE.md): `gpt-5.6-sol`
- * (flagship), `gpt-5.6-terra` (mid), `gpt-5.6-luna` (light).
+ * Codex model strings for the built-in tiers in
+ * packages/workflows/src/defaults/tier-defaults.json: `gpt-6.1-sol` (large),
+ * `gpt-6.1-terra` (medium), `gpt-6-luna` (small). Other Codex ids are free-typed.
  */
 export const CODEX_MODEL_OPTIONS: readonly ModelOption[] = [
-  { value: 'gpt-5.6-sol' },
-  { value: 'gpt-5.6-terra' },
-  { value: 'gpt-5.6-luna' },
+  { value: 'gpt-6.1-sol' },
+  { value: 'gpt-6.1-terra' },
+  { value: 'gpt-6-luna' },
 ];
 
 /**

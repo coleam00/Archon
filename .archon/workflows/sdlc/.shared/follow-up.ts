@@ -23,9 +23,16 @@ function disposition(stdout: string): Record<string, unknown> | undefined {
 /**
  * Fire `binding` (an absolute timer-binding config path) with `inputs` as its event
  * inputs, keyed by `deliveryId`, which must be built from values a retry repeats.
- * Returns how `what` proceeds, for the run's summary.
+ * `later` says what starts `what` when this fire does not. Returns how `what`
+ * proceeds, for the run's summary.
  */
-export function followUp(binding: string, deliveryId: string, inputs: Record<string, string>, what: string): string {
+export function followUp(
+  binding: string,
+  deliveryId: string,
+  inputs: Record<string, string>,
+  what: string,
+  later = 'the next queue run picks it up'
+): string {
   if (binding === '') return `no follow-up binding is set, so the next queue run picks up ${what}`;
   // Stable key order: the receipt digest covers the inputs as written.
   const sorted = Object.fromEntries(Object.entries(inputs).sort(([a], [b]) => (a < b ? -1 : 1)));
@@ -45,6 +52,6 @@ export function followUp(binding: string, deliveryId: string, inputs: Record<str
     result.exitCode === 0
       ? `its binding ${String(admitted?.status ?? 'admitted nothing')}`
       : (result.stderr.toString().trim().split('\n')[0] ?? '') || `trigger fire exited ${String(result.exitCode)}`;
-  note(`${what} did not start, so the next queue run picks it up: ${why}`);
-  return `${what} did not start (${why}), so the next queue run picks it up`;
+  note(`${what} did not start, so ${later}: ${why}`);
+  return `${what} did not start (${why}), so ${later}`;
 }

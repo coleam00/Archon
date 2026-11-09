@@ -42,6 +42,7 @@ export function workflowWakeScheduleConfig(intervalSeconds = 5): NativeScheduleC
     programArguments: [executable, ...prefix, 'workflow', 'wake', '--watch', '--json'],
     workingDirectory: archonHome,
     archonHome,
+    path: process.env.PATH ?? '',
     schedule: { intervalSeconds, runAtLoad: true },
   };
 }

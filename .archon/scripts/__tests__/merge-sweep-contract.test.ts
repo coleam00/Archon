@@ -8,7 +8,8 @@ type Shape = string | { union: Shape[] } | { array: Shape } | {
 };
 
 interface Schema {
-  type: string | string[];
+  type?: string | string[];
+  anyOf?: Schema[];
   enum?: string[];
   properties?: Record<string, Schema>;
   required?: string[];
@@ -32,7 +33,10 @@ function schemaShape(schema: Schema): Shape {
   // These annotations constrain values without changing their TypeScript shape.
   const supported = ['type', 'enum', 'properties', 'required', 'items', 'additionalProperties',
     'minimum', 'pattern', 'minItems', 'description'];
+  // A union of whole alternatives, as the sweep's decision variants are.
+  if (schema.anyOf !== undefined) return union(schema.anyOf.map(schemaShape));
   expect(Object.keys(schema).filter(key => !supported.includes(key))).toEqual([]);
+  if (schema.type === undefined) throw new Error('A sweep schema without a type or anyOf');
   const types = Array.isArray(schema.type) ? schema.type : [schema.type];
   if (schema.enum !== undefined) {
     expect(types).toContain('string');
@@ -65,7 +69,7 @@ function typeShape(checker: ts.TypeChecker, type: ts.Type): Shape {
     const item = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
     if (item !== undefined) return { array: typeShape(checker, item) };
   }
-  if (type.flags & ts.TypeFlags.Object) {
+  if (type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) {
     return { fields: Object.fromEntries(checker.getPropertiesOfType(type).sort((a, b) => a.name.localeCompare(b.name))
       .map(property => {
         const declaration = property.valueDeclaration;
@@ -89,9 +93,9 @@ test('the complete sweep output conforms to the recorder contract', () => {
   const schema = sweeps[0]?.output_format;
   if (schema === undefined) throw new Error('Missing sweep.output_format');
   // TypeScript's number cannot express the positive integer PR identifier contract.
-  expect(schema.properties?.decisions.items?.properties?.number).toMatchObject({
-    type: 'integer', minimum: 1,
-  });
+  for (const variant of schema.properties?.decisions.items?.anyOf ?? []) {
+    expect(variant.properties?.number).toMatchObject({ type: 'integer', minimum: 1 });
+  }
   const file = resolve(pack, 'merge-queue/scripts/record.ts');
   const program = ts.createProgram([file], {
     strict: true, noEmit: true, skipLibCheck: true,
@@ -104,4 +108,26 @@ test('the complete sweep output conforms to the recorder contract', () => {
   const sweep = module && checker.getExportsOfModule(module).find(symbol => symbol.name === 'Sweep');
   if (sweep === undefined) throw new Error('Missing exported Sweep consumer type');
   expect(typeShape(checker, checker.getDeclaredTypeOfSymbol(sweep))).toEqual(schemaShape(schema));
+});
+
+test("the CI agent's declared validation conforms to the build round's Validation", () => {
+  const pack = resolve(import.meta.dir, '../../workflows/sdlc');
+  type Node = { id: string; output_format?: Schema; loop_group?: { nodes: Node[] } };
+  const workflow = Bun.YAML.parse(readFileSync(resolve(pack, 'deliver/archon-deliver.yaml'), 'utf8')) as { nodes: Node[] };
+  const ci = workflow.nodes.flatMap(node => [node, ...(node.loop_group?.nodes ?? [])]).filter(node => node.id === 'ci');
+  expect(ci).toHaveLength(1);
+  const schema = ci[0]?.output_format?.properties?.validation;
+  if (schema === undefined) throw new Error('Missing ci.output_format.properties.validation');
+  const file = resolve(pack, '.shared/build.ts');
+  const program = ts.createProgram([file], {
+    strict: true, noEmit: true, skipLibCheck: true,
+    target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler, allowImportingTsExtensions: true,
+  });
+  const checker = program.getTypeChecker();
+  const source = program.getSourceFile(file);
+  const module = source && checker.getSymbolAtLocation(source);
+  const validation = module && checker.getExportsOfModule(module).find(symbol => symbol.name === 'Validation');
+  if (validation === undefined) throw new Error('Missing exported Validation type');
+  expect(union([typeShape(checker, checker.getDeclaredTypeOfSymbol(validation)), 'null'])).toEqual(schemaShape(schema));
 });

@@ -34,9 +34,10 @@ const DEFAULT_POSTHOG_HOST = 'https://us.i.posthog.com';
 // to `-v5` when install channel and build commit were added, and to `-v6` when
 // runs gained an anonymous per-run reference and cancellations were reported, and
 // to `-v7` when workflow shape (node-type counts, depth, fan-out, command-reference
-// count, prompt-size bucket) and bundled-workflow ancestry were added. Bumping re-shows the updated first-run notice once per install so existing
-// users re-consent rather than silently getting broader capture.
-export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v7';
+// count, prompt-size bucket) and bundled-workflow ancestry were added, and to `-v8`
+// when direct-chat cache usage was added. Bumping re-shows the updated first-run
+// notice once per install so existing users see the expanded capture.
+export const NOTICE_STAMP_FILENAME = 'telemetry-notice-shown-v8';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -262,11 +263,13 @@ export function maybeShowFirstRunNotice(): void {
   }
 
   const message =
-    'Archon collects anonymous usage telemetry — now also the shape of each\n' +
-    'workflow (node-type counts, depth, fan-out, how many commands it uses, a\n' +
+    'Archon collects anonymous usage telemetry — now also cache-read/cache-write\n' +
+    'token counts for direct chat turns, plus whether cache totals are partial\n' +
+    '(numbers only, never message content). Also sent: the shape of each workflow\n' +
+    '(node-type counts, depth, fan-out, how many commands it uses, a\n' +
     'prompt-size bucket) and, for a copy of a bundled workflow, which bundled one\n' +
-    "it came from — never your own workflow's name, description or text. Also\n" +
-    'sent: an anonymous per-run reference (a hash, never the run id), cancelled\n' +
+    "it came from — never your own workflow's name, description or text;\n" +
+    'an anonymous per-run reference (a hash, never the run id), cancelled\n' +
     'runs, how Archon was installed (binary, Docker, or source), the build commit,\n' +
     'chat activity (platform/provider/model, never message content), aggregate\n' +
     'usage totals (token counts, cost, durations, loop iterations), approval\n' +
