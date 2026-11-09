@@ -338,7 +338,8 @@ picks up its pull request where it stopped. The prior run's artifacts are at
 `$ADOPTED_RUN_DIR`; name the report you want built on in the note, or pass it as an
 input, such as `--input prior_report=<path>` for review. Repeat any `--input` the
 first run had. `archon-triage` runs in the launch checkout and has no worktree to
-adopt: run it again with the note. A review that is Ready on a draft pull request leaves the draft as it
+adopt: run it again with the item and the note, since a message that is only the note
+would become the target. A review that is Ready on a draft pull request leaves the draft as it
 is; take it out of draft on the forge.
 
 A composer owns what follows a stage's ending and asks through its own attention item
