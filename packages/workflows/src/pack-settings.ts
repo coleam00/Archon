@@ -22,6 +22,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { inputEnvKeyCollision } from './loader/workflow-fields';
+import { PACK_DECLARATION_PATH } from './packaged-workflow';
 import type { JsonValue } from './output-ref';
 import { INPUT_NAME_PATTERN } from './schemas/node-bindings';
 import type { ResolvedWorkflow } from './schemas';
@@ -31,9 +32,6 @@ import {
   type WorkflowPack,
 } from './schemas/pack-settings';
 import { defaultRunInputs } from './workflow-inputs';
-
-/** The declaration's path inside a pack directory. */
-export const PACK_DECLARATION_PATH = join('.pack', 'pack.yaml');
 
 /** Every pack-settings failure a caller reports: it names the file and the key. */
 export class PackSettingsError extends Error {
@@ -175,7 +173,7 @@ export async function loadPackDeclaration(
   packPath: string,
   label: string
 ): Promise<Record<string, PackSettingSpec> | undefined> {
-  const fileLabel = `${label}/${PACK_DECLARATION_PATH.replaceAll('\\', '/')}`;
+  const fileLabel = `${label}/${PACK_DECLARATION_PATH}`;
   const text = await readOptionalFile(join(packPath, PACK_DECLARATION_PATH), failIn(fileLabel));
   return text === undefined ? undefined : parsePackDeclaration(text, fileLabel);
 }

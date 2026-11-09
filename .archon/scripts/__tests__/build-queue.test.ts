@@ -614,6 +614,19 @@ describe('the build queue scripts', () => {
     expect(kept?.reviews).toBeUndefined();
   }, 60_000);
 
+  test("the round records the latest full validation the run's CI agent ran", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const listing = JSON.stringify({
+      artifactsByType: { 'ci-report': [{ path: 'c1.json' }, { path: 'c2.json' }] },
+      errors: [],
+    });
+    const report = (head: string, passed: boolean) => JSON.stringify({ state: 'ready', summary: 's', validation: { head, passed } });
+    const artifacts = { 'listing.json': listing, 'c1.json': report('a'.repeat(40), false), 'c2.json': report('b'.repeat(40), true) };
+    ok(run(at, 'apply', { ...applyInputs(CONTINUE), TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' }, { artifacts }));
+    expect((stored(at).value as WorkItem).facts.build?.rounds[0]?.validation).toEqual({ head: 'b'.repeat(40), passed: true });
+  }, 60_000);
+
   test('a continue whose next round fails to start leaves the item waiting for the next queue run', () => {
     const at = install();
     seed(at, triaged(CLAIMED));

@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { type BuildRecord, buildWaits } from '../../workflows/sdlc/.shared/build';
 import {
+  CI_MODES,
   gateRefusals,
   type MergeAttention,
   type MergeRecord,
@@ -87,6 +88,7 @@ const FACTS: PrFacts = {
 };
 
 const BASE = { head: OLD, checks: { state: 'green', failing: [], pending: [] } } as const;
+const FORGE = { mode: 'forge' } as const;
 
 describe('the merge record and the gate', () => {
   test('an item waits once the build queue finished it, until the merge queue settles it', () => {
@@ -104,8 +106,8 @@ describe('the merge record and the gate', () => {
   });
 
   test('the gate passes only a Ready verdict and green CI at a pinned head that contains the default branch or merges into it cleanly, on a default branch that is not red', () => {
-    expect(gateRefusals(FACTS, HEAD, BASE)).toEqual([]);
-    const refused = (facts: Partial<PrFacts>, head = HEAD) => gateRefusals({ ...FACTS, ...facts }, head, BASE);
+    expect(gateRefusals(FACTS, HEAD, BASE, FORGE)).toEqual([]);
+    const refused = (facts: Partial<PrFacts>, head = HEAD) => gateRefusals({ ...FACTS, ...facts }, head, BASE, FORGE);
     expect(refused({ verdict: { ...FACTS.verdict, reviewed: OLD } })).toEqual([`its review verdict is for ${OLD}, not ${HEAD}`]);
     expect(refused({ verdict: { ...FACTS.verdict, state: 'unstamped' } })).toEqual(['its review verdict is unstamped']);
     expect(refused({ verdict: { state: 'not_ready', reviewed: HEAD, url: null, contract: null } })).toEqual(['its review verdict is not_ready']);
@@ -312,6 +314,7 @@ function run(
       INPUTS_REPO_PATH: PR.repo.path,
       INPUTS_LIMIT: '10',
       INPUTS_MERGE_METHOD: 'squash',
+      INPUTS_CI: 'forge',
       ...inputs,
     },
   });
@@ -500,7 +503,7 @@ describe('the merge queue scripts', () => {
   test('the gate refuses an unreadable base and merges nothing', () => {
     const at = install();
     const gated = run(at, 'gate', {}, { pr: { baseUnreadable: true }, args: [
-      '--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge',
+      '--method', 'squash', '--ci', 'forge', '--pr', PR_URL, '--head', HEAD, '--merge',
     ] });
     expect(gated.code).toBe(1);
     expect(gated.stderr).toContain('forge checks.commit failed: HTTP 502 reading base');
@@ -509,7 +512,7 @@ describe('the merge queue scripts', () => {
 
   test('the gate refuses two trusted review comments and merges nothing', () => {
     const at = install();
-    const args = ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'];
+    const args = ['--method', 'squash', '--ci', 'forge', '--pr', PR_URL, '--head', HEAD, '--merge'];
     const duplicate = run(at, 'gate', {}, { args, comments: [REVIEWED, { ...REVIEWED, id: 2 }] });
     expect(duplicate.code).toBe(1);
     expect(JSON.parse(duplicate.stdout).refusals).toEqual(['its review verdict is duplicate']);
@@ -632,7 +635,7 @@ describe('the merge queue scripts', () => {
     expect(existsSync(object)).toBe(true);
     const before = stored(at);
     const result = run(at, 'gate', {}, {
-      args: ['--pr', PR_URL, '--head', HEAD, '--method', 'squash', '--merge'],
+      args: ['--pr', PR_URL, '--head', HEAD, '--method', 'squash', '--ci', 'forge', '--merge'],
       preload: `
         import { unlinkSync } from 'node:fs';
         const gitWithPolicy = Bun.spawnSync.bind(Bun);
@@ -948,7 +951,7 @@ describe('the merge queue scripts', () => {
 describe('the merge queue facts and gate', () => {
   const on = (at: Install, script: 'facts' | 'gate', options: Parameters<typeof run>[3] = {}, inputs: Record<string, string> = {}) =>
     run(at, script, inputs, options);
-  const args = ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'];
+  const args = ['--method', 'squash', '--ci', 'forge', '--pr', PR_URL, '--head', HEAD, '--merge'];
 
   test('facts claims the items the build queue finished and reads each pull request', () => {
     const at = install();
@@ -1026,6 +1029,38 @@ describe('the merge queue facts and gate', () => {
   }, 60_000);
 });
 
+describe('the gate under ci: none', () => {
+  const args = ['--method', 'squash', '--ci', 'none', '--item', '7', '--pr', PR_URL, '--head', HEAD, '--merge'];
+  const validated = (validation: { head: string; passed: boolean }): WorkItem =>
+    item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, validation })) });
+
+  test('a passing validation recorded at the head merges it, whatever the forge checks say', () => {
+    const at = install();
+    seed(at, validated({ head: HEAD, passed: true }));
+    const gated = run(at, 'gate', {}, { args, pr: { checks: 'red' } });
+    expect(ok(gated).refusals).toEqual([]);
+    expect(merges(gated)).toEqual([`forge pr.merge squash ${HEAD}`]);
+  }, 60_000);
+
+  test('a validation for another head, or a failed one, refuses and merges nothing', () => {
+    const at = install();
+    seed(at, validated({ head: OLD, passed: true }));
+    const stale = run(at, 'gate', {}, { args });
+    expect(JSON.parse(stale.stdout).refusals).toEqual([`its validation is for ${OLD}, not ${HEAD}`]);
+    seed(at, validated({ head: HEAD, passed: false }));
+    const red = run(at, 'gate', {}, { args });
+    expect(JSON.parse(red.stdout).refusals).toEqual([`its validation at ${HEAD} failed`]);
+    expect([...merges(stale), ...merges(red)]).toEqual([]);
+  }, 60_000);
+
+  test('the ci values the scripts accept are the ones the pack declares', () => {
+    const declared = Bun.YAML.parse(readFileSync(resolve(import.meta.dir, '../../workflows/sdlc/.pack/pack.yaml'), 'utf8')) as {
+      inputs: { ci: { values: string[] } };
+    };
+    expect(declared.inputs.ci.values).toEqual([...CI_MODES]);
+  });
+});
+
 describe('the merge queue on the forge', () => {
   test('facts refuses a plugin without every merge-queue operation before claiming anything', () => {
     const at = install();
@@ -1041,7 +1076,7 @@ describe('the merge queue on the forge', () => {
   test('the facts and the merge use exactly the operations the plugin must advertise, besides the sweep agent\'s rerun', () => {
     const at = install();
     seed(at, item());
-    const args = ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'];
+    const args = ['--method', 'squash', '--ci', 'forge', '--pr', PR_URL, '--head', HEAD, '--merge'];
     const facts = run(at, 'facts', {}, {});
     const gate = run(at, 'gate', {}, { args });
     expect([facts.code, gate.code]).toEqual([0, 0]);
@@ -1056,14 +1091,14 @@ describe('the merge queue on the forge', () => {
     ['merge state', { mergeStateHead: OLD }, 'moved while it was read'],
     ['checks', { checksRevision: OLD }, 'are not on its head'],
   ] as const)('the gate refuses %s read at another commit than the head, and merges nothing', (_, pr, reason) => {
-    const gated = run(install(), 'gate', {}, { pr, args: ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'] });
+    const gated = run(install(), 'gate', {}, { pr, args: ['--method', 'squash', '--ci', 'forge', '--pr', PR_URL, '--head', HEAD, '--merge'] });
     expect(gated.code).not.toBe(0);
     expect(gated.stderr).toContain(reason);
     expect(merges(gated)).toEqual([]);
   }, 60_000);
 
   test('the gate counts a check the forge reports neither green nor pending as failing, and merges nothing', () => {
-    const gated = run(install(), 'gate', {}, { pr: { checks: 'unknown' }, args: ['--method', 'squash', '--pr', PR_URL, '--head', HEAD, '--merge'] });
+    const gated = run(install(), 'gate', {}, { pr: { checks: 'unknown' }, args: ['--method', 'squash', '--ci', 'forge', '--pr', PR_URL, '--head', HEAD, '--merge'] });
     expect(gated.code).toBe(1);
     expect(JSON.parse(gated.stdout).refusals).toEqual(['CI at its head is red (test)']);
     expect(merges(gated)).toEqual([]);

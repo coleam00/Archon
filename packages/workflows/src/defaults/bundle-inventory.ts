@@ -5,6 +5,7 @@ import { z } from 'zod';
 import {
   formatPackagedResourceReference,
   isValidWorkflowFolderSegment,
+  PACK_DECLARATION_PATH,
   PACK_SHARED_DIRECTORY,
   type WorkflowResourceOwner,
 } from '../packaged-workflow';
@@ -174,6 +175,7 @@ async function collectPack(workflowsRoot: string, pack: string, add: AddSource):
     throw new Error(`Indexed bundle pack "${pack}" directory not found: ${packRoot}`);
   const scope: PackScope = { workflowsRoot, pack, packRoot, add };
   await collectSharedFiles(scope);
+  await collectDeclaration(scope);
   const listing = await readPackWorkflowFolders(packRoot, pack);
   if ('error' in listing) throw loadErrorToError(listing.error);
   for (const entry of listing.folders) {
@@ -199,6 +201,25 @@ async function collectSharedFiles({ pack, packRoot, add }: PackScope): Promise<v
       relativePath: `workflows/${pack}/${packPath}`,
     });
   }
+}
+
+/** The pack's settings declaration ships beside its workflows, so a bundled pack has
+ * the same settings as the pack folder it was built from. */
+async function collectDeclaration({ pack, packRoot, add }: PackScope): Promise<void> {
+  const path = join(packRoot, PACK_DECLARATION_PATH);
+  try {
+    await stat(path);
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+    throw error;
+  }
+  add({
+    kind: 'pack-file',
+    pack,
+    packPath: PACK_DECLARATION_PATH,
+    sourcePath: path,
+    relativePath: `workflows/${pack}/${PACK_DECLARATION_PATH}`,
+  });
 }
 
 async function collectWorkflow(

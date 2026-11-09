@@ -14,7 +14,7 @@
  *   contract coverage did not mark met, carried from the previous round when this
  *   round ran no review.
  * - INPUTS_SIMPLIFY: whether simplify recorded smaller shapes in shape.md.
- * - INPUTS_CI: the CI agent's state.
+ * - INPUTS_CI_STATE: the CI agent's state.
  * - INPUTS_THREADS_OPEN: how many review threads were still unresolved when the round
  *   ended; "null" when the threads node did not run (no pull request).
  * - INPUTS_SETTLE_ASK: whether settle-threads found a thread that needs a decision this run cannot make.
@@ -42,7 +42,7 @@ const redCause = text(process.env.INPUTS_RED_CAUSE);
 const reviewReady = text(process.env.INPUTS_REVIEW_READY);
 const reviewAction = text(process.env.INPUTS_REVIEW_ACTION);
 const reviewSummary = process.env.INPUTS_REVIEW_SUMMARY;
-const ci = text(process.env.INPUTS_CI);
+const ci = text(process.env.INPUTS_CI_STATE);
 const prUrl = text(process.env.INPUTS_PR_URL);
 const threadsOpen = text(process.env.INPUTS_THREADS_OPEN);
 const contractLeft = nullableJson(process.env.INPUTS_REVIEW_CONTRACT_LEFT);

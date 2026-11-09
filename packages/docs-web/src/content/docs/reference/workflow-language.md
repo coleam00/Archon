@@ -2132,10 +2132,10 @@ that is after its worktree was created. A `required` setting must be set there, 
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
-reads it against its own declaration. A bundled pack declares no settings, so if a project pack
-folder takes a bundled pack's name and the file sets the project pack's settings, the bundled
-workflows of that name refuse to start ("declares no settings"); the same happens when the
-project and home declarations of one name differ. Give a pack with settings a name of its own.
+reads it against its own declaration. A bundled pack ships its `.pack/pack.yaml` with it, so its
+settings are set the same way. If a project or home pack folder takes another pack's name and
+declares different settings, a workflow whose declaration lacks a setting the file sets refuses
+to start ("unknown setting"). Give a pack with settings of its own a name of its own.
 
 **Layers**, lowest first: the pack's `default:`, then the workflow's own `inputs:` default of the
 same name, then the project's `.archon/packs/<pack>.yaml`, then the run's supplied inputs

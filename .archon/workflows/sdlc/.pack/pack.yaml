@@ -1,0 +1,11 @@
+# The SDLC pack's settings. A project sets them in `.archon/packs/sdlc.yaml`, under
+# `settings:`; the README's "Pack settings" section says what each one does.
+inputs:
+  ci:
+    type: enum
+    values: [forge, none]
+    default: forge
+    description: >-
+      What the merge gate trusts at a pull request's head besides a Ready review verdict.
+      forge: green checks on the forge. none: the full validation delivery ran and
+      recorded at that same head, for a project with no CI.

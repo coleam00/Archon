@@ -14,7 +14,8 @@ facts:
       facts: { state: open, head_revision: "1111111", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
       record: null
   settled: []
-  gate: "'bun' '/stub/gate.ts' '--method' 'squash'"
+  gate: "'bun' '/stub/gate.ts' '--method' 'squash' '--ci' 'forge'"
+  ci: forge
 sweep:
   decisions:
     - { number: 42, action: wait, class: clear, head: "1111111", reran: false, reason: "stub: dev is red, so nothing merges", brief: "", attention: null }
