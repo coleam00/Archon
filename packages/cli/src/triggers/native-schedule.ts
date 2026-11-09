@@ -149,7 +149,8 @@ function differentConfiguration(path: string): Error {
   return new Error(
     `Refusing to replace an existing native schedule with different configuration: ${path}. ` +
       "The job records the installing shell's PATH, so a different PATH or an upgrade changes it. " +
-      'Run `archon trigger schedule remove`, then `install`, from the shell whose PATH the job should use.'
+      'Remove it (`archon trigger schedule remove`, or `archon workflow wake schedule remove` for the wake schedule), ' +
+      'then install it again from the shell whose PATH the job should use.'
   );
 }
 

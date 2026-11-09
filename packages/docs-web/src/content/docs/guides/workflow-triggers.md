@@ -141,7 +141,7 @@ The command returns a durable receipt and disposition, then runs accepted work i
 archon trigger schedule install --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-Archon installs only jobs in the `com.archon.trigger.*` namespace. The plist contains the absolute executable and arguments, working directory, `ARCHON_HOME`, and the `PATH` of the shell that ran `install`, so scheduled runs find `bun`, `uv`, `gh`, git credential helpers, and provider CLIs where your terminal finds them. launchd's default `PATH` is only `/usr/bin:/bin:/usr/sbin:/sbin`. The plist does not copy provider credentials or other environment variables. Scheduled runs use the same native provider configuration and credentials available to the configured user.
+Archon installs only jobs in the `com.archon.trigger.*` namespace. The plist contains the absolute executable and arguments, working directory, `ARCHON_HOME`, and the `PATH` of the shell that ran `install`, so scheduled runs find `bun`, `uv`, `gh`, git credential helpers, and provider CLIs where your terminal finds them. launchd's default `PATH` is only `/usr/bin:/bin:/usr/sbin:/sbin`. The plist does not copy provider credentials or other environment variables. Scheduled runs use the same native provider configuration and credentials available to the configured user, so a credential that exists only as a variable in your shell is not there: keep it where the provider stores its login, or in Archon's config.
 
 Use `archon trigger list` to find recent native or webhook receipts, then inspect a receipt or resource-start request by its UUID:
 

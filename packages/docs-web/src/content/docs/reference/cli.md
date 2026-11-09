@@ -1467,7 +1467,7 @@ The launch interval is a positive integer in seconds, defaulting to 5. It starts
 
 On Linux, use a long-lived systemd user service with `ExecStart=/absolute/path/to/archon workflow wake --watch --json`, `Environment=ARCHON_HOME=/absolute/path/to/.archon`, an `Environment=PATH=...` that contains the tools your workflows run (systemd's default `PATH` usually lacks `~/.bun/bin`), and `Restart=on-failure`. Enable it with `systemctl --user enable --now <name>.service`.
 
-On Windows Task Scheduler, select the absolute Archon executable, set arguments to `workflow wake --watch --json`, and start the task at login. Disable the task's execution time limit and select “Do not start a new instance” if it is already running. Set `ARCHON_HOME` in the task's environment or invoke a wrapper that sets it, and use that home as the working directory.
+On Windows Task Scheduler, select the absolute Archon executable, set arguments to `workflow wake --watch --json`, and start the task at login. Disable the task's execution time limit and select “Do not start a new instance” if it is already running. Set `ARCHON_HOME`, and a `PATH` that contains the tools your workflows run, in the task's environment or in a wrapper that sets them, and use that home as the working directory.
 
 ### `workflow signal`
 
