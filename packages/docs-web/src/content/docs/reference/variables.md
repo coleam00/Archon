@@ -372,8 +372,9 @@ A `workflow:` parent and a fan-out aggregate relay a child's value unchanged: th
 already proved its pointers against the only run it may name. Reachability and real-path
 checks belong to the read side by design — whether a reader may see that run, and whether
 the path still resolves inside its artifacts directory once symlinks are followed.
-`GET /api/artifacts/<run_id>/<path>` does lexical containment on the untrusted request
-today; real-path resolution at read time is not yet implemented (#3160).
+`GET /api/artifacts/<run_id>/<path>` checks lexical containment, resolves symlinks in
+both the artifacts directory and requested file, and refuses a target outside the
+resolved artifacts directory before reading it.
 
 The value stays a run id plus a relative path in node outputs, events, sub-run results,
 fan-out aggregates, and resumed runs. Archon never rewrites it into an absolute path and

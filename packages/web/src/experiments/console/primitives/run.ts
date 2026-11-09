@@ -1,3 +1,4 @@
+import type { QueryParams } from '../lib/api-types';
 import type { RunStatus } from '../lib/run-status';
 import type { components } from '@/lib/api.generated';
 
@@ -19,28 +20,28 @@ type NormalizedWorkflowWait<T extends WorkflowWait = WorkflowWait> = T extends W
   : never;
 
 export interface Run {
-  id: string;
-  projectId: string | null;
-  projectName: string | null;
+  id: WorkflowRun['id'];
+  projectId: WorkflowRun['codebase_id'];
+  projectName: components['schemas']['DashboardWorkflowRun']['codebase_name'];
   /** Total USD cost from the agent SDK. Populated for completed Claude runs;
    *  Pi/Codex runs may not report cost. Null when the run hasn't recorded any. */
   costUsd: number | null;
   /** DB id of the conversation this run belongs to. */
-  conversationId: string | null;
+  conversationId: WorkflowRun['conversation_id'];
   /**
    * Platform-level conversation id (e.g. `cli-1776237248436-9f86d081884c7d659a2feaa0c55ad015`). This is
    * the id the `/api/conversations/:id/messages` route accepts in its URL
    * path — the server looks conversations up by platform id, not DB id, on
    * that endpoint. Use this when fetching the run's messages.
    */
-  conversationPlatformId: string | null;
+  conversationPlatformId: DetailRun['conversation_platform_id'];
   /**
    * Platform id of the WORKER conversation for chat-dispatched (web) runs —
    * where a chat-dispatched run's messages actually live. See
    * runMessageConversationId() for how CLI vs. web runs are picked (#2048).
    */
-  workerPlatformId: string | null;
-  workflow: string;
+  workerPlatformId: components['schemas']['DashboardWorkflowRun']['worker_platform_id'];
+  workflow: WorkflowRun['workflow_name'];
   origin: RunOrigin;
   status: RunStatus;
   /**
@@ -51,12 +52,12 @@ export interface Run {
   attention: components['schemas']['WorkflowRun']['attention'];
   outcome: RunOutcome;
   terminalRecord: components['schemas']['WorkflowRunDetail']['run']['terminal_record'];
-  startedAt: string;
-  finishedAt: string | null;
+  startedAt: WorkflowRun['started_at'];
+  finishedAt: WorkflowRun['completed_at'];
   /** workflow_runs.working_path — used to join against worktrees. */
-  workingPath: string | null;
-  userMessage: string;
-  activeNodes: string[];
+  workingPath: WorkflowRun['working_path'];
+  userMessage: NonNullable<WorkflowRun['user_message']>;
+  activeNodes: NonNullable<components['schemas']['DashboardWorkflowRun']['active_nodes']>;
   lastTool?: string | null;
   toolCallAttention?: NonNullable<WorkflowRunMetadata['tool_call_attention']>;
   /**
@@ -86,7 +87,7 @@ export interface Run {
    * approval surfaces hide (approval is null) and the card shows a
    * "resuming" hint instead of stale approve/reject buttons.
    */
-  gateResolved?: 'approved' | 'rejected' | null;
+  gateResolved?: WorkflowApproval['resolved'];
   /**
    * Why the run stopped, as the owning process recorded it (#3479). Null when it
    * stopped without one, or has not stopped. The run's `status` is unaffected: a
@@ -98,7 +99,7 @@ export interface Run {
    * spawned by a parent run's node; null for top-level runs. Drives the "child of"
    * affordance in the console so a sub-run isn't mistaken for an orphan top-level run.
    */
-  parentRunId?: string | null;
+  parentRunId?: WorkflowRun['parent_run_id'];
 }
 
 export function runDetailPath(run: Pick<Run, 'id' | 'projectId'>): string {
@@ -256,4 +257,17 @@ export function toRun(raw: RawWorkflowRun): Run {
     gateResolved,
     stopReason: raw.metadata?.stop_reason ?? null,
   };
+}
+
+export interface ListRunsOptions {
+  codebaseId?: QueryParams<'/api/dashboard/runs', 'get'>['codebaseId'];
+  status?: RunStatus;
+  limit?: number;
+  offset?: number;
+}
+
+type AttentionResponse = components['schemas']['RunsNeedingAttentionResponse'];
+export interface RunsAttention {
+  runs: Run[];
+  degraded: NonNullable<AttentionResponse['degraded']>;
 }

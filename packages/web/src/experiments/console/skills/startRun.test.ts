@@ -10,14 +10,9 @@ import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { HttpError } from '../lib/http';
 import { startRun } from './startRun';
 
-interface Captured {
-  url: string;
-  init: RequestInit | undefined;
-}
-
 const originalFetch = globalThis.fetch;
 const originalWindow = globalThis.window;
-let calls: Captured[] = [];
+let calls: { url: string; init: RequestInit | undefined }[] = [];
 
 function stubFetch(
   runStatus = 200,
@@ -40,7 +35,7 @@ function stubFetch(
 }
 
 /** The run dispatch is the second call; the first creates the conversation. */
-function runCall(): Captured {
+function runCall(): (typeof calls)[number] {
   const call = calls.find(c => c.url.includes('/run'));
   if (call === undefined) throw new Error('no run dispatch captured');
   return call;
@@ -101,8 +96,17 @@ describe('startRun — declared inputs (#2554)', () => {
     const form = runCall().init?.body as FormData;
     expect(form).toBeInstanceOf(FormData);
     expect(JSON.parse(String(form.get('inputs')))).toEqual({ diff: 'D1' });
+    expect(form.get('conversationId')).toBe('web-test-1');
     expect(form.get('message')).toBe('go');
-    expect(form.getAll('files')).toHaveLength(1);
+    expect(Array.from(form.keys()).sort()).toEqual([
+      'conversationId',
+      'files',
+      'inputs',
+      'message',
+    ]);
+    expect(form.getAll('files').map(file => (typeof file === 'string' ? file : file.name))).toEqual(
+      ['a.txt']
+    );
     expect(new Headers(runCall().init?.headers).has('Content-Type')).toBe(false);
   });
 

@@ -290,14 +290,10 @@ async function fetchProviderEvents(
   stepName: string,
   after?: ProviderEventCursor
 ): Promise<ProviderEventRecord[]> {
-  const qs = new URLSearchParams({ step: stepName });
-  if (after !== undefined) {
-    qs.set('attemptId', after.attemptId);
-    qs.set('afterSeq', after.seq.toString());
-  }
-  const res = await requestJson<{ events: ProviderEventRecord[] }>(
-    `/api/workflows/runs/${encodeURIComponent(runId)}/provider-events?${qs.toString()}`
-  );
+  const res = await requestJson('/api/workflows/runs/{runId}/provider-events', 'get', {
+    params: { runId },
+    query: { step: stepName, attemptId: after?.attemptId, afterSeq: after?.seq },
+  });
   return res.events;
 }
 
