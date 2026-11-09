@@ -28,17 +28,7 @@ import {
   OUTPUT_PATH_SOURCE,
 } from './output-ref';
 
-/**
- * The reserved scope name for workflow inputs. The loader's ref scans (`loader/dag-references.ts`,
- * `loader/dag-structure.ts`) import this rather than re-typing the literal. It is NOT the only spelling in the tree —
- * `include/command-prompts.ts` and `output-ref.ts` still hardcode the word, and
- * `dagNodeSchema` (which enforces the reservation) cannot import it back without a cycle.
- *
- * `INPUTS` can never be a node id: `dagNodeSchema.superRefine` rejects it outright
- * ("node id 'INPUTS' is reserved for the $INPUTS.<name> parameter surface"). So binding
- * the name to the input scope here cannot shadow a real node — there is none to shadow.
- */
-export const WHEN_INPUTS_SCOPE = 'INPUTS';
+import { INPUTS_SCOPE } from './reference-scopes';
 
 /**
  * Operators `when:` accepts, in regex-alternation order (`<=` before `<`, or the
@@ -94,7 +84,7 @@ const NESTED_SHORTHAND_WHEN_REF_PATTERN = new RegExp(
  */
 export const WHEN_ATOM_PATTERN = new RegExp(
   '^(?:' +
-    String.raw`\$${WHEN_INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})` +
+    String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})` +
     '|' +
     String.raw`\$(${NODE_ID_SOURCE})\.(${PATH_SEGMENT_SOURCE})(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     ')' +
@@ -102,7 +92,7 @@ export const WHEN_ATOM_PATTERN = new RegExp(
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
 );
 
-const LOOP_PREV_WHEN_ATOM_PATTERN = new RegExp(
+export const LOOP_PREV_WHEN_ATOM_PATTERN = new RegExp(
   String.raw`^\$LOOP_PREV\.(${NODE_ID_SOURCE})\.output(?:\.(${OUTPUT_PATH_SOURCE}))?` +
     String.raw`\s*(${WHEN_OPERATORS.join('|')})\s*` +
     String.raw`(?:'([^']*)'|(-?\d+(?:\.\d+)?|true|false))$`
@@ -195,8 +185,7 @@ export function findUnsupportedNestedWhenRef(expr: string): { reference: string 
     if (shorthand?.[1] !== undefined && shorthand[2] !== undefined && shorthand[3] !== undefined) {
       const nodeId = shorthand[2];
       const firstSegment = shorthand[3];
-      if (nodeId === WHEN_INPUTS_SCOPE || nodeId === 'LOOP_PREV' || firstSegment === 'output')
-        continue;
+      if (nodeId === INPUTS_SCOPE || nodeId === 'LOOP_PREV' || firstSegment === 'output') continue;
       return {
         reference: shorthand[1],
       };
@@ -251,7 +240,7 @@ function parseWhenAtomInternal(expr: string, allowLoopPrev: boolean): WhenAtom |
   if (nodeId === undefined || segment1 === undefined) return null;
   // Reached only by `$INPUTS.<a>.<b>` backtracking out of the input branch. No node can
   // carry the reserved id, so this is a malformed input ref, not a node reference.
-  if (nodeId === WHEN_INPUTS_SCOPE) return null;
+  if (nodeId === INPUTS_SCOPE) return null;
 
   // Resolve the effective field, preserving canonical `$node.output[.field]` semantics
   // while also accepting the `$node.field` shorthand:

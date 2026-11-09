@@ -44,6 +44,7 @@
  * policy at its substitution call sites because an empty fallback would decide loop
  * completion. See `similarNodeIds`.
  */
+import { INPUTS_SCOPE } from './reference-scopes';
 import { z } from 'zod';
 import type { NodeOutput } from './schemas';
 import { findSimilar } from './utils/fuzzy-match';
@@ -167,7 +168,7 @@ export function assertSupportedOutputRefs(text: string): void {
   const refs = new RegExp(`${CURRENT_OUTPUT_PATH_SOURCE}|${PRIOR_OUTPUT_PATH_SOURCE}`, 'g');
   const continuation = new RegExp(`^${UNSUPPORTED_PATH_CONTINUATION_SOURCE}`);
   for (const match of text.matchAll(refs)) {
-    if (match[1] === 'INPUTS') continue;
+    if (match[1] === INPUTS_SCOPE) continue;
     // Groups 2 and 4 are the field path of the current and prior forms.
     if (match[2] === undefined && match[4] === undefined) continue;
     const end = match.index + match[0].length;
@@ -188,7 +189,9 @@ export function assertSupportedOutputRefs(text: string): void {
 export const INPUT_NAME_SOURCE = String.raw`[a-zA-Z_][a-zA-Z0-9_-]*`;
 
 /** Anchored whole-value form: the ENTIRE (trimmed) string is one `$INPUTS.<name>` ref. */
-const WHOLE_INPUTS_REF_PATTERN = new RegExp(String.raw`^\$INPUTS\.(${INPUT_NAME_SOURCE})$`);
+const WHOLE_INPUTS_REF_PATTERN = new RegExp(
+  String.raw`^\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})$`
+);
 
 /**
  * Parse a string that is exactly one whole `$INPUTS.<name>` reference (after
@@ -244,7 +247,7 @@ export function substituteTemplate(template: string, tokens: readonly TemplateTo
 
 /** The runtime `$INPUTS.<name>` reference. An unknown name throws with a did-you-mean. */
 export function inputRefToken(inputs: Record<string, JsonValue> | undefined): TemplateToken {
-  return templateToken(String.raw`\$INPUTS\.(${INPUT_NAME_SOURCE})`, match =>
+  return templateToken(String.raw`\$${INPUTS_SCOPE}\.(${INPUT_NAME_SOURCE})`, match =>
     canonicalValueText(resolveInputValue(match[1], inputs))
   );
 }

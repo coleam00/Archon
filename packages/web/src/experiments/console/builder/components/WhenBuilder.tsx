@@ -132,6 +132,10 @@ function AtomRow({
     <div className="flex items-center gap-1">
       {atom.kind === 'input' ? (
         <InputRefFields atom={atom} onChange={onChange} />
+      ) : atom.kind === 'loop_prev' ? (
+        <span className="font-mono text-[11px]">
+          {`$LOOP_PREV.${atom.nodeId}.output${atom.field === undefined ? '' : `.${atom.field}`}`}
+        </span>
       ) : (
         <NodeRefFields atom={atom} upstreamIds={upstreamIds} onChange={onChange} />
       )}

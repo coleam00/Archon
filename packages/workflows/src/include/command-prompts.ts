@@ -1,3 +1,4 @@
+import { INPUTS_SCOPE } from '../reference-scopes';
 import type { AgentNode, DagNode, IncludeDirective, WorkflowDefinition } from '../schemas';
 import { isAgentNode, isLoopGroupNode, isLoopNode } from '../schemas';
 import { resolvedBodyNodes } from '../graph-plan';
@@ -163,7 +164,7 @@ function firstRefOutsideScope(prompt: string, scope: BlockCommandScope): string 
   let match: RegExpExecArray | null;
   while ((match = outputRefPattern.exec(prompt)) !== null) {
     const referencedId = match[1];
-    if (referencedId === 'INPUTS') continue;
+    if (referencedId === INPUTS_SCOPE) continue;
     if (
       referencedId !== undefined &&
       !scope.currentIds.has(referencedId) &&

@@ -386,3 +386,17 @@ describe('validateContent — base-field AI text is scanned too (#1764/#2476)', 
     expect(issues.filter(i => i.rule === 'content.var.unknown')).toEqual([]);
   });
 });
+
+test('reports a malformed LOOP_PREV condition as a parse error', () => {
+  const issues = validateContent(
+    wf([
+      {
+        id: 'use',
+        variant: 'bash',
+        base: { when: "$LOOP_PREV.output == 'x'" },
+        data: { bash: 'echo ok' },
+      },
+    ])
+  );
+  expect(issues.map(issue => issue.rule)).toEqual(['content.when.parse']);
+});
