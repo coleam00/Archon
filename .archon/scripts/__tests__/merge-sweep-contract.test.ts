@@ -8,7 +8,8 @@ type Shape = string | { union: Shape[] } | { array: Shape } | {
 };
 
 interface Schema {
-  type: string | string[];
+  type?: string | string[];
+  anyOf?: Schema[];
   enum?: string[];
   properties?: Record<string, Schema>;
   required?: string[];
@@ -32,7 +33,10 @@ function schemaShape(schema: Schema): Shape {
   // These annotations constrain values without changing their TypeScript shape.
   const supported = ['type', 'enum', 'properties', 'required', 'items', 'additionalProperties',
     'minimum', 'pattern', 'minItems', 'description'];
+  // A union of whole alternatives, as the sweep's decision variants are.
+  if (schema.anyOf !== undefined) return union(schema.anyOf.map(schemaShape));
   expect(Object.keys(schema).filter(key => !supported.includes(key))).toEqual([]);
+  if (schema.type === undefined) throw new Error('A sweep schema without a type or anyOf');
   const types = Array.isArray(schema.type) ? schema.type : [schema.type];
   if (schema.enum !== undefined) {
     expect(types).toContain('string');
@@ -65,7 +69,7 @@ function typeShape(checker: ts.TypeChecker, type: ts.Type): Shape {
     const item = checker.getIndexTypeOfType(type, ts.IndexKind.Number);
     if (item !== undefined) return { array: typeShape(checker, item) };
   }
-  if (type.flags & ts.TypeFlags.Object) {
+  if (type.flags & (ts.TypeFlags.Object | ts.TypeFlags.Intersection)) {
     return { fields: Object.fromEntries(checker.getPropertiesOfType(type).sort((a, b) => a.name.localeCompare(b.name))
       .map(property => {
         const declaration = property.valueDeclaration;
@@ -89,9 +93,9 @@ test('the complete sweep output conforms to the recorder contract', () => {
   const schema = sweeps[0]?.output_format;
   if (schema === undefined) throw new Error('Missing sweep.output_format');
   // TypeScript's number cannot express the positive integer PR identifier contract.
-  expect(schema.properties?.decisions.items?.properties?.number).toMatchObject({
-    type: 'integer', minimum: 1,
-  });
+  for (const variant of schema.properties?.decisions.items?.anyOf ?? []) {
+    expect(variant.properties?.number).toMatchObject({ type: 'integer', minimum: 1 });
+  }
   const file = resolve(pack, 'merge-queue/scripts/record.ts');
   const program = ts.createProgram([file], {
     strict: true, noEmit: true, skipLibCheck: true,

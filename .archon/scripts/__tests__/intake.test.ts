@@ -206,6 +206,20 @@ describe('the intake decision', () => {
     ).toBe('triage');
   });
 
+  test("a run's re-triage request re-triages a maintainer's or a promoted item, naming the run, and never promotes an outside one", () => {
+    const asked: IntakeRequest = { at: AT, run_id: 'merge-run', action: 'retriage', label: null, actor: null, body_digest: null };
+    const named = expect.objectContaining({ outcome: 'retriage', summary: 'run merge-run asked for a re-triage' });
+    const maintainer = decide(item({ trust: 'maintainer', stage: 'deliver', facts: { triage: triaged() } }, [asked]), issue());
+    expect(maintainer).toMatchObject({ path: 'triage' });
+    expect(maintainer.notes).toEqual([named]);
+    const pin = { body_digest: DIGEST };
+    const promoted = { at: AT, via: 'label' as const, by: 'Maintainer', label: 'archon-triage', pin };
+    expect(decide(item({ trust: 'outside', stage: 'deliver', promoted, facts: { triage: triaged() } }, [asked]), issue())).toMatchObject({ path: 'triage' });
+    const outside = decide(item({ trust: 'outside', stage: 'needs_maintainer' }, [asked]), issue());
+    expect(outside).toMatchObject({ path: 'outside', promoted: null });
+    expect(outside.notes).toEqual([named]);
+  });
+
   test('a request label removed before intake reads it is void', () => {
     const decision = decide(
       item({ trust: 'outside', stage: 'needs_maintainer' }, [
@@ -827,6 +841,16 @@ describe('the intake scripts', () => {
       statuses: { 'run-1': 'completed' },
     }).output;
     expect(echo).toMatchObject({ path: 'idle' });
+    expect(stored(at).revision).toBe(revision);
+  }, 60_000);
+
+  test("a re-triage pickup records nothing of its own: the asking run's request is the only one", () => {
+    const at = install();
+    const first = facts(at, { runId: 'run-1' }).output;
+    expect(outcome(at, { runId: 'run-1' }, first, READY_VERDICT).code).toBe(0);
+    const revision = stored(at).revision;
+    const pickup = facts(at, { runId: 'run-2', action: 'retriage', statuses: { 'run-1': 'completed' } }).output;
+    expect(pickup).toMatchObject({ path: 'idle' });
     expect(stored(at).revision).toBe(revision);
   }, 60_000);
 

@@ -1,24 +1,22 @@
 /**
  * Send the blocked items the revisit agent judged unblocked back to intake.
  *
- * Each gets `archon-triage` and a detached intake run with that label event, recorded
- * as added by `retriage_as`; intake decides whether the item is now ready. Every listed
- * item records the revisit, so the next one waits its turn.
+ * Each gets this run's re-triage request and one intake pickup; intake decides whether
+ * the item is now ready. Every listed item records the revisit, so the next one waits
+ * its turn.
  *
- * Bound inputs: INPUTS_REPO from start, INPUTS_BLOCKED from blocked, INPUTS_RETRIAGE
- * from revisit, and the workflow input INPUTS_RETRIAGE_AS.
+ * Bound inputs: INPUTS_REPO from start, INPUTS_BLOCKED from blocked, and
+ * INPUTS_RETRIAGE from revisit.
  */
 
 import { type BlockedItem, recordRevisit } from '../../.shared/build.ts';
-import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { launchDetached } from '../../.shared/launch.ts';
-import { writeLabels } from '../../.shared/labels.ts';
+import { emit, note, nullableJson, refuse, text } from '../../.shared/io.ts';
+import { requestRetriage } from '../../.shared/launch.ts';
 
 function main(): void {
   const blocked = nullableJson(process.env.INPUTS_BLOCKED) as BlockedItem[];
   const judged = nullableJson(process.env.INPUTS_RETRIAGE) as { number: number; reason: string }[];
   const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
-  const actor = trimmed(process.env.INPUTS_RETRIAGE_AS);
   const runId = text(process.env.WORKFLOW_ID);
   const listed = new Set(blocked.map(item => item.number));
   const stray = judged.find(entry => !listed.has(entry.number));
@@ -26,16 +24,7 @@ function main(): void {
 
   const sent = new Map<number, string>();
   for (const { number, reason } of judged) {
-    const item = { repo, number };
-    writeLabels(item, ['archon-triage'], []);
-    const intake = launchDetached('archon-intake', {
-      repo_host: repo.host,
-      repo_path: repo.path,
-      number: String(number),
-      action: 'added',
-      label: 'archon-triage',
-      label_actor: actor,
-    });
+    const intake = requestRetriage({ repo, number }, runId);
     sent.set(number, `asked intake to re-triage (run ${intake}): ${reason}`);
   }
   for (const { number } of blocked) {

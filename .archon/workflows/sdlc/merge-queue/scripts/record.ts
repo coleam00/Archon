@@ -8,8 +8,7 @@
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
  * back to the build queue with its brief and starts its next round through the
- * build-queue binding; an ask offering a return with no brief waits
- * for the next sweep instead. A run raises at most one attention item: the
+ * build-queue binding. A run raises at most one attention item: the
  * sweep's item for a red default branch first, because it holds every merge, otherwise
  * the first pull request the sweep asked about, in its order. That item keeps its claim
  * while the run waits;
@@ -37,6 +36,7 @@ import {
   type MergeAsked,
   type MergeAttention,
   type MergeDecisionEntry,
+  type MergeEffect,
   type MergeRecord,
   type MergeSettled,
   type MergeStatus,
@@ -47,7 +47,7 @@ import {
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { askFields, attentionWait, withOther } from '../../.shared/queue.ts';
+import { askFields, type Attention, attentionWait, withOther } from '../../.shared/queue.ts';
 
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -72,16 +72,23 @@ interface Item {
   readonly record: MergeRecord | null;
 }
 
-interface Decision {
+/**
+ * One sweep decision, as the sweep's output schema admits it: a return carries its
+ * brief, an ask its question, and an ask whose brief may be blank offers no return.
+ */
+type Decision = {
   readonly number: number;
-  readonly action: SweepAction;
   readonly class: PolicyClass;
   readonly head: string;
   readonly reran: boolean;
   readonly reason: string;
   readonly brief: string;
-  readonly attention: MergeAttention | null;
-}
+} & (
+  | { readonly action: Exclude<SweepAction, 'return' | 'ask'>; readonly attention: null }
+  | { readonly action: 'return'; readonly attention: null }
+  | { readonly action: 'ask'; readonly attention: MergeAttention }
+  | { readonly action: 'ask'; readonly attention: Attention<Exclude<MergeEffect, 'return'>> }
+);
 
 export interface Sweep {
   readonly decisions: readonly Decision[];
@@ -97,48 +104,22 @@ function message(error: unknown): string {
 }
 
 /**
- * Why a declared decision cannot be acted on, or null. A return hands the item to the
- * build queue, which needs a brief to start from. An ask needs its question, and the
- * return it offers needs the same: an ask that offers one with no brief is refused, so
- * the sweep's recommendation is never rewritten into a choice it did not make.
- */
-function invalidDecision(decision: Decision): string | null {
-  const pr = `pull request ${String(decision.number)}`;
-  if (decision.action === 'return' && decision.brief.trim() === '') return `the sweep returned ${pr} with no brief`;
-  if (decision.action !== 'ask') return null;
-  if (decision.attention === null) return `the sweep asked about ${pr} with no question`;
-  // An effect lives on a declared choice, so a recommended return is an offered one.
-  if (!decision.attention.choices.some(choice => choice.effect === 'return')) return null;
-  if (decision.brief.trim() === '') return `the sweep's question about ${pr} offers a return with no brief`;
-  return null;
-}
-
-/**
  * The decisions record acts on: one per claimed pull request, in the sweep's order. A
  * decision about a pull request this run did not claim is refused with a note, because
  * its work item belongs to another run, and every other decision is still recorded; a
- * claimed one the sweep left out waits for the next sweep.
+ * claimed one the sweep left out waits for the next sweep. The sweep's output schema
+ * already holds each action to what it can act on.
  */
-function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decision[]; refused: string[] } {
-  if (sweep === null) return { decisions: [], refused: [] };
+function decide(items: readonly Item[], sweep: Sweep | null): Decision[] {
+  if (sweep === null) return [];
   const wanted = new Map(items.map(item => [item.pr.number, item]));
   const strays = sweep.decisions.filter(decision => !wanted.has(decision.number)).map(decision => decision.number);
   if (strays.length > 0) {
     note(`merge-queue record: the sweep decided PR ${strays.join(', ')}, which this run did not claim; not recorded`);
   }
   const decided = new Map<number, Decision>();
-  const refused: string[] = [];
   for (const decision of sweep.decisions) {
-    if (!wanted.has(decision.number) || decided.has(decision.number)) continue;
-    const invalid = invalidDecision(decision);
-    if (invalid === null) {
-      decided.set(decision.number, decision.action === 'ask' ? decision : { ...decision, attention: null });
-      continue;
-    }
-    // Refused output waits for the next sweep, and the record fails once the rest is written.
-    const refusal = `${invalid}; it waits for the next sweep`;
-    refused.push(refusal);
-    decided.set(decision.number, { ...decision, action: 'wait', brief: '', attention: null, reason: `${refusal} (the sweep said: ${decision.reason})` });
+    if (wanted.has(decision.number) && !decided.has(decision.number)) decided.set(decision.number, decision);
   }
   for (const item of items) {
     if (decided.has(item.pr.number)) continue;
@@ -153,7 +134,7 @@ function decide(items: readonly Item[], sweep: Sweep | null): { decisions: Decis
       attention: null,
     });
   }
-  return { decisions: [...decided.values()], refused };
+  return [...decided.values()];
 }
 
 /** The default branch as facts read it. */
@@ -305,7 +286,7 @@ function main(): void {
   }
   const sweep = nullableJson(process.env.INPUTS_SWEEP) as Sweep | null;
   if (path === 'sweep' && sweep === null) throw new Error('the sweep path reached record with no sweep');
-  const { decisions, refused } = decide(items, sweep);
+  const decisions = decide(items, sweep);
   const base = nullableJson(process.env.INPUTS_BASE) as Base | null;
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
@@ -336,7 +317,7 @@ function main(): void {
   const maintainers = items.length > 0 ? readMaintainers(items[0]?.pr.repo as QualifiedPr['repo']) : new Set<string>();
 
   const outcomes = decisions.map(decision => ({ decision, ...readBack(decision, itemOf(decision.number), maintainers) }));
-  const contradictions = [...refused, ...outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]))];
+  const contradictions = outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]));
   const silentRed = unraisedRedBase(sweep, base);
   if (silentRed !== null) contradictions.push(silentRed);
   // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for

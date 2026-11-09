@@ -433,6 +433,11 @@ request, never the state.
   already in the document's mirror is the pack's own write coming back as an event
   and is ignored. The outcome also refuses to add a request label to an outside item
   no maintainer promoted, so the install's own identity cannot promote anything.
+- **Run requests.** A pack run that sends an item back to intake records its own
+  `retriage` request on the work item, naming the run, and starts one intake pickup
+  with `action: retriage`, which records nothing more. The history names the run. It
+  re-triages a maintainer's item or a promoted outside item, and on an outside item
+  no maintainer promoted it is refused: a run's request never promotes.
 - **Pickup.** Every run records its event as a request on its issue, then claims the
   waiting item that sorts first (most urgent, then most important, then smallest,
   then oldest; an untriaged item sorts after triaged ones, oldest first) with a
@@ -558,16 +563,17 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   run has none, so it picks up as before.
 - **Blocked items.** Intake's blocked verdict can go stale while work lands in
   parallel: a blocker's outcome can arrive another way while its issue is still open.
-  When `retriage_as` names a maintainer login, a run that names no item also revisits
+  With `revisit_blocked` set to `true`, a run that names no item also revisits
   the blocked items, beside the item it builds. `blocked` lists the unclaimed blocked
   items not revisited in the last six hours, independently of item pickup and PR
   resolution. An unresolved PR create refuses the item's continuation without
   suppressing these revisits. A scheduled queue does not judge the same items every
-  run. One `revisit` agent reads each issue, what it waits on and the default branch, and names the items that no longer look blocked. `retriage` adds
-  `archon-triage` to each and starts `archon-intake` detached with that label event,
-  recorded as added by `retriage_as`. Intake stays the judge: it re-triages only when
-  that login is on the maintainer list, and its verdict decides whether the item now
-  waits for the build queue. Every listed item records the revisit.
+  run. One `revisit` agent reads each issue, what it waits on and the default branch, and names the items that no longer look blocked. `retriage` records
+  the run's own re-triage request on each item, naming the run, and starts one
+  `archon-intake` pickup for it; no label is written and no maintainer is credited.
+  Intake stays the judge: a run's request re-triages a maintainer's item or a
+  promoted one and never promotes an outside item, and its verdict decides whether
+  the item now waits for the build queue. Every listed item records the revisit.
 - **Route.** The `route` agent checks that the issue body is a contract (the six
   elements, with its dated "Current scope" sections), proves a bug's symptom before
   its first round, and writes the brief `archon-ship` starts from. A bug that needs a
@@ -883,8 +889,9 @@ then the project's file, whose lines win where the two conflict.
   merge), and the pull request is open, not a draft, into the default branch, at the
   head the sweep named, and that head contains the default branch's head or the forge
   reports it merges cleanly. Open review threads are the sweep's judgment. It merges
-  through `pr.merge` pinned to that head and reads the merge back. A pull request that reads back unmerged, as when the forge
-  queues merges, fails the gate.
+  through `pr.merge` pinned to that head and reports the commit the forge's own
+  read-back says it landed as. A merge the forge cannot verify, as when it queues
+  merges, fails the gate with the forge's outcome, and the sweep declares it `wait`.
 - **The default branch.** The sweep judges it first. While its CI is red the gate
   refuses every merge, and the sweep always raises it to a maintainer, naming the pull
   requests merged since it was last green. It recommends a revert or fix-forward, or,
@@ -898,13 +905,12 @@ then the project's file, whose lines win where the two conflict.
   until it is resumed and finishes, or is abandoned. It makes no further forge
   reads and fails with the original diagnostic and any settlement write failures.
   Otherwise, the `record` script skips and reports a decision for a pull request this
-  run did not claim, because that item belongs to another run. It refuses a
-  `return` without a brief, an `ask` without its question, an `ask` that offers a
-  `return` with a blank brief, and a red default branch the sweep did not raise: the pull
-  request waits for the next sweep, and the record fails, naming each, once every
-  other decision is written. A claimed pull request
-  the sweep left undecided waits for the next sweep, and an ask with no attention item
-  waits the same way. It reads every pull request back: the forge, not the sweep, says
+  run did not claim, because that item belongs to another run. The sweep's output
+  schema already holds each action to what it can act on: a `return` carries a brief,
+  an `ask` carries its question, and an `ask` with a blank brief offers no `return`.
+  A red default branch the sweep did not raise fails the record once every other
+  decision is written. A claimed pull request
+  the sweep left undecided waits for the next sweep. It reads every pull request back: the forge, not the sweep, says
   what merged, at the head the forge merged. A sweep that says it merged a pull
   request the forge does not show merged fails the record after every other decision
   is written: that pull request is recorded as waiting, or parked if it was closed,
@@ -922,14 +928,14 @@ then the project's file, whose lines win where the two conflict.
   the next build-queue run picks the item up.
 - **Merged issues.** A pull request that links its issue with `Refs #N` merges
   without closing it, and the issue keeps its intake stage, so the build queue could
-  claim it again. When `retriage_as` names a maintainer login, `retriage` reads the
+  claim it again. With `retriage_merged` set to `true`, `retriage` reads the
   issue of each build item whose pull request merged, by the gate this run or before
-  it. One still open gets `archon-triage` and an `archon-intake` run started detached
-  with that label event, recorded as added by `retriage_as`. Intake stays the judge:
-  it re-triages only when that login is on the maintainer list, and closes the issue
-  as delivered or keeps it with what is still open. A closed issue is left alone. A failed read, label write or launch
-  is named in the node's summary and stops nothing else. Empty `retriage_as`
-  re-triages nothing.
+  it. One still open gets the run's own re-triage request, naming the run, and one
+  `archon-intake` pickup. Intake stays the judge: a run's request re-triages a
+  maintainer's item or a promoted one and never promotes an outside item, and intake
+  closes the issue as delivered or keeps it with what is still open. A closed issue is left alone. A failed read, request or launch
+  is named in the node's summary and stops nothing else. Without `retriage_merged`,
+  nothing is re-triaged.
 - **Discoveries drain.** When `discoveries_binding` names the operator's
   [discoveries](#discoveries) binding, a sweep the forge shows merged at least one pull
   request fires it with `archon trigger fire`, keyed by the run, so one sweep starts at

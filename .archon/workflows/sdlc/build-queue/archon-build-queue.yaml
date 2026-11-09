@@ -48,13 +48,12 @@ inputs:
       nothing when no order is open. It first marks done each open order whose members
       have all merged. A named item is claimed either way. Anything else picks from
       every waiting item.
-  retriage_as:
+  revisit_blocked:
     default: ""
     description: >-
-      The maintainer login a blocked item's re-triage is requested as. Set, a run that
-      names no item also revisits the blocked items: one agent judges which no longer
-      look blocked, and those get archon-triage and an intake run with that label
-      event. Empty revisits nothing.
+      "true" makes a run that names no item also revisit the blocked items: one agent
+      judges which no longer look blocked, and each of those gets this run's re-triage
+      request and one intake pickup. Anything else revisits nothing.
   round_limit:
     default: "3"
     description: >-
