@@ -11,7 +11,7 @@
  */
 
 import { launchDetached } from '../../.shared/launch.ts';
-import { emit, nullableJson, refuse, text } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, workflowRunId } from '../../.shared/io.ts';
 import { ORDER_PREFIX, parseWorkOrder, type WorkOrder } from '../../.shared/order.ts';
 import { runUser, statePut } from '../../.shared/state.ts';
 import { readWorkItem } from '../../.shared/workitem.ts';
@@ -23,8 +23,7 @@ interface Declared {
 }
 
 function main(): void {
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const declared = nullableJson(process.env.INPUTS_ORDER) as Declared;
   const name = `${ORDER_PREFIX}${declared.id}`;
   const by = runUser(runId);

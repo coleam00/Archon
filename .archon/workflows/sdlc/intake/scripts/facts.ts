@@ -7,7 +7,7 @@
  * that list. The run's only writes are the request and the claim.
  */
 
-import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { isRequestLabel } from '../../.shared/labels.ts';
 import {
@@ -23,9 +23,7 @@ import { readMaintainers } from '../../.shared/maintainers.ts';
 import { workflowRepo } from '../../.shared/remote.ts';
 
 function main(): void {
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '')
-    throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const number = Number(trimmed(process.env.INPUTS_NUMBER));
   if (!Number.isInteger(number) || number <= 0) throw new Error('a positive issue number is required');
   const repo = workflowRepo();

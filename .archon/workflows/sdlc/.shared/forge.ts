@@ -54,55 +54,6 @@ export interface PrRecord extends QualifiedPr {
   readonly maintainer_can_modify: boolean | null;
 }
 
-export interface MergeRequest {
-  readonly ref: QualifiedPr;
-  readonly method: 'merge' | 'squash';
-  readonly conditions: { readonly head?: string; readonly base?: string; readonly tree?: string };
-}
-export interface Landed {
-  readonly commit: string | null;
-  readonly tree: string | null;
-  readonly parents: readonly string[] | null;
-}
-export interface MergeResult extends Omit<MergeRequest, 'ref'> {
-  readonly target: QualifiedPr;
-  readonly outcome: 'applied';
-  readonly changed: true;
-  readonly pr: PrRecord;
-  readonly enforcedConditions: readonly (keyof MergeRequest['conditions'])[];
-  readonly landed: Landed;
-}
-export interface ReviewItem {
-  readonly kind: 'review' | 'review_comment';
-  readonly id: string;
-  readonly author: {
-    readonly host: string;
-    readonly id: string;
-    readonly login: string | null;
-  } | null;
-  readonly commit: string | null;
-  readonly state: string | null;
-  readonly createdAt: string | null;
-  readonly url: string;
-  readonly body: string;
-}
-export interface ReviewsResult {
-  readonly ref: QualifiedPr;
-  readonly items: readonly ReviewItem[];
-}
-export interface MutationFailure {
-  readonly op: string;
-  readonly target: QualifiedPr | QualifiedPr['repo'];
-  readonly outcome: 'refused' | 'verification_failed' | 'outcome_unknown';
-  readonly leaveBehind?: string;
-  readonly observed?: PrRecord;
-  readonly merge?: {
-    readonly method: MergeRequest['method'];
-    readonly conditions: MergeRequest['conditions'];
-    readonly landed?: Landed;
-  };
-}
-
 /**
  * Repository identity, compared the way a forge registers it.
  *
