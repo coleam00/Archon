@@ -202,7 +202,11 @@ function convertObject(schema: SchemaObject, path: string, enums: Enums): string
     );
   }
   const names = Object.keys(properties);
-  if (names.length === 0) return 'Readonly<Record<string, unknown>>';
+  if (names.length === 0) {
+    return additionalProperties === false
+      ? 'Readonly<Record<string, never>>'
+      : 'Readonly<Record<string, unknown>>';
+  }
   const members = names.map(name => {
     const optional = requiredNames.has(name) ? '' : '?';
     const type = convert(properties[name], childPath(path, name), enums);
@@ -265,6 +269,27 @@ function convertTyped(schema: SchemaObject, path: string, enums: Enums): string 
   );
 }
 
+/** The values a `const` or `enum` admits, recording the enum by its path. */
+function admittedValues(
+  schema: SchemaObject,
+  path: string,
+  enums: Enums
+): readonly SchemaLiteral[] | undefined {
+  let values: readonly SchemaLiteral[] | undefined;
+  if (Object.hasOwn(schema, 'enum')) {
+    if (!Array.isArray(schema.enum) || schema.enum.length === 0) {
+      throw new UnsupportedSchemaError('enum', path, 'must be a non-empty list of values');
+    }
+    values = literals('enum', path, schema.enum);
+    // Two property names can spell one path (`a.b` under the root, `b` under `a`).
+    if (enums.has(path)) {
+      throw new UnsupportedSchemaError('enum', path, 'is the path of two enums in this schema');
+    }
+    enums.set(path, values);
+  }
+  return Object.hasOwn(schema, 'const') ? literals('const', path, [schema.const]) : values;
+}
+
 function convert(schema: unknown, path: string, enums: Enums): string {
   if (schema === true) return 'unknown';
   if (schema === false) return 'never';
@@ -283,23 +308,11 @@ function convert(schema: unknown, path: string, enums: Enums): string {
   if (Object.hasOwn(schema, 'anyOf')) return convertAlternatives('anyOf', schema, path, enums);
   if (Object.hasOwn(schema, 'oneOf')) return convertAlternatives('oneOf', schema, path, enums);
   // `const` and `enum` list the admitted values outright, so they are the type. A `type`
-  // beside them can only restate or remove values, and ajv enforces that.
-  if (Object.hasOwn(schema, 'const')) {
-    return union(literals('const', path, [schema.const]).map(literal));
-  }
-  if (Object.hasOwn(schema, 'enum')) {
-    if (!Array.isArray(schema.enum) || schema.enum.length === 0) {
-      throw new UnsupportedSchemaError('enum', path, 'must be a non-empty list of values');
-    }
-    const values = literals('enum', path, schema.enum);
-    // Two property names can spell one path (`a.b` under the root, `b` under `a`).
-    if (enums.has(path)) {
-      throw new UnsupportedSchemaError('enum', path, 'is the path of two enums in this schema');
-    }
-    enums.set(path, values);
-    return union(values.map(literal));
-  }
-  return convertTyped(schema, path, enums);
+  // beside them can only restate or remove values, and ajv enforces that. The rest of the
+  // schema is still converted, so its refusals and its enums hold beside a literal.
+  const values = admittedValues(schema, path, enums);
+  const typed = convertTyped(schema, path, enums);
+  return values === undefined ? typed : union(values.map(literal));
 }
 
 /**

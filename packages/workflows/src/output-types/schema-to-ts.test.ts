@@ -110,8 +110,11 @@ describe('convertOutputSchema', () => {
     ]);
   });
 
-  test('a root enum is recorded under $', () => {
+  test('a root enum is recorded under $, also beside a const', () => {
     expect([...convertOutputSchema({ enum: ['a', 'b'] }).enums]).toEqual([['$', ['a', 'b']]]);
+    const beside = convertOutputSchema({ const: 'a', enum: ['a', 'b'] });
+    expect(beside.type).toBe("'a'");
+    expect([...beside.enums]).toEqual([['$', ['a', 'b']]]);
   });
 
   test('oneOf is a union of its alternatives', () => {
@@ -120,11 +123,14 @@ describe('convertOutputSchema', () => {
     ).toBe("number | 'none'");
   });
 
-  test('an object without properties is a record of its additionalProperties', () => {
+  test('an object that declares no property is a record of its additionalProperties', () => {
     expect(convertOutputSchema({ type: 'object' }).type).toBe('Readonly<Record<string, unknown>>');
     expect(
       convertOutputSchema({ type: 'object', additionalProperties: { type: 'integer' } }).type
     ).toBe('Readonly<Record<string, number>>');
+    expect(
+      convertOutputSchema({ type: 'object', properties: {}, additionalProperties: false }).type
+    ).toBe('Readonly<Record<string, never>>');
   });
 
   test('an unconstrained schema is unknown, never any', () => {
@@ -140,6 +146,11 @@ describe('convertOutputSchema', () => {
     ['not', { type: 'array', items: { not: { type: 'null' } } }, '$[]'],
     ['patternProperties', { type: 'object', patternProperties: {} }, '$'],
     ['if', { anyOf: [{ type: 'string' }, { if: {} }] }, 'anyOf[1]'],
+    [
+      'allOf',
+      { const: 'x', type: 'object', properties: { a: { allOf: [{ type: 'string' }] } } },
+      'a',
+    ],
   ])('refuses %s by name and path', (keyword, schema, path) => {
     const error = unsupported(schema);
     expect(error.keyword).toBe(keyword);
@@ -151,6 +162,7 @@ describe('convertOutputSchema', () => {
     ['items without a type', { items: { type: 'string' } }, 'items'],
     ['items on a non-array', { type: 'string', items: { type: 'string' } }, 'items'],
     ['tuple items', { type: 'array', items: [{ type: 'string' }] }, 'items'],
+    ['tuple items beside an enum', { type: 'array', enum: [1], items: [{}] }, 'items'],
     ['a type beside anyOf', { type: 'object', anyOf: [{ type: 'object' }] }, 'type'],
     ['an unknown type name', { type: 'date' }, 'type'],
     ['an object enum value', { enum: [{ a: 1 }] }, 'enum'],
