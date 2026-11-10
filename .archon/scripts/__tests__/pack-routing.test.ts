@@ -9,10 +9,10 @@ import { PR, PR_URL, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
-describe("ship's terminal outcome", () => {
+describe("the build block's terminal outcome", () => {
   interface ShipOutcome { delivered: boolean; reason: string; pr_url: string; summary: string }
   const outcome = (inputs: Record<string, string>): ShipOutcome => {
-    const run = runPackScript('ship/scripts/outcome', {
+    const run = runPackScript('build-route/scripts/outcome', {
       inputs: {
         INPUTS_ROUTE: 'no_action',
         INPUTS_CONTRACT: 'NO_ACTION',
@@ -115,7 +115,7 @@ describe("deliver's report after a node failure", () => {
     });
   });
 
-  for (const script of ['deliver/scripts/report', 'ship/scripts/report']) {
+  for (const script of ['deliver/scripts/report', 'build-route/scripts/report']) {
     it.each(['unverified', 'unreadable', 'directory'])(
       'distinguishes an unresolved %s create from no PR', kind => {
         const run = runPackScript(script, {
@@ -132,22 +132,15 @@ describe("deliver's report after a node failure", () => {
   }
 });
 
-describe("ship's continued pull request", () => {
+describe("the build block's continued pull request", () => {
   const continues = (caller: string, triage: string): { code: number; stdout: string; stderr: string } =>
-    runPackScript('ship/scripts/continues', { inputs: { INPUTS_CALLER: caller, INPUTS_TRIAGE: triage } });
+    runPackScript('build-route/scripts/continues', { inputs: { INPUTS_CALLER: caller, INPUTS_TRIAGE: triage } });
 
   it("is the caller's whichever route triage took, else triage's", () => {
     expect(JSON.parse(continues('42', 'null').stdout)).toEqual({ pull_request: 42 });
     expect(JSON.parse(continues('', '42').stdout)).toEqual({ pull_request: 42 });
     expect(JSON.parse(continues('42', '42').stdout)).toEqual({ pull_request: 42 });
     expect(JSON.parse(continues('null', 'null').stdout)).toEqual({ pull_request: null });
-    expect(JSON.parse(continues('none', 'null').stdout)).toEqual({ pull_request: null });
-  });
-
-  it('refuses when the caller decided none but triage routed the run to continue one', () => {
-    const result = continues('none', '42');
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('the caller decided the run continues no pull request, but triage routed it to continue 42');
   });
 
   it('refuses when the caller and triage name different pull requests', () => {

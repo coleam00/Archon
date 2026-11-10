@@ -5,7 +5,14 @@ import { RunningDot } from './LiveDot';
 import { OwnerObservationHint } from './OwnerObservationHint';
 import { OriginBadge } from './OriginBadge';
 import type { Run } from '../primitives/run';
-import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
+import {
+  shortRunId,
+  formatElapsed,
+  elapsedSince,
+  formatCost,
+  formatDateTime,
+  ensureUtc,
+} from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { isRunLive, runElapsedLabel, runStatusLabel, statusTextClass } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
@@ -102,8 +109,8 @@ export function RunDetailHeader({
       {/* Origin */}
       <OriginBadge origin={run.origin} />
 
-      {/* Cost + elapsed + IDE — right-aligned */}
-      <div className="ml-auto flex items-center gap-3">
+      {/* Timing, cost and IDE */}
+      <div className="ml-auto flex flex-wrap items-center gap-x-3 gap-y-1">
         {typeof run.costUsd === 'number' ? (
           <span
             className="font-mono text-[12px] tabular-nums text-text-secondary"
@@ -115,6 +122,15 @@ export function RunDetailHeader({
         <span className="font-mono text-[12px] tabular-nums text-text-tertiary">
           {runElapsedLabel(run, elapsed)}
         </span>
+        <span className="font-mono text-[12px] text-text-tertiary">
+          Started <time dateTime={ensureUtc(run.startedAt)}>{formatDateTime(run.startedAt)}</time>
+        </span>
+        {run.finishedAt !== null ? (
+          <span className="font-mono text-[12px] text-text-tertiary">
+            Finished{' '}
+            <time dateTime={ensureUtc(run.finishedAt)}>{formatDateTime(run.finishedAt)}</time>
+          </span>
+        ) : null}
         {canOpenIde && run.workingPath !== null ? (
           <button
             type="button"

@@ -1,5 +1,5 @@
 import { execFileSync } from 'node:child_process';
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 const REPO_ROOT = resolve(import.meta.dir, '..');
@@ -43,10 +43,11 @@ export function findLeaks(file: string, content: string): Leak[] {
   return leaks;
 }
 
+/** The tracked pack files still on disk: a file moved or deleted but not yet staged is still listed. */
 function packFiles(): string[] {
   return execFileSync('git', ['ls-files', '--', PACK_ROOT], { cwd: REPO_ROOT, encoding: 'utf8' })
     .split('\n')
-    .filter(file => file !== '');
+    .filter(file => file !== '' && existsSync(resolve(REPO_ROOT, file)));
 }
 
 if (import.meta.main) {
