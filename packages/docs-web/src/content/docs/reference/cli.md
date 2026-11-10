@@ -220,7 +220,7 @@ Fixtures with `exec-code: true` receive the same environment as [executable dry 
 
 ### `workflow types`
 
-Generate TypeScript from the [`output_format`](/reference/workflow-language/#typescript-for-output_format) of a workflow's nodes, so scripts read node outputs through generated types instead of restating each schema by hand. The file holds, for every node that declares `output_format`, its output type (`NodeOutput<'<workflow>', '<node>'>`) and, for every `enum` in those schemas, its values as an `as const` tuple (`OUTPUT_ENUMS`). It contains no imports.
+Generate TypeScript from the [`output_format`](/reference/workflow-language/#typescript-for-output_format) of a workflow's nodes, so scripts read node outputs through generated types instead of restating each schema by hand. The file holds, for every node that declares `output_format`, its output type (`NodeOutput<'<workflow>', '<node>'>`) and, for every `enum` in those schemas, its values as an `as const` tuple (`OUTPUT_ENUMS`). A pack's file also holds the [settings the pack declares](/reference/workflow-language/#typescript-for-pack-settings) (`PackSettings`) and the values of each `enum` setting (`PACK_SETTING_ENUMS`); a file generated for one workflow holds no settings. It contains no imports.
 
 ```bash
 archon workflow types my-team                          # a pack of this project, by name
@@ -239,10 +239,10 @@ A relative path target and `--out` resolve from the invoking directory. A workfl
 | Flag | Effect |
 | --- | --- |
 | `--out <file>` | The file to write |
-| `--check` | Compare instead of writing. Exits 1 naming the file when it is missing or its content differs. CRLF line endings in the file are read as LF, so a checkout that converts line endings stays current |
+| `--check` | Compare instead of writing. Exits 1 naming the file when it is missing or its content differs, whether a workflow's `output_format` or the pack's `.pack/pack.yaml` changed. CRLF line endings in the file are read as LF, so a checkout that converts line endings stays current |
 | `--json` | Print `{ ok, path, status, workflows, nodes }`; `status` is `written`, `unchanged`, `current` or `stale` |
 
-Output is deterministic: workflows sorted by name, nodes and fields in YAML order. The command exits 1 without writing when a workflow of the pack does not load, when no node declares `output_format`, or when a schema uses a keyword the generator cannot state as a type; that error names the workflow, the node and the keyword. See [the supported keywords](/reference/workflow-language/#typescript-for-output_format).
+Output is deterministic: workflows sorted by name; nodes, fields and settings in YAML order. The command exits 1 without writing when a workflow of the pack does not load (an invalid `.pack/pack.yaml` fails every workflow of its pack), when no node declares `output_format`, or when a schema uses a keyword the generator cannot state as a type; that error names the workflow, the node and the keyword. See [the supported keywords](/reference/workflow-language/#typescript-for-output_format).
 
 ### `workflow run <name> [message]`
 

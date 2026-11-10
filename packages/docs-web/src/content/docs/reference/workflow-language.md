@@ -2164,6 +2164,33 @@ same name, then the project's `.archon/packs/<pack>.yaml`, then the run's suppli
 project's choice, so it beats them. The run resolves them **once, when it starts**, and stores the
 result on its row; a resumed run keeps those values even if the project file changed since.
 
+#### TypeScript for pack settings
+
+A script that checks a setting's value should not restate the declaration.
+[`archon workflow types <pack>`](/reference/cli/#workflow-types) writes the pack's settings into
+the same `<pack>/.shared/outputs.generated.ts` as its [node outputs](#typescript-for-output_format),
+and `--check` fails once `.pack/pack.yaml` changes without regenerating. For the declaration above:
+
+```ts
+export interface PackSettings {
+  readonly forge: 'gh' | 'glab';
+  readonly strict: 'true' | 'false';
+  readonly reviewers?: string;
+}
+
+export const PACK_SETTING_ENUMS = {
+  forge: ['gh', 'glab'],
+} as const;
+```
+
+Each setting has its declared type as the text a run reads: an `enum` is the union of its
+values, a `bool` is `'true' | 'false'`, a `string` or a `list` is `string`. A setting with
+neither a `default` nor `required: true` may be unset, so it is optional. `PACK_SETTING_ENUMS`
+is left out when no setting is an `enum`, and the whole section when the pack declares no
+settings. A pack with settings still needs one node that declares `output_format`. The types
+describe the pack's settings only: a workflow that declares an input of a setting's name reads
+that input instead.
+
 - **Settings belong to a run.** A run reads its root workflow's pack; every node of the run
   sees the same `$INPUTS`. A workflow input of the same name as a pack setting overrides the
   pack's default, never the project file.

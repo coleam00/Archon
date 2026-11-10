@@ -77,6 +77,12 @@ async function writePackWorkflow(pack: string, folder: string, yaml: string): Pr
   return file;
 }
 
+async function writePackDeclaration(pack: string, yaml: string): Promise<void> {
+  const dir = join(cwd, '.archon', 'workflows', pack, '.pack');
+  await mkdir(dir, { recursive: true });
+  await writeFile(join(dir, 'pack.yaml'), yaml);
+}
+
 const packFile = (pack: string): string =>
   join(cwd, '.archon', 'workflows', pack, '.shared', 'outputs.generated.ts');
 
@@ -247,9 +253,8 @@ export const OUTPUT_ENUMS = {
   });
 
   test('a pack workflow that reads a pack setting generates by file as by name', async () => {
-    await mkdir(join(cwd, '.archon', 'workflows', 'alpha', '.pack'), { recursive: true });
-    await writeFile(
-      join(cwd, '.archon', 'workflows', 'alpha', '.pack', 'pack.yaml'),
+    await writePackDeclaration(
+      'alpha',
       'inputs:\n  ci:\n    type: enum\n    values: [forge, none]\n    default: forge\n'
     );
     const file = await writePackWorkflow(
@@ -263,6 +268,94 @@ export const OUTPUT_ENUMS = {
 
     expect(await generate({ target: 'block', out: 'by-name.gen.ts' })).toMatchObject({ nodes: 1 });
     expect(await generate({ target: file, out: 'by-file.gen.ts' })).toMatchObject({ nodes: 1 });
+  });
+
+  test('a pack file also holds the settings the pack declares, each as its declared type', async () => {
+    await writePackWorkflow('alpha', 'block', BLOCK);
+    await generate({ target: 'alpha' });
+    const withoutSettings = await readFile(packFile('alpha'), 'utf-8');
+    await writePackDeclaration(
+      'alpha',
+      `inputs:
+  ci: { type: enum, values: [forge, none], default: forge }
+  note: {}
+  strict: { type: bool, default: false }
+  reviewers: { type: list, required: true }
+  dry-run: { type: enum, values: ['on', "it's off"] }
+`
+    );
+
+    expect((await generate({ target: 'alpha', check: true })).status).toBe('stale');
+    expect(await generate({ target: 'alpha' })).toMatchObject({ status: 'written', nodes: 1 });
+
+    expect(await readFile(packFile('alpha'), 'utf-8')).toBe(`${withoutSettings}
+/**
+ * The pack's settings, as \`.pack/pack.yaml\` declares them under \`inputs:\`. Every value is
+ * text: a \`bool\` is \`true\` or \`false\`, a \`list\` is comma-separated. A workflow that declares
+ * an input of a setting's name reads that input instead, which this type does not describe.
+ */
+export interface PackSettings {
+  readonly ci: 'forge' | 'none';
+  readonly note?: string;
+  readonly strict: 'true' | 'false';
+  readonly reviewers: string;
+  readonly 'dry-run'?: 'on' | 'it\\'s off';
+}
+
+/** The values of every \`enum\` setting, by setting name. */
+export const PACK_SETTING_ENUMS = {
+  ci: ['forge', 'none'],
+  'dry-run': ['on', 'it\\'s off'],
+} as const;
+`);
+  });
+
+  test('check goes stale when the pack declaration changes, and tolerates CRLF', async () => {
+    await writePackWorkflow('alpha', 'block', BLOCK);
+    await writePackDeclaration('alpha', 'inputs:\n  ci: { type: enum, values: [forge, none] }\n');
+    await generate({ target: 'alpha' });
+    const generated = await readFile(packFile('alpha'), 'utf-8');
+    await writeFile(packFile('alpha'), generated.replaceAll('\n', '\r\n'));
+    expect((await generate({ target: 'alpha', check: true })).status).toBe('current');
+
+    await writePackDeclaration(
+      'alpha',
+      'inputs:\n  ci: { type: enum, values: [forge, none, local] }\n'
+    );
+
+    expect((await generate({ target: 'alpha', check: true })).status).toBe('stale');
+  });
+
+  test("settings are a pack file's: no declaration, no enum, or one workflow emits less", async () => {
+    await writePackWorkflow('alpha', 'block', BLOCK);
+    await generate({ target: 'alpha' });
+    const withoutSettings = await readFile(packFile('alpha'), 'utf-8');
+    expect(withoutSettings).not.toContain('PackSettings');
+
+    // A declaration with bindings only declares no settings.
+    await writePackDeclaration(
+      'alpha',
+      'bindings:\n  nightly:\n    workflow: block\n    resource: nightly\n    overlap: skip\n    schedule: { interval_seconds: 3600 }\n'
+    );
+    expect((await generate({ target: 'alpha', check: true })).status).toBe('current');
+
+    await writePackDeclaration('alpha', 'inputs:\n  note: { default: x }\n');
+    await generate({ target: 'alpha' });
+    const content = await readFile(packFile('alpha'), 'utf-8');
+    expect(content).toContain('export interface PackSettings {\n  readonly note: string;\n}\n');
+    expect(content).not.toContain('PACK_SETTING_ENUMS');
+
+    const single = await generate({ target: 'block', out: 'block.gen.ts' });
+    expect(await readFile(single.path, 'utf-8')).not.toContain('PackSettings');
+  });
+
+  test('an invalid pack declaration refuses the pack rather than dropping its settings', async () => {
+    await writePackWorkflow('alpha', 'block', BLOCK);
+    await writePackDeclaration('alpha', 'inputs:\n  ci: { type: enum }\n');
+
+    await expect(generate({ target: 'alpha' })).rejects.toThrow(
+      "Pack 'alpha' has workflows that do not load"
+    );
   });
 
   test('a fresh output under a symlinked folder that did not exist is current', async () => {

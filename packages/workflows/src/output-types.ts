@@ -5,6 +5,9 @@
  *
  * It reads workflow files as authored, before include expansion, so a node is emitted
  * once, under the workflow file that declares it, however many workflows include it.
+ *
+ * A pack's file also holds the settings its `.pack/pack.yaml` declares, so a script
+ * derives a setting's values from the declaration as it does a node's output.
  */
 import { mkdir, readFile, realpath, stat, writeFile } from 'fs/promises';
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'path';
@@ -21,6 +24,7 @@ import {
 } from './output-types/schema-to-ts';
 import type { DagNode, IncludeDirective, WorkflowLoadError } from './schemas';
 import { isIncludeDirective, isLoopGroupNode, isOutputFormatEnforced, isWaitNode } from './schemas';
+import type { PackSettingSpec } from './schemas/pack-settings';
 import type { WorkflowDefinition } from './schemas/workflow';
 import { parseWorkflow } from './loader';
 import {
@@ -77,7 +81,11 @@ interface Selection {
   readonly target: string;
   readonly workflows: readonly WorkflowDefinition[];
   readonly defaultOut?: string;
+  /** The settings the pack declares. Absent for one workflow, and for a pack that declares none. */
+  readonly settings?: PackSettings;
 }
+
+type PackSettings = Readonly<Record<string, PackSettingSpec>>;
 
 /** One node's type, or the error naming the workflow, the node and the keyword that stops it. */
 function nodeTypes(workflowName: string, id: string, schema: unknown): NodeTypes {
@@ -136,10 +144,63 @@ function renderMap(entries: readonly (readonly [string, string])[], separator: s
   return `{\n${indent(members.join('\n'))}\n}`;
 }
 
-/** The generated file. Deterministic: workflows by name, nodes and fields in YAML order. */
+/**
+ * A setting's value as a run's `$INPUTS` holds it. Every value is text: a `bool` is the
+ * text `true` or `false` and a `list` is comma-separated text.
+ */
+function settingType(spec: PackSettingSpec): string {
+  switch (spec.type) {
+    case 'string':
+    case 'list':
+      return 'string';
+    case 'bool':
+      return "'true' | 'false'";
+    case 'enum':
+      return [...new Set(spec.values.map(quote))].join(' | ');
+  }
+}
+
+/**
+ * The settings section of a pack's file, in declaration order; empty when the pack declares
+ * none. A setting with neither a default nor `required` may be unset, so it is optional.
+ */
+function renderPackSettings(settings: PackSettings): string {
+  const entries = Object.entries(settings);
+  if (entries.length === 0) return '';
+  const members = entries.map(([name, spec]) => {
+    const optional = spec.default !== undefined || spec.required === true ? '' : '?';
+    return `readonly ${propertyKey(name)}${optional}: ${settingType(spec)};`;
+  });
+  const enums = entries.flatMap(([name, spec]): (readonly [string, string])[] =>
+    spec.type === 'enum' ? [[name, `[${spec.values.map(quote).join(', ')}]`]] : []
+  );
+  const tuples =
+    enums.length === 0
+      ? ''
+      : `
+/** The values of every \`enum\` setting, by setting name. */
+export const PACK_SETTING_ENUMS = ${renderMap(enums, ',')} as const;
+`;
+  return `
+/**
+ * The pack's settings, as \`.pack/pack.yaml\` declares them under \`inputs:\`. Every value is
+ * text: a \`bool\` is \`true\` or \`false\`, a \`list\` is comma-separated. A workflow that declares
+ * an input of a setting's name reads that input instead, which this type does not describe.
+ */
+export interface PackSettings {
+${indent(members.join('\n'))}
+}
+${tuples}`;
+}
+
+/**
+ * The generated file. Deterministic: workflows by name; nodes, fields and settings in
+ * YAML order.
+ */
 export function renderOutputTypes(
   command: string,
-  workflows: readonly WorkflowDefinition[]
+  workflows: readonly WorkflowDefinition[],
+  settings: PackSettings = {}
 ): { content: string; workflows: number; nodes: number } {
   const names = new Set<string>();
   for (const { name } of workflows) {
@@ -203,7 +264,7 @@ export type NodeOutput<
  * is the schema itself.
  */
 export const OUTPUT_ENUMS = ${enums} as const;
-`;
+${renderPackSettings(settings)}`;
   return {
     content,
     workflows: typed.length,
@@ -240,11 +301,15 @@ async function selectPack(
       `Pack '${name}' has workflows that do not load, so its types would be incomplete:\n${formatLoadErrors(errors)}`
     );
   }
-  if (files.length === 0) return undefined;
+  const [first] = files;
+  if (first === undefined) return undefined;
+  const packSettings = first.parsed.workflow.pack?.settings;
   return {
     target,
     workflows: files.map(file => file.parsed.workflow),
     defaultOut: join(packPath, PACK_OUTPUT_TYPES_FILE),
+    // The loader attached one parsed declaration to every workflow of the pack.
+    ...(packSettings !== undefined ? { settings: packSettings } : {}),
   };
 }
 
@@ -431,7 +496,7 @@ export async function generateOutputTypes(options: OutputTypesOptions): Promise<
       ? ''
       : ` --out ${shellWord(projectPath(cwd, await stablePath(path)))}`;
   const command = `archon workflow types ${shellWord(selection.target)}${out}`;
-  const rendered = renderOutputTypes(command, selection.workflows);
+  const rendered = renderOutputTypes(command, selection.workflows, selection.settings);
   const counts = { workflows: rendered.workflows, nodes: rendered.nodes };
   let existing: string | undefined;
   try {
