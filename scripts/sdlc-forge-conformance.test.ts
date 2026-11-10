@@ -177,7 +177,7 @@ test('the pack reads host responses with credential attribution and metadata int
 });
 
 test("forge-check's metadata request conforms to the CLI host input", () => {
-  const run = runPackScript('deliver/scripts/forge-check', {
+  const run = runPackScript('.shared/scripts/forge-check', {
     cwd: gitCheckout({}, trackTempRoot),
     forge: {
       kind: 'fake',

@@ -53,7 +53,7 @@ function check(
       cwd,
     });
   }
-  return runPackScript(`${entry}/scripts/forge-check`, {
+  return runPackScript('.shared/scripts/forge-check', {
     cwd,
     ...rest,
     inputs: { ARCHON_HOME, ...rest.inputs },
