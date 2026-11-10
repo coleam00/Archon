@@ -14,8 +14,8 @@
 
 import { BUILD_BRANCH_PREFIX } from './build.ts';
 import { invokeForge, parsePrRecord, type QualifiedPr, record, sameRepo } from './forge.ts';
+import { prFromUrl } from './pr.ts';
 import { note } from './io.ts';
-import { prFromUrl } from './merge.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */

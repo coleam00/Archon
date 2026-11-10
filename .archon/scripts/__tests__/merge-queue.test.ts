@@ -13,7 +13,6 @@ import {
   type MergeSettled,
   mergeWaits,
   type PrFacts,
-  prFromUrl,
   MERGE_QUEUE_FORGE_OPERATIONS,
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
@@ -150,10 +149,6 @@ describe('the merge record and the gate', () => {
     expect(readReviewStamp('Verdict: ready')).toBeNull();
   });
 
-  test('a pull request URL names its repository and number; anything else refuses', () => {
-    expect(prFromUrl(PR_URL)).toEqual(PR);
-    expect(() => prFromUrl('https://ghe.example.com/example/repo/issues/42')).toThrow('not a pull request URL');
-  });
 });
 
 // --- the scripts, run as the engine runs them --------------------------------------
@@ -262,6 +257,8 @@ const forgeOp = (op, request) => {
   const units = state => [{ unit: { kind: 'check', id: '1', name: 'test' }, state }];
   const state = () => (forgePr.merged ?? []).includes(ref.number) ? 'merged' : (forgePr.closed ?? []).includes(ref.number) ? 'closed' : forgePr.state.toLowerCase();
   const unreadable = () => forgePr.unreadable === true || Array.isArray(forgePr.unreadable) && forgePr.unreadable.includes(ref.number);
+  // The harness's forge resolves a pull request URL.
+  if (op === 'resolve') return null;
   if (op === 'metadata') return out(true, { capabilities: ${JSON.stringify(MERGE_QUEUE_FORGE_OPERATIONS)}.filter(name => !(forgePr.missingOps ?? []).includes(name)) });
   if (op === 'checks.commit') return forgePr.baseUnreadable ? failed('HTTP 502 reading base') : out(true, { repo: request.repo, branch: 'dev', revision: ${JSON.stringify(OLD)}, units: units(forgePr.baseChecks ?? 'green') });
   if (op === 'pr.merge') {
@@ -1090,7 +1087,9 @@ describe('the merge queue on the forge', () => {
     const gate = run(at, 'gate', {}, { args });
     expect([facts.code, gate.code]).toEqual([0, 0]);
     const used = [...forgeCalls(facts), ...forgeCalls(gate)];
-    expect(new Set(used.filter(call => call.startsWith('forge ') && call !== 'forge metadata').map(call => call.split(' ')[1]))).toEqual(
+    // `resolve` runs no preflight: the host refuses it on a plugin that cannot resolve a URL.
+    const preflighted = used.filter(call => call.startsWith('forge ') && !['forge metadata', 'forge resolve'].includes(call));
+    expect(new Set(preflighted.map(call => call.split(' ')[1]))).toEqual(
       // The sweep agent, not a script, reruns a pull request's failed checks.
       new Set(MERGE_QUEUE_FORGE_OPERATIONS.filter(op => op !== 'checks.rerun'))
     );

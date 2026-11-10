@@ -54,6 +54,7 @@ function round(runId: string, at: string, reason = 'review_open'): BuildRound {
     delivered: false,
     reason,
     pr_url: 'https://ghe.example.com/example/repo/pull/42',
+    pr_number: 42,
     summary: `Not ready: ${reason}`,
     artifacts: `/runs/${runId}`,
   };
@@ -113,13 +114,8 @@ describe('the build record', () => {
     }
   });
 
-  test("an item's recorded pull request URL from another repository is refused, not guessed around", () => {
-    const foreign = { ...round('r1', AT), pr_url: 'https://ghe.example.com/someone/else/pull/42' };
-    expect(() => itemPullRequest([foreign], TRIAGE, PR.repo)).toThrow('is not a pull request of ghe.example.com/example/repo');
-  });
-
   test("a fresh round's replacement pull request wins over the superseded one and triage's stale reference", () => {
-    const replacement = { ...round('r2', LATER), pr_url: 'https://ghe.example.com/example/repo/pull/43' };
+    const replacement = { ...round('r2', LATER), pr_url: 'https://ghe.example.com/example/repo/pull/43', pr_number: 43 };
     expect(itemPullRequest([round('r1', AT), replacement], { ...TRIAGE, pull_request: 42 }, PR.repo)).toEqual({ repo: PR.repo, number: 43 });
   });
 

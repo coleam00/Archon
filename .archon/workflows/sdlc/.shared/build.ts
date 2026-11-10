@@ -10,7 +10,7 @@
 import { type QualifiedPr, sameRepo } from './forge.ts';
 import { followUp } from './follow-up.ts';
 import { note, text } from './io.ts';
-import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
+import { findPrByHead, PR_CREATE_UNRESOLVED, prFromUrl } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
@@ -74,6 +74,12 @@ export interface BuildRound {
   readonly delivered: boolean;
   readonly reason: string;
   readonly pr_url: string;
+  /**
+   * That pull request's number in the item's repository, as the forge resolved the URL
+   * when the round was recorded. Absent on a round recorded before rounds carried it,
+   * whose URL the forge resolves when the item's pull request is read.
+   */
+  readonly pr_number?: number;
   readonly summary: string;
   readonly artifacts: string;
   /**
@@ -205,21 +211,18 @@ export function itemPullRequest(
     if (triage !== undefined && triage.at > (round?.at ?? '')) return triaged;
     throw new Error(`round ${round?.run_id} has an unresolved PR create; reconcile its artifacts and re-triage the item, naming the PR if one exists`);
   }
-  const url = rounds.filter(round => round.pr_url !== '').at(-1)?.pr_url;
-  return url === undefined ? triaged : { repo, number: roundPrNumber(url, repo) };
+  const last = rounds.filter(round => round.pr_url !== '').at(-1);
+  if (last === undefined) return triaged;
+  return { repo, number: last.pr_number ?? roundPrNumber(last.pr_url, repo) };
 }
 
-function roundPrNumber(url: string, repo: QualifiedPr['repo']): number {
-  const parsed = URL.canParse(url) ? new URL(url) : null;
-  const match = parsed === null ? null : /^\/(.+)\/pull\/([1-9][0-9]*)$/.exec(parsed.pathname);
-  if (
-    parsed === null ||
-    match === null ||
-    !sameRepo({ host: parsed.hostname, path: match[1] ?? '' }, repo)
-  ) {
+/** The number of the round's pull request, which must be one of the item's repository. */
+export function roundPrNumber(url: string, repo: QualifiedPr['repo']): number {
+  const pr = prFromUrl(url);
+  if (!sameRepo(pr.repo, repo)) {
     throw new Error(`round pr_url ${url} is not a pull request of ${repo.host}/${repo.path}`);
   }
-  return Number(match[2]);
+  return pr.number;
 }
 
 /** Every round's branch starts with this, so a pull request from such a branch is the build queue's. */
@@ -304,6 +307,7 @@ export function withReleasedRound(doc: WorkItem, claim: Claim, at: string): Work
     delivered: false,
     reason: ENDED_UNDECIDED,
     pr_url: pr.url,
+    pr_number: pr.number,
     summary: `The run ended after it opened ${pr.url} and before it recorded the round.`,
     artifacts: '',
   };

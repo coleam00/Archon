@@ -245,10 +245,12 @@ function answer(op, request) {
   switch (op) {
     case 'workitem.view': return view(request.ref);
     case 'resolve': {
-      const url = /^https:\\/\\/([^/]+)\\/(.+?)(?:\\.git)?$/.exec(request.remote);
+      const web = request.web ? /^(.+)\\/(issues|pull)\\/([1-9][0-9]*)$/.exec(request.remote) : null;
+      const url = request.web && web === null ? null : /^https:\\/\\/([^/]+)\\/(.+?)(?:\\.git)?$/.exec(web?.[1] ?? request.remote);
       return done(url === null
         ? { kind: 'none', forge: 'none' }
-        : { kind: 'resolved', forge: 'fake', repo: { host: url[1], path: url[2] }, plugin: { name: 'fake', version: '1' } });
+        : { kind: 'resolved', forge: 'fake', repo: { host: url[1], path: url[2] }, plugin: { name: 'fake', version: '1' },
+            ...(web ? { subject: { kind: web[2] === 'pull' ? 'pr' : 'issue', number: Number(web[3]) } } : {}) });
     }
     case 'repo.labels.list': return done({ repo: request.repo, labels: [...labels].map(name => ({ name })) });
     case 'repo.label.ensure': return write(op, () => labels.add(request.name), () => ({}));

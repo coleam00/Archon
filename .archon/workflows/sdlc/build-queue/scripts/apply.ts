@@ -26,6 +26,7 @@ import {
   type BuildRound,
   type BuildStatus,
   nextRound,
+  roundPrNumber,
   type Validation,
   withBuild,
 } from '../../.shared/build.ts';
@@ -247,7 +248,15 @@ function main(): void {
   const round: BuildRound | null =
     ending === null
       ? null
-      : { run_id: runId, at, ...ending, artifacts: artifactsDir(), ...reviewsOf(), ...validationOf() };
+      : {
+          run_id: runId,
+          at,
+          ...ending,
+          ...(ending.pr_url === '' ? {} : { pr_number: roundPrNumber(ending.pr_url, item.repo) }),
+          artifacts: artifactsDir(),
+          ...reviewsOf(),
+          ...validationOf(),
+        };
   const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
   const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
   const decision = decide(path, route, answer);
