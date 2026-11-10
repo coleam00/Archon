@@ -16,7 +16,7 @@ Never report "missing test for line X" — name the observable failure that rema
 ## An excess test needs all three
 
 1. **The test** — `file:line` and the outcome it asserts.
-2. **What already protects that outcome** — the kept test and the assertion (`file:line`) that fails for every regression this one catches; inspect **assertions, not test titles**.
+2. **What already protects that outcome** — the kept tests and assertions (`file:line`) that together fail for every regression this one catches; inspect **assertions, not test titles**.
 3. **The smaller set to keep** — the tests that stay, and why every regression the dropped ones catch still fails one of them.
 
 Look for a test that repeats an assertion at another layer, enumerates permutations one representative case proves, or re-proves a library, the schema or the type system, and for a test dependency the change brings in. A new test dependency is excess unless the behavior it proves matters and nothing the project already has can prove it: name what does. Judge only tests the change adds or edits.
