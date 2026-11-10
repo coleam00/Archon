@@ -408,6 +408,9 @@ nodes:
       route: { from: "$route.output", if_skipped: null }
       ending: { from: "$ship.output", if_skipped: null }
       answer: { from: "$answer.output", if_skipped: null }
+      # Every verdict and CI report this run's delivery rounds produced.
+      reviews: { outputs: review-report }
+      ci: { outputs: ci-report }
     output_format:
       type: object
       properties:

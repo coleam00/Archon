@@ -26,10 +26,9 @@ describe("the build block's terminal outcome", () => {
         INPUTS_DELIVERY: 'null',
         INPUTS_DELIVERY_REASON: 'null',
         INPUTS_PR_URL: 'null',
-        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
+        INPUTS_REVIEWS: '[]',
         ...inputs,
       },
-      artifacts: { 'listing.json': JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }) },
     });
     expect(run.code, run.stderr).toBe(0);
     return JSON.parse(run.stdout) as ShipOutcome;
@@ -61,21 +60,23 @@ describe("the build block's terminal outcome", () => {
 });
 
 describe("deliver's report after a node failure", () => {
-  const failedReport = (listing: object, artifacts: Record<string, string> = {}): { reason: string; pr_url: string } =>
-    JSON.parse(
-      runPackScript('deliver/scripts/report', {
-        inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' },
-        artifacts: { 'listing.json': JSON.stringify({ runId: 'run', errors: [], ...listing }), ...artifacts },
-      }).stdout
-    ) as { reason: string; pr_url: string };
+  /** The `pull-request` outputs a run bound, as the engine delivers them. */
+  const published = (...values: object[]): string =>
+    JSON.stringify(values.map(value => ({ node: 'pr__publish', loop: [{ group: 'rounds', iteration: 1 }], at: '2026-11-06T10:00:00Z', value })));
+  /** A report node's bindings after a node failure, in a run with no typed output. */
+  const FAILED = { INPUTS_OUTCOME: 'null', INPUTS_REVIEWS: '[]', INPUTS_PULL_REQUESTS: '[]' };
+  const failedReport = (pullRequests: string, extra: Partial<Parameters<typeof runPackScript>[1]> = {}) =>
+    runPackScript('deliver/scripts/report', {
+      ...extra,
+      inputs: { ...FAILED, INPUTS_PULL_REQUESTS: pullRequests, ...extra.inputs },
+    });
+  const reported = (run: ReturnType<typeof failedReport>): { reason: string; pr_url: string } =>
+    JSON.parse(run.stdout) as { reason: string; pr_url: string };
 
   it('names the pull request a round published before the failure, so the next run continues it', () => {
-    const published = failedReport(
-      { artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json' }] } },
-      { 'nodes/publish.json': JSON.stringify({ number: 42, url: PR_URL }) }
-    );
-    expect(published).toMatchObject({ reason: 'failed', pr_url: PR_URL });
-    expect(failedReport({ artifactsByType: {} })).toMatchObject({ reason: 'failed', pr_url: '' });
+    // No outcomes listing reaches this run, so the creation record decides, and there is none.
+    expect(reported(failedReport(published({ number: 42, url: PR_URL })))).toMatchObject({ reason: 'failed', pr_url: PR_URL });
+    expect(reported(failedReport('[]'))).toMatchObject({ reason: 'failed', pr_url: '' });
   });
   it("lets the creation record decide once the publish node's latest invocation failed", () => {
     // Round 1 published PR_URL; round 2's publish failed after its create started.
@@ -87,11 +88,9 @@ describe("deliver's report after a node failure", () => {
       ],
     });
     for (const secondRound of ['failed', 'completed']) {
-      const run = runPackScript('deliver/scripts/report', {
-        inputs: { INPUTS_OUTCOME: 'null', TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json', NODE_OUTCOMES_FILE: '{ARTIFACTS}/outcomes.json' },
+      const run = failedReport(published({ url: PR_URL }), {
+        inputs: { NODE_OUTCOMES_FILE: '{ARTIFACTS}/outcomes.json' },
         artifacts: {
-          'listing.json': JSON.stringify({ artifactsByType: { 'pull-request': [{ path: 'nodes/publish.json', nodeId: 'pr__publish', loopGroupPath: [{ groupId: 'rounds', iteration: 1 }] }] }, errors: [] }),
-          'nodes/publish.json': JSON.stringify({ url: PR_URL }),
           'outcomes.json': outcomes(secondRound),
           'pr-create-started': JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }),
         },
@@ -105,7 +104,7 @@ describe("deliver's report after a node failure", () => {
 
   it('does not certify a URL without a complete PR record', () => {
     const result = runPackScript('deliver/scripts/report', {
-      inputs: { INPUTS_OUTCOME: 'null' },
+      inputs: FAILED,
       artifacts: { 'pr-create-started': JSON.stringify({ pr: { url: PR_URL } }) },
     });
     expect(result.code).toBe(0);
@@ -119,7 +118,7 @@ describe("deliver's report after a node failure", () => {
     it.each(['unverified', 'unreadable', 'directory'])(
       'distinguishes an unresolved %s create from no PR', kind => {
         const run = runPackScript(script, {
-          inputs: { INPUTS_OUTCOME: 'null' },
+          inputs: FAILED,
           artifacts: kind === 'directory' ? {} : {
             'pr-create-started': kind === 'unverified' ? JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) : 'invalid JSON',
           },

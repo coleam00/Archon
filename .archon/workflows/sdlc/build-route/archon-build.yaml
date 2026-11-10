@@ -171,6 +171,7 @@ nodes:
       delivery: { from: "$deliver.output.summary", if_skipped: null }
       delivery_reason: { from: "$deliver.output.reason", if_skipped: null }
       pr_url: { from: "$deliver.output.pr_url", if_skipped: null }
+      reviews: { outputs: review-report }
 
   # The block's terminal report on every ending. A node failure skips `outcome`
   # (never fails it), so `all_done` still runs this node and the binding reads null.
@@ -183,6 +184,8 @@ nodes:
     trigger_rule: all_done
     with:
       outcome: { from: "$outcome.output", if_skipped: null }
+      reviews: { outputs: review-report }
+      pull_requests: { outputs: pull-request }
     output_format:
       type: object
       properties:

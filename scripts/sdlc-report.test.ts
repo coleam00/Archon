@@ -3,52 +3,53 @@ import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { writeNodeArtifactsListing } from '../packages/workflows/src/artifacts-index';
-import { caveats, failed } from '../.archon/workflows/sdlc/.shared/report';
+import { runTypedOutputs, bindTypedOutputs } from '../packages/workflows/src/typed-output-bindings';
+import { writeNodeArtifact } from '../packages/workflows/src/artifacts-index';
+import { typedOutputs } from '../.archon/workflows/sdlc/.shared/io';
+import { caveats, failed, type Reviews } from '../.archon/workflows/sdlc/.shared/report';
 
 /**
  * The SDLC pack's terminal-report module, tested where the pack lives in this
- * repository. The listing these tests pass in is produced by the engine's own
- * writer, so the JSON contract the pack consumes cannot drift from the contract
- * the engine emits without one of these failing.
+ * repository. The reviews these tests pass in are resolved by the engine's own
+ * binding, so the JSON contract the pack consumes cannot drift from the contract
+ * the engine delivers without one of these failing.
  */
 const track = trackTempRoots();
 
 function artifactsDir(): string {
   const dir = track(join(tmpdir(), `sdlc-report-${Math.random().toString(36).slice(2)}`));
-  mkdirSync(join(dir, 'nodes'), { recursive: true });
+  mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-/** A typed artifact as the engine writes it: the result under nodes/ and its sidecar. */
-function typed(
+/** A review verdict as the engine records it. */
+async function review(
   dir: string,
-  stem: string,
-  outputType: string,
+  nodeId: string,
   producedAt: string,
-  result: Record<string, unknown> | string
-): void {
-  writeFileSync(
-    join(dir, 'nodes', `${stem}.md`),
-    typeof result === 'string' ? result : JSON.stringify(result)
-  );
-  writeFileSync(
-    join(dir, 'nodes', `${stem}.meta.json`),
-    JSON.stringify({
-      nodeId: stem,
-      outputType,
-      path: `nodes/${stem}.md`,
-      runId: 'run',
-      producedAt,
-      size: 1,
-    })
+  result: Record<string, unknown>
+): Promise<void> {
+  await writeNodeArtifact(
+    dir,
+    { nodeId, outputType: 'review-report', runId: 'run', producedAt },
+    JSON.stringify(result)
   );
 }
 
-/** The report as a tail composes it: with the engine listing this node received. */
+/** This run's reviews as a `{ outputs: review-report }` binding delivers them. */
+async function reviews(dir: string): Promise<Reviews> {
+  const bound = await bindTypedOutputs(
+    'report',
+    { reviews: { outputs: 'review-report' } },
+    runTypedOutputs(dir, 'run')
+  );
+  // Through env text, as a script node receives it.
+  return typedOutputs(JSON.stringify(bound?.reviews));
+}
+
+/** The report as a tail composes it: with the reviews this node bound. */
 async function report(dir: string): Promise<string> {
-  const listingFile = await writeNodeArtifactsListing(dir, 'run');
-  return caveats(dir, { listingFile });
+  return caveats(dir, { reviews: await reviews(dir) });
 }
 
 describe('discoveries', () => {
@@ -68,10 +69,9 @@ describe('discoveries', () => {
       JSON.stringify([record('Seen by review')])
     );
     utimesSync(join(dir, 'discoveries', 'review-code.json'), 1, 1);
-    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+    await review(dir, 'review__publish', '2026-09-10T09:00:00.000Z', {
       discoveries: [record('Stale mock type')],
     });
-    utimesSync(join(dir, 'nodes', 'review__publish.md'), 2, 2);
     writeFileSync(
       join(dir, 'discoveries', 'review-simplify.json'),
       JSON.stringify([record('Found after review')])
@@ -95,10 +95,10 @@ describe('discoveries', () => {
 
   it("lists the latest verdict's discoveries with the relay", async () => {
     const dir = artifactsDir();
-    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+    await review(dir, 'review__publish', '2026-09-10T09:00:00.000Z', {
       discoveries: [record('Old')],
     });
-    typed(dir, 'recheck__publish', 'review-report', '2026-09-10T10:00:00.000Z', {
+    await review(dir, 'recheck__publish', '2026-09-10T10:00:00.000Z', {
       discoveries: [record('Flaky timeout')],
     });
     const text = await report(dir);
@@ -109,15 +109,10 @@ describe('discoveries', () => {
 
   it('says nothing when the final verdict recorded no discoveries', async () => {
     const dir = artifactsDir();
-    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+    await review(dir, 'review__publish', '2026-09-10T09:00:00.000Z', {
       discoveries: [],
     });
     expect(await report(dir)).toBe('');
-  });
-
-  it('names a missing listing instead of reading as no discoveries', () => {
-    const dir = artifactsDir();
-    expect(caveats(dir, { listingFile: undefined })).toContain('Discoveries could not be listed');
   });
 });
 
@@ -129,8 +124,7 @@ describe('failed', () => {
       join(dir, 'discoveries', 'implement.json'),
       JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
     );
-    const listingFile = await writeNodeArtifactsListing(dir, 'run');
-    const text = failed(dir, { listingFile, outcomesFile: undefined });
+    const text = failed(dir, { reviews: [], pullRequests: [], outcomesFile: undefined });
     expect(text.startsWith('Not done:')).toBe(true);
     expect(text).toContain('- Guard refuses an empty diff [unreviewed]');
     expect(text).not.toContain('Ready');
@@ -138,8 +132,8 @@ describe('failed', () => {
 });
 
 /**
- * Each tail's `report` node, run as the engine runs it: the outcome binding as env
- * text and this run's listing, with stdout as the node's result.
+ * Each tail's `report` node, run as the engine runs it: its bindings as env text,
+ * with stdout as the node's result.
  */
 describe.each([
   {
@@ -172,7 +166,8 @@ describe.each([
       env: {
         ...process.env,
         ARTIFACTS_DIR: dir,
-        TYPED_ARTIFACTS_FILE: await writeNodeArtifactsListing(dir, 'run'),
+        INPUTS_REVIEWS: '[]',
+        INPUTS_PULL_REQUESTS: '[]',
         INPUTS_OUTCOME: outcome,
       },
     });

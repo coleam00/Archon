@@ -9,13 +9,16 @@
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_OUTCOME: the outcome node's report, or "null" when a node failure kept it
  *   from running.
+ * - INPUTS_REVIEWS / INPUTS_PULL_REQUESTS: every `review-report` and `pull-request`
+ *   output of this run.
  */
 
-import { artifactsDir, emit, nullableJson } from '../../.shared/io.ts';
+import { artifactsDir, emit, nullableJson, typedOutputs } from '../../.shared/io.ts';
 import { failed, failedPublication } from '../../.shared/report.ts';
 
 const options = {
-  listingFile: process.env.TYPED_ARTIFACTS_FILE,
+  reviews: typedOutputs(process.env.INPUTS_REVIEWS),
+  pullRequests: typedOutputs(process.env.INPUTS_PULL_REQUESTS),
   outcomesFile: process.env.NODE_OUTCOMES_FILE,
 };
 

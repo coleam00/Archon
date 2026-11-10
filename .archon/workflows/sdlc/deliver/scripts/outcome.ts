@@ -11,9 +11,10 @@
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_ROUNDS: the rounds loop's final `round` output.
+ * - INPUTS_REVIEWS: every `review-report` output of this run.
  */
 
-import { artifactsDir, emit, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, text, typedOutputs } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
 
 const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
@@ -26,7 +27,7 @@ const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
   summary: string;
 };
 const capped = !rounds.done;
-const notes = caveats(artifactsDir(), { listingFile: process.env.TYPED_ARTIFACTS_FILE });
+const notes = caveats(artifactsDir(), { reviews: typedOutputs(process.env.INPUTS_REVIEWS) });
 const where = rounds.pr_url === '' ? '' : `\n${rounds.pr_url}`;
 const left = rounds.contract_left?.length
   ? `\n\nLeft open, so the pull request does not close its issue:\n${rounds.contract_left.map(item => `- ${item}`).join('\n')}`

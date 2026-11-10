@@ -38,7 +38,6 @@ const GITHUB_PLUGIN = join(REPO_ROOT, 'packages/adapters/src/forge/github/plugin
 const FAKE_GITHUB = join(import.meta.dir, 'fixtures/sdlc-fake-github.ts');
 
 const MARKER = '<!-- archon-review-report -->';
-const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const OPENING_BODY = 'Opening body: the change adds a guard.';
 
 /** A host with the GitHub plugin configured for the fake host and a host command. */
@@ -190,9 +189,8 @@ describe('delivery goes through plugin operations', () => {
           path: 'pr-body.md',
         }),
         INPUTS_DRAFT: 'true',
-        TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       },
-      artifacts: { 'pr-body.md': OPENING_BODY, 'listing.json': EMPTY_LISTING },
+      artifacts: { 'pr-body.md': OPENING_BODY },
     });
     const record = JSON.parse(created.stdout) as Record<string, unknown>;
     expect(record).toMatchObject({ number: 42, is_draft: true, head_revision: HEAD_SHA });
