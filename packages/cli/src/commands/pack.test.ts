@@ -172,14 +172,6 @@ describe('archon pack bindings', () => {
     });
   });
 
-  it('refuses an event binding for a host the source plugin does not read, writing nothing', async () => {
-    await writePack(DECLARATION);
-    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
-      "Binding 'opened' does not generate a valid GitHub source plugin binding"
-    );
-    await expect(readdir(out)).rejects.toThrow();
-  });
-
   it('refuses a declaration that references an unknown sibling, naming the file', async () => {
     await writePack(DECLARATION.replace('{ binding: sweep }', '{ binding: missing }'));
     const run = packCommand('bindings', ['fixture'], options({ only: 'sweep' }));

@@ -10,7 +10,9 @@
  */
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github-source-plugin';
+import { createForgeBindingSchema } from '@archon/forge';
+import { jsonValueSchema } from '@archon/workflows/output-ref';
+import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
 import {
   isPackTimerBinding,
   type PackBinding,
@@ -129,20 +131,34 @@ function generate(
 }
 
 /** Check a generated document against the schema of the loader that will read it. */
-function assertLoadable({ id, kind, document }: Generated, target: Target): void {
+/**
+ * An event binding as a forge source plugin reads one: the start it asks for, and a
+ * selector whose event fields its input mapping may name. The CLI may not bundle a source
+ * plugin, so this checks the two contracts every such plugin builds on; the plugin still
+ * validates its whole configuration, host and secret included, when it loads.
+ */
+const eventMappingSchema = createForgeBindingSchema(jsonValueSchema);
+const eventBindingSchema = resourceStartBindingIntentSchema
+  .omit({ bindingRevision: true, eventInputs: true })
+  .passthrough()
+  .superRefine((binding, context) => {
+    const mapping = eventMappingSchema.safeParse({
+      selector: binding.selector,
+      inputs: binding.inputMapping,
+    });
+    if (mapping.success) return;
+    for (const issue of mapping.error.issues) {
+      context.addIssue({ code: 'custom', path: issue.path, message: issue.message });
+    }
+  });
+
+function assertLoadable({ id, kind, document }: Generated): void {
   const result =
     kind === 'timer'
       ? timerTriggerConfigSchema.safeParse(document)
-      : // The plugin reads a binding only inside its configuration, so the binding is checked
-        // there. The secret name is the operator's and is not part of what is written.
-        githubWebhookSourceConfigSchema.safeParse({
-          version: 1,
-          webhookSecretEnv: 'WEBHOOK_SECRET',
-          host: target.repo.host,
-          bindings: [document],
-        });
+      : eventBindingSchema.safeParse(document);
   if (result.success) return;
-  const reader = kind === 'timer' ? 'timer binding' : 'GitHub source plugin binding';
+  const reader = kind === 'timer' ? 'timer binding' : 'source plugin binding';
   const issues = result.error.issues
     .map(issue => `${issue.path.join('.')}: ${issue.message}`)
     .join('; ');
@@ -296,7 +312,7 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
     const item = generate(id, binding, workflowNameFor(pack, id, binding.workflow), target);
-    assertLoadable(item, target);
+    assertLoadable(item);
     generated.push(item);
   }
   if (!options.force) await assertNothingOverwritten(generated);
