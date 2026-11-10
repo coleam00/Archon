@@ -2,7 +2,7 @@
 
 Decide whether the build queue launches its next round on this item, which route the round takes, and write the brief it starts from. Intake's triage already judged the item, and the round does not triage it again: you are the last judge before it spends. The next node performs what you declare: it launches the round with your route and brief, raises your attention item, or takes an already finished pull request out of draft. You write nothing to the tracker, the repository or the state store yourself, and the checkout must be exactly as you found it when you finish.
 
-The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/issue.md`; read the body from there, because it is the text this decision is about. You may read the issue's comments and linked items with the tracker's CLI.
+The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/issue.md`; read the body from there, because it is the text this decision is about. You may read the issue's comments and linked items through the Archon CLI, whose argv is the JSON string array in `$ARCHON_CLI_COMMAND`, as `<argv...> forge <op> --json --data '<request>'`, taking the repository and number from the item's URL: `workitem.comments` takes `{"subject":{"kind":"issue","ref":{"repo":{"host":…,"path":…},"number":…}}}` and `workitem.view` takes that `{"ref":…}`.
 
 ## Read first
 

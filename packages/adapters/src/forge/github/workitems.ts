@@ -20,7 +20,7 @@ const labelSchema = z.object({
   color: z.string(),
   description: z.string().nullable(),
 });
-const issueSchema = z.object({
+export const issueSchema = z.object({
   number: z.number().int().positive(),
   repository_url: z.url(),
   labels: z.array(z.object({ name: z.string().min(1) })),
@@ -38,7 +38,11 @@ type Issue = z.infer<typeof issueSchema>;
  * GitHub's issues endpoint serves pull requests too, and only `pull_request`
  * distinguishes them.
  */
-function itemRecord(repo: RepoRef, item: Issue, number = item.number): ForgeSubjectRecord {
+export function itemRecord(
+  repo: RepoRef,
+  item: Pick<Issue, 'number' | 'repository_url' | 'html_url' | 'state' | 'pull_request'>,
+  number = item.number
+): ForgeSubjectRecord {
   const { root, path } = location(repo);
   if (
     item.number !== number ||

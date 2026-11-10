@@ -212,9 +212,12 @@ remote resolves to no repository, or that has several remotes and no `origin`, r
 the run and says so. A checkout whose `origin` is a fork works on the fork; set both
 inputs to choose another repository.
 
-Agents read CI job logs with the tools the run has, since the contract has no operation
-for them. A red default branch is always raised as a `merge: base` item: `checks.rerun`
-acts only on a pull request, so the pack never reruns it.
+Agents reach the forge through `archon forge` too: they read a failing check's log with
+`checks.logs` and search issues and pull requests with `workitem.search`. No workflow
+preflights those two reads, so on a plugin without one the agent's call is refused with
+`unsupported_op`, and the agent reports that instead of a cause or a search result. A red
+default branch is always raised as a `merge: base` item: `checks.rerun` acts only on a
+pull request, so the pack never reruns it.
 
 `archon-ship`, `archon-deliver`, `archon-upkeep` and `archon-pr` start with a `forge` node
 ([`.shared/forge-check.ts`](.shared/forge-check.ts)) that proves the plugin can act
@@ -574,7 +577,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   run holds it, or its stage and build status show it does not wait.
 - **A message.** A run with no `number` and a message, such as
   `archon workflow run archon-build-queue "build the retry fix"`, has the `interpret`
-  agent resolve the message with the tracker's CLI to one of five typed decisions:
+  agent resolve the message through the forge's reads to one of five typed decisions:
   `build` one issue, which the run then claims as a named item; `choose` between
   several, which pauses as a `select` attention item labelled `build: message` and
   claims the issue picked; `order`, for several issues to build, which the `order`
