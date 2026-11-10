@@ -10,6 +10,7 @@ import {
   mutationAttempt,
 } from '@archon/forge/operations';
 import { githubErrorDetail, parseRemote, TransientGitHubError, type Fetch } from './api';
+import { handleGithubChecksLogs } from './check-logs';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
 import { handleGithubWorkItemComments } from './comments';
 import { handleGithubPrFiles, handleGithubRepoFile } from './files';
@@ -22,6 +23,7 @@ import {
   handleGithubWorkItemView,
 } from './workitems';
 import { handleGithubPrThreads } from './review-threads';
+import { handleGithubWorkItemSearch } from './search';
 
 export const githubPluginMetadata = {
   protocol: 1,
@@ -33,6 +35,7 @@ export const githubPluginMetadata = {
     'resolve',
     'checks.state',
     'checks.commit',
+    'checks.logs',
     'workitem.view',
     'workitem.comments',
     'workitem.create',
@@ -43,6 +46,7 @@ export const githubPluginMetadata = {
     'workitem.close',
     'workitem.edit-body',
     'workitem.list',
+    'workitem.search',
     'repo.labels.list',
     'repo.label.ensure',
     'pr.view',
@@ -110,6 +114,7 @@ type ReadHandler<Op extends ReadOp> = (
 const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'workitem.view': handleGithubWorkItemView,
   'workitem.list': handleGithubWorkItemList,
+  'workitem.search': handleGithubWorkItemSearch,
   'workitem.comments': handleGithubWorkItemComments,
   'repo.labels.list': handleGithubRepoLabelsList,
   'pr.view': handleGithubPrView,
@@ -120,6 +125,7 @@ const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'repo.file': handleGithubRepoFile,
   'checks.state': handleGithubChecksState,
   'checks.commit': handleGithubChecksCommit,
+  'checks.logs': handleGithubChecksLogs,
 };
 
 export async function handleGithubOperation(

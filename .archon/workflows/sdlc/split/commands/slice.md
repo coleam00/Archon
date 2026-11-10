@@ -7,7 +7,7 @@ The item: `$INPUTS.url`, with its title and body in `$ARTIFACTS_DIR/split/prd.md
 ## Read first
 
 - The triage policy: the pack's default in `$PACK_DIR/.shared/policy/triage.md`, then the project's `.archon/sdlc/policy/triage.md` when it exists, which adds to the default and wins where they conflict. Its sections on splitting, on how each kind splits, and on PRDs are the bar you judge against.
-- The project's direction document and repository guidance, the current code, and the open issues, enough to tell what already exists. You may read the item's comments and linked items with the tracker's CLI; an earlier split's comment on the item holds its plan.
+- The project's direction document and repository guidance, the current code, and the open issues, enough to tell what already exists. You may read the item's comments, linked items and the open issues through the Archon CLI, whose argv is the JSON string array in `$ARCHON_CLI_COMMAND`, as `<argv...> forge <op> --json --data '<request>'`, taking the repository and number from the item's URL: `workitem.comments` takes `{"subject":{"kind":"issue","ref":{"repo":{"host":…,"path":…},"number":…}}}`, `workitem.view` takes that `{"ref":…}`, and `workitem.search` takes `{"repo":…,"text":"<terms>","kind":"issue"}`. An earlier split's comment on the item holds its plan.
 
 ## Decide
 

@@ -1,4 +1,6 @@
 import {
+  CHECKS_LOGS_DEFAULT_BYTES,
+  WORKITEM_SEARCH_DEFAULT_LIMIT,
   contentDigest,
   isMutationRequest,
   mergeConditionSchema,
@@ -279,6 +281,33 @@ function matchesMerge(
   );
 }
 
+function matchesSearch(
+  request: OpRequest<'workitem.search'>,
+  value: OpValue<'workitem.search'>
+): boolean {
+  const state = request.state ?? 'open';
+  return (
+    sameRepo(value.repo, request.repo) &&
+    value.text === request.text &&
+    value.items.length <= (request.limit ?? WORKITEM_SEARCH_DEFAULT_LIMIT) &&
+    value.items.every(
+      item =>
+        sameRepo(item.ref.repo, request.repo) &&
+        (request.kind === undefined || item.kind === request.kind) &&
+        (state === 'any' || item.state === state)
+    )
+  );
+}
+
+function matchesLogs(request: OpRequest<'checks.logs'>, value: OpValue<'checks.logs'>): boolean {
+  return (
+    sameRepo(value.repo, request.repo) &&
+    sameCheck({ unit: value.unit, rerun: null }, { unit: request.unit, rerun: null }) &&
+    (value.log.kind === 'none' ||
+      Buffer.byteLength(value.log.text) <= (request.maxBytes ?? CHECKS_LOGS_DEFAULT_BYTES))
+  );
+}
+
 /** One matcher per operation: each checks a successful result against the request that asked for it. */
 const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
   resolve: (request, value, { metadata, host }) =>
@@ -295,6 +324,8 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     (request.at.kind === 'revision'
       ? value.revision === request.at.revision && value.branch === null
       : value.branch !== null),
+  'checks.logs': matchesLogs,
+  'workitem.search': matchesSearch,
   'pr.merge-state': byRef,
   'pr.files': byRef,
   'repo.file': (request, value) =>

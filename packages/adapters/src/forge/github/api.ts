@@ -74,24 +74,15 @@ export function location(repo: RepoRef): { root: string; graphql: string; path: 
   };
 }
 
-/**
- * One GitHub API call.
- *
- * `acknowledge` runs once GitHub has answered with a success status, which is the
- * moment a write stops being merely submitted and becomes one whose effect must
- * be verified rather than guessed at.
- */
-export async function githubRequest(
+/** One authenticated GitHub call, answered with any status or lost in transit. */
+export async function githubSend(
   fetchImpl: Fetch,
   token: string,
   url: string,
-  init: RequestInit = {},
-  acknowledge?: () => void,
-  responseMode: 'json' | 'empty' = 'json'
-): Promise<unknown> {
-  let response: Response;
+  init: RequestInit = {}
+): Promise<Response> {
   try {
-    response = await fetchImpl(url, {
+    return await fetchImpl(url, {
       ...init,
       headers: {
         accept: 'application/vnd.github+json',
@@ -108,6 +99,24 @@ export async function githubRequest(
       { cause }
     );
   }
+}
+
+/**
+ * One GitHub API call.
+ *
+ * `acknowledge` runs once GitHub has answered with a success status, which is the
+ * moment a write stops being merely submitted and becomes one whose effect must
+ * be verified rather than guessed at.
+ */
+export async function githubRequest(
+  fetchImpl: Fetch,
+  token: string,
+  url: string,
+  init: RequestInit = {},
+  acknowledge?: () => void,
+  responseMode: 'json' | 'empty' = 'json'
+): Promise<unknown> {
+  const response = await githubSend(fetchImpl, token, url, init);
   if (!response.ok) {
     throw githubResponseError(response);
   }
@@ -253,7 +262,7 @@ export function githubErrorDetail(cause: unknown): ForgeError {
   };
 }
 
-function githubResponseError(response: Response): GitHubError {
+export function githubResponseError(response: Response): GitHubError {
   return new (response.status >= 500 ? TransientGitHubError : GitHubError)(
     {
       kind:

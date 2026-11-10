@@ -38,7 +38,11 @@ type Issue = z.infer<typeof issueSchema>;
  * GitHub's issues endpoint serves pull requests too, and only `pull_request`
  * distinguishes them.
  */
-function itemRecord(repo: RepoRef, item: Issue, number = item.number): ForgeSubjectRecord {
+export function itemRecord(
+  repo: RepoRef,
+  item: Pick<Issue, 'number' | 'repository_url' | 'html_url' | 'state' | 'pull_request'>,
+  number = item.number
+): ForgeSubjectRecord {
   const { root, path } = location(repo);
   if (
     item.number !== number ||
