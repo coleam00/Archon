@@ -244,6 +244,23 @@ export const workflowHelp: HelpGroup = {
       description:
         'Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a\nworkflow, a workflow folder or pack (by name or directory\npath); relative paths resolve from the invoking directory before the\nrepository root. With no target, runs every fixture. Never creates a\nrun or contacts a provider; exec-code fixtures execute in a\nscratch worktree of HEAD',
     },
+    {
+      command: 'workflow',
+      subcommand: 'types',
+      spec: 'workflow types <name|folder|path>',
+      description:
+        "Generate TypeScript for each node's output_format: the node\noutput types and every enum's values. A pack (by name or\ndirectory path) writes <pack>/.shared/outputs.generated.ts; a single\nworkflow needs --out. --check exits 1 when the file is stale",
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write, relative to the invoking directory',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
+    },
   ],
   scopedOnly: [
     {
