@@ -118,11 +118,15 @@ async function markedCandidates(
 ): Promise<Issue[]> {
   // The marker's words as one quoted phrase: quotes dropped so the marker cannot add
   // qualifiers, and cut to a length GitHub accepts. The exact match is the caller's.
+  // Whole words only: a cut inside a word changes the term search matches.
   const words = marker
     .replace(/<!--|-->|"/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim()
-    .slice(0, SEARCH_TERM_CHARS);
+    .split(/\s+/)
+    .filter(word => word !== '')
+    .reduce((kept, word) => {
+      const next = kept === '' ? word : `${kept} ${word}`;
+      return next.length <= SEARCH_TERM_CHARS ? next : kept;
+    }, '');
   const query = encodeURIComponent(`repo:${path} is:issue in:body "${words}"`);
   const search = searchSchema.parse(
     await githubRequest(fetchImpl, token, `${root}/search/issues?q=${query}&per_page=100`)

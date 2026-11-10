@@ -148,14 +148,19 @@ test('closed recovery preserves edited content, ambiguous and failed lookups nev
 test('marker lookup finds an old issue by search and a new one search has not indexed, never a PR', async () => {
   const fake = fixture();
   const baseFetch = fake.fetch;
-  const lookup = async (searched: unknown[], newest: unknown[], incomplete = false) => {
+  const lookup = async (
+    searched: unknown[],
+    newest: unknown[],
+    incomplete = false,
+    total = searched.length
+  ) => {
     fake.fetch = async (input, init) => {
       const url = new URL(String(input));
       if ((init?.method ?? 'GET') === 'GET' && url.pathname === '/search/issues') {
         // Only a search for the marker's words in issue bodies of this repository finds it.
         const asked = url.searchParams.get('q') === 'repo:owner/repo is:issue in:body "canonical"';
         return Response.json({
-          total_count: searched.length,
+          total_count: total,
           incomplete_results: incomplete,
           items: asked ? searched : [],
         });
@@ -185,12 +190,36 @@ test('marker lookup finds an old issue by search and a new one search has not in
     ok: false,
     mutation: { outcome: 'refused' },
   });
+  // A full page with more matches beyond it cannot show the marker is absent either.
+  expect(await lookup([unmarked], [], false, 101)).toMatchObject({
+    ok: false,
+    mutation: { outcome: 'refused' },
+  });
   expect(fake.writes()).toBe(0);
   // A pull request carrying the marker is not the issue.
   expect(await lookup([{ ...fake.issue, pull_request: {} }], [])).toMatchObject({
     ok: true,
     result: { value: { changed: true } },
   });
+});
+
+test('a marker cannot add search qualifiers or outgrow the query limit', async () => {
+  const fake = fixture();
+  const long = `<!-- a" is:closed "b ${'word '.repeat(60)}-->`;
+  const queries: string[] = [];
+  const baseFetch = fake.fetch;
+  fake.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/search/issues') queries.push(url.searchParams.get('q') ?? '');
+    return baseFetch(input, init);
+  };
+  await run(forgeRequestSchema.parse({ ...create, marker: long, body: `${long}\nBody` }), fake);
+  const phrase = queries[0]?.match(/"(.*)"$/)?.[1] ?? '';
+  expect(phrase).not.toContain('"');
+  expect(phrase.length).toBeLessThanOrEqual(200);
+  // Quotes gone, so `is:closed` stays inside the phrase; cut after a whole word.
+  expect(phrase.startsWith('a is:closed b word')).toBe(true);
+  expect(phrase.endsWith(' word')).toBe(true);
 });
 
 test('label set clears, verifies exact sets, no-ops, and never creates missing names', async () => {
