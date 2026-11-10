@@ -86,7 +86,8 @@ export const cliArgOptions: CliArgOptions = {
   effort: { type: 'string' },
   full: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
-  // `archon workflow types`: compare instead of writing, and the file to write.
+  // `archon workflow types`: compare instead of writing. `--out` is the file it writes,
+  // and the directory `archon pack bindings` writes into.
   check: { type: 'boolean' },
   out: { type: 'string' },
   stubs: { type: 'string' },
@@ -107,7 +108,6 @@ export const cliArgOptions: CliArgOptions = {
   // `archon pack bindings`: the operator's choices a pack's binding declaration lacks.
   repo: { type: 'string' },
   'run-as': { type: 'string' },
-  out: { type: 'string' },
   only: { type: 'string' },
   // Private sealed handoff appended by the parent of a detached workflow run.
   'internal-detached-run-config': { type: 'string' },
