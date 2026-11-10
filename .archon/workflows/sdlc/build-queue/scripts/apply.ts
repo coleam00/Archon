@@ -33,6 +33,7 @@ import {
 import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { readTyped } from '../../.shared/typed.ts';
 import { pushHead } from '../../.shared/push.ts';
@@ -41,32 +42,9 @@ import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
-interface RouteOutput {
-  readonly decision: 'launch' | 'ask' | 'ready';
-  /** The route the round took; recorded on the round so outcomes can be read by route. */
-  readonly route: string;
-  readonly ready_head?: string | null;
-  readonly brief: string;
-  readonly reason: string;
-  readonly attention: BuildAttention | null;
-}
-
-interface AnswerOutput {
-  readonly decision: 'done' | 'continue' | 'ask';
-  readonly brief: string;
-  readonly push: QualifiedPr | null;
-  readonly reason: string;
-  /** The agent's own class for an ask; the round count does not decide it. Ignored otherwise. */
-  readonly ask_class: Exclude<AskedBy, 'route'>;
-  readonly attention: BuildAttention | null;
-}
-
-interface ShipReport {
-  readonly delivered: boolean;
-  readonly reason: string;
-  readonly pr_url: string;
-  readonly summary: string;
-}
+type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
+type AnswerOutput = NodeOutput<'archon-build-queue', 'answer'>;
+type ShipReport = NodeOutput<'archon-build', 'report'>;
 
 /** What the run decided, before anything is written. */
 type Decision =
