@@ -20,7 +20,7 @@ const labelSchema = z.object({
   color: z.string(),
   description: z.string().nullable(),
 });
-const issueSchema = z.object({
+export const issueSchema = z.object({
   number: z.number().int().positive(),
   repository_url: z.url(),
   labels: z.array(z.object({ name: z.string().min(1) })),

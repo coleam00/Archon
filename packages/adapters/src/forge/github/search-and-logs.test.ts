@@ -50,8 +50,8 @@ describe('workitem.search', () => {
     updated_at,
     ...(pr ? { pull_request: {} } : {}),
   });
-  const page = (items: unknown[], total = items.length) =>
-    Response.json({ total_count: total, incomplete_results: false, items });
+  const page = (items: unknown[], total = items.length, incomplete = false) =>
+    Response.json({ total_count: total, incomplete_results: incomplete, items });
   const kindOf = (url: URL) => (url.searchParams.get('q')?.includes(' is:pr ') ? 'pr' : 'issue');
 
   test('searches issues and pull requests in the repository, newest update first', async () => {
@@ -111,6 +111,13 @@ describe('workitem.search', () => {
       'repo:archon/test is:issue retry backoff',
     ]);
     expect(github.calls[0]?.url.searchParams.get('per_page')).toBe('30');
+
+    // A search GitHub timed out is partial even when its count matches what it returned.
+    const timedOut = fakeGitHub(() => page([found(4, '2026-11-04T00:00:00Z')], 1, true));
+    expect(await run({ ...request, kind: 'issue' }, timedOut)).toMatchObject({
+      ok: true,
+      result: { value: { truncated: true } },
+    });
   });
 
   test('refuses a match from another repository and a search GitHub would not accept', async () => {

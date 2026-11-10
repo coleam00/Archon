@@ -7,7 +7,7 @@ import {
   type ForgeResponse,
 } from '@archon/forge/operations';
 import { GitHubError, githubRepository, githubRequest, location, type Fetch } from './api';
-import { itemRecord } from './workitems';
+import { issueSchema, itemRecord } from './workitems';
 
 type SearchRequest = Extract<ForgeRequest, { op: 'workitem.search' }>;
 type Kind = NonNullable<SearchRequest['kind']>;
@@ -19,15 +19,16 @@ const pageSchema = z.object({
   total_count: z.number().int(),
   incomplete_results: z.boolean(),
   items: z.array(
-    z.object({
-      number: z.number().int().positive(),
-      repository_url: z.url(),
-      html_url: z.url(),
-      title: z.string(),
-      state: z.enum(['open', 'closed']),
-      updated_at: z.iso.datetime({ offset: true }),
-      pull_request: z.unknown().optional(),
-    })
+    issueSchema
+      .pick({
+        number: true,
+        repository_url: true,
+        html_url: true,
+        title: true,
+        state: true,
+        pull_request: true,
+      })
+      .extend({ updated_at: z.iso.datetime({ offset: true }) })
   ),
 });
 type Page = z.infer<typeof pageSchema>;

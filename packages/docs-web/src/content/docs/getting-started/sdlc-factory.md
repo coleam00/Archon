@@ -35,7 +35,7 @@ You need:
 archon workflow run archon-forge-check     # from the clone
 ```
 
-The pack talks to the forge only through `archon forge` and an installed [forge plugin](/reference/forge/); for GitHub, `archon plugin add coleam00/Archon/plugins/forge-github`. The check proves the plugin offers every operation the delivery workflows use and can read the repository the clone's remotes name. It proves read access only; the first write proves the rest. It does not check the merge queue's operations: the merge queue checks those itself when it starts and refuses a plugin without them before it claims any work.
+The pack talks to the forge only through `archon forge` and an installed [forge plugin](/reference/forge/); for GitHub, `archon plugin add coleam00/Archon/plugins/forge-github`. The check proves the plugin offers every operation the delivery workflows' scripts call and can read the repository the clone's remotes name. It does not check `checks.logs` or `workitem.search`, which only agents call; a plugin without one refuses that call and the agent reports it. It proves read access only; the first write proves the rest. It does not check the merge queue's operations: the merge queue checks those itself when it starts and refuses a plugin without them before it claims any work.
 
 ## 2. Name your maintainers
 
