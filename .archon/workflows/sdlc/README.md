@@ -1260,6 +1260,30 @@ archon metrics sdlc.review_rounds --compare <when this checkout picked up a pack
 archon metrics sdlc.review_one_round --by-model ship__deliver__rounds.review__code
 ```
 
+### Test and production lines
+
+Given `lines_since`, `archon-metrics-prs` also records the lines each factory pull
+request merged since then added, at its merge time and attributed like the other records:
+
+| Metric | Kind | Unit | One record per merged pull request |
+|---|---|---|---|
+| `sdlc.test_lines_added` | count | `lines` | lines it added in test files |
+| `sdlc.production_lines_added` | count | `lines` | lines it added in every other file |
+
+A test file is one under a `__tests__`, `test`, `tests` or `spec` directory, or named
+`*.test.*`, `*.spec.*`, `*_test.*`, `*_spec.*` or `test_*`. Lines are counted from the
+patches `pr.files` reports, one read per pull request, so the window sets the cost. A pull
+request with a file the forge reports without a patch, such as a binary or a very large
+diff, is listed in `lines_skipped` and counts in neither. The records are evidence and gate
+nothing. The test-to-production ratio across a pack change is the two values divided, on
+each side of the cut:
+
+```bash
+archon workflow run archon-metrics-prs --input lines_since=30d
+archon metrics sdlc.test_lines_added --compare <when this checkout picked up a pack change>
+archon metrics sdlc.production_lines_added --compare <when this checkout picked up a pack change>
+```
+
 ### Test value
 
 [`archon-metrics-test-value`](metrics-test-value/archon-metrics-test-value.yaml) judges

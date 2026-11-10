@@ -110,6 +110,14 @@ export function readPrFacts(urls: Iterable<string>): PrFacts[] {
   return facts;
 }
 
+/** The time `since` names: an ISO date or time, or `<n>d` back from now. */
+export function sinceTime(since: string): number {
+  const days = /^(\d+)d$/.exec(since)?.[1];
+  const from = days === undefined ? Date.parse(since) : Date.now() - Number(days) * 86_400_000;
+  if (Number.isNaN(from)) throw new Error(`since must be an ISO date or time, or a number of days such as 7d; received ${JSON.stringify(since)}`);
+  return from;
+}
+
 /** A pull request from a round's branch: a `build/` branch in the repository itself. */
 function isQueueBuilt(pr: PrFacts): boolean {
   return !pr.isCrossRepository && pr.headRefName.startsWith(BUILD_BRANCH_PREFIX);
