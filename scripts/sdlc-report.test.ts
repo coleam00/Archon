@@ -5,7 +5,9 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { runTypedOutputs, bindTypedOutputs } from '../packages/workflows/src/typed-output-bindings';
 import { writeNodeArtifact } from '../packages/workflows/src/artifacts-index';
-import { typedOutputs } from '../.archon/workflows/sdlc/.shared/io';
+import type { JsonValue } from '../packages/workflows/src/output-ref';
+import type { TypedOutputRecord } from '../packages/workflows/src/schemas/node-bindings';
+import { type TypedOutput, typedOutputs } from '../.archon/workflows/sdlc/.shared/io';
 import { caveats, failed, type Reviews } from '../.archon/workflows/sdlc/.shared/report';
 
 /**
@@ -35,6 +37,16 @@ async function review(
     JSON.stringify(result)
   );
 }
+
+// The pack restates the engine's typed-output envelope, which it may not import. Each
+// side must accept the other's, so a field added, dropped or retyped on either fails here.
+const packReadsEngine = (record: TypedOutputRecord): TypedOutput<JsonValue> => record;
+const engineReadsPack = (record: TypedOutput<JsonValue>): TypedOutputRecord => ({
+  ...record,
+  loop: [...record.loop],
+});
+void packReadsEngine;
+void engineReadsPack;
 
 /** This run's reviews as the tails' `{ outputs: review-report, if_unreadable: null }` delivers them. */
 async function reviews(dir: string): Promise<Reviews> {
