@@ -4,7 +4,6 @@ import { DETAIL_VIEWS, type DetailView, type NodeFilterOption } from '../compone
 
 const VIEW_KEY = 'archon.console.detailView';
 const NODE_KEY = 'archon.console.runNodeSelection';
-const LEGACY_NODE_KEY = 'archon.console.runNodeFilter';
 
 function readPreference(key: string): string | null {
   try {
@@ -26,11 +25,9 @@ function parseView(value: string | null): DetailView {
   return DETAIL_VIEWS.find(view => view === value) ?? 'log';
 }
 
+/** The remembered node; empty or absent means all nodes. */
 function readStoredNode(): string | null {
-  const selection = readPreference(NODE_KEY);
-  if (selection !== null) return selection || null;
-  const legacy = readPreference(LEGACY_NODE_KEY);
-  return legacy === 'all' ? null : legacy;
+  return readPreference(NODE_KEY) || null;
 }
 
 export function useRunDetailSelection(nodeOptions: NodeFilterOption[], loaded: boolean) {

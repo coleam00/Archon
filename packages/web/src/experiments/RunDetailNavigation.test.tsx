@@ -34,7 +34,6 @@ const container = document.createElement('div');
 const base = '/console/r/run-1';
 const viewKey = 'archon.console.detailView';
 const nodeKey = 'archon.console.runNodeSelection';
-const legacyNodeKey = 'archon.console.runNodeFilter';
 const originalFetch = globalThis.fetch;
 
 beforeEach(() => {
@@ -151,25 +150,21 @@ test('tab and node changes push history; Back and Forward restore the URL select
   expect(container.querySelector('select')?.value).toBe('outcome');
 });
 
-test.each([nodeKey, legacyNodeKey])(
-  'bare links restore Artifacts and %s with replace, leaving no extra Back entry',
-  async key => {
-    localStorage.setItem(viewKey, 'artifacts');
-    localStorage.setItem(key, 'outcome');
-    await open(base);
-    activeTab('Artifacts');
-    expect(query().get('view')).toBe('artifacts');
-    expect(query().get('node')).toBe('outcome');
-    await act(async () => router.navigate(-1));
-    expect(container.textContent).toBe('Previous page');
-  }
-);
+test('bare links restore Artifacts and the stored node with replace, leaving no extra Back entry', async () => {
+  localStorage.setItem(viewKey, 'artifacts');
+  localStorage.setItem(nodeKey, 'outcome');
+  await open(base);
+  activeTab('Artifacts');
+  expect(query().get('view')).toBe('artifacts');
+  expect(query().get('node')).toBe('outcome');
+  await act(async () => router.navigate(-1));
+  expect(container.textContent).toBe('Previous page');
+});
 
 test.each([...DETAIL_VIEWS])(
   'a shared %s link overrides stored defaults and survives remount',
   async view => {
     localStorage.setItem(viewKey, view === 'log' ? 'graph' : 'log');
-    localStorage.setItem(legacyNodeKey, 'all');
     await open(`${base}?view=${view}&node=outcome`);
     activeTab(DETAIL_VIEW_LABELS[view]);
     expect(query().get('node')).toBe('outcome');
@@ -386,7 +381,6 @@ test('the node named all is distinct from all nodes across graph, log, history a
     ],
     nodes: [...detailFixture.run.nodes, { node_id: 'all', state: 'completed' }],
   });
-  localStorage.setItem(legacyNodeKey, 'all');
   localStorage.setItem(viewKey, 'graph');
   await open(base);
   expect(query().get('node')).toBe('');

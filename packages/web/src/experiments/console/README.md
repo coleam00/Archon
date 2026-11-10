@@ -53,8 +53,7 @@ installations operate without an identity.
 | `archon.console.attentionAlerts` | `0`     | Alert when a run needs you or finishes |
 
 Local storage reads are guarded and fall back to these defaults. The node selection
-uses an empty value for all nodes. When absent, it restores the legacy
-`archon.console.runNodeFilter` preference, where `all` meant all nodes.
+uses an empty value for all nodes.
 
 ### Closed-console notifications
 
