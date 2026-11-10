@@ -37,7 +37,7 @@ import { join } from 'node:path';
 import { artifactsDir, emit, note, refuse, text } from '../../.shared/io.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { FINDING_VALUES, type Finding, readFindings } from '../../.shared/review-item.ts';
-import { isObject } from '../../.shared/typed.ts';
+import { isObject } from '../../.shared/io.ts';
 
 /** The verifier nodes' numbers; each writes review/verify-<n>.json. */
 const VOTERS = [1, 2, 3] as const;

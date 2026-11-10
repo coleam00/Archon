@@ -1137,7 +1137,7 @@ that built it:
 A review round is one verdict a delivery round's review published on the pull request:
 the `review-report` output of the deliver loop's `review` node. The build queue records each run's
 verdicts on its build round (`reviews` on the work item) when it records the round, from
-the run's typed-artifact listing, and the metric reads only the work item. Every build
+the run's `review-report` outputs bound into that node, and the metric reads only the work item. Every build
 round that carried the pull request counts, oldest verdict first. Rounds to Ready counts up to the
 verdict from which every later verdict is ready, so a Ready review that a later review
 overturned does not end the count. A pull request Ready on its first review and on every

@@ -8,16 +8,16 @@
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
  * its claim until the ruling node records the answer. The round carries the review
- * verdicts its delivery published and the latest validation its CI agent ran, read from
- * this run's typed-artifact listing. A continue then starts the item's
- * next round at once through the operator's build-queue binding; if it does not start,
- * the item waits for the next queue run.
+ * verdicts its delivery published and the latest validation its CI agent ran. A
+ * continue then starts the item's next round at once through the operator's
+ * build-queue binding; if it does not start, the item waits for the next queue run.
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ORDER and INPUTS_HANDOFF,
  * the order's and the handoff's summaries, empty when skipped; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-build's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
- * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's input; INPUTS_REVIEWS and INPUTS_CI, every
+ * `review-report` and `ci-report` output of this run.
  */
 
 import {
@@ -32,10 +32,9 @@ import {
 } from '../../.shared/build.ts';
 import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed, typedOutputs, UNREADABLE_OUTPUTS, workflowRunId } from '../../.shared/io.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
-import { readTyped } from '../../.shared/typed.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
 import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
@@ -183,34 +182,29 @@ function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; 
 }
 
 /**
- * The review verdicts this run's delivery published, for the round's record. A listing
- * that cannot be read leaves them out, noted: the round is still recorded, and the
- * review-round metric reads its run's artifacts instead or skips its pull request.
+ * The review verdicts this run's delivery published, for the round's record. Unreadable
+ * outputs leave them out, noted: the round is still recorded, and the review-round
+ * metric reads its run's artifacts instead or skips its pull request.
  */
 function reviewsOf(): Pick<BuildRound, 'reviews'> {
-  const read = runReviews(process.env.TYPED_ARTIFACTS_FILE, artifactsDir());
-  if (read.ok) return { reviews: read.verdicts };
-  note(`the round records no review verdicts: ${read.problem}`);
+  const reviews = typedOutputs<{ ready: boolean }>(process.env.INPUTS_REVIEWS);
+  if (reviews !== null) return { reviews: runReviews(reviews) };
+  note(`the round records no review verdicts: ${UNREADABLE_OUTPUTS}`);
   return {};
 }
 
 /**
- * The latest full validation this run's CI agent ran, for the round's record. A listing
- * that cannot be read leaves it out, noted: under `ci: none` the gate then refuses the
- * pull request until a later round records one.
+ * The latest full validation this run's CI agent ran, for the round's record. Unreadable
+ * outputs leave it out, noted: under `ci: none` the gate then refuses the pull request
+ * until a later round records one.
  */
 function validationOf(): Pick<BuildRound, 'validation'> {
-  const read = readTyped<{ validation: Validation | null }>(
-    process.env.TYPED_ARTIFACTS_FILE,
-    artifactsDir(),
-    'ci-report'
-  );
-  const problem = read.listingProblem ?? read.problems[0];
-  if (problem !== undefined) {
-    note(`the round records no validation: ${problem}`);
+  const reports = typedOutputs<{ validation: Validation | null }>(process.env.INPUTS_CI);
+  if (reports === null) {
+    note(`the round records no validation: ${UNREADABLE_OUTPUTS}`);
     return {};
   }
-  const validation = read.values.filter(report => report.validation !== null).at(-1)?.validation;
+  const validation = reports.map(report => report.value.validation).filter(ran => ran !== null).at(-1);
   return validation == null ? {} : { validation };
 }
 

@@ -136,6 +136,7 @@ export {
   inputEnvKey,
   bindingDirectiveSchema,
   isBindingDirective,
+  isTypedOutputsDirective,
 } from './node-bindings';
 export {
   isAgentNode,
@@ -180,7 +181,11 @@ export type {
   PiNodeConfig,
   NestedKeySpec,
 } from './dag-node';
-export type { BindingDirective } from './node-bindings';
+export type {
+  BindingDirective,
+  TypedOutputsDirective,
+  TypedOutputRecord,
+} from './node-bindings';
 export type { PromptSource, AgentNode } from './agent-node';
 export type { ExecNode } from './exec-node';
 export type { LoopNode } from './loop-node';

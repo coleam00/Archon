@@ -47,6 +47,7 @@ import type {
   ComposeFanOutNode,
   LoopGroupNode,
 } from './schemas';
+import { validateTypedOutputOrder } from './loader/typed-output-order';
 import { findWorkflowLoadError } from './schemas/workflow';
 import { isIncludeDirective, isLoopGroupNode, isComposeFanOutNode } from './schemas';
 import { validateDagStructure } from './loader/dag-structure';
@@ -216,7 +217,9 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
   // equivalent failures inside every recursively expanded loop_group body.
   const structureError =
     validateDagStructure(expanded.nodes, undefined, expanded.includeAliases) ||
-    validateLoopGroupProseCompletion(expanded.nodes);
+    validateLoopGroupProseCompletion(expanded.nodes) ||
+    // Only here: a producer inside an included block is invisible before flattening.
+    validateTypedOutputOrder(expanded.nodes);
   if (structureError) {
     throw new IncludeExpansionError(structureError);
   }
