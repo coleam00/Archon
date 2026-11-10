@@ -587,6 +587,18 @@ describe('the build queue scripts', () => {
     expect(buildWaits(doc as WorkItem)).toBe(true);
   }, 60_000);
 
+  test("a round whose pull request is in another repository records no pull request number", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const foreign = 'https://ghe.example.com/someone/else/pull/42';
+    const inputs = { ...applyInputs(CONTINUE), INPUTS_ENDING: JSON.stringify({ ...ENDING, pr_url: foreign }) };
+    const applied = run(at, 'apply', inputs);
+    expect(applied.stderr).toContain('is not a pull request of ghe.example.com/example/repo');
+    const [recorded] = (stored(at).value as WorkItem).facts.build?.rounds ?? [];
+    expect(recorded).toMatchObject({ pr_url: foreign });
+    expect(recorded).not.toHaveProperty('pr_number');
+  }, 60_000);
+
   test("the round records the review verdicts the run's delivery published, and still records the round when they cannot be read", () => {
     const at = install();
     seed(at, triaged(CLAIMED));
