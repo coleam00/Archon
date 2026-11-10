@@ -142,7 +142,8 @@ export const resolveResultSchema = z.discriminatedUnion('kind', [
     forge: z.string().min(1),
     repo: repoRefSchema,
     plugin: pluginIdentitySchema,
-    // The issue or pull request the URL names, in `repo`; only on a `web` request.
+    // The issue or pull request the URL names, in `repo`: only on a `web` request, and
+    // required there; the host refuses a resolved `web` answer without it.
     subject: z
       .object({ kind: z.enum(['issue', 'pr']), number: z.number().int().positive() })
       .optional(),
