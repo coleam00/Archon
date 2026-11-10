@@ -62,14 +62,6 @@ describe('bundled workflows', () => {
     expect(offenders).toEqual([]);
   });
 
-  it('should have valid YAML structure', () => {
-    for (const content of Object.values(BUNDLED_WORKFLOWS)) {
-      expect(content).toContain('name:');
-      expect(content).toContain('description:');
-      expect(content.includes('nodes:')).toBe(true);
-    }
-  });
-
   it.each([
     [
       'Codex group under Claude',

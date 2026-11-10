@@ -18,7 +18,7 @@
 
 import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
@@ -49,8 +49,7 @@ const ABOUT: Record<AskedBy, string> = {
 };
 
 function main(): void {
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const asked = nullableJson(process.env.INPUTS_ASKED) as Asked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');

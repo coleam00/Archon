@@ -12,7 +12,7 @@ import { followUp } from './follow-up.ts';
 import { note, text } from './io.ts';
 import type { NodeOutput } from './outputs.generated.ts';
 import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
-import type { Attention, DecisionEntry } from './queue.ts';
+import { type Attention, clipped, type DecisionEntry, withDecision } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
   type Claim,
@@ -111,13 +111,6 @@ export interface BuildRecord {
 // Rounds, decisions and their prose are capped so the record keeps the work item well
 // under the state store's 64 KiB limit. `archon state log` keeps every revision.
 export const KEPT_ROUNDS = 10;
-const KEPT_DECISIONS = 20;
-const KEPT_TEXT = 1500;
-
-function clipped(text: string): string {
-  return text.length <= KEPT_TEXT ? text : `${text.slice(0, KEPT_TEXT)}…`;
-}
-
 /** Whether an unclaimed item waits for the build queue. */
 export function buildWaits(doc: WorkItem): boolean {
   if (!(LAUNCH_STAGES as readonly string[]).includes(doc.stage)) return false;
@@ -259,12 +252,11 @@ export interface BuildChange {
 export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
   const prior = doc.facts.build;
   const round = change.round === null ? [] : [{ ...change.round, summary: clipped(change.round.summary) }];
-  const entry = { ...change.entry, reason: clipped(change.entry.reason) };
   const build: BuildRecord = {
     status: change.status,
     brief: change.status === 'next' ? change.brief : '',
     rounds: [...(prior?.rounds ?? []), ...round].slice(-KEPT_ROUNDS),
-    decisions: [...(prior?.decisions ?? []), entry].slice(-KEPT_DECISIONS),
+    decisions: withDecision(prior?.decisions, change.entry),
     at: change.at,
   };
   return {
