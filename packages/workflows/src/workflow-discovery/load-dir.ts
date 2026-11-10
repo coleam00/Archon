@@ -234,11 +234,10 @@ export async function loadPackWorkflows(
   if ('error' in listing) return { files, errors: [listing.error] };
   let workflowPack: WorkflowPack | PackSettingsError;
   try {
-    const settings = await loadPackDeclaration(packPath, pack.label);
     workflowPack = {
       key: pack.pack,
       source: pack.source,
-      ...(settings !== undefined ? { settings } : {}),
+      ...(await loadPackDeclaration(packPath, pack.label)),
     };
   } catch (error) {
     if (!(error instanceof PackSettingsError)) throw error;

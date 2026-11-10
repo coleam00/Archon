@@ -2,7 +2,6 @@ import { readdir, access } from 'fs/promises';
 import { basename, join } from 'path';
 import * as archonPaths from '@archon/paths';
 import type { WorkflowLoadError } from '../schemas';
-import type { WorkflowPack } from '../schemas/pack-settings';
 import {
   BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
@@ -14,7 +13,7 @@ import {
 import { collectInstalledBundleSources, readBundleContent } from '../defaults/bundle-inventory';
 import { parseWorkflow, type ParseResult } from '../loader';
 import { PACK_DECLARATION_PATH, qualifyWorkflowResources } from '../packaged-workflow';
-import { PackSettingsError, parsePackDeclaration } from '../pack-settings';
+import { PackSettingsError, parsePackDeclaration, type PackDeclaration } from '../pack-settings';
 import type { DiscoveryContext } from './context';
 import {
   loadPackagedWorkflowsFromDir,
@@ -108,11 +107,11 @@ function parseBundledWorkflow(
 ): ParseResult {
   const { providers, configuredEnvNames } = context;
   if (owner === undefined) return parseWorkflow(content, filename, providers, configuredEnvNames);
-  let settings: WorkflowPack['settings'];
+  let declared: PackDeclaration;
   try {
-    settings =
+    declared =
       declaration === undefined
-        ? undefined
+        ? {}
         : parsePackDeclaration(declaration, `${owner.pack}/${PACK_DECLARATION_PATH}`);
   } catch (error) {
     if (!(error instanceof PackSettingsError)) throw error;
@@ -124,7 +123,7 @@ function parseBundledWorkflow(
   return parseWorkflow(content, filename, providers, configuredEnvNames, {
     key: owner.pack,
     source: 'bundled',
-    ...(settings !== undefined ? { settings } : {}),
+    ...declared,
   });
 }
 

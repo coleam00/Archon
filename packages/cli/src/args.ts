@@ -101,6 +101,11 @@ export const cliArgOptions: CliArgOptions = {
   'delivery-id': { type: 'string' },
   inputs: { type: 'string' },
   owner: { type: 'string' },
+  // `archon pack bindings`: the operator's choices a pack's binding declaration lacks.
+  repo: { type: 'string' },
+  'run-as': { type: 'string' },
+  out: { type: 'string' },
+  only: { type: 'string' },
   // Private sealed handoff appended by the parent of a detached workflow run.
   'internal-detached-run-config': { type: 'string' },
   // Private handoff: the run row the detached parent created before forking (#2872).
