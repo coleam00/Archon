@@ -32,7 +32,7 @@ reference covers launching and tending the queues by hand.
   maintainer wrote; with no trusted review, no verdict is Ready and nothing merges.
 - The merge gate requires green CI at the pull request's head. A repository with no
   CI checks reads as `none`, not green, so nothing merges there until the project sets
-  `ci: none` in `.archon/packs/sdlc.yaml` (https://archon.diy/guides/sdlc-operations/#pack-settings): delivery
+  `ci: none` in `.archon/packs/sdlc.yaml` (the pack README's setup guide, "Choose the pack settings"): delivery
   then runs the full validation itself, and the gate requires it to have passed at the
   head instead.
 - Policy documents at `.archon/sdlc/policy/<topic>.md` add to the pack's defaults

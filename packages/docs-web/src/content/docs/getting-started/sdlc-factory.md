@@ -172,7 +172,7 @@ archon pack bindings sdlc \
   If you already schedule a queue another way, remove that schedule first, or both start runs for the same queue.
 - **Intake** starts on GitHub issue and label events, through the GitHub source plugin on a running server. The two `intake-*` files are entries for that plugin's `bindings` array ([Configure GitHub event starts](/guides/workflow-triggers/#configure-github-event-starts)). It needs a webhook, so it is the last piece most people add. Until then, run intake by hand for each new issue.
 
-[Operate the SDLC factory](/guides/sdlc-operations/#bindings) says what each binding does and why it has its capacity and overlap. [Workflow triggers](/guides/workflow-triggers/) covers schedules, webhooks, capacity and overlap.
+[Operate the SDLC factory](/guides/sdlc-operations/) says, queue by queue, why each binding has its capacity and overlap. [Workflow triggers](/guides/workflow-triggers/) covers schedules, webhooks, capacity and overlap.
 
 ## What the pack writes
 

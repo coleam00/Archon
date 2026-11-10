@@ -9,35 +9,15 @@ sidebar:
   order: 14
 ---
 
-This page is the operator manual for the bundled `sdlc` pack. [Set up the SDLC factory](/getting-started/sdlc-factory/) takes one repository from nothing to a merged pull request; read it first. [SDLC pack workflows](/reference/sdlc-workflows/) lists every workflow and what it produces. This page says how the queues behave once they run: what each one picks up, what it decides on its own, what it asks, and what it writes down.
+This page is the operator manual for the bundled `sdlc` pack. Set the pack up first, with [Set up the SDLC factory](/getting-started/sdlc-factory/) or the [setup guide in the pack's README](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack), which is written for a coding agent to follow. [SDLC pack workflows](/reference/sdlc-workflows/) lists every workflow and what it produces. This page says how the queues behave once they run: what each one picks up, what it decides on its own, what it asks, and what it writes down.
 
 ## Pack settings
 
-The pack declares its settings in [`.pack/pack.yaml`](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/.pack/pack.yaml). A project sets them in `.archon/packs/sdlc.yaml`, under `settings:`, committed so isolated runs see it:
-
-```yaml
-settings:
-  ci: none
-```
-
-`ci` is what the merge gate trusts at a pull request's head besides a Ready review verdict.
-
-- `forge` (default): green checks on the forge at the head. Any CI provider that reports checks or commit statuses to the forge counts. No checks at all refuses the merge, and the sweep asks once, naming the setting and the branch's CI triggers.
-- `none`: for a project with no CI. Delivery's CI agent runs the project's full validation itself and declares the commit it ran on and whether it passed. The build queue records it on the item's build round, and the gate requires a passing validation at exactly the head it merges. A push after the validation, or a failed one, refuses until a later round validates the head again. This trusts the agent's report of the run, which is weaker than CI.
+A project sets the pack's settings in `.archon/packs/sdlc.yaml`. The pack's README says what each setting means and how to choose it: [Choose the pack settings](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#6-choose-the-pack-settings).
 
 ## Bindings
 
-The pack installs no binding and starts nothing by itself. It declares the bindings it recommends under `bindings:` in `.pack/pack.yaml`, with each one's workflow, schedule or event, inputs, resource, capacity and overlap policy. [`archon pack bindings sdlc`](/reference/cli/#pack-bindings) writes them as files for one repository; [step 7 of the setup guide](/getting-started/sdlc-factory/#7-let-it-run-on-its-own) shows the command and how to register each file.
-
-- `--cwd` is the checkout the runs launch in. Point it at one that tracks the default branch: intake, the split queue, the merge queue, discoveries and cleanup create no worktree and run in that checkout as it stands.
-- The repository, host, user and checkout are filled in once. An input that names another binding's file (`build_queue_binding`, `merge_queue_binding`, `discoveries_binding`) is the path of the file written beside it.
-- A timer binding is a whole file. Fire it once with `archon trigger fire --config <file>`, then schedule that command. If you already schedule a queue another way, remove that schedule first, or both start runs for the same queue.
-- An event binding is one entry of the GitHub source plugin's `bindings` array; see [Configure GitHub event starts](/guides/workflow-triggers/#configure-github-event-starts).
-- A generated file is yours from then on. Write it again with `--force` after the pack's declaration changes.
-- An installed schedule keeps the interval it was installed with. After changing `schedule.intervalSeconds`, run `archon trigger schedule remove --config <file>` and install it again on macOS, or change the interval in cron, systemd or Task Scheduler.
-- A resource keeps the capacity its first start declared, and a start declaring another is rejected as `resource_capacity_conflict`. To change a capacity, give the resource a new name, with the same new name and capacity in every binding that shares it.
-
-Each queue's section below says why its binding has the capacity and overlap policy it has. [Workflow triggers](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy) explains resources, capacity and overlap.
+The pack installs no binding and starts nothing by itself. Its README lists the bindings it recommends and how to write and register them with [`archon pack bindings sdlc`](/reference/cli/#pack-bindings): [Let it run on its own](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#10-let-it-run-on-its-own). Each queue's section below says why its binding has the capacity and overlap policy it has. [Workflow triggers](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy) explains resources, capacity and overlap.
 
 ## The forge and the repository
 

@@ -1,12 +1,287 @@
-# Working in the SDLC pack
+# SDLC pack
 
-Conventions for this pack specifically. Project-wide judgment lives in
+This pack turns issues into merged pull requests. Intake triages each issue, the build
+queue takes a triaged issue to a reviewed pull request, the merge queue merges it, and
+the discoveries drain files what runs noticed outside their task. A run that reaches a
+decision it cannot make pauses as one attention item, with a recommendation, for a
+person to answer. Each stage is also a workflow a person can run alone.
+
+This file has two parts. [Set up the pack](#set-up-the-pack) is a guide to install the
+pack on one repository, written so a coding agent can follow it for its user.
+[Author conventions](#author-conventions) is for people changing the pack.
+
+How the queues behave once they run is on the docs site:
+
+- [Operate the SDLC factory](https://archon.diy/guides/sdlc-operations/): work items and claims, and
+  each queue's pickup, decisions, questions and record, including work orders and
+  worktree cleanup.
+- [SDLC pack workflows](https://archon.diy/reference/sdlc-workflows/): every workflow, its inputs and
+  what it produces.
+- [SDLC factory metrics](https://archon.diy/guides/sdlc-metrics/): the metrics the pack records.
+- [Forge](https://archon.diy/reference/forge/#use-the-forge-path-in-the-sdlc-pack): the plugin, its
+  credential and the operations each stage needs.
+- [Disposable Docker verification images](https://archon.diy/reference/variables/#disposable-docker-verification-images):
+  the image label a run's Docker builds carry, and when the engine removes them.
+
+## Set up the pack
+
+Follow the steps in order, from a clone of the repository the pack will work on. Each
+step has a check, and a fix for when the check fails. The pack's settings and bindings
+are still being shaped: [`.pack/pack.yaml`](.pack/pack.yaml) declares what exists, and
+this guide describes only that.
+
+If you are an agent doing this for a user:
+
+- A step marked **Ask the user** is their decision. Put the question and what each
+  choice means to them; do not choose.
+- Ask before anything that writes to the tracker or the repository, starts a run, or
+  enables a schedule or trigger. The steps say which commands do.
+- Everything the pack writes (labels, comments, pushes, merges) is made as the forge
+  account whose credential it uses.
+
+### 1. Check Archon
+
+```bash
+archon doctor
+archon workflow list archon-forge-check
+```
+
+`doctor` exits 0 when no check fails. The second command lists the workflow when the
+pack is available in this checkout. If `doctor` reports no provider, add one with
+`archon provider add <claude|codex|pi>`.
+
+### 2. Install the forge plugin and give it a credential
+
+The pack reaches the forge only through `archon forge` and a forge plugin. Nothing
+falls back to another tool.
+
+```bash
+archon plugin list
+```
+
+The list must show a forge plugin for the repository's host. If it does not, install
+one with `archon plugin add <owner/repo/path>`;
+[Install the GitHub plugin](https://archon.diy/reference/forge/#install-the-github-plugin)
+gives the plugin to add for github.com.
+
+**Ask the user** which forge account the pack acts as. On GitHub the credential is
+`GH_TOKEN`, then `GITHUB_TOKEN`, then the `gh` login (`gh auth login`), in that order.
+The [forge reference](https://archon.diy/reference/forge/#use-the-forge-path-in-the-sdlc-pack) covers
+the other cases.
+
+### 3. Check the forge
+
+```bash
+archon workflow run archon-forge-check
+```
+
+It reads only. A pass names the credential source it used. A refusal says what to fix:
+a missing plugin, a plugin that lacks an operation the pack needs, or a credential that
+cannot read the repository. It proves read access; the first write proves write access.
+A run in a container has no path to the forge and refuses here.
+
+### 4. Name the maintainers
+
+The queues read `.archon/sdlc/policy/maintainers.json` from the head of the default
+branch on the remote. A local copy does nothing.
+
+```bash
+git fetch origin
+git show origin/<default-branch>:.archon/sdlc/policy/maintainers.json
+```
+
+The file is a JSON array of forge logins, such as `["alice", "bob"]`. With no file,
+every author is outside and nothing is triaged or merged.
+
+**Ask the user** who is a maintainer. The list decides two things:
+
+- Whose issues get triaged. Anyone else's issue gets `archon-needs-maintainer` and
+  starts no agent until a listed maintainer adds `archon-triage` or a route label.
+- Whose review verdicts the merge queue trusts. The account from step 2 authors the
+  pack's review comments, so it must be on the list, or its verdicts are ignored and
+  nothing merges. Intake also treats the issues that account files as outside items
+  unless it is listed.
+
+Committing the file to the default branch is a write to the repository: ask first.
+
+### 5. Labels
+
+Nothing to set up. The pack creates its own `archon-*` labels in the repository the
+first time it writes one, and adds and removes them as a delta, so labels others add
+survive.
+
+### 6. Choose the pack settings
+
+A project sets the pack's settings in `.archon/packs/sdlc.yaml`, under `settings:`,
+committed so isolated runs see it:
+
+```yaml
+settings:
+  ci: none
+```
+
+**Ask the user** about `ci`: what the merge gate trusts at a pull request's head
+besides a Ready review verdict.
+
+- `forge` (the default, with no file): green checks on the forge at the head. Any CI
+  provider that reports checks or commit statuses to the forge counts. A repository
+  with no checks never merges.
+- `none`: for a project with no CI. Delivery's CI agent runs the project's full
+  validation itself and records the commit it ran on and whether it passed. The gate
+  requires a passing validation at exactly the head it merges. This trusts the agent's
+  report of the run, which is weaker than CI.
+
+Check: `.pack/pack.yaml` lists every setting under `inputs:` with its values. A value
+it does not declare is refused when a run starts.
+
+### 7. Adjust policy (optional)
+
+The queues decide clear cases on their own and ask about unclear ones. The defaults
+are the documents in [`.shared/policy/`](.shared/policy). To change one, put only the
+lines to add or override in `.archon/sdlc/policy/<same file name>` in the project. The
+project's lines win where the two conflict. **Ask the user** before changing what the
+pack may merge or close on its own.
+
+### 8. Run each queue once by hand
+
+Every command here starts a run that writes to the tracker, so ask before each. Run
+them from the clone. Replace `42` with an issue a maintainer wrote; its body should
+state the problem, why it matters, the desired outcome, the invariants and acceptance.
+
+```bash
+archon workflow run archon-intake --input number=42
+archon state get work/42
+```
+
+Intake labels the issue with its route and records its work item, which the second
+command prints.
+
+```bash
+archon workflow run archon-build-queue --input number=42 --detach
+archon workflow runs
+```
+
+The build queue works the issue toward a reviewed pull request, one round per run.
+`archon workflow get <run-id>` shows how a run ended.
+
+```bash
+archon workflow run archon-merge-queue
+archon workflow run archon-discoveries
+```
+
+The merge queue merges what the build queue finished and the gate allows. The
+discoveries drain files, tracks or drops what runs noticed outside their task.
+
+The queues work on the repository the clone's `origin` (or its only remote) names. When
+`origin` is a fork, add `--input repo_host=<host> --input repo_path=<owner>/<repo>`.
+
+The stages also run alone, without the queues: `archon-ship` takes an issue or request
+to a reviewed pull request, and `archon-triage`, `archon-plan`, `archon-deliver` and
+`archon-review` each do one stage. A stage never pauses; it ends with its outcome. To
+take one that ended not ready further, start it again in the same worktree with the
+item and your note:
+
+```bash
+archon workflow run archon-deliver --adopt <run-id> "#42: the flaky test is out of scope; skip it"
+```
+
+### 9. Answer what the pack asks
+
+```bash
+archon workflow attention
+archon workflow respond <run-id> <choice> "why"
+```
+
+Each item says what is being decided, the agent's recommendation and its evidence, the
+choices and what each does. The reason matters: a build or merge answer is written into
+the issue body as a dated "Current scope" section, and later rounds work from it. An
+agent answers an item only when the user's stated direction decides it, and otherwise
+brings it to the user.
+
+### 10. Let it run on its own
+
+The pack installs no binding and starts nothing by itself. It declares the bindings it
+recommends under `bindings:` in `.pack/pack.yaml`:
+
+- `intake-issues` and `intake-labels` start intake on GitHub issue and label events.
+- `build-queue`, `split-queue`, `merge-queue` and `discoveries` start the queues on a
+  schedule.
+- `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
+- `worktree-cleanup` removes merged worktrees, for an install that runs no server.
+
+**Ask the user** which to enable. Then write them as files:
+
+```bash
+archon trigger whoami
+archon pack bindings sdlc \
+  --repo github.com/acme/widgets \
+  --host build-host-1 \
+  --run-as <the id whoami printed> \
+  --cwd /path/to/the/clone \
+  --out /path/for/binding/files \
+  --only build-queue,merge-queue,discoveries
+```
+
+`--host` is a name for this machine. `--cwd` is the checkout the runs launch in; point
+it at one that tracks the default branch. The command writes one file per binding and
+prints what registers each. It registers and schedules nothing, and refuses to replace
+a file unless `--force`. A binding whose input names another binding's file needs that
+binding in `--only` too, or its file already in `--out`.
+
+Registering a file starts runs, so ask first:
+
+- **A schedule binding** is a whole file. Fire it once, check the run, then schedule
+  it:
+
+  ```bash
+  archon trigger fire --config <file>
+  archon workflow runs
+  archon trigger schedule install --config <file>   # macOS
+  ```
+
+  On Linux or Windows, run the same `trigger fire` command from cron, systemd or Task
+  Scheduler. If a queue is already scheduled another way, remove that schedule first.
+- **An event binding** is one entry for the GitHub source plugin's `bindings` array on
+  a running server with a webhook. See
+  [Configure GitHub event starts](https://archon.diy/guides/workflow-triggers/#configure-github-event-starts).
+  Until then, run intake by hand for each new issue.
+
+Later changes:
+
+- A generated file is the user's from then on. Write it again with `--force` after the
+  pack's declaration changes.
+- An installed schedule keeps the interval it was installed with. To change it, run
+  `archon trigger schedule remove --config <file>` and install it again.
+- A resource keeps the capacity its first start declared; a start declaring another is
+  rejected as `resource_capacity_conflict`. To change a capacity, give the resource a
+  new name in every binding that shares it.
+- To stop, remove the schedules and the webhook bindings, then
+  `archon workflow status` and `archon workflow cancel <run-id>` for runs in flight.
+
+### 11. Verify the setup
+
+The setup is complete when all of these hold:
+
+```bash
+archon workflow run archon-forge-check                                    # passes
+git show origin/<default-branch>:.archon/sdlc/policy/maintainers.json    # lists the pack's account
+archon state get work/42                                                  # the item from step 8
+archon workflow attention                                                 # lists what waits for the user
+archon trigger list                                                       # a receipt per binding fired
+```
+
+The last line applies only when step 10 enabled a binding.
+
+## Author conventions
+
+Conventions for changing this pack. Project-wide judgment lives in
 [`AGENTS.md`](../../../AGENTS.md); the YAML surface is governed by
 [`.archon/workflow-language-constitution.md`](../../workflow-language-constitution.md).
 How we decide what a workflow should be, agents first, is in
-[`CONSTITUTION.md`](CONSTITUTION.md).
+[`CONSTITUTION.md`](CONSTITUTION.md). When a change alters what the setup guide above
+or a docs page says, update it in the same change.
 
-## Guards
+### Guards
 
 A guard here must protect an action the node it lives in takes.
 
@@ -25,7 +300,7 @@ That belongs where it is established, once, not at each node that depends on it.
 of an irreversible action. Otherwise it is a comment; write it as one.** A guard
 does not earn its place by having a fixture that turns it red.
 
-### Why this rule exists
+#### Why this rule exists
 
 The pack once verified "the checkout is on the branch my PR is on" in three places:
 a preflight node before review, the ready flip, and prose inside the correction
@@ -47,7 +322,7 @@ above have not happened either, and both are worth their few lines. The question
 whether the guard is protecting *this node's own action*, or restating something
 that was already true when the node started.
 
-## Public writes belong to a script
+### Public writes belong to a script
 
 An agent judges and authors; one script node owns each public write and proves it
 landed. The node acts on the values the agent before it declared in its typed output,
@@ -72,7 +347,7 @@ go through `archon forge`, after the `forge` node checked the plugin can act.
 Which remote holds a repository is decided by its configured URL, never by the
 remote's name ([`.shared/remote.ts`](.shared/remote.ts)).
 
-## Deterministic scripts
+### Deterministic scripts
 
 Every `script:` node here is TypeScript on Bun, under its own component's
 `scripts/` directory. Logic more than one of them needs lives once in
@@ -119,7 +394,7 @@ Three rules, each protecting something a script cannot get back on its own:
 A vocabulary a node declares in YAML has exactly one owner, its `output_format`. A
 script that consumes another node's certified value does not restate the list.
 
-## Evidence never carries credentials
+### Evidence never carries credentials
 
 The engine retains what every exec node prints, so a node's output is the record
 whether it set out to keep one or not. Never print a value that can contain a
@@ -134,7 +409,7 @@ That retention is also why a node does not need its own log. The ready flip once
 wrote one by hand, every command it ran echoed into an artifact, which is what
 the transcript now holds for free.
 
-## The engineering-conventions sidecar
+### The engineering-conventions sidecar
 
 A repository may declare its architecture in an `architecture.md`, its
 engineering conventions in an `engineering.md`, and its product direction in a
@@ -179,7 +454,7 @@ binary's embedded bundle as from a source checkout. The agent reads the default 
 the project's file, and no script opens either. The default is a file rather than text in the prompt, so a node
 whose decision names no policy carries none of it.
 
-## A stage never pauses for a person
+### A stage never pauses for a person
 
 Each stage a person runs is one workflow, and a workflow that composes a stage includes
 that same file. A stage ends with its typed outcome as the run's result: whether it got
@@ -189,7 +464,7 @@ attention item when it needs a person, as the build queue does. A workflow that
 includes `archon-deliver` keeps running after a failed delivery, because the report
 node completes either way, so it gates what follows on `$deliver.output.ready`.
 
-## A node's streams are the operator's channel
+### A node's streams are the operator's channel
 
 Retention is not the only reader. Anything a node writes to stderr is sent to the
 operator as the run happens, even when the node succeeds, and that copy is not
@@ -198,22 +473,3 @@ and let only your own authored messages reach the streams. Re-emit a command's
 output when it failed and its words are the diagnostic; drop it when it is just a
 tool narrating itself. Capture a value's stderr separately rather than merging it,
 too: a `gh` update notice merged into a read becomes the value.
-
-## Operator documentation
-
-How the pack behaves for the person running it is documented on the docs site, not
-here. Update the page when a change alters what it says.
-
-- [Set up the SDLC factory](https://archon.diy/getting-started/sdlc-factory/): the
-  first run on a repository, policy files, model aliases and what the pack writes.
-- [Operate the SDLC factory](https://archon.diy/guides/sdlc-operations/): pack
-  settings, bindings, work items and claims, and each queue's pickup, decisions,
-  questions and record, including work orders.
-- [SDLC pack workflows](https://archon.diy/reference/sdlc-workflows/): every workflow,
-  its inputs and what it produces, and how to continue a stage that ended not ready.
-- [SDLC factory metrics](https://archon.diy/guides/sdlc-metrics/): the metrics the
-  pack records and how the test-value judge is calibrated.
-- [Forge](https://archon.diy/reference/forge/#use-the-forge-path-in-the-sdlc-pack):
-  the plugin, its credential and the operations each stage needs.
-- [Disposable Docker verification images](https://archon.diy/reference/variables/#disposable-docker-verification-images):
-  the image label a run's Docker builds carry, and when the engine removes them.
