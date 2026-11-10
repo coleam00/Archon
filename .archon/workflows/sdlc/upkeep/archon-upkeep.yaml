@@ -117,6 +117,7 @@ nodes:
       delivered: { from: "$deliver.output.ready", if_skipped: null }
       delivery: { from: "$deliver.output.summary", if_skipped: null }
       pr_url: { from: "$deliver.output.pr_url", if_skipped: null }
+      reviews: { outputs: review-report, if_unreadable: null }
     output_format:
       type: object
       properties:

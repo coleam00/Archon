@@ -364,7 +364,11 @@ concurrently.
 - `with:` bindings (#2637) — prompt/command files read bound values as
   `$INPUTS.<name>`; bash/script processes receive `INPUTS_<UPPER_SNAKE>` env vars.
   `{from, if_skipped}` discriminates skipped producers from ran ones; a failed
-  producer fails the binding
+  producer fails the binding. On a script node, `{outputs: <output_type>}` binds the
+  JSON array of every output of that type the run recorded (`{node, loop, at, value}`,
+  oldest first), across loop iterations and includes; every producer must be upstream,
+  the type must be declared by some node, and an unreadable record fails the node unless
+  the binding adds `if_unreadable: <value>`
 - `$INPUTS.<name>` — declared workflow inputs, also delivered as
   `INPUTS_<UPPER_SNAKE>` to bash/script
 - `$ARTIFACTS_DIR` — pre-created directory for reports/evidence humans read.

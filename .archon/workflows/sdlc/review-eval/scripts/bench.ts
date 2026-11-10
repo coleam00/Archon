@@ -62,7 +62,7 @@ import {
   writeItem,
 } from '../../.shared/review-item.ts';
 import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
-import { isObject } from '../../.shared/typed.ts';
+import { isObject } from '../../.shared/io.ts';
 
 export const LENSES = [...REVIEW_LENSES, 'simplify'] as const;
 export type Lens = (typeof LENSES)[number];

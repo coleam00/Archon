@@ -283,6 +283,8 @@ function applyInputs(answer: Record<string, unknown>): Record<string, string> {
     INPUTS_ROUTE: JSON.stringify({ decision: 'launch', brief: 'deliver 7', reason: 'a contract', attention: null }),
     INPUTS_ENDING: JSON.stringify(ENDING),
     INPUTS_ANSWER: JSON.stringify(answer),
+    INPUTS_REVIEWS: '[]',
+    INPUTS_CI: '[]',
   };
 }
 
@@ -599,46 +601,42 @@ describe('the build queue scripts', () => {
     expect(recorded).not.toHaveProperty('pr_number');
   }, 60_000);
 
-  test("the round records the review verdicts the run's delivery published, and still records the round when they cannot be read", () => {
+  test("the round records the review verdicts the run's delivery published", () => {
     const at = install();
     seed(at, triaged(CLAIMED));
-    const report = (nodeId: string, path: string, producedAt: string) => ({ nodeId, path, producedAt });
-    const listing = JSON.stringify({
-      artifactsByType: {
-        'review-report': [
-          report('review__publish', 'r1.json', '2026-11-06T10:00:00Z'),
-          report('review__synthesize', 'r2.json', '2026-11-06T10:05:00Z'),
-          report('review__publish', 'r2.json', '2026-11-06T10:06:00Z'),
-        ],
-      },
-      errors: [],
-    });
-    const artifacts = { 'listing.json': listing, 'r1.json': '{"ready":false}', 'r2.json': '{"ready":true}' };
-    const inputs = { ...applyInputs(CONTINUE), TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' };
-    ok(run(at, 'apply', inputs, { artifacts }));
+    const review = (node: string, ready: boolean, at: string) => ({ node, loop: [], at, value: { ready } });
+    const INPUTS_REVIEWS = JSON.stringify([
+      review('review__publish', false, '2026-11-06T10:00:00Z'),
+      review('review__synthesize', true, '2026-11-06T10:05:00Z'),
+      review('review__publish', true, '2026-11-06T10:06:00Z'),
+    ]);
+    ok(run(at, 'apply', { ...applyInputs(CONTINUE), INPUTS_REVIEWS }));
     expect((stored(at).value as WorkItem).facts.build?.rounds[0]?.reviews).toEqual([
       { ready: false, at: '2026-11-06T10:00:00Z' },
       { ready: true, at: '2026-11-06T10:06:00Z' },
     ]);
 
+    // The bindings declare `if_unreadable: null`: the round is recorded without them.
     seed(at, triaged(CLAIMED));
-    const unreadable = run(at, 'apply', { ...inputs, TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/missing.json' });
+    const unreadable = run(at, 'apply', { ...applyInputs(CONTINUE), INPUTS_REVIEWS: 'null', INPUTS_CI: 'null' });
     expect(unreadable.code).toBe(0);
+    expect(unreadable.stderr).toContain('the round records no review verdicts');
     const kept = (stored(at).value as WorkItem).facts.build?.rounds[0];
     expect(kept).toMatchObject({ run_id: 'run-1', reason: 'review_open' });
     expect(kept?.reviews).toBeUndefined();
+    expect(kept?.validation).toBeUndefined();
   }, 60_000);
 
   test("the round records the latest full validation the run's CI agent ran", () => {
     const at = install();
     seed(at, triaged(CLAIMED));
-    const listing = JSON.stringify({
-      artifactsByType: { 'ci-report': [{ path: 'c1.json' }, { path: 'c2.json' }] },
-      errors: [],
-    });
-    const report = (head: string, passed: boolean) => JSON.stringify({ state: 'ready', summary: 's', validation: { head, passed } });
-    const artifacts = { 'listing.json': listing, 'c1.json': report('a'.repeat(40), false), 'c2.json': report('b'.repeat(40), true) };
-    ok(run(at, 'apply', { ...applyInputs(CONTINUE), TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json' }, { artifacts }));
+    const report = (validation: object | null) => ({ node: 'ci', loop: [], at: '2026-11-06T10:00:00Z', value: { state: 'ready', summary: 's', validation } });
+    const INPUTS_CI = JSON.stringify([
+      report({ head: 'a'.repeat(40), passed: false }),
+      report({ head: 'b'.repeat(40), passed: true }),
+      report(null),
+    ]);
+    ok(run(at, 'apply', { ...applyInputs(CONTINUE), INPUTS_CI }));
     expect((stored(at).value as WorkItem).facts.build?.rounds[0]?.validation).toEqual({ head: 'b'.repeat(40), passed: true });
   }, 60_000);
 

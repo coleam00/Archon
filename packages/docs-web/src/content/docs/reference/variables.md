@@ -325,6 +325,12 @@ reference-looking text there is neither substituted nor validated as an output r
       iteration: { from: $iteration-ready.output.ready, if_skipped: false }
 ```
 
+On a `script:` node an object value may instead be `{ outputs: <output_type> }`: the JSON
+array of every output of that type the run has recorded, oldest first, each
+`{ node, loop, at, value }`. A record the engine cannot read fails the node unless the
+binding declares `if_unreadable:` as `null` or an array, which it then takes. See
+[Binding every output of a type](/reference/workflow-language/#binding-every-output-of-a-type).
+
 Every referenced producer must be an upstream `depends_on` dependency — the loader rejects
 the workflow otherwise, so a binding can never race its producer. Node-local bindings are
 the **nearest** input layer: they win over a composed block's inputs, which win over the

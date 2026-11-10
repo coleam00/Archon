@@ -17,6 +17,7 @@ import {
 } from '../../../workflow-source';
 import type { ExecNode } from '../../../schemas';
 import { writeInvocationListings, type InvocationListings } from '../../../invocation-listings';
+import { bindTypedOutputs, runTypedOutputs } from '../../../typed-output-bindings';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
 import {
   isInlineScript,
@@ -52,11 +53,20 @@ export async function executeScriptNode(
   const stepName = ctx.stepNamePrefix + node.id;
   // Fresh per call, same as executeBashNode: one attempt, one observation.
   const listings = await writeInvocationListings(ctx);
+  // Read at the same moment as the listings, so both describe one view of the run.
+  const bound: ExecNode = {
+    ...node,
+    with: await bindTypedOutputs(
+      node.id,
+      node.with,
+      runTypedOutputs(ctx.artifactsDir, ctx.workflowRun.id)
+    ),
+  };
   const finalScript = substituteScript(ctx, node, listings);
   const source = await captureScriptSource(ctx, finalScript, stepName);
   await reserveBudget();
   const execution = await startScriptExecution(ctx, node);
-  const subprocessEnv = scriptEnvironment(ctx, node, listings, execution);
+  const subprocessEnv = scriptEnvironment(ctx, bound, listings, execution);
 
   const lookup = resolveScriptInvocation(ctx, node, finalScript, source.namedScripts);
   if ('errorMsg' in lookup) return recordScriptConfigFailure(ctx, node, execution, lookup.errorMsg);

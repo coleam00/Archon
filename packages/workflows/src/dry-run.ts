@@ -165,6 +165,8 @@ function createDryRunContext(
     checkoutProducers: collectCheckoutProducers(options.workflow.nodes),
     ...(inputs ? { inputs } : {}),
     loopBodyScopes: [],
+    loopGroupPath: [],
+    typedOutputs: [],
     artifactsDir: join(tempRoot, 'artifacts'),
     stateDir: join(tempRoot, 'state'),
     logDir: join(tempRoot, 'logs'),
