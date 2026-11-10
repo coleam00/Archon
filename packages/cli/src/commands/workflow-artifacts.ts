@@ -13,7 +13,7 @@ interface ArtifactsOptions {
 }
 
 /** Exits 1. Under `--json` it is one `{ ok: false }` document on stdout; otherwise one stderr line. */
-async function fail(json: boolean | undefined, error: string, runId?: string): Promise<1> {
+export async function fail(json: boolean | undefined, error: string, runId?: string): Promise<1> {
   if (json) await writeJsonLine({ ok: false, runId, error });
   else await writeStderr(`${error}\n`);
   return 1;
@@ -33,36 +33,39 @@ export async function workflowArtifactsCommand(
   if (!runId || args.length > 2) {
     return fail(opts.json, 'Usage: archon workflow artifacts <run-id> [path] [--json]');
   }
-  const resolved = await resolveArtifactsRun(host, runId, opts);
-  if (typeof resolved === 'number') return resolved;
+  const resolved = await resolveRunArtifacts(host, runId, opts.cwd);
+  if ('error' in resolved) return fail(opts.json, resolved.error, resolved.runId);
   return path === undefined
     ? listArtifacts(resolved.run, resolved.artifactsDir, opts.json)
     : readArtifact(resolved.run, resolved.artifactsDir, path, opts.json);
 }
 
-async function resolveArtifactsRun(
+/**
+ * The run a run-id argument names and its `$ARTIFACTS_DIR`, or why they cannot be
+ * resolved, under the id to report it for.
+ */
+export async function resolveRunArtifacts(
   host: WorkflowHost,
   runId: string,
-  opts: ArtifactsOptions
-): Promise<{ run: WorkflowRun; artifactsDir: string } | number> {
+  cwd: string | undefined
+): Promise<{ run: WorkflowRun; artifactsDir: string } | { runId: string; error: string }> {
   let run: WorkflowRun | null = null;
   let artifactsDir: string | null;
   try {
-    run = await host.deps.store.getWorkflowRun(await resolveRunIdArg(host, runId, opts.cwd));
-    if (!run) return fail(opts.json, `Workflow run not found: ${runId}`, runId);
+    run = await host.deps.store.getWorkflowRun(await resolveRunIdArg(host, runId, cwd));
+    if (!run) return { runId, error: `Workflow run not found: ${runId}` };
     artifactsDir = await resolveRunArtifactsDir(host, run);
   } catch (error) {
     const id = run?.id ?? runId;
     getLog().error({ err: error as Error, runId: id }, 'cli.workflow_artifacts_failed');
-    return fail(opts.json, (error as Error).message, id);
+    return { runId: id, error: (error as Error).message };
   }
   // An empty list must mean the run wrote nothing, never that its location is unknown.
   if (!artifactsDir) {
-    return fail(
-      opts.json,
-      `Artifacts not available: could not resolve the output location of run ${run.id}`,
-      run.id
-    );
+    return {
+      runId: run.id,
+      error: `Artifacts not available: could not resolve the output location of run ${run.id}`,
+    };
   }
   return { run, artifactsDir };
 }

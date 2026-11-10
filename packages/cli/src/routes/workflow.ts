@@ -153,6 +153,16 @@ export async function runWorkflowArtifacts(route: WorkflowRoute): Promise<number
   });
 }
 
+export async function runWorkflowOutputs(route: WorkflowRoute): Promise<number> {
+  const { workflowOutputsCommand } = await import('../commands/workflow-outputs');
+  return await workflowOutputsCommand(route.host, route.positionals.slice(2), {
+    json: route.json,
+    cwd: route.effectiveCwd,
+    type: route.values.type as string | undefined,
+    node: route.values.node as string | undefined,
+  });
+}
+
 export async function runWorkflowLogs(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   const logsRunId = positionals[2];

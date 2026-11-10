@@ -53,6 +53,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | One run with raw event rows | `archon workflow get <run-id> --verbose --events --json` |
 | List a run's artifact files | `archon workflow artifacts <run-id> --json` |
 | Read one artifact | `archon workflow artifacts <run-id> <path>` |
+| Read the typed outputs of runs (values by `output_type`) | `archon workflow outputs <run-id>... [--type <type>] --json` |
 | List registered projects (and their `--project` keys) | `archon project list --json` |
 | Active runs (this project) | `archon workflow status --json` |
 | Active runs (all projects) | `archon workflow status --all --json` |

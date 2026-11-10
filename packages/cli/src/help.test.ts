@@ -227,6 +227,7 @@ Commands:
   workflow runs              List recent runs (all statuses) for this project
   workflow get <run-id>      Show detail for a single run (any status)
   workflow artifacts <run-id> [path] List a run's artifact files, or print one
+  workflow outputs <run-id>... List the typed outputs of runs, in the order nodes produced them
   workflow logs <run-id>     Print or follow a run's JSONL transcript
   workflow wait <run-id>     Block until the run ends or needs attention
   workflow attention [<run-id>] List, count or stream the attention queue, or read the item one run stands for
@@ -328,7 +329,7 @@ Options:
   --spawn                    Open setup wizard in a new terminal window (for setup command)
   --quiet, -q                Log warnings and errors only (the default except for serve)
   --verbose, -v              Show debug-level logs (on stderr; on stdout for serve)
-  --json                     Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list/config)
+  --json                     Output machine-readable JSON (list/status/get/artifacts/outputs/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list/config)
   --events                   For verbose JSON status/get: output raw event rows instead of node summaries
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer

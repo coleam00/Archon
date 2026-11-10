@@ -213,16 +213,17 @@ export async function readNodeArtifacts(
     else artifactsByType.set(parsed.outputType, [parsed]);
   }
 
-  for (const entries of artifactsByType.values()) {
-    entries.sort((left, right) => {
-      // Numeric, not lexicographic: `…00Z` and `…00.000Z` are the same instant but
-      // different strings. Equal instants keep a deterministic order by content path,
-      // which is one-to-one with the sidecar path that produced the entry.
-      const delta = Date.parse(left.producedAt) - Date.parse(right.producedAt);
-      return delta !== 0 ? delta : left.path.localeCompare(right.path);
-    });
-  }
+  for (const entries of artifactsByType.values()) entries.sort(compareProduction);
   return { artifactsByType: Object.fromEntries(artifactsByType), errors };
+}
+
+/** Production order: the order typed artifacts were written in. */
+export function compareProduction(left: NodeArtifact, right: NodeArtifact): number {
+  // Numeric, not lexicographic: `…00Z` and `…00.000Z` are the same instant but
+  // different strings. Equal instants keep a deterministic order by content path,
+  // which is one-to-one with the sidecar path that produced the entry.
+  const delta = Date.parse(left.producedAt) - Date.parse(right.producedAt);
+  return delta !== 0 ? delta : left.path.localeCompare(right.path);
 }
 
 async function resolveArtifactRoot(

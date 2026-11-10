@@ -64,6 +64,16 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'outputs',
+      spec: 'workflow outputs <run-id>...',
+      description: 'List the typed outputs of runs, in the order nodes produced them',
+      scopedFlags: [
+        { spec: '--type <output_type>', description: 'Only outputs of this exact output_type' },
+        { spec: '--node <id>', description: 'Only outputs of this node' },
+      ],
+    },
+    {
+      command: 'workflow',
       subcommand: 'logs',
       spec: 'workflow logs <run-id>',
       description: "Print or follow a run's JSONL transcript",

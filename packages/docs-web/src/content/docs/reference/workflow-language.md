@@ -1312,6 +1312,8 @@ for (const gate of listing.artifactsByType['green-gate'] ?? []) {
 }
 ```
 
+To read the values themselves, or another run's typed outputs, use [`archon workflow outputs`](/reference/cli/#workflow-outputs): it returns each output with its producing node, loop position, completion time and value, and says when a run's artifacts are gone.
+
 In an agent prompt, point at the listing rather than the layout: "Read `$TYPED_ARTIFACTS_FILE`, select `artifactsByType["plan"]`, and open each entry's `path` under `$ARTIFACTS_DIR`."
 
 Properties worth knowing:

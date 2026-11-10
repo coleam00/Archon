@@ -24,6 +24,7 @@
     "./end-turn-request": "./src/end-turn-request.ts",
     "./run-attention-resolution": "./src/run-attention-resolution.ts",
     "./terminal-record": "./src/terminal-record.ts",
+    "./run-outputs": "./src/run-outputs.ts",
     "./run-terminal-telemetry": "./src/run-terminal-telemetry.ts",
     "./run-scratch": "./src/run-scratch.ts",
     "./workflow-status-read": "./src/workflow-status-read.ts",

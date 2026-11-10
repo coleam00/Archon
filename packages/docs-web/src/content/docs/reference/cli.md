@@ -863,6 +863,53 @@ The list is uncapped. Files under the engine's own `.archon` child are counted, 
 
 With a path, the command writes the file's exact bytes to stdout. `--json` returns `{ "runId", "path", "content" }` with the content as UTF-8 text, and fails for a file that is not valid UTF-8; read that one without `--json`. A path that does not exist, names a directory, or resolves outside the run's artifacts (`..`, or a symlink pointing elsewhere) exits `1`. Under `--json` every failure is one `{ "ok": false, "runId", "error" }` document.
 
+### `workflow outputs`
+
+Read the [typed outputs](/reference/workflow-language/#typed-artifacts-output_type) of one or more runs: the output of every node that declared `output_type`, in the order the run produced them. Reads the store and filesystem directly; no server needs to be running.
+
+```bash
+archon workflow outputs <run-id>                        # list the run's typed outputs
+archon workflow outputs <run-id> --json                 # with their values
+archon workflow outputs <run-id> --type review-report --json
+archon workflow outputs <run-id> --node plan --json
+archon workflow outputs <run-a> <run-b> --type plan --json
+```
+
+Each `<run-id>` resolves as it does for `workflow artifacts`, so the command reads the same runs that one does. `--type` keeps the outputs of one exact, case-sensitive `output_type`, and `--node` those of one node id. The command only reads.
+
+`--json` returns one document with an entry per named run, in the order named:
+
+```json
+{
+  "runs": [
+    {
+      "runId": "0b6f…",
+      "artifactsDir": "/home/me/.archon/workspaces/acme/widget/artifacts/runs/0b6f…",
+      "artifacts": "present",
+      "outputs": [
+        {
+          "nodeId": "review",
+          "outputType": "review-report",
+          "loopGroupPath": [{ "groupId": "rounds", "iteration": 2 }],
+          "producedAt": "2026-06-03T10:06:00.000Z",
+          "value": { "ready": true }
+        }
+      ],
+      "unreadable": []
+    }
+  ]
+}
+```
+
+- `nodeId` is the producing node; `loopGroupPath` is present for a node inside a `loop_group` and names each enclosing group and iteration, outermost first; `producedAt` is when the node completed.
+- `value` is the node's output parsed as JSON, which is what an `output_format` node's certified output is. A node that declares `output_type` alone outputs text, and text that is not JSON is the value as written.
+- `unreadable` lists every record that yielded no value, as `{ "path", "kind", "code" }`, with the output's `nodeId`, `outputType` and `producedAt` when its metadata was readable. A record whose metadata could not be read has no known type, so it is listed whatever `--type` and `--node` select.
+- `artifacts` says what the read found. `"present"` carries `outputs` and `unreadable`; a run that produced no typed output has both empty. `"missing"` means the run's artifact directory no longer exists, for example after `archon workflow cleanup`, so its outputs cannot be read: an empty `outputs` list always means the run produced none. `"unknown"` carries an `error` instead: no run has that id, or its output location could not be resolved.
+
+The command exits `1` when any named run is `"unknown"`, and still answers for every run. An invocation that names no run prints `{ "ok": false, "error" }` under `--json` and exits `1`.
+
+A workflow script reads its own run with `$WORKFLOW_ID` and another run of the project by its id, through the host command in `ARCHON_CLI_COMMAND`.
+
 ### `workflow logs`
 
 Print the run's existing JSONL transcript, or follow it as rows are appended:

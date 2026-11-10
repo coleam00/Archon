@@ -164,7 +164,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--json',
     description:
-      'Output machine-readable JSON (list/status/get/artifacts/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list/config)',
+      'Output machine-readable JSON (list/status/get/artifacts/outputs/wait/attention/runs/approve/reject/respond/answer/cancel/abandon/resume, project list/config)',
     owners: [],
   },
   {
