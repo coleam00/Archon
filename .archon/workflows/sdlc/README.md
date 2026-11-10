@@ -138,7 +138,7 @@ archon pack bindings sdlc \
 ```
 
 `--cwd` is the checkout the runs launch in; point it at one that tracks the default
-branch. The command writes `<owner>-<name>-<binding>.json` for each binding below and
+branch. The command writes `sdlc-<owner>-<name>-<binding>-<digest>.json` for each binding below and
 prints what registers each one. It registers and schedules nothing, refuses to replace a
 file unless `--force`, and `--only <id,...>` writes a subset. The repository, host, user
 and checkout are filled in once, and an input that names another binding's file
@@ -162,8 +162,13 @@ then schedule that command (`archon trigger schedule install --config <file>` on
 cron, systemd or Task Scheduler elsewhere). An event binding is one entry of the GitHub
 source plugin's `bindings` array, so its file is the object to add there; see
 [Configure GitHub event starts](https://archon.diy/guides/workflow-triggers/#configure-github-event-starts).
-A generated file is the operator's from then on: change an interval or a capacity in it,
-or write it again with `--force` after the declaration changes.
+A generated file is the operator's from then on; write it again with `--force` after the
+declaration changes. An installed schedule keeps the interval it was installed with: after
+changing `schedule.intervalSeconds`, run `archon trigger schedule remove --config <file>` and
+install it again on macOS, or change the interval in cron, systemd or Task Scheduler. A
+resource keeps the capacity its first start declared, and a start declaring another is
+rejected as `resource_capacity_conflict`. To change a capacity, give the resource a new
+name, with the same new name and capacity in every binding that shares it.
 
 ## Forge
 
