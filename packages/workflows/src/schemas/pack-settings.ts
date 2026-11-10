@@ -8,6 +8,7 @@
  * comma-separated text.
  */
 import { z } from 'zod';
+import type { PackBinding } from './pack-bindings';
 import type { WorkflowSource } from './workflow';
 
 const settingBase = {
@@ -61,9 +62,11 @@ export type PackSettingSpec =
  * under whichever source roots a run reads (`packDirectory`); the path itself is not
  * stored, because a run's capture moves after discovery reads it.
  * `settings` is the pack's declaration, absent when the pack declares none.
+ * `bindings` is the trigger bindings the pack recommends, by id; no run reads them.
  */
 export interface WorkflowPack {
   readonly key: string;
   readonly source: WorkflowSource;
   readonly settings?: Readonly<Record<string, PackSettingSpec>>;
+  readonly bindings?: Readonly<Record<string, PackBinding>>;
 }

@@ -9,3 +9,102 @@ inputs:
       What the merge gate trusts at a pull request's head besides a Ready review verdict.
       forge: green checks on the forge. none: the full validation delivery ran and
       recorded at that same head, for a project with no CI.
+
+# The trigger bindings the pack recommends. Nothing here starts a run: an operator writes
+# them for one repository with `archon pack bindings sdlc` and registers each file. The
+# README's section on each queue says why its capacity and overlap are what they are.
+bindings:
+  intake-issues:
+    workflow: archon-intake
+    resource: intake
+    capacity: 2
+    overlap: queue
+    event:
+      kind: issue.lifecycle
+      actions: [opened, edited, reopened]
+    inputs:
+      repo_host: { event: repository.host }
+      repo_path: { event: repository.path }
+      number: { event: subject.number }
+      kind: { event: subject.kind }
+      action: { event: event.action }
+  intake-labels:
+    workflow: archon-intake
+    resource: intake
+    capacity: 2
+    overlap: queue
+    event:
+      kind: label.changed
+      actions: [added]
+      # The request labels, REQUEST_LABELS in .shared/labels.ts; a pack test keeps the
+      # two equal. The predicate only saves runs: intake ignores any other label.
+      predicates:
+        - field: label.name
+          in: [archon-triage, archon-ready, archon-plan, archon-investigate, archon-split]
+    inputs:
+      repo_host: { event: repository.host }
+      repo_path: { event: repository.path }
+      number: { event: subject.number }
+      kind: { event: subject.kind }
+      action: { event: event.action }
+      label: { event: label.name }
+      label_actor: { event: label.actor.login }
+  build-queue:
+    workflow: archon-build-queue
+    resource: build
+    capacity: 2
+    overlap: skip
+    isolation: { kind: worktree }
+    schedule: { interval_seconds: 1800 }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+      build_queue_binding: { binding: build-queue }
+  split-queue:
+    workflow: archon-split
+    resource: split
+    overlap: skip
+    schedule: { interval_seconds: 1800 }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+  merge-queue:
+    workflow: archon-merge-queue
+    resource: merge
+    overlap: queue
+    schedule: { interval_seconds: 1800 }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+      merge_queue_binding: { binding: merge-queue }
+      build_queue_binding: { binding: build-queue }
+      discoveries_binding: { binding: discoveries }
+  discoveries:
+    workflow: archon-discoveries
+    resource: discoveries
+    overlap: skip
+    schedule: { interval_seconds: 14400 }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+  metrics-prs:
+    workflow: archon-metrics-prs
+    resource: metrics-prs
+    overlap: skip
+    schedule: { interval_seconds: 86400 }
+  metrics-test-value:
+    workflow: archon-metrics-test-value
+    resource: metrics-test-value
+    overlap: skip
+    schedule: { interval_seconds: 86400 }
+    inputs:
+      since: 1d
+  worktree-cleanup:
+    workflow: archon-worktree-cleanup
+    # The sweep covers every project registered on the host, so one resource guards it.
+    resource: worktree-cleanup
+    resource_scope: host
+    overlap: skip
+    schedule: { interval_seconds: 21600 }
+    inputs:
+      include_closed: 'false'

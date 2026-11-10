@@ -2209,7 +2209,8 @@ same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
 `INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
 
 The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
-shape as a workflow's, plus a `type`:
+shape as a workflow's, plus a `type`. The file holds only `inputs:` and
+[`bindings:`](#pack-bindings):
 
 ```yaml
 # .archon/workflows/review-kit/.pack/pack.yaml
@@ -2297,6 +2298,55 @@ result on its row; a resumed run keeps those values even if the project file cha
   checked against the setting's type.
 - A run refused at start by its project settings file is marked failed, including a run row
   created in advance by a background or detached launch.
+
+### Pack bindings
+
+A pack can also declare the [trigger bindings](/guides/workflow-triggers/) it recommends, in a
+top-level `bindings:` block of the same `<pack>/.pack/pack.yaml`. A declaration starts nothing
+and installs nothing. An operator turns it into binding files for one repository with
+[`archon pack bindings`](/reference/cli/#pack-bindings) and registers each file. The pack
+states what it knows; the command fills in the repository, the execution host, the run-as user
+and the checkout.
+
+```yaml
+# .archon/workflows/review-kit/.pack/pack.yaml
+bindings:
+  sweep:                              # the binding id: lowercase letters, digits, hyphens
+    workflow: review-sweep            # a workflow of this pack
+    resource: sweep                   # last segment of the resource name
+    capacity: 1                       # optional, default 1
+    overlap: skip                     # skip | queue
+    isolation: { kind: worktree }     # optional, default { kind: default }
+    schedule: { interval_seconds: 1800 }
+    inputs:
+      repo_host: { repo: host }       # the host of --repo
+      repo_path: { repo: path }       # the owner/name of --repo
+      sweep_binding: { binding: sweep }   # the path of the file written for that binding
+      mode: fast                      # literal text
+  opened:
+    workflow: review-pull-request
+    resource: review
+    overlap: queue
+    event:                            # the source plugin's selector, without `repository`
+      kind: pr.lifecycle
+      actions: [opened]
+    inputs:
+      number: { event: subject.number }   # an event field; event bindings only
+```
+
+Each binding sets exactly one of `schedule:` (a timer binding, written as a file
+`archon trigger fire --config` reads) or `event:` (an entry for the GitHub source plugin's
+`bindings` array). `capacity`, `overlap` and `isolation` mean what they mean in a
+[binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
+resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
+same `resource` share its slots. With `resource_scope: host` it is
+`<pack>:<host id>:<resource>`, for work that spans every repository on the host.
+
+The declaration is validated when the pack loads, and an invalid one fails every workflow of
+the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
+input must name a declared timer binding, an `{ event: <field> }` input belongs to an event
+binding, and bindings sharing a resource must declare the same capacity. An `event:` selector
+and its fields are checked against the source plugin when a binding is generated, not at load.
 
 ## Launching a Separate Governed Run with `workflow:`
 
