@@ -40,6 +40,7 @@ import {
   type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
 
 /** The pull request delivery recorded, when the scope is that JSON record. */
@@ -52,6 +53,9 @@ function recordedPr(scope: string): QualifiedPr | undefined {
   }
   return record(parsed) ? parseQualifiedPr(scope) : undefined;
 }
+
+/** The settled verdict, as the settle node declares it. */
+type Settled = NodeOutput<'archon-review', 'settle'>;
 
 /** The pull request the scope agent declared, or undefined for a working diff. */
 function declaredPr(value: string): QualifiedPr | undefined {
@@ -70,12 +74,12 @@ function label(pr: QualifiedPr | undefined): string {
 
 try {
   const verdict = {
-    ready: JSON.parse(text(process.env.INPUTS_READY)) as boolean,
+    ready: JSON.parse(text(process.env.INPUTS_READY)) as Settled['ready'],
     action: text(process.env.INPUTS_ACTION),
     findings_summary: text(process.env.INPUTS_SUMMARY),
-    report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
-    discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
-    contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
+    report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as Settled['report'],
+    discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as Settled['discoveries'],
+    contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as Settled['contract_left'],
   };
   // Complete only on an empty list: a review that left anything open never lets a merge close the issue.
   const coverage = Array.isArray(verdict.contract_left) && verdict.contract_left.length === 0 ? 'complete' : 'open';

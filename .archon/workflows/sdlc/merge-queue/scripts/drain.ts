@@ -13,9 +13,10 @@
 
 import { followUp } from '../../.shared/follow-up.ts';
 import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 function main(): void {
-  const merged = (nullableJson(process.env.INPUTS_MERGED) ?? []) as number[];
+  const merged = (nullableJson(process.env.INPUTS_MERGED) ?? []) as NodeOutput<'archon-merge-queue', 'record'>['merged'];
   const binding = trimmed(process.env.INPUTS_DISCOVERIES_BINDING);
   if (merged.length === 0) {
     emit({ summary: 'This sweep merged nothing, so no discoveries drain starts.' });

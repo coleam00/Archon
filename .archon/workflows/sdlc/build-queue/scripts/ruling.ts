@@ -16,18 +16,15 @@
  * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
-import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
+import { type AskedBy, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
+import { PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 
-interface Asked {
-  readonly attention: BuildAttention;
-  readonly brief: string;
-  readonly by: AskedBy;
-}
+type Apply = NodeOutput<'archon-build-queue', 'apply'>;
 
 const STATUS = { continue: 'next', ready: 'ready', park: 'parked' } as const satisfies Record<
   BuildEffect,
@@ -51,9 +48,10 @@ const ABOUT: Record<AskedBy, string> = {
 function main(): void {
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
-  const asked = nullableJson(process.env.INPUTS_ASKED) as Asked | null;
+  const asked = nullableJson(process.env.INPUTS_ASKED) as Apply['asked'];
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const choice = nullableJson(process.env.INPUTS_CHOICE) as Choice<BuildEffect> | null;
+  // The wait answers with the chosen option's value.
+  const choice = nullableJson(process.env.INPUTS_CHOICE) as Apply['options'][number]['value'] | null;
   if (choice === null) throw new Error(PRE_VALUE_ANSWER);
   const words = trimmed(process.env.INPUTS_TEXT);
   const at = new Date().toISOString();

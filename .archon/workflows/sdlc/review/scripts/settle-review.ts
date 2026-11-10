@@ -35,6 +35,7 @@
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { artifactsDir, emit, note, refuse, text } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { FINDING_VALUES, type Finding, readFindings } from '../../.shared/review-item.ts';
 import { isObject } from '../../.shared/typed.ts';
 
@@ -51,13 +52,8 @@ interface Vote {
   readonly reason: string;
 }
 
-interface Discovery {
-  title: string;
-  claim: string;
-  evidence: string[];
-  relation: 'unrelated' | 'scope_conflict' | 'note';
-  source_nodes: string[];
-}
+/** Synthesis's verdict, as its node's schema certified it. */
+type Synthesis = NodeOutput<'archon-review', 'synthesize'>;
 
 function isVote(value: unknown): value is Vote {
   return (
@@ -97,14 +93,14 @@ function latestRoundCopy(dir: string): string | undefined {
 
 try {
   const verdict = {
-    ready: JSON.parse(text(process.env.INPUTS_READY)) as boolean,
+    ready: JSON.parse(text(process.env.INPUTS_READY)) as Synthesis['ready'],
     action: text(process.env.INPUTS_ACTION),
     findings_summary: text(process.env.INPUTS_SUMMARY),
-    report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
-    discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as Discovery[],
-    contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
+    report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as Synthesis['report'],
+    discoveries: [...(JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as Synthesis['discoveries'])],
+    contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as Synthesis['contract_left'],
   };
-  const gaps = JSON.parse(text(process.env.INPUTS_COVERAGE_GAPS)) as unknown[];
+  const gaps = JSON.parse(text(process.env.INPUTS_COVERAGE_GAPS)) as Synthesis['coverage_gaps'];
   // A Ready verdict ran no verifier and has nothing to settle.
   if (verdict.ready) {
     emit(verdict);

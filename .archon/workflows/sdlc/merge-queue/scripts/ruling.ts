@@ -25,8 +25,11 @@ import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
-import { type Choice, PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
+import { PRE_VALUE_ANSWER, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
+
+type RecordOutput = NodeOutput<'archon-merge-queue', 'record'>;
 
 const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<
   MergeAttention['choices'][number]['effect'],
@@ -52,9 +55,10 @@ function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, a
 }
 
 function main(): void {
-  const asked = nullableJson(process.env.INPUTS_ASKED) as MergeAsked | null;
+  const asked = nullableJson(process.env.INPUTS_ASKED) as RecordOutput['asked'];
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const answered = nullableJson(process.env.INPUTS_CHOICE) as Choice<string> | null;
+  // The wait answers with the chosen option's value.
+  const answered = nullableJson(process.env.INPUTS_CHOICE) as RecordOutput['options'][number]['value'] | null;
   if (answered === null) throw new Error(PRE_VALUE_ANSWER);
   const words = trimmed(process.env.INPUTS_TEXT);
   if (asked.by === 'base') {

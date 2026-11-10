@@ -9,6 +9,7 @@
 
 import { invokeForge, readRepositoryLabels, type QualifiedPr } from './forge.ts';
 import { viewIssue } from './issue.ts';
+import type { NodeOutput } from './outputs.generated.ts';
 
 interface LabelSpec {
   readonly color: string;
@@ -72,10 +73,12 @@ export function isPackLabel(name: string): name is PackLabel {
   return Object.hasOwn(PACK_LABELS, name);
 }
 
-export type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
-export type WorkType = 'bug' | 'feature' | 'refactor' | 'maintenance' | 'docs' | 'question';
-export type Size = 's' | 'm' | 'l';
-export type Route = 'investigate' | 'plan' | 'deliver' | 'continue' | 'split';
+/** Triage's vocabularies, as archon-triage-block.yaml's triage node declares them. */
+type Triage = NodeOutput<'archon-triage-block', 'triage'>;
+export type Contract = Triage['decision']['contract'];
+export type WorkType = Triage['type']['value'];
+export type Size = Triage['size']['value'];
+export type Route = Extract<Triage['decision'], { contract: 'READY' }>['route'];
 
 // Exactly one state label per item. A READY item's label names the route the run
 // takes on it: archon-ready delivers (a new pull request, or the open one it

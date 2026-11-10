@@ -25,10 +25,11 @@ import {
   countedRounds,
   itemPullRequest,
 } from '../../.shared/build.ts';
-import { type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
+import { type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { openOrderMembers } from '../../.shared/order.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import {
   claimNamed,
@@ -48,12 +49,8 @@ function positive(name: string, value: unknown): number {
   return parsed;
 }
 
-/** What interpret declared about the run's message; null when the run had none. */
-interface Interpreted {
-  readonly decision: 'build' | 'choose' | 'order' | 'intake' | 'none';
-  readonly number: number | null;
-  readonly reason: string;
-}
+/** What interpret declared about the run's message. */
+type Interpreted = NodeOutput<'archon-build-queue', 'interpret'>;
 
 /**
  * The item the run names: the `number` input, else the item interpret resolved the
@@ -63,13 +60,15 @@ interface Interpreted {
 function namedItem(): number | null | 'order' | 'handoff' {
   const number = trimmed(process.env.INPUTS_NUMBER);
   if (number !== '') return positive('number', number);
+  // Null when the run had no message.
   const interpreted = nullableJson(process.env.INPUTS_INTERPRETED) as Interpreted | null;
   if (interpreted === null) return null;
   switch (interpreted.decision) {
     case 'build':
       return positive("interpret's number", interpreted.number);
     case 'choose': {
-      const picked = nullableJson(process.env.INPUTS_PICKED) as { number?: unknown } | null;
+      // The wait answers with the value of the option the person picked.
+      const picked = nullableJson(process.env.INPUTS_PICKED) as Interpreted['options'][number]['value'] | null;
       return positive('the picked issue number', picked?.number);
     }
     case 'order':
@@ -87,7 +86,7 @@ function namedItem(): number | null | 'order' | 'handoff' {
  * claim, so a release or claim never touches that other repository's item.
  */
 function requireRunRepo(number: number): void {
-  const repo = nullableJson(process.env.INPUTS_REPO) as QualifiedPr['repo'];
+  const repo = nullableJson(process.env.INPUTS_REPO) as NodeOutput<'archon-build-queue', 'start'>['repo'];
   const subject = readWorkItem(number)?.subject;
   if (subject !== undefined && !sameRepo(subject.repo, repo)) {
     throw new Error(
@@ -110,11 +109,7 @@ function writeIssue(title: string, url: string, body: string): void {
  * continue. Whether it does is the route agent's call, since a dated ruling can
  * supersede it, so `branch` is always set for a round that continues none.
  */
-interface ItemPr {
-  readonly pull_request: PrRecord | null;
-  readonly continues: number | null;
-  readonly branch: string;
-}
+type ItemPr = Pick<NodeOutput<'archon-build-queue', 'facts'>, 'pull_request' | 'continues' | 'branch'>;
 
 const NO_ITEM_PR: ItemPr = { pull_request: null, continues: null, branch: '' };
 

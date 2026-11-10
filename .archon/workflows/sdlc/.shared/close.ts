@@ -18,21 +18,18 @@
 
 import { samePr, type QualifiedPr } from './forge.ts';
 import { closeIssue, type IssueView, NotAnIssueError, viewIssue } from './issue.ts';
+import type { NodeOutput } from './outputs.generated.ts';
 import { upsertComment } from './pr.ts';
 
-/** What made a `NO_ACTION` item closable, as triage declared it. */
-export type Closure =
-  | {
-      readonly kind: 'duplicate';
-      /** The open issue this one duplicates, and its URL. */
-      readonly url: string;
-      readonly original: QualifiedPr;
-    }
-  | {
-      readonly kind: 'delivered';
-      /** The merged change that already delivered the item's outcome. */
-      readonly url: string;
-    };
+/**
+ * What made a `NO_ACTION` item closable, as triage declared it: a duplicate names the
+ * open issue it duplicates by `original` and `url`, a delivered item the merged change
+ * that already delivered its outcome by `url`.
+ */
+export type Closure = Extract<
+  NodeOutput<'archon-triage-block', 'triage'>['decision'],
+  { contract: 'NO_ACTION' }
+>['closure'];
 
 const CLOSED_MARKER = '<!-- archon-close -->';
 

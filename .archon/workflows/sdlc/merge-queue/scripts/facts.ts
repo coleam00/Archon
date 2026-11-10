@@ -34,19 +34,18 @@ import {
   withMerge,
 } from '../../.shared/merge.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { workflowRepo } from '../../.shared/remote.ts';
 import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
 
-interface Item {
-  /** The issue whose work item the queue claimed. */
-  readonly item: QualifiedPr;
-  readonly pr: QualifiedPr;
-  readonly url: string;
-  readonly facts: PrFacts;
+/**
+ * A claimed pull request as the facts node declares it. Its schema leaves the two stored
+ * documents an item carries loose, so their own types state them here.
+ */
+type Item = Omit<NodeOutput<'archon-merge-queue', 'facts'>['items'][number], 'record' | 'validation'> & {
   readonly record: MergeRecord | null;
-  /** The latest validation its build rounds recorded, which the gate trusts under `ci: none`. */
   readonly validation: Validation | null;
-}
+};
 
 function positive(name: string, value: string): number {
   const parsed = Number(value);

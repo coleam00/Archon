@@ -24,17 +24,20 @@
  * request the round continues: its number, or null for a fresh round.
  */
 
-import type { PrRecord, QualifiedPr } from '../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
 import { emit, nullableJson, refuse } from '../../.shared/io.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { reviewedHead } from '../../.shared/merge.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 
+type Facts = NodeOutput<'archon-build-queue', 'facts'>;
+
 /** A fresh round stays on the base and continues no pull request. */
 function fresh(): void {
-  const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'>;
+  const item = nullableJson(process.env.INPUTS_ITEM) as Facts['item'];
+  if (item === null) throw new Error('facts reported no item for the round');
   const base = fetchDefaultBranch(item.repo);
   if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
     throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
@@ -42,9 +45,9 @@ function fresh(): void {
 }
 
 function main(): void {
-  const continues = nullableJson(process.env.INPUTS_CONTINUES) as number | null;
-  const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
-  const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
+  const continues = nullableJson(process.env.INPUTS_CONTINUES) as NodeOutput<'archon-build-queue', 'route'>['continues'];
+  const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as Facts['continues'];
+  const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as Facts['pull_request'];
   if (continues === null) {
     fresh();
     return;

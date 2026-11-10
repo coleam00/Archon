@@ -14,17 +14,10 @@
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { caveats } from '../../.shared/report.ts';
 
-const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
-  round: number;
-  done: boolean;
-  ready: boolean;
-  reason: string;
-  pr_url: string;
-  contract_left: string[] | null;
-  summary: string;
-};
+const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as NodeOutput<'archon-deliver', 'round'>;
 const capped = !rounds.done;
 const notes = caveats(artifactsDir(), { listingFile: process.env.TYPED_ARTIFACTS_FILE });
 const where = rounds.pr_url === '' ? '' : `\n${rounds.pr_url}`;

@@ -17,27 +17,13 @@
 import type { Closure } from '../../.shared/close.ts';
 import { record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, refuse, text, trimmed } from '../../.shared/io.ts';
-import {
-  type Contract,
-  isPackLabel,
-  PACK_LABEL_NAMES,
-  type Route,
-  type Size,
-  type WorkType,
-  wantedLabels,
-  writeLabels,
-} from '../../.shared/labels.ts';
+import { type Contract, isPackLabel, PACK_LABEL_NAMES, wantedLabels, writeLabels } from '../../.shared/labels.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 type Item = QualifiedPr;
-/** One of triage's judged fields: a value and the one-line reason for it. */
-interface Field<Value extends string> {
-  readonly value: Value;
-  readonly reason: string;
-}
-interface Edits {
-  readonly title: string;
-  readonly body: string;
-}
+/** The triage agent's verdict, as its node's schema certified it. */
+type Triage = NodeOutput<'archon-triage-block', 'triage'>;
+type Edits = NodeOutput<'archon-triage-block', 'verdict'>['proposed_edits'];
 
 /** A `from:` binding arrives as the producer's JSON, already certified against its schema. */
 function bound(value: string | undefined): unknown {
@@ -54,14 +40,6 @@ function isQualifiedUrl(value: string): boolean {
   }
 }
 
-/** One branch of the triage decision, as the node's schema admits it. */
-type Decision =
-  | { contract: 'READY'; route: Exclude<Route, 'continue'> }
-  | { contract: 'READY'; route: 'continue'; pull_request: number }
-  | { contract: 'NEEDS_CONTRACT_WORK'; proposed_edits: Edits }
-  | { contract: 'BLOCKED'; blocked_reason: string; blocked_by: string[] }
-  | { contract: 'NO_ACTION'; closure: Closure };
-
 /** Every link a verdict carries is one the agent opened, so each must be a qualified URL. */
 function unqualifiedLink(
   blockedBy: readonly string[],
@@ -75,7 +53,7 @@ function unqualifiedLink(
 }
 
 function main(): void {
-  const decision = bound(process.env.INPUTS_DECISION) as Decision;
+  const decision = bound(process.env.INPUTS_DECISION) as Triage['decision'];
   const contract: Contract = decision.contract;
   const route = 'route' in decision ? decision.route : 'no_action';
   const edits: Edits = 'proposed_edits' in decision ? decision.proposed_edits : { title: '', body: '' };
@@ -83,16 +61,16 @@ function main(): void {
   const blockedBy = 'blocked_by' in decision ? decision.blocked_by : [];
   const pullRequest = 'pull_request' in decision ? decision.pull_request : null;
   const closure = 'closure' in decision ? decision.closure : null;
-  const type = bound(process.env.INPUTS_TYPE) as Field<WorkType>;
-  const size = bound(process.env.INPUTS_SIZE) as Field<Size>;
+  const type = bound(process.env.INPUTS_TYPE) as Triage['type'];
+  const size = bound(process.env.INPUTS_SIZE) as Triage['size'];
   // Passed through for the caller; no label mirrors these three.
-  const complexity = bound(process.env.INPUTS_COMPLEXITY) as Field<string>;
-  const importance = bound(process.env.INPUTS_IMPORTANCE) as Field<string>;
-  const urgency = bound(process.env.INPUTS_URGENCY) as Field<string>;
+  const complexity = bound(process.env.INPUTS_COMPLEXITY) as Triage['complexity'];
+  const importance = bound(process.env.INPUTS_IMPORTANCE) as Triage['importance'];
+  const urgency = bound(process.env.INPUTS_URGENCY) as Triage['urgency'];
   const publish = text(process.env.INPUTS_PUBLISH) === 'true';
   const summary = text(process.env.INPUTS_SUMMARY);
-  const area = bound(process.env.INPUTS_AREA_LABELS) as string[];
-  const related = bound(process.env.INPUTS_RELATED) as { url: string; relation: string }[];
+  const area = bound(process.env.INPUTS_AREA_LABELS) as Triage['area_labels'];
+  const related = bound(process.env.INPUTS_RELATED) as Triage['related'];
   const boundItem = record(bound(process.env.INPUTS_ITEM));
   const repo = record(boundItem?.repo);
   if (

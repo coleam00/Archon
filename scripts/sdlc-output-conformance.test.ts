@@ -50,10 +50,9 @@ import {
   type TierBinding,
 } from '../.archon/workflows/sdlc/review-eval/scripts/runs';
 import type { Closure } from '../.archon/workflows/sdlc/.shared/close';
-import { type AgentDecision, AGENT_OUTCOMES } from '../.archon/workflows/sdlc/.shared/discoveries';
+import type { AgentDecision } from '../.archon/workflows/sdlc/.shared/discoveries';
 import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/forge';
 import { parseLease } from '../.archon/workflows/sdlc/.shared/state';
-import { SIZE_LABEL, TYPE_LABEL } from '../.archon/workflows/sdlc/.shared/labels';
 import { newWorkItem } from '../.archon/workflows/sdlc/.shared/workitem';
 
 const { runPackScript } = packScriptRunner();
@@ -263,18 +262,6 @@ describe('triage', () => {
         expect(validateStructuredOutput({ ...VALID, [field]: broken }, schema).valid).toBe(false);
       }
     }
-    // The labels mirror type and size, so the schema's values and the label map's keys
-    // must be the same set.
-    const properties = schema.properties as Record<
-      string,
-      { properties: { value: { enum: string[] } } }
-    >;
-    expect([...properties.type.properties.value.enum].sort()).toEqual(
-      Object.keys(TYPE_LABEL).sort()
-    );
-    expect([...properties.size.properties.value.enum].sort()).toEqual(
-      Object.keys(SIZE_LABEL).sort()
-    );
   });
 });
 
@@ -333,31 +320,6 @@ describe('discoveries', () => {
   const DISCOVERIES = 'discoveries/archon-discoveries.yaml';
   const RUN = 'aaaaaaaa-0000-4000-8000-000000000001';
   const ISSUE = { repo: PR.repo, number: 7 };
-
-  test("the decide node's output schema admits each of the agent's outcomes", () => {
-    const schema = outputFormat(DISCOVERIES, 'decide');
-    const base = { key: 'some-defect', refs: [`${RUN}:review#0`], title: 'A defect' };
-    const examples: AgentDecision[] = [
-      { ...base, outcome: 'file', body: 'The brief.', reason: 'r' },
-      { ...base, outcome: 'track', issue: ISSUE, comment: null, reason: 'r' },
-      { ...base, outcome: 'track', issue: ISSUE, comment: 'More evidence.', reason: 'r' },
-      { ...base, outcome: 'drop', reason: 'r' },
-      { ...base, outcome: 'ask', question: 'q', recommendation: 'r' },
-      { ...base, outcome: 'wait', reason: 'r' },
-    ];
-    expect(new Set(examples.map(example => example.outcome))).toEqual(new Set(AGENT_OUTCOMES));
-    for (const example of examples) {
-      expect(validateStructuredOutput({ decisions: [example], summary: 's' }, schema)).toEqual({
-        valid: true,
-      });
-    }
-    expect(
-      validateStructuredOutput(
-        { decisions: [{ ...base, outcome: 'drop', body: 'b', reason: 'r' }], summary: 's' },
-        schema
-      ).valid
-    ).toBe(false);
-  });
 
   test('a pass emits facts, an outcome and an answer their nodes admit', () => {
     const at = install('archon-discoveries-home-');

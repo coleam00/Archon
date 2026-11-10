@@ -42,6 +42,7 @@ import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
+type FactsOutput = NodeOutput<'archon-build-queue', 'facts'>;
 type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
 type AnswerOutput = NodeOutput<'archon-build-queue', 'answer'>;
 type ShipReport = NodeOutput<'archon-build', 'report'>;
@@ -142,7 +143,7 @@ function markReady(pr: PrRecord | null, head: string | null | undefined): string
 /** The pull request write the decision declared: a push, taking it out of draft, or none. */
 function writePullRequest(route: RouteOutput | null, answer: AnswerOutput | null, push: QualifiedPr | null): string | null {
   if (answer === null && route?.decision === 'ready')
-    return markReady(nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null, route.ready_head);
+    return markReady(nullableJson(process.env.INPUTS_PULL_REQUEST) as FactsOutput['pull_request'], route.ready_head);
   return push === null ? null : pushTo(push);
 }
 

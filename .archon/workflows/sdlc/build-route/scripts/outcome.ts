@@ -27,6 +27,7 @@
  */
 
 import { artifactsDir, emit, text } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { caveats } from '../../.shared/report.ts';
 
 const artifacts = artifactsDir();
@@ -45,7 +46,7 @@ const invVerdict = optional(process.env.INPUTS_INV_VERDICT);
 const invSummary = optional(process.env.INPUTS_INV_SUMMARY);
 const planSummary = optional(process.env.INPUTS_PLAN_SUMMARY);
 const openQuestions = JSON.parse(text(process.env.INPUTS_OPEN_QUESTIONS) || 'null') as
-  | string[]
+  | NodeOutput<'archon-plan', 'plan'>['open_questions']
   | null;
 const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
 const delivery = text(process.env.INPUTS_DELIVERY);

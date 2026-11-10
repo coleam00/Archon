@@ -36,13 +36,10 @@ import {
   type MergeAsked,
   type MergeAttention,
   type MergeDecisionEntry,
-  type MergeRecord,
   type MergeSettled,
   type MergeStatus,
   type PrFacts,
-  readBase,
   readPr,
-  type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
 import { askFields, attentionWait, withOther } from '../../.shared/queue.ts';
@@ -62,13 +59,8 @@ function withQueueOther(attention: MergeAttention, brief: string): MergeAttentio
   return withOther(attention, 'return');
 }
 
-interface Item {
-  readonly item: QualifiedPr | null;
-  readonly pr: QualifiedPr;
-  readonly url: string;
-  readonly facts: PrFacts | null;
-  readonly record: MergeRecord | null;
-}
+type Facts = NodeOutput<'archon-merge-queue', 'facts'>;
+type Item = Facts['items'][number];
 
 /** The sweep's whole output, and one of its decisions, as its output schema admits them. */
 type Sweep = NodeOutput<'archon-merge-queue', 'sweep'>;
@@ -102,7 +94,7 @@ function decide(items: readonly Item[], sweep: Sweep | null): Decision[] {
       number: item.pr.number,
       action: 'wait',
       class: 'unclear',
-      head: item.facts?.head_revision ?? '',
+      head: item.facts.head_revision,
       reran: false,
       reason: 'the sweep left it undecided; the next sweep decides it',
       brief: '',
@@ -112,11 +104,8 @@ function decide(items: readonly Item[], sweep: Sweep | null): Decision[] {
   return [...decided.values()];
 }
 
-/** The default branch as facts read it. */
-type Base = ReturnType<typeof readBase>;
-
 /** A red default branch the sweep did not raise would hold every merge in silence. */
-function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null {
+function unraisedRedBase(sweep: Sweep | null, base: Facts['base']): string | null {
   if (sweep === null || base?.checks.state !== 'red' || sweep.base.attention !== null) return null;
   return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep did not raise it`;
 }
@@ -146,7 +135,7 @@ function settle(decision: Decision, after: PrFacts): Outcome {
     return { status: 'parked', reason: `${after.url} was closed during the sweep`, head, contradiction };
   }
   if (decision.action === 'merged') return { status: 'waiting', reason: claimed, head, contradiction: claimed };
-  const status: Record<Exclude<SweepAction, 'merged'>, MergeStatus> = {
+  const status: Record<Exclude<Decision['action'], 'merged'>, MergeStatus> = {
     return: 'returned',
     ask: 'waiting',
     wait: 'waiting',
@@ -207,10 +196,6 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   const decided = `${label} (${decision.class})`;
   const links = [item.url, ...(decision.attention?.links ?? [])];
   const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran };
-  if (item.item === null) {
-    writes.lines.push(`PR ${String(decision.number)}: ${label}, with no work item to record it on`);
-    return false;
-  }
   const name = `PR ${String(decision.number)}`;
   const written = write(writes, item.item, name, label, doc => {
     const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr, release: !raised });
@@ -240,8 +225,8 @@ function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], bas
 function main(): void {
   const path = MERGE_PATHS.find(candidate => candidate === trimmed(process.env.INPUTS_PATH));
   if (path === undefined) throw new Error(`path must be one of ${MERGE_PATHS.join(', ')}`);
-  const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
-  const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
+  const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Facts['items'];
+  const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as Facts['settled'];
   const baseError = text(process.env.INPUTS_BASE_ERROR);
   const runId = workflowRunId();
   const writes: Writes = { at: new Date().toISOString(), runId, lines: [], failed: [] };
@@ -261,7 +246,7 @@ function main(): void {
   const sweep = nullableJson(process.env.INPUTS_SWEEP) as Sweep | null;
   if (path === 'sweep' && sweep === null) throw new Error('the sweep path reached record with no sweep');
   const decisions = decide(items, sweep);
-  const base = nullableJson(process.env.INPUTS_BASE) as Base | null;
+  const base = nullableJson(process.env.INPUTS_BASE) as Facts['base'];
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
   const baseAttention = sweep?.base.attention ?? null;
@@ -273,7 +258,7 @@ function main(): void {
         ? null
         : {
             by: 'pr',
-            item: itemOf(firstAsk.number).item as QualifiedPr,
+            item: itemOf(firstAsk.number).item,
             pr: itemOf(firstAsk.number).pr,
             head: firstAsk.head,
             brief: firstAsk.brief,

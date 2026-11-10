@@ -27,19 +27,21 @@ import {
   workItemName,
 } from './workitem.ts';
 
-/**
- * What a build choice does when a person picks it; archon-build-queue.yaml declares the
- * same enum. `continue` launches the next round from the brief. `ready` hands the pull
- * request to the merge queue as it stands, such as after a maintainer finished it by
- * hand. `park` stops work until a re-triage.
- */
-export const BUILD_EFFECTS = ['continue', 'ready', 'park'] as const;
-export type BuildEffect = (typeof BUILD_EFFECTS)[number];
+/** The build queue's attention item, as archon-build-queue.yaml's deciding nodes declare it. */
 export type BuildAttention = Attention<BuildEffect>;
+/**
+ * What a build choice does when a person picks it. `continue` launches the next round
+ * from the brief. `ready` hands the pull request to the merge queue as it stands, such
+ * as after a maintainer finished it by hand. `park` stops work until a re-triage.
+ */
+export type BuildEffect = NonNullable<
+  NodeOutput<'archon-build-queue', 'route'>['attention']
+>['choices'][number]['effect'];
 
-/** Which decision raised an attention item: its class label, which the YAML also declares. */
-export const ASKED_BY = ['route', 'stop', 'scope'] as const;
-export type AskedBy = (typeof ASKED_BY)[number];
+/** What the apply node asked, which the ruling node needs to act on the answer. */
+export type BuildAsked = NonNullable<NodeOutput<'archon-build-queue', 'apply'>['asked']>;
+/** Which decision raised an attention item: its class label. */
+export type AskedBy = BuildAsked['by'];
 
 /** The stages a triaged item can be launched from: a READY verdict's routes. */
 export const LAUNCH_STAGES = [
@@ -129,10 +131,7 @@ export function buildWaits(doc: WorkItem): boolean {
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
 
 /** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
-export interface BlockedItem {
-  readonly number: number;
-  readonly summary: string;
-}
+export type BlockedItem = NodeOutput<'archon-build-queue', 'blocked'>['blocked'][number];
 
 // A scheduled queue would otherwise judge the same blocked items on every run.
 const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
