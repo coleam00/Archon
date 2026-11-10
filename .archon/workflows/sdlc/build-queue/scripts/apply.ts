@@ -26,6 +26,7 @@ import {
   type BuildRound,
   type BuildStatus,
   nextRound,
+  roundPrNumber,
   type Validation,
   withBuild,
 } from '../../.shared/build.ts';
@@ -212,6 +213,22 @@ function validationOf(): Pick<BuildRound, 'validation'> {
   return validation == null ? {} : { validation };
 }
 
+/**
+ * The number of the round's pull request, resolved through the forge, for the round's
+ * record. A forge that cannot answer now leaves it out, noted: the round is still
+ * recorded, and the next read of the item's pull request resolves the URL, and refuses
+ * there if it is not one of the item's repository.
+ */
+function prNumberOf(url: string, repo: QualifiedPr['repo']): Pick<BuildRound, 'pr_number'> {
+  if (url === '') return {};
+  try {
+    return { pr_number: roundPrNumber(url, repo) };
+  } catch (error) {
+    note(`the round records no pull request number: ${error instanceof Error ? error.message : String(error)}`);
+    return {};
+  }
+}
+
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
   const noItem = noItemSummary(path);
@@ -232,6 +249,7 @@ function main(): void {
           run_id: runId,
           at,
           ...ending,
+          ...prNumberOf(ending.pr_url, item.repo),
           artifacts: artifactsDir(),
           ...(route === null ? {} : { route: route.route }),
           ...reviewsOf(),

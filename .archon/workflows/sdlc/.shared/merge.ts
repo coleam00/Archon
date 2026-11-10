@@ -137,22 +137,6 @@ export function itemPr(doc: WorkItem): QualifiedPr | null {
   return itemPullRequest(doc.facts.build?.rounds ?? [], doc.facts.triage, doc.subject.repo);
 }
 
-/** `https://<host>/<owner>/<name>/pull/<number>`; anything else refuses. */
-export function prFromUrl(url: string): QualifiedPr {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`"${url}" is not a pull request URL`);
-  }
-  const [owner, name, kind, number, ...rest] = parsed.pathname.split('/').filter(part => part !== '');
-  const value = Number(number);
-  if (owner === undefined || name === undefined || kind !== 'pull' || rest.length > 0 || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`"${url}" is not a pull request URL`);
-  }
-  return { repo: { host: parsed.host, path: `${owner}/${name}` }, number: value };
-}
-
 export interface MergeChange {
   readonly at: string;
   readonly run_id: string;
