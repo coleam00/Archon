@@ -34,12 +34,8 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
       ['bun', 'run', 'check:provider-contract-schema'],
       ['bun', 'run', 'check:chat-contract-schema'],
       ['bun', 'run', 'check:api-types'],
+      ['bun', 'run', 'check:workflow-output-types'],
     ],
-  },
-  {
-    id: 'merge-sweep-contract',
-    label: 'Merge sweep schema agrees with its recorder contract',
-    commands: [['bun', 'run', 'test', '.archon/scripts/__tests__/merge-sweep-contract.test.ts']],
   },
   {
     id: 'type-check',

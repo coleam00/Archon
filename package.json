@@ -28,6 +28,8 @@
     "check:provider-contract-schema": "bun run --cwd=packages/provider-contract check:schema",
     "generate:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts",
     "check:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts --check",
+    "generate:workflow-output-types": "bun run cli workflow types .archon/workflows/sdlc",
+    "check:workflow-output-types": "bun run cli workflow types .archon/workflows/sdlc --check",
     "check:schema-upgrades": "bun run scripts/check-schema-upgrades.ts",
     "lens-yield": "bun run scripts/lens-yield.ts",
     "test:install": "bash scripts/test-install.sh",

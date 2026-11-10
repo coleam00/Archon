@@ -42,6 +42,7 @@
     "./validator": "./src/validator.ts",
     "./validation-config": "./src/validation-config.ts",
     "./dry-run": "./src/dry-run.ts",
+    "./output-types": "./src/output-types.ts",
     "./graph-plan": "./src/graph-plan.ts",
     "./utils/tool-formatter": "./src/utils/tool-formatter.ts",
     "./utils/github-token-policy": "./src/utils/github-token-policy.ts",

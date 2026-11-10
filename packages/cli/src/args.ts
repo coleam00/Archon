@@ -86,6 +86,9 @@ export const cliArgOptions: CliArgOptions = {
   effort: { type: 'string' },
   full: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
+  // `archon workflow types`: compare instead of writing, and the file to write.
+  check: { type: 'boolean' },
+  out: { type: 'string' },
   stubs: { type: 'string' },
   'stubs-init': { type: 'string' },
   'default-stubs': { type: 'boolean' },

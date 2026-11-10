@@ -383,6 +383,9 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
   if (command === 'workflow' && subcommand === 'test') {
     return await workflowRoutes.runWorkflowTest(ctx);
   }
+  if (command === 'workflow' && subcommand === 'types') {
+    return await workflowRoutes.runWorkflowTypes(ctx);
+  }
 
   const effectiveCwd = await resolveEffectiveCwd(ctx);
   if (typeof effectiveCwd === 'number') return effectiveCwd;

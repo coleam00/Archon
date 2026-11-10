@@ -301,9 +301,14 @@ covers every TypeScript file under `.archon/workflows/`, so it needs no globs of
 own. A script placed outside the type-check globs fails `pack-scripts-validation.test.ts`
 rather than going quietly unchecked.
 
-The scripts' tool-boundary tests live under `.archon/scripts/__tests__/`. CI runs the
-merge-sweep conformance test through `merge-sweep-contract`, and runs the other pack tests and
-the workflow fixtures on a pull request that changes the pack. Run them locally with
+`.shared/outputs.generated.ts` holds the type of every node output and the values of every
+enum, generated from the workflows' `output_format` schemas. A script reads a node's
+output as `NodeOutput<'<workflow>', '<node>'>` instead of restating the shape. After
+changing an `output_format`, run `bun run generate:workflow-output-types`; CI's
+`generated-files` check fails while the file is stale.
+
+The scripts' tool-boundary tests live under `.archon/scripts/__tests__/`. CI runs the pack
+tests and the workflow fixtures on a pull request that changes the pack. Run them locally with
 `bun run test --plan pack` and `bun run validate --only workflow-fixtures`.
 
 Three rules, each protecting something a script cannot get back on its own:

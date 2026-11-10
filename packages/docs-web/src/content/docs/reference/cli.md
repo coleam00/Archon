@@ -218,6 +218,32 @@ The command exits 0 when every fixture passes, including when none are declared.
 
 Fixtures with `exec-code: true` receive the same environment as [executable dry runs](#deterministic-dry-run): inherited process values, file-configured `env`, then registered-project environment values, with later sources winning. Environment lookup happens only for executable fixtures. If lookup fails, that fixture fails with the lookup error; independent stub fixtures still run and workflow-load errors remain in the report.
 
+### `workflow types`
+
+Generate TypeScript from the [`output_format`](/reference/workflow-language/#typescript-for-output_format) of a workflow's nodes, so scripts read node outputs through generated types instead of restating each schema by hand. The file holds, for every node that declares `output_format`, its output type (`NodeOutput<'<workflow>', '<node>'>`) and, for every `enum` in those schemas, its values as an `as const` tuple (`OUTPUT_ENUMS`). It contains no imports.
+
+```bash
+archon workflow types my-team                          # a pack of this project, by name
+archon workflow types .archon/workflows/my-team        # the same pack, by directory path
+archon workflow types my-team --check                  # write nothing; exit 1 when stale
+archon workflow types build-change --out src/build-change.gen.ts   # one workflow
+```
+
+| Target | Written to |
+| --- | --- |
+| A pack: its name under `.archon/workflows/`, or its directory path | `<pack>/.shared/outputs.generated.ts`, unless `--out` names another file |
+| One workflow: its name, its YAML file, or its folder | The `--out` file, which is required |
+
+A relative path target and `--out` resolve from the invoking directory. A workflow file can live anywhere, inside or outside the project. A name resolves in the project's `.archon/workflows/` only; bundled, global and installed workflows are not targets. The generated file's header names the command that regenerates it, with paths relative to the project root.
+
+| Flag | Effect |
+| --- | --- |
+| `--out <file>` | The file to write |
+| `--check` | Compare instead of writing. Exits 1 naming the file when it is missing or its content differs. CRLF line endings in the file are read as LF, so a checkout that converts line endings stays current |
+| `--json` | Print `{ ok, path, status, workflows, nodes }`; `status` is `written`, `unchanged`, `current` or `stale` |
+
+Output is deterministic: workflows sorted by name, nodes and fields in YAML order. The command exits 1 without writing when a workflow of the pack does not load, when no node declares `output_format`, or when a schema uses a keyword the generator cannot state as a type; that error names the workflow, the node and the keyword. See [the supported keywords](/reference/workflow-language/#typescript-for-output_format).
+
 ### `workflow run <name> [message]`
 
 Run a workflow with an optional user message, which the workflow reads as `$ARGUMENTS`.

@@ -42,12 +42,14 @@ import {
   statePut,
   statePutClaimed,
 } from './state.ts';
+import { OUTPUT_ENUMS } from './outputs.generated.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
-/** The trust and path vocabularies; a test proves archon-intake.yaml's enums agree. */
-export const TRUSTS = ['maintainer', 'outside'] as const;
+/** The trust and path enums archon-intake.yaml's facts node declares; its trust also admits null. */
+const INTAKE_ENUMS = OUTPUT_ENUMS['archon-intake'].facts;
+export const TRUSTS = INTAKE_ENUMS['decision.trust'].filter(trust => trust !== null);
 export type Trust = (typeof TRUSTS)[number];
-export const INTAKE_PATHS = ['quiet', 'closed', 'outside', 'triage'] as const;
+export const INTAKE_PATHS = INTAKE_ENUMS['decision.path'];
 /**
  * What a request records: a forge event, or `retriage`, a pack run's own request to
  * re-triage the item, recorded by that run, whose `run_id` it carries.
@@ -261,14 +263,15 @@ export function parseWorkItem(value: unknown): WorkItem {
 // --- ordering -----------------------------------------------------------------
 
 /**
- * Rank orders for the ordering keys. Each list is the triage node's own enum for
- * that field, lowest first; a test proves the two agree.
+ * Rank orders for the ordering keys. Each list is the enum archon-triage-block.yaml's
+ * triage node declares for that field, which it lists lowest first.
  */
+const TRIAGE_ENUMS = OUTPUT_ENUMS['archon-triage-block'].triage;
 export const RANKS = {
-  urgency: ['none', 'soon', 'now'],
-  importance: ['low', 'medium', 'high'],
-  size: ['s', 'm', 'l'],
-  complexity: ['low', 'medium', 'high'],
+  urgency: TRIAGE_ENUMS['urgency.value'],
+  importance: TRIAGE_ENUMS['importance.value'],
+  size: TRIAGE_ENUMS['size.value'],
+  complexity: TRIAGE_ENUMS['complexity.value'],
 } as const;
 type RankedKey = keyof typeof RANKS;
 export interface OrderKey {

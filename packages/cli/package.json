@@ -107,6 +107,9 @@
       "src/commands/workflow-list.test.ts"
     ],
     [
+      "src/commands/workflow-types.test.ts"
+    ],
+    [
       "src/commands/workflow-run-output.test.ts"
     ],
     [
