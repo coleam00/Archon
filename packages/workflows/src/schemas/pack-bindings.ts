@@ -4,7 +4,7 @@
  *
  * A declaration starts nothing. `archon pack bindings` turns it into binding files for one
  * repository, and the operator registers each file. The declaration holds what the pack
- * knows (the workflow, its timer or event, how starts may overlap, its inputs); the
+ * knows (the workflow, what starts it, how starts may overlap, its inputs); the
  * operator supplies what only the install knows (the repository, the host, the run-as
  * user, the checkout).
  */
@@ -71,10 +71,22 @@ export const packEventBindingSchema = z
   })
   .strict();
 
+/**
+ * A binding no clock and no event starts: only `archon trigger fire` does, from a run or
+ * an operator. It is its own strict shape, so a `schedule:` or `event:` key that is
+ * present but invalid is refused by its own schema and never read as fire-only.
+ */
+export const packFireBindingSchema = z.object(bindingShape).strict();
+
 export type PackTimerBinding = z.infer<typeof packTimerBindingSchema>;
 export type PackEventBinding = z.infer<typeof packEventBindingSchema>;
-export type PackBinding = PackTimerBinding | PackEventBinding;
+export type PackFireBinding = z.infer<typeof packFireBindingSchema>;
+export type PackBinding = PackTimerBinding | PackEventBinding | PackFireBinding;
 
-export function isPackTimerBinding(binding: PackBinding): binding is PackTimerBinding {
-  return 'schedule' in binding;
+/** What starts a binding: a `timer`, an `event`, or only a `fire`. */
+export type PackBindingKind = 'timer' | 'event' | 'fire';
+
+export function packBindingKind(binding: PackBinding): PackBindingKind {
+  if ('schedule' in binding) return 'timer';
+  return 'event' in binding ? 'event' : 'fire';
 }

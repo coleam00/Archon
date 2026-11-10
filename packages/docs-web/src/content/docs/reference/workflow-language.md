@@ -2332,11 +2332,19 @@ bindings:
       actions: [opened]
     inputs:
       number: { event: subject.number }   # an event field; event bindings only
+  follow-up:                          # neither schedule nor event: fire-only
+    workflow: review-follow-up
+    resource: follow-up
+    overlap: queue
 ```
 
-Each binding sets exactly one of `schedule:` (a timer binding, written as a file
-`archon trigger fire --config` reads) or `event:` (an entry for the GitHub source plugin's
-`bindings` array). `capacity`, `overlap` and `isolation` mean what they mean in a
+A binding sets `schedule:` (a timer binding, written as a file
+`archon trigger fire --config` reads), `event:` (an entry for the GitHub source plugin's
+`bindings` array), or neither. With neither it is a
+[fire-only binding](/guides/workflow-triggers/#start-a-binding-only-with-trigger-fire): the
+same file as a timer binding without a schedule, started only when a run or an operator fires
+it. Setting both is refused, and so is a `schedule:` or `event:` key with an invalid value.
+`capacity`, `overlap` and `isolation` mean what they mean in a
 [binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
 resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
 same `resource` share its slots. With `resource_scope: host` it is
@@ -2344,7 +2352,7 @@ same `resource` share its slots. With `resource_scope: host` it is
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
-input must name a declared timer binding, an `{ event: <field> }` input belongs to an event
+input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an event
 binding, and bindings sharing a resource must declare the same capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 

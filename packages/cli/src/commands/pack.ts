@@ -6,16 +6,18 @@
  * supplies the repository, the host, the run-as user and the checkout. The command only
  * writes files. It registers and schedules nothing: the operator still runs
  * `archon trigger fire` and `archon trigger schedule install` for a timer binding, and adds
- * an event binding to the source plugin's configuration.
+ * an event binding to the source plugin's configuration. A fire-only binding needs neither:
+ * its file is what a run or an operator passes to `archon trigger fire`.
  */
 import { createHash } from 'node:crypto';
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import {
-  isPackTimerBinding,
+  packBindingKind,
   type PackBinding,
   type PackBindingInput,
+  type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import type { WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { writeJsonLine } from '../utils/stdout';
@@ -48,7 +50,7 @@ interface Target {
 
 interface Generated {
   id: string;
-  kind: 'timer' | 'event';
+  kind: PackBindingKind;
   path: string;
   document: unknown;
 }
@@ -111,16 +113,20 @@ function generate(
     },
   };
   const path = bindingPath(target, id);
-  if (isPackTimerBinding(binding)) {
+  if (!('event' in binding)) {
+    // A timer and a fire-only binding are the same `trigger fire --config` file; only the
+    // timer carries a schedule.
     return {
       id,
-      kind: 'timer',
+      kind: packBindingKind(binding),
       path,
       document: {
         version: 1,
         sourceInstanceId: bindingName(target, id),
         binding: { ...intent, bindingRevision: null },
-        schedule: { intervalSeconds: binding.schedule.interval_seconds, runAtLoad: false },
+        ...('schedule' in binding
+          ? { schedule: { intervalSeconds: binding.schedule.interval_seconds, runAtLoad: false } }
+          : {}),
       },
     };
   }
@@ -139,7 +145,7 @@ function generate(
 /** Check a generated document against the schema of the loader that will read it. */
 function assertLoadable({ id, kind, document }: Generated, target: Target): void {
   const result =
-    kind === 'timer'
+    kind !== 'event'
       ? timerTriggerConfigSchema.safeParse(document)
       : // The plugin reads a binding only inside its configuration, so the binding is checked
         // there. The secret name is the operator's and is not part of what is written.
@@ -150,7 +156,7 @@ function assertLoadable({ id, kind, document }: Generated, target: Target): void
           bindings: [document],
         });
   if (result.success) return;
-  const reader = kind === 'timer' ? 'timer binding' : 'GitHub source plugin binding';
+  const reader = kind === 'event' ? 'GitHub source plugin binding' : '`trigger fire` configuration';
   const issues = result.error.issues
     .map(issue => `${issue.path.join('.')}: ${issue.message}`)
     .join('; ');
@@ -248,6 +254,14 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
         `  archon trigger schedule install --config ${shellQuote(timer.path)}`
       );
     }
+  }
+  const fires = generated.filter(g => g.kind === 'fire');
+  if (fires.length > 0) {
+    lines.push(
+      '',
+      'Fire-only bindings. Nothing schedules these; a run or an operator starts each with:'
+    );
+    for (const fire of fires) lines.push(`  archon trigger fire --config ${shellQuote(fire.path)}`);
   }
   if (events.length > 0) {
     lines.push(

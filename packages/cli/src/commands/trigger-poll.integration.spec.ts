@@ -259,3 +259,36 @@ test('poll-style fires preserve unkeyed starts', async () => {
     restore();
   }
 });
+
+test('a fire-only binding starts a run on fire and has no timer to install', async () => {
+  const { host, config, configPath, restore } = await orderFixture({
+    order_id: 'literal-order',
+    mode: 'fire-only',
+  });
+  const stdout = silenceStdout();
+  try {
+    const { schedule: _schedule, ...fireOnly } = config;
+    await writeFile(configPath, JSON.stringify(fireOnly));
+
+    await fireAndExecute(host, { config: configPath });
+    const { runs } = await host.deps.store.listWorkflowRuns();
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatchObject({
+      status: 'completed',
+      metadata: { resource_start: { bindingId: 'fired' } },
+    });
+
+    await expect(
+      triggerCommand(host, 'schedule', ['install'], { config: configPath })
+    ).rejects.toThrow("Binding 'fired' is fire-only");
+
+    // A schedule that is present but incomplete is a broken timer, not a fire-only binding.
+    await writeFile(configPath, JSON.stringify({ ...fireOnly, schedule: {} }));
+    await expect(fireAndExecute(host, { config: configPath })).rejects.toThrow(
+      'Invalid timer configuration fields: schedule.intervalSeconds'
+    );
+  } finally {
+    stdout.mockRestore();
+    restore();
+  }
+});

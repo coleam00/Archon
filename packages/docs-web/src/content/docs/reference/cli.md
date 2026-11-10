@@ -2196,7 +2196,7 @@ archon pack bindings <pack> \
 - `--only` writes the listed bindings. A binding whose input names another binding's file needs that binding listed too, or its file already in `--out`.
 - `--force` replaces existing files. Without it, one existing file refuses the whole set and nothing is written.
 
-A timer binding is written as a complete `trigger fire --config` file. An event binding is written as one object for the `bindings` array of the GitHub source plugin's `config`, in the file `ARCHON_WEBHOOK_SOURCES` names, because the plugin reads bindings only from there. The plugin accepts `github.com` repositories, so the command refuses to write an event binding for another host. Every file is checked against the schema of the loader that will read it before any is written. `--json` prints `{"pack", "written": [{"id", "kind", "path"}]}`.
+A timer binding is written as a complete `trigger fire --config` file. A fire-only binding is the same file without `schedule`; the command lists it under its own heading with the `trigger fire` command that starts it, and `trigger schedule install` refuses it. An event binding is written as one object for the `bindings` array of the GitHub source plugin's `config`, in the file `ARCHON_WEBHOOK_SOURCES` names, because the plugin reads bindings only from there. The plugin accepts `github.com` repositories, so the command refuses to write an event binding for another host. Every file is checked against the schema of the loader that will read it before any is written. `--json` prints `{"pack", "written": [{"id", "kind", "path"}]}`, where `kind` is `timer`, `event` or `fire`.
 
 ```bash
 archon pack bindings sdlc --repo github.com/acme/widgets --host build-host-1 \

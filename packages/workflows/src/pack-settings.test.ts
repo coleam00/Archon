@@ -102,9 +102,9 @@ describe('parsePackDeclaration bindings', () => {
   const timer = (extra = ''): string =>
     `  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule: { interval_seconds: 60 }\n${extra}`;
 
-  it('reads a timer and an event binding, applying the defaults', () => {
+  it('reads a timer, an event and a fire-only binding, applying the defaults', () => {
     const declared = parsePackDeclaration(
-      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n')}  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    inputs:\n      number: { event: subject.number }\n`,
+      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n      next: { binding: follow-up }\n')}  follow-up:\n    workflow: sweep\n    resource: follow-up\n    overlap: queue\n  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    inputs:\n      number: { event: subject.number }\n`,
       'p/.pack/pack.yaml'
     );
     expect(declared).toEqual({
@@ -117,7 +117,22 @@ describe('parsePackDeclaration bindings', () => {
           overlap: 'skip',
           isolation: { kind: 'default' },
           schedule: { interval_seconds: 60 },
-          inputs: { self: { binding: 'sweep' }, host: { repo: 'host' }, mode: 'fast' },
+          inputs: {
+            self: { binding: 'sweep' },
+            host: { repo: 'host' },
+            mode: 'fast',
+            next: { binding: 'follow-up' },
+          },
+        },
+        // Neither `schedule` nor `event`: only `trigger fire` starts it.
+        'follow-up': {
+          workflow: 'sweep',
+          resource: 'follow-up',
+          resource_scope: 'repo',
+          capacity: 1,
+          overlap: 'queue',
+          isolation: { kind: 'default' },
+          inputs: {},
         },
         opened: {
           workflow: 'sweep',
@@ -135,11 +150,19 @@ describe('parsePackDeclaration bindings', () => {
 
   it.each([
     [timer('    inputs:\n      other: { binding: missing }\n'), "names unknown binding 'missing'"],
-    [timer('    inputs:\n      n: { event: subject.number }\n'), 'a timer has no event'],
-    [timer('    event: { kind: issue.lifecycle }\n'), "exactly one of 'schedule'"],
     [
-      '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n',
-      "exactly one of 'schedule'",
+      timer('    inputs:\n      n: { event: subject.number }\n'),
+      'only an event binding has an event',
+    ],
+    [timer('    event: { kind: issue.lifecycle }\n'), "must not set both 'schedule'"],
+    // A schedule key without its expression is a broken timer, never a fire-only binding.
+    [
+      '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule:\n',
+      "binding 'sweep' is invalid at 'schedule'",
+    ],
+    [
+      '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule: {}\n',
+      "binding 'sweep' is invalid at 'schedule.interval_seconds'",
     ],
     [timer('    overlap_policy: skip\n'), "binding 'sweep' is invalid"],
     ['  Bad_Id:\n    workflow: w\n', "binding 'Bad_Id' is not a valid id"],
