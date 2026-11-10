@@ -71,11 +71,11 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 #### `archon-build-queue`
 
-The stage after intake, started by a schedule binding. Each run claims the triaged item that sorts first, or the issue `--input number=<n>` names, launches `archon-ship` on it from a brief, and reads how the run ended. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, unless only a check no round can run remains, which it asks for once at that head (a maintainer's `ready` answer also hands it to the merge queue, whose gate still checks it), and a correctable finding or a stop the issue already answers starts the item's next round at once (never when the pull request changed nothing material since its last review), as a detached `archon-build-queue --input number=<n>` run on the same run config. An unclear one, a correction that would add machinery the issue does not ask for, a Ready pull request waiting only on a check no round can run, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
+The stage after intake, started by a schedule binding. Each run claims the triaged item that sorts first, or the issue `--input number=<n>` names, runs one round on it from a brief, and reads how the round ended. A round is `archon-ship` without its triage, since intake already triaged the item: the queue's route agent declares the route and checks that triage's verdict still holds. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, unless only a check no round can run remains, which it asks for once at that head (a maintainer's `ready` answer also hands it to the merge queue, whose gate still checks it), and a correctable finding or a stop the issue already answers starts the item's next round at once (never when the pull request changed nothing material since its last review), as a detached `archon-build-queue --input number=<n>` run on the same run config. An unclear one, a correction that would add machinery the issue does not ask for, a Ready pull request waiting only on a check no round can run, or several rounds that each find new defects, pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section.
 
 **When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
 
-**What it produces**: Pull requests from `archon-ship`, the queue's record on each work item (`facts.build`: status, rounds and decisions), and attention items for the decisions that need a person.
+**What it produces**: Reviewed pull requests, the queue's record on each work item (`facts.build`: status, rounds and decisions), and attention items for the decisions that need a person.
 
 #### `archon-merge-queue`
 
@@ -250,7 +250,7 @@ archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out
 | `archon-ship` | Issue or request to reviewed PR | Yes | Yes |
 | `archon-triage` | Decide what an item needs next | No | No |
 | `archon-intake` | Triage new issues as they arrive (trigger-started) | No | No |
-| `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes (through `archon-ship`) | Yes (through `archon-ship`) |
+| `archon-build-queue` | Work triaged issues to reviewed PRs (trigger-started) | Yes | Yes |
 | `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | No |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
 | `archon-split` | File the issues a large item splits into when it can't be built whole (trigger-started) | No | No |

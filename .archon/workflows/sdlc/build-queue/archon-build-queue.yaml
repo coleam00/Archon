@@ -3,7 +3,7 @@ description: |
   The build queue: takes intake's triaged work items to a reviewed, ready pull
   request and stops only for decisions that belong to a person. Each run claims the
   best waiting item with intake's claim, or the one the number input names. One
-  agent routes it (and proves a bug's symptom first) and launches archon-ship from a
+  agent routes it (and proves a bug's symptom first) and launches archon-build from a
   brief, or marks a pull request already reviewed Ready, with no red check the change
   caused, ready without another round; one agent answers how that round ended; and after several rounds that each
   found new defects, one agent decides whether to ask the scope question instead of
@@ -200,7 +200,9 @@ nodes:
         # The branch the round opens its pull request from when route continues none: a
         # new build/<issue>-<slug>-<run>. Empty with no item.
         branch: { type: string }
-      required: [path, item, url, record, brief, rounds, at_cap, pull_request, continues, branch]
+        # The related work intake's triage found, for a round that plans.
+        related: { type: array, items: { type: object } }
+      required: [path, item, url, record, brief, rounds, at_cap, pull_request, continues, branch, related]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -222,6 +224,9 @@ nodes:
       type: object
       properties:
         decision: { type: string, enum: [launch, ask, ready] }
+        # The route this round takes through archon-build. Declared on every decision,
+        # read only on launch.
+        route: { type: string, enum: [investigate, plan, deliver, continue] }
         # On launch, the number of the pull request the round continues: the candidate
         # facts reports, or null when the issue's dated scope or a recorded answer
         # supersedes it and the round starts fresh from the new branch. Null otherwise.
@@ -230,7 +235,7 @@ nodes:
         # with no red check the change caused; apply takes it out of draft only while
         # its head is still this commit. Null otherwise.
         ready_head: { type: [string, 'null'] }
-        # The brief archon-ship starts from on launch; on ask, the brief a continue
+        # The brief the round starts from on launch; on ask, the brief a continue
         # choice launches.
         brief: { type: string, pattern: '\S' }
         reason: { type: string, pattern: '\S' }
@@ -266,7 +271,7 @@ nodes:
             if_unanswered: { type: string, pattern: '\S' }
             links: { type: array, items: { type: string } }
           required: [what, why, recommendation, choices, if_unanswered, links]
-      required: [decision, continues, ready_head, brief, reason, attention]
+      required: [decision, route, continues, ready_head, brief, reason, attention]
 
   # A round that continues a pull request (route's declaration) starts from that pull
   # request's head, not from the branch the run's checkout was cut from, so its publish
@@ -289,22 +294,26 @@ nodes:
         # start; null on a fresh round or when it has no trusted review. Checkout refuses
         # a pull request with more than one.
         reviewed: { type: [string, 'null'] }
-        # What ship continues: the number, `none` when the item has a pull request
-        # the round does not continue, or null when it has none and ship's triage
-        # decides.
-        pull_request:
-          anyOf:
-            - { type: integer, minimum: 1 }
-            - { type: string, enum: [none] }
-            - { type: 'null' }
+        # The pull request the round continues, or null when it starts fresh.
+        pull_request: { type: [integer, 'null'], minimum: 1 }
       required: [head, reviewed, pull_request]
 
+  # The round. Intake triaged the item and route declared this round's route, so the
+  # run triages nothing: archon-build is archon-ship without its triage.
   - id: ship
-    include: archon-ship
+    include: archon-build
     depends_on: [facts, route, checkout]
     when: "$route.output.decision == 'launch'"
     with:
-      target: "$route.output.brief"
+      route: "$route.output.route"
+      work: >-
+        $route.output.brief
+
+        The issue, its title and body, is in $ARTIFACTS_DIR/build/issue.md. Read it
+        in full: the body, with its dated "Current scope" sections, is the contract,
+        and the brief above adds only what the body does not say. Intake triaged the
+        item; no triage report is in this run's artifacts.
+      related: "$facts.output.related"
       pull_request: "$checkout.output.pull_request"
       branch: "$facts.output.branch"
       ci: "$INPUTS.ci"

@@ -1,12 +1,15 @@
 /**
  * Metric records for the pull requests the build queue opened: opened, merged,
  * abandoned and the merge rate, and for each merged one the review rounds it took to
- * reach Ready, each attributed to the build-queue runs that built it. Pull requests a
+ * reach Ready, each attributed to the build-queue runs that built it; and for each issue
+ * the queue worked, whether it was built and merged, its lead time, rounds and asks, in
+ * total and per route. Pull requests a
  * round only continued, and merged ones whose rounds cannot be counted, are reported in
  * `skipped`; the metrics no record carries yet are reported in `not_available`.
  */
 
 import { dirname, join } from 'node:path';
+import { issueMetricRecords } from '../../.shared/factory-issues.ts';
 import { factoryPrRuns, factoryPrs, prMetricRecords, readPrFacts } from '../../.shared/factory-prs.ts';
 import { artifactsDir, emit, refuse } from '../../.shared/io.ts';
 import { backfillRunReviews, droppedRoundPrs, prBuildRounds, reviewRoundRecords } from '../../.shared/review-rounds.ts';
@@ -37,7 +40,7 @@ try {
   const backfill = (runId: string) => backfillRunReviews(join(runs, runId));
   const reviews = reviewRoundRecords(factory, runsByUrl, prBuildRounds(items), droppedRoundPrs(items), backfill);
   emit({
-    metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics],
+    metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...issueMetricRecords(items)],
     skipped,
     review_rounds_skipped: reviews.skipped,
     review_rounds_distribution: reviews.distribution,
