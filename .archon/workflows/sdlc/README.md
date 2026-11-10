@@ -60,9 +60,11 @@ archon plugin list
 ```
 
 The list must show a forge plugin for the repository's host. If it does not, install
-one with `archon plugin add <owner/repo/path>`;
-[Install the GitHub plugin](https://archon.diy/reference/forge/#install-the-github-plugin)
-gives the plugin to add for github.com.
+one. For github.com:
+
+```bash
+archon plugin add coleam00/Archon/plugins/forge-github
+```
 
 **Ask the user** which forge account the pack acts as. On GitHub the credential is
 `GH_TOKEN`, then `GITHUB_TOKEN`, then the `gh` login (`gh auth login`), in that order.

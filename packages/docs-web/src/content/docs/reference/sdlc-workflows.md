@@ -11,7 +11,7 @@ Archon bundles one workflow pack, `sdlc`. It covers the software lifecycle from 
 
 ## How the factory runs
 
-`archon-intake` triages each new issue, `archon-split` files the issues a large item splits into when it can't be built as one, `archon-build-queue` works it to a reviewed pull request, `archon-merge-queue` merges it, and `archon-discoveries` files what runs noticed on the way. Anything unclear pauses as one attention item with a recommendation. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs them on your repository; the pack binds no trigger by default.
+`archon-intake` triages each new issue, `archon-split` files the issues a large item splits into when it can't be built as one, `archon-build-queue` works it to a reviewed pull request, `archon-merge-queue` merges it, and `archon-discoveries` files what runs noticed on the way. Anything unclear pauses as one attention item with a recommendation. [The SDLC factory](/getting-started/sdlc-factory/) introduces them and points at the setup guide; the pack binds no trigger by default.
 
 `archon-ship` itself is a graph of the stage workflows below. Triage picks a route; investigate or plan runs when the route needs it; then the delivery rounds implement, open a draft pull request, review it through specialist lenses, fix the findings and hand the pull request off ready without waiting for CI. Stages hand each other files in `$ARTIFACTS_DIR`, such as `triage.md`, `plan.md` and `implementation.md`, not conversation history.
 
@@ -65,7 +65,7 @@ archon workflow run archon-triage "#142"
 
 The standing front of the pack, started by trigger bindings on issue and label events rather than by hand. A script checks whether the issue's author is on the project's maintainer list (`.archon/sdlc/policy/maintainers.json`) before any model reads the text. A maintainer's issue is triaged and gets a route label; an outside issue gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label.
 
-**When to use it**: You want new issues triaged as they arrive without letting anyone who can open an issue spend tokens. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it. [Intake](/guides/sdlc-operations/#intake) covers trust, promotion, pickup and closing.
+**When to use it**: You want new issues triaged as they arrive without letting anyone who can open an issue spend tokens. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it. [Intake](/guides/sdlc-operations/#intake) covers trust, promotion, pickup and closing.
 
 **What it produces**: A work item per issue (`archon state get work/<number>`) holding its trust, stage, triage fields, and history, and the labels that mirror it.
 
@@ -73,7 +73,7 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 The stage after intake, started by a schedule binding. Each run claims the triaged item that sorts first, the issue `--input number=<n>` names, or the issue its message describes, runs one round on it from a brief, and reads how the round ended. A round is `archon-ship` without its triage, since intake already triaged the item. A clear case acts on its own: the item is done when its pull request is reviewed Ready at its head, and a correctable finding or a stop the issue already answers starts the item's next round at once through the build-queue binding. An unclear one pauses as one attention item with the agent's recommendation and declared choices; the answer is written into the issue body as a dated "Current scope" section. [Build queue](/guides/sdlc-operations/#build-queue) covers pickup, rounds, the questions it asks and [work orders](/guides/sdlc-operations/#work-orders), which limit a scheduled queue to the items you approved.
 
-**When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
+**When to use it**: You want triaged issues worked to reviewed pull requests without answering every routine stop yourself. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it.
 
 **What it produces**: Reviewed pull requests, the queue's record on each work item (`facts.build`: status, rounds and decisions), and attention items for the decisions that need a person.
 
@@ -81,7 +81,7 @@ The stage after intake, started by a schedule binding. Each run claims the triag
 
 The stage after the build queue, started by a schedule binding. Each run claims the items whose pull requests the build queue made ready, and one agent sweeps them: it orders them, merges each Ready pull request that passes the gate, hands back to the build queue what it can fix (a conflict, a stale or missing verdict, a review thread that raises a defect, red the change caused), and never pushes or waits for CI itself. Every merge goes through a gate script that reads the pull request fresh and merges pinned to its head. An unclear pull request, such as a very large change, is asked about as a `merge: pr` attention item, and a red base branch raises a `merge: base` item whose one choice is `hold`. [Merge queue](/guides/sdlc-operations/#merge-queue) covers the gate's conditions, what a sweep returns or reruns, and what each answer does.
 
-**When to use it**: You want reviewed, green pull requests merged without merging each by hand, while changes that need a person still wait for one. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it.
+**When to use it**: You want reviewed, green pull requests merged without merging each by hand, while changes that need a person still wait for one. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it.
 
 **What it produces**: Merged pull requests, the queue's record on each work item (`facts.merge`: status and decisions), and attention items for the decisions that need a person.
 
@@ -89,7 +89,7 @@ The stage after the build queue, started by a schedule binding. Each run claims 
 
 Drains the discoveries finished runs recorded outside their own scope. One agent verifies each one against the default branch, merges duplicates across runs and with earlier decisions, and decides: file an issue with a full brief, track it on the open issue that already covers it, drop it with a reason, ask a maintainer, or wait when the code it is about is still on an open pull request, so a later pass decides it after that pull request merges or closes. Scripts perform only the writes it declared.
 
-**When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. [Set up the SDLC factory](/getting-started/sdlc-factory/) runs it by hand and binds it. Naming its binding in the merge queue's `discoveries_binding` input also starts a pass after each sweep that merged a pull request. [Discoveries](/guides/sdlc-operations/#discoveries) covers the queue, the decisions and the writes.
+**When to use it**: Runs keep finding defects outside their change and nobody reads their `discoveries.md`. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it. Naming its binding in the merge queue's `discoveries_binding` input also starts a pass after each sweep that merged a pull request. [Discoveries](/guides/sdlc-operations/#discoveries) covers the queue, the decisions and the writes.
 
 **What it produces**: Filed issues and evidence comments, and one state document per drained run (`archon state list --prefix discoveries/runs/`) recording which of its records were decided and any question asked with its answer, so a record is decided once.
 
@@ -131,7 +131,7 @@ Turns decided intent, such as a feature request, an investigation report, or an 
 archon workflow run archon-plan "Add CSV export to the reports page"
 ```
 
-**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops to ask a question, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `ask`. An addition that leaves every existing value meaning what it meant before is the plan's call, not a person's: the plan lists it under contract additions and the pull request body flags it for the reviewer. Changing what an existing value means, removing something shipped, or changing a persisted shape still stops to ask: the run ends not ready with the questions in the plan; [continue it with a note](#continuing-a-stage-that-ended-not-ready) that answers them. [Adjust policy and models](/getting-started/sdlc-factory/#3-adjust-policy-and-models-optional) describes the policy documents.
+**What it produces**: A plan artifact. Pass `--input report=<path>` to build on a prior investigation report. The repository is left as it was found. Before it stops to ask a question, it checks whether the work order, the issue's comments, a project document, or a ruling your maintainers recorded in `.archon/sdlc/policy/rulings.md` already answers it; review synthesis does the same before it returns `replan` or `ask`. An addition that leaves every existing value meaning what it meant before is the plan's call, not a person's: the plan lists it under contract additions and the pull request body flags it for the reviewer. Changing what an existing value means, removing something shipped, or changing a persisted shape still stops to ask: the run ends not ready with the questions in the plan; [continue it with a note](#continuing-a-stage-that-ended-not-ready) that answers them. [Policy and models](/guides/sdlc-operations/#policy-and-models) describes the policy documents.
 
 #### `archon-implement`
 

@@ -9,7 +9,7 @@ sidebar:
   order: 14
 ---
 
-This page is the operator manual for the bundled `sdlc` pack. Set the pack up first, with [Set up the SDLC factory](/getting-started/sdlc-factory/) or the [setup guide in the pack's README](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack), which is written for a coding agent to follow. [SDLC pack workflows](/reference/sdlc-workflows/) lists every workflow and what it produces. This page says how the queues behave once they run: what each one picks up, what it decides on its own, what it asks, and what it writes down.
+This page is the operator manual for the bundled `sdlc` pack. Set the pack up first, with the [setup guide in the pack's README](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack). [The SDLC factory](/getting-started/sdlc-factory/) says what the factory is and what it writes. [SDLC pack workflows](/reference/sdlc-workflows/) lists every workflow and what it produces. This page says how the queues behave once they run: what each one picks up, what it decides on its own, what it asks, and what it writes down.
 
 ## Pack settings
 
@@ -18,6 +18,39 @@ A project sets the pack's settings in `.archon/packs/sdlc.yaml`. The pack's READ
 ## Bindings
 
 The pack installs no binding and starts nothing by itself. Its README lists the bindings it recommends and how to write and register them with [`archon pack bindings sdlc`](/reference/cli/#pack-bindings): [Let it run on its own](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#10-let-it-run-on-its-own). Each queue's section below says why its binding has the capacity and overlap policy it has. [Workflow triggers](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy) explains resources, capacity and overlap.
+
+## Policy and models
+
+The queues decide clear cases on their own and ask about unclear ones. The pack's default policy for each decision lives in [`.shared/policy/`](https://github.com/coleam00/Archon/tree/dev/.archon/workflows/sdlc/.shared/policy):
+
+| File | Decides |
+|---|---|
+| `triage.md` | What triage accepts, and what may close without a person |
+| `build.md` | What the build queue continues on its own and what it asks |
+| `merge.md` | Which pull requests merge on their own: by default small fixes, small features, tests and docs. Schemas, auth, large or partial work are asked |
+| `rulings.md` | Answers your maintainers already gave, read before plan or review stops to ask |
+| `discoveries.md` | When a discovery is filed, tracked or dropped |
+| `ui-check.md` | How review starts your app to use a user-facing change in a browser |
+
+To change one, put only the lines to add or override in `.archon/sdlc/policy/<file>`. The agent reads the default first, then your file, and your line wins where they conflict. A policy file can be a pointer to documents the project already has.
+
+Each stage picks its model from a concern alias, falling back to the tier it has always used. With nothing set, you get the tier models.
+
+| Alias | Nodes | Falls back to |
+|---|---|---|
+| `@triage` | triage | `medium` |
+| `@planner` | plan | `large` |
+| `@investigator` | investigate | `medium` |
+| `@implementer` | implement | `large` |
+| `@reviewer` | every review agent and simplify | each node's tier |
+| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier |
+
+```bash
+archon ai alias set @reviewer codex gpt-6.1-sol                                   # every run
+archon workflow run archon-build-queue --model @reviewer=codex/gpt-6.1-sol ...    # one run
+```
+
+The first alias your config defines wins; `aliases:` in `.archon/config.yaml` sets them too. A lens alias overrides only its lens: with `@reviewer` on Codex and `@review-seams` on Claude, seams runs on Claude and every other lens on Codex. Review's lens router and the queues' own judges keep their size tiers; to move those, rebind the tier.
 
 ## The forge and the repository
 
@@ -204,7 +237,7 @@ Every merge goes through one gate script, which reads the pull request and the d
 - the pull request is open, not a draft, into the default branch, at the head the sweep named;
 - that head contains the default branch's head, or the forge reports it merges cleanly.
 
-Open review threads are the sweep's judgment, not the gate's: the sweep holds a merge only for a thread that raises a defect in code the pull request changes or makes reachable. The gate merges pinned to that head, with the method `merge_method` names, and reports the commit the forge's own read-back says it landed as. A merge the forge cannot verify, as when it queues merges, fails the gate with the forge's outcome, and the sweep waits.
+Open review threads are the sweep's judgment, not the gate's: the sweep holds a merge only for a thread that raises a defect in code the pull request changes or makes reachable. The gate merges pinned to that head, by squash unless `--input merge_method=merge` asks for a merge commit, and reports the commit the forge's own read-back says it landed as. A merge the forge cannot verify, as when it queues merges, fails the gate with the forge's outcome, and the sweep waits.
 
 Before merging, the queue rechecks the pull request's closing keyword against the review's stamped contract coverage and the issue's latest ruling, and corrects it in either direction.
 

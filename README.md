@@ -102,7 +102,7 @@ The bundled `sdlc` pack is a working factory for a repository:
 
 Archon builds Archon: of the 524 pull requests merged into this repository between 1 and 19 October 2026, Archon runs built 363.
 
-You start the queues by hand or bind them to a schedule or issue events with a [trigger](https://archon.diy/guides/workflow-triggers/). The pack binds nothing by default. The pack reaches GitHub through the forge plugin (`archon plugin add coleam00/Archon/plugins/forge-github`); see [the forge path](https://archon.diy/reference/forge/#use-the-forge-path-in-the-sdlc-pack). [Set up the SDLC factory](https://archon.diy/getting-started/sdlc-factory/) runs it on your repository, and [SDLC pack workflows](https://archon.diy/reference/sdlc-workflows/) describes every workflow in it.
+You start the queues by hand or bind them to a schedule or issue events with a [trigger](https://archon.diy/guides/workflow-triggers/). The pack binds nothing by default. The pack reaches GitHub through the forge plugin (`archon plugin add coleam00/Archon/plugins/forge-github`); see [the forge path](https://archon.diy/reference/forge/#use-the-forge-path-in-the-sdlc-pack). [The SDLC factory](https://archon.diy/getting-started/sdlc-factory/) introduces it and links its setup guide, and [SDLC pack workflows](https://archon.diy/reference/sdlc-workflows/) describes every workflow in it.
 
 ## Build any factory
 
