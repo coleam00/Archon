@@ -157,11 +157,11 @@ archon pack bindings sdlc \
 
 `--host` is a name you choose for this machine, and `--cwd` is the clone the runs launch in. The command writes one file per binding and prints what registers each. It registers and schedules nothing, and `--only build-queue,merge-queue,discoveries` writes a subset. See [`pack bindings`](/reference/cli/#pack-bindings).
 
-- **Build, split, merge and discoveries** run on a schedule. Fire each written file once, then install it:
+- **Build, split, merge and discoveries** run on a schedule. Fire each written file once, then install it. The command prints both lines for every file; the glob below matches the one file written for `build-queue`:
 
   ```bash
-  archon trigger fire --config ~/.archon/triggers/sdlc-acme-widgets-build-queue-<digest>.json
-  archon trigger schedule install --config ~/.archon/triggers/sdlc-acme-widgets-build-queue-<digest>.json   # macOS
+  archon trigger fire --config ~/.archon/triggers/sdlc-acme-widgets-build-queue-*.json
+  archon trigger schedule install --config ~/.archon/triggers/sdlc-acme-widgets-build-queue-*.json   # macOS
   ```
 
   On Linux or Windows, run the same `trigger fire` command from cron, systemd or Task Scheduler.

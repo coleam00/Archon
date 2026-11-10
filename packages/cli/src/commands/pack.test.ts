@@ -146,9 +146,9 @@ describe('archon pack bindings', () => {
     const after = timerTriggerConfigSchema.parse(await readJson(await fileFor('after')));
     expect(after.binding.resource).toBe('fixture:host-1:after');
     expect(after.binding.launch.inputs).toEqual({ sweep_binding: sweepPath });
-    expect(logSpy.mock.calls.flat().join('\n')).toContain(
-      `archon trigger schedule install --config '${sweepPath}'`
-    );
+    const printed = logSpy.mock.calls.flat().join('\n');
+    expect(printed).toContain(`archon trigger fire --config '${sweepPath}'`);
+    expect(printed).toContain(`archon trigger schedule install --config '${sweepPath}'`);
   });
 
   it('writes an event binding the GitHub source plugin accepts', async () => {
