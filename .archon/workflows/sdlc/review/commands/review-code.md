@@ -59,4 +59,4 @@ Verify the file exists and every `file:line` in it is real, then reply with one 
 
 ## Docker verification builds
 
-For disposable Docker verification builds, follow the [Docker verification guidance](../../README.md#docker-verification).
+For disposable Docker verification builds, follow the [Docker verification guidance](https://archon.diy/reference/variables/#disposable-docker-verification-images).

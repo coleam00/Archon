@@ -11,7 +11,7 @@ description: |
   promotes it by adding archon-triage or a route label.
 
   Use when: trigger bindings start it on issue lifecycle and label events (see
-  the SDLC pack README, "Intake").
+  https://archon.diy/guides/sdlc-operations/#intake).
   NOT for: triaging one item by hand (archon-triage), or delivering work.
 
 inputs:

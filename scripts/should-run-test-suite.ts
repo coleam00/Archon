@@ -21,14 +21,13 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
  *   - The docs manifest is copied by the Docker dependency layer.
- *   - The SDLC README and variables reference contain Docker commands checked by
+ *   - The variables reference contains Docker commands checked by
  *     `docker-verification-label.test.ts` against the cleanup ownership label.
  *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
 const BUILD_INPUTS = [
   '.claude/skills/',
-  '.archon/workflows/sdlc/README.md',
   '.archon/architecture.md',
   '.archon/workflow-language-constitution.md',
   '.claude/commands/execute.md',

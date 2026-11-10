@@ -13,8 +13,8 @@ description: |
   key's marker, so filing a key again recovers that issue.
 
   Use when: an operator drains discoveries by hand, or a schedule binding the
-  operator installed starts it (see the SDLC pack README, "Discoveries"). The pack
-  installs no binding.
+  operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#discoveries). The pack installs no binding.
   NOT for: delivering the filed work (intake triages each filed issue), or reading
   one run's discoveries (its terminal report lists them).
 

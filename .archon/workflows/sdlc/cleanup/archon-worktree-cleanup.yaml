@@ -11,9 +11,9 @@ description: |
   With include_closed true, worktrees whose pull request was closed without
   merging go too.
 
-  Use when: a schedule binding the operator installed starts it (see the SDLC
-  pack README, "Worktree cleanup"), or an operator runs it by hand. The pack
-  installs no binding.
+  Use when: a schedule binding the operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#worktree-cleanup), or an operator runs
+  it by hand. The pack installs no binding.
   NOT for: unmerged worktrees (a completed run releases its own clean checkout;
   the age sweep and `archon complete` handle the rest).
 
