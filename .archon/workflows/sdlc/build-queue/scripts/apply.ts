@@ -15,7 +15,7 @@
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ORDER and INPUTS_HANDOFF,
  * the order's and the handoff's summaries, empty when skipped; INPUTS_ROUTE,
- * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
+ * INPUTS_ENDING (archon-build's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
  * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
@@ -42,6 +42,8 @@ import { updateClaimed } from '../../.shared/workitem.ts';
 
 interface RouteOutput {
   readonly decision: 'launch' | 'ask' | 'ready';
+  /** The route the round took; recorded on the round so outcomes can be read by route. */
+  readonly route: string;
   readonly ready_head?: string | null;
   readonly brief: string;
   readonly reason: string;
@@ -244,12 +246,20 @@ function main(): void {
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const ending = nullableJson(process.env.INPUTS_ENDING) as ShipReport | null;
   const at = new Date().toISOString();
+  const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
+  const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
   const round: BuildRound | null =
     ending === null
       ? null
-      : { run_id: runId, at, ...ending, artifacts: artifactsDir(), ...reviewsOf(), ...validationOf() };
-  const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
-  const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
+      : {
+          run_id: runId,
+          at,
+          ...ending,
+          artifacts: artifactsDir(),
+          ...(route === null ? {} : { route: route.route }),
+          ...reviewsOf(),
+          ...validationOf(),
+        };
   const decision = decide(path, route, answer);
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;

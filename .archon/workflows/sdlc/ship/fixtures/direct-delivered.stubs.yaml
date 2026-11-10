@@ -10,7 +10,7 @@
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
 forge: { source: forge }
-deliver__forge: { source: forge }
+build__deliver__forge: { source: forge }
 triage__triage:
   decision: { contract: READY, route: deliver }
   type: { value: feature, reason: "stub: asks for new behavior" }
@@ -58,7 +58,7 @@ simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 threads: { open: 0, summary: "stub: no review thread is unresolved" }
 ci: { state: ready, summary: "stub: no check red at the head; marked ready", validation: null }
-deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
+build__deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   inputs:
     part: '{"delivers":1,"parts":[{"part":1,"items":["the API returns the new state"]},{"part":2,"items":["the console shows the new state"]}]}'

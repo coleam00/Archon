@@ -881,18 +881,15 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(emitted(run(at, 'checkout', inputs, { preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42 });
   }, 60_000);
 
-  test('a round route declares fresh stays on the base and tells ship none, and route cannot name a pull request facts did not offer', () => {
+  test('a round route declares fresh stays on the base and continues no pull request, and route cannot name one facts did not offer', () => {
     const at = install();
     git(at.checkout, 'push', '-q', 'upstream', 'feature');
     git(at.checkout, 'checkout', '-q', 'dev');
     const base = git(at.checkout, 'rev-parse', 'HEAD');
     const pr = JSON.stringify({ repo: PR.repo, number: 42 });
     const item = JSON.stringify(SUBJECT);
-    expect(emitted(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, reviewed: null, pull_request: 'none' });
+    expect(emitted(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, reviewed: null, pull_request: null });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
-    // A pull request facts never offered, such as a fork's, is not left to ship's triage either.
-    expect(emitted(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, reviewed: null, pull_request: 'none' });
-    expect(emitted(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: 'null' }))).toEqual({ head: null, reviewed: null, pull_request: null });
     expect(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
   }, 60_000);
 

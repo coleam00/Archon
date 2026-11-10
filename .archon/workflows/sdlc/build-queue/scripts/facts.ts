@@ -96,7 +96,7 @@ function requireRunRepo(number: number): void {
   }
 }
 
-const NOTHING = { item: null, url: '', record: null, brief: '', rounds: [], at_cap: false };
+const NOTHING = { item: null, url: '', record: null, brief: '', rounds: [], at_cap: false, related: [] };
 
 /** Write the issue every agent reads; its path is fixed so the prompts name it. */
 function writeIssue(title: string, url: string, body: string): void {
@@ -151,6 +151,7 @@ function emitItem(
     brief: doc?.facts.build?.brief ?? '',
     rounds,
     at_cap: atCap,
+    related: doc?.facts.triage?.related ?? [],
     ...itemPr,
   });
 }

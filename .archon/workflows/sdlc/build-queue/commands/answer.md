@@ -1,12 +1,12 @@
 # Answer How a Build Round Ended
 
-A build round is one `archon-ship` run on the item. Read how it ended and decide what the queue does next: the item is done, the queue continues it with another round, or a maintainer must decide. The next node performs what you declare and reads it back: it pushes commits the round left unpushed, records your decision, and raises your attention item. You write nothing to the tracker, the repository or the state store yourself, and the checkout must be exactly as you found it when you finish.
+A build round is one `archon-build` run on the item. Read how it ended and decide what the queue does next: the item is done, the queue continues it with another round, or a maintainer must decide. The next node performs what you declare and reads it back: it pushes commits the round left unpushed, records your decision, and raises your attention item. You write nothing to the tracker, the repository or the state store yourself, and the checkout must be exactly as you found it when you finish.
 
 The item: `$INPUTS.url`. Its issue, title and body, is in `$ARTIFACTS_DIR/build/issue.md`; read the body from there, because it is the text this decision is about. Dated "Current scope" sections are part of the contract and override what they rule on.
 
 ## The round
 
-- This round's ending, as `archon-ship`'s report declared it: `$INPUTS.ending`. Its artifacts are in `$ARTIFACTS_DIR`: `triage.md`, then `plan.md` or `investigation.md` when they exist, `implementation.md`, and `review/report.md`.
+- This round's ending, as `archon-build`'s report declared it: `$INPUTS.ending`. Its artifacts are in `$ARTIFACTS_DIR`: `build/issue.md`, then `plan.md` or `investigation.md` when they exist, `implementation.md`, and `review/report.md`.
 - The commit the continued pull request's review named when this round started: `$INPUTS.reviewed`. It is the head the last review judged, before this round's own review replaced it, or null when the round started fresh or the pull request had no review.
 - The earlier rounds, oldest first, each with its own `artifacts` directory: `$INPUTS.rounds`.
 - The item's work item: `$INPUTS.record`. Under `facts.build` is every decision the queue made on it, with any maintainer's answer. Null means no queue has recorded it.
@@ -37,7 +37,7 @@ Then, when `$INPUTS.reviewed` is not null, check what changed since that review:
 
 ## The brief
 
-On continue, `brief` is the target the next `archon-ship` run starts from cold. It names the issue by URL and says the issue body, including its dated scope sections, is the contract. Then it names the open pull request by URL and branch, says why this round stopped, and says what the next round does about it: the findings to correct with their report path, the answer to the stop with its source, or the steps that follow a false blocker. It does not restate or widen the contract. On ask, `brief` is what the next round starts from if the maintainer chooses to continue. On done it is empty.
+On continue, `brief` is what the next round starts from cold. It names the issue by URL and says the issue body, including its dated scope sections, is the contract. Then it names the open pull request by URL and branch, says why this round stopped, and says what the next round does about it: the findings to correct with their report path, the answer to the stop with its source, or the steps that follow a false blocker. It does not restate or widen the contract. On ask, `brief` is what the next round starts from if the maintainer chooses to continue. On done it is empty.
 
 ## The attention item
 

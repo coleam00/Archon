@@ -154,7 +154,7 @@ describe.each([
     },
   },
   {
-    tail: 'ship',
+    tail: 'build-route',
     result: 'delivered',
     passed: { delivered: true, reason: 'delivered', pr_url: 'https://pr/1', summary: 'Ready.' },
   },

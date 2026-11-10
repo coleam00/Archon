@@ -8,7 +8,10 @@ description: |
   so `archon metrics --compare` splits pull requests by when those runs started.
   Pull requests a round only continued, such as a contributor's, are reported in
   `skipped` and count in no metric; merged ones whose rounds cannot be counted
-  are reported in `review_rounds_skipped`. Re-runs replace earlier records.
+  are reported in `review_rounds_skipped`. It also records each issue the queue
+  worked: sdlc.issues_built, sdlc.issues_merged, sdlc.issue_lead_time,
+  sdlc.issue_build_rounds and sdlc.issue_asks, each again per route, such as
+  sdlc.issues_merged.plan. Re-runs replace earlier records.
 
   Use when: an operator wants current PR counts, merge rate and review rounds
   (`archon metrics sdlc.pr_merge_rate`), or a schedule binding the operator

@@ -1,6 +1,6 @@
 import { INPUTS_SCOPE } from '../reference-scopes';
 import type { DagNode, IncludeDirective, WorkflowDefinition } from '../schemas';
-import { INPUT_NAME_SOURCE, inputEnvKey } from '../schemas';
+import { INPUT_NAME_SOURCE, inputEnvKey, isIncludeDirective, isLoopGroupNode } from '../schemas';
 import { canonicalValueText, parseWholeInputsRef, type JsonValue } from '../output-ref';
 import { resolveDeclaredInputs } from '../workflow-inputs';
 import { parseWhenExpression } from '../when-atom';
@@ -98,9 +98,20 @@ export function applyInputsMacro(
     return expanded;
   };
 
-  for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
-    if (boundary.when !== undefined) boundary.when = substituteWhen(boundary.when);
-  }
+  // A loop_group body node carries the enclosing include's boundary too, so a gate that
+  // names an input is substituted there as well. Left as `$INPUTS.<name>`, the body's
+  // copy cannot be evaluated and every body node is skipped on the first iteration.
+  const substituteBoundaries = (target: DagNode): void => {
+    for (const boundary of readComposedMeta(target)?.boundaries ?? []) {
+      if (boundary.when !== undefined) boundary.when = substituteWhen(boundary.when);
+    }
+    if (isLoopGroupNode(target)) {
+      for (const body of target.loop_group.nodes) {
+        if (!isIncludeDirective(body)) substituteBoundaries(body);
+      }
+    }
+  };
+  substituteBoundaries(node);
 
   const textMapped = mapNodeTemplateSlots(node, slot => {
     if (slot.surface === 'binding_from' || slot.name === 'binding.if_skipped') return slot.value;

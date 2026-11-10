@@ -3,13 +3,14 @@
  * `archon workflow get/status --verbose` renders, and the `nodes` array their
  * `--json` form emits.
  */
-import { describe, expect, it } from 'bun:test';
+import { describe, expect, it, spyOn } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
 import {
   NODE_SUMMARY_EVENT_TYPES,
   buildNodeSummaries,
   buildRunNodes,
+  printVerboseNodes,
 } from './workflow-node-summaries';
 
 function event(
@@ -31,6 +32,31 @@ function event(
 }
 
 describe('buildNodeSummaries', () => {
+  it('distinguishes empty from absent output', () => {
+    const summaries = buildNodeSummaries([
+      event('empty', 'node_completed', 'empty', '2026-11-10T10:00:00.000Z', { node_output: '' }),
+      event('absent', 'node_completed', 'absent', '2026-11-10T10:00:00.000Z'),
+    ]);
+    expect(summaries[0]).toMatchObject({ output: '', outputTruncated: false, outputPreview: '' });
+    expect(summaries[1]).not.toHaveProperty('output');
+    expect(summaries[1]).not.toHaveProperty('outputTruncated');
+  });
+
+  it('keeps human output limited to the preview', () => {
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      printVerboseNodes([
+        event('output', 'node_completed', 'work', '2026-11-10T10:00:00.000Z', {
+          node_output: `${'x'.repeat(200)}hidden suffix`,
+        }),
+      ]);
+      expect(log).toHaveBeenCalledWith(`        Output: ${'x'.repeat(200)}...`);
+      expect(log.mock.calls.flat().join(' ')).not.toContain('hidden suffix');
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('resets a retried node to its current running attempt', () => {
     const summaries = buildNodeSummaries([
       {
@@ -112,6 +138,8 @@ describe('buildNodeSummaries', () => {
         startedAt: '2026-08-29T14:27:29.000Z',
         durationMs: 107_000,
         outputPreview: 'https://github.com/coleam00/Archon/pull/2971',
+        output: 'https://github.com/coleam00/Archon/pull/2971',
+        outputTruncated: false,
       },
     ]);
   });
@@ -175,7 +203,13 @@ describe('buildNodeSummaries', () => {
     ]);
 
     expect(summaries).toEqual([
-      { nodeId: 'triage__triage', state: 'completed', outputPreview: 'bug' },
+      {
+        nodeId: 'triage__triage',
+        state: 'completed',
+        outputPreview: 'bug',
+        output: 'bug',
+        outputTruncated: false,
+      },
     ]);
   });
 });
@@ -288,6 +322,8 @@ describe('buildNodeSummaries resume resets', () => {
             startedAt: '2026-10-03T10:05:01.000Z',
             durationMs: 2_000,
             outputPreview: 'prepared again',
+            output: 'prepared again',
+            outputTruncated: false,
           },
         ]);
       });
@@ -301,7 +337,15 @@ describe('buildNodeSummaries resume resets', () => {
               node_output: 'prepared',
             }),
           ])
-        ).toEqual([{ nodeId: 'prepare', state: 'completed', outputPreview: 'prepared' }]);
+        ).toEqual([
+          {
+            nodeId: 'prepare',
+            state: 'completed',
+            outputPreview: 'prepared',
+            output: 'prepared',
+            outputTruncated: false,
+          },
+        ]);
       });
     });
   }
