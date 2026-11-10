@@ -34,15 +34,14 @@ function fixture(mode = 'ok') {
   const labels = [{ name: 'other', color: 'abcdef', description: 'operator' }];
   const calls: string[] = [];
   let writes = 0;
-  const issueList = (url: URL, method: string, init?: RequestInit) => {
+  const issueList = (method: string, init?: RequestInit) => {
     if (method === 'POST') {
       const payload = JSON.parse(String(init?.body)) as { title: string; body: string };
       if (mode !== 'unverified') issues.push({ ...issue, ...payload });
       if (mode === 'lost-create') throw new Error('committed but response lost');
       return Response.json(issue, { status: 201 });
     }
-    const page = Number(url.searchParams.get('page'));
-    return Response.json(page === 1 ? issues : []);
+    return Response.json(issues);
   };
   const setLabels = (init?: RequestInit) => {
     if (mode !== 'unverified')
@@ -77,8 +76,15 @@ function fixture(mode = 'ok') {
       if (mode === 'unknown') throw new Error('lost before response');
     }
     if (mode === 'lookup-failed' && method === 'GET') return Response.json({}, { status: 500 });
+    if (path === 'https://api.github.com/search/issues') {
+      return Response.json({
+        total_count: issues.length,
+        incomplete_results: false,
+        items: issues,
+      });
+    }
     if (path === `${root}/issues`) {
-      return issueList(url, method, init);
+      return issueList(method, init);
     }
     if (path === `${root}/issues/1`) {
       return readIssue();
@@ -139,30 +145,81 @@ test('closed recovery preserves edited content, ambiguous and failed lookups nev
   expect(failed.writes()).toBe(0);
 });
 
-test('marker lookup includes later pages and excludes PRs', async () => {
+test('marker lookup finds an old issue by search and a new one search has not indexed, never a PR', async () => {
   const fake = fixture();
-  const page = Array.from({ length: 100 }, (_, index) => ({
-    ...fake.issue,
-    number: index + 2,
-    body: 'unmarked',
-  }));
   const baseFetch = fake.fetch;
-  fake.seed();
-  fake.fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith('/issues') && (init?.method ?? 'GET') === 'GET')
-      return Response.json(
-        url.searchParams.get('page') === '1'
-          ? [...page.slice(1), { ...fake.issue, pull_request: {} }]
-          : [fake.issue]
-      );
-    return baseFetch(input, init);
+  const lookup = async (
+    searched: unknown[],
+    newest: unknown[],
+    incomplete = false,
+    total = searched.length
+  ) => {
+    fake.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if ((init?.method ?? 'GET') === 'GET' && url.pathname === '/search/issues') {
+        // Only a search for the marker's words in issue bodies of this repository finds it.
+        const asked = url.searchParams.get('q') === 'repo:owner/repo is:issue in:body "canonical"';
+        return Response.json({
+          total_count: total,
+          incomplete_results: incomplete,
+          items: asked ? searched : [],
+        });
+      }
+      if ((init?.method ?? 'GET') === 'GET' && url.pathname.endsWith('/issues')) {
+        // Only the newest-first page holds a just-created issue.
+        const newestFirst =
+          url.searchParams.get('sort') === 'created' &&
+          url.searchParams.get('direction') === 'desc';
+        return Response.json(newestFirst ? newest : []);
+      }
+      return baseFetch(input, init);
+    };
+    return run(create, fake);
   };
-  expect(await run(create, fake)).toMatchObject({
-    ok: true,
-    result: { value: { changed: false } },
+  fake.seed();
+  const unmarked = { ...fake.issue, number: 2, body: 'unmarked' };
+  const found = { ok: true, result: { value: { changed: false } } };
+  // Older than the newest hundred: only search sees it.
+  expect(await lookup([fake.issue], [unmarked])).toMatchObject(found);
+  // Created moments ago, before search indexed it.
+  expect(await lookup([], [fake.issue])).toMatchObject(found);
+  // Found by both: one issue, not a conflict.
+  expect(await lookup([fake.issue], [fake.issue])).toMatchObject(found);
+  // A partial search cannot show the marker is absent, so nothing is created.
+  expect(await lookup([unmarked], [], true)).toMatchObject({
+    ok: false,
+    mutation: { outcome: 'refused' },
+  });
+  // A full page with more matches beyond it cannot show the marker is absent either.
+  expect(await lookup([unmarked], [], false, 101)).toMatchObject({
+    ok: false,
+    mutation: { outcome: 'refused' },
   });
   expect(fake.writes()).toBe(0);
+  // A pull request carrying the marker is not the issue.
+  expect(await lookup([{ ...fake.issue, pull_request: {} }], [])).toMatchObject({
+    ok: true,
+    result: { value: { changed: true } },
+  });
+});
+
+test('a marker cannot add search qualifiers or outgrow the query limit', async () => {
+  const fake = fixture();
+  const long = `<!-- a" is:closed "b ${'word '.repeat(60)}-->`;
+  const queries: string[] = [];
+  const baseFetch = fake.fetch;
+  fake.fetch = async (input, init) => {
+    const url = new URL(String(input));
+    if (url.pathname === '/search/issues') queries.push(url.searchParams.get('q') ?? '');
+    return baseFetch(input, init);
+  };
+  await run(forgeRequestSchema.parse({ ...create, marker: long, body: `${long}\nBody` }), fake);
+  const phrase = queries[0]?.match(/"(.*)"$/)?.[1] ?? '';
+  expect(phrase).not.toContain('"');
+  expect(phrase.length).toBeLessThanOrEqual(200);
+  // Quotes gone, so `is:closed` stays inside the phrase; cut after a whole word.
+  expect(phrase.startsWith('a is:closed b word')).toBe(true);
+  expect(phrase.endsWith(' word')).toBe(true);
 });
 
 test('label set clears, verifies exact sets, no-ops, and never creates missing names', async () => {

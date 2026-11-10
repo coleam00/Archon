@@ -3,6 +3,17 @@
 
 /** Each workflow's node outputs, as the node's `output_format` declares them. */
 export interface WorkflowOutputs {
+  'archon-build': {
+    continues: {
+      readonly pull_request: number | null;
+    };
+    report: {
+      readonly delivered: boolean;
+      readonly reason: string;
+      readonly pr_url: string;
+      readonly summary: string;
+    };
+  };
   'archon-build-queue': {
     start: {
       readonly repo: {
@@ -53,9 +64,11 @@ export interface WorkflowOutputs {
       readonly pull_request: Readonly<Record<string, unknown>> | null;
       readonly continues: number | null;
       readonly branch: string;
+      readonly related: ReadonlyArray<Readonly<Record<string, unknown>>>;
     };
     route: {
       readonly decision: 'launch' | 'ask' | 'ready';
+      readonly route: 'investigate' | 'plan' | 'deliver' | 'continue';
       readonly continues: number | null;
       readonly ready_head: string | null;
       readonly brief: string;
@@ -84,7 +97,7 @@ export interface WorkflowOutputs {
     checkout: {
       readonly head: string | null;
       readonly reviewed: string | null;
-      readonly pull_request: number | 'none' | null;
+      readonly pull_request: number | null;
     };
     answer: {
       readonly decision: 'done' | 'continue' | 'ask';
@@ -684,17 +697,6 @@ export interface WorkflowOutputs {
       readonly shape_unmatched: number;
     };
   };
-  'archon-ship': {
-    continues: {
-      readonly pull_request: number | null;
-    };
-    report: {
-      readonly delivered: boolean;
-      readonly reason: string;
-      readonly pr_url: string;
-      readonly summary: string;
-    };
-  };
   'archon-simplify': {
     simplify: {
       readonly findings: boolean;
@@ -911,7 +913,7 @@ export interface WorkflowOutputs {
   };
 }
 
-/** One node's output, for example `NodeOutput<'archon-build-queue', 'start'>`. */
+/** One node's output, for example `NodeOutput<'archon-build', 'continues'>`. */
 export type NodeOutput<
   W extends keyof WorkflowOutputs,
   N extends keyof WorkflowOutputs[W],
@@ -932,11 +934,9 @@ export const OUTPUT_ENUMS = {
     },
     route: {
       decision: ['launch', 'ask', 'ready'],
+      route: ['investigate', 'plan', 'deliver', 'continue'],
       'attention.recommendation.confidence': ['low', 'medium', 'high'],
       'attention.choices[].effect': ['continue', 'ready', 'park'],
-    },
-    checkout: {
-      'pull_request.anyOf[1]': ['none'],
     },
     answer: {
       decision: ['done', 'continue', 'ask'],
