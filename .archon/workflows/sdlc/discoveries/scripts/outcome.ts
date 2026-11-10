@@ -55,7 +55,7 @@ function issueBody(decision: AgentDecision & { outcome: 'file' }, sha: string): 
 function main(): void {
   const idle = trimmed(process.env.INPUTS_PATH) === 'idle';
   if (idle) {
-    emit({ summary: IDLE, written: [], dropped: [], asked: [], waiting: [], question: '' });
+    emit<NodeOutput<'archon-discoveries', 'outcome'>>({ summary: IDLE, written: [], dropped: [], asked: [], waiting: [], question: '' });
     return;
   }
   const repo = nullableJson(process.env.INPUTS_REPO) as NodeOutput<'archon-discoveries', 'facts'>['repo'];
@@ -151,7 +151,7 @@ function main(): void {
       throw new Error(`${name} changed while this run held its claim`);
     }
   }
-  emit({
+  emit<NodeOutput<'archon-discoveries', 'outcome'>>({
     summary,
     written,
     dropped,

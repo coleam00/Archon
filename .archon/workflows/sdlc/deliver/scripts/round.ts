@@ -22,6 +22,7 @@
  */
 
 import { artifactsDir, emit, nullableJson, text } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 /** Why a round ended. */
 type Ended =
@@ -45,7 +46,8 @@ const reviewSummary = process.env.INPUTS_REVIEW_SUMMARY;
 const ci = text(process.env.INPUTS_CI_STATE);
 const prUrl = text(process.env.INPUTS_PR_URL);
 const threadsOpen = text(process.env.INPUTS_THREADS_OPEN);
-const contractLeft = nullableJson(process.env.INPUTS_REVIEW_CONTRACT_LEFT);
+type ContractLeft = NodeOutput<'archon-deliver', 'round'>['contract_left'];
+const contractLeft = nullableJson(process.env.INPUTS_REVIEW_CONTRACT_LEFT) as ContractLeft;
 
 /** The reason this round ended, whether another round can change it, and the deciding node's summary. */
 function decide(): { reason: Ended; again: boolean; summary: string | undefined } {
@@ -76,7 +78,7 @@ function decide(): { reason: Ended; again: boolean; summary: string | undefined 
 
 const { reason, again, summary } = decide();
 
-emit({
+emit<NodeOutput<'archon-deliver', 'round'>>({
   round,
   done: !again,
   ready: reason === 'delivered',
@@ -87,6 +89,6 @@ emit({
   prior_report:
     reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
   // The latest review's open contract items; null until a review has judged coverage.
-  contract_left: contractLeft ?? nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT),
+  contract_left: contractLeft ?? (nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT) as ContractLeft),
   summary: `Round ${round}: ${reason}. ${text(summary)}`,
 });

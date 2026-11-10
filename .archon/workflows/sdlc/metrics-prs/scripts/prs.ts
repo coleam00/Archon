@@ -18,6 +18,7 @@ import { lineRecords, readPrFiles } from '../../.shared/pr-lines.ts';
 import { backfillRunReviews, droppedRoundPrs, prBuildRounds, reviewRoundRecords } from '../../.shared/review-rounds.ts';
 import { stateDocuments } from '../../.shared/state.ts';
 import { read } from '../../.shared/workitem.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 /** The review set's metrics that no record the pack writes can count yet. */
 const NOT_AVAILABLE = [
@@ -48,7 +49,7 @@ try {
   const from = linesSince === '' ? Infinity : sinceTime(linesSince);
   const merged = factory.filter(pr => pr.state === 'MERGED' && Date.parse(pr.mergedAt ?? '') >= from);
   const lines = lineRecords(merged, runsByUrl, readPrFiles);
-  emit({
+  emit<NodeOutput<'archon-metrics-prs', 'prs'>>({
     metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...issueMetricRecords(items), ...lines.metrics],
     skipped,
     review_rounds_skipped: reviews.skipped,

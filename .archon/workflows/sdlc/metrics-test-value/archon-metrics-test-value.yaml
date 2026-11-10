@@ -61,3 +61,5 @@ nodes:
       required: [metrics]
       properties:
         metrics: { type: array }
+        # The pull requests whose judge did not complete, which make no record.
+        skipped: { type: array }

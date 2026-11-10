@@ -76,13 +76,13 @@ export interface Claim {
   readonly branch?: string;
 }
 
-export interface Promotion {
+export type Promotion = {
   readonly at: string;
   readonly via: 'label';
   readonly by: string;
   readonly label: string;
   readonly pin: { readonly body_digest: string };
-}
+};
 
 interface Field<Value extends string> {
   readonly value: Value;
@@ -103,7 +103,7 @@ export interface TriageFacts {
   readonly run_id: string;
 }
 
-export interface HistoryEntry {
+export type HistoryEntry = {
   readonly at: string;
   /** The queue whose pickup or decision wrote the entry. */
   readonly stage: 'intake' | 'build' | 'merge' | 'split';
@@ -113,9 +113,9 @@ export interface HistoryEntry {
   readonly verdict?: string;
   /** Stored as the writing run's artifact pointer; another run's output carries it through `withPlainReports`. */
   readonly report?: { readonly run_id: string; readonly path: string };
-}
+};
 
-export interface WorkItem {
+export type WorkItem = {
   readonly version: 1;
   readonly subject: QualifiedPr;
   readonly created_at: string;
@@ -141,7 +141,7 @@ export interface WorkItem {
     readonly split?: SplitRecord;
   };
   readonly history: readonly HistoryEntry[];
-}
+};
 
 /**
  * What the facts node decided for the item it claimed, handed to the outcome node, as

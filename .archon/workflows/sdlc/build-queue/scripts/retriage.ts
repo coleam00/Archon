@@ -33,7 +33,7 @@ function main(): void {
       note(`issue ${String(number)}: the revisit was not recorded, so the next run judges it again`);
     }
   }
-  emit({ retriaged: [...sent.keys()], summary: `Revisited ${String(blocked.length)} blocked item(s); sent ${String(sent.size)} to re-triage.` });
+  emit<NodeOutput<'archon-build-queue', 'retriage'>>({ retriaged: [...sent.keys()], summary: `Revisited ${String(blocked.length)} blocked item(s); sent ${String(sent.size)} to re-triage.` });
 }
 
 try {

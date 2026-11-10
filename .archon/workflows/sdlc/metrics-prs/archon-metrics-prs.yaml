@@ -50,3 +50,9 @@ nodes:
       required: [metrics]
       properties:
         metrics: { type: array }
+        # The report beside the records: what the run left out of them.
+        skipped: { type: array }
+        review_rounds_skipped: { type: array }
+        review_rounds_distribution: { type: object }
+        lines_skipped: { type: array }
+        not_available: { type: array }

@@ -228,7 +228,7 @@ function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
   const noItem = noItemSummary(path);
   if (noItem !== null) {
-    emit({ ...noItem, attention: '', options: [], recommendation: null, class: '', asked: null });
+    emit<NodeOutput<'archon-build-queue', 'apply'>>({ ...noItem, attention: '', options: [], recommendation: null, class: '', asked: null });
     return;
   }
   const runId = workflowRunId();
@@ -261,7 +261,7 @@ function main(): void {
     ...(round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '')),
     ...(asking?.attention.links ?? []),
   ];
-  const result = {
+  const result: NodeOutput<'archon-build-queue', 'apply'> = {
     decision: decision.kind,
     summary: summaryOf(item, decision),
     ...askFields(wait),
@@ -291,7 +291,7 @@ function main(): void {
       release: asking === null,
     })
   );
-  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
+  emit<NodeOutput<'archon-build-queue', 'apply'>>({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
 }
 
 try {

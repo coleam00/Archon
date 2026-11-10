@@ -137,7 +137,7 @@ function emitFacts(
     : items.length > 0 || base.checks.state === 'red'
       ? 'sweep'
       : settled.length > 0 ? 'record' : 'idle';
-  emit({
+  emit<NodeOutput<'archon-merge-queue', 'facts'>>({
     path,
     base,
     base_error: inspection.error,

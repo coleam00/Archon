@@ -29,7 +29,7 @@ function main(): void {
     repo_path: repo.path,
     number: String(created.issue.number),
   });
-  emit({ summary: `Filed ${created.url} as new work and started intake on it (run ${intake}); intake triages it before any queue builds it.` });
+  emit<NodeOutput<'archon-build-queue', 'handoff'>>({ summary: `Filed ${created.url} as new work and started intake on it (run ${intake}); intake triages it before any queue builds it.` });
 }
 
 try {

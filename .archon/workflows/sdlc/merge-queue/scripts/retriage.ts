@@ -31,7 +31,7 @@ function retriage(issue: QualifiedPr, runId: string): string | null {
 
 function main(): void {
   if (trimmed(process.env.INPUTS_RETRIAGE_MERGED) !== 'true') {
-    emit({ retriaged: [], summary: 'retriage_merged is off; no merged issue is re-triaged.' });
+    emit<NodeOutput<'archon-merge-queue', 'retriage'>>({ retriaged: [], summary: 'retriage_merged is off; no merged issue is re-triaged.' });
     return;
   }
   const runId = workflowRunId();
@@ -62,7 +62,7 @@ function main(): void {
     }
   }
   const summary = `Sent ${String(retriaged.length)} of ${String(done.length)} merged issue(s) back to intake.`;
-  emit({ retriaged, summary: [summary, ...lines].join('\n') });
+  emit<NodeOutput<'archon-merge-queue', 'retriage'>>({ retriaged, summary: [summary, ...lines].join('\n') });
 }
 
 try {

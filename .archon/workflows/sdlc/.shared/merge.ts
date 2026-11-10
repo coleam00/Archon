@@ -67,7 +67,7 @@ export interface MergeDecisionEntry extends DecisionEntry {
   readonly reran: boolean;
 }
 
-export interface MergeRecord {
+export type MergeRecord = {
   readonly status: MergeStatus;
   readonly pr: QualifiedPr | null;
   /** A maintainer's approval to merge, pinned to the head they approved. */
@@ -75,7 +75,7 @@ export interface MergeRecord {
   readonly decisions: readonly MergeDecisionEntry[];
   /** When the queue last decided the item. */
   readonly at: string;
-}
+};
 
 export function answeredMergeDecision(effect: MergeEffect): `answered: ${MergeEffect}` {
   return `answered: ${effect}`;

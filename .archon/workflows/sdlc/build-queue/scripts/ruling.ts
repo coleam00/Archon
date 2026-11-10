@@ -90,7 +90,7 @@ function main(): void {
     ready: () => 'its pull request waits for the merge queue',
     park: () => 'the queue stops working it until a re-triage',
   }[choice.effect]();
-  emit({ decision: choice.effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
+  emit<NodeOutput<'archon-build-queue', 'ruling'>>({ decision: choice.effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
 }
 
 try {

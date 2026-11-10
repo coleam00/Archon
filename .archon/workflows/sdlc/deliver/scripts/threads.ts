@@ -174,7 +174,7 @@ try {
   const open = read.threads.filter(thread => !thread.resolved);
   writeFileSync(join(artifactsDir(), 'threads.md'), threadsReport(pr.url, open));
   if (open.length > 0 && read.open && !read.draft) setPrDraft(pr, true);
-  emit({
+  emit<NodeOutput<'archon-deliver', 'threads'>>({
     open: open.length,
     summary:
       open.length === 0

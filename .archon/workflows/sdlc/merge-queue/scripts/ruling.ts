@@ -62,7 +62,7 @@ function main(): void {
   if (answered === null) throw new Error(PRE_VALUE_ANSWER);
   const words = trimmed(process.env.INPUTS_TEXT);
   if (asked.by === 'base') {
-    emit({
+    emit<NodeOutput<'archon-merge-queue', 'ruling'>>({
       decision: 'hold',
       section: '',
       summary: 'The queue holds merges while the default branch is red; every sweep reads that from the forge.',
@@ -102,7 +102,7 @@ function main(): void {
     const brief = `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`;
     return withBuild(recorded, { at, run_id: runId, round: null, entry, status: 'next', brief, release: true });
   });
-  emit({
+  emit<NodeOutput<'archon-merge-queue', 'ruling'>>({
     decision: choice.effect,
     section: heading,
     summary: `PR ${String(asked.pr.number)}: the maintainer chose ${choice.id} (${choice.effect})${continueNow(choice.effect, asked.item, runId)}.`,

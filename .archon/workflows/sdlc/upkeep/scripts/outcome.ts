@@ -20,6 +20,7 @@
 
 import { artifactsDir, emit, text, typedOutputs } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 const artifacts = artifactsDir();
 const reviews = typedOutputs(process.env.INPUTS_REVIEWS);
@@ -27,7 +28,7 @@ const action = text(process.env.INPUTS_ACTION);
 const summary = text(process.env.INPUTS_SUMMARY);
 
 if (action === 'no_action') {
-  emit({
+  emit<NodeOutput<'archon-upkeep', 'outcome'>>({
     delivered: false,
     pr_url: '',
     summary:
@@ -36,7 +37,7 @@ if (action === 'no_action') {
   });
 } else {
   // Deliver ran, so its outcome is the report; its summary already carries the caveats.
-  emit({
+  emit<NodeOutput<'archon-upkeep', 'outcome'>>({
     delivered: text(process.env.INPUTS_DELIVERED) === 'true',
     pr_url: text(process.env.INPUTS_PR_URL),
     summary: text(process.env.INPUTS_DELIVERY),

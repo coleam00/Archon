@@ -290,7 +290,7 @@ async function publishWithDescription(): Promise<PrRecord> {
 }
 
 try {
-  emit(await publishWithDescription());
+  emit<NodeOutput<'archon-pr', 'publish'>>(await publishWithDescription());
 } catch (error) {
   refuse(`publish-pr: ${error instanceof Error ? error.message : String(error)}`);
 }

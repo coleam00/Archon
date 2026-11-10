@@ -699,6 +699,11 @@ export interface WorkflowOutputs {
   'archon-metrics-prs': {
     prs: {
       readonly metrics: ReadonlyArray<unknown>;
+      readonly skipped?: ReadonlyArray<unknown>;
+      readonly review_rounds_skipped?: ReadonlyArray<unknown>;
+      readonly review_rounds_distribution?: Readonly<Record<string, unknown>>;
+      readonly lines_skipped?: ReadonlyArray<unknown>;
+      readonly not_available?: ReadonlyArray<unknown>;
     };
   };
   'archon-metrics-test-value': {
@@ -708,6 +713,7 @@ export interface WorkflowOutputs {
     };
     emit: {
       readonly metrics: ReadonlyArray<unknown>;
+      readonly skipped?: ReadonlyArray<unknown>;
     };
   };
   'archon-metrics-test-value-calibrate': {
@@ -717,6 +723,7 @@ export interface WorkflowOutputs {
     };
     score: {
       readonly metrics: ReadonlyArray<unknown>;
+      readonly disagreements?: ReadonlyArray<unknown>;
     };
   };
   'archon-metrics-test-value-judge': {
@@ -948,6 +955,7 @@ export interface WorkflowOutputs {
         readonly key: string;
         readonly number: number;
         readonly url: string;
+        readonly title?: string;
       }>;
       readonly adopted: ReadonlyArray<{
         readonly number: number;

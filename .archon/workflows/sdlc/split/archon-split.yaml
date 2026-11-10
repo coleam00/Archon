@@ -171,6 +171,8 @@ nodes:
               key: { type: string }
               number: { type: integer }
               url: { type: string }
+              # Absent on an issue recorded before titles were.
+              title: { type: string }
             required: [key, number, url]
         adopted:
           type: array

@@ -19,7 +19,7 @@ type Answer = NodeOutput<'archon-split', 'slice'>['split'];
 /** What the slice agent judged the item to be. */
 export type SplitKind = Exclude<Answer['kind'], 'whole'>;
 
-export interface SplitIssue {
+export type SplitIssue = {
   readonly key: string;
   readonly number: number;
   readonly url: string;
@@ -28,7 +28,7 @@ export interface SplitIssue {
    * records written before titles were recorded.
    */
   readonly title?: string;
-}
+};
 
 /** An existing issue the item's outcome depends on, which the split did not file. */
 export interface AdoptedIssue {

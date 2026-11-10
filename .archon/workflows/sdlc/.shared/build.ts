@@ -68,7 +68,7 @@ export type Validation = NonNullable<NodeOutput<'archon-deliver', 'ci'>['validat
  * One build round, as its terminal report ended it. `run_id` is the build-queue run that
  * delivered it; the ship work runs inside that run through `include:`.
  */
-export interface BuildRound {
+export type BuildRound = {
   readonly run_id: string;
   readonly at: string;
   readonly delivered: boolean;
@@ -96,7 +96,7 @@ export interface BuildRound {
   readonly reviews?: readonly ReviewVerdict[];
   /** The latest validation the round's delivery ran; absent when it ran none. */
   readonly validation?: Validation;
-}
+};
 
 /**
  * Who owns the item, as the build queue last recorded it. `next`: the build queue, for

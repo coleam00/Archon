@@ -8,9 +8,10 @@
 
 import { emit, refuse, trimmed } from '../../.shared/io.ts';
 import { workflowRepo } from '../../.shared/remote.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 try {
-  emit({
+  emit<NodeOutput<'archon-build-queue', 'start'>>({
     repo: workflowRepo(),
     message: trimmed(process.env.INPUTS_NUMBER) === '' && trimmed(process.env.ARGUMENTS) !== '',
   });

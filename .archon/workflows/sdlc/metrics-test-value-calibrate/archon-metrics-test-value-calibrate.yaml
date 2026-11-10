@@ -52,3 +52,5 @@ nodes:
       required: [metrics]
       properties:
         metrics: { type: array }
+        # The labeled tests the judge got wrong, for the operator reading the output.
+        disagreements: { type: array }

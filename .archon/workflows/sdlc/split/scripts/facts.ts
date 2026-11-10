@@ -16,6 +16,7 @@ import { artifactsDir, emit, refuse, trimmed, workflowRunId } from '../../.share
 import { viewIssue } from '../../.shared/issue.ts';
 import { filedIssues, SPLIT_PICKUP } from '../../.shared/split.ts';
 import { claimNamed, claimNext } from '../../.shared/workitem.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 function main(): void {
   const runId = workflowRunId();
@@ -25,14 +26,14 @@ function main(): void {
   if (named !== '' && (!Number.isInteger(number) || number <= 0)) throw new Error('number must be a positive integer');
   const doc = named === '' ? claimNext(at, runId, SPLIT_PICKUP) : claimNamed(number, at, runId, SPLIT_PICKUP);
   if (doc === null) {
-    emit({ path: 'idle', item: null, url: '', filed: [], reason: '' });
+    emit<NodeOutput<'archon-split', 'facts'>>({ path: 'idle', item: null, url: '', filed: [], reason: '' });
     return;
   }
   const issue = viewIssue(doc.subject);
   const dir = join(artifactsDir(), 'split');
   mkdirSync(dir, { recursive: true });
   writeFileSync(join(dir, 'prd.md'), `# ${issue.title}\n\n${issue.url}, now.\n\n${issue.body}\n`);
-  emit({
+  emit<NodeOutput<'archon-split', 'facts'>>({
     path: issue.state === 'closed' ? 'closed' : 'slice',
     item: doc.subject,
     url: issue.url,

@@ -138,7 +138,7 @@ function emitItem(
   atCap: boolean,
   itemPr: ItemPr
 ): void {
-  emit({
+  emit<NodeOutput<'archon-build-queue', 'facts'>>({
     path,
     item: subject,
     url,
@@ -167,7 +167,7 @@ function main(): void {
 
   const named = namedItem();
   if (named === 'order' || named === 'handoff') {
-    emit({ path: named, ...NOTHING, ...NO_ITEM_PR });
+    emit<NodeOutput<'archon-build-queue', 'facts'>>({ path: named, ...NOTHING, ...NO_ITEM_PR });
     return;
   }
   if (named !== null) requireRunRepo(named);
@@ -176,7 +176,7 @@ function main(): void {
       ? claimNext(new Date().toISOString(), runId, pickup())
       : claimNamed(named, new Date().toISOString(), runId, BUILD_PICKUP);
   if (doc === null) {
-    emit({ path: 'idle', ...NOTHING, ...NO_ITEM_PR });
+    emit<NodeOutput<'archon-build-queue', 'facts'>>({ path: 'idle', ...NOTHING, ...NO_ITEM_PR });
     return;
   }
   const issue = viewIssue(doc.subject);

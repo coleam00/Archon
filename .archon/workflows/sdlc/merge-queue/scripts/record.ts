@@ -232,7 +232,7 @@ function main(): void {
   const writes: Writes = { at: new Date().toISOString(), runId, lines: [], failed: [] };
   if (baseError !== '') recordBaseFailure(writes, settled, baseError);
   if (path === 'idle') {
-    emit({
+    emit<NodeOutput<'archon-merge-queue', 'record'>>({
       merged: [],
       summary: idleSummary('No pull request waits for the merge queue.', stuckItems(text(process.env.WORKFLOW_ID))),
       attention: '',
@@ -298,7 +298,7 @@ function main(): void {
     throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
   }
 
-  emit({
+  emit<NodeOutput<'archon-merge-queue', 'record'>>({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
     summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
     ...askFields(waitOf(asked)),

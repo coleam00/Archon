@@ -21,6 +21,7 @@ import {
 } from '../../.shared/workitem.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { workflowRepo } from '../../.shared/remote.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 function main(): void {
   const runId = workflowRunId();
@@ -55,7 +56,7 @@ function main(): void {
 
   const doc = claimNext(at, runId);
   if (doc === null) {
-    emit({ path: 'idle', item: null, target: '', decision: null });
+    emit<NodeOutput<'archon-intake', 'facts'>>({ path: 'idle', item: null, target: '', decision: null });
     return;
   }
   const issue = viewIssue(doc.subject);
@@ -66,7 +67,7 @@ function main(): void {
     at,
     runId
   );
-  emit({ path: decision.path, item: doc.subject, target: issue.url, decision });
+  emit<NodeOutput<'archon-intake', 'facts'>>({ path: decision.path, item: doc.subject, target: issue.url, decision });
 }
 
 try {

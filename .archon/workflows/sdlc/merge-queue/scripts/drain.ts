@@ -19,17 +19,17 @@ function main(): void {
   const merged = (nullableJson(process.env.INPUTS_MERGED) ?? []) as NodeOutput<'archon-merge-queue', 'record'>['merged'];
   const binding = trimmed(process.env.INPUTS_DISCOVERIES_BINDING);
   if (merged.length === 0) {
-    emit({ summary: 'This sweep merged nothing, so no discoveries drain starts.' });
+    emit<NodeOutput<'archon-merge-queue', 'drain'>>({ summary: 'This sweep merged nothing, so no discoveries drain starts.' });
     return;
   }
   if (binding === '') {
-    emit({ summary: 'discoveries_binding is empty, so no discoveries drain starts.' });
+    emit<NodeOutput<'archon-merge-queue', 'drain'>>({ summary: 'discoveries_binding is empty, so no discoveries drain starts.' });
     return;
   }
   const runId = workflowRunId();
   const later = 'the next sweep that merges, or a scheduled pass, starts one';
   // The binding names the repository, so the drain takes no inputs.
-  emit({ summary: followUp(binding, `discoveries-drain:${runId}`, {}, 'a discoveries drain', later) });
+  emit<NodeOutput<'archon-merge-queue', 'drain'>>({ summary: followUp(binding, `discoveries-drain:${runId}`, {}, 'a discoveries drain', later) });
 }
 
 try {

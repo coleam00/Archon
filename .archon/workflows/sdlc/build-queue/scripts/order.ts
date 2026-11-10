@@ -48,7 +48,7 @@ function main(): void {
     ...(intake.length === 0 ? [] : [`Not yet triaged, sent to intake first: ${intake.join(', ')}.`]),
     ...declared.unresolved.map(part => `Not in the order: "${part.named}": ${part.why}`),
   ];
-  emit({ summary: lines.join('\n') });
+  emit<NodeOutput<'archon-build-queue', 'order'>>({ summary: lines.join('\n') });
 }
 
 try {

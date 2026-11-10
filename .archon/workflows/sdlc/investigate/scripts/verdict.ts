@@ -12,8 +12,8 @@
 import { emit, text } from '../../.shared/io.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
-const verdict = text(process.env.INPUTS_VERDICT);
-emit({
+const verdict = text(process.env.INPUTS_VERDICT) as NodeOutput<'archon-investigate', 'investigate'>['verdict'];
+emit<NodeOutput<'archon-investigate', 'verdict'>>({
   verdict,
   rooted: verdict === 'rooted',
   summary: text(process.env.INPUTS_SUMMARY),

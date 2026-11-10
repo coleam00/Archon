@@ -6,6 +6,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { emit, refuse } from '../../.shared/io.ts';
 import { CASES_PATH, parseCases } from '../../.shared/test-value.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 try {
   if (!existsSync(CASES_PATH)) {
@@ -14,7 +15,7 @@ try {
     );
   }
   const cases = parseCases(JSON.parse(readFileSync(CASES_PATH, 'utf8')));
-  emit({ cases, urls: cases.map(entry => entry.pr) });
+  emit<NodeOutput<'archon-metrics-test-value-calibrate', 'cases'>>({ cases, urls: cases.map(entry => entry.pr) });
 } catch (error) {
   refuse(`cases: ${error instanceof Error ? error.message : String(error)}`);
 }

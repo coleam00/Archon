@@ -124,7 +124,7 @@ function summary(item: QualifiedPr, next: WorkItem, runId: string): string {
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
   if (path === 'idle') {
-    emit({
+    emit<NodeOutput<'archon-intake', 'outcome'>>({
       path,
       item: null,
       stage: null,
@@ -166,7 +166,7 @@ function main(): void {
   // before it leaves them for the next pickup to queue again.
   updateClaimed(item, runId, doc => ({ ...doc, claim: null }));
 
-  emit({
+  emit<NodeOutput<'archon-intake', 'outcome'>>({
     path: decision.path,
     item: item.number,
     stage: next.stage,

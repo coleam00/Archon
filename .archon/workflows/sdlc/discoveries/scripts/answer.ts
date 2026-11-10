@@ -14,6 +14,7 @@ import { join } from 'node:path';
 import { parseRunDocument, type Queue, runName } from '../../.shared/discoveries.ts';
 import { artifactsDir, emit, nullableJson, refuse, text } from '../../.shared/io.ts';
 import { stateGet, statePut } from '../../.shared/state.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 try {
   const keys = nullableJson(process.env.INPUTS_KEYS);
@@ -39,7 +40,7 @@ try {
       throw new Error(`${name} changed while this run held its claim`);
     }
   }
-  emit({ answered: keys });
+  emit<NodeOutput<'archon-discoveries', 'answer'>>({ answered: keys });
 } catch (error) {
   refuse(`discoveries answer: ${error instanceof Error ? error.message : String(error)}`);
 }

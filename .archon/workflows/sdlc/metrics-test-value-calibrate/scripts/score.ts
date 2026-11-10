@@ -6,11 +6,12 @@
 
 import { emit, refuse, text } from '../../.shared/io.ts';
 import { type Case, judgeIdentity, judgeSlots, scoreCalibration } from '../../.shared/test-value.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 try {
   // The `cases` node parsed and checked these before any judge ran.
   const cases = JSON.parse(text(process.env.INPUTS_CASES)) as Case[];
-  emit(scoreCalibration(judgeSlots(cases, JSON.parse(text(process.env.INPUTS_VERDICTS))), judgeIdentity()));
+  emit<NodeOutput<'archon-metrics-test-value-calibrate', 'score'>>(scoreCalibration(judgeSlots(cases, JSON.parse(text(process.env.INPUTS_VERDICTS))), judgeIdentity()));
 } catch (error) {
   refuse(`score: ${error instanceof Error ? error.message : String(error)}`);
 }

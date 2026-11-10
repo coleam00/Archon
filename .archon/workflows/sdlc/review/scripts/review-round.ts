@@ -44,14 +44,15 @@ import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { readFindingsFile } from '../../.shared/review-item.ts';
 import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
 import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 /**
  * The bound part assignment. The refusal drops the parser's message, which quotes
  * a token of the operator's text.
  */
-function partAssignment(value: string | undefined): unknown {
+function partAssignment(value: string | undefined): NodeOutput<'archon-review', 'mode'>['part'] {
   try {
-    return nullableJson(value);
+    return nullableJson(value) as NodeOutput<'archon-review', 'mode'>['part'];
   } catch {
     throw new Error('the part input is not JSON');
   }
@@ -96,7 +97,7 @@ try {
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
   const head = nodeStartCommit();
   if (prior === '') {
-    emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, ...lensFlags(new Set()), part });
+    emit<NodeOutput<'archon-review', 'mode'>>({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, ...lensFlags(new Set()), part });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
     const recorded = join(dirname(prior), REVIEWED_HEAD);
@@ -112,7 +113,7 @@ try {
       );
     }
     const rerun = lensFlags(owingLenses(join(dirname(prior), 'findings.json')));
-    emit({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, ...rerun, part });
+    emit<NodeOutput<'archon-review', 'mode'>>({ continuation: true, head, cursor, risks: FULL_REVIEW_RISKS, ...rerun, part });
   }
 } catch (error) {
   refuse(`review-round: ${error instanceof Error ? error.message : String(error)}`);

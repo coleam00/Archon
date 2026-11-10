@@ -92,7 +92,7 @@ function main(): void {
     boundItem.number === 0
       ? undefined
       : { repo: { host: repo.host, path: repo.path }, number: boundItem.number };
-  const report = bound(process.env.INPUTS_REPORT);
+  const report = bound(process.env.INPUTS_REPORT) as Triage['report'];
 
   const invalid = (message: string): void => {
     refuse(`invalid triage verdict: ${message}`);
@@ -129,7 +129,7 @@ function main(): void {
       )
     : [...new Set([...wanted, ...area])].sort();
 
-  emit({
+  emit<NodeOutput<'archon-triage-block', 'verdict'>>({
     contract,
     route,
     pull_request: pullRequest,

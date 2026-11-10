@@ -15,6 +15,7 @@
 
 import { artifactsDir, emit, nullableJson, typedOutputs } from '../../.shared/io.ts';
 import { failed, failedPublication } from '../../.shared/report.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 const options = {
   reviews: typedOutputs(process.env.INPUTS_REVIEWS),
@@ -22,8 +23,8 @@ const options = {
   outcomesFile: process.env.NODE_OUTCOMES_FILE,
 };
 
-const outcome = nullableJson(process.env.INPUTS_OUTCOME);
-emit(
+const outcome = nullableJson(process.env.INPUTS_OUTCOME) as NodeOutput<'archon-deliver', 'report'> | null;
+emit<NodeOutput<'archon-deliver', 'report'>>(
   outcome ?? {
     ready: false,
     ...failedPublication(artifactsDir(), options),

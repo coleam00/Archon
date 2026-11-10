@@ -41,7 +41,7 @@ function fresh(): void {
   const base = fetchDefaultBranch(item.repo);
   if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
     throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
-  emit({ head: null, reviewed: null, pull_request: null });
+  emit<NodeOutput<'archon-build-queue', 'checkout'>>({ head: null, reviewed: null, pull_request: null });
 }
 
 function main(): void {
@@ -70,7 +70,7 @@ function main(): void {
   const branch = gitOrThrow('branch', '--show-current');
   gitOrThrow('checkout', '-q', ...(branch === '' ? ['--detach'] : ['-B', branch]), head);
   const ref = { repo: pr.repo, number: continues };
-  emit({ head, reviewed: reviewedHead(ref, readMaintainers(pr.repo)), pull_request: continues });
+  emit<NodeOutput<'archon-build-queue', 'checkout'>>({ head, reviewed: reviewedHead(ref, readMaintainers(pr.repo)), pull_request: continues });
 }
 
 try {

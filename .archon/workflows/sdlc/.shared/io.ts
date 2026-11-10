@@ -114,8 +114,15 @@ export function artifactsDir(): string {
  * A node that declares `output_format` gets exactly one attempt — no fence
  * stripping, no repair pass, no reask — so this is the only way a certified script
  * writes its result.
+ *
+ * Name the node's generated output type at the call, as in
+ * `emit<NodeOutput<'archon-build', 'continues'>>({ ... })`, so the compiler refuses a
+ * result the node's `output_format` does not declare. It checks a field written in
+ * the call for being undeclared, but not one a spread or a variable carries in. A
+ * value emitted where the schema declares a bare object must be a type alias: an
+ * interface has no index signature, so it is not assignable there.
  */
-export function emit(value: unknown): void {
+export function emit<T>(value: T): void {
   console.log(JSON.stringify(value));
 }
 

@@ -8,6 +8,7 @@ import { emit, refuse, trimmed } from '../../.shared/io.ts';
 import { stateDocuments } from '../../.shared/state.ts';
 import { requireTestValueSource } from '../../.shared/test-value.ts';
 import { read } from '../../.shared/workitem.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 const since = trimmed(process.env.INPUTS_SINCE);
 
@@ -19,7 +20,7 @@ try {
     .factory.filter(pr => pr.state === 'MERGED' && pr.mergedAt !== null && Date.parse(pr.mergedAt) >= from)
     .map(pr => ({ url: pr.url, merged_at: pr.mergedAt as string, runs: prRuns(runsByUrl, pr.url) }));
   requireTestValueSource(prs.map(pr => new URL(pr.url).host));
-  emit({ prs, urls: prs.map(pr => pr.url) });
+  emit<NodeOutput<'archon-metrics-test-value', 'prs'>>({ prs, urls: prs.map(pr => pr.url) });
 } catch (error) {
   refuse(`prs: ${error instanceof Error ? error.message : String(error)}`);
 }

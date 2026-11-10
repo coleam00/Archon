@@ -27,6 +27,7 @@ import { artifactsDir, emit, note, refuse, trimmed, workflowRunId } from '../../
 import { fetchDefaultBranch, workflowRepo } from '../../.shared/remote.ts';
 import { latestVerdictOf, relayedDiscoveries } from '../../.shared/report.ts';
 import { claimEnded, listRuns, stateDocuments, stateGet, statePut } from '../../.shared/state.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 /** The CLI lists at most this many runs, newest first. */
 const LISTING = 1000;
@@ -162,7 +163,7 @@ function main(): void {
   mkdirSync(drain, { recursive: true });
   const document: Queue = { base, runs: queue };
   writeFileSync(join(drain, 'queue.json'), `${JSON.stringify(document, null, 2)}\n`);
-  emit({
+  emit<NodeOutput<'archon-discoveries', 'facts'>>({
     path: queue.length === 0 ? 'idle' : 'decide',
     repo,
     base,

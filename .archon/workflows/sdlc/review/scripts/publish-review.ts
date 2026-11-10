@@ -75,7 +75,7 @@ function label(pr: QualifiedPr | undefined): string {
 try {
   const verdict = {
     ready: JSON.parse(text(process.env.INPUTS_READY)) as Settled['ready'],
-    action: text(process.env.INPUTS_ACTION),
+    action: text(process.env.INPUTS_ACTION) as Settled['action'],
     findings_summary: text(process.env.INPUTS_SUMMARY),
     report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as Settled['report'],
     discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as Settled['discoveries'],
@@ -122,7 +122,7 @@ try {
   }
   // review-round reads this as the next round's cursor.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
-  emit(verdict);
+  emit<NodeOutput<'archon-review', 'publish'>>(verdict);
 } catch (error) {
   refuse(`publish-review: ${error instanceof Error ? error.message : String(error)}`);
 }

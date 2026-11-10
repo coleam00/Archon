@@ -11,6 +11,7 @@
  */
 
 import { emit, nullableJson, refuse } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 const caller = nullableJson(process.env.INPUTS_CALLER) as number | null;
 const triage = nullableJson(process.env.INPUTS_TRIAGE) as number | null;
@@ -20,5 +21,5 @@ if (caller !== null && triage !== null && caller !== triage) {
     `continues: the caller resolved pull request ${String(caller)}, but triage routed the run to continue ${String(triage)}`
   );
 } else {
-  emit({ pull_request: caller ?? triage });
+  emit<NodeOutput<'archon-build', 'continues'>>({ pull_request: caller ?? triage });
 }

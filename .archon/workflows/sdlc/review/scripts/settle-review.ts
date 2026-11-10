@@ -94,7 +94,7 @@ function latestRoundCopy(dir: string): string | undefined {
 try {
   const verdict = {
     ready: JSON.parse(text(process.env.INPUTS_READY)) as Synthesis['ready'],
-    action: text(process.env.INPUTS_ACTION),
+    action: text(process.env.INPUTS_ACTION) as Synthesis['action'],
     findings_summary: text(process.env.INPUTS_SUMMARY),
     report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as Synthesis['report'],
     discoveries: [...(JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as Synthesis['discoveries'])],
@@ -103,7 +103,7 @@ try {
   const gaps = JSON.parse(text(process.env.INPUTS_COVERAGE_GAPS)) as Synthesis['coverage_gaps'];
   // A Ready verdict ran no verifier and has nothing to settle.
   if (verdict.ready) {
-    emit(verdict);
+    emit<NodeOutput<'archon-review', 'settle'>>(verdict);
   } else {
     const dir = join(artifactsDir(), 'review');
     const findingsFile = join(dir, 'findings.json');
@@ -178,7 +178,7 @@ try {
       }
       verdict.findings_summary = `${verdict.findings_summary} ${summary}`;
     }
-    emit(verdict);
+    emit<NodeOutput<'archon-review', 'settle'>>(verdict);
   }
 } catch (error) {
   refuse(`settle-review: ${error instanceof Error ? error.message : String(error)}`);

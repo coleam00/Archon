@@ -13,6 +13,7 @@
 import { REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
 import { emit, refuse } from '../../.shared/io.ts';
 import { readOutcomes, sameFrames, type LoopFrame } from '../../.shared/outcomes.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 /** This node's id in the review block; its path ends in it. */
 const SELF = 'review-complete';
@@ -31,7 +32,7 @@ try {
       : ([...outcomes].reverse().find(
           entry => entry.node_id === prefix + lens && sameFrames(entry.loop_group_path, execution.invocation.loopPath)
         )?.state ?? 'unreadable');
-  emit(Object.fromEntries(REVIEW_LENSES.map(lens => [lens, state(lens)])));
+  emit<NodeOutput<'archon-review', 'review-complete'>>(Object.fromEntries(REVIEW_LENSES.map(lens => [lens, state(lens)])));
 } catch (error) {
   refuse(`lens-outcomes: ${error instanceof Error ? error.message : String(error)}`);
 }
