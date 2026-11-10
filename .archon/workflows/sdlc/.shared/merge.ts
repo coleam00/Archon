@@ -16,7 +16,7 @@ import { invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
 import { viewPr } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
-import type { Pickup, WorkItem } from './workitem.ts';
+import { type Pickup, unheld, type WorkItem } from './workitem.ts';
 
 /** What a merge choice does when a person picks it; archon-merge-queue.yaml declares the same enum. */
 export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
@@ -164,7 +164,7 @@ export interface MergeChange {
   readonly pr: QualifiedPr | null;
   /** Undefined keeps the approval already recorded. */
   readonly approval?: MergeRecord['approval'];
-  /** Clear the claim in the same write: nothing is left for this run to do. */
+  /** Give the item back in the same write: nothing is left for this run to do. */
   readonly release: boolean;
 }
 
@@ -183,8 +183,7 @@ export function withMerge(doc: WorkItem, change: MergeChange): WorkItem {
     at: change.at,
   };
   return {
-    ...doc,
-    claim: change.release ? null : doc.claim,
+    ...(change.release ? unheld(doc) : doc),
     facts: { ...doc.facts, merge },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
   };

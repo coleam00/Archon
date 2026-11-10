@@ -29,6 +29,7 @@ import {
   type IntakeDecision,
   mirrorLabels,
   type TriageResult,
+  unheld,
   updateClaimed,
   type WorkItem,
 } from '../../.shared/workitem.ts';
@@ -160,9 +161,9 @@ function main(): void {
   const delta = labelDelta(next, decision, judged, bodyMoved);
   const labels = delta === null ? [] : writeLabels(item, delta.add, delta.remove);
   if (close !== null && close.refused === null) close.close();
-  // Clearing the claim is what marks this run's requests honored; a run that stops
+  // Giving the item back is what marks this run's requests honored; a run that stops
   // before it leaves them for the next pickup to queue again.
-  updateClaimed(item, runId, doc => ({ ...doc, claim: null }));
+  updateClaimed(item, runId, unheld);
 
   emit({
     path: decision.path,

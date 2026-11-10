@@ -74,15 +74,20 @@ function seed(at: Install, change: (doc: WorkItem) => WorkItem = doc => doc): vo
       ...current,
       stage: 'split',
       trust: 'maintainer',
-      claim: { run_id: 'run-1', at: AT, requests: [] },
+      hold: { requests: [] },
       facts: { ...current.facts, triage: TRIAGE },
     });
-    expect(statePut('work/7', doc, stored.revision)).toBe('ok');
+    process.env.WORKFLOW_ID = 'run-1';
+    expect(statePut('work/7', doc, stored.revision, 'take')).toBe('ok');
   });
 }
 
-function stored(at: Install): WorkItem {
-  return inProcess(at, () => parseWorkItem(stateGet('work/7').value));
+/** The stored item; `held` says whether a run's engine lease is on it. */
+function stored(at: Install): WorkItem & { held: boolean } {
+  return inProcess(at, () => {
+    const read = stateGet('work/7');
+    return { ...parseWorkItem(read.value), held: read.lease !== null };
+  });
 }
 
 function publish(
@@ -135,7 +140,7 @@ describe('split publish', () => {
     expect(first.comments).toEqual([{ issue: 7, body: expect.stringContaining('- Widen to every route. Filed once the earlier work shows: the slice moves the median') }]);
     expect(labelWrites(first, 7).add).toContain('archon-prd');
     expect(first.closes).toEqual([]);
-    expect(stored(at)).toMatchObject({ claim: null, facts: { split: { status: 'done', kind: 'prd' } } });
+    expect(stored(at)).toMatchObject({ held: false, facts: { split: { status: 'done', kind: 'prd' } } });
 
     // A re-triage sends the item back; the next split lists the same keys.
     seed(at);
@@ -225,7 +230,7 @@ describe('split publish', () => {
     expect(run.comments).toEqual([{ issue: 7, body: expect.stringContaining('Measure first.') }]);
     expect(labelWrites(run, 7)).toEqual({ add: ['archon-plan'], remove: ['archon-split'] });
     const doc = stored(at);
-    expect(doc).toMatchObject({ stage: 'plan', claim: null, facts: { split: { status: 'whole', route: 'plan' } } });
+    expect(doc).toMatchObject({ stage: 'plan', held: false, facts: { split: { status: 'whole', route: 'plan' } } });
     expect(doc.history.at(-1)).toMatchObject({ stage: 'split', outcome: 'whole', summary: 'Measure first.' });
     // Intake's mirror of the document agrees with the labels publish wrote.
     expect(mirrorLabels(doc)).toContain('archon-plan');

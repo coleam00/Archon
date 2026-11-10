@@ -14,7 +14,7 @@ import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
 import type { Attention, DecisionEntry } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
 import {
-  type Claim,
+  heldBy,
   type HistoryEntry,
   newest,
   type Pickup,
@@ -22,6 +22,7 @@ import {
   read,
   type Stage,
   type TriageFacts,
+  unheld,
   type WorkItem,
   workItemName,
 } from './workitem.ts';
@@ -114,7 +115,7 @@ function clipped(text: string): string {
   return text.length <= KEPT_TEXT ? text : `${text.slice(0, KEPT_TEXT)}…`;
 }
 
-/** Whether an unclaimed item waits for the build queue. */
+/** Whether a free item waits for the build queue. */
 export function buildWaits(doc: WorkItem): boolean {
   if (!(LAUNCH_STAGES as readonly string[]).includes(doc.stage)) return false;
   const build = doc.facts.build;
@@ -135,7 +136,7 @@ export interface BlockedItem {
 const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
 const REVISITED = 'revisited';
 
-/** The unclaimed blocked items the queue has not revisited in the last few hours. */
+/** The free blocked items the queue has not revisited in the last few hours. */
 export function dueBlocked(at: string): BlockedItem[] {
   const due = new Date(Date.parse(at) - REVISIT_EVERY_MS).toISOString();
   const items: BlockedItem[] = [];
@@ -149,23 +150,24 @@ export function dueBlocked(at: string): BlockedItem[] {
       continue;
     }
     const last = doc.history.filter(entry => entry.outcome === REVISITED).at(-1)?.at ?? '';
-    if (doc.stage !== 'blocked' || doc.claim !== null || last >= due) continue;
+    if (doc.stage !== 'blocked' || heldBy({ doc, lease: stored.lease }) !== null || last >= due) continue;
     const triaged = doc.history.filter(entry => entry.outcome === 'blocked').at(-1);
     items.push({ number: doc.subject.number, summary: triaged?.summary ?? '' });
   }
   return items;
 }
 
-/** Record that the queue revisited the item, re-reading on a conflict; false if it never landed. */
+/**
+ * Record that the queue revisited the item; false if the record did not land. It lands
+ * only on a free item as it was read: a run that holds the item, or took it since, is
+ * deciding it and owns its history.
+ */
 export function recordRevisit(subject: QualifiedPr, runId: string, summary: string): boolean {
   const entry: HistoryEntry = { at: new Date().toISOString(), stage: 'build', run_id: runId, outcome: REVISITED, summary };
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const stored = read(workItemName(subject.number));
-    if (stored === undefined) return false;
-    const doc = { ...stored.doc, history: newest([...stored.doc.history, entry]) };
-    if (statePut(stored.name, doc, stored.revision) === 'ok') return true;
-  }
-  return false;
+  const stored = read(workItemName(subject.number));
+  if (stored === undefined || heldBy(stored) !== null) return false;
+  const doc = { ...stored.doc, history: newest([...stored.doc.history, entry]) };
+  return statePut(stored.name, doc, stored.revision) === 'ok';
 }
 
 /**
@@ -247,7 +249,7 @@ export interface BuildChange {
   readonly entry: DecisionEntry;
   readonly status: BuildStatus;
   readonly brief: string;
-  /** Clear the claim in the same write: nothing is left for this run to do. */
+  /** Give the item back in the same write: nothing is left for this run to do. */
   readonly release: boolean;
 }
 
@@ -264,8 +266,7 @@ export function withBuild(doc: WorkItem, change: BuildChange): WorkItem {
     at: change.at,
   };
   return {
-    ...doc,
-    claim: change.release ? null : doc.claim,
+    ...(change.release ? unheld(doc) : doc),
     facts: { ...doc.facts, build },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
   };
@@ -289,17 +290,17 @@ export function nextRound(item: QualifiedPr, runId: string): string {
 }
 
 /**
- * The work item with the round a released build claim's run left: the pull request
- * whose head is the branch the claim recorded. A run that opened none, and a run that
- * recorded its round before it stopped, such as one that asked, add nothing.
+ * The work item with the round an ended build run left: the pull request whose head is
+ * the branch the run's hold recorded. A run that opened none, and a run that recorded
+ * its round before it stopped, such as one that asked, add nothing.
  */
-export function withReleasedRound(doc: WorkItem, claim: Claim, at: string): WorkItem {
+export function withReleasedRound(doc: WorkItem, runId: string, branch: string, at: string): WorkItem {
   const prior = doc.facts.build;
-  if (claim.branch === undefined || prior?.rounds.some(round => round.run_id === claim.run_id)) return doc;
-  const pr = findPrByHead(doc.subject.repo, claim.branch);
+  if (prior?.rounds.some(round => round.run_id === runId)) return doc;
+  const pr = findPrByHead(doc.subject.repo, branch);
   if (pr === undefined) return doc;
   const round: BuildRound = {
-    run_id: claim.run_id,
+    run_id: runId,
     at,
     delivered: false,
     reason: ENDED_UNDECIDED,

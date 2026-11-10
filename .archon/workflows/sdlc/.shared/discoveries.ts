@@ -1,7 +1,8 @@
 /**
  * The discoveries workflow's state: one document per drained run.
  *
- * `discoveries/runs/<run-id>` is that run's memory and its claim. `decided` lists the
+ * `discoveries/runs/<run-id>` is that run's memory, and a pass claims the run by taking
+ * the document's engine lease. `decided` lists the
  * refs a pass decided for it, whatever the outcome but `wait`, so a later pass does not
  * queue them again; `questions` holds what a pass asked a maintainer about it, with the answer once
  * there is one, so the next pass decides those refs from it. A run's claim is held while
@@ -33,6 +34,10 @@ export interface Question {
 
 export interface RunDocument {
   readonly version: 1;
+  /**
+   * Always null in a document this pack writes. A claim here was written before claims
+   * took an engine lease, and is read as `holder` reads it (./state.ts).
+   */
   readonly claim: { readonly run_id: string; readonly at: string } | null;
   /**
    * The refs a pass decided for this run. A document without it was drained before

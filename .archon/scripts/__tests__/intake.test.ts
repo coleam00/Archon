@@ -11,6 +11,7 @@ import {
   bodyDigest,
   claimItem,
   decideIntake,
+  enqueue,
   type IntakeRequest,
   type IssueFacts,
   mirrorLabels,
@@ -19,6 +20,7 @@ import {
   PICKUP_ORDER,
   sortCandidates,
   type TriageFacts,
+  updateClaimed,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
 import { parseMaintainers } from '../../workflows/sdlc/.shared/maintainers';
@@ -60,7 +62,7 @@ function triaged(overrides: Partial<TriageFacts> = {}): TriageFacts {
 function item(overrides: Partial<WorkItem> = {}, requests: IntakeRequest[] = []): WorkItem {
   return {
     ...newWorkItem(SUBJECT, AT),
-    claim: { run_id: 'run', at: AT, requests },
+    hold: { requests },
     ...overrides,
   };
 }
@@ -479,11 +481,12 @@ function stored(at: Install): { revision: number; value: WorkItem } {
   return { revision: parsed.revision, value: parseWorkItem(parsed.value) };
 }
 
-/** Run pack code in this process against the install's state store. */
-function inProcess<T>(at: Install, body: () => T): T {
+/** Run pack code in this process against the install's state store, as `runId` when given. */
+function inProcess<T>(at: Install, body: () => T, runId = ''): T {
   const saved = { ...process.env };
   Object.assign(process.env, at.env, {
     ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, FAKE_ARCHON]),
+    WORKFLOW_ID: runId,
   });
   try {
     return body();
@@ -491,6 +494,29 @@ function inProcess<T>(at: Install, body: () => T): T {
     for (const key of Object.keys(process.env)) if (!(key in saved)) delete process.env[key];
     Object.assign(process.env, saved);
   }
+}
+
+/** The run whose engine lease is on the item, or null. */
+function leaseHolder(at: Install): string | null {
+  return inProcess(at, () => stateGet('work/7')).lease?.runId ?? null;
+}
+
+/**
+ * Rewrite the item run-1 holds as a pack from before claims took a lease stored it: the
+ * claim in the document, and no hold. `leased` false also drops the lease, as a claim
+ * from before leases existed.
+ */
+function asLegacyClaim(at: Install, leased: boolean): void {
+  inProcess(
+    at,
+    () => {
+      const { revision, value } = stored(at);
+      const { hold, ...rest } = value;
+      const legacy = { ...rest, claim: { run_id: 'run-1', at: AT, requests: hold?.requests ?? [] } };
+      expect(statePut('work/7', legacy, revision, leased ? undefined : 'release')).toBe('ok');
+    },
+    'run-1'
+  );
 }
 
 describe('the intake scripts', () => {
@@ -502,7 +528,8 @@ describe('the intake scripts', () => {
       item: SUBJECT,
       decision: { trust: 'maintainer' },
     });
-    expect(stored(at).value.claim?.run_id).toBe('run-1');
+    expect(leaseHolder(at)).toBe('run-1');
+    expect(stored(at).value).toMatchObject({ claim: null, hold: { requests: [{ action: 'opened' }] } });
 
     const applied = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
@@ -546,17 +573,14 @@ describe('the intake scripts', () => {
 
     // The same race in-process: a pickup that read the item before run-1's claim
     // loses the conditional write and skips the item.
-    const unclaimed = {
-      ...stored(at).value,
-      claim: null,
-      requests: [labelRequest('archon-triage', 'maintainer')],
-    };
+    const { hold: _hold, ...free } = stored(at).value;
+    const unclaimed = { ...free, requests: [labelRequest('archon-triage', 'maintainer')] };
     expect(
       inProcess(at, () =>
         claimItem({ name: 'work/7', revision: claimedRevision - 1, doc: unclaimed, lease: null }, AT, 'run-3')
       )
     ).toBeNull();
-    expect(stored(at).value.claim?.run_id).toBe('run-1');
+    expect(leaseHolder(at)).toBe('run-1');
   }, 60_000);
 
   test("a failed run keeps its claim; the next pickup releases a cancelled run's claim and queues its requests again", () => {
@@ -565,7 +589,7 @@ describe('the intake scripts', () => {
     // A failed run can resume, so its lease, and with it the claim, stands.
     const held = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'failed' } }).output;
     expect(held).toMatchObject({ path: 'idle', item: null });
-    expect(stored(at).value.claim?.run_id).toBe('run-1');
+    expect(leaseHolder(at)).toBe('run-1');
     const decided = facts(at, {
       runId: 'run-2',
       kind: 'pr',
@@ -573,8 +597,8 @@ describe('the intake scripts', () => {
     }).output;
     expect(decided).toMatchObject({ path: 'triage', item: SUBJECT });
     const doc = stored(at).value;
-    expect(doc.claim).toMatchObject({
-      run_id: 'run-2',
+    expect(leaseHolder(at)).toBe('run-2');
+    expect(doc.hold).toMatchObject({
       requests: [expect.objectContaining({ run_id: 'run-1', action: 'opened' })],
     });
     expect(doc.history.at(-1)).toMatchObject({
@@ -621,15 +645,13 @@ describe('the intake scripts', () => {
     const decided = facts(at, { runId: 'run-1' }).output;
     const failed = outcome(at, { runId: 'run-1', writeLost: true }, decided, READY_VERDICT);
     expect(failed.code).not.toBe(0);
-    expect(stored(at).value).toMatchObject({
-      stage: 'deliver',
-      claim: { run_id: 'run-1' },
-    });
+    expect(stored(at).value).toMatchObject({ stage: 'deliver', hold: { requests: [{ action: 'opened' }] } });
+    expect(leaseHolder(at)).toBe('run-1');
 
     const retried = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'cancelled' } });
     expect(retried.output).toMatchObject({ path: 'quiet', item: SUBJECT });
-    expect(stored(at).value.claim).toMatchObject({
-      run_id: 'run-2',
+    expect(leaseHolder(at)).toBe('run-2');
+    expect(stored(at).value.hold).toMatchObject({
       requests: [expect.objectContaining({ run_id: 'run-1', action: 'opened' })],
     });
     const applied = outcome(at, { runId: 'run-2' }, retried.output, SKIPPED_TRIAGE);
@@ -861,7 +883,75 @@ describe('the intake scripts', () => {
     const resumed = outcome(at, { runId: 'run-1', statuses: { 'run-1': 'running' } }, decided, READY_VERDICT);
     expect({ code: resumed.code, stderr: resumed.stderr }).toEqual({ code: 0, stderr: '' });
     expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null });
-    // Clearing the claim gave the run's lease back in the same write.
-    expect(inProcess(at, () => stateGet('work/7')).lease).toBeNull();
+    expect(stored(at).value.hold).toBeUndefined();
+    // Giving the item back gave the run's lease back in the same write.
+    expect(leaseHolder(at)).toBeNull();
+  }, 60_000);
+
+  test('a request recorded between a holder\'s read and its write survives the write', () => {
+    const at = install();
+    facts(at, { runId: 'run-1' });
+    const late = labelRequest('archon-triage', 'maintainer');
+    const written = inProcess(
+      at,
+      () =>
+        updateClaimed(SUBJECT, 'run-1', doc => {
+          // The engine appends this to the latest revision, after this run read the item.
+          enqueue(SUBJECT, late);
+          return { ...doc, stage: 'blocked' };
+        }),
+      'run-1'
+    );
+    expect(written).toMatchObject({ stage: 'blocked', requests: [late] });
+    expect(stored(at).value).toMatchObject({ stage: 'blocked', requests: [late] });
+    // Another run holds nothing here, so the engine refuses its write.
+    expect(() => inProcess(at, () => updateClaimed(SUBJECT, 'run-2', doc => ({ ...doc, stage: 'new' })), 'run-2')).toThrow(
+      'work/7 is no longer claimed by this run'
+    );
+    expect(stored(at).value.stage).toBe('blocked');
+  }, 60_000);
+
+  test('a claim an earlier pack wrote with its lease is held while its run lives, and the run still writes its outcome', () => {
+    const at = install();
+    const decided = facts(at, { runId: 'run-1' }).output;
+    asLegacyClaim(at, true);
+    const waiting = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'paused' } }).output;
+    expect(waiting).toMatchObject({ path: 'idle', item: null });
+    expect(stored(at).value.claim?.run_id).toBe('run-1');
+    const applied = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null, requests: [] });
+    expect(leaseHolder(at)).toBeNull();
+  }, 60_000);
+
+  test('a claim an earlier pack wrote is taken over once its lease ended, and its requests wait again', () => {
+    const at = install();
+    facts(at, { runId: 'run-1' });
+    asLegacyClaim(at, true);
+    const taken = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'cancelled' } }).output;
+    expect(taken).toMatchObject({ path: 'triage', item: SUBJECT });
+    const doc = stored(at).value;
+    expect(leaseHolder(at)).toBe('run-2');
+    expect(doc).toMatchObject({
+      claim: null,
+      hold: { requests: [expect.objectContaining({ run_id: 'run-1', action: 'opened' })] },
+    });
+    expect(doc.history.at(-1)).toMatchObject({ outcome: 'released', summary: expect.stringContaining('run-1') });
+  }, 60_000);
+
+  test('a run whose claim predates leases still writes its outcome, and no other run takes the item', () => {
+    const at = install();
+    const decided = facts(at, { runId: 'run-1' }).output;
+    asLegacyClaim(at, false);
+    expect(leaseHolder(at)).toBeNull();
+    // Nothing proves run-1 ended, whatever the engine says about it.
+    const other = run(at, 'facts', { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'cancelled' } });
+    expect(JSON.parse(other.stdout)).toMatchObject({ path: 'idle', item: null });
+    expect(other.stderr).toContain('run run-1 holds no engine lease on it');
+    expect(stored(at).value.claim?.run_id).toBe('run-1');
+    const applied = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
+    expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null, requests: [] });
+    expect(leaseHolder(at)).toBeNull();
   }, 60_000);
 });

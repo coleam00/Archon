@@ -5,16 +5,15 @@
  * The document is the item's state; its labels mirror it, and a label a person adds
  * is a request, never the state. Trust is decided once, by a script, from the
  * project's maintainer list, so no model and no workflow input can raise it. Every
- * event records a request on its item; a run then claims the best waiting item with
- * a conditional write, so two runs never work the same item, and releases the claim
- * when it is done. A claim whose run the engine reports terminal is released by the
- * next pickup; any other answer leaves it held, because a live owner and an orphan
- * cannot be told apart here.
+ * event records a request on its item; a run then claims the best waiting item by
+ * taking its engine lease in a conditional write, so two runs never work the same
+ * item, and gives the lease back when it is done. The engine says who holds an item:
+ * a pickup takes one over only when the engine reports its holder ended. The pack's
+ * part is which items wait for which queue, and in what order.
  *
- * The build, merge and split queues claim the same documents through the same claim,
- * so an item has one owner at a time across the queues; their records are
- * `facts.build` (./build.ts), `facts.merge` (./merge.ts) and `facts.split`
- * (./split.ts).
+ * The build, merge and split queues claim the same documents the same way, so an item
+ * has one owner at a time across the queues; their records are `facts.build`
+ * (./build.ts), `facts.merge` (./merge.ts) and `facts.split` (./split.ts).
  */
 
 import { createHash } from 'node:crypto';
@@ -34,13 +33,15 @@ import {
   wantedLabels,
 } from './labels.ts';
 import {
-  claimEnded,
+  holder,
+  holdsLegacy,
   type Lease,
+  type LegacyClaim,
   stateAppend,
   stateDocuments,
   stateGet,
   statePut,
-  statePutClaimed,
+  stateWriteHeld,
 } from './state.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
@@ -65,14 +66,14 @@ export interface IntakeRequest {
   readonly body_digest: string | null;
 }
 
-export interface Claim {
-  readonly run_id: string;
-  readonly at: string;
+/**
+ * What the run holding the item's lease took from it, for the pickup that takes the item
+ * over if that run ends first. Who holds the item is the lease's to say, never this.
+ */
+export interface Hold {
+  /** The requests an intake pickup took: honored once the lease is given back, waiting again otherwise. */
   readonly requests: readonly IntakeRequest[];
-  /**
-   * The branch a build round opens its pull request from, recorded once the round
-   * names it, so a release can find a pull request its run opened. No other claim has one.
-   */
+  /** The branch a build round opens its pull request from, so the next pickup finds one its run opened. */
   readonly branch?: string;
 }
 
@@ -122,7 +123,10 @@ export interface WorkItem {
   readonly stage: Stage;
   /** Null until intake first decides it; never changed after that. */
   readonly trust: Trust | null;
-  readonly claim: Claim | null;
+  /** Null in every document this pack writes; a claim from before claims took a lease is read by `holder` (./state.ts). */
+  readonly claim: (Hold & LegacyClaim) | null;
+  /** Present exactly while a run holds the item's lease. */
+  readonly hold?: Hold;
   /** Requests waiting for intake. A non-empty list is what makes the item a candidate. */
   readonly requests: readonly IntakeRequest[];
   readonly links: { readonly runs: readonly string[] };
@@ -247,6 +251,7 @@ export function parseWorkItem(value: unknown): WorkItem {
     !(doc.trust === null || (TRUSTS as readonly unknown[]).includes(doc.trust)) ||
     claim === undefined ||
     (claim !== null && (typeof claim.run_id !== 'string' || !Array.isArray(claim.requests))) ||
+    !(doc.hold === undefined || Array.isArray(record(doc.hold)?.requests)) ||
     !Array.isArray(doc.requests) ||
     !Array.isArray(record(doc.links)?.runs) ||
     !(doc.promoted === null || record(doc.promoted) !== undefined) ||
@@ -296,8 +301,8 @@ function sortValue(doc: WorkItem, key: OrderKey['key']): number | string | undef
 }
 
 /**
- * Whether the item's last attempt ended without recording an outcome: a pickup
- * released its claim after the item's latest recorded decision.
+ * Whether the item's last attempt ended without recording an outcome: a pickup took
+ * the item over from an ended run after the item's latest recorded decision.
  */
 export function lastAttemptFailed(doc: WorkItem): boolean {
   const released = doc.history.filter(entry => entry.outcome === 'released').at(-1);
@@ -405,7 +410,7 @@ function runAsked(requests: readonly IntakeRequest[], noted: (outcome: string, s
 }
 
 /**
- * Decide what the claimed item needs, from the document, its claimed requests and
+ * Decide what the claimed item needs, from the document, the requests its claim took and
  * the live issue. Pure: the outcome node applies the result.
  */
 export function decideIntake(
@@ -419,7 +424,7 @@ export function decideIntake(
   let promoted = doc.promoted;
   const notes: HistoryEntry[] = [];
   const mirror = new Set<string>(mirrorLabels(doc));
-  const claimed = new Set((doc.claim?.requests ?? []).map(request => request.label));
+  const claimed = new Set((doc.hold?.requests ?? []).map(request => request.label));
   const waited = new Set(doc.facts.intake?.waiting ?? []);
   // A request label this run neither claimed a request for nor wrote itself may have
   // a request on its way, landing at any point of this run or after it, so the label
@@ -468,7 +473,7 @@ export function decideIntake(
 
   // A run's request re-triages a maintainer's item or a promoted one, and a maintainer's
   // label re-triages or promotes; nothing else starts triage.
-  const requests = doc.claim?.requests ?? [];
+  const requests = doc.hold?.requests ?? [];
   let retriage = runAsked(requests, noted);
   for (const request of requests) {
     const label = request.label;
@@ -649,46 +654,39 @@ export function readWorkItem(number: number): WorkItem | null {
   return stored.value === null ? null : parseWorkItem(stored.value);
 }
 
+/** The run a pickup leaves the item to, or null when the item is free to claim. */
+export function heldBy(item: Pick<Read, 'doc' | 'lease'>): string | null {
+  return holder(item, item.doc.claim);
+}
+
+/** The document as its holder leaves it when it gives the item back. */
+export function unheld(doc: WorkItem): WorkItem {
+  const { hold: _hold, ...rest } = doc;
+  return { ...rest, claim: null };
+}
+
 /**
- * Release a claim whose run's lease the engine reports ended; any other claim holds. A
- * run that finishes clears its own claim, so an ended run still holding one stopped
- * before its labels were written, and its requests wait again. A build round that
- * opened a pull request before it stopped is recorded as a round.
+ * A free item as it waits. A run that finishes gives its lease back, so a lease left
+ * on a free item is an ended run's that stopped before its labels were written: what
+ * it took waits again, and the history says so, which sorts the item last. Pure, so a
+ * pickup reads every free item this way and writes only the one it claims.
  */
-export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
-  const claim = item.doc.claim;
-  // A pickup that claims several items sees its own claims on its next pass.
-  if (claim === null || claim.run_id === runId) return item;
-  if (!claimEnded(claim.run_id, item)) {
-    if (item.lease?.runId !== claim.run_id) {
-      note(`${pickup.stage} leaves ${item.name} claimed: run ${claim.run_id} holds no engine lease on it`);
-    }
-    return item;
-  }
-  const doc: WorkItem = {
-    ...withReleasedRound(item.doc, claim, at),
-    claim: null,
-    requests: queued([...claim.requests, ...item.doc.requests]),
-    history: newest([
-      ...item.doc.history,
-      {
-        at,
-        stage: pickup.stage,
-        run_id: runId,
-        outcome: 'released',
-        summary: `released the claim of run ${claim.run_id}, which ended without finishing its outcome; its requests wait again`,
-      },
-    ]),
+function waitingAgain(item: Read, at: string, runId: string, stage: HistoryEntry['stage']): WorkItem {
+  const left = item.doc.hold ?? item.doc.claim;
+  if (item.lease === null && left == null) return item.doc;
+  const ended = item.lease === null ? 'a run' : `run ${item.lease.runId}`;
+  const summary = `released the claim of ${ended}, which ended without finishing its outcome; its requests wait again`;
+  return {
+    ...unheld(item.doc),
+    requests: queued([...(left?.requests ?? []), ...item.doc.requests]),
+    history: newest([...item.doc.history, { at, stage, run_id: runId, outcome: 'released', summary }]),
   };
-  return statePut(item.name, doc, item.revision, 'release') === 'ok'
-    ? { ...item, revision: item.revision + 1, doc, lease: null }
-    : item;
 }
 
 /** Which items a queue's pickup claims, and what its claim takes from the item. */
 export interface Pickup {
   readonly stage: HistoryEntry['stage'];
-  /** Whether an unclaimed item waits for this queue. */
+  /** Whether a free item waits for this queue. */
   readonly waits: (doc: WorkItem) => boolean;
   /**
    * Intake's claim takes the item's waiting requests. Another queue's takes none, so
@@ -703,80 +701,81 @@ export const INTAKE_PICKUP: Pickup = {
   takesRequests: true,
 };
 
-function claimed(item: Read, at: string, runId: string, pickup: Pickup): WorkItem {
-  if (!pickup.takesRequests) return { ...item.doc, claim: { run_id: runId, at, requests: [] } };
-  return {
-    ...item.doc,
-    claim: { run_id: runId, at, requests: queued(item.doc.requests) },
-    requests: [],
-  };
-}
-
-export function claimable(item: Read | undefined, pickup: Pickup): item is Read {
-  return item !== undefined && item.doc.claim === null && pickup.waits(item.doc);
-}
-
 /**
- * Read every work item in one state call, release terminal claims, then claim the
- * first waiting item in `PICKUP_ORDER` with a conditional write. A conflict re-reads the
- * item once and claims it only if it still waits unclaimed; otherwise the next
- * candidate is tried.
+ * Read every work item in one state call and claim the first free one that waits, in
+ * `PICKUP_ORDER`. A candidate that moved or was taken since the read is skipped: the
+ * run that moved it picks it up, or the next pickup does.
  */
 export function claimNext(
   at: string,
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
-  const items = stateDocuments('work/')
-    .map(stored => read(stored.name, stored))
-    .filter((item): item is Read => item !== undefined)
-    .map(item => releaseIfTerminal(item, at, runId, pickup));
-  const waiting = items.filter((item): item is Read => claimable(item, pickup));
-  for (const candidate of sortCandidates(waiting, PICKUP_ORDER)) {
-    const won = claimItem(candidate, at, runId, pickup);
+  const waiting: { item: Read; doc: WorkItem }[] = [];
+  for (const stored of stateDocuments('work/')) {
+    const item = read(stored.name, stored);
+    if (item === undefined) continue;
+    const held = heldBy(item);
+    const doc = held === null ? waitingAgain(item, at, runId, pickup.stage) : undefined;
+    if (doc !== undefined && pickup.waits(doc)) waiting.push({ item, doc });
+    if (held !== null && held !== runId && item.lease?.live !== true) {
+      note(`${pickup.stage} leaves ${item.name} claimed: run ${held} holds no engine lease on it`);
+    }
+  }
+  for (const { item } of sortCandidates(waiting, PICKUP_ORDER)) {
+    const won = claimItem(item, at, runId, pickup);
     if (won !== null) return won;
   }
   return null;
 }
 
+/**
+ * Claim a free item as it was read: one conditional write that takes its lease and
+ * stores the item as it waits, the round an ended build run left (./build.ts) and what
+ * the claim took. Null when the item moved or another run took it first.
+ */
 export function claimItem(
   candidate: Read,
   at: string,
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
-  const doc = claimed(candidate, at, runId, pickup);
-  if (statePut(candidate.name, doc, candidate.revision, 'take') === 'ok') return doc;
-  const fresh = read(candidate.name);
-  if (!claimable(fresh, pickup)) return null;
-  const retried = claimed(fresh, at, runId, pickup);
-  return statePut(fresh.name, retried, fresh.revision, 'take') === 'ok' ? retried : null;
+  const waiting = waitingAgain(candidate, at, runId, pickup.stage);
+  const branch = (candidate.doc.hold ?? candidate.doc.claim)?.branch;
+  const free =
+    candidate.lease === null || branch === undefined
+      ? waiting
+      : withReleasedRound(waiting, candidate.lease.runId, branch, at);
+  const doc: WorkItem = pickup.takesRequests
+    ? { ...free, hold: { requests: queued(free.requests) }, requests: [] }
+    : { ...free, hold: { requests: [] } };
+  return statePut(candidate.name, doc, candidate.revision, 'take') === 'ok' ? doc : null;
 }
 
-/**
- * Claim the named item for a queue, releasing a terminal claim on it first as
- * `claimNext` does. Refuses with the facts an operator acts on when it cannot.
- */
+/** Claim the named item for a queue. Refuses with the facts an operator acts on when it cannot. */
 export function claimNamed(number: number, at: string, runId: string, pickup: Pickup): WorkItem {
   const issue = `issue ${String(number)}`;
-  const found = read(workItemName(number));
-  if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
-  const item = releaseIfTerminal(found, at, runId, pickup);
-  const won = claimable(item, pickup) ? claimItem(item, at, runId, pickup) : null;
-  if (won !== null) return won;
-  const now = read(item.name) ?? item;
-  if (now.doc.claim !== null) throw new Error(`${issue} is claimed by run ${now.doc.claim.run_id}`);
-  // Both conditional writes can lose to concurrent writes that leave the item waiting.
-  if (pickup.waits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
-  const record = now.doc.facts[pickup.stage];
-  const status = record !== undefined && 'status' in record ? `, ${pickup.stage} status ${record.status}` : '';
-  throw new Error(`${issue} does not wait for the ${pickup.stage} queue: stage ${now.doc.stage}${status}`);
+  const item = read(workItemName(number));
+  if (item === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
+  const held = heldBy(item);
+  if (held !== null) throw new Error(`${issue} is claimed by run ${held}`);
+  const doc = waitingAgain(item, at, runId, pickup.stage);
+  if (!pickup.waits(doc)) {
+    const record = doc.facts[pickup.stage];
+    const status = record !== undefined && 'status' in record ? `, ${pickup.stage} status ${record.status}` : '';
+    throw new Error(`${issue} does not wait for the ${pickup.stage} queue: stage ${doc.stage}${status}`);
+  }
+  const won = claimItem(item, at, runId, pickup);
+  if (won === null) throw new Error(`${issue} changed while this run claimed it; launch it again`);
+  return won;
 }
 
 /**
- * Replace the document of the item this run holds, re-reading on a conflict. Refuses
- * when the claim is no longer this run's. A change that clears the claim gives back the
- * run's lease in the same write.
+ * Change the item this run holds and return the document as written. The engine makes
+ * the write only while the run holds the item's lease, and refuses otherwise. A change
+ * that drops the hold gives the lease back in the same write. Requests are appended to
+ * a held item at any time; the write sets only the fields the change touched, so they
+ * survive it, and nothing but its holder writes a held item's other fields.
  */
 export function updateClaimed(
   subject: QualifiedPr,
@@ -784,14 +783,14 @@ export function updateClaimed(
   change: (doc: WorkItem) => WorkItem
 ): WorkItem {
   const name = workItemName(subject.number);
-  // Enqueues append to the document at any time, so a conflict is ordinary here.
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const stored = stateGet(name);
-    const doc = parseWorkItem(stored.value);
-    if (doc.claim?.run_id !== runId) throw new Error(`${name} is no longer claimed by this run`);
-    const changed = change(doc);
-    const next = { ...changed, requests: queued(changed.requests) };
-    if (statePutClaimed(name, next, stored.revision) === 'ok') return next;
-  }
-  throw new Error(`${name} kept changing: three conditional writes conflicted`);
+  const stored = stateGet(name);
+  const doc = parseWorkItem(stored.value);
+  const changed = change(doc);
+  // Past the cap the oldest requests are dropped; below it the requests are left to the appends.
+  const next = changed.requests.length > KEPT ? { ...changed, requests: queued(changed.requests) } : changed;
+  const written = stateWriteHeld(name, doc, next, {
+    by: holdsLegacy(runId, stored, doc.claim) ? 'take' : 'held',
+    release: next.hold === undefined && next.claim === null,
+  });
+  return parseWorkItem(written);
 }

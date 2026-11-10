@@ -6,8 +6,8 @@
  * terminal runs are queued, oldest first. A record is settled once its run's
  * `discoveries/runs/<id>` document lists it as decided. Every run document is read in
  * one call. Each queued run is claimed with a conditional write on its document that
- * takes the document's engine lease, so two passes never decide the same run; a claim is
- * taken over only when the engine reports the claiming run's lease ended.
+ * takes the document's engine lease, so two passes never decide the same run; a run is
+ * taken over only when the engine reports the lease's holder ended.
  *
  * Writes `$ARTIFACTS_DIR/drain/queue.json`: the queued records, each run with the
  * questions earlier passes asked about it, for the agent and the outcome.
@@ -26,7 +26,7 @@ import {
 import { artifactsDir, emit, note, refuse, trimmed } from '../../.shared/io.ts';
 import { fetchDefaultBranch, workflowRepo } from '../../.shared/remote.ts';
 import { latestVerdictOf, relayedDiscoveries } from '../../.shared/report.ts';
-import { claimEnded, listRuns, stateDocuments, stateGet, statePut } from '../../.shared/state.ts';
+import { holder, listRuns, stateDocuments, stateGet, statePut } from '../../.shared/state.ts';
 
 /** The CLI lists at most this many runs, newest first. */
 const LISTING = 1000;
@@ -57,25 +57,7 @@ function settledOf(document: RunDocument | undefined): ((ref: string) => boolean
   return ref => decided.has(ref);
 }
 
-/**
- * Claim the run for this pass and return the document as claimed, or null when another pass
- * holds it or won the write. Callers decide from this document, not an earlier snapshot, so a
- * pass that settled the run in between is seen.
- */
-function claimRun(runId: string, self: string, at: string): RunDocument | null {
-  const name = runName(runId);
-  const stored = stateGet(name);
-  const current = parseRunDocument(name, stored.value);
-  const held = current?.claim ?? null;
-  if (held !== null && held.run_id !== self && !claimEnded(held.run_id, stored)) {
-    if (stored.lease?.runId !== held.run_id) note(`${name} stays claimed: run ${held.run_id} holds no engine lease on it`);
-    return null;
-  }
-  const claimed: RunDocument = { ...(current ?? { version: 1 }), claim: { run_id: self, at } };
-  return statePut(name, claimed, stored.revision, 'take') === 'ok' ? claimed : null;
-}
-
-/** The run's undecided records and its questions, from the document this pass decides against. */
+/** The run's undecided records, from the document this pass decides against. */
 function undecided<R extends { ref: string }>(records: readonly R[], document: RunDocument | undefined): R[] {
   const settled = settledOf(document);
   return records.filter(record => !settled(record.ref));
@@ -83,19 +65,30 @@ function undecided<R extends { ref: string }>(records: readonly R[], document: R
 
 /**
  * The run's undecided records and questions once this pass holds it, or null when nothing is
- * left to decide or another pass holds it. The snapshot only skips a claim that could not
- * matter; what is queued comes from the document as claimed.
+ * left to decide, another pass holds it or another pass won the write. The snapshot only skips
+ * a claim that could not matter; what is queued comes from the document read for the claim, so
+ * a pass that settled the run in between is seen.
  */
 function claimUndecided<R extends { ref: string }>(
   id: string,
   all: readonly R[],
-  pass: { self: string; at: string; snapshot: RunDocument | undefined }
+  pass: { self: string; snapshot: RunDocument | undefined }
 ): { records: R[]; questions: NonNullable<RunDocument['questions']> } | null {
   if (undecided(all, pass.snapshot).length === 0) return null;
-  const document = claimRun(id, pass.self, pass.at);
-  if (document === null) return null;
-  const records = undecided(all, document);
-  return records.length === 0 ? null : { records, questions: document.questions ?? [] };
+  const name = runName(id);
+  const stored = stateGet(name);
+  const current = parseRunDocument(name, stored.value) ?? undefined;
+  const records = undecided(all, current);
+  if (records.length === 0) return null;
+  const held = holder(stored, current?.claim);
+  if (held !== null && held !== pass.self) {
+    if (stored.lease?.live !== true) note(`${name} stays claimed: run ${held} holds no engine lease on it`);
+    return null;
+  }
+  const questions = current?.questions ?? [];
+  // `decided` is written from here on: a document without it reads as fully decided.
+  const claimed: RunDocument = { version: 1, claim: null, decided: current?.decided ?? [], questions };
+  return statePut(name, claimed, stored.revision, 'take') === 'ok' ? { records, questions } : null;
 }
 
 function main(): void {
@@ -110,7 +103,6 @@ function main(): void {
 
   const base = fetchDefaultBranch(repo);
   const documents = readRunDocuments();
-  const at = new Date().toISOString();
 
   const listed = listRuns(LISTING);
   if (listed.length >= LISTING) {
@@ -148,7 +140,7 @@ function main(): void {
       continue;
     }
     const all = relayed.records.map(record => ({ ...record, ref: `${id}:${record.ref}` }));
-    const claimed = claimUndecided(id, all, { self, at, snapshot: documents.get(id) });
+    const claimed = claimUndecided(id, all, { self, snapshot: documents.get(id) });
     if (claimed === null) continue;
     queue.push({
       id,

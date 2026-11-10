@@ -31,7 +31,7 @@ import { sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { createIssue, viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { stateGet, statePutClaimed } from '../../.shared/state.ts';
+import { holds, stateGet, statePut } from '../../.shared/state.ts';
 
 const IDLE = 'No finished run has undecided discoveries.';
 
@@ -120,7 +120,8 @@ function main(): void {
     const name = runName(run.id);
     const read = stateGet(name);
     const document = parseRunDocument(name, read.value);
-    if (document?.claim?.run_id !== self) throw new Error(`${name} is no longer claimed by this run`);
+    // The lease is this run's at the revision read, and the write below names that revision.
+    if (!holds(self, read, document)) throw new Error(`${name} is no longer claimed by this run`);
     const ofRun = (refs: readonly string[]): string[] => refs.filter(ref => refRun(ref) === run.id);
     const decided = decisions
       .filter(decision => decision.outcome !== 'ask' && decision.outcome !== 'wait')
@@ -136,7 +137,7 @@ function main(): void {
       }));
     const next = {
       version: 1 as const,
-      claim: questions.length > 0 ? document.claim : null,
+      claim: null,
       decided: [...new Set([...(document.decided ?? []), ...decided])],
       // A question this pass answered by deciding its refs is settled; one it asked again replaces it.
       questions: [
@@ -146,7 +147,8 @@ function main(): void {
         ...questions,
       ],
     };
-    if (statePutClaimed(name, next, read.revision) === 'conflict') {
+    // A run with an asked record keeps its lease until it ends.
+    if (statePut(name, next, read.revision, questions.length > 0 ? 'take' : 'release') === 'conflict') {
       throw new Error(`${name} changed while this run held its claim`);
     }
   }

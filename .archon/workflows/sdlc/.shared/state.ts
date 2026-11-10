@@ -1,14 +1,16 @@
 /**
  * The pack's state store and run reads, through the host's `archon` command.
  *
- * A queue's work item is a state document claimed with a conditional write
- * (`statePut` at the revision read) that also takes the document's engine lease. A
- * claim is released only when the engine reports that lease ended, never on age.
+ * A run claims a state document by taking its engine lease in a conditional write
+ * (`statePut` at the revision read), and writes it afterwards only while it holds that
+ * lease (`statePatchHeld`). The engine says who holds a document and whether that run
+ * has ended; the pack keeps no record of its own and frees nothing on age.
  */
 
 import { archonCommand, record } from './forge.ts';
 
 const STATE_CONFLICT = 3;
+const STATE_LEASE_LOST = 6;
 
 function archon(args: readonly string[], input?: string): { code: number; value: unknown } {
   const result = Bun.spawnSync([...archonCommand(), ...args], {
@@ -63,11 +65,37 @@ export function stateGet(name: string): Stored {
 }
 
 /**
- * Whether the run holding a claim has ended without clearing it, as its lease reports.
- * A claim with no lease of its run, written before claims took one, is never proven ended.
+ * A claim as documents recorded it before claims took an engine lease: the claiming
+ * run's id in the document's own `claim` field. The pack still writes the key, always
+ * null, because that earlier pack refuses a document without it.
  */
-export function claimEnded(claimRunId: string, stored: Pick<Stored, 'lease'>): boolean {
-  return stored.lease?.runId === claimRunId && !stored.lease.live;
+export interface LegacyClaim {
+  readonly run_id: string;
+}
+
+/**
+ * The run a pickup must leave the document to, or null when it is free to claim: the
+ * run whose lease the engine reports live, else the run of a legacy claim no lease of
+ * its own proves ended. Such a claim has no owner the engine can answer for, so only a
+ * person clears it. A legacy claim whose run's lease ended is free.
+ */
+export function holder(stored: Pick<Stored, 'lease'>, legacy: LegacyClaim | null | undefined): string | null {
+  if (stored.lease?.live === true) return stored.lease.runId;
+  return legacy != null && stored.lease?.runId !== legacy.run_id ? legacy.run_id : null;
+}
+
+/** Whether a legacy claim is the run's own and no lease stands in for it, so the run's next write takes one. */
+export function holdsLegacy(runId: string, stored: Pick<Stored, 'lease'>, legacy: LegacyClaim | null | undefined): boolean {
+  return stored.lease === null && legacy?.run_id === runId;
+}
+
+/** Whether the run holds the document as read: by its lease, or by its own legacy claim. */
+export function holds<Doc extends { readonly claim: LegacyClaim | null }>(
+  runId: string,
+  stored: Pick<Stored, 'lease'>,
+  doc: Doc | null
+): doc is Doc {
+  return doc !== null && (stored.lease?.runId === runId || holdsLegacy(runId, stored, doc.claim));
 }
 
 /**
@@ -91,23 +119,58 @@ export function statePut(
   return 'ok';
 }
 
-/** A conditional replace of a claimed document; clearing its claim gives its lease back in the same write. */
-export function statePutClaimed(
-  name: string,
-  value: { readonly claim: unknown },
-  ifRevision: number
-): 'ok' | 'conflict' {
-  return statePut(name, value, ifRevision, value.claim === null ? 'release' : undefined);
-}
-
 export type StatePatchOp =
   | { readonly op: 'set'; readonly path: string; readonly value: unknown }
+  | { readonly op: 'remove'; readonly path: string }
   | { readonly op: 'append'; readonly path: string; readonly value: unknown };
 
 /** Apply ops to the latest revision; a patch never conflicts. */
 export function statePatch(name: string, ops: readonly StatePatchOp[]): void {
   const result = archon(['state', 'patch', name], JSON.stringify({ ops }));
   if (result.code !== 0) throw failed(`state patch ${name}`, result);
+}
+
+/** One `set` or `remove` per top-level field in which `after` differs from `before`. */
+function fieldOps(before: object, after: object): StatePatchOp[] {
+  const [was, now]: Record<string, unknown>[] = [{ ...before }, { ...after }];
+  const ops: StatePatchOp[] = [];
+  for (const key of new Set([...Object.keys(was), ...Object.keys(now)])) {
+    const value = now[key];
+    if (value === undefined) {
+      if (was[key] !== undefined) ops.push({ op: 'remove', path: `/${key}` });
+    } else if (JSON.stringify(was[key]) !== JSON.stringify(value)) {
+      ops.push({ op: 'set', path: `/${key}`, value });
+    }
+  }
+  // A write that changes no field still proves the hold, or gives the lease back.
+  const [unchanged] = Object.entries(now);
+  return ops.length === 0 && unchanged !== undefined ? [{ op: 'set', path: `/${unchanged[0]}`, value: unchanged[1] }] : ops;
+}
+
+/**
+ * Write `after` over `before`, the value read, on a document the run holds, and return
+ * the value written. Only the top-level fields that differ are set, on the latest
+ * revision, so what another writer appended to any other field since the read survives.
+ * `held` makes the write only while the run's lease is live; `take` is for a legacy
+ * claim, which has no lease until this write takes one. `release` gives the lease back
+ * in the same write. Throws when the run no longer holds the document.
+ */
+export function stateWriteHeld(
+  name: string,
+  before: object,
+  after: object,
+  lease: { readonly by: 'held' | 'take'; readonly release: boolean }
+): unknown {
+  const release = lease.release ? ['--release-lease'] : [];
+  const flags = lease.by === 'held' ? ['--held', ...release] : lease.release ? release : ['--lease'];
+  const result = archon(['state', 'patch', name, ...flags], JSON.stringify({ ops: fieldOps(before, after) }));
+  // Without --if-revision, exit 3 is another run's live lease.
+  if (result.code === STATE_LEASE_LOST || result.code === STATE_CONFLICT) {
+    throw new Error(`${name} is no longer claimed by this run`);
+  }
+  const value = record(result.value)?.value;
+  if (result.code !== 0 || value === undefined) throw failed(`state patch ${name}`, result);
+  return value;
 }
 
 /** Append to an array in the latest revision; appends never conflict. */

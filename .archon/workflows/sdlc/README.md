@@ -411,8 +411,8 @@ Trigger bindings start it on issue events. Each issue has a work item, the state
 project's scope, owned by [`.shared/workitem.ts`](.shared/workitem.ts). The
 document is the item's state: its trust, stage, triage fields (the five judged
 fields and the related work triage found: overlapping issues, earlier attempts and
-merged changes on the same surface, which plan reads), promotion, claim and a short
-history. The issue's pack labels mirror it, and a label a person adds is a
+merged changes on the same surface, which plan reads), promotion, what the run
+holding it took, and a short history. The issue's pack labels mirror it, and a label a person adds is a
 request, never the state.
 
 - **Trust.** The `facts` script reads `.archon/sdlc/policy/maintainers.json` at the
@@ -449,18 +449,29 @@ request, never the state.
   `archon-triage` waits, since a route label is reconciled away either way. An
   open, edit or
   reopen adds no request while another one waits, since the pickup reads the live
-  issue; label requests keep the newest 50. A run clears its
-  claim only after the item's labels are written. A claim takes the work item's
-  engine lease (`archon state put --lease`), and the next pickup releases a claim whose
-  lease the engine reports ended: its run completed, was cancelled or abandoned, or was
-  deleted. It queues that run's requests again; the item then sorts after every other
-  waiting item until an attempt finishes, so one item that cannot be read or labelled
-  never starves the rest. A claim whose run is pending, running, paused or failed is
-  never released, because a failed run can resume; abandon the run to free its claim.
-  A claim with no lease of its run, written before claims took one, is held and named
-  by an idle pass; abandoning its run does not free it, so a person clears it by
-  writing the document back with `claim` set to `null` through a conditional
-  `archon state put <name> --if-revision <n>`. There is no age timeout.
+  issue; label requests keep the newest 50. A claim is the work item's engine lease:
+  the run takes it in the conditional write that stores what the claim took, the
+  item's waiting requests, as `hold` (`archon state put --if-revision <n> --lease`).
+  The engine says who holds an item; the document records no owner. While it holds
+  the item the run writes it with `archon state patch --held`, which the engine
+  refuses once the lease is no longer the run's, and it gives the lease back only
+  after the item's labels are written. A pickup takes over an item whose lease the
+  engine reports ended: its run completed, was cancelled or abandoned, or was
+  deleted. The same write queues that run's requests again; the item then sorts
+  after every other waiting item until an attempt finishes, so one item that cannot
+  be read or labelled never starves the rest. An item whose holder is pending,
+  running, paused or failed is never taken over, because a failed run can resume;
+  abandon the run to free its item. There is no age timeout.
+- **Claims from before the lease.** A work item or drained-run document written by an
+  earlier pack carries its claim in the document, as `claim: { run_id, ... }`; this
+  pack writes `claim: null`. Such a claim with its run's lease is read as that lease:
+  held while the run can finish, taken over once it ended, with the requests and the
+  branch it recorded. Its own run still writes and releases it. A claim with no lease
+  of its run, written before claims took one, is held and named by an idle pass,
+  because nothing proves its run ended; abandoning the run does not free it, so a
+  person clears it by writing the document back with `claim` set to `null` through a
+  conditional `archon state put <name> --if-revision <n>`. Its own run, if it
+  resumes, takes the lease with its next write.
 - **Closing.** When triage's verdict is `NO_ACTION`, the item is a duplicate of
   another open issue or a merged change already delivered it, and the triage policy
   lets it close without a person. Before writing anything, the outcome checks a
@@ -601,7 +612,7 @@ which a project extends with its own `.archon/sdlc/policy/build.md`.
   pull request to be closed as superseded once the replacement opens. A round that failed
   after publishing still records its pull request. A round that continues none opens its
   pull request from `build/<issue>-<slug>-<run>`, a name never reused, and facts records
-  that branch on the claim. When a pickup releases the claim of a run that ended before
+  that branch on the item's `hold`. When a pickup takes over the item of a run that ended before
   recording its round, the newest pull request from that branch, open, closed or
   merged, is recorded as the run's round with reason `ended_undecided`, and the next round sees it as its
   candidate. A closed or
@@ -1018,9 +1029,10 @@ terminal report lists.
   cancelled) inside `since` and `until`, oldest first, and claims up to `limit` of
   them that still have undecided records. A run's state document
   `discoveries/runs/<run-id>` is its memory and its work item: the refs a pass decided
-  for it, the questions a pass asked about it with their answers, and the claim of the
-  pass working it. A record is decided once its run's document lists it. Every run
-  document is read in one call. A claim takes the document's engine lease and is
+  for it, and the questions a pass asked about it with their answers. A record is
+  decided once its run's document lists it. Every run
+  document is read in one call. A pass claims a run by taking its document's engine
+  lease, and the run is
   taken over only when the engine reports that lease ended (the claiming run
   completed, was cancelled or abandoned, or was deleted), never on age. A failed pass
   keeps its claims, since it can resume. A run whose records cannot be read is

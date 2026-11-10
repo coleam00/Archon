@@ -225,6 +225,12 @@ function state(at: Install, name: string): unknown {
   return cli(at, ['state', 'get', name]).value.value ?? null;
 }
 
+/** The run whose lease the fake CLI records on the document, or null. */
+function holder(at: Install, name: string): string | null {
+  const leases = JSON.parse(readFileSync(join(at.env.ARCHON_HOME ?? '', 'fake-leases.json'), 'utf8')) as Record<string, string>;
+  return leases[name] ?? null;
+}
+
 const fileIt = (key: string) => (refs: string[]): AgentDecision[] => [
   { outcome: 'file', key, refs, title: 'A new defect', body: 'The brief.', reason: 'real at the base' },
 ];
@@ -301,7 +307,7 @@ describe('the discoveries scripts', () => {
       expect(outcome.code).toBe(1);
       expect(outcome.stderr).toContain(why);
       expect([outcome.createdIssues, outcome.comments]).toEqual([[], []]);
-      expect(state(at, `discoveries/runs/${RUN}`)).not.toHaveProperty('decided');
+      expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ decided: [] });
     }
   }, 120_000);
 
@@ -315,7 +321,7 @@ describe('the discoveries scripts', () => {
     }
     const released = script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } });
     expect(queued(released)).toEqual([`${RUN}:review#0`]);
-    expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ claim: { run_id: 'pass-2' } });
+    expect(holder(at, `discoveries/runs/${RUN}`)).toBe('pass-2');
   }, 60_000);
 
   test('a waiting record stays undecided on its run, and the next pass queues it again', () => {
@@ -328,7 +334,27 @@ describe('the discoveries scripts', () => {
     expect(ok(outcome).waiting).toEqual([{ key: 'open-pr-defect', reason: 'PR 42 adds this code and is open' }]);
     expect([outcome.createdIssues, outcome.comments]).toEqual([[], []]);
     expect(state(at, `discoveries/runs/${RUN}`)).toEqual({ version: 1, claim: null, decided: [`${RUN}:review#1`], questions: [] });
+    expect(holder(at, `discoveries/runs/${RUN}`)).toBeNull();
     expect(queued(script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'completed' } }))).toEqual([`${RUN}:review#0`]);
+  }, 60_000);
+
+  test('a claim an earlier pack wrote into the document holds until its lease ended; one with no lease holds until a person clears it', () => {
+    const at = install();
+    runArtifacts(at.outputRoot, RUN, { verdict: [record('one')] });
+    const name = `discoveries/runs/${RUN}`;
+    const legacy = JSON.stringify({ version: 1, claim: { run_id: 'pass-1', at: '2026-10-14T00:00:00.000Z' }, decided: [] });
+    expect(cli(at, ['state', 'put', name, '--if-revision', '0'], legacy).status).toBe(0);
+    // No lease proves pass-1 ended, whatever its status.
+    const ghost = script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } });
+    expect(JSON.parse(ghost.stdout)).toMatchObject({ path: 'idle' });
+    expect(ghost.stderr).toContain('pass-1 holds no engine lease');
+    // With its lease, the same claim is held while pass-1 lives and taken over once it ended.
+    writeFileSync(join(at.env.ARCHON_HOME ?? '', 'fake-leases.json'), JSON.stringify({ [name]: 'pass-1' }));
+    expect(ok(script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'failed' } }))).toMatchObject({ path: 'idle' });
+    const taken = script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } });
+    expect(queued(taken)).toEqual([`${RUN}:review#0`]);
+    expect(state(at, name)).toMatchObject({ claim: null, decided: [] });
+    expect(holder(at, name)).toBe('pass-2');
   }, 60_000);
 
   test('an asked record keeps its run claimed by the asking run, and the answer reaches the next pass', () => {
@@ -339,7 +365,8 @@ describe('the discoveries scripts', () => {
       { outcome: 'drop', key: 'clear-drop', refs: [refs[1] as string], title: 'Clear', reason: 'fixed' },
     ]);
     expect(ok(outcome)).toMatchObject({ asked: ['unclear-scope'], question: expect.stringContaining('1. unclear-scope: In scope?') });
-    expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ claim: { run_id: 'pass-1' }, decided: [`${RUN}:review#1`] });
+    expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ claim: null, decided: [`${RUN}:review#1`] });
+    expect(holder(at, `discoveries/runs/${RUN}`)).toBe('pass-1');
     // While the asking run waits, no pass takes the run and asks again.
     expect(ok(script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'paused' } }))).toMatchObject({ path: 'idle' });
 

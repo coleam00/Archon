@@ -1,15 +1,14 @@
 /**
  * The stored work items no queue pickup can act on, for a queue's idle outcome.
  *
- * Pickup skips a document that does not parse, and holds a claim whose run holds no
- * engine lease on it (a claim written before claims took one), because it never releases
- * a claim it cannot prove ended.
- * Both leave the item stuck on every pass. A queue whose pickup claimed nothing names
+ * Pickup skips a document that does not parse, and leaves an item to a claim its
+ * document recorded before claims took an engine lease, because no lease proves that
+ * claim's run ended. Both leave the item stuck on every pass. A queue whose pickup claimed nothing names
  * them, so a person looks, instead of reporting an empty queue.
  */
 
 import { stateDocuments } from './state.ts';
-import { parseWorkItem } from './workitem.ts';
+import { heldBy, parseWorkItem, type WorkItem } from './workitem.ts';
 
 export interface Stuck {
   readonly name: string;
@@ -21,18 +20,19 @@ export function stuckItems(runId: string): Stuck[] {
   const stuck: Stuck[] = [];
   for (const stored of stateDocuments('work/')) {
     if (stored.value === null) continue;
-    let claim: { readonly run_id: string } | null;
+    let doc: WorkItem;
     try {
-      claim = parseWorkItem(stored.value).claim;
+      doc = parseWorkItem(stored.value);
     } catch (error) {
       const reason = `its document does not parse: ${error instanceof Error ? error.message : String(error)}`;
       stuck.push({ name: stored.name, reason });
       continue;
     }
-    if (claim !== null && claim.run_id !== runId && stored.lease?.runId !== claim.run_id) {
+    const held = heldBy({ doc, lease: stored.lease });
+    if (held !== null && held !== runId && stored.lease?.live !== true) {
       stuck.push({
         name: stored.name,
-        reason: `claimed by run ${claim.run_id}, which holds no engine lease on it; clear the claim with a conditional \`archon state put\``,
+        reason: `claimed by run ${held}, which holds no engine lease on it; clear the claim with a conditional \`archon state put\``,
       });
     }
   }

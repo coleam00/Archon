@@ -40,7 +40,7 @@ import {
   type WholeRoute,
 } from '../../.shared/split.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
-import { newest, readWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { newest, readWorkItem, unheld, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 /** One issue as the slice node's schema certified it. */
 interface Planned {
@@ -78,8 +78,7 @@ function filedOn(doc: WorkItem | null): readonly SplitIssue[] {
 
 function finish(doc: WorkItem, record: SplitRecord, runId: string, outcome: string, summary: string): WorkItem {
   return {
-    ...doc,
-    claim: null,
+    ...unheld(doc),
     facts: { ...doc.facts, split: record },
     history: newest([...doc.history, { at: record.at, stage: 'split', run_id: runId, outcome, summary }]),
     links: { runs: newest([...doc.links.runs.filter(id => id !== runId), runId]) },

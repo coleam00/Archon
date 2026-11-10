@@ -189,12 +189,12 @@ function main(): void {
   const closed = issue.state === 'closed';
   const rounds = doc.facts.build?.rounds ?? [];
   const itemPr = closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId);
-  // A release reads the branch from the claim: the title can change before then.
+  // The pickup after a run that ended reads the branch from its hold: the title can change before then.
   const recorded = closed
     ? doc
     : updateClaimed(doc.subject, runId, held => ({
         ...held,
-        claim: held.claim && { ...held.claim, branch: itemPr.branch },
+        hold: { requests: held.hold?.requests ?? [], branch: itemPr.branch },
       }));
   emitItem(closed ? 'closed' : 'route', doc.subject, issue.url, recorded, rounds, countedRounds(doc) + 1 >= limit, itemPr);
 }

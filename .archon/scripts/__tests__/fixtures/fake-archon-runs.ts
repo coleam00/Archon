@@ -11,10 +11,11 @@
  * The real CLI runs as a surface write, outside any run, in `INTAKE_STATE_CWD` when
  * set: inside a run it would refuse with exit 5, because its store has no such run. A
  * surface write cannot hold a lease either, so this fake keeps the documents' leases in
- * `$ARCHON_HOME/fake-leases.json` the way `archon state` reports them: `--lease` and
- * `--release-lease` act for `WORKFLOW_ID`, and a lease is live while its run's status in
- * `INTAKE_RUN_STATUSES` is neither `completed` nor `cancelled`. A run with no status
- * there counts as deleted, so its lease has ended.
+ * `$ARCHON_HOME/fake-leases.json` the way `archon state` reports them: `--lease`,
+ * `--release-lease` and `--held` act for `WORKFLOW_ID`, and a lease is live while its
+ * run's status in `INTAKE_RUN_STATUSES` is neither `completed` nor `cancelled`. A run
+ * with no status there counts as deleted, so its lease has ended; the calling run with
+ * no status there is running.
  */
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -67,7 +68,7 @@ function host(args: readonly string[]) {
 
 function live(runId: string): boolean {
   const statuses = JSON.parse(process.env.INTAKE_RUN_STATUSES ?? '{}') as Record<string, string>;
-  return fakeLeaseLive(statuses[runId]);
+  return fakeLeaseLive(statuses[runId] ?? (runId === process.env.WORKFLOW_ID ? 'running' : undefined));
 }
 
 /** The lease the documents' leases record after this successful write. */
@@ -90,6 +91,13 @@ function withLeases(op: string | undefined, output: Record<string, unknown>, lea
   return output;
 }
 
+/** The exit code `archon state` refuses the write with, or undefined when it makes it. */
+function refusal(holder: string | undefined, change: string | undefined): number | undefined {
+  const self = process.env.WORKFLOW_ID;
+  if (argv.includes('--held') && !(holder !== undefined && holder === self && live(holder))) return 6;
+  return change !== undefined && holder !== undefined && holder !== self && live(holder) ? 3 : undefined;
+}
+
 function state(): void {
   // Declared here, not at module level: the dispatch above runs before later declarations.
   const file = join(process.env.ARCHON_HOME ?? '.', 'fake-leases.json');
@@ -97,12 +105,13 @@ function state(): void {
   const [, op, name] = argv;
   const change = argv.includes('--lease') ? 'take' : argv.includes('--release-lease') ? 'release' : undefined;
   const holder = name === undefined ? undefined : leases[name];
-  if (change !== undefined && holder !== undefined && holder !== process.env.WORKFLOW_ID && live(holder)) {
-    process.stdout.write(JSON.stringify({ ok: false, error: `leased by live run ${holder}`, code: 3 }));
-    process.exitCode = 3;
+  const code = refusal(holder, change);
+  if (code !== undefined) {
+    process.stdout.write(JSON.stringify({ ok: false, error: `refused: leased by ${holder ?? 'no run'}`, code }));
+    process.exitCode = code;
     return;
   }
-  const result = host(argv.filter(arg => arg !== '--lease' && arg !== '--release-lease'));
+  const result = host(argv.filter(arg => !['--lease', '--release-lease', '--held'].includes(arg)));
   process.stderr.write(result.stderr);
   process.exitCode = result.status ?? 1;
   if (result.status !== 0) {
