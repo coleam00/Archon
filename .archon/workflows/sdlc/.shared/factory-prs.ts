@@ -13,8 +13,8 @@
  */
 
 import { BUILD_BRANCH_PREFIX } from './build.ts';
-import { invokeForge, parsePrRecord, type QualifiedPr, record, sameRepo } from './forge.ts';
-import { prFromUrl } from './pr.ts';
+import { invokeForge, parsePrRecord, record, sameRepo } from './forge.ts';
+import { resolvePrUrl } from './pr.ts';
 import { note } from './io.ts';
 import type { WorkItem } from './workitem.ts';
 
@@ -94,16 +94,15 @@ export function prFacts(url: string, view: Record<string, unknown> | null): PrFa
 
 /**
  * Read each pull request by number, so no list limit can drop an old one. A recorded
- * URL that is not a pull request URL is noted and left out.
+ * URL the forge says is not a pull request URL is noted and left out; a forge that
+ * cannot resolve one fails the read, so the cohort is never silently short.
  */
 export function readPrFacts(urls: Iterable<string>): PrFacts[] {
   const facts: PrFacts[] = [];
   for (const url of urls) {
-    let ref: QualifiedPr;
-    try {
-      ref = prFromUrl(url);
-    } catch (error) {
-      note(`PR metrics skip a round's URL: ${error instanceof Error ? error.message : String(error)}`);
+    const ref = resolvePrUrl(url);
+    if (ref === undefined) {
+      note(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
       continue;
     }
     facts.push(prFacts(url, invokeForge('pr.view', { selector: { kind: 'number', ref } })));
