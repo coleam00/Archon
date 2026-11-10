@@ -77,7 +77,11 @@ function fixture(mode = 'ok') {
     }
     if (mode === 'lookup-failed' && method === 'GET') return Response.json({}, { status: 500 });
     if (path === 'https://api.github.com/search/issues') {
-      return Response.json({ items: issues });
+      return Response.json({
+        total_count: issues.length,
+        incomplete_results: false,
+        items: issues,
+      });
     }
     if (path === `${root}/issues`) {
       return issueList(method, init);
@@ -144,33 +148,42 @@ test('closed recovery preserves edited content, ambiguous and failed lookups nev
 test('marker lookup finds an old issue by search and a new one search has not indexed, never a PR', async () => {
   const fake = fixture();
   const baseFetch = fake.fetch;
-  const lookup = async (searched: unknown[], newest: unknown[]) => {
+  const lookup = async (searched: unknown[], newest: unknown[], incomplete = false) => {
     fake.fetch = async (input, init) => {
       const url = new URL(String(input));
-      if ((init?.method ?? 'GET') === 'GET' && url.pathname === '/search/issues')
-        return Response.json({ items: searched });
-      if ((init?.method ?? 'GET') === 'GET' && url.pathname.endsWith('/issues'))
-        return Response.json(newest);
+      if ((init?.method ?? 'GET') === 'GET' && url.pathname === '/search/issues') {
+        // Only a search for the marker's words in issue bodies of this repository finds it.
+        const asked = url.searchParams.get('q') === 'repo:owner/repo is:issue in:body "canonical"';
+        return Response.json({
+          total_count: searched.length,
+          incomplete_results: incomplete,
+          items: asked ? searched : [],
+        });
+      }
+      if ((init?.method ?? 'GET') === 'GET' && url.pathname.endsWith('/issues')) {
+        // Only the newest-first page holds a just-created issue.
+        const newestFirst =
+          url.searchParams.get('sort') === 'created' &&
+          url.searchParams.get('direction') === 'desc';
+        return Response.json(newestFirst ? newest : []);
+      }
       return baseFetch(input, init);
     };
     return run(create, fake);
   };
   fake.seed();
   const unmarked = { ...fake.issue, number: 2, body: 'unmarked' };
+  const found = { ok: true, result: { value: { changed: false } } };
   // Older than the newest hundred: only search sees it.
-  expect(await lookup([fake.issue], [unmarked])).toMatchObject({
-    ok: true,
-    result: { value: { changed: false } },
-  });
+  expect(await lookup([fake.issue], [unmarked])).toMatchObject(found);
   // Created moments ago, before search indexed it.
-  expect(await lookup([], [fake.issue])).toMatchObject({
-    ok: true,
-    result: { value: { changed: false } },
-  });
+  expect(await lookup([], [fake.issue])).toMatchObject(found);
   // Found by both: one issue, not a conflict.
-  expect(await lookup([fake.issue], [fake.issue])).toMatchObject({
-    ok: true,
-    result: { value: { changed: false } },
+  expect(await lookup([fake.issue], [fake.issue])).toMatchObject(found);
+  // A partial search cannot show the marker is absent, so nothing is created.
+  expect(await lookup([unmarked], [], true)).toMatchObject({
+    ok: false,
+    mutation: { outcome: 'refused' },
   });
   expect(fake.writes()).toBe(0);
   // A pull request carrying the marker is not the issue.

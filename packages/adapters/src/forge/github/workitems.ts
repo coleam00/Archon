@@ -92,7 +92,14 @@ export async function readIssue(fetchImpl: Fetch, token: string, ref: PrRef): Pr
 function firstLine(body: string | null): string {
   return (body ?? '').split(/\r?\n/, 1)[0];
 }
-const searchSchema = z.object({ items: z.array(issueSchema) });
+const searchSchema = z.object({
+  total_count: z.number().int(),
+  incomplete_results: z.boolean(),
+  items: z.array(issueSchema),
+});
+
+/** GitHub refuses a search query longer than 256 characters. */
+const SEARCH_TERM_CHARS = 200;
 
 /**
  * The issues that may already carry `marker`, read in two bounded calls rather than by
@@ -109,11 +116,23 @@ async function markedCandidates(
   path: string,
   marker: string
 ): Promise<Issue[]> {
-  const words = marker.replace(/<!--|-->/g, ' ').trim();
+  // The marker's words as one quoted phrase: quotes dropped so the marker cannot add
+  // qualifiers, and cut to a length GitHub accepts. The exact match is the caller's.
+  const words = marker
+    .replace(/<!--|-->|"/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .slice(0, SEARCH_TERM_CHARS);
   const query = encodeURIComponent(`repo:${path} is:issue in:body "${words}"`);
-  const found = searchSchema.parse(
+  const search = searchSchema.parse(
     await githubRequest(fetchImpl, token, `${root}/search/issues?q=${query}&per_page=100`)
-  ).items;
+  );
+  // A partial result cannot show that no issue carries the marker, or that only one does.
+  if (search.incomplete_results || search.total_count > search.items.length)
+    throw new Error(
+      `marker search returned ${String(search.items.length)} of ${String(search.total_count)} results${search.incomplete_results ? ', incomplete' : ''}`
+    );
+  const found = search.items;
   const newest = z
     .array(issueSchema)
     .parse(
