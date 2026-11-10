@@ -398,8 +398,8 @@ function validateTypedOutputsDirective(
   if (!parsed.success) {
     addIssue(
       ctx,
-      `${kind} binding '${key}': a typed-outputs binding must be exactly ` +
-        `{ outputs: '<output_type>' } — ${parsed.error.issues[0]?.message ?? 'invalid shape'}`,
+      `${kind} binding '${key}': a typed-outputs binding must be ` +
+        `{ outputs: '<output_type>', if_unreadable?: <value> } — ${parsed.error.issues[0]?.message ?? 'invalid shape'}`,
       ['with', key]
     );
     return;

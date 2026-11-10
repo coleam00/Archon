@@ -33,6 +33,12 @@ export type BindingDirective = z.infer<typeof bindingDirectiveSchema>;
  */
 export const typedOutputsDirectiveSchema = z.strictObject({
   outputs: z.string().min(1, "'outputs' must be a non-empty output_type"),
+  /**
+   * The value the binding takes when a typed-output record of the run cannot be read.
+   * Without it that fails the node. Data, like `if_skipped`: the reader's own code
+   * decides what the value means.
+   */
+  if_unreadable: jsonValueSchema.optional(),
 });
 
 export type TypedOutputsDirective = z.infer<typeof typedOutputsDirectiveSchema>;

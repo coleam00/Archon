@@ -43,6 +43,17 @@ describe('typed-outputs binding order', () => {
     );
   });
 
+  test('refuses a bound type that no node in the workflow declares', () => {
+    const { nodes } = wf('typo', [
+      { id: 'first', bash: 'echo {}', ...VERDICT },
+      { ...reader(['first']), with: { verdicts: { outputs: 'verdcit' } } },
+    ]);
+
+    expect(validateTypedOutputOrder(nodes)).toBe(
+      "Node 'read' binding 'with.verdicts' reads every 'verdcit' output, but no node in this workflow declares output_type: verdcit — fix the type, or declare it on the node that produces it"
+    );
+  });
+
   test('names the loop to depend on when the unordered producer is inside one', () => {
     const { nodes } = wf('racing-loop', [
       loop('rounds', [{ id: 'judge', bash: 'echo {}', ...VERDICT }]),
@@ -105,10 +116,11 @@ describe('typed-outputs binding shape', () => {
     return parsed.success ? '' : parsed.error.issues.map(issue => issue.message).join('\n');
   }
 
-  test('accepts exactly { outputs: <type> } on a script node', () => {
+  test('accepts { outputs: <type> } with an optional if_unreadable value, and nothing else', () => {
     expect(load({ outputs: 'verdict' })).toBe('');
+    expect(load({ outputs: 'verdict', if_unreadable: null })).toBe('');
     expect(load({ outputs: 'verdict', latest: true })).toContain(
-      "a typed-outputs binding must be exactly { outputs: '<output_type>' }"
+      "a typed-outputs binding must be { outputs: '<output_type>', if_unreadable?: <value> }"
     );
     expect(load({ outputs: '' })).toContain("'outputs' must be a non-empty output_type");
   });

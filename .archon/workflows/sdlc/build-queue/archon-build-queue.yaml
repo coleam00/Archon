@@ -408,9 +408,10 @@ nodes:
       route: { from: "$route.output", if_skipped: null }
       ending: { from: "$ship.output", if_skipped: null }
       answer: { from: "$answer.output", if_skipped: null }
-      # Every verdict and CI report this run's delivery rounds produced.
-      reviews: { outputs: review-report }
-      ci: { outputs: ci-report }
+      # Every verdict and CI report this run's delivery rounds produced; null when a
+      # record cannot be read, so the round is still recorded, without them.
+      reviews: { outputs: review-report, if_unreadable: null }
+      ci: { outputs: ci-report, if_unreadable: null }
     output_format:
       type: object
       properties:

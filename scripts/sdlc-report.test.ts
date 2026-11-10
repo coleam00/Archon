@@ -36,11 +36,11 @@ async function review(
   );
 }
 
-/** This run's reviews as a `{ outputs: review-report }` binding delivers them. */
+/** This run's reviews as the tails' `{ outputs: review-report, if_unreadable: null }` delivers them. */
 async function reviews(dir: string): Promise<Reviews> {
   const bound = await bindTypedOutputs(
     'report',
-    { reviews: { outputs: 'review-report' } },
+    { reviews: { outputs: 'review-report', if_unreadable: null } },
     runTypedOutputs(dir, 'run')
   );
   // Through env text, as a script node receives it.
@@ -113,6 +113,13 @@ describe('discoveries', () => {
       discoveries: [],
     });
     expect(await report(dir)).toBe('');
+  });
+
+  it('names an unreadable record instead of reading as no discoveries', async () => {
+    const dir = artifactsDir();
+    mkdirSync(join(dir, 'nodes'));
+    writeFileSync(join(dir, 'nodes', 'torn.meta.json'), '{ not json');
+    expect(await report(dir)).toContain('Discoveries could not be listed');
   });
 });
 

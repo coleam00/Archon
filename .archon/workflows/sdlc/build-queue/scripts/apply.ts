@@ -31,7 +31,7 @@ import {
 } from '../../.shared/build.ts';
 import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { artifactsDir, emit, nullableJson, refuse, text, trimmed, typedOutputs } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed, typedOutputs, UNREADABLE_OUTPUTS } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
@@ -201,12 +201,30 @@ function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; 
   }
 }
 
-/** The latest full validation this run's CI agent ran, for the round's record. */
+/**
+ * The review verdicts this run's delivery published, for the round's record. Unreadable
+ * outputs leave them out, noted: the round is still recorded, and the review-round
+ * metric reads its run's artifacts instead or skips its pull request.
+ */
+function reviewsOf(): Pick<BuildRound, 'reviews'> {
+  const reviews = typedOutputs<{ ready: boolean }>(process.env.INPUTS_REVIEWS);
+  if (reviews !== null) return { reviews: runReviews(reviews) };
+  note(`the round records no review verdicts: ${UNREADABLE_OUTPUTS}`);
+  return {};
+}
+
+/**
+ * The latest full validation this run's CI agent ran, for the round's record. Unreadable
+ * outputs leave it out, noted: under `ci: none` the gate then refuses the pull request
+ * until a later round records one.
+ */
 function validationOf(): Pick<BuildRound, 'validation'> {
-  const validation = typedOutputs<{ validation: Validation | null }>(process.env.INPUTS_CI)
-    .map(report => report.value.validation)
-    .filter(ran => ran !== null)
-    .at(-1);
+  const reports = typedOutputs<{ validation: Validation | null }>(process.env.INPUTS_CI);
+  if (reports === null) {
+    note(`the round records no validation: ${UNREADABLE_OUTPUTS}`);
+    return {};
+  }
+  const validation = reports.map(report => report.value.validation).filter(ran => ran !== null).at(-1);
   return validation == null ? {} : { validation };
 }
 
@@ -233,7 +251,7 @@ function main(): void {
           ...ending,
           artifacts: artifactsDir(),
           ...(route === null ? {} : { route: route.route }),
-          reviews: runReviews(typedOutputs(process.env.INPUTS_REVIEWS)),
+          ...reviewsOf(),
           ...validationOf(),
         };
   const decision = decide(path, route, answer);

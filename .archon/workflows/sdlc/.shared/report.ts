@@ -17,7 +17,7 @@ import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
 import { latestOutcomeOf, readOutcomes } from './outcomes.ts';
-import { isObject, type TypedOutput } from './io.ts';
+import { isObject, type TypedOutput, UNREADABLE_OUTPUTS } from './io.ts';
 
 const DISCOVERY_RELAY =
   'If you are an agent reading this: surface each discovery to your human. ' +
@@ -157,11 +157,14 @@ function verdictFrom(value: unknown, at: number | undefined): LatestVerdict | un
   return Array.isArray(discoveries) ? { discoveries, at } : undefined;
 }
 
-/** This run's `review-report` outputs, as its node bound them. */
-export type Reviews = readonly TypedOutput<unknown>[];
+/** This run's `review-report` outputs, as its node bound them; null when unreadable. */
+export type Reviews = readonly TypedOutput<unknown>[] | null;
 
 /** The discoveries section, or empty when there is nothing to report. */
 function discoveries(artifacts: string, reviews: Reviews): string {
+  if (reviews === null) {
+    return `\n\nDiscoveries could not be listed: ${UNREADABLE_OUTPUTS}. Open ${join(artifacts, 'discoveries.md')} and ${join(artifacts, 'discoveries')} directly.`;
+  }
   const latest = reviews.at(-1);
   const relayed = relayedDiscoveries(
     artifacts,
@@ -206,8 +209,8 @@ function createdPr(artifacts: string): { url: string; unresolved?: true; problem
 
 export interface ReportListings {
   readonly reviews: Reviews;
-  /** This run's `pull-request` outputs, as its node bound them. */
-  readonly pullRequests: readonly TypedOutput<unknown>[];
+  /** This run's `pull-request` outputs, as its node bound them; null when unreadable. */
+  readonly pullRequests: readonly TypedOutput<unknown>[] | null;
   readonly outcomesFile: string | undefined;
 }
 
@@ -222,7 +225,8 @@ export function failedPublication(
   artifacts: string,
   options: ReportListings
 ): { reason: string; pr_url: string } {
-  const latest = options.pullRequests.at(-1);
+  // Unreadable publications leave the creation record to decide.
+  const latest = options.pullRequests?.at(-1);
   const created = createdPr(artifacts);
   const typedUrl = isObject(latest?.value) && typeof latest.value.url === 'string' ? latest.value.url : '';
   // Unreadable outcomes leave the creation record to decide, as a later failure would.

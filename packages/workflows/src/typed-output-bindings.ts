@@ -5,9 +5,11 @@
  *
  * A record that cannot be read fails the binding and names the record. An unreadable
  * sidecar has no trustworthy type, so it might be one of the outputs asked for; dropping
- * it would hand the script a shorter list that looks complete.
+ * it would hand the script a shorter list that looks complete. A binding that declares
+ * `if_unreadable` takes that value instead, and the failure is logged.
  */
 import { join } from 'node:path';
+import { createLogger } from '@archon/paths';
 import { readArtifactFile } from './artifact-writes';
 import { readNodeArtifacts } from './artifacts-index';
 import type { JsonValue } from './output-ref';
@@ -16,7 +18,18 @@ import {
   isTypedOutputsDirective,
   type BindingDirective,
   type TypedOutputRecord,
+  type TypedOutputsDirective,
 } from './schemas/node-bindings';
+
+/** Lazy logger (deferred so test mocks can intercept createLogger). */
+let cachedLog: ReturnType<typeof createLogger> | undefined;
+function getLog(): ReturnType<typeof createLogger> {
+  if (!cachedLog) cachedLog = createLogger('typed-output-bindings');
+  return cachedLog;
+}
+
+/** The run holds a typed-output record the engine could not read. */
+export class TypedOutputsUnreadableError extends Error {}
 
 /** A typed output as the engine recorded it: who produced it, when, and its text. */
 export interface RecordedTypedOutput
@@ -42,7 +55,9 @@ export function runTypedOutputs(artifactsDir: string, runId: string): TypedOutpu
       const named = errors.map(
         error => `${error.path} (${error.kind}${error.code === undefined ? '' : `, ${error.code}`})`
       );
-      throw new Error(`the run has typed-output records that cannot be read: ${named.join('; ')}`);
+      throw new TypedOutputsUnreadableError(
+        `the run has typed-output records that cannot be read: ${named.join('; ')}`
+      );
     }
     const recorded: RecordedTypedOutput[] = [];
     // `Object.hasOwn`: an output type is an open string and must not resolve an inherited key.
@@ -50,7 +65,9 @@ export function runTypedOutputs(artifactsDir: string, runId: string): TypedOutpu
       ? artifactsByType[outputType]
       : []) {
       const text = await readArtifactFile(join(artifactsDir, artifact.path));
-      if (text === undefined) throw new Error(`${artifact.path} cannot be read`);
+      if (text === undefined) {
+        throw new TypedOutputsUnreadableError(`${artifact.path} cannot be read`);
+      }
       recorded.push({ ...artifact, source: artifact.path, text });
     }
     return recorded;
@@ -97,14 +114,32 @@ export async function bindTypedOutputs(
       bound[name] = value;
       continue;
     }
-    try {
-      bound[name] = (await read(value.outputs)).map(typedOutputRecord);
-    } catch (error) {
-      throw new Error(
-        `Node '${consumerId}' binding '${name}' reads every '${value.outputs}' output of this run, but ` +
-          (error as Error).message
-      );
-    }
+    bound[name] = await resolveTypedOutputs(consumerId, name, value, read);
   }
   return bound;
+}
+
+async function resolveTypedOutputs(
+  consumerId: string,
+  name: string,
+  directive: TypedOutputsDirective,
+  read: TypedOutputsReader
+): Promise<JsonValue> {
+  try {
+    return (await read(directive.outputs)).map(typedOutputRecord);
+  } catch (error) {
+    // Presence-keyed, as `if_skipped` is: `if_unreadable: null` is a declared value.
+    // An output that is not JSON is its producer's defect and still fails the node.
+    if (error instanceof TypedOutputsUnreadableError && Object.hasOwn(directive, 'if_unreadable')) {
+      getLog().warn(
+        { nodeId: consumerId, binding: name, outputType: directive.outputs, err: error },
+        'typed_outputs.unreadable_default_used'
+      );
+      return directive.if_unreadable as JsonValue;
+    }
+    throw new Error(
+      `Node '${consumerId}' binding '${name}' reads every '${directive.outputs}' output of this run, but ` +
+        (error as Error).message
+    );
+  }
 }

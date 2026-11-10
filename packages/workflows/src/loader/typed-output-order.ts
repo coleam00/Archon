@@ -8,9 +8,12 @@
  * a producer is ordered before the reader when, in the innermost scope that holds both,
  * the reader's side depends on the producer's side.
  *
+ * A bound type no node declares is refused too: a misspelt type would otherwise read as
+ * "this run produced none".
+ *
  * Runs on the flattened graph only: before include expansion a producer inside an
  * included block is not visible. The instances of a composed fan-out are expanded at run
- * time and are not visible here at all.
+ * time and are not visible here at all, so a type only they declare is refused.
  */
 import { transitiveDepsLookup } from '../depends-on';
 import {
@@ -90,6 +93,9 @@ export function validateTypedOutputOrder(nodes: Nodes): string | null {
       const producers = placed.filter(
         other => other.node.output_type === outputType && other !== reader
       );
+      if (producers.length === 0) {
+        return `Node '${reader.node.id}' binding 'with.${name}' reads every '${outputType}' output, but no node in this workflow declares output_type: ${outputType} — fix the type, or declare it on the node that produces it`;
+      }
       for (const producer of producers) {
         const problem = producerOrderProblem(reader, producer, orderedBefore);
         if (problem !== null) {

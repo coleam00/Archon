@@ -600,6 +600,16 @@ describe('the build queue scripts', () => {
       { ready: false, at: '2026-11-06T10:00:00Z' },
       { ready: true, at: '2026-11-06T10:06:00Z' },
     ]);
+
+    // The bindings declare `if_unreadable: null`: the round is recorded without them.
+    seed(at, triaged(CLAIMED));
+    const unreadable = run(at, 'apply', { ...applyInputs(CONTINUE), INPUTS_REVIEWS: 'null', INPUTS_CI: 'null' });
+    expect(unreadable.code).toBe(0);
+    expect(unreadable.stderr).toContain('the round records no review verdicts');
+    const kept = (stored(at).value as WorkItem).facts.build?.rounds[0];
+    expect(kept).toMatchObject({ run_id: 'run-1', reason: 'review_open' });
+    expect(kept?.reviews).toBeUndefined();
+    expect(kept?.validation).toBeUndefined();
   }, 60_000);
 
   test("the round records the latest full validation the run's CI agent ran", () => {

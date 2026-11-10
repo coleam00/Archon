@@ -197,6 +197,24 @@ describe('executeDagWorkflow -- typed-outputs bindings', () => {
     expect(error).toContain('nodes/torn.meta.json (invalid_metadata)');
   });
 
+  it('delivers the declared if_unreadable value instead, and only for an unreadable record', async () => {
+    const tolerant = { with: { verdicts: { outputs: 'verdict', if_unreadable: null } } };
+    await mkdir(join(testDir, 'artifacts', 'nodes'), { recursive: true });
+    await writeFile(join(testDir, 'artifacts', 'nodes', 'torn.meta.json'), '{ not json');
+
+    await run([verdict('first', true), reader(['first'], tolerant as Partial<DagNode>)]);
+    expect(delivered).toEqual(['null']);
+
+    // An output that is not JSON is the producer's defect, which the default does not cover.
+    await removeTempTree(join(testDir, 'artifacts'));
+    const store = await run([
+      { id: 'prose', kind: 'exec', runtime: 'sh', script: 'echo fine', output_type: 'verdict' },
+      reader(['prose'], tolerant as Partial<DagNode>),
+    ] as DagNode[]);
+    expect(delivered).toEqual(['null']);
+    expect(failureOf(store, 'read')).toContain("declare output_format on 'prose'");
+  });
+
   it('fails the node when an output of the type is not a JSON document', async () => {
     const store = await run([
       {

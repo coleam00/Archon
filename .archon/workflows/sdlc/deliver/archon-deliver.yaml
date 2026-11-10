@@ -350,7 +350,7 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       rounds: { from: "$rounds.output" }
-      reviews: { outputs: review-report }
+      reviews: { outputs: review-report, if_unreadable: null }
 
   # The workflow's terminal report on every ending. A node failure skips `outcome`
   # (never fails it), so `all_done` still runs this node and the binding reads null.
@@ -363,8 +363,8 @@ nodes:
     trigger_rule: all_done
     with:
       outcome: { from: "$outcome.output", if_skipped: null }
-      reviews: { outputs: review-report }
-      pull_requests: { outputs: pull-request }
+      reviews: { outputs: review-report, if_unreadable: null }
+      pull_requests: { outputs: pull-request, if_unreadable: null }
     output_format:
       type: object
       properties:

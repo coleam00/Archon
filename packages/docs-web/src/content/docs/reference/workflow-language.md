@@ -1316,20 +1316,29 @@ output itself. The script selects, filters and reduces; the YAML only names the 
 What the binding guarantees, and where it stops:
 
 - **It reads recorded outputs, the ones `$TYPED_ARTIFACTS_FILE` lists.** One record per
-  node per loop iteration; a node that failed or was skipped recorded none. No output of the
-  type is an empty array, not an error.
+  node per loop iteration; a node that failed or was skipped recorded none. When every
+  producer was skipped, the value is an empty array, not an error.
+- **The type must exist in the workflow.** A bound type that no node declares as its
+  `output_type` is a load error naming the binding, so a misspelt type never reads as "this
+  run produced none".
 - **Every producer is ordered before the reader, checked at load.** Each node in the
   workflow that declares the type must be an upstream dependency of the reader, directly,
   transitively, or through the `loop_group` that holds it. A producer the reader could race
   is a load error naming the `depends_on` edge to add. Two producers are outside that check:
   the instances of a [composed fan-out](#fanning-out-a-composed-block-inside-the-run-include--fan_out),
-  whose nodes exist only at run time, so order the reader after the fan-out node yourself;
-  and a `workflow:` child, which is another run whose outputs this binding never reads.
+  whose nodes exist only at run time, so order the reader after the fan-out node yourself
+  (a type that only those instances declare is refused as undeclared); and a `workflow:`
+  child, which is another run whose outputs this binding never reads.
 - **A value is a JSON document.** Declare `output_format` on every producer of a type you
   bind. An output that is not JSON fails the binding, naming the producer.
 - **An unreadable record fails the node.** A record the engine cannot read has no
   trustworthy type, so it might be one of the outputs asked for. The node fails before its
   script starts, with the record named; it never receives a shorter list that looks complete.
+  A reader that must run anyway says so on the binding:
+  `reviews: { outputs: review-report, if_unreadable: null }` delivers the declared value
+  (here `null`, never a partial list) and the engine logs the record it could not read. Like
+  `if_skipped`, it is data: the script decides what a null means, and should say so in its
+  own output. It covers unreadable records only; an output that is not JSON still fails.
 - **Resume reads the same records.** A resumed run keeps its artifact directory, so the
   reader sees what was recorded before the pause or failure. A node replayed as already
   complete has its output recorded again from its stored output, with a new `at`: sort by

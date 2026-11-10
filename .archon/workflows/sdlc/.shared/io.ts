@@ -69,12 +69,16 @@ export interface TypedOutput<T> {
   readonly value: T;
 }
 
+/** What a script says when a binding declared `if_unreadable: null` and took it. */
+export const UNREADABLE_OUTPUTS = "a typed-output record of this run could not be read; the run's log names it";
+
 /**
- * A bound typed-outputs value: every output of the type, oldest first. The engine fails
- * the node before it starts when a record cannot be read, so the list is complete.
+ * A bound typed-outputs value: every output of the type, oldest first, and complete.
+ * Null when a record could not be read and the binding declared `if_unreadable: null`;
+ * without that declaration the engine fails the node instead.
  */
-export function typedOutputs<T>(bound: string | undefined): readonly TypedOutput<T>[] {
-  return JSON.parse(text(bound)) as TypedOutput<T>[];
+export function typedOutputs<T>(bound: string | undefined): readonly TypedOutput<T>[] | null {
+  return JSON.parse(text(bound)) as TypedOutput<T>[] | null;
 }
 
 /**
