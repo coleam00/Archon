@@ -10,6 +10,7 @@
 import { type QualifiedPr, sameRepo } from './forge.ts';
 import { followUp } from './follow-up.ts';
 import { note, text } from './io.ts';
+import type { NodeOutput } from './outputs.generated.ts';
 import { findPrByHead, PR_CREATE_UNRESOLVED } from './pr.ts';
 import { type Attention, clipped, type DecisionEntry, withDecision } from './queue.ts';
 import { stateDocuments, statePut } from './state.ts';
@@ -59,10 +60,7 @@ export interface ReviewVerdict {
  * typed `ci-report` declared it. Under the pack's `ci: none` setting the merge gate
  * trusts this instead of forge checks.
  */
-export interface Validation {
-  readonly head: string;
-  readonly passed: boolean;
-}
+export type Validation = NonNullable<NodeOutput<'archon-deliver', 'ci'>['validation']>;
 
 /**
  * One build round, as its terminal report ended it. `run_id` is the build-queue run that
