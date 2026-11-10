@@ -265,6 +265,9 @@
       "src/commands/plugin-pack.test.ts"
     ],
     [
+      "src/commands/pack.test.ts"
+    ],
+    [
       "src/triggers/native-schedule.test.ts"
     ],
     [

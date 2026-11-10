@@ -68,6 +68,31 @@ export async function runPlugin({
   });
 }
 
+export async function runPack({
+  subcommand,
+  positionals,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
+  const { packCommand } = await loadRoute(() => import('../commands/pack'));
+  const text = (name: string): string | undefined => {
+    const value = values[name];
+    return typeof value === 'string' ? value : undefined;
+  };
+  await packCommand(subcommand, positionals.slice(2), {
+    cwd,
+    repo: text('repo'),
+    host: text('host'),
+    runAs: text('run-as'),
+    out: text('out'),
+    only: text('only'),
+    force: values.force === true,
+    json,
+  });
+  return 0;
+}
+
 export async function runState({
   subcommand,
   positionals,

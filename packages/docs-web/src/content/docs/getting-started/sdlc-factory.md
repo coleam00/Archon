@@ -143,19 +143,33 @@ The reason matters. A build or merge queue answer is written into the issue body
 
 ## 7. Let it run on its own
 
-The pack installs no trigger. Nothing starts until you start it, by hand as above or with a binding you add. A binding names the workflow, its inputs, the Archon user it runs as (`archon trigger whoami` prints the ID) and how starts may overlap.
+The pack installs no trigger. Nothing starts until you start it, by hand as above or with a binding you add. A binding names the workflow, its inputs, the Archon user it runs as and how starts may overlap. The pack declares the bindings it recommends, and one command writes them as files for your repository:
 
-- **Build, merge and discoveries** run on a schedule. Save the binding, fire it once, then install it:
+```bash
+archon trigger whoami   # prints the runAsUserId
+archon pack bindings sdlc \
+  --repo github.com/acme/widgets \
+  --host build-host-1 \
+  --run-as <runAsUserId> \
+  --cwd ~/code/widgets \
+  --out ~/.archon/triggers
+```
+
+`--host` is a name you choose for this machine, and `--cwd` is the clone the runs launch in. The command writes one file per binding and prints what registers each. It registers and schedules nothing, and `--only build-queue,merge-queue,discoveries` writes a subset. See [`pack bindings`](/reference/cli/#pack-bindings).
+
+- **Build, split, merge and discoveries** run on a schedule. Fire each written file once, then install it. The command prints both lines for every file. Set `BINDING` to the path it printed for each one; below it is the `build-queue` file for `github.com/acme/widgets`:
 
   ```bash
-  archon trigger fire --config ~/.archon/triggers/widgets-build-queue.json
-  archon trigger schedule install --config ~/.archon/triggers/widgets-build-queue.json   # macOS
+  BINDING=~/.archon/triggers/sdlc-acme-widgets-build-queue-0297fdfa94d5.json
+  archon trigger fire --config "$BINDING"
+  archon trigger schedule install --config "$BINDING"   # macOS
   ```
 
   On Linux or Windows, run the same `trigger fire` command from cron, systemd or Task Scheduler.
-- **Intake** starts on GitHub issue and label events, through the GitHub source plugin on a running server. It needs a webhook, so it is the last piece most people add. Until then, run intake by hand for each new issue.
+  If you already schedule a queue another way, remove that schedule first, or both start runs for the same queue.
+- **Intake** starts on GitHub issue and label events, through the GitHub source plugin on a running server. The two `intake-*` files are entries for that plugin's `bindings` array ([Configure GitHub event starts](/guides/workflow-triggers/#configure-github-event-starts)). It needs a webhook, so it is the last piece most people add. Until then, run intake by hand for each new issue.
 
-The pack's README has a binding for each queue: [Intake](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#intake), [Build queue](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#build-queue), [Merge queue](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#merge-queue), [Split queue](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#split-queue) and [Discoveries](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#discoveries). [Workflow triggers](/guides/workflow-triggers/) covers schedules, webhooks, capacity and overlap.
+The pack's README says what each binding does and why it has its capacity and overlap: [Bindings](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#bindings). [Workflow triggers](/guides/workflow-triggers/) covers schedules, webhooks, capacity and overlap.
 
 ## What the pack writes
 
