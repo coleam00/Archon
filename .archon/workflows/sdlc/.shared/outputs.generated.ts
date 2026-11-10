@@ -61,7 +61,26 @@ export interface WorkflowOutputs {
       readonly brief: string;
       readonly rounds: ReadonlyArray<Readonly<Record<string, unknown>>>;
       readonly at_cap: boolean;
-      readonly pull_request: Readonly<Record<string, unknown>> | null;
+      readonly pull_request: {
+        readonly schemaVersion: 1;
+        readonly repo: {
+          readonly host: string;
+          readonly path: string;
+        };
+        readonly number: number;
+        readonly url: string;
+        readonly head: string;
+        readonly base: string;
+        readonly is_draft: boolean;
+        readonly state: 'open' | 'closed' | 'merged';
+        readonly head_repo: {
+          readonly host: string;
+          readonly path: string;
+        } | null;
+        readonly head_revision: string | null;
+        readonly base_revision: string | null;
+        readonly maintainer_can_modify: boolean | null;
+      } | null;
       readonly continues: number | null;
       readonly branch: string;
       readonly related: ReadonlyArray<Readonly<Record<string, unknown>>>;
@@ -146,11 +165,44 @@ export interface WorkflowOutputs {
         readonly id: string;
         readonly label: string;
         readonly does: string;
-        readonly value: Readonly<Record<string, unknown>>;
+        readonly value: {
+          readonly id: string;
+          readonly label: string;
+          readonly does: string;
+          readonly effect: 'continue' | 'ready' | 'park';
+          readonly ruling: string;
+        };
       }>;
-      readonly recommendation: Readonly<Record<string, unknown>> | null;
+      readonly recommendation: {
+        readonly option: string;
+        readonly why: string;
+        readonly confidence: 'low' | 'medium' | 'high';
+      } | null;
       readonly class: '' | 'route' | 'stop' | 'scope';
-      readonly asked: Readonly<Record<string, unknown>> | null;
+      readonly asked: {
+        readonly attention: {
+          readonly what: string;
+          readonly why: string;
+          readonly recommendation: {
+            readonly choice: string;
+            readonly why: string;
+            readonly evidence: string;
+            readonly confidence: 'low' | 'medium' | 'high';
+            readonly would_change: string;
+          };
+          readonly choices: ReadonlyArray<{
+            readonly id: string;
+            readonly label: string;
+            readonly does: string;
+            readonly effect: 'continue' | 'ready' | 'park';
+            readonly ruling: string;
+          }>;
+          readonly if_unanswered: string;
+          readonly links: ReadonlyArray<string>;
+        };
+        readonly brief: string;
+        readonly by: 'route' | 'stop' | 'scope';
+      } | null;
     };
     ruling: {
       readonly decision: 'continue' | 'ready' | 'park';
@@ -359,10 +411,90 @@ export interface WorkflowOutputs {
   'archon-merge-queue': {
     facts: {
       readonly path: 'idle' | 'record' | 'sweep';
-      readonly base: Readonly<Record<string, unknown>> | null;
+      readonly base: {
+        readonly branch: string;
+        readonly head: string;
+        readonly checks: {
+          readonly state: 'none' | 'pending' | 'green' | 'red';
+          readonly failing: ReadonlyArray<string>;
+          readonly pending: ReadonlyArray<string>;
+        };
+      } | null;
       readonly base_error: string;
-      readonly items: ReadonlyArray<Readonly<Record<string, unknown>>>;
-      readonly settled: ReadonlyArray<Readonly<Record<string, unknown>>>;
+      readonly items: ReadonlyArray<{
+        readonly item: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+          };
+          readonly number: number;
+        };
+        readonly pr: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+          };
+          readonly number: number;
+        };
+        readonly url: string;
+        readonly facts: {
+          readonly pr: {
+            readonly repo: {
+              readonly host: string;
+              readonly path: string;
+            };
+            readonly number: number;
+          };
+          readonly url: string;
+          readonly title: string;
+          readonly state: 'open' | 'closed' | 'merged';
+          readonly is_draft: boolean;
+          readonly base: string;
+          readonly default_branch: string;
+          readonly default_head: string;
+          readonly behind: number;
+          readonly head: string;
+          readonly head_revision: string;
+          readonly merge_commit: string | null;
+          readonly mergeable: 'clean' | 'conflict' | 'unknown';
+          readonly checks: {
+            readonly state: 'none' | 'pending' | 'green' | 'red';
+            readonly failing: ReadonlyArray<string>;
+            readonly pending: ReadonlyArray<string>;
+          };
+          readonly threads: {
+            readonly unresolved: number;
+            readonly urls: ReadonlyArray<string>;
+          };
+          readonly verdict: {
+            readonly state: 'none' | 'unstamped' | 'duplicate' | 'ready' | 'not_ready';
+            readonly reviewed: string | null;
+            readonly url: string | null;
+            readonly contract: 'complete' | 'open' | null;
+          };
+        };
+        readonly record: Readonly<Record<string, unknown>> | null;
+        readonly validation: Readonly<Record<string, unknown>> | null;
+      }>;
+      readonly settled: ReadonlyArray<{
+        readonly item: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+          };
+          readonly number: number;
+        };
+        readonly pr: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+          };
+          readonly number: number;
+        } | null;
+        readonly status: 'merged' | 'parked' | 'waiting';
+        readonly decision: string;
+        readonly reason: string;
+      }>;
       readonly gate: string;
       readonly ci: string;
     };
@@ -475,11 +607,81 @@ export interface WorkflowOutputs {
         readonly id: string;
         readonly label: string;
         readonly does: string;
-        readonly value: Readonly<Record<string, unknown>>;
+        readonly value: {
+          readonly id: string;
+          readonly label: string;
+          readonly does: string;
+          readonly effect: string;
+          readonly ruling: string;
+        };
       }>;
-      readonly recommendation: Readonly<Record<string, unknown>> | null;
+      readonly recommendation: {
+        readonly option: string;
+        readonly why: string;
+        readonly confidence: 'low' | 'medium' | 'high';
+      } | null;
       readonly class: '' | 'pr' | 'base';
-      readonly asked: Readonly<Record<string, unknown>> | null;
+      readonly asked: null | {
+        readonly by: 'pr';
+        readonly item: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+          };
+          readonly number: number;
+        };
+        readonly pr: {
+          readonly repo: {
+            readonly host: string;
+            readonly path: string;
+          };
+          readonly number: number;
+        };
+        readonly head: string;
+        readonly brief: string;
+        readonly attention: {
+          readonly what: string;
+          readonly why: string;
+          readonly recommendation: {
+            readonly choice: string;
+            readonly why: string;
+            readonly evidence: string;
+            readonly confidence: 'low' | 'medium' | 'high';
+            readonly would_change: string;
+          };
+          readonly choices: ReadonlyArray<{
+            readonly id: string;
+            readonly label: string;
+            readonly does: string;
+            readonly effect: 'merge' | 'return' | 'park';
+            readonly ruling: string;
+          }>;
+          readonly if_unanswered: string;
+          readonly links: ReadonlyArray<string>;
+        };
+      } | {
+        readonly by: 'base';
+        readonly attention: {
+          readonly what: string;
+          readonly why: string;
+          readonly recommendation: {
+            readonly choice: string;
+            readonly why: string;
+            readonly evidence: string;
+            readonly confidence: 'low' | 'medium' | 'high';
+            readonly would_change: string;
+          };
+          readonly choices: ReadonlyArray<{
+            readonly id: string;
+            readonly label: string;
+            readonly does: string;
+            readonly effect: 'hold';
+            readonly ruling: string;
+          }>;
+          readonly if_unanswered: string;
+          readonly links: ReadonlyArray<string>;
+        };
+      };
     };
     retriage: {
       readonly retriaged: ReadonlyArray<number>;
@@ -931,6 +1133,8 @@ export const OUTPUT_ENUMS = {
     },
     facts: {
       path: ['idle', 'closed', 'route', 'order', 'handoff'],
+      'pull_request.schemaVersion': [1],
+      'pull_request.state': ['open', 'closed', 'merged'],
     },
     route: {
       decision: ['launch', 'ask', 'ready'],
@@ -946,7 +1150,12 @@ export const OUTPUT_ENUMS = {
     },
     apply: {
       decision: ['idle', 'order', 'handoff', 'parked', 'ready', 'continue', 'asked', 'launch'],
+      'options[].value.effect': ['continue', 'ready', 'park'],
+      'recommendation.confidence': ['low', 'medium', 'high'],
       class: ['', 'route', 'stop', 'scope'],
+      'asked.attention.recommendation.confidence': ['low', 'medium', 'high'],
+      'asked.attention.choices[].effect': ['continue', 'ready', 'park'],
+      'asked.by': ['route', 'stop', 'scope'],
     },
     ruling: {
       decision: ['continue', 'ready', 'park'],
@@ -1002,6 +1211,13 @@ export const OUTPUT_ENUMS = {
   'archon-merge-queue': {
     facts: {
       path: ['idle', 'record', 'sweep'],
+      'base.checks.state': ['none', 'pending', 'green', 'red'],
+      'items[].facts.state': ['open', 'closed', 'merged'],
+      'items[].facts.mergeable': ['clean', 'conflict', 'unknown'],
+      'items[].facts.checks.state': ['none', 'pending', 'green', 'red'],
+      'items[].facts.verdict.state': ['none', 'unstamped', 'duplicate', 'ready', 'not_ready'],
+      'items[].facts.verdict.contract': ['complete', 'open', null],
+      'settled[].status': ['merged', 'parked', 'waiting'],
     },
     sweep: {
       'decisions[].anyOf[0].action': ['merged', 'wait'],
@@ -1020,7 +1236,14 @@ export const OUTPUT_ENUMS = {
       'base.attention.choices[].effect': ['hold'],
     },
     record: {
+      'recommendation.confidence': ['low', 'medium', 'high'],
       class: ['', 'pr', 'base'],
+      'asked.anyOf[1].by': ['pr'],
+      'asked.anyOf[1].attention.recommendation.confidence': ['low', 'medium', 'high'],
+      'asked.anyOf[1].attention.choices[].effect': ['merge', 'return', 'park'],
+      'asked.anyOf[2].by': ['base'],
+      'asked.anyOf[2].attention.recommendation.confidence': ['low', 'medium', 'high'],
+      'asked.anyOf[2].attention.choices[].effect': ['hold'],
     },
     ruling: {
       decision: ['merge', 'return', 'park', 'hold'],

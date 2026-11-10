@@ -85,7 +85,10 @@ nodes:
             promoted: { type: [object, 'null'] }
             stage: { type: string }
             body_digest: { type: string }
+            # The issue's labels at pickup that are this run's to remove; the outcome
+            # removes only owned labels among them.
             labels: { type: array, items: { type: string } }
+            # The request labels on the issue that wait for a request not yet recorded.
             waiting: { type: array, items: { type: string } }
             notes: { type: array, items: { type: object } }
           required: [path, trust, promoted, stage, body_digest, labels, waiting, notes]

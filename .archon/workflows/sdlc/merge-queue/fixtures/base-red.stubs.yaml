@@ -11,8 +11,25 @@ facts:
     - item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
       pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
       url: "https://github.com/example/repo/pull/42"
-      facts: { state: open, head_revision: "1111111", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
+      facts:
+        pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
+        url: "https://github.com/example/repo/pull/42"
+        title: "stub: fix the thing"
+        state: open
+        is_draft: false
+        base: dev
+        default_branch: dev
+        default_head: "2222222"
+        behind: 0
+        head: feature
+        head_revision: "1111111"
+        merge_commit: null
+        mergeable: clean
+        checks: { state: green, failing: [], pending: [] }
+        threads: { unresolved: 0, urls: [] }
+        verdict: { state: ready, reviewed: "1111111", url: "https://github.com/example/repo/pull/42#issuecomment-1", contract: complete }
       record: null
+      validation: null
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash' '--ci' 'forge'"
   ci: forge
@@ -38,7 +55,16 @@ record:
     - { id: hold, label: "stub: hold merges", does: "stub: holds merges", value: { id: hold, label: "stub: hold merges", does: "stub: holds merges", effect: hold, ruling: "" } }
   recommendation: { option: hold, why: "stub: why", confidence: high }
   class: base
-  asked: { by: base, attention: {} }
+  asked:
+    by: base
+    attention:
+      what: "stub: dev CI is red since PR 41 merged"
+      why: "stub: every merge waits while it is red"
+      recommendation: { choice: hold, why: "stub: revert PR 41", evidence: "stub: the failing job's log", confidence: high, would_change: "stub: a green rerun" }
+      choices:
+        - { id: hold, label: "stub: hold merges", does: "stub: merges nothing until dev is green", effect: hold, ruling: "" }
+      if_unanswered: "stub: the queue merges nothing while dev is red"
+      links: ["https://github.com/example/repo/actions/runs/1"]
 ask: { decision: hold, text: "" }
 ruling:
   decision: hold
