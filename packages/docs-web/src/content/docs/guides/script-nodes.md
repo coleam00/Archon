@@ -123,7 +123,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `script` | string | Yes | Inline code, or a named script in the owning workflow's `scripts/` directory (packaged workflows) or shared script directories (legacy workflows) |
+| `script` | string | Yes | Inline code, or a named script in the owning workflow's `scripts/` directory or the pack's `.shared/scripts/` (packaged workflows) or shared script directories (legacy workflows) |
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Milliseconds before Archon sends `SIGTERM` to the node. Omitted: no timeout, the node runs until it exits |
@@ -159,16 +159,16 @@ identifier, add a trailing comment or newline to force inline mode.
 
 Named scripts use one of two resolution modes:
 
-- **Packaged workflow:** resolve only from the owning workflow's `scripts/` directory. Bundled package scripts use the same ownership rule and are embedded for binary distribution.
+- **Packaged workflow:** resolve from the owning workflow's `scripts/` directory, then from the pack's shared scripts in `<pack>/.shared/scripts/`. The workflow's own script wins. Bundled package scripts use the same rule and are embedded for binary distribution.
 - **Legacy workflow:** resolve shared scripts from `<repoRoot>/.archon/scripts/`, then `~/.archon/scripts/`.
 
-Workflow-local lookup is scoped to the workflow that declared the node, including through `include:` expansion. Authors still write only the bare name (`script: publish`); the ownership key is internal.
+Workflow-local lookup is scoped to the workflow that declared the node, including through `include:` expansion. Authors still write only the bare name (`script: publish`); the ownership key is internal. A lookup never leaves the pack: a name in neither place fails the workflow at load time, and the error names both directories.
 
 Packaged scripts can import modules from their pack's `.shared/` directory. Keep package dependencies out of that tree: packaged scripts must not depend on the target project's `package.json`, `node_modules`, or `tsconfig.json`. Python dependencies can still be declared with `deps:`. Imports across packs and npm dependencies are outside the packaged-module contract.
 
 ### Share code within a pack
 
-Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules, `.md` documents and the pack's [`metric-views.json`](/guides/metrics/#overview-cards-a-pack-declares): its files are neither workflows nor named script targets. Documents ship with the pack in every build, beside the modules. Any node reads one through `$PACK_DIR`, the pack's directory in the run's source: a prompt or command file names `$PACK_DIR/.shared/policy/triage.md`, and a `bash:` or `script:` node also gets `PACK_DIR` in its environment. See [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack). A packaged workflow that names an unavailable script, including a shared module, fails at load time.
+Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules, `.md` documents, the pack's [`metric-views.json`](/guides/metrics/#overview-cards-a-pack-declares) and its [shared scripts](#share-a-script-between-workflows-of-a-pack): its files are not workflows, and only those under `.shared/scripts/` are named script targets. Documents ship with the pack in every build, beside the modules. Any node reads one through `$PACK_DIR`, the pack's directory in the run's source: a prompt or command file names `$PACK_DIR/.shared/policy/triage.md`, and a `bash:` or `script:` node also gets `PACK_DIR` in its environment. See [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack). A packaged workflow that names an unavailable script, including a shared module, fails at load time.
 
 ```text
 my-pack/
@@ -192,6 +192,26 @@ For Bun, import from the script's location:
 import { summary } from '../../.shared/result.ts';
 console.log(summary);
 ```
+
+### Share a script between workflows of a pack
+
+When several workflows of a pack run the same script, put one copy in `<pack>/.shared/scripts/`. A `script:` node of any workflow in the pack that names it finds it there, unless the workflow has a script of that name in its own `scripts/`, which wins. As in a workflow's `scripts/`, a script sits directly in the directory or one folder below it, and its name is the file name without the extension.
+
+```text
+my-pack/
+├── .shared/
+│   ├── result.ts
+│   └── scripts/
+│       └── preflight.ts        # script: preflight, from release and inspect
+├── release/
+│   └── release.yaml
+└── inspect/
+    ├── inspect.yaml
+    └── scripts/
+        └── preflight.ts        # inspect runs its own
+```
+
+A shared script imports the pack's modules from one level up (`import { summary } from '../result.ts';`).
 
 Python scripts run as files, so package-relative syntax such as `from ...shared` does not apply. Add the pack's shared directory using Python's standard library:
 
@@ -383,9 +403,9 @@ for the full story.
 `archon validate workflows <name>` checks script nodes for:
 
 - **Script file exists** — for named scripts, the basename must exist in the
-  owning workflow's `scripts/` directory or the legacy shared search path, with
-  a matching extension for the declared runtime. Missing files fail validation
-  with a hint showing the expected path.
+  owning workflow's `scripts/` directory, the pack's `.shared/scripts/`, or the
+  legacy shared search path, with a matching extension for the declared runtime.
+  Missing files fail validation, naming the directories that were searched.
 - **Runtime available on PATH** — `bun` or `uv` must be installed. Missing
   runtimes emit a warning with the official install command:
   - `curl -fsSL https://bun.sh/install | bash`
