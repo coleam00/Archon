@@ -3,7 +3,7 @@ import { readFile } from 'node:fs/promises';
 import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
 import { getPluginsPath } from '@archon/paths';
 import { discoverPlugins } from '@archon/forge/discovery';
-import { dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
+import { checkForgeAccess, dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { type ForgePluginConfig, forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import {
   forgeRequestSchema,
@@ -13,6 +13,7 @@ import {
   type ForgeRequest,
 } from '@archon/forge/operations';
 import {
+  cliForgeCheckRequestSchema,
   cliForgeMetadataRequestSchema,
   cliForgeResponseSchema,
   type CliForgeResponse,
@@ -107,6 +108,7 @@ export async function forgeCommand(
   try {
     const input = await readForgeInput(subcommand, options, context);
     if (input.op === 'metadata') return await answerMetadata(input, context);
+    if (input.op === 'check') return await answerCheck(input, context);
     const result = await dispatchRequest(input, context);
     response = result.response;
     const auditFailure = await auditOperation(result.audit, response, context);
@@ -178,6 +180,44 @@ async function answerMetadata(
     },
   });
   return 1;
+}
+
+/**
+ * A preflight for a workflow about to spend: the plugin, its capabilities and the
+ * credential source, read the way dispatch reads them. No plugin operation runs, so
+ * there is nothing to audit.
+ */
+async function answerCheck(
+  { archonHome, op, supplied, config }: ForgeInput,
+  { operationId, env, trustedEnv, write }: ForgeCommandContext
+): Promise<number> {
+  const request = cliForgeCheckRequestSchema.parse({ ...supplied, op, operationId });
+  const check = await checkForgeAccess(request, {
+    config,
+    env: trustedEnv,
+    pluginsDir: getPluginsPath(archonHome),
+    credentialEnv: env,
+  });
+  if (!check.ok) {
+    const { error, unsupported } = check;
+    await write({ operationId, ok: false, error, ...(unsupported ? { unsupported } : {}) });
+    return 1;
+  }
+  const { plugin, credentialSource } = check;
+  await write({
+    operationId,
+    ok: true,
+    result: {
+      op: 'check',
+      value: {
+        host: request.host.toLowerCase(),
+        plugin,
+        operations: request.operations,
+        ...(credentialSource ? { credentialSource } : {}),
+      },
+    },
+  });
+  return 0;
 }
 
 async function dispatchRequest(

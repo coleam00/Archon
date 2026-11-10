@@ -13,7 +13,24 @@ export async function runForge({
   subcommand,
   values,
   forgeTrustedEnv,
+  cwd,
+  json,
 }: CliRouteContext): Promise<number> {
+  if (subcommand === 'types') {
+    try {
+      const { forgeTypesCommand } = await loadRoute(() => import('../commands/forge-types'), {
+        providers: false,
+      });
+      return await forgeTypesCommand(cwd, {
+        json,
+        check: values.check === true,
+        out: typeof values.out === 'string' ? values.out : undefined,
+      });
+    } catch (error) {
+      const { message } = error as Error;
+      return await fail(json, json ? message : `Error: ${message}`);
+    }
+  }
   const { forgeCommand } = await loadRoute(() => import('../commands/forge'));
   return await forgeCommand(subcommand, {
     data: typeof values.data === 'string' ? values.data : undefined,

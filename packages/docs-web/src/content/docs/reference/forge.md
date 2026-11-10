@@ -87,6 +87,47 @@ With `"web": true`, `resolve` reads the forge's web URL of an issue or a pull re
 
 Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the operation returned a response but its run audit could not be persisted. Stdout retains that response, which may be a success or a failed write with its mutation outcome; read it before retrying or reconciling, because exit 2 alone does not say whether a write happened.
 
+### Check forge access before a run spends
+
+```sh
+archon forge check --json --data '{"host":"github.com","operations":["pr.view","pr.create","pr.merge"]}'
+```
+
+`check` answers three questions for one host without running a forge operation: which plugin serves the host, whether it advertises every name in `operations`, and whether its credential resolves. `operations` takes operation names and any other capability a plugin advertises, such as `resolve:subject`. A workflow runs it in its first node, so a missing plugin or token refuses before any agent runs instead of at the first write.
+
+On success it exits 0 and the result names the plugin and, when the plugin needs a credential, the source it was found in, never the token:
+
+```json
+{
+  "operationId": "…",
+  "ok": true,
+  "result": {
+    "op": "check",
+    "value": {
+      "host": "github.com",
+      "plugin": { "name": "github", "version": "0.14.0" },
+      "operations": ["pr.view", "pr.create", "pr.merge"],
+      "credentialSource": "GH_TOKEN"
+    }
+  }
+}
+```
+
+Otherwise it exits 1 with the first reason that applies, in this order:
+
+| `error.kind` | Meaning |
+| --- | --- |
+| `no_plugin_for_host` | No installed or configured plugin claims the host |
+| `unsupported_op` | The plugin lacks at least one named operation; `unsupported` lists every one it lacks |
+| `no_credential` | The plugin's credential environment is unset or empty |
+| `process_failed` | Plugin discovery failed, or `gh auth token` failed for a GitHub host |
+
+The credential is resolved the way an operation resolves it, so for GitHub the check may run `gh auth token`. It does not contact the forge: a credential that resolves can still be expired or lack access to a repository, which the first operation reports.
+
+### Generate types for scripts
+
+`archon forge types --out <file>` writes the request and result type of every operation, the failure envelope, and a typed client into one TypeScript file with no dependencies. See [Call the forge from a script](/guides/script-nodes/#call-the-forge-from-a-script).
+
 ## What a write reports
 
 `workitem.create`, `workitem.labels.set`, `workitem.label.add`, `workitem.label.remove`, `workitem.comment.upsert`, `workitem.close`, `repo.label.ensure`, `pr.create`, `pr.edit-body`, `pr.ready`, `pr.draft` and `comment.upsert` each perform at most one write and then read the result back. A valid write request reports exactly one outcome, so a caller never has to guess which happened. A request that fails validation before dispatch is answered with `invalid_request` and no `mutation`; nothing was written.

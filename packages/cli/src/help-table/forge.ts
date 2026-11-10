@@ -78,6 +78,37 @@ export const forgeHelp: HelpGroup = {
         },
       ],
     },
+    {
+      command: 'forge',
+      subcommand: 'check',
+      spec: 'forge check',
+      description:
+        'Check before a run spends that a plugin serves a host, supports the named\noperations and has a credential; runs no forge operation. Exits 1 with the reason',
+      scopedFlags: [
+        {
+          spec: '--data <json>',
+          description:
+            'JSON object with host and operations, for example\n{"host":"github.com","operations":["pr.view","pr.merge"]}',
+        },
+      ],
+    },
+    {
+      command: 'forge',
+      subcommand: 'types',
+      spec: 'forge types',
+      description:
+        "Generate one TypeScript file with every forge operation's request and result\ntypes and a typed client that calls this CLI, for scripts to commit and import",
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write, relative to the invoking directory (required)',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
+    },
     ...Object.entries(forgeOperationDescriptions)
       .filter(([op]) => op !== 'resolve')
       .map(([subcommand, description]) => ({

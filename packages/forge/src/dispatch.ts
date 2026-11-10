@@ -131,14 +131,10 @@ function retainHostClaim(response: ForgeResponse, host: string, claim: string): 
   };
 }
 
-function discoveryError(request: ForgeRequest, error: unknown): ForgeResponse {
-  if (error instanceof PluginDiscoveryError) {
-    return errorResponse(request, { kind: error.kind, message: error.message });
-  }
-  return errorResponse(request, {
-    kind: 'process_failed',
-    message: 'forge plugin discovery failed',
-  });
+function discoveryFailure(error: unknown): ForgeError {
+  return error instanceof PluginDiscoveryError
+    ? { kind: error.kind, message: error.message }
+    : { kind: 'process_failed', message: 'forge plugin discovery failed' };
 }
 
 interface DispatchOptions {
@@ -188,17 +184,9 @@ async function dispatch(request: ForgeRequest, options: DispatchOptions): Promis
   if (request.op === 'resolve' && !host) return { response: noForge(request), plugin: null };
   let discovery: PluginDiscovery;
   try {
-    discovery =
-      options.discovery ??
-      (await discoverPlugins({
-        config: options.config,
-        env: options.env,
-        pluginsDir: options.pluginsDir,
-        timeoutMs: options.timeoutMs,
-        maxOutputBytes: options.maxOutputBytes,
-      }));
+    discovery = await discover(options);
   } catch (error) {
-    return { response: discoveryError(request, error), plugin: null };
+    return { response: errorResponse(request, discoveryFailure(error)), plugin: null };
   }
   const repository = host ?? '';
   const hosts: DispatchHosts = { repository, selected: selectHost(discovery, request, repository) };
@@ -209,15 +197,12 @@ async function dispatch(request: ForgeRequest, options: DispatchOptions): Promis
   const identity = { name: plugin.metadata.name, version: plugin.metadata.version };
   const refusal = refuseBeforeRun(request, plugin.metadata);
   if (refusal) return { response: errorResponse(request, refusal), plugin: identity };
-  const credential = await operationCredential(request, plugin, discovery, hosts.selected, options);
+  const credential: OperationCredential =
+    request.op === 'resolve'
+      ? { kind: 'none' }
+      : await pluginCredential(plugin, discovery, hosts.selected, options);
   if (credential.kind === 'failed' || credential.kind === 'missing') {
-    return {
-      response: errorResponse(request, {
-        kind: credential.kind === 'failed' ? 'process_failed' : 'no_credential',
-        message: credential.message,
-      }),
-      plugin: identity,
-    };
+    return { response: errorResponse(request, credentialFailure(credential)), plugin: identity };
   }
   const selected = credential.kind === 'selected' ? credential : undefined;
   return {
@@ -299,14 +284,12 @@ function refuseBeforeRun(request: ForgeRequest, metadata: PluginMetadata): Forge
   return undefined;
 }
 
-function operationCredential(
-  request: ForgeRequest,
+function pluginCredential(
   plugin: DiscoveredPlugin,
   discovery: PluginDiscovery,
   selectedHost: string,
   options: DispatchOptions
 ): Promise<OperationCredential> {
-  if (request.op === 'resolve') return Promise.resolve({ kind: 'none' });
   const env = options.env ?? process.env;
   const metadata = plugin.metadata;
   const override =
@@ -319,6 +302,86 @@ function operationCredential(
     metadata.token_env.every(name => GH_DOTCOM_TOKEN_KEYS.some(key => key === name));
   const names = override ? [override] : github ? GH_DOTCOM_TOKEN_KEYS : metadata.token_env;
   return selectCredential(names, github, selectedHost, options.credentialEnv ?? env, env);
+}
+
+function credentialFailure(
+  credential: Extract<OperationCredential, { kind: 'missing' | 'failed' }>
+): ForgeError {
+  return {
+    kind: credential.kind === 'failed' ? 'process_failed' : 'no_credential',
+    message: credential.message,
+  };
+}
+
+function discover(options: DispatchOptions): Promise<PluginDiscovery> | PluginDiscovery {
+  return (
+    options.discovery ??
+    discoverPlugins({
+      config: options.config,
+      env: options.env,
+      pluginsDir: options.pluginsDir,
+      timeoutMs: options.timeoutMs,
+      maxOutputBytes: options.maxOutputBytes,
+    })
+  );
+}
+
+/** What a preflight learns about one host: the plugin that serves it, or why a run cannot use it. */
+export type ForgeAccessCheck =
+  | { ok: true; plugin: NonNullable<ForgeDispatchResult['plugin']>; credentialSource?: string }
+  | { ok: false; error: ForgeError; unsupported?: string[] };
+
+/**
+ * Whether a forge operation on `host` could start: a plugin claims the host, it
+ * advertises every capability in `operations`, and its credential resolves. It reads
+ * discovery metadata and the credential sources only; no plugin operation runs, so it
+ * proves nothing about what the credential may read or write.
+ */
+export async function checkForgeAccess(
+  request: { host: string; operations: readonly string[] },
+  options: DispatchOptions = {}
+): Promise<ForgeAccessCheck> {
+  const host = normalizeHost(request.host);
+  let discovery: PluginDiscovery;
+  try {
+    discovery = await discover(options);
+  } catch (error) {
+    return { ok: false, error: discoveryFailure(error) };
+  }
+  const plugin = discovery.byHost.get(host);
+  if (!plugin) {
+    const unavailable = discovery.unavailable.map(error => error.message).join('; ');
+    return {
+      ok: false,
+      error: unavailable
+        ? {
+            kind: 'process_failed',
+            message: `forge discovery could not resolve ${host}: ${unavailable}`,
+          }
+        : { kind: 'no_plugin_for_host', message: `no forge plugin claims ${host}` },
+    };
+  }
+  const { name, version, capabilities } = plugin.metadata;
+  const unsupported = request.operations.filter(operation => !capabilities.includes(operation));
+  if (unsupported.length > 0) {
+    return {
+      ok: false,
+      error: {
+        kind: 'unsupported_op',
+        message: `plugin ${name} does not support ${unsupported.join(', ')}`,
+      },
+      unsupported,
+    };
+  }
+  const credential = await pluginCredential(plugin, discovery, host, options);
+  if (credential.kind === 'failed' || credential.kind === 'missing') {
+    return { ok: false, error: credentialFailure(credential) };
+  }
+  return {
+    ok: true,
+    plugin: { name, version },
+    ...(credential.kind === 'selected' ? { credentialSource: credential.source } : {}),
+  };
 }
 
 async function runOperation(
