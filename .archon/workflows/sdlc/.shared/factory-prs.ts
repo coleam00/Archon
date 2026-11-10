@@ -13,9 +13,9 @@
  */
 
 import { BUILD_BRANCH_PREFIX } from './build.ts';
-import { invokeForge, parsePrRecord, type QualifiedPr, record, sameRepo } from './forge.ts';
+import { invokeForge, parsePrRecord, record, sameRepo } from './forge.ts';
+import { resolvePrUrl } from './pr.ts';
 import { note } from './io.ts';
-import { prFromUrl } from './merge.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */
@@ -94,21 +94,28 @@ export function prFacts(url: string, view: Record<string, unknown> | null): PrFa
 
 /**
  * Read each pull request by number, so no list limit can drop an old one. A recorded
- * URL that is not a pull request URL is noted and left out.
+ * URL the forge says is not a pull request URL is noted and left out; a forge that
+ * cannot resolve one fails the read, so the cohort is never silently short.
  */
 export function readPrFacts(urls: Iterable<string>): PrFacts[] {
   const facts: PrFacts[] = [];
   for (const url of urls) {
-    let ref: QualifiedPr;
-    try {
-      ref = prFromUrl(url);
-    } catch (error) {
-      note(`PR metrics skip a round's URL: ${error instanceof Error ? error.message : String(error)}`);
+    const ref = resolvePrUrl(url);
+    if (ref === undefined) {
+      note(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
       continue;
     }
     facts.push(prFacts(url, invokeForge('pr.view', { selector: { kind: 'number', ref } })));
   }
   return facts;
+}
+
+/** The time `since` names: an ISO date or time, or `<n>d` back from now. */
+export function sinceTime(since: string): number {
+  const days = /^(\d+)d$/.exec(since)?.[1];
+  const from = days === undefined ? Date.parse(since) : Date.now() - Number(days) * 86_400_000;
+  if (Number.isNaN(from)) throw new Error(`since must be an ISO date or time, or a number of days such as 7d; received ${JSON.stringify(since)}`);
+  return from;
 }
 
 /** A pull request from a round's branch: a `build/` branch in the repository itself. */

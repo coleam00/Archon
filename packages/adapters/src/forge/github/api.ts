@@ -247,6 +247,25 @@ export function parseRemote(remote: string | null): RepoRef | null {
   return { host: match[1].toLowerCase(), path: `${repository.owner}/${repository.repo}` };
 }
 
+/**
+ * GitHub's web URL of an issue or a pull request: `<repository>/issues/<n>` or
+ * `<repository>/pull/<n>`. A query or fragment, such as a link to one comment, is
+ * ignored; any other URL is not a subject.
+ */
+export function parseSubjectUrl(
+  value: string | null
+): { repo: RepoRef; subject: { kind: 'issue' | 'pr'; number: number } } | null {
+  const trimmed = value?.trim().replace(/[?#].*$/, '') ?? '';
+  const match = /^(https?:\/\/.+)\/(issues|pull)\/([1-9]\d*)\/?$/.exec(trimmed);
+  if (!match) return null;
+  const repo = parseUrlRemote(match[1]);
+  if (!repo) return null;
+  return {
+    repo,
+    subject: { kind: match[2] === 'pull' ? 'pr' : 'issue', number: Number(match[3]) },
+  };
+}
+
 /** Translate a thrown cause into the wire error a caller can act on. */
 export function githubErrorDetail(cause: unknown): ForgeError {
   if (cause instanceof GitHubError) return cause.detail;

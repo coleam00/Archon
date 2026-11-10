@@ -195,6 +195,21 @@ describe('forge plugin discovery and dispatch', () => {
     expect(result.response).toMatchObject({ ok: false, error: { kind: 'unsupported_op' } });
   });
 
+  test('does not ask a plugin that resolves remotes only to resolve an issue or pull request URL', async () => {
+    const discovery = await discoverPlugins({ config: config() });
+    const result = await dispatchForge(
+      { operationId: 'web', op: 'resolve', remote: 'https://forge.example/a/b/pull/1', web: true },
+      { discovery }
+    );
+    expect(result.response).toMatchObject({
+      ok: false,
+      error: {
+        kind: 'unsupported_op',
+        message: expect.stringContaining('issue or pull request URL'),
+      },
+    });
+  });
+
   test('rejects duplicate host claims', async () => {
     await expect(
       discoverPlugins({

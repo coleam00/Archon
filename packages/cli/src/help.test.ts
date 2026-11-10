@@ -254,6 +254,10 @@ Commands:
                              repository root. With no target, runs every fixture. Never creates a
                              run or contacts a provider; exec-code fixtures execute in a
                              scratch worktree of HEAD
+  workflow types <name|folder|path> Generate TypeScript for each node's output_format: the node
+                             output types and every enum's values. A pack (by name or
+                             directory path) writes <pack>/.shared/outputs.generated.ts; a single
+                             workflow needs --out. --check exits 1 when the file is stale
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove eligible worktrees by inactivity, containers by creation age (default: 7 days)
   isolation cleanup --merged Remove environments with branches merged into the base branch

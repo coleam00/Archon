@@ -136,6 +136,13 @@ export const pluginMetadataSchema = pluginIdentitySchema.extend({
   token_env: z.array(z.string().min(1)).default([]),
 });
 export type PluginMetadata = z.infer<typeof pluginMetadataSchema>;
+/**
+ * The capability a plugin advertises when `resolve` with `web: true` reads the
+ * forge's web URL of an issue or a pull request. URL shapes belong to the forge, so a
+ * caller never parses one. An older plugin would answer for the repository alone, or
+ * not at all, so the host refuses the request without it.
+ */
+export const RESOLVE_SUBJECT = 'resolve:subject';
 export const resolveResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('none'), forge: z.literal('none') }),
   z.object({
@@ -143,12 +150,19 @@ export const resolveResultSchema = z.discriminatedUnion('kind', [
     forge: z.string().min(1),
     repo: repoRefSchema,
     plugin: pluginIdentitySchema,
+    // The issue or pull request the URL names, in `repo`: only on a `web` request, and
+    // required there; the host refuses a resolved `web` answer without it.
+    subject: z
+      .object({ kind: z.enum(['issue', 'pr']), number: z.number().int().positive() })
+      .optional(),
   }),
 ]);
 export const resolveRequestSchema = z.object({
   operationId: z.string().min(1),
   op: z.literal('resolve'),
+  // A git remote URL, or with `web` the forge's web URL of an issue or a pull request.
   remote: z.string().nullable(),
+  web: z.literal(true).optional(),
 });
 export const checksRequestSchema = z.object({
   operationId: z.string().min(1),

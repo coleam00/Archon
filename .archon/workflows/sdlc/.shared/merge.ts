@@ -14,7 +14,7 @@
 import { itemPullRequest, type Validation } from './build.ts';
 import { invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
 import { viewPr } from './pr.ts';
-import type { Attention, DecisionEntry } from './queue.ts';
+import { type Attention, type DecisionEntry, withDecision } from './queue.ts';
 import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
@@ -94,9 +94,6 @@ export interface MergeRecord {
   readonly at: string;
 }
 
-const KEPT_DECISIONS = 20;
-const KEPT_TEXT = 1500;
-
 export function answeredMergeDecision(effect: MergeEffect): `answered: ${MergeEffect}` {
   return `answered: ${effect}`;
 }
@@ -140,22 +137,6 @@ export function itemPr(doc: WorkItem): QualifiedPr | null {
   return itemPullRequest(doc.facts.build?.rounds ?? [], doc.facts.triage, doc.subject.repo);
 }
 
-/** `https://<host>/<owner>/<name>/pull/<number>`; anything else refuses. */
-export function prFromUrl(url: string): QualifiedPr {
-  let parsed: URL;
-  try {
-    parsed = new URL(url);
-  } catch {
-    throw new Error(`"${url}" is not a pull request URL`);
-  }
-  const [owner, name, kind, number, ...rest] = parsed.pathname.split('/').filter(part => part !== '');
-  const value = Number(number);
-  if (owner === undefined || name === undefined || kind !== 'pull' || rest.length > 0 || !Number.isInteger(value) || value <= 0) {
-    throw new Error(`"${url}" is not a pull request URL`);
-  }
-  return { repo: { host: parsed.host, path: `${owner}/${name}` }, number: value };
-}
-
 export interface MergeChange {
   readonly at: string;
   readonly run_id: string;
@@ -171,15 +152,11 @@ export interface MergeChange {
 /** The work item with one merge decision recorded on it. */
 export function withMerge(doc: WorkItem, change: MergeChange): WorkItem {
   const prior = doc.facts.merge;
-  const reason = change.entry.reason;
   const merge: MergeRecord = {
     status: change.status,
     pr: change.pr,
     approval: change.approval === undefined ? (prior?.approval ?? null) : change.approval,
-    decisions: [
-      ...(prior?.decisions ?? []),
-      { ...change.entry, reason: reason.length <= KEPT_TEXT ? reason : `${reason.slice(0, KEPT_TEXT)}…` },
-    ].slice(-KEPT_DECISIONS),
+    decisions: withDecision(prior?.decisions, change.entry),
     at: change.at,
   };
   return {

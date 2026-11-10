@@ -254,9 +254,14 @@ covers every TypeScript file under `.archon/workflows/`, so it needs no globs of
 own. A script placed outside the type-check globs fails `pack-scripts-validation.test.ts`
 rather than going quietly unchecked.
 
-The scripts' tool-boundary tests live under `.archon/scripts/__tests__/`. CI runs the
-merge-sweep conformance test through `merge-sweep-contract`, and runs the other pack tests and
-the workflow fixtures on a pull request that changes the pack. Run them locally with
+`.shared/outputs.generated.ts` holds the type of every node output and the values of every
+enum, generated from the workflows' `output_format` schemas. A script reads a node's
+output as `NodeOutput<'<workflow>', '<node>'>` instead of restating the shape. After
+changing an `output_format`, run `bun run generate:workflow-output-types`; CI's
+`generated-files` check fails while the file is stale.
+
+The scripts' tool-boundary tests live under `.archon/scripts/__tests__/`. CI runs the pack
+tests and the workflow fixtures on a pull request that changes the pack. Run them locally with
 `bun run test --plan pack` and `bun run validate --only workflow-fixtures`.
 
 Three rules, each protecting something a script cannot get back on its own:
@@ -1261,6 +1266,30 @@ the review's code lens:
 ```bash
 archon metrics sdlc.review_rounds --compare <when this checkout picked up a pack change>
 archon metrics sdlc.review_one_round --by-model ship__deliver__rounds.review__code
+```
+
+### Test and production lines
+
+Given `lines_since`, `archon-metrics-prs` also records the lines each factory pull
+request merged since then added, at its merge time and attributed like the other records:
+
+| Metric | Kind | Unit | One record per merged pull request |
+|---|---|---|---|
+| `sdlc.test_lines_added` | count | `lines` | lines it added in test files |
+| `sdlc.production_lines_added` | count | `lines` | lines it added in every other file |
+
+A test file is one under a `__tests__`, `test`, `tests` or `spec` directory, or named
+`*.test.*`, `*.spec.*`, `*_test.*`, `*_spec.*` or `test_*`. Lines are counted from the
+patches `pr.files` reports, one read per pull request, so the window sets the cost. A pull
+request with a file the forge reports without a patch, such as a binary or a very large
+diff, is listed in `lines_skipped` and counts in neither. The records are evidence and gate
+nothing. The test-to-production ratio across a pack change is the two values divided, on
+each side of the cut:
+
+```bash
+archon workflow run archon-metrics-prs --input lines_since=30d
+archon metrics sdlc.test_lines_added --compare <when this checkout picked up a pack change>
+archon metrics sdlc.production_lines_added --compare <when this checkout picked up a pack change>
 ```
 
 ### Test value

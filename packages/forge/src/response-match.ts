@@ -312,7 +312,9 @@ function matchesLogs(request: OpRequest<'checks.logs'>, value: OpValue<'checks.l
 const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
   resolve: (request, value, { metadata, host }) =>
     value.kind === 'none' ||
-    (matchesResolvedHost(request, value.repo.host, host) &&
+    // A resolved issue or pull request URL is only an answer when it names the subject.
+    ((request.web !== true || value.subject !== undefined) &&
+      matchesResolvedHost(request, value.repo.host, host) &&
       value.forge === metadata.forge &&
       value.plugin.name === metadata.name &&
       value.plugin.version === metadata.version),

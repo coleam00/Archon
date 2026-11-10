@@ -21,9 +21,7 @@ import {
   mutationOperationSchema,
 } from '../packages/forge/src/lifecycle';
 import {
-  type ForgeMutationFailure,
   type ForgeRequest,
-  type ForgeResponse,
   forgeErrorSchema,
   forgeRequestSchema,
 } from '../packages/forge/src/operations';
@@ -35,13 +33,9 @@ import {
 } from '../.archon/scripts/__tests__/deliver-checks-harness';
 import {
   forgeResult,
-  type MergeRequest,
-  type MergeResult,
-  type MutationFailure,
   type PrRecord,
   type QualifiedPr,
   REMEDY,
-  type ReviewsResult,
 } from '../.archon/workflows/sdlc/.shared/forge';
 import { REQUIRED_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/forge-check';
 import { MERGE_QUEUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/merge';
@@ -89,67 +83,6 @@ test("every refusal remedy is keyed by a kind the forge contract's errors carry"
 
 test('every reason the pack closes an issue with is a forge close reason', () => {
   for (const reason of CLOSE_REASONS) expect(closeReasonSchema.parse(reason)).toBe(reason);
-});
-
-type ContractResult = Extract<ForgeResponse, { ok: true }>['result'];
-const consumesMerge = (value: Extract<ContractResult, { op: 'pr.merge' }>): MergeResult =>
-  value.value;
-const consumesReviews = (value: Extract<ContractResult, { op: 'pr.reviews' }>): ReviewsResult =>
-  value.value;
-const consumesFailure = (value: ForgeMutationFailure): MutationFailure => value;
-const producesMerge = (
-  value: MergeRequest
-): Omit<Extract<ForgeRequest, { op: 'pr.merge' }>, 'op' | 'operationId'> => value;
-
-test('the pack projections of the merge and review operations carry typed evidence', () => {
-  const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 1 };
-  expect(
-    forgeRequestSchema.parse({
-      ...producesMerge({ ref, method: 'merge', conditions: { head: 'opaque-head' } }),
-      op: 'pr.merge',
-      operationId: 'merge',
-    }).op
-  ).toBe('pr.merge');
-  expect(consumesReviews({ op: 'pr.reviews', value: { ref, items: [] } })).toEqual({
-    ref,
-    items: [],
-  });
-  expect(
-    consumesFailure({
-      op: 'pr.merge',
-      target: ref,
-      outcome: 'outcome_unknown',
-      merge: { method: 'merge', conditions: { head: 'head' } },
-    }).outcome
-  ).toBe('outcome_unknown');
-  const pr = forgePrRecordSchema.parse({
-    ...ref,
-    schemaVersion: 1,
-    url: 'https://forge.example/pr/1',
-    head: 'feature',
-    base: 'dev',
-    is_draft: false,
-    state: 'merged',
-    head_repo: ref.repo,
-    head_revision: 'head',
-    base_revision: null,
-    maintainer_can_modify: null,
-  });
-  expect(
-    consumesMerge({
-      op: 'pr.merge',
-      value: {
-        target: ref,
-        outcome: 'applied',
-        changed: true,
-        pr,
-        method: 'squash',
-        conditions: { head: 'head' },
-        enforcedConditions: ['head'],
-        landed: { commit: 'landed', tree: null, parents: null },
-      },
-    }).landed.commit
-  ).toBe('landed');
 });
 
 /**

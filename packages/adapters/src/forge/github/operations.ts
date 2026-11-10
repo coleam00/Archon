@@ -1,5 +1,6 @@
 import {
   PR_VIEW_ANY_STATE,
+  RESOLVE_SUBJECT,
   type ForgeError,
   type ForgeMutationRequest,
   type ForgeRequest,
@@ -9,7 +10,13 @@ import {
   mutationTarget,
   mutationAttempt,
 } from '@archon/forge/operations';
-import { githubErrorDetail, parseRemote, TransientGitHubError, type Fetch } from './api';
+import {
+  githubErrorDetail,
+  parseRemote,
+  parseSubjectUrl,
+  TransientGitHubError,
+  type Fetch,
+} from './api';
 import { handleGithubChecksLogs } from './check-logs';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
 import { handleGithubWorkItemComments } from './comments';
@@ -33,6 +40,7 @@ export const githubPluginMetadata = {
   hosts: ['github.com'],
   capabilities: [
     'resolve',
+    RESOLVE_SUBJECT,
     'checks.state',
     'checks.commit',
     'checks.logs',
@@ -128,22 +136,35 @@ const readHandlers: { [Op in ReadOp]: ReadHandler<Op> } = {
   'checks.logs': handleGithubChecksLogs,
 };
 
+type ResolveValue = Extract<
+  Extract<ForgeResponse, { ok: true }>['result'],
+  { op: 'resolve' }
+>['value'];
+
+/** A Git remote's repository, or with `web` the issue or pull request a web URL names. */
+function resolveGithub(remote: string | null, web: boolean): ResolveValue {
+  const subject = web ? parseSubjectUrl(remote) : null;
+  const repo = web ? subject?.repo : parseRemote(remote);
+  if (!repo) return { kind: 'none', forge: 'none' };
+  const resolved = {
+    kind: 'resolved' as const,
+    forge: 'github',
+    repo,
+    plugin: githubPluginMetadata,
+  };
+  return subject ? { ...resolved, subject: subject.subject } : resolved;
+}
+
 export async function handleGithubOperation(
   request: ForgeRequest,
   options: GitHubOperationOptions
 ): Promise<ForgeResponse> {
   try {
     if (request.op === 'resolve') {
-      const repo = parseRemote(request.remote);
       return {
         operationId: request.operationId,
         ok: true,
-        result: {
-          op: 'resolve',
-          value: repo
-            ? { kind: 'resolved', forge: 'github', repo, plugin: githubPluginMetadata }
-            : { kind: 'none', forge: 'none' },
-        },
+        result: { op: 'resolve', value: resolveGithub(request.remote, request.web === true) },
       };
     }
 

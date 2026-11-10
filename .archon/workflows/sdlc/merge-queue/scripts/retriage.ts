@@ -16,7 +16,7 @@
  */
 
 import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, note, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { requestRetriage } from '../../.shared/launch.ts';
 import type { MergeSettled } from '../../.shared/merge.ts';
@@ -37,8 +37,7 @@ function main(): void {
     emit({ retriaged: [], summary: 'retriage_merged is off; no merged issue is re-triaged.' });
     return;
   }
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
   const merged = new Set((nullableJson(process.env.INPUTS_MERGED) ?? []) as number[]);

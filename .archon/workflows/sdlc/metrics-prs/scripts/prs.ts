@@ -6,12 +6,15 @@
  * total and per route. Pull requests a
  * round only continued, and merged ones whose rounds cannot be counted, are reported in
  * `skipped`; the metrics no record carries yet are reported in `not_available`.
+ * Merged pull requests merged at or after `lines_since` also record the test and
+ * production lines they added; without it, none do.
  */
 
 import { dirname, join } from 'node:path';
 import { issueMetricRecords } from '../../.shared/factory-issues.ts';
-import { factoryPrRuns, factoryPrs, prMetricRecords, readPrFacts } from '../../.shared/factory-prs.ts';
-import { artifactsDir, emit, refuse } from '../../.shared/io.ts';
+import { factoryPrRuns, factoryPrs, prMetricRecords, readPrFacts, sinceTime } from '../../.shared/factory-prs.ts';
+import { artifactsDir, emit, refuse, trimmed } from '../../.shared/io.ts';
+import { lineRecords, readPrFiles } from '../../.shared/pr-lines.ts';
 import { backfillRunReviews, droppedRoundPrs, prBuildRounds, reviewRoundRecords } from '../../.shared/review-rounds.ts';
 import { stateDocuments } from '../../.shared/state.ts';
 import { read } from '../../.shared/workitem.ts';
@@ -29,6 +32,8 @@ const NOT_AVAILABLE = [
   },
 ];
 
+const linesSince = trimmed(process.env.INPUTS_LINES_SINCE);
+
 try {
   const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
   const runsByUrl = factoryPrRuns(items);
@@ -39,11 +44,16 @@ try {
   const runs = dirname(artifactsDir());
   const backfill = (runId: string) => backfillRunReviews(join(runs, runId));
   const reviews = reviewRoundRecords(factory, runsByUrl, prBuildRounds(items), droppedRoundPrs(items), backfill);
+  // One pr.files read per pull request, so only the ones merged in the window are read.
+  const from = linesSince === '' ? Infinity : sinceTime(linesSince);
+  const merged = factory.filter(pr => pr.state === 'MERGED' && Date.parse(pr.mergedAt ?? '') >= from);
+  const lines = lineRecords(merged, runsByUrl, readPrFiles);
   emit({
-    metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...issueMetricRecords(items)],
+    metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...issueMetricRecords(items), ...lines.metrics],
     skipped,
     review_rounds_skipped: reviews.skipped,
     review_rounds_distribution: reviews.distribution,
+    lines_skipped: lines.skipped,
     not_available: NOT_AVAILABLE,
   });
 } catch (error) {

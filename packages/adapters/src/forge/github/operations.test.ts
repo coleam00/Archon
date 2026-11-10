@@ -47,6 +47,10 @@ function json(value: unknown, status = 200): Response {
   return Response.json(value, { status });
 }
 
+const failingFetch = async (): Promise<never> => {
+  throw new Error('Resolution must not fetch');
+};
+
 describe('GitHub outbound producer', () => {
   test('publishes bounded metadata without naming the child credential', () => {
     expect(githubPluginMetadata).toEqual({
@@ -57,6 +61,7 @@ describe('GitHub outbound producer', () => {
       hosts: ['github.com'],
       capabilities: [
         'resolve',
+        'resolve:subject',
         'checks.state',
         'checks.commit',
         'checks.logs',
@@ -156,6 +161,41 @@ describe('GitHub outbound producer', () => {
       ok: true,
       result: { op: 'resolve', value: { kind: 'resolved', repo: { host, path } } },
     });
+  });
+
+  test.each([
+    ['a pull request', 'https://github.com/Archon/Repo/pull/42', { kind: 'pr', number: 42 }],
+    ['an issue', 'https://github.com/Archon/Repo/issues/7', { kind: 'issue', number: 7 }],
+    [
+      'a link to one comment',
+      'https://github.com/Archon/Repo/pull/42#issuecomment-9',
+      { kind: 'pr', number: 42 },
+    ],
+  ])('resolves the web URL of %s to its repository and number', async (_label, remote, subject) => {
+    const response = await handleGithubOperation(
+      { operationId: 'resolve-web', op: 'resolve', remote, web: true },
+      { token: undefined, fetch: failingFetch }
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        op: 'resolve',
+        value: { kind: 'resolved', repo: { host: 'github.com', path: 'Archon/Repo' }, subject },
+      },
+    });
+  });
+
+  test.each([
+    'https://github.com/Archon/Repo',
+    'https://github.com/Archon/Repo/pull/0',
+    'https://github.com/Archon/Repo/tree/main',
+    'git@github.com:Archon/Repo.git',
+  ])('answers none for %s, which names no issue or pull request', async remote => {
+    const response = await handleGithubOperation(
+      { operationId: 'resolve-web', op: 'resolve', remote, web: true },
+      { token: undefined, fetch: failingFetch }
+    );
+    expect(response).toMatchObject({ ok: true, result: { value: { kind: 'none' } } });
   });
 
   test.each([

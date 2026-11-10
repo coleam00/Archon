@@ -10,13 +10,12 @@
  */
 
 import { record } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, workflowRunId } from '../../.shared/io.ts';
 import { createIssue } from '../../.shared/issue.ts';
 import { launchDetached } from '../../.shared/launch.ts';
 
 function main(): void {
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
   const issue = record(nullableJson(process.env.INPUTS_ISSUE));
   if (typeof issue?.title !== 'string' || typeof issue.body !== 'string' || issue.title.trim() === '' || issue.body.trim() === '') {

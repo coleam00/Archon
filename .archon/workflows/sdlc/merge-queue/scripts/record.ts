@@ -29,25 +29,23 @@
 
 import { nextRound, withBuild } from '../../.shared/build.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, note, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
-  type BaseAttention,
   MERGE_PATHS,
   type MergeAsked,
   type MergeAttention,
   type MergeDecisionEntry,
-  type MergeEffect,
   type MergeRecord,
   type MergeSettled,
   type MergeStatus,
-  type PolicyClass,
   type PrFacts,
   readBase,
   readPr,
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { askFields, type Attention, attentionWait, withOther } from '../../.shared/queue.ts';
+import { askFields, attentionWait, withOther } from '../../.shared/queue.ts';
 
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -72,32 +70,9 @@ interface Item {
   readonly record: MergeRecord | null;
 }
 
-/**
- * One sweep decision, as the sweep's output schema admits it: a return carries its
- * brief, an ask its question, and an ask whose brief may be blank offers no return.
- */
-type Decision = {
-  readonly number: number;
-  readonly class: PolicyClass;
-  readonly head: string;
-  readonly reran: boolean;
-  readonly reason: string;
-  readonly brief: string;
-} & (
-  | { readonly action: Exclude<SweepAction, 'return' | 'ask'>; readonly attention: null }
-  | { readonly action: 'return'; readonly attention: null }
-  | { readonly action: 'ask'; readonly attention: MergeAttention }
-  | { readonly action: 'ask'; readonly attention: Attention<Exclude<MergeEffect, 'return'>> }
-);
-
-export interface Sweep {
-  readonly decisions: readonly Decision[];
-  readonly base: {
-    readonly summary: string;
-    readonly attention: BaseAttention | null;
-  };
-  readonly summary: string;
-}
+/** The sweep's whole output, and one of its decisions, as its output schema admits them. */
+type Sweep = NodeOutput<'archon-merge-queue', 'sweep'>;
+type Decision = Sweep['decisions'][number];
 
 function message(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
@@ -268,8 +243,7 @@ function main(): void {
   const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
   const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
   const baseError = text(process.env.INPUTS_BASE_ERROR);
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const writes: Writes = { at: new Date().toISOString(), runId, lines: [], failed: [] };
   if (baseError !== '') recordBaseFailure(writes, settled, baseError);
   if (path === 'idle') {
