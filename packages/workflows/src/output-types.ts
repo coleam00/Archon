@@ -351,7 +351,9 @@ export async function generateOutputTypes(options: OutputTypesOptions): Promise<
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
   }
-  const same = existing === rendered.content;
+  // A checkout that converts line endings, as git does on Windows by default, hands the
+  // committed file back with CRLF. The generator writes LF, so compare on LF.
+  const same = existing?.replaceAll('\r\n', '\n') === rendered.content;
   if (options.check) return { path, status: same ? 'current' : 'stale', ...counts };
   if (same) return { path, status: 'unchanged', ...counts };
   await mkdir(dirname(path), { recursive: true });

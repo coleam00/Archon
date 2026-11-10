@@ -161,6 +161,12 @@ export const OUTPUT_ENUMS = {
     expect((await generate({ target: 'alpha', check: true })).status).toBe('current');
     expect((await generate({ target: 'alpha' })).status).toBe('unchanged');
 
+    // A checkout that converted the committed file to CRLF is still current.
+    const generated = await readFile(packFile('alpha'), 'utf-8');
+    await writeFile(packFile('alpha'), generated.replaceAll('\n', '\r\n'));
+    expect((await generate({ target: 'alpha', check: true })).status).toBe('current');
+    await writeFile(packFile('alpha'), generated);
+
     await writeFile(file, BLOCK.replace('[low, high]', '[low, mid, high]'));
     const before = await readFile(packFile('alpha'), 'utf-8');
     expect(await generate({ target: 'alpha', check: true })).toMatchObject({
