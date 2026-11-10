@@ -10,7 +10,7 @@
 
 import { type PrFacts, prRuns } from './factory-prs.ts';
 import { invokeForge } from './forge.ts';
-import { prFromUrl } from './merge.ts';
+import { prFromUrl } from './pr.ts';
 
 /** A test file, by its path: under a `__tests__`, `test(s)` or `spec` directory, `*.test.*`, `*_spec.*`, or `test_*`. Every other file is production. */
 const TEST_PATH = /(^|\/)(__tests__|tests?|spec)\/|[._](test|spec)\.|(^|\/)test_[^/]+$/;
