@@ -105,6 +105,7 @@
       "src/forge/github/workitems.test.ts",
       "src/forge/github/review-threads.test.ts",
       "src/forge/github/files.test.ts",
+      "src/forge/github/search-and-logs.test.ts",
       "src/forge/github/plugin.test.ts"
     ],
     [

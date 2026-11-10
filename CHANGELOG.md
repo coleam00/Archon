@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The forge contract can search a repository's issues and pull requests by text (`workitem.search`) and read the end of a check's log (`checks.logs`). The GitHub plugin implements both, and the SDLC pack's agents use them instead of `gh`.
+
 ## [0.14.0] - 2026-11-07
 
 The SDLC pack reaches GitHub only through the forge plugin, packs can declare settings, and `archon metrics` measures the factory.

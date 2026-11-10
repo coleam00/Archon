@@ -24,7 +24,7 @@ Inspect the current checkout only far enough to answer:
 
 - Does the described behavior or surface still exist?
 - Has later work delivered, superseded, or rejected the outcome?
-- Does another open issue already track this outcome? Search the tracker and read any candidate issue with its comments before choosing a verdict. Note what the search turns up that overlaps without duplicating, along with closed earlier attempts and recent merged changes on the same surface: they go in `related`.
+- Does another open issue already track this outcome? Search the tracker (use `archon forge workitem.search` with the qualified repository and `"state":"any"`, through the argv in `$ARCHON_CLI_COMMAND`) and read any candidate issue with its comments before choosing a verdict. Note what the search turns up that overlaps without duplicating, along with closed earlier attempts and recent merged changes on the same surface: they go in `related`.
 - Does one load-bearing solution assumption already conflict with current code?
 - Is the remaining work already clear enough to deliver?
 

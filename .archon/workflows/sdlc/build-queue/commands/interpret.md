@@ -12,7 +12,7 @@ The repository: `$INPUTS.repo`. Every item you declare is an issue in it.
 
 ## Resolve the message
 
-Read the message whole and judge what it asks for. It can name an issue by number or URL, describe issues to find, point at a file in the checkout, or paste a brief. Look items up with the tracker's CLI and read what you find before you declare it; a file path is read from the checkout.
+Read the message whole and judge what it asks for. It can name an issue by number or URL, describe issues to find, point at a file in the checkout, or paste a brief. Look items up through the Archon CLI, whose argv is the JSON string array in `$ARCHON_CLI_COMMAND`, as `<argv...> forge <op> --json --data '<request>'`, with `<repo>` = `{"host":…,"path":…}`, `$INPUTS.repo` split at its first `/`, and read what you find before you declare it: `workitem.view` takes `{"ref":{"repo":<repo>,"number":<n>}}`, and `workitem.search` takes `{"repo":<repo>,"text":"<terms>"}` for open issues and pull requests (`"state":"any"` adds closed ones, `"kind":"issue"` leaves pull requests out), matched by the forge's own search, so try more than one wording. A failed read is the answer, never an item that does not exist: report it, and never repeat it through another tool. A file path is read from the checkout.
 
 The build queue builds work intake already triaged. It never builds new work in this run: new work is filed and goes to intake, which triages it and routes it, including splitting it when it is too large.
 
