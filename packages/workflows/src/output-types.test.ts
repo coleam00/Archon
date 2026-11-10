@@ -5,7 +5,7 @@
  */
 import { providerRegistry } from '@archon/providers';
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp, readFile, realpath, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -214,7 +214,7 @@ export const OUTPUT_ENUMS = {
   });
 
   test('a workflow file is selected by its path: a bare filename, or one outside the project', async () => {
-    const local = join(cwd, 'probes');
+    const local = join(cwd, 'probe dir');
     await mkdir(local, { recursive: true });
     await writeFile(join(local, 'probe.yaml'), BLOCK.replace('name: block', 'name: probe'));
     const outside = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'output-types-'))));
@@ -223,7 +223,7 @@ export const OUTPUT_ENUMS = {
     const bare = await generate({ target: 'probe.yaml', targetCwd: local, out: 'probe.gen.ts' });
     expect(bare).toMatchObject({ path: join(local, 'probe.gen.ts'), workflows: 1, nodes: 1 });
     expect(await readFile(bare.path, 'utf-8')).toContain(
-      '`archon workflow types probes/probe.yaml --out probes/probe.gen.ts`'
+      "`archon workflow types 'probe dir/probe.yaml' --out 'probe dir/probe.gen.ts'`"
     );
 
     const external = await generate({ target: join(outside, 'external.yaml'), out: 'ext.gen.ts' });
@@ -244,6 +244,36 @@ export const OUTPUT_ENUMS = {
 
     const content = await readFile(result.path, 'utf-8');
     expect(() => new Bun.Transpiler({ loader: 'ts' }).transformSync(content)).not.toThrow();
+  });
+
+  test('a pack workflow that reads a pack setting generates by file as by name', async () => {
+    await mkdir(join(cwd, '.archon', 'workflows', 'alpha', '.pack'), { recursive: true });
+    await writeFile(
+      join(cwd, '.archon', 'workflows', 'alpha', '.pack', 'pack.yaml'),
+      'inputs:\n  ci:\n    type: enum\n    values: [forge, none]\n    default: forge\n'
+    );
+    const file = await writePackWorkflow(
+      'alpha',
+      'block',
+      BLOCK.replace('description: d', 'description: d\ninputs:\n  local: { default: x }').replace(
+        `bash: echo '{"ok":true}'`,
+        'bash: echo "$INPUTS_CI"'
+      )
+    );
+
+    expect(await generate({ target: 'block', out: 'by-name.gen.ts' })).toMatchObject({ nodes: 1 });
+    expect(await generate({ target: file, out: 'by-file.gen.ts' })).toMatchObject({ nodes: 1 });
+  });
+
+  test('a fresh output under a symlinked folder that did not exist is current', async () => {
+    await writePackWorkflow('alpha', 'block', BLOCK);
+    await mkdir(join(cwd, 'storage'));
+    await symlink(join(cwd, 'storage'), join(cwd, 'alias'));
+    const options = { target: 'alpha', out: 'alias/new/types.ts' };
+
+    await generate(options);
+
+    expect((await generate({ ...options, check: true })).status).toBe('current');
   });
 
   test('an unsupported keyword fails naming the workflow, the node and the keyword', async () => {

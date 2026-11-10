@@ -276,14 +276,20 @@ async function isWorkflowFolder(entry: ParsedWorkflowFile, folderPath: string): 
 }
 
 /**
- * One workflow file, read directly wherever it lives. Only its `output_format`s are
- * read, and discovery would not change them.
+ * One workflow file. A file the project discovers is taken as discovery loaded it, so a
+ * pack workflow keeps its pack's settings; any other file is parsed directly.
  */
 async function selectFile(
   context: WorkflowParseContext,
+  workflowsRoot: string,
   filePath: string,
   target: string
 ): Promise<Selection> {
+  const { parsed: discovered } = await loadProjectWorkflows(context, workflowsRoot);
+  for (const entry of discovered) {
+    const file = entry.filePath === undefined ? undefined : await existingRealPath(entry.filePath);
+    if (file === filePath) return { target, workflows: [entry.workflow] };
+  }
   const content = await readFile(filePath, 'utf-8');
   const parsed = parseWorkflow(
     content,
@@ -344,6 +350,22 @@ function pathTarget(cwd: string, path: string): string {
   return looksLikePath(target) ? target : `./${target}`;
 }
 
+/** One shell word: bare when it needs no quoting, POSIX single-quoted otherwise. */
+function shellWord(word: string): string {
+  return /^[\w@%+=:,./-]+$/.test(word) ? word : `'${word.replaceAll("'", "'\\''")}'`;
+}
+
+/**
+ * `path` through the real path of its nearest existing folder. Write and check spell it
+ * the same way whether or not its missing folders have been created yet.
+ */
+async function stablePath(path: string): Promise<string> {
+  const real = await existingRealPath(path);
+  if (real !== undefined) return real;
+  const parent = dirname(path);
+  return parent === path ? path : join(await stablePath(parent), basename(path));
+}
+
 /** A path target's real path: read from the invoking directory, then from the project. */
 async function resolveTargetPath(
   options: OutputTypesOptions,
@@ -375,7 +397,7 @@ async function select(options: OutputTypesOptions, cwd: string): Promise<Selecti
   const packPath = targetPath ?? (await existingRealPath(join(workflowsRoot, target)));
   const isDirectory = packPath !== undefined && (await stat(packPath)).isDirectory();
   if (targetPath !== undefined && !isDirectory) {
-    return await selectFile(context, targetPath, pathTarget(cwd, targetPath));
+    return await selectFile(context, workflowsRoot, targetPath, pathTarget(cwd, targetPath));
   }
   if (packPath !== undefined && isDirectory) {
     // A pack of the project reruns by its name; any other pack directory by its path.
@@ -404,10 +426,11 @@ export async function generateOutputTypes(options: OutputTypesOptions): Promise<
       `'${options.target}' is one workflow, not a pack, so it has no default file. Pass --out <file>.`
     );
   }
-  const outDir = (await existingRealPath(dirname(path))) ?? dirname(path);
   const out =
-    path === selection.defaultOut ? '' : ` --out ${projectPath(cwd, join(outDir, basename(path)))}`;
-  const command = `archon workflow types ${selection.target}${out}`;
+    path === selection.defaultOut
+      ? ''
+      : ` --out ${shellWord(projectPath(cwd, await stablePath(path)))}`;
+  const command = `archon workflow types ${shellWord(selection.target)}${out}`;
   const rendered = renderOutputTypes(command, selection.workflows);
   const counts = { workflows: rendered.workflows, nodes: rendered.nodes };
   let existing: string | undefined;
