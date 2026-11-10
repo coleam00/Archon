@@ -159,7 +159,8 @@ binding's file already in `--out`.
 
 A timer binding is a whole file: fire it once with `archon trigger fire --config <file>`,
 then schedule that command (`archon trigger schedule install --config <file>` on macOS;
-cron, systemd or Task Scheduler elsewhere). An event binding is one entry of the GitHub
+cron, systemd or Task Scheduler elsewhere). If you already schedule a queue another way, remove that
+schedule first, or both start runs for the same queue. An event binding is one entry of the GitHub
 source plugin's `bindings` array, so its file is the object to add there; see
 [Configure GitHub event starts](https://archon.diy/guides/workflow-triggers/#configure-github-event-starts).
 A generated file is the operator's from then on; write it again with `--force` after the
