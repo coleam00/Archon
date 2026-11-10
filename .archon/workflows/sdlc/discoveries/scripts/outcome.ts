@@ -30,7 +30,6 @@ import {
 import { sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { createIssue, viewIssue } from '../../.shared/issue.ts';
-import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { upsertComment } from '../../.shared/pr.ts';
 import { stateGet, statePutClaimed } from '../../.shared/state.ts';
 
@@ -58,9 +57,9 @@ function main(): void {
     emit({ summary: IDLE, written: [], dropped: [], asked: [], waiting: [], question: '' });
     return;
   }
-  const repo = nullableJson(process.env.INPUTS_REPO) as NodeOutput<'archon-discoveries', 'facts'>['repo'];
+  const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
   const queue = JSON.parse(readFileSync(join(artifactsDir(), 'drain', 'queue.json'), 'utf8')) as Queue;
-  const decisions = (nullableJson(process.env.INPUTS_DECISIONS) ?? []) as NodeOutput<'archon-discoveries', 'decide'>['decisions'];
+  const decisions = (nullableJson(process.env.INPUTS_DECISIONS) ?? []) as AgentDecision[];
   const summary = text(process.env.INPUTS_SUMMARY);
 
   const problems = checkDecisions(

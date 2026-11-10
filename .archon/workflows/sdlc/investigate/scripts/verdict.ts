@@ -10,12 +10,11 @@
  */
 
 import { emit, text } from '../../.shared/io.ts';
-import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 const verdict = text(process.env.INPUTS_VERDICT);
 emit({
   verdict,
   rooted: verdict === 'rooted',
   summary: text(process.env.INPUTS_SUMMARY),
-  report: JSON.parse(text(process.env.INPUTS_REPORT)) as NodeOutput<'archon-investigate', 'investigate'>['report'],
+  report: JSON.parse(text(process.env.INPUTS_REPORT)) as unknown,
 });

@@ -39,13 +39,12 @@ import {
   ForgeOperationError,
   record,
   type PrRecord,
+  type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { pushHead } from '../../.shared/push.ts';
 
-/** What prepare declared for the pull request, as its node's schema certified it. */
-type Prepared = NodeOutput<'archon-pr', 'prepare'>;
+type Repo = QualifiedPr['repo'];
 
 const { start: SECTION_START, end: SECTION_END } = DESCRIPTION_SECTION;
 
@@ -181,9 +180,9 @@ function recordPublishedPr(claimPath: string, pr: PrRecord, required: boolean): 
 }
 
 function publish(hasDescription: boolean): PrRecord {
-  const repo = JSON.parse(text(process.env.INPUTS_REPO)) as Prepared['repo'];
-  const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Prepared['head_repo'];
-  const existing = nullableJson(process.env.INPUTS_EXISTING) as Prepared['existing'];
+  const repo = JSON.parse(text(process.env.INPUTS_REPO)) as Repo;
+  const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Repo;
+  const existing = nullableJson(process.env.INPUTS_EXISTING) as number | null;
   const artifacts = artifactsDir();
 
   const named = nullableJson(process.env.INPUTS_PULL_REQUEST) as number | null;

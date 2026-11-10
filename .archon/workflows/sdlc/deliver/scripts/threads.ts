@@ -28,7 +28,6 @@ import {
   type QualifiedPr,
 } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, text } from '../../.shared/io.ts';
-import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 
 interface ThreadComment {
@@ -46,7 +45,10 @@ interface Thread {
   readonly comments: readonly ThreadComment[];
 }
 
-type Answer = NodeOutput<'archon-deliver', 'settle-threads'>['answers'][number];
+interface Answer {
+  readonly thread: string;
+  readonly reply: string;
+}
 
 interface PrThreads {
   readonly open: boolean;

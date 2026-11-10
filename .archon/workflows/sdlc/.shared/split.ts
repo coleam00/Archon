@@ -11,13 +11,11 @@
  * the item's outcome waits on those as much as on the filed ones.
  */
 
-import type { NodeOutput } from './outputs.generated.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
-/** The slice agent's answer, as archon-split.yaml's slice node declares it. */
-type Answer = NodeOutput<'archon-split', 'slice'>['split'];
-/** What the slice agent judged the item to be. */
-export type SplitKind = Exclude<Answer['kind'], 'whole'>;
+/** What the slice agent judged the item to be; a test proves archon-split.yaml's enum agrees. */
+export const SPLIT_KINDS = ['prd', 'epic', 'bundle'] as const;
+export type SplitKind = (typeof SPLIT_KINDS)[number];
 
 export interface SplitIssue {
   readonly key: string;
@@ -39,7 +37,7 @@ export interface AdoptedIssue {
 }
 
 /** The build routes a split agent can hand an item back to, built as one work item. */
-export type WholeRoute = Extract<Answer, { kind: 'whole' }>['route'];
+export type WholeRoute = 'plan' | 'deliver';
 
 /**
  * `filing` while publish files the issues; `done` once every one is filed and a PRD is

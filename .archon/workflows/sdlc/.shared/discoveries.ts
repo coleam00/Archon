@@ -12,13 +12,15 @@
  * key twice recovers the issue instead of opening another.
  */
 
-import type { NodeOutput } from './outputs.generated.ts';
+import type { QualifiedPr } from './forge.ts';
 import type { fetchDefaultBranch } from './remote.ts';
 import type { DiscoveryRecord } from './report.ts';
 import { isObject } from './io.ts';
 
 export const RUNS_PREFIX = 'discoveries/runs/';
 const KEY = /^[a-z0-9][a-z0-9-]{2,80}$/;
+
+export type IssueRef = QualifiedPr;
 
 export interface Question {
   /** The keys of the asked decisions this question covers. */
@@ -124,12 +126,25 @@ export interface Queue {
   readonly runs: readonly QueuedRun[];
 }
 
-/**
- * What the deciding agent declared for one discovery, as archon-discoveries.yaml's
- * decide node declares it. A `track` comment is evidence the issue does not hold yet,
- * and null posts nothing; a `wait` is left undecided, so a later pass queues its refs again.
- */
-export type AgentDecision = NodeOutput<'archon-discoveries', 'decide'>['decisions'][number];
+/** What the deciding agent declared for one discovery, as its output schema admits it. */
+export type AgentDecision = {
+  readonly key: string;
+  readonly refs: readonly string[];
+  readonly title: string;
+} & (
+  | { readonly outcome: 'file'; readonly body: string; readonly reason: string }
+  | {
+      readonly outcome: 'track';
+      readonly issue: IssueRef;
+      /** Evidence the issue does not hold yet; null posts nothing. */
+      readonly comment: string | null;
+      readonly reason: string;
+    }
+  | { readonly outcome: 'drop'; readonly reason: string }
+  | { readonly outcome: 'ask'; readonly question: string; readonly recommendation: string }
+  /** Left undecided, so a later pass queues its refs again. */
+  | { readonly outcome: 'wait'; readonly reason: string }
+);
 
 /**
  * The exact checks before any write: every queued ref is decided exactly once, by a

@@ -9,15 +9,14 @@
  * INPUTS_RETRIAGE from revisit.
  */
 
-import { recordRevisit } from '../../.shared/build.ts';
+import { type BlockedItem, recordRevisit } from '../../.shared/build.ts';
 import { emit, note, nullableJson, refuse, text } from '../../.shared/io.ts';
 import { requestRetriage } from '../../.shared/launch.ts';
-import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 function main(): void {
-  const blocked = nullableJson(process.env.INPUTS_BLOCKED) as NodeOutput<'archon-build-queue', 'blocked'>['blocked'];
-  const judged = nullableJson(process.env.INPUTS_RETRIAGE) as NodeOutput<'archon-build-queue', 'revisit'>['retriage'];
-  const repo = nullableJson(process.env.INPUTS_REPO) as NodeOutput<'archon-build-queue', 'start'>['repo'];
+  const blocked = nullableJson(process.env.INPUTS_BLOCKED) as BlockedItem[];
+  const judged = nullableJson(process.env.INPUTS_RETRIAGE) as { number: number; reason: string }[];
+  const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
   const runId = text(process.env.WORKFLOW_ID);
   const listed = new Set(blocked.map(item => item.number));
   const stray = judged.find(entry => !listed.has(entry.number));

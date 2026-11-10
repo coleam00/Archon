@@ -42,12 +42,14 @@ import {
   statePut,
   statePutClaimed,
 } from './state.ts';
-import { type NodeOutput, OUTPUT_ENUMS } from './outputs.generated.ts';
+import { OUTPUT_ENUMS } from './outputs.generated.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
-/** The trust enum archon-intake.yaml's facts node declares, which also admits null. */
-export const TRUSTS = OUTPUT_ENUMS['archon-intake'].facts['decision.trust'].filter(trust => trust !== null);
+/** The trust and path enums archon-intake.yaml's facts node declares; its trust also admits null. */
+const INTAKE_ENUMS = OUTPUT_ENUMS['archon-intake'].facts;
+export const TRUSTS = INTAKE_ENUMS['decision.trust'].filter(trust => trust !== null);
 export type Trust = (typeof TRUSTS)[number];
+export const INTAKE_PATHS = INTAKE_ENUMS['decision.path'];
 /**
  * What a request records: a forge event, or `retriage`, a pack run's own request to
  * re-triage the item, recorded by that run, whose `run_id` it carries.
@@ -143,19 +145,22 @@ export interface WorkItem {
   readonly history: readonly HistoryEntry[];
 }
 
-/**
- * What the facts node decided for the item it claimed, handed to the outcome node, as
- * archon-intake.yaml's facts node declares it. Its schema leaves the stage and the two
- * pieces of the stored work item it carries loose, so their own types state them here.
- */
-export type IntakeDecision = Omit<
-  NonNullable<NodeOutput<'archon-intake', 'facts'>['decision']>,
-  'promoted' | 'stage' | 'notes'
-> & {
+/** What the facts node decided for the item it claimed, handed to the outcome node. */
+export interface IntakeDecision {
+  readonly path: (typeof INTAKE_PATHS)[number];
+  readonly trust: Trust | null;
   readonly promoted: Promotion | null;
   readonly stage: Stage;
+  readonly body_digest: string;
+  /**
+   * The issue's labels at pickup that are this run's to remove; the outcome removes
+   * only owned labels among them.
+   */
+  readonly labels: readonly string[];
+  /** The request labels on the issue that wait for a request not yet recorded. */
+  readonly waiting: readonly string[];
   readonly notes: readonly HistoryEntry[];
-};
+}
 
 /** Triage's verdict as the outcome node receives it. */
 export interface TriageResult extends Omit<TriageFacts, 'at' | 'run_id'> {

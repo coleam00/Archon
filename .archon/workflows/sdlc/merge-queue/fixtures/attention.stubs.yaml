@@ -10,25 +10,8 @@ facts:
     - item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
       pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
       url: "https://github.com/example/repo/pull/42"
-      facts:
-        pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
-        url: "https://github.com/example/repo/pull/42"
-        title: "stub: fix the thing"
-        state: open
-        is_draft: false
-        base: dev
-        default_branch: dev
-        default_head: "2222222"
-        behind: 0
-        head: feature
-        head_revision: "1111111"
-        merge_commit: null
-        mergeable: clean
-        checks: { state: green, failing: [], pending: [] }
-        threads: { unresolved: 0, urls: [] }
-        verdict: { state: ready, reviewed: "1111111", url: "https://github.com/example/repo/pull/42#issuecomment-1", contract: complete }
+      facts: { state: open, head_revision: "1111111", mergeable: clean, checks: { state: green }, threads: { unresolved: 0 }, verdict: { state: ready, reviewed: "1111111" } }
       record: null
-      validation: null
   settled: []
   gate: "'bun' '/stub/gate.ts' '--method' 'squash' '--ci' 'forge'"
   ci: forge
@@ -61,22 +44,7 @@ record:
     - { id: park, label: "stub: park it", does: "stub: parks it", value: { id: park, label: "stub: park it", does: "stub: parks it", effect: park, ruling: "" } }
   recommendation: { option: merge, why: "stub: why", confidence: medium }
   class: pr
-  asked:
-    by: pr
-    item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
-    pr: { repo: { host: "github.com", path: "example/repo" }, number: 42 }
-    head: "1111111"
-    brief: "stub: rework PR 42 under the ruling"
-    attention:
-      what: "stub: PR 42 changes the SDLC pack; merge it?"
-      why: "stub: what either answer changes"
-      recommendation: { choice: merge, why: "stub: why", evidence: "stub: evidence", confidence: medium, would_change: "stub: what would change it" }
-      choices:
-        - { id: merge, label: "stub: merge it", does: "stub: merges once the gate passes", effect: merge, ruling: "" }
-        - { id: park, label: "stub: park it", does: "stub: stops working it", effect: park, ruling: "" }
-        - { id: other, label: "stub: something else", does: "stub: does what the answer says", effect: return, ruling: "" }
-      if_unanswered: "stub: it waits"
-      links: ["https://github.com/example/repo/pull/42"]
+  asked: { by: pr, attention: {} }
 ask: { decision: merge, text: "" }
 ruling:
   decision: merge

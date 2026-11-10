@@ -80,129 +80,12 @@ nodes:
       properties:
         path: { type: string, enum: [idle, record, sweep] }
         # The default branch snapshot, or null with its diagnostic in base_error.
-        base:
-          type: [object, 'null']
-          properties:
-            branch: { type: string }
-            head: { type: string }
-            # The checks on one commit: only a green one passes, so a gated or unknown
-            # one is failing.
-            checks: &checks
-              type: object
-              properties:
-                state: { type: string, enum: [none, pending, green, red] }
-                failing: { type: array, items: { type: string } }
-                pending: { type: array, items: { type: string } }
-              required: [state, failing, pending]
-          required: [branch, head, checks]
+        base: { type: [object, 'null'] }
         base_error: { type: string }
         # The claimed pull requests the sweep decides, each with its facts snapshot.
-        items:
-          type: array
-          items:
-            type: object
-            properties:
-              # The issue whose work item the queue claimed.
-              item: &ref
-                type: object
-                properties:
-                  repo:
-                    type: object
-                    properties:
-                      host: { type: string }
-                      path: { type: string }
-                    required: [host, path]
-                  number: { type: integer }
-                required: [repo, number]
-              pr: *ref
-              url: { type: string }
-              # One snapshot of everything the gate and the sweep read about the pull request.
-              facts:
-                type: object
-                properties:
-                  pr: *ref
-                  url: { type: string }
-                  title: { type: string }
-                  state: { type: string, enum: [open, closed, merged] }
-                  is_draft: { type: boolean }
-                  base: { type: string }
-                  default_branch: { type: string }
-                  # The default branch's head when the pull request was read.
-                  default_head: { type: string }
-                  # How many commits of the default branch at default_head the head lacks.
-                  behind: { type: number }
-                  head: { type: string }
-                  head_revision: { type: string }
-                  merge_commit: { type: [string, 'null'] }
-                  mergeable: { type: string, enum: [clean, conflict, unknown] }
-                  checks: *checks
-                  threads:
-                    type: object
-                    properties:
-                      unresolved: { type: integer }
-                      urls: { type: array, items: { type: string } }
-                    required: [unresolved, urls]
-                  # The trusted review comment. none: there is none. unstamped: it was
-                  # published before the verdict was stamped, so it carries no verdict a
-                  # script can read. duplicate: more than one, so none is canonical.
-                  verdict:
-                    type: object
-                    properties:
-                      state: { type: string, enum: [none, unstamped, duplicate, ready, not_ready] }
-                      # The commit the verdict is about.
-                      reviewed: { type: [string, 'null'] }
-                      url: { type: [string, 'null'] }
-                      # The stamped contract coverage; null when the comment predates
-                      # the stamp or none is trusted.
-                      contract: { type: [string, 'null'], enum: [complete, open, null] }
-                    required: [state, reviewed, url, contract]
-                required:
-                  [
-                    pr,
-                    url,
-                    title,
-                    state,
-                    is_draft,
-                    base,
-                    default_branch,
-                    default_head,
-                    behind,
-                    head,
-                    head_revision,
-                    merge_commit,
-                    mergeable,
-                    checks,
-                    threads,
-                    verdict,
-                  ]
-              # The item's merge record as its work item stores it; null before its first decision.
-              record: { type: [object, 'null'] }
-              # The latest validation its build rounds stored, which the gate trusts under `ci: none`.
-              validation: { type: [object, 'null'] }
-            required: [item, pr, url, facts, record, validation]
+        items: { type: array, items: { type: object } }
         # Claimed items settled without the sweep: merged or closed already, or no pull request.
-        settled:
-          type: array
-          items:
-            type: object
-            properties:
-              item: *ref
-              pr:
-                type: [object, 'null']
-                properties:
-                  repo:
-                    type: object
-                    properties:
-                      host: { type: string }
-                      path: { type: string }
-                    required: [host, path]
-                  number: { type: integer }
-                required: [repo, number]
-              status: { type: string, enum: [merged, parked, waiting] }
-              # The decision label recorded.
-              decision: { type: string }
-              reason: { type: string }
-            required: [item, pr, status, decision, reason]
+        settled: { type: array, items: { type: object } }
         # The gate command the sweep runs to merge.
         gate: { type: string }
         # The pack's ci setting: what the gate trusts at a head besides the verdict.
@@ -264,7 +147,7 @@ nodes:
                   reran: *reran
                   reason: *reason
                   brief: *brief
-                  attention: &pr_attention
+                  attention:
                     type: object
                     additionalProperties: false
                     properties:
@@ -345,7 +228,7 @@ nodes:
                 what: { type: string, pattern: '\S' }
                 why: { type: string, pattern: '\S' }
                 recommendation: *recommendation
-                choices: &base_choices
+                choices:
                   type: array
                   minItems: 1
                   items:
@@ -395,59 +278,13 @@ nodes:
               id: { type: string }
               label: { type: string }
               does: { type: string }
-              value:
-                type: object
-                properties:
-                  id: { type: string }
-                  label: { type: string }
-                  does: { type: string }
-                  # One of the effects the asked item's choices declare.
-                  effect: { type: string }
-                  ruling: { type: string }
-                required: [id, label, does, effect, ruling]
+              value: { type: object }
             required: [id, label, does, value]
         # The wait's recommendation; null when nothing is asked.
-        recommendation:
-          type: [object, 'null']
-          properties:
-            # The id of the recommended option.
-            option: { type: string }
-            why: { type: string }
-            confidence: { type: string, enum: [low, medium, high] }
-          required: [option, why, confidence]
+        recommendation: { type: [object, 'null'] }
         class: { type: string, enum: ['', pr, base] }
         # What the ruling node needs to act on the answer; null when nothing is asked.
-        # A pull request's question is the sweep's item with the queue's `other` choice
-        # added; a red default branch's is the sweep's item as declared.
-        asked:
-          anyOf:
-            - type: 'null'
-            - type: object
-              properties:
-                by: { type: string, enum: [pr] }
-                item: *ref
-                pr: *ref
-                # The head the question is about.
-                head: { type: string }
-                # The brief a return choice hands the build queue; empty offers no return.
-                brief: { type: string }
-                attention: *pr_attention
-              required: [by, item, pr, head, brief, attention]
-            - type: object
-              properties:
-                by: { type: string, enum: [base] }
-                attention:
-                  type: object
-                  additionalProperties: false
-                  properties:
-                    what: *what
-                    why: *why
-                    recommendation: *recommendation
-                    choices: *base_choices
-                    if_unanswered: *if_unanswered
-                    links: *links
-                  required: *attention
-              required: [by, attention]
+        asked: { type: [object, 'null'] }
       required: [merged, summary, attention, options, recommendation, class, asked]
 
   # An issue its merged pull request left open (`Refs #N`) goes back to intake, the

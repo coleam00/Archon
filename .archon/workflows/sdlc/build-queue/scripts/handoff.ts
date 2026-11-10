@@ -13,11 +13,10 @@ import { record } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, workflowRunId } from '../../.shared/io.ts';
 import { createIssue } from '../../.shared/issue.ts';
 import { launchDetached } from '../../.shared/launch.ts';
-import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 function main(): void {
   const runId = workflowRunId();
-  const repo = nullableJson(process.env.INPUTS_REPO) as NodeOutput<'archon-build-queue', 'start'>['repo'];
+  const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
   const issue = record(nullableJson(process.env.INPUTS_ISSUE));
   if (typeof issue?.title !== 'string' || typeof issue.body !== 'string' || issue.title.trim() === '' || issue.body.trim() === '') {
     throw new Error('interpret declared new work without a title and body');

@@ -8,13 +8,13 @@
  * verdict fields, each "null" when triage did not run.
  */
 
-import { type ClosePlan, planClose } from '../../.shared/close.ts';
+import { type Closure, type ClosePlan, planClose } from '../../.shared/close.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
-import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import {
+  type Contract,
   type LabelVerdict,
   isPackLabel,
   type PackLabel,
@@ -33,9 +33,6 @@ import {
   type WorkItem,
 } from '../../.shared/workitem.ts';
 
-/** Triage's verdict, as the outcome node's bindings carry its fields. */
-type Verdict = NodeOutput<'archon-triage-block', 'verdict'>;
-
 /**
  * A string field of triage's verdict, or null when triage did not run. The engine
  * binds a string raw, not as JSON, and a skipped producer's `if_skipped: null` as
@@ -48,10 +45,10 @@ function verdictText(value: string | undefined): string | null {
 
 /** Triage's verdict, or null when triage did not run on this path. */
 function triageResult(): TriageResult | null {
-  const contract = verdictText(process.env.INPUTS_CONTRACT) as Verdict['contract'] | null;
+  const contract = verdictText(process.env.INPUTS_CONTRACT) as Contract | null;
   if (contract === null) return null;
   const route = verdictText(process.env.INPUTS_ROUTE) as Route;
-  const closure = nullableJson(process.env.INPUTS_CLOSURE) as Verdict['closure'];
+  const closure = nullableJson(process.env.INPUTS_CLOSURE) as Closure | null;
   // A missing binding reads as null; a NO_ACTION verdict without its closure would
   // label the item for a close that never happens.
   if ((contract === 'NO_ACTION') !== (closure !== null)) {
@@ -60,17 +57,17 @@ function triageResult(): TriageResult | null {
   const verdict: LabelVerdict = contract === 'READY' ? { contract, route } : { contract };
   return {
     verdict,
-    pull_request: nullableJson(process.env.INPUTS_PULL_REQUEST) as Verdict['pull_request'],
-    type: nullableJson(process.env.INPUTS_TYPE) as Verdict['type'],
-    size: nullableJson(process.env.INPUTS_SIZE) as Verdict['size'],
-    complexity: nullableJson(process.env.INPUTS_COMPLEXITY) as Verdict['complexity'],
-    importance: nullableJson(process.env.INPUTS_IMPORTANCE) as Verdict['importance'],
-    urgency: nullableJson(process.env.INPUTS_URGENCY) as Verdict['urgency'],
-    related: (nullableJson(process.env.INPUTS_RELATED) as Verdict['related'] | null) ?? [],
+    pull_request: nullableJson(process.env.INPUTS_PULL_REQUEST) as number | null,
+    type: nullableJson(process.env.INPUTS_TYPE) as TriageResult['type'],
+    size: nullableJson(process.env.INPUTS_SIZE) as TriageResult['size'],
+    complexity: nullableJson(process.env.INPUTS_COMPLEXITY) as TriageResult['complexity'],
+    importance: nullableJson(process.env.INPUTS_IMPORTANCE) as TriageResult['importance'],
+    urgency: nullableJson(process.env.INPUTS_URGENCY) as TriageResult['urgency'],
+    related: (nullableJson(process.env.INPUTS_RELATED) as TriageResult['related']) ?? [],
     closure,
-    labels: nullableJson(process.env.INPUTS_LABELS) as Verdict['labels'],
+    labels: nullableJson(process.env.INPUTS_LABELS) as string[],
     summary: text(process.env.INPUTS_SUMMARY),
-    report: nullableJson(process.env.INPUTS_REPORT) as Verdict['report'],
+    report: nullableJson(process.env.INPUTS_REPORT) as TriageResult['report'],
   };
 }
 

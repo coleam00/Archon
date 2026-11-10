@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
-import { filedIssues, splitMarker } from '../../workflows/sdlc/.shared/split';
+import { filedIssues, SPLIT_KINDS, splitMarker } from '../../workflows/sdlc/.shared/split';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import { mirrorLabels, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
-import { gitCheckout, hostCli, labelWrites, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
+import { gitCheckout, hostCli, labelWrites, PACK, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -112,6 +112,14 @@ function ok(result: ScriptRun): Record<string, unknown> {
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
+
+test("the split kinds are the slice node's own enum", () => {
+  const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'split/archon-split.yaml'), 'utf8')) as {
+    nodes: { id: string; output_format?: { properties: { split: { anyOf: { properties: { kind: { enum: string[] } } }[] } } } }[];
+  };
+  const branches = workflow.nodes.find(node => node.id === 'slice')?.output_format?.properties.split.anyOf ?? [];
+  expect(branches.flatMap(branch => branch.properties.kind.enum)).toEqual([...SPLIT_KINDS, 'whole']);
+});
 
 describe('split publish', () => {
   test('files the current phase once, records later phases unfiled, and a rerun files none again', () => {

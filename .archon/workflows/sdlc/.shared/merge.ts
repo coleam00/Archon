@@ -13,24 +13,39 @@
 
 import { itemPullRequest, type Validation } from './build.ts';
 import { invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
-import { type NodeOutput, OUTPUT_ENUMS } from './outputs.generated.ts';
 import { viewPr } from './pr.ts';
 import { type Attention, type DecisionEntry, withDecision } from './queue.ts';
-import { readReviewStamp } from './review-comment.ts';
+import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
-// archon-merge-queue.yaml's output_format declarations own the queue's vocabularies and
-// the shapes its nodes hand each other; everything here is read from them.
-type MergeFacts = NodeOutput<'archon-merge-queue', 'facts'>;
-type Sweep = NodeOutput<'archon-merge-queue', 'sweep'>;
-
-/** What a merge choice does when a person picks it. */
-export type MergeEffect = NonNullable<Sweep['decisions'][number]['attention']>['choices'][number]['effect'];
+/** What a merge choice does when a person picks it; archon-merge-queue.yaml declares the same enum. */
+export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
+export type MergeEffect = (typeof MERGE_EFFECTS)[number];
 export type MergeAttention = Attention<MergeEffect>;
 
-export const MERGE_PATHS = OUTPUT_ENUMS['archon-merge-queue'].facts.path;
+/** The one answer to a red default branch: the queue holds merges until it is green again. */
+export const BASE_EFFECTS = ['hold'] as const;
+export type BaseAttention = Attention<(typeof BASE_EFFECTS)[number]>;
+
+/** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
+export type SweepAction = 'merged' | 'return' | 'ask' | 'wait';
+export const POLICY_CLASSES = ['clear', 'unclear'] as const;
+export type PolicyClass = (typeof POLICY_CLASSES)[number];
+export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
+export type MergePath = (typeof MERGE_PATHS)[number];
+/** Which attention item a run raised: its class label, which the YAML also declares. */
+export type MergeAskedBy = 'pr' | 'base';
 /** What the record node asked, which the ruling node needs to act on the answer. */
-export type MergeAsked = NonNullable<NodeOutput<'archon-merge-queue', 'record'>['asked']>;
+export type MergeAsked =
+  | {
+      readonly by: Extract<MergeAskedBy, 'pr'>;
+      readonly item: QualifiedPr;
+      readonly pr: QualifiedPr;
+      readonly head: string;
+      readonly brief: string;
+      readonly attention: MergeAttention;
+    }
+  | { readonly by: Extract<MergeAskedBy, 'base'>; readonly attention: BaseAttention };
 export const MERGE_METHODS = ['squash', 'merge'] as const;
 /** The pack's `ci` setting; `.pack/pack.yaml` declares the same values. */
 export const CI_MODES = ['forge', 'none'] as const;
@@ -101,7 +116,14 @@ export function mergeWaits(doc: WorkItem): boolean {
 export const UNREADABLE = 'waiting (unreadable)';
 
 /** A claimed item the facts node settled without the sweep, which the record node writes. */
-export type MergeSettled = MergeFacts['settled'][number];
+export interface MergeSettled {
+  readonly item: QualifiedPr;
+  readonly pr: QualifiedPr | null;
+  readonly status: Extract<MergeStatus, 'merged' | 'parked' | 'waiting'>;
+  /** The decision label recorded. */
+  readonly decision: string;
+  readonly reason: string;
+}
 
 export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
 
@@ -145,12 +167,50 @@ export function withMerge(doc: WorkItem, change: MergeChange): WorkItem {
 
 // --- the facts the gate reads -----------------------------------------------------
 
-/** One snapshot of a pull request, as the facts node declares it on each claimed item. */
-export type PrFacts = MergeFacts['items'][number]['facts'];
-export type Checks = PrFacts['checks'];
-export type Verdict = PrFacts['verdict'];
+export const CHECK_STATES = ['none', 'pending', 'green', 'red'] as const;
+export interface Checks {
+  readonly state: (typeof CHECK_STATES)[number];
+  readonly failing: readonly string[];
+  readonly pending: readonly string[];
+}
 
-const MERGEABLE = OUTPUT_ENUMS['archon-merge-queue'].facts['items[].facts.mergeable'];
+/**
+ * `none`: no trusted review comment. `unstamped`: published before the verdict was
+ * stamped, so it carries no verdict a script can read. `duplicate`: more than one
+ * trusted review comment, so none of them is the canonical one.
+ */
+export const VERDICT_STATES = ['none', 'unstamped', 'duplicate', 'ready', 'not_ready'] as const;
+export interface Verdict {
+  readonly state: (typeof VERDICT_STATES)[number];
+  /** The commit the verdict is about. */
+  readonly reviewed: string | null;
+  readonly url: string | null;
+  /** The stamped contract coverage; null when the comment predates the stamp or none is trusted. */
+  readonly contract: ContractCoverage | null;
+}
+
+const MERGEABLE = ['clean', 'conflict', 'unknown'] as const;
+
+export interface PrFacts {
+  readonly pr: QualifiedPr;
+  readonly url: string;
+  readonly title: string;
+  readonly state: 'open' | 'closed' | 'merged';
+  readonly is_draft: boolean;
+  readonly base: string;
+  readonly default_branch: string;
+  /** The default branch's head when the pull request was read. */
+  readonly default_head: string;
+  /** How many commits of the default branch at `default_head` the pull request's head lacks. */
+  readonly behind: number;
+  readonly head: string;
+  readonly head_revision: string;
+  readonly merge_commit: string | null;
+  readonly mergeable: (typeof MERGEABLE)[number];
+  readonly checks: Checks;
+  readonly threads: { readonly unresolved: number; readonly urls: readonly string[] };
+  readonly verdict: Verdict;
+}
 
 /** The forge operations the merge queue reads and merges through. */
 export const MERGE_QUEUE_FORGE_OPERATIONS = [
@@ -177,7 +237,11 @@ export function requireMergeSource(repo: QualifiedPr['repo']): void {
   }
 }
 
-export type BaseFacts = NonNullable<MergeFacts['base']>;
+export interface BaseFacts {
+  readonly branch: string;
+  readonly head: string;
+  readonly checks: Checks;
+}
 
 /** The default branch, its head commit and the checks on it. */
 export function readBase(repo: QualifiedPr['repo']): BaseFacts {

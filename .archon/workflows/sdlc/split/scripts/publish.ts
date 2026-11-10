@@ -28,7 +28,6 @@ import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { closeIssue, createIssue, viewIssue } from '../../.shared/issue.ts';
 import { ROUTE_LABEL, writeLabels } from '../../.shared/labels.ts';
-import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { upsertComment } from '../../.shared/pr.ts';
 import {
   type AdoptedIssue,
@@ -43,14 +42,26 @@ import {
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { newest, readWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
-/** The slice agent's answer, as its node's schema certified it. */
-type Slice = NodeOutput<'archon-split', 'slice'>;
-/** One issue to file now. */
-type Planned = Slice['issues'][number];
+/** One issue as the slice node's schema certified it. */
+interface Planned {
+  readonly key: string;
+  readonly title: string;
+  readonly body: string;
+}
+
 /** A later phase, recorded on the item and not filed yet. */
-type Later = Slice['later'][number];
+interface Later {
+  readonly title: string;
+  readonly signal: string;
+}
+
 /** An existing issue the agent listed instead of filing. */
-type Existing = Slice['existing'][number];
+interface Existing {
+  readonly number: number;
+  readonly why: string;
+}
+
+type Answer = { readonly kind: SplitKind } | { readonly kind: 'whole'; readonly route: WholeRoute };
 
 const COMMENT_MARKER = '<!-- archon-split -->';
 
@@ -212,10 +223,10 @@ function main(): void {
     emit({ path, item: item.number, kind: null, issues: filedOn(doc), adopted: [], summary: `Issue ${String(item.number)}: ${reason}` });
     return;
   }
-  const answer = nullableJson(process.env.INPUTS_SPLIT) as Slice['split'] | null;
-  const planned = nullableJson(process.env.INPUTS_ISSUES) as Slice['issues'] | null;
-  const later = nullableJson(process.env.INPUTS_LATER) as Slice['later'] | null;
-  const existing = nullableJson(process.env.INPUTS_EXISTING) as Slice['existing'] | null;
+  const answer = nullableJson(process.env.INPUTS_SPLIT) as Answer | null;
+  const planned = nullableJson(process.env.INPUTS_ISSUES) as Planned[] | null;
+  const later = nullableJson(process.env.INPUTS_LATER) as Later[] | null;
+  const existing = nullableJson(process.env.INPUTS_EXISTING) as Existing[] | null;
   if (path !== 'slice' || answer === null || planned === null || later === null || existing === null)
     throw new Error(`the ${path} path reached publish with no split`);
   const summary = text(process.env.INPUTS_SUMMARY);

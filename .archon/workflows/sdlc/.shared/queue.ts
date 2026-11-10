@@ -11,36 +11,45 @@
  * prose. A choice's effect vocabulary belongs to the queue that declares it.
  */
 
-import type { NodeOutput } from './outputs.generated.ts';
-
-/**
- * The attention item as a deciding agent declares it. Each queue's output_format
- * declares this shape with its own effects. The build queue's route node stands for the
- * shape here, and another node's item is checked against it wherever it is passed in.
- */
-type Declared = NonNullable<NodeOutput<'archon-build-queue', 'route'>['attention']>;
-
-/**
- * One answer the person can give, and what the queue does when it is chosen. `id` is
- * what the attention answer carries. `ruling` is written into the issue body as a dated
- * "Current scope" section when the choice is chosen, so the next run and review read it
- * as the contract; empty writes no section.
- */
-export type Choice<Effect extends string> = Omit<Declared['choices'][number], 'effect'> & {
+/** One answer the person can give, and what the queue does when it is chosen. */
+export interface Choice<Effect extends string> {
+  /** The id the attention answer carries: kebab-case, unique within the item. */
+  readonly id: string;
+  readonly label: string;
+  /** What choosing it does, in plain words. */
+  readonly does: string;
   readonly effect: Effect;
-};
+  /**
+   * The ruling written into the issue body as a dated "Current scope" section when
+   * this is chosen, so the next run and review read it as the contract. Empty writes
+   * no section.
+   */
+  readonly ruling: string;
+}
 
-/** The recommended choice, by its id, with the evidence for it and what would change it. */
-export type Recommendation = Declared['recommendation'];
+export const CONFIDENCES = ['low', 'medium', 'high'] as const;
 
-/**
- * `what` is the item and the decision in plain words, `why` what happens if it is decided
- * either way, `if_unanswered` whether the item waits, blocks others, or goes stale while
- * nobody answers, and `links` the pull request, the review report and the run.
- */
-export type Attention<Effect extends string> = Omit<Declared, 'choices'> & {
+export interface Recommendation {
+  /** The id of the recommended choice. */
+  readonly choice: string;
+  readonly why: string;
+  readonly evidence: string;
+  readonly confidence: (typeof CONFIDENCES)[number];
+  readonly would_change: string;
+}
+
+export interface Attention<Effect extends string> {
+  /** The item and the decision, in plain words. */
+  readonly what: string;
+  /** What happens if it is decided either way. */
+  readonly why: string;
+  readonly recommendation: Recommendation;
   readonly choices: readonly Choice<Effect>[];
-};
+  /** Whether the item waits, blocks others, or goes stale while nobody answers. */
+  readonly if_unanswered: string;
+  /** The pull request, the review report and the run. */
+  readonly links: readonly string[];
+}
 
 /** One decision a queue recorded on an item, with the person's answer when it asked. */
 export interface DecisionEntry {
