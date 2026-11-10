@@ -2166,7 +2166,7 @@ archon pack bindings <pack> \
 - `--host` is the execution host the starts are assigned to: the server's `ARCHON_TRIGGER_HOST`, or the host you pass to `trigger drain`.
 - `--run-as` is the Archon user the runs act as; `archon trigger whoami` prints yours. The command does not check that the user exists; `trigger schedule install` and a webhook delivery do.
 - `--cwd` is the checkout the runs launch in (default: the current directory). It is written as an absolute path.
-- `--out` is where the files go. Each is named `<owner>-<name>-<binding id>.json`, and that name without `.json` is its binding ID and a timer's `sourceInstanceId`.
+- `--out` is where the files go. Each is named `<pack>-<owner>-<name>-<binding id>-<digest>.json`, where the digest is of the pack, repository host and path, and binding ID, so two packs or repositories never share a name. That name without `.json` is its binding ID and a timer's `sourceInstanceId`.
 - `--only` writes the listed bindings. A binding whose input names another binding's file needs that binding listed too, or its file already in `--out`.
 - `--force` replaces existing files. Without it, one existing file refuses the whole set and nothing is written.
 
@@ -2175,8 +2175,9 @@ A timer binding is written as a complete `trigger fire --config` file. An event 
 ```bash
 archon pack bindings sdlc --repo github.com/acme/widgets --host build-host-1 \
   --run-as 2a568f73-e217-40ca-b17d-a784d19fd43a --cwd /srv/archon/widgets --out /srv/archon/bindings
-archon trigger fire --config /srv/archon/bindings/acme-widgets-build-queue.json
-archon trigger schedule install --config /srv/archon/bindings/acme-widgets-build-queue.json
+# the command prints each file's path; the digest is shown as <digest>
+archon trigger fire --config /srv/archon/bindings/sdlc-acme-widgets-build-queue-<digest>.json
+archon trigger schedule install --config /srv/archon/bindings/sdlc-acme-widgets-build-queue-<digest>.json
 ```
 
 ### `forge`

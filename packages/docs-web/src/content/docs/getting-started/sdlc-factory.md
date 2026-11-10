@@ -160,8 +160,8 @@ archon pack bindings sdlc \
 - **Build, split, merge and discoveries** run on a schedule. Fire each written file once, then install it:
 
   ```bash
-  archon trigger fire --config ~/.archon/triggers/acme-widgets-build-queue.json
-  archon trigger schedule install --config ~/.archon/triggers/acme-widgets-build-queue.json   # macOS
+  archon trigger fire --config ~/.archon/triggers/sdlc-acme-widgets-build-queue-<digest>.json
+  archon trigger schedule install --config ~/.archon/triggers/sdlc-acme-widgets-build-queue-<digest>.json   # macOS
   ```
 
   On Linux or Windows, run the same `trigger fire` command from cron, systemd or Task Scheduler.

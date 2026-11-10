@@ -8,11 +8,10 @@
  * `archon trigger fire` and `archon trigger schedule install` for a timer binding, and adds
  * an event binding to the source plugin's configuration.
  */
+import { createHash } from 'node:crypto';
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
-import { createForgeBindingSchema } from '@archon/forge';
-import { jsonValueSchema } from '@archon/workflows/output-ref';
-import { resourceStartBindingIntentSchema } from '@archon/workflows/schemas/resource-start';
+import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import {
   isPackTimerBinding,
   type PackBinding,
@@ -41,8 +40,6 @@ const USAGE =
 interface Target {
   packKey: string;
   repo: { host: string; path: string };
-  /** The repository path as one file-name segment. */
-  slug: string;
   hostId: string;
   runAsUserId: string;
   cwd: string;
@@ -63,9 +60,18 @@ function parseRepo(repo: string): Target['repo'] {
   return { host: match[1], path: match[2] };
 }
 
-/** One name for a binding's file, its binding id and a timer's source instance. */
+/**
+ * One name for a binding's file, its binding id and a timer's source instance. The
+ * readable part flattens the repository path, so `a-b/c` and `a/b-c` read alike; the
+ * digest of the whole identity keeps distinct packs, hosts and repositories apart.
+ */
 function bindingName(target: Target, id: string): string {
-  return `${target.slug}-${id}`;
+  const { packKey, repo } = target;
+  const digest = createHash('sha256')
+    .update(JSON.stringify([packKey, repo.host, repo.path, id]))
+    .digest('hex')
+    .slice(0, 12);
+  return `${packKey}-${repo.path.replaceAll('/', '-')}-${id}-${digest}`;
 }
 
 function bindingPath(target: Target, id: string): string {
@@ -131,34 +137,20 @@ function generate(
 }
 
 /** Check a generated document against the schema of the loader that will read it. */
-/**
- * An event binding as a forge source plugin reads one: the start it asks for, and a
- * selector whose event fields its input mapping may name. The CLI may not bundle a source
- * plugin, so this checks the two contracts every such plugin builds on; the plugin still
- * validates its whole configuration, host and secret included, when it loads.
- */
-const eventMappingSchema = createForgeBindingSchema(jsonValueSchema);
-const eventBindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true })
-  .passthrough()
-  .superRefine((binding, context) => {
-    const mapping = eventMappingSchema.safeParse({
-      selector: binding.selector,
-      inputs: binding.inputMapping,
-    });
-    if (mapping.success) return;
-    for (const issue of mapping.error.issues) {
-      context.addIssue({ code: 'custom', path: issue.path, message: issue.message });
-    }
-  });
-
-function assertLoadable({ id, kind, document }: Generated): void {
+function assertLoadable({ id, kind, document }: Generated, target: Target): void {
   const result =
     kind === 'timer'
       ? timerTriggerConfigSchema.safeParse(document)
-      : eventBindingSchema.safeParse(document);
+      : // The plugin reads a binding only inside its configuration, so the binding is checked
+        // there. The secret name is the operator's and is not part of what is written.
+        githubWebhookSourceConfigSchema.safeParse({
+          version: 1,
+          webhookSecretEnv: 'WEBHOOK_SECRET',
+          host: target.repo.host,
+          bindings: [document],
+        });
   if (result.success) return;
-  const reader = kind === 'timer' ? 'timer binding' : 'source plugin binding';
+  const reader = kind === 'timer' ? 'timer binding' : 'GitHub source plugin binding';
   const issues = result.error.issues
     .map(issue => `${issue.path.join('.')}: ${issue.message}`)
     .join('; ');
@@ -182,7 +174,13 @@ interface DeclaredPack {
   workflowNames: readonly string[];
 }
 
-const SCOPE_PRECEDENCE: readonly WorkflowSource[] = ['project', 'global', 'bundled', 'installed'];
+/** Nearest scope first. A `Record` so a new workflow source cannot be left unranked. */
+const SCOPE_RANK: Readonly<Record<WorkflowSource, number>> = {
+  project: 0,
+  global: 1,
+  bundled: 2,
+  installed: 3,
+};
 
 async function findPack(cwd: string, packKey: string): Promise<DeclaredPack> {
   const discovered = await loadWorkflows(cwd);
@@ -196,9 +194,9 @@ async function findPack(cwd: string, packKey: string): Promise<DeclaredPack> {
   }
   // Pack folders of one name in several scopes are one pack to a run, and the nearest
   // scope's file wins there; the nearest declaration wins here.
-  const bindings = SCOPE_PRECEDENCE.map(
-    source => workflows.find(entry => entry.workflow.pack?.source === source)?.workflow.pack
-  ).find(pack => pack?.bindings !== undefined)?.bindings;
+  const bindings = workflows
+    .flatMap(({ workflow: { pack } }) => (pack?.bindings !== undefined ? [pack] : []))
+    .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0]?.bindings;
   if (bindings === undefined)
     throw new Error(`Pack '${packKey}' declares no bindings in its .pack/pack.yaml.`);
   return {
@@ -230,6 +228,11 @@ function workflowNameFor(pack: DeclaredPack, id: string, declared: string): stri
   return name;
 }
 
+/** A POSIX shell word for a path the operator chose, which may hold spaces or quotes. */
+function shellQuote(path: string): string {
+  return `'${path.replaceAll("'", `'\\''`)}'`;
+}
+
 function nextSteps(generated: readonly Generated[], target: Target): string[] {
   const lines: string[] = [];
   const timers = generated.filter(g => g.kind === 'timer');
@@ -241,8 +244,8 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
     );
     for (const timer of timers) {
       lines.push(
-        `  archon trigger fire --config ${timer.path}`,
-        `  archon trigger schedule install --config ${timer.path}`
+        `  archon trigger fire --config ${shellQuote(timer.path)}`,
+        `  archon trigger schedule install --config ${shellQuote(timer.path)}`
       );
     }
   }
@@ -262,7 +265,6 @@ function targetFrom(packKey: string, options: PackBindingsOptions): Target {
   return {
     packKey,
     repo,
-    slug: repo.path.replaceAll('/', '-'),
     hostId: options.host,
     runAsUserId: options.runAs,
     cwd: resolve(options.cwd),
@@ -312,7 +314,7 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
     const item = generate(id, binding, workflowNameFor(pack, id, binding.workflow), target);
-    assertLoadable(item);
+    assertLoadable(item, target);
     generated.push(item);
   }
   if (!options.force) await assertNothingOverwritten(generated);

@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, spyOn } from 'bun:test';
 import { mkdir, mkdtemp, readFile, readdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github-source-plugin';
+import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -84,12 +84,20 @@ async function readJson(name: string): Promise<unknown> {
   return JSON.parse(await readFile(join(out, name), 'utf8')) as unknown;
 }
 
+/** The one written file for a binding id; its name carries a digest of the identity. */
+async function fileFor(id: string): Promise<string> {
+  const [file, ...others] = (await readdir(out)).filter(name => name.includes(`-${id}-`));
+  if (file === undefined || others.length > 0) throw new Error(`expected one file for ${id}`);
+  return file;
+}
+
 beforeEach(async () => {
   // Loading the project's config needs the policies a CLI route installs.
   setPlatformPolicies(defaultPlatformPolicies);
   root = await mkdtemp(join(tmpdir(), 'pack-bindings-'));
   cwd = join(root, 'checkout');
-  out = join(root, 'bindings');
+  // A space in the path: the printed commands must still pass it as one argument.
+  out = join(root, 'binding files');
   process.env.ARCHON_HOME = join(root, 'home');
   logSpy = spyOn(console, 'log').mockImplementation(() => {});
 });
@@ -106,16 +114,15 @@ describe('archon pack bindings', () => {
     await writePack(DECLARATION);
     await packCommand('bindings', ['fixture'], options({ only: 'sweep,after' }));
 
-    expect((await readdir(out)).sort()).toEqual([
-      'acme-widgets-after.json',
-      'acme-widgets-sweep.json',
-    ]);
-    const sweepPath = join(out, 'acme-widgets-sweep.json');
-    expect(timerTriggerConfigSchema.parse(await readJson('acme-widgets-sweep.json'))).toEqual({
+    expect((await readdir(out)).length).toBe(2);
+    const sweepFile = await fileFor('sweep');
+    const sweepName = sweepFile.replace(/\.json$/, '');
+    const sweepPath = join(out, sweepFile);
+    expect(timerTriggerConfigSchema.parse(await readJson(sweepFile))).toEqual({
       version: 1,
-      sourceInstanceId: 'acme-widgets-sweep',
+      sourceInstanceId: sweepName,
       binding: {
-        bindingId: 'acme-widgets-sweep',
+        bindingId: sweepName,
         bindingRevision: null,
         hostId: 'host-1',
         runAsUserId: 'user-1',
@@ -136,11 +143,11 @@ describe('archon pack bindings', () => {
       },
       schedule: { intervalSeconds: 600, runAtLoad: false },
     });
-    const after = timerTriggerConfigSchema.parse(await readJson('acme-widgets-after.json'));
+    const after = timerTriggerConfigSchema.parse(await readJson(await fileFor('after')));
     expect(after.binding.resource).toBe('fixture:host-1:after');
     expect(after.binding.launch.inputs).toEqual({ sweep_binding: sweepPath });
     expect(logSpy.mock.calls.flat().join('\n')).toContain(
-      `archon trigger schedule install --config ${sweepPath}`
+      `archon trigger schedule install --config '${sweepPath}'`
     );
   });
 
@@ -152,7 +159,8 @@ describe('archon pack bindings', () => {
       options({ repo: 'github.com/acme/widgets', only: 'opened' })
     );
 
-    const binding = await readJson('acme-widgets-opened.json');
+    const file = await fileFor('opened');
+    const binding = await readJson(file);
     const config = githubWebhookSourceConfigSchema.parse({
       version: 1,
       webhookSecretEnv: 'WEBHOOK_SECRET',
@@ -160,7 +168,7 @@ describe('archon pack bindings', () => {
       bindings: [binding],
     });
     expect(config.bindings[0]).toMatchObject({
-      bindingId: 'acme-widgets-opened',
+      bindingId: file.replace(/\.json$/, ''),
       resource: 'fixture:github.com/acme/widgets:opened',
       launch: { workflowName: 'fixture-sweep', inputs: { mode: 'slow' } },
       selector: {
@@ -170,6 +178,29 @@ describe('archon pack bindings', () => {
       },
       inputMapping: { number: { source: 'field', field: 'subject.number' } },
     });
+  });
+
+  it('refuses an event binding for a host the source plugin does not read, writing nothing', async () => {
+    await writePack(DECLARATION);
+    await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(
+      "Binding 'opened' does not generate a valid GitHub source plugin binding"
+    );
+    await expect(readdir(out)).rejects.toThrow();
+  });
+
+  it('gives distinct repositories distinct binding identities in one directory', async () => {
+    await writePack(DECLARATION);
+    const ids = new Set<string>();
+    for (const repo of ['git.example.com/a-b/c', 'git.example.com/a/b-c', 'other.example/a/b-c']) {
+      await packCommand('bindings', ['fixture'], options({ repo, only: 'sweep' }));
+    }
+    const files = await readdir(out);
+    for (const file of files) {
+      const config = timerTriggerConfigSchema.parse(await readJson(file));
+      ids.add(config.binding.bindingId).add(config.sourceInstanceId);
+    }
+    expect(files.length).toBe(3);
+    expect(ids.size).toBe(3);
   });
 
   it('refuses a declaration that references an unknown sibling, naming the file', async () => {
@@ -192,19 +223,18 @@ describe('archon pack bindings', () => {
 
   it('refuses to overwrite an existing file unless forced, and writes none of the set', async () => {
     await writePack(DECLARATION);
-    await mkdir(out, { recursive: true });
-    await writeFile(join(out, 'acme-widgets-after.json'), 'mine');
+    await packCommand('bindings', ['fixture'], options({ only: 'sweep' }));
+    const sweep = await fileFor('sweep');
+    await writeFile(join(out, sweep), 'mine');
 
     await expect(
       packCommand('bindings', ['fixture'], options({ only: 'sweep,after' }))
     ).rejects.toThrow('Refusing to overwrite');
-    expect(await readdir(out)).toEqual(['acme-widgets-after.json']);
-    expect(await readFile(join(out, 'acme-widgets-after.json'), 'utf8')).toBe('mine');
+    expect(await readdir(out)).toEqual([sweep]);
+    expect(await readFile(join(out, sweep), 'utf8')).toBe('mine');
 
     await packCommand('bindings', ['fixture'], options({ only: 'sweep,after', force: true }));
-    expect(
-      timerTriggerConfigSchema.safeParse(await readJson('acme-widgets-after.json')).success
-    ).toBe(true);
+    expect(timerTriggerConfigSchema.safeParse(await readJson(sweep)).success).toBe(true);
   });
 
   it.each([
