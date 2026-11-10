@@ -76,6 +76,20 @@ export function checkAttention<Effect extends string>(attention: Attention<Effec
   }
 }
 
+// Decisions and their prose are capped so a queue's record keeps the work item well under
+// the state store's 64 KiB limit. `archon state log` keeps every revision.
+const KEPT_DECISIONS = 20;
+const KEPT_TEXT = 1500;
+
+export function clipped(text: string): string {
+  return text.length <= KEPT_TEXT ? text : `${text.slice(0, KEPT_TEXT)}…`;
+}
+
+/** A queue's decisions with one more recorded: its reason clipped, the oldest dropped past the cap. */
+export function withDecision<Entry extends DecisionEntry>(prior: readonly Entry[] | undefined, entry: Entry): Entry[] {
+  return [...(prior ?? []), { ...entry, reason: clipped(entry.reason) }].slice(-KEPT_DECISIONS);
+}
+
 /** The choice every item offers when none of the declared ones fits. */
 export const OTHER = 'other';
 

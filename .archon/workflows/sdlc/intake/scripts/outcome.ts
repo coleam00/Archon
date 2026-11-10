@@ -10,7 +10,7 @@
 
 import { type Closure, type ClosePlan, planClose } from '../../.shared/close.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import {
@@ -132,9 +132,7 @@ function main(): void {
     });
     return;
   }
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '')
-    throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const decision = nullableJson(process.env.INPUTS_DECISION) as IntakeDecision;
   const triage = triageResult();
