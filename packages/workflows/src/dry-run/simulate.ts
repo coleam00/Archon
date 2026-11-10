@@ -194,6 +194,17 @@ async function simulateLayerNode(
   await simulateNode(node, outputs, ctx, iteration, execution);
   const result = outputs.get(node.id);
   if (result?.state === 'failed') ctx.interactionAdmission?.failed(node.id);
+  // The real run's rule (`writeTypedArtifacts`): a completed node that declares a type.
+  if (result?.state === 'completed' && node.output_type) {
+    ctx.typedOutputs.push({
+      nodeId: node.id,
+      outputType: node.output_type,
+      ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: [...ctx.loopGroupPath] } : {}),
+      producedAt: new Date().toISOString(),
+      source: `the simulated output of node '${node.id}'`,
+      text: result.output,
+    });
+  }
   if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
     outputs.set(node.id, { ...result, execution });
   }

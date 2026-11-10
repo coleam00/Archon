@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A script node can bind every output of an `output_type` its run produced: `with: { reviews: { outputs: review-report } }` delivers them as one JSON array, across loop iterations and included blocks. The loader refuses a producer the node could race.
+
 ## [0.14.0] - 2026-11-07
 
 The SDLC pack reaches GitHub only through the forge plugin, packs can declare settings, and `archon metrics` measures the factory.

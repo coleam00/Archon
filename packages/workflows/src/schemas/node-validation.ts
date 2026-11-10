@@ -16,7 +16,13 @@ import {
 import type { DagNodeFields, NodeMode } from './dag-node';
 import { bashExecAuthoringSchema, execNodeSchema, scriptExecAuthoringSchema } from './exec-node';
 import { composeFanOutNodeSchema } from './include-node';
-import { bindingDirectiveSchema, INPUT_NAME_PATTERN, inputEnvKey } from './node-bindings';
+import {
+  bindingDirectiveSchema,
+  INPUT_NAME_PATTERN,
+  inputEnvKey,
+  isTypedOutputsDirective,
+  typedOutputsDirectiveSchema,
+} from './node-bindings';
 import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
 
 type NodeIssue = { message: string; path?: readonly PropertyKey[] };
@@ -371,9 +377,39 @@ function validateBindings(kind: 'command' | 'script', value: unknown, ctx: z.Ref
   if (map === undefined) return;
   validateBindingEnvKeys(kind, map, ctx);
   for (const [key, entry] of Object.entries(map)) {
-    if (typeof entry === 'object' && entry !== null && !Array.isArray(entry)) {
-      validateBindingDirective(kind, key, entry, ctx);
-    }
+    if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) continue;
+    if (isTypedOutputsDirective(entry)) validateTypedOutputsDirective(kind, key, entry, ctx);
+    else validateBindingDirective(kind, key, entry, ctx);
+  }
+}
+
+/**
+ * `{ outputs: <output_type> }` is delivered to a script's environment only. A command
+ * node is refused rather than handed a JSON array spliced into its prompt: an agent
+ * reads the same outputs through `$TYPED_ARTIFACTS_FILE`.
+ */
+function validateTypedOutputsDirective(
+  kind: 'command' | 'script',
+  key: string,
+  value: object,
+  ctx: z.RefinementCtx
+): void {
+  const parsed = typedOutputsDirectiveSchema.safeParse(value);
+  if (!parsed.success) {
+    addIssue(
+      ctx,
+      `${kind} binding '${key}': a typed-outputs binding must be exactly ` +
+        `{ outputs: '<output_type>' } — ${parsed.error.issues[0]?.message ?? 'invalid shape'}`,
+      ['with', key]
+    );
+    return;
+  }
+  if (kind === 'command') {
+    addIssue(
+      ctx,
+      `command binding '${key}': '{ outputs: ${parsed.data.outputs} }' is only supported on script nodes; a command reads typed outputs through $TYPED_ARTIFACTS_FILE`,
+      ['with', key]
+    );
   }
 }
 
@@ -415,7 +451,7 @@ function validateBindingDirective(
     addIssue(
       ctx,
       `${kind} binding '${key}': an object value must be a binding directive ` +
-        "{ from: '$node.output[.a.b]', if_skipped?: <value> } — " +
+        "{ from: '$node.output[.a.b]', if_skipped?: <value> } or { outputs: '<output_type>' } — " +
         `${parsed.error.issues[0]?.message ?? 'invalid shape'}. ` +
         'Use a string, number, boolean, null, or array for a literal value.',
       ['with', key]

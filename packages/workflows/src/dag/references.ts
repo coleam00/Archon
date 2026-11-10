@@ -9,6 +9,7 @@ import {
   inputEnvKey,
   isExecNode,
   isBindingDirective,
+  isTypedOutputsDirective,
 } from '../schemas';
 import {
   type JsonValue,
@@ -275,6 +276,8 @@ export function resolveValueTemplate(
  * `from` reads one whole upstream ref; a producer that did not run (skipped or
  * pending — reachable under `trigger_rule: all_done` across a skipped branch)
  * takes `if_skipped` instead, and without one the node fails with the fix named.
+ * A typed-outputs directive `{ outputs }` never reaches here unresolved: `bindTypedOutputs`
+ * has already replaced it with its array, which passes through as a literal.
  * Everything else resolves through {@link resolveWorkflowValue} in strict mode.
  * The loader guarantees bound producers are upstream `depends_on`, so resolution
  * here is a per-node pre-step with no new scheduling.
@@ -295,6 +298,14 @@ export function resolveNodeBindings(
     if (isBindingDirective(rawValue)) {
       resolved[name] = resolveBindingDirective(consumerId, name, rawValue, ctx);
       continue;
+    }
+    if (isTypedOutputsDirective(rawValue)) {
+      // Reading the run's records is asynchronous, so `bindTypedOutputs` replaces the
+      // directive before a script node's bindings reach this resolver. Any other path
+      // here has no array to give, and must not deliver the directive as a literal.
+      throw new Error(
+        `Node '${consumerId}' binding '${name}': '{ outputs: ${String(rawValue.outputs)} }' is only resolved for a script node's own 'with:' map`
+      );
     }
     if (typeof rawValue === 'object' && rawValue !== null && !Array.isArray(rawValue)) {
       // The loader rejects this shape at load time; programmatic definitions can
