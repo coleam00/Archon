@@ -90,8 +90,8 @@ const mcpStatusSchema: z.ZodType<McpStatusPage> = z.object({
   data: z.array(
     z.object({
       name: z.string(),
-      pluginId: z.string().nullable(),
-      toolsError: z.string().nullable(),
+      pluginId: z.string().nullable().default(null),
+      toolsError: z.string().nullable().default(null),
       // A status this Codex version does not list reads as unknown (null), which the check
       // treats as live: it can pass only for a declared server.
       runtimeStatus: z
