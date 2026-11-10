@@ -149,6 +149,12 @@ export const OUTPUT_ENUMS = {
     });
 
     expect(result).toMatchObject({ path: packFile('alpha'), status: 'written' });
+    expect(await readFile(packFile('alpha'), 'utf-8')).toContain('`archon workflow types alpha`');
+
+    await generate({ target: 'alpha', out: 'alpha.gen.ts' });
+    expect(await readFile(join(cwd, 'alpha.gen.ts'), 'utf-8')).toContain(
+      '`archon workflow types alpha --out alpha.gen.ts`'
+    );
   });
 
   test('check writes nothing: missing and edited files are stale, a fresh one is current', async () => {
@@ -194,13 +200,50 @@ export const OUTPUT_ENUMS = {
       nodes: 1,
     });
     const content = await readFile(byName.path, 'utf-8');
-    expect(content).toContain('`archon workflow types flat --out <file>`');
+    expect(content).toContain('`archon workflow types flat --out types/flat.gen.ts`');
     expect(content).toContain('  flat: {\n    verdict: {');
     expect(content).not.toContain('main');
 
     const byFile = await generate({ target: blockFile, out: 'block.gen.ts' });
     expect(byFile).toMatchObject({ workflows: 1, nodes: 1 });
-    expect(await readFile(byFile.path, 'utf-8')).toContain('  block: {\n    verdict: {');
+    const fileContent = await readFile(byFile.path, 'utf-8');
+    expect(fileContent).toContain('  block: {\n    verdict: {');
+    expect(fileContent).toContain(
+      '`archon workflow types .archon/workflows/alpha/block/block.yaml --out block.gen.ts`'
+    );
+  });
+
+  test('a workflow file is selected by its path: a bare filename, or one outside the project', async () => {
+    const local = join(cwd, 'probes');
+    await mkdir(local, { recursive: true });
+    await writeFile(join(local, 'probe.yaml'), BLOCK.replace('name: block', 'name: probe'));
+    const outside = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'output-types-'))));
+    await writeFile(join(outside, 'external.yaml'), BLOCK.replace('name: block', 'name: external'));
+
+    const bare = await generate({ target: 'probe.yaml', targetCwd: local, out: 'probe.gen.ts' });
+    expect(bare).toMatchObject({ path: join(local, 'probe.gen.ts'), workflows: 1, nodes: 1 });
+    expect(await readFile(bare.path, 'utf-8')).toContain(
+      '`archon workflow types probes/probe.yaml --out probes/probe.gen.ts`'
+    );
+
+    const external = await generate({ target: join(outside, 'external.yaml'), out: 'ext.gen.ts' });
+    expect(await readFile(external.path, 'utf-8')).toContain('  external: {\n    verdict: {');
+  });
+
+  test('authored names cannot break the comments of the generated file', async () => {
+    await writePackWorkflow(
+      'alpha',
+      'odd',
+      BLOCK.replace('name: block', 'name: "odd */ name\\nnext"').replace(
+        'id: verdict',
+        'id: "verdict */ tail"'
+      )
+    );
+
+    const result = await generate({ target: '.archon/workflows/alpha/odd', out: 'odd.gen.ts' });
+
+    const content = await readFile(result.path, 'utf-8');
+    expect(() => new Bun.Transpiler({ loader: 'ts' }).transformSync(content)).not.toThrow();
   });
 
   test('an unsupported keyword fails naming the workflow, the node and the keyword', async () => {
