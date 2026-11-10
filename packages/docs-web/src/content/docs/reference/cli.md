@@ -234,12 +234,12 @@ archon workflow types build-change --out src/build-change.gen.ts   # one workflo
 | A pack: its name under `.archon/workflows/`, or its directory path | `<pack>/.shared/outputs.generated.ts`, unless `--out` names another file |
 | One workflow: its name, its YAML file, or its folder | The `--out` file, which is required |
 
-A relative path target and `--out` resolve from the invoking directory. A name resolves in the project's `.archon/workflows/` only; bundled, global and installed workflows are not targets.
+A relative path target and `--out` resolve from the invoking directory. A workflow file can live anywhere, inside or outside the project. A name resolves in the project's `.archon/workflows/` only; bundled, global and installed workflows are not targets. The generated file's header names the command that regenerates it, with paths relative to the project root.
 
 | Flag | Effect |
 | --- | --- |
 | `--out <file>` | The file to write |
-| `--check` | Compare instead of writing. Exits 1 naming the file when it is missing or differs by a byte |
+| `--check` | Compare instead of writing. Exits 1 naming the file when it is missing or its content differs. CRLF line endings in the file are read as LF, so a checkout that converts line endings stays current |
 | `--json` | Print `{ ok, path, status, workflows, nodes }`; `status` is `written`, `unchanged`, `current` or `stale` |
 
 Output is deterministic: workflows sorted by name, nodes and fields in YAML order. The command exits 1 without writing when a workflow of the pack does not load, when no node declares `output_format`, or when a schema uses a keyword the generator cannot state as a type; that error names the workflow, the node and the keyword. See [the supported keywords](/reference/workflow-language/#typescript-for-output_format).
