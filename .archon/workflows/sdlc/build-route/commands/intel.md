@@ -2,7 +2,11 @@
 
 A planner is about to make the design calls for one work item. Decide whether data about how people use the product could change one of those calls, and fetch that data only when it could. Write what you found to `$ARTIFACTS_DIR/intel.md`. No one watches this run; that file is all the planner reads from you.
 
-The work item's assessment is `$ARTIFACTS_DIR/triage.md`. Read it first: its handoff names the decisions the planner owns.
+The work item:
+
+$INPUTS.work
+
+Read what it names first: it holds the decisions the planner owns.
 
 The operator's request — the message that started this run:
 

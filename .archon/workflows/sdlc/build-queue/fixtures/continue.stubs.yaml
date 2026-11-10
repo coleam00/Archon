@@ -1,7 +1,7 @@
 # Dry-run fixture, a later round: the item already has open pull request 1 in its
-# repository, and ship's triage routes `deliver`, not `continue`. The pull request
-# facts resolved still reaches delivery through ship's real `continues` script: the
-# implementer and prepare are both told to finish it.
+# repository, and route declares `deliver`, not `continue`. The pull request facts
+# resolved still reaches delivery through the round's real `continues` script: the
+# implementer and prepare are both told to finish it. No triage runs in the round.
 start:
   repo: { host: github.com, path: example/repo }
   message: false
@@ -16,31 +16,20 @@ facts:
   pull_request: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
   continues: 1
   branch: "build/7-stub-fixture"
+  related: []
 blocked:
   blocked: []
   blocked_count: 0
 route:
   decision: launch
+  route: deliver
   continues: 1
   ready_head: null
   brief: "stub-brief: fix the open review finding on https://github.com/example/repo/pull/1"
   reason: "stub: the finding is correctable"
   attention: null
 checkout: { head: fixturehead, reviewed: null, pull_request: 1 }
-ship__forge: { source: forge }
 ship__deliver__forge: { source: forge }
-ship__triage__triage:
-  decision: { contract: READY, route: deliver }
-  type: { value: bug, reason: "stub: a finding" }
-  size: { value: s, reason: "stub: size" }
-  complexity: { value: low, reason: "stub: complexity" }
-  importance: { value: medium, reason: "stub: importance" }
-  urgency: { value: none, reason: "stub: urgency" }
-  item: { repo: { host: "", path: "" }, number: 0 }
-  area_labels: []
-  related: []
-  summary: "stub: the work order is complete"
-  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 implement__implement:
   done: true
   green: true

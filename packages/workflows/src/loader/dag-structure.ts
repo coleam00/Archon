@@ -22,7 +22,7 @@ import {
 } from '../schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from '../fan-out-identity';
 import { isBindingDirective } from '../schemas/node-bindings';
-import { WHEN_INPUTS_SCOPE } from '../when-atom';
+import { INPUTS_SCOPE } from '../reference-scopes';
 import {
   EXECUTION_CHECKOUT_REF_SOURCE,
   OUTPUT_REF_SOURCE,
@@ -356,7 +356,7 @@ function bindingProducerIds(
     const refPattern = new RegExp(OUTPUT_REF_SOURCE, 'g');
     let refMatch: RegExpExecArray | null;
     while ((refMatch = refPattern.exec(value)) !== null) {
-      if (refMatch[1] !== WHEN_INPUTS_SCOPE) producerIds.push(refMatch[1]);
+      if (refMatch[1] !== INPUTS_SCOPE) producerIds.push(refMatch[1]);
     }
   } else if (isBindingDirective(value)) {
     const ref = parseWholeOutputRef(value.from);

@@ -19,7 +19,7 @@ import { prFromUrl } from './merge.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */
-const MAX_RUNS = 20;
+export const MAX_RUNS = 20;
 
 /** One pull request's facts as the forge's `pr.view` reports them. */
 export interface PrFacts {

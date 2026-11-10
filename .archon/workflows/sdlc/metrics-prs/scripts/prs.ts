@@ -1,7 +1,9 @@
 /**
  * Metric records for the pull requests the build queue opened: opened, merged,
  * abandoned and the merge rate, and for each merged one the review rounds it took to
- * reach Ready, each attributed to the build-queue runs that built it. Pull requests a
+ * reach Ready, each attributed to the build-queue runs that built it; and for each issue
+ * the queue worked, whether it was built and merged, its lead time, rounds and asks, in
+ * total and per route. Pull requests a
  * round only continued, and merged ones whose rounds cannot be counted, are reported in
  * `skipped`; the metrics no record carries yet are reported in `not_available`.
  * Merged pull requests merged at or after `lines_since` also record the test and
@@ -9,6 +11,7 @@
  */
 
 import { dirname, join } from 'node:path';
+import { issueMetricRecords } from '../../.shared/factory-issues.ts';
 import { factoryPrRuns, factoryPrs, prMetricRecords, readPrFacts, sinceTime } from '../../.shared/factory-prs.ts';
 import { artifactsDir, emit, refuse, trimmed } from '../../.shared/io.ts';
 import { lineRecords, readPrFiles } from '../../.shared/pr-lines.ts';
@@ -46,7 +49,7 @@ try {
   const merged = factory.filter(pr => pr.state === 'MERGED' && Date.parse(pr.mergedAt ?? '') >= from);
   const lines = lineRecords(merged, runsByUrl, readPrFiles);
   emit({
-    metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...lines.metrics],
+    metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics, ...issueMetricRecords(items), ...lines.metrics],
     skipped,
     review_rounds_skipped: reviews.skipped,
     review_rounds_distribution: reviews.distribution,
