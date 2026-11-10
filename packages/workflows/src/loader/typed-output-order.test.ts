@@ -125,6 +125,11 @@ describe('typed-outputs binding shape', () => {
     expect(load({ outputs: '' })).toContain("'outputs' must be a non-empty output_type");
   });
 
+  test('refuses an object as the if_unreadable value, which would read as a directive', () => {
+    expect(load({ outputs: 'verdict', if_unreadable: [] })).toBe('');
+    expect(load({ outputs: 'verdict', if_unreadable: { from: '$a.output' } })).not.toBe('');
+  });
+
   test('refuses it on a command node, naming the channel an agent reads', () => {
     expect(load({ outputs: 'verdict' }, { command: 'review' })).toContain(
       'is only supported on script nodes; a command reads typed outputs through $TYPED_ARTIFACTS_FILE'
