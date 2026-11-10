@@ -408,6 +408,13 @@ describe('the build queue scripts', () => {
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
   }, 60_000);
 
+  test("a round's recorded pull request URL from another repository is refused, not guessed around", () => {
+    const at = install();
+    const { pr_number: _, ...legacy } = round('r1', AT);
+    seed(at, triaged({}, record({ rounds: [{ ...legacy, pr_url: 'https://ghe.example.com/someone/else/pull/42' }] })));
+    expect(run(at, 'facts', {}).stderr).toContain('is not a pull request of ghe.example.com/example/repo');
+  }, 60_000);
+
   test('a closed pull request, or one from a fork, is not continued: the round gets a new branch', () => {
     const at = install();
     seed(at, triaged({}, record({ rounds: [round('r1', AT)] })));
@@ -572,7 +579,7 @@ describe('the build queue scripts', () => {
         build: {
           status: 'next',
           brief: 'continue PR 42 on R1',
-          rounds: [{ run_id: 'run-1', reason: 'review_open', artifacts: applied.artifacts }],
+          rounds: [{ run_id: 'run-1', reason: 'review_open', pr_number: 42, artifacts: applied.artifacts }],
           decisions: [{ decision: 'continue', reason: 'R1 is correctable' }],
         },
       },
