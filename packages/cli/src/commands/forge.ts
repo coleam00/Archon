@@ -1,8 +1,9 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
-import { getPluginsPath } from '@archon/paths';
-import { discoverPlugins } from '@archon/forge/discovery';
+import { BUNDLED_IS_BINARY, getPluginsPath } from '@archon/paths';
+import { getSourceGithubForgeEntry } from '@archon/paths/source-tree-paths';
+import { discoverPlugins, type SourcePlugin } from '@archon/forge/discovery';
 import { dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { type ForgePluginConfig, forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import {
@@ -48,6 +49,22 @@ async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<
   }
 }
 
+/**
+ * Release binaries carry no forge plugin and load only installed executables. Source
+ * checkouts and Docker run the GitHub plugin from this checkout, as they run the
+ * maintained providers, so the plugin is never older than the host that calls it.
+ */
+export function sourceForgePlugins(isBinary: boolean = BUNDLED_IS_BINARY): SourcePlugin[] {
+  if (isBinary) return [];
+  return [
+    {
+      name: 'github',
+      command: process.execPath,
+      args: ['--no-env-file', getSourceGithubForgeEntry()],
+    },
+  ];
+}
+
 interface ForgeCommandOptions {
   data?: string;
   dataFile?: string;
@@ -58,6 +75,7 @@ interface ForgeCommandOptions {
 interface ForgeCommandDependencies {
   dispatch?: typeof dispatchForge;
   readConfig?: () => Promise<unknown>;
+  sourcePlugins?: readonly SourcePlugin[];
   audit?: typeof persistAudit;
   write?: typeof writeJsonLine;
   env?: NodeJS.ProcessEnv;
@@ -153,13 +171,14 @@ async function readForgeInput(
  */
 async function answerMetadata(
   { archonHome, op, supplied, config }: ForgeInput,
-  { operationId, trustedEnv, write }: ForgeCommandContext
+  { operationId, trustedEnv, write, dependencies }: ForgeCommandContext
 ): Promise<number> {
   const { host } = cliForgeMetadataRequestSchema.parse({ ...supplied, op, operationId });
   const discovery = await discoverPlugins({
     config,
     env: trustedEnv,
     pluginsDir: getPluginsPath(archonHome),
+    sourcePlugins: dependencies.sourcePlugins ?? sourceForgePlugins(),
   });
   const plugin = discovery.byHost.get(host.toLowerCase());
   if (plugin) {
@@ -192,6 +211,7 @@ async function dispatchRequest(
     env: context.trustedEnv,
     // The trusted directory `archon plugin add` writes; repo env cannot move it.
     pluginsDir: getPluginsPath(archonHome),
+    sourcePlugins: context.dependencies.sourcePlugins ?? sourceForgePlugins(),
     // Repo scope may supply the credential named by trusted user config. It
     // cannot replace executable discovery or the plugin's runtime identity.
     credentialEnv: context.env,

@@ -12,6 +12,7 @@
     "./workflow-source": "./src/workflow-source.ts",
     "./release-asset": "./src/release-asset.ts",
     "./server-launch": "./src/server-launch.ts",
+    "./source-tree-paths": "./src/source-tree-paths.ts",
     "./archon-paths": "./src/archon-paths.ts",
     "./credential-redaction": "./src/credential-redaction.ts",
     "./logger": "./src/logger.ts",

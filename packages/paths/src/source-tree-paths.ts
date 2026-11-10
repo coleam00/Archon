@@ -1,6 +1,6 @@
 /**
  * Paths into the source checkout this build runs from: the bundled defaults,
- * the built web UI, and the provider and server entry points.
+ * the built web UI, and the provider, forge plugin and server entry points.
  */
 
 import { join, dirname } from 'path';
@@ -57,6 +57,11 @@ export function getSourceProviderEntry(id: string): string {
     ...(id === 'pi' ? ['community', 'pi'] : [id]),
     'plugin.ts'
   );
+}
+
+/** The first-party GitHub forge plugin's entry point in this checkout. */
+export function getSourceGithubForgeEntry(): string {
+  return join(getSourceRepoRoot(), 'packages', 'adapters', 'src', 'forge', 'github', 'plugin.ts');
 }
 
 export function getSourceServerEntry(): string {

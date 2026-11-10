@@ -17,6 +17,11 @@ export interface PluginCandidate extends PluginArgv {
   expectedName?: string;
 }
 
+/** A plugin the host runs from its own source tree instead of an installed executable. */
+export interface SourcePlugin extends PluginArgv {
+  name: string;
+}
+
 export interface DiscoveredPlugin extends PluginCandidate {
   metadata: PluginMetadata;
 }
@@ -210,6 +215,12 @@ export async function discoverPlugins(
      * Omitted, only configured plugins, `pluginDirs` and PATH are scanned.
      */
     pluginsDir?: string;
+    /**
+     * Plugins a source checkout runs from its own tree. Each one replaces every scanned
+     * executable of the same name, so an installed copy older than the host never runs.
+     * A release binary passes none.
+     */
+    sourcePlugins?: readonly SourcePlugin[];
   } = {}
 ): Promise<PluginDiscovery> {
   const config = forgePluginConfigSchema.parse(options.config ?? {});
@@ -255,7 +266,43 @@ async function discoverCandidates(
     kind: 'ready',
     candidate,
   }));
-  return mergeCandidates([...configured, ...scanned]);
+  return mergeCandidates([...configured, ...withSourcePlugins(options, configured, scanned)]);
+}
+
+function withSourcePlugins(
+  options: DiscoveryOptions,
+  configured: readonly CandidateInspection[],
+  scanned: readonly CandidateInspection[]
+): CandidateInspection[] {
+  // A plugin the operator configured by name is their explicit choice of executable, so
+  // it runs instead of the source plugin. A scanned one was only found by its file name.
+  const configuredNames = new Set(configured.map(({ candidate }) => candidate.expectedName));
+  const source = (options.sourcePlugins ?? []).filter(plugin => !configuredNames.has(plugin.name));
+  const sourceNames = new Set(source.map(plugin => plugin.name));
+  const kept = scanned.filter(({ candidate }) => {
+    if (!sourceNames.has(candidate.expectedName ?? '')) return true;
+    process.stderr.write(
+      `Skipping forge plugin ${candidate.command}: this checkout runs ${candidate.expectedName} from source\n`
+    );
+    return false;
+  });
+  return [
+    // Marked configured so a source plugin that fails its handshake fails discovery
+    // instead of being skipped.
+    ...source.map(
+      (plugin): CandidateInspection => ({
+        kind: 'ready',
+        candidate: {
+          source: `source:${plugin.name}`,
+          configured: true,
+          command: plugin.command,
+          args: plugin.args,
+          expectedName: plugin.name,
+        },
+      })
+    ),
+    ...kept,
+  ];
 }
 
 function mergeCandidates(inspections: readonly CandidateInspection[]): CandidateInspection[] {

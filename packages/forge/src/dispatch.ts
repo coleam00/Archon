@@ -20,6 +20,7 @@ import {
   PluginDiscoveryError,
   type DiscoveredPlugin,
   type PluginDiscovery,
+  type SourcePlugin,
 } from './discovery';
 import { normalizeHost, type ForgePluginConfig } from './plugin-config';
 import { runPluginProcess, type PluginProcessResult } from './plugin-process';
@@ -148,6 +149,8 @@ interface DispatchOptions {
   discovery?: PluginDiscovery;
   /** Passed to `discoverPlugins`; the host owns where installed plugins live. */
   pluginsDir?: string;
+  /** Passed to `discoverPlugins`; set only by a host running from source. */
+  sourcePlugins?: readonly SourcePlugin[];
   timeoutMs?: number;
   maxOutputBytes?: number;
   signal?: AbortSignal;
@@ -194,6 +197,7 @@ async function dispatch(request: ForgeRequest, options: DispatchOptions): Promis
         config: options.config,
         env: options.env,
         pluginsDir: options.pluginsDir,
+        sourcePlugins: options.sourcePlugins,
         timeoutMs: options.timeoutMs,
         maxOutputBytes: options.maxOutputBytes,
       }));

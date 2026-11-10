@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getPluginsPath } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { forgeCommand } from './forge';
+import { forgeCommand, sourceForgePlugins } from './forge';
 import {
   forgeAuditResponse,
   type ForgeRequest,
@@ -512,5 +512,55 @@ test('host metadata exposes selected plugin capabilities without credentials or 
   expect(output[0]).toMatchObject({
     ok: true,
     result: { op: 'metadata', value: { capabilities: ['pr.view', 'resolve'] } },
+  });
+});
+
+/** An Archon home whose installed GitHub forge plugin is a file no host can execute. */
+function homeWithUnusableInstalledGithubPlugin(): string {
+  const home = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-source-')));
+  const plugins = getPluginsPath(home);
+  mkdirSync(plugins, { recursive: true });
+  const exe = process.platform === 'win32' ? '.exe' : '';
+  writeFileSync(join(plugins, `archon-forge-github${exe}`), 'not an executable', { mode: 0o755 });
+  return home;
+}
+
+async function githubMetadata(
+  home: string,
+  dependencies: Parameters<typeof forgeCommand>[2] = {}
+): Promise<unknown> {
+  const output: unknown[] = [];
+  await forgeCommand(
+    'metadata',
+    { data: JSON.stringify({ host: 'github.com' }) },
+    {
+      env: { HOME: home, ARCHON_HOME: home, PATH: process.env.PATH },
+      readConfig: async () => ({ scanPath: false }),
+      write: async value => {
+        output.push(value);
+      },
+      ...dependencies,
+    }
+  );
+  return output[0];
+}
+
+test('a source checkout runs the GitHub plugin from source, whatever is installed', async () => {
+  expect(await githubMetadata(homeWithUnusableInstalledGithubPlugin())).toMatchObject({
+    ok: true,
+    result: {
+      op: 'metadata',
+      value: { name: 'github', capabilities: expect.arrayContaining(['resolve:subject']) },
+    },
+  });
+});
+
+test('a release binary loads the installed GitHub plugin and nothing from source', async () => {
+  expect(sourceForgePlugins(true)).toEqual([]);
+  expect(
+    await githubMetadata(homeWithUnusableInstalledGithubPlugin(), { sourcePlugins: [] })
+  ).toMatchObject({
+    ok: false,
+    error: { kind: 'process_failed', message: 'discovery:github: metadata handshake failed' },
   });
 });

@@ -106,7 +106,9 @@ layout below. Existing projects keep their names and storage.
   each plugin's receipt is `installed/<owner>/<repo>[/<path>]/receipt.json`, and
   workflow pack trees live under `packs/`. Release binaries load the Claude, Codex
   and Pi providers only from these receipts; source checkouts and Docker run them
-  from source and ignore receipts for those three.
+  from source and ignore receipts for those three. Source checkouts and Docker also
+  run the GitHub forge plugin from source and skip an `archon-forge-github`
+  executable here.
 - `install.json` - Discovery metadata for the last compiled Archon invoked. GUI and
   service consumers may use its absolute `binary` path when the user has not
   configured one explicitly. Source/Bun runs do not write this file.
