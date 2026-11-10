@@ -104,7 +104,9 @@ describe('publish-pr opens the pull request at most once', () => {
       const schema = workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties[field]?.properties;
       expect({ type: schema?.type?.enum, path: schema?.path?.enum }).toEqual({ type: [pointer.type], path: [pointer.path] });
       const command = readFileSync(join(PACK, 'pr/commands/pr.md'), 'utf8');
-      expect(command).toContain(`{"type": "${pointer.type}", "run_id": "$WORKFLOW_ID", "path": "${pointer.path}"}`);
+      // Compare the pointers the prompt declares as values, so its JSON formatting is free to change.
+      const declared = (command.match(/\{[^{}]*"archon_artifact"[^{}]*\}/g) ?? []).map(json => JSON.parse(json));
+      expect(declared).toContainEqual({ type: pointer.type, run_id: '$WORKFLOW_ID', path: pointer.path });
       expect(command).toContain(`$ARTIFACTS_DIR/${pointer.path}`);
     }
   );
