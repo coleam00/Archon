@@ -290,7 +290,6 @@
       "@archon/paths",
       "node:fs/promises"
     ],
-    "packages/core/src/operations/workflow/test-harness.ts": ["@archon/paths"],
     "packages/core/src/orchestrator/chat-context-paused.integration.test.ts": ["../db/connection"],
     "packages/core/src/orchestrator/dispatch/background.test.ts": [
       "../../config/config-loader",

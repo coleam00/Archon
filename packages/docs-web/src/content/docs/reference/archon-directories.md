@@ -90,8 +90,9 @@ layout below. Existing projects keep their names and storage.
   retains filesystem run artifacts until the operator removes them, with one exception:
   `.archon/scratch/`, where a workflow puts throwaway checkouts and dependency installs, is
   removed once the run is completed, failed or cancelled (including a failed run that is
-  resumed later) and its nodes have stopped. A container run's scratch is removed when its
-  container is. A run whose nodes Archon cannot confirm stopped (its owner ran on another
+  resumed later) and its nodes have stopped. Git worktrees of the run's repository that a
+  node added under scratch are removed from that repository first, so no registration
+  outlives its files. A container run's scratch is removed when its container is. A run whose nodes Archon cannot confirm stopped (its owner ran on another
   host, or its owner process is still alive) keeps its scratch until the operator removes it.
   A CLI run stopped by a signal (Ctrl-C, SIGTERM) is marked failed without stopping its nodes
   through Archon, so it keeps its scratch until it is abandoned or its conversation is reset.
