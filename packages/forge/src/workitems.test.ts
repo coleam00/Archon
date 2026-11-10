@@ -378,3 +378,88 @@ test('close proof verifies the issue, its closed state and the requested reason'
   ])
     expect(matches(close, response(close.op, ref, wrong))).toBe(false);
 });
+
+const read = (op: string, value: object): ForgeResponse =>
+  forgeResponseSchema.parse({ operationId: 'read', ok: true, result: { op, value } });
+
+test('a search answers its repository, words, kind, state and limit', () => {
+  const request = {
+    operationId: 'read',
+    op: 'workitem.search',
+    repo,
+    text: 'retry backoff',
+    kind: 'issue',
+    limit: 2,
+  } satisfies ForgeRequest;
+  const found = { ...item, title: 'secret title', updatedAt: '2026-11-01T10:00:00Z' };
+  const searched = (value: object): ForgeResponse =>
+    read(request.op, { repo, text: request.text, items: [found], truncated: false, ...value });
+  expect(matches(request, searched({}))).toBe(true);
+  expect(matches(request, searched({ items: [], truncated: true }))).toBe(true);
+  expect(
+    matches({ ...request, state: 'any' }, searched({ items: [{ ...found, state: 'closed' }] }))
+  ).toBe(true);
+  for (const wrong of [
+    { text: 'other words' },
+    { repo: { ...repo, path: 'other/repo' } },
+    { items: [{ ...found, kind: 'pr' }] },
+    // With no state asked for, the search is of open items.
+    { items: [{ ...found, state: 'closed' }] },
+    { items: [{ ...found, ref: { ...ref, repo: { ...repo, path: 'other/repo' } } }] },
+    { items: [found, found, found] },
+  ])
+    expect(matches(request, searched(wrong))).toBe(false);
+  expect(forgeRequestSchema.safeParse({ ...request, limit: 101 }).success).toBe(false);
+  expect(forgeRequestSchema.safeParse({ ...request, text: '  ' }).success).toBe(false);
+
+  const audit = JSON.stringify(forgeAuditResponse(searched({})));
+  for (const authored of [request.text, found.title]) {
+    expect(audit).not.toContain(authored);
+    expect(audit).toContain(contentDigest(authored));
+  }
+});
+
+test('a check log answers its unit within the size asked for, or says the unit has none', () => {
+  const unit = { kind: 'check', id: '71', name: 'test (linux)' } as const;
+  const request = {
+    operationId: 'read',
+    op: 'checks.logs',
+    repo,
+    unit,
+    maxBytes: 16,
+  } satisfies ForgeRequest;
+  const logged = (log: object, value: object = {}): ForgeResponse =>
+    read(request.op, { repo, unit, log, ...value });
+  const text = { kind: 'text', text: 'secret log tail', truncated: true, totalBytes: 900 };
+  expect(matches(request, logged(text))).toBe(true);
+  expect(matches(request, logged({ kind: 'none', reason: 'unit_has_no_log' }))).toBe(true);
+  for (const wrong of [
+    logged({ ...text, text: 'a log longer than asked' }),
+    logged(text, { unit: { ...unit, id: '72' } }),
+    logged(text, { unit: { ...unit, kind: 'commit_status' } }),
+    logged(text, { repo: { ...repo, path: 'other/repo' } }),
+  ])
+    expect(matches(request, wrong)).toBe(false);
+  expect(forgeRequestSchema.safeParse({ ...request, maxBytes: 1024 * 1024 + 1 }).success).toBe(
+    false
+  );
+
+  const audit = forgeAuditResponse(logged(text));
+  expect(JSON.stringify(audit)).not.toContain(text.text);
+  expect(audit).toMatchObject({
+    result: {
+      value: {
+        unit,
+        log: {
+          kind: 'text',
+          truncated: true,
+          totalBytes: 900,
+          content: { digest: contentDigest(text.text), bytes: 15 },
+        },
+      },
+    },
+  });
+  expect(forgeAuditResponse(logged({ kind: 'none', reason: 'log_unavailable' }))).toMatchObject({
+    result: { value: { log: { kind: 'none', reason: 'log_unavailable' } } },
+  });
+});

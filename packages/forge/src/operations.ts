@@ -20,6 +20,9 @@ import {
   prViewSchema,
   workItemListRequestSchema,
   workItemListSchema,
+  workItemSearchItemSchema,
+  workItemSearchRequestSchema,
+  workItemSearchSchema,
   workItemViewRequestSchema,
   workItemViewSchema,
   workItemCommentsRequestSchema,
@@ -37,7 +40,12 @@ import {
 
 export * from './lifecycle';
 export * from './checks';
-import { rerunGroupSchema } from './checks';
+import {
+  checkLogSchema,
+  checksLogsRequestSchema,
+  checksLogsSchema,
+  rerunGroupSchema,
+} from './checks';
 
 export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
 export type ChecksState = z.infer<typeof checksStateSchema>;
@@ -174,6 +182,7 @@ export const forgeRequestSchema = z.discriminatedUnion('op', [
   resolveRequestSchema,
   checksRequestSchema,
   checksCommitRequestSchema,
+  checksLogsRequestSchema,
   ...lifecycleReadRequestSchemas,
   ...mutationRequestSchemas,
 ]);
@@ -206,6 +215,7 @@ export const forgeResponseSchema = z.discriminatedUnion('ok', [
       z.object({ op: z.literal('resolve'), value: resolveResultSchema }),
       z.object({ op: z.literal('checks.state'), value: checksObservationSchema }),
       z.object({ op: z.literal('checks.commit'), value: commitChecksObservationSchema }),
+      z.object({ op: checksLogsRequestSchema.shape.op, value: checksLogsSchema }),
       ...lifecycleReadResultSchemas,
       ...mutationResultSchemas,
     ]),
@@ -270,6 +280,24 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
       z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
       z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
       z.object({
+        op: workItemSearchRequestSchema.shape.op,
+        value: workItemSearchSchema.omit({ text: true }).extend({
+          query: contentAuditSchema,
+          items: z.array(
+            workItemSearchItemSchema.omit({ title: true }).extend({ content: contentAuditSchema })
+          ),
+        }),
+      }),
+      z.object({
+        op: checksLogsRequestSchema.shape.op,
+        value: checksLogsSchema.extend({
+          log: z.discriminatedUnion('kind', [
+            checkLogSchema.options[0].omit({ text: true }).extend({ content: contentAuditSchema }),
+            checkLogSchema.options[1],
+          ]),
+        }),
+      }),
+      z.object({
         op: prFilesRequestSchema.shape.op,
         value: prFilesSchema.extend({
           files: z.array(
@@ -316,9 +344,36 @@ function bodyAudit(body: string): z.infer<typeof contentAuditSchema> {
   return { digest: contentDigest(body), bytes: Buffer.byteLength(body) };
 }
 
+type ForgeResult = Extract<ForgeResponse, { ok: true }>['result'];
+type ForgeAuditResult = Extract<ForgeAuditResponse, { ok: true }>['result'];
+
+/** A search's words and titles and a check's log are authored text: digests only. */
+function searchAudit(result: Extract<ForgeResult, { op: 'workitem.search' }>): ForgeAuditResult {
+  const { text, ...facts } = result.value;
+  return {
+    op: result.op,
+    value: {
+      ...facts,
+      query: bodyAudit(text),
+      items: facts.items.map(({ title, ...item }) => ({ ...item, content: bodyAudit(title) })),
+    },
+  };
+}
+function logAudit(result: Extract<ForgeResult, { op: 'checks.logs' }>): ForgeAuditResult {
+  const log = result.value.log;
+  if (log.kind === 'none') return { op: result.op, value: { ...result.value, log } };
+  const { text, ...facts } = log;
+  return {
+    op: result.op,
+    value: { ...result.value, log: { ...facts, content: bodyAudit(text) } },
+  };
+}
+
 export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse {
   if (!response.ok) return response;
   const result = response.result;
+  if (result.op === 'workitem.search') return { ...response, result: searchAudit(result) };
+  if (result.op === 'checks.logs') return { ...response, result: logAudit(result) };
   if (result.op === 'pr.reviews')
     return {
       ...response,
