@@ -601,7 +601,7 @@ describe('the build queue scripts', () => {
     expect(recorded).not.toHaveProperty('pr_number');
   }, 60_000);
 
-  test("the round records the review verdicts the run's delivery published, and still records the round when they cannot be read", () => {
+  test("the round records the review verdicts the run's delivery published", () => {
     const at = install();
     seed(at, triaged(CLAIMED));
     const review = (node: string, ready: boolean, at: string) => ({ node, loop: [], at, value: { ready } });
