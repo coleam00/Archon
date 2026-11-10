@@ -2175,9 +2175,10 @@ A timer binding is written as a complete `trigger fire --config` file. An event 
 ```bash
 archon pack bindings sdlc --repo github.com/acme/widgets --host build-host-1 \
   --run-as 2a568f73-e217-40ca-b17d-a784d19fd43a --cwd /srv/archon/widgets --out /srv/archon/bindings
-# the glob matches the one file written for build-queue; the command also prints its path
-archon trigger fire --config /srv/archon/bindings/sdlc-acme-widgets-build-queue-*.json
-archon trigger schedule install --config /srv/archon/bindings/sdlc-acme-widgets-build-queue-*.json
+# the build-queue path the command printed; another repository's file names a different one
+BINDING=/srv/archon/bindings/sdlc-acme-widgets-build-queue-0297fdfa94d5.json
+archon trigger fire --config "$BINDING"
+archon trigger schedule install --config "$BINDING"
 ```
 
 ### `forge`
