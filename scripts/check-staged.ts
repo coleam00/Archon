@@ -51,7 +51,12 @@ const paths = decoder
   .decode(git('diff', '--cached', '--name-only', '--diff-filter=ACMR', '-z'))
   .split('\0')
   .filter(path => path !== '');
-const problems = (await Promise.all(paths.map(check))).filter(problem => problem !== null);
+// A merge can stage hundreds of files; a few Biome processes at a time keeps launches bounded.
+const problems: string[] = [];
+for (let start = 0; start < paths.length; start += 8) {
+  const batch = await Promise.all(paths.slice(start, start + 8).map(check));
+  problems.push(...batch.filter(problem => problem !== null));
+}
 if (problems.length > 0) {
   console.error(problems.join('\n\n'));
   process.exit(1);
