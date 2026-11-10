@@ -20,7 +20,7 @@ import {
   StateRevisionConflictError,
   type IStateDocumentStore,
   type StateLease,
-  type StateLeaseChange,
+  type StateLeaseWrite,
   type StateRevision,
   type StateScope,
 } from '../state-document-store';
@@ -112,7 +112,7 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
     return commit(root, [], async () => ({ result: await call(), changes: {} }));
   }
   function write(
-    input: z.infer<typeof stateDeleteSchema> & { lease?: StateLeaseChange | undefined },
+    input: z.infer<typeof stateDeleteSchema> & StateLeaseWrite,
     operation: StateRevision['operation'],
     compute: (prior: StateRevision | null) => StateRevision['value']
   ): Promise<StateRevision> {

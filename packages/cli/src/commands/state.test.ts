@@ -124,7 +124,7 @@ test('a run takes a lease in its write, another run is refused until the holder 
     await invoke('put', '{}', { ifRevision: '2', lease: true, project: 'owner/repo' }, {})
   ).toBe(1);
   expect(output.at(-1)).toMatchObject({
-    error: '--lease and --release-lease are only valid inside a run',
+    error: '--lease, --release-lease and --held are only valid inside a run',
   });
   await store.updateWorkflowRun(run.id, { status: 'running' });
   await store.completeWorkflowRun(run.id, { duration_ms: 0 });
@@ -134,6 +134,40 @@ test('a run takes a lease in its write, another run is refused until the holder 
   expect(output.at(-1)).toMatchObject({ revision: 3, lease: { runId: other.id, live: true } });
   expect(await invoke('put', '{}', { ifRevision: '3', releaseLease: true }, otherEnv)).toBe(0);
   expect(output.at(-1)).toMatchObject({ revision: 4, lease: null });
+});
+test('a held write lands only while the run holds the lease, and exits 6 once it is lost', async () => {
+  const { invoke, output, store, run } = await fixture();
+  const stage = (value: string): string =>
+    JSON.stringify({ ops: [{ op: 'set', path: '/stage', value }] });
+  expect(await invoke('get', '', { held: true })).toBe(1);
+  expect(await invoke('put', '{}', { ifRevision: '0', lease: true, held: true })).toBe(1);
+  expect(await invoke('put', '{}', { ifRevision: '0' })).toBe(0);
+  // Nobody holds the document, where --lease would take it.
+  expect(await invoke('patch', stage('mine'), { held: true })).toBe(6);
+  expect(output.at(-1)).toMatchObject({ ok: false, code: 6 });
+  expect(await invoke('patch', stage('taken'), { lease: true })).toBe(0);
+  const other = await store.createWorkflowRun({ workflow_name: 'state', user_message: '' });
+  await store.updateWorkflowRun(other.id, {
+    output_root: getProjectStoragePaths({ kind: 'repo', owner: 'owner', repo: 'repo' }).root,
+  });
+  const otherEnv = {
+    WORKFLOW_ID: other.id,
+    ARCHON_NODE_EXECUTION: JSON.stringify({ runId: other.id, path: 'claim' }),
+  };
+  // Another run's unfenced append moves the revision; the holder's held patch still lands.
+  const append = '{"ops":[{"op":"append","path":"/seen","value":1}]}';
+  expect(await invoke('patch', append, {}, otherEnv)).toBe(0);
+  expect(await invoke('patch', stage('stolen'), { held: true }, otherEnv)).toBe(6);
+  expect(await invoke('patch', stage('held'), { held: true })).toBe(0);
+  expect(output.at(-1)).toMatchObject({
+    revision: 4,
+    value: { stage: 'held', seen: [1] },
+    lease: { runId: run.id, live: true },
+  });
+  expect(await invoke('put', '{}', { ifRevision: '4', held: true, releaseLease: true })).toBe(0);
+  expect(output.at(-1)).toMatchObject({ revision: 5, lease: null });
+  expect(await invoke('put', '{}', { ifRevision: '5', held: true, releaseLease: true })).toBe(6);
+  expect(await invoke('patch', stage('x'), { held: true, project: 'owner/repo' }, {})).toBe(1);
 });
 test('get on a deleted document returns the revision a recreating put must name', async () => {
   const { invoke, output } = await fixture();

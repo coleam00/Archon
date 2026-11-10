@@ -3,6 +3,7 @@ import {
   StateRevisionConflictError,
   StateDocumentTooLargeError,
   StateLeaseHeldError,
+  StateLeaseLostError,
   StatePatchError,
   stateValueSchema,
   statePutSchema,
@@ -512,7 +513,7 @@ export function describeStateDocumentConformance(
               lease: 'take',
             })
           )
-        ).toMatchObject({ message: 'Only a run can take or release a state lease' });
+        ).toMatchObject({ message: 'Only a run can take, hold or release a state lease' });
         const released = await store.putStateDocument({
           ...input,
           value: { seen: [1] },
@@ -533,6 +534,91 @@ export function describeStateDocumentConformance(
         ).toEqual([null, true, null, true, true]);
       }
     );
+    check('a held write needs the writing run to hold a live lease', async harness => {
+      const { store, runs } = harness;
+      const scope = p('lease-held');
+      const holder = await runs.create();
+      const other = await runs.create();
+      const input = { scope, name: 'item', writer: leaseWriter(holder) };
+      const stage = (value: string) => [{ op: 'set' as const, path: '/stage', value }];
+      // Nobody holds it: a take would succeed here, a held write does not.
+      await store.putStateDocument({ scope, name: 'item', value: {}, ifRevision: 0, writer });
+      expect(
+        await rejection(store.patchStateDocument({ ...input, ops: stage('mine'), held: true }))
+      ).toBeInstanceOf(StateLeaseLostError);
+      expect(
+        await rejection(
+          store.patchStateDocument({ scope, name: 'item', ops: stage('x'), writer, held: true })
+        )
+      ).toMatchObject({ message: 'Only a run can take, hold or release a state lease' });
+      const taken = await store.patchStateDocument({
+        ...input,
+        ops: stage('taken'),
+        lease: 'take',
+      });
+      // A write by anyone else moves the revision and leaves the lease with its holder.
+      await store.patchStateDocument({
+        scope,
+        name: 'item',
+        ops: [{ op: 'append', path: '/seen', value: 1 }],
+        writer,
+      });
+      const held = await store.patchStateDocument({ ...input, ops: stage('held'), held: true });
+      expect(held.lease).toEqual(taken.lease);
+      expect(held.value).toEqual({ stage: 'held', seen: [1] });
+      expect(
+        await rejection(
+          store.patchStateDocument({
+            scope,
+            name: 'item',
+            ops: stage('stolen'),
+            writer: leaseWriter(other),
+            held: true,
+          })
+        )
+      ).toBeInstanceOf(StateLeaseLostError);
+      // A failed run can resume, so it still holds; a cancelled one has lost the lease
+      // even though no other run took it.
+      await runs.setStatus(holder, 'failed');
+      await store.putStateDocument({
+        ...input,
+        value: { stage: 'resumed' },
+        ifRevision: 4,
+        held: true,
+      });
+      await runs.setStatus(holder, 'cancelled');
+      expect(
+        await rejection(
+          store.putStateDocument({ ...input, value: { stage: 'late' }, ifRevision: 5, held: true })
+        )
+      ).toBeInstanceOf(StateLeaseLostError);
+      expect(
+        await rejection(
+          store.patchStateDocument({ ...input, ops: stage('late'), held: true, lease: 'release' })
+        )
+      ).toBeInstanceOf(StateLeaseLostError);
+      expect(await store.getStateDocument(scope, 'item')).toMatchObject({
+        revision: 5,
+        value: { stage: 'resumed' },
+      });
+      // The run that takes the ended lease over gives it back in a held write.
+      await store.patchStateDocument({
+        scope,
+        name: 'item',
+        ops: stage('next'),
+        writer: leaseWriter(other),
+        lease: 'take',
+      });
+      const released = await store.patchStateDocument({
+        scope,
+        name: 'item',
+        ops: stage('done'),
+        writer: leaseWriter(other),
+        held: true,
+        lease: 'release',
+      });
+      expect(released.lease).toBeNull();
+    });
     check('runs racing to take one lease: exactly one wins', async harness => {
       const { store, runs } = harness;
       const scope = p('lease-race');

@@ -25,14 +25,14 @@ export const stateHelp: HelpGroup = {
     {
       command: 'state',
       subcommand: 'put',
-      spec: 'state put <name> --if-revision <n> [--raw] [--lease|--release-lease]',
+      spec: 'state put <name> --if-revision <n> [--raw] [--lease|--release-lease] [--held]',
       description:
-        "Replace the value with JSON (or --raw text) from stdin; 0 creates it. In a run, --lease takes the document's lease and --release-lease gives it back in the same write",
+        "Replace the value with JSON (or --raw text) from stdin; 0 creates it. In a run, --lease takes the document's lease and --release-lease gives it back in the same write; --held writes only while the run holds the lease (exit 6 otherwise)",
     },
     {
       command: 'state',
       subcommand: 'patch',
-      spec: 'state patch <name> [--if-revision <n>] [--lease|--release-lease]',
+      spec: 'state patch <name> [--if-revision <n>] [--lease|--release-lease] [--held]',
       description:
         'Apply {ops:[...]} from stdin to the latest value, or only to revision n; lease flags as for put',
     },

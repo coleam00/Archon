@@ -2007,6 +2007,8 @@ archon state list --project acme/widgets
 # inside a run: claim the document in the same write, and give it back with the outcome
 printf '{"stage":"building"}' | archon state put work/7 --if-revision 4 --lease
 printf '{"stage":"done"}' | archon state put work/7 --if-revision 5 --release-lease
+# inside a run: write only while the run still holds the document
+printf '{"ops":[{"op":"set","path":"/stage","value":"reviewed"}]}' | archon state patch work/7 --held
 ```
 
 Every command writes JSON and names the scope it used: `{kind: "project", key}` or
@@ -2033,6 +2035,21 @@ exits `3` naming the holder and writes nothing. Taking an ended lease, or one th
 already holds, succeeds. A write without a lease flag keeps the document's lease unchanged,
 whoever writes it, and `delete` clears it. The lease flags are refused outside a run.
 
+`--held` makes a `put` or `patch` only while the calling run's own lease on the document
+is live, and otherwise exits `6` and writes nothing. It keeps the lease, or gives it back
+when combined with `--release-lease`. Use it for every write a run makes to a document
+it claimed: unlike `--lease`, it never takes a lease, so a run whose lease ended, or
+whose document another run took over and released, cannot write again. A held `patch`
+without `--if-revision` applies to the latest revision, so it also lands when another
+writer appended to the document since the run read it. `--held` cannot be combined with
+`--lease`.
+
+To hand one document out of several to exactly one run, read them with `list --values`,
+order the ones whose `lease` is `null` or not `live`, and `put --if-revision <n> --lease`
+each in turn until one succeeds. Each attempt is atomic: it lands only if the document is
+still at the revision read and no live run holds it, so a candidate another run took or
+changed exits `3` and the next one is tried.
+
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
 stdin to the latest value, initially `{}`. With `--if-revision <n>` it applies only when
@@ -2055,7 +2072,8 @@ a string). Use plain `get` when you need the revision for a following `put`.
 Names contain 1–200 lowercase letters, digits, `.`, `_`, `-`, and slash-separated segments.
 Values are limited to 64 KiB of serialized UTF-8 JSON. Exit codes: `0` success, `1` usage
 or storage failure, `3` revision conflict or a lease another live run holds, `4` oversized value, invalid patch or non-text
-`--raw` value, `5` the CLI opened a store that does not know the calling run. Failures
+`--raw` value, `5` the CLI opened a store that does not know the calling run, `6` a `--held` write
+by a run that does not hold the document's lease. Failures
 return `{ok:false, error, code}` and rejected writes append no revision.
 
 Inside a bash/script node, or the shell of an AI node's agent, `WORKFLOW_ID` and

@@ -139,19 +139,29 @@ export const stateWriteScopeSchema = z.object({
 });
 /**
  * What a put or patch does to the document's lease. Absent, the write keeps whatever
- * lease the document had. Only a run can take or release one, and only for itself.
+ * lease the document had. Only a run can take, hold or release one, and only for itself.
  */
 export const stateLeaseChangeSchema = z.enum(['take', 'release']);
 export type StateLeaseChange = z.infer<typeof stateLeaseChangeSchema>;
+/**
+ * How a put or patch treats the document's lease. `held` makes the write only while the
+ * writing run's own lease is live, which a take does not: a take also succeeds on a
+ * document nobody holds, so a run that lost its lease would take it again.
+ */
+const stateLeaseWriteSchema = z.object({
+  lease: stateLeaseChangeSchema.optional(),
+  held: z.boolean().optional(),
+});
+export type StateLeaseWrite = z.infer<typeof stateLeaseWriteSchema>;
 export const statePutSchema = stateWriteScopeSchema.extend({
   value: stateValueSchema.refine(value => value !== null, 'Use delete for a tombstone'),
   ifRevision: stateRevisionNumberSchema,
-  lease: stateLeaseChangeSchema.optional(),
+  ...stateLeaseWriteSchema.shape,
 });
 export const statePatchSchema = stateWriteScopeSchema.extend({
   ops: statePatchOpsSchema,
   ifRevision: stateRevisionNumberSchema.optional(),
-  lease: stateLeaseChangeSchema.optional(),
+  ...stateLeaseWriteSchema.shape,
 });
 export const stateDeleteSchema = stateWriteScopeSchema.extend({
   ifRevision: stateRevisionNumberSchema.optional(),
@@ -177,14 +187,27 @@ export class StateLeaseHeldError extends Error {
     super(`State document '${name}' is leased by live run ${holder.runId}`);
   }
 }
+/** A held write by a run whose own lease on the document is not live; the write was not made. */
+export class StateLeaseLostError extends Error {
+  constructor(
+    public readonly name: string,
+    public readonly runId: string,
+    public readonly holder: StateLease | null
+  ) {
+    super(
+      `State document '${name}' is not leased by run ${runId}: ${holder === null ? 'no live lease' : `leased by live run ${holder.runId}`}`
+    );
+  }
+}
 /**
  * The lease the next revision records. A delete clears it, a write that names no change
  * keeps it, and a take or release by a run is refused while another run's lease is live.
- * A run that already holds a live lease keeps it as taken.
+ * A run that already holds a live lease keeps it as taken. A held write is refused unless
+ * the writing run's own lease is live, and then keeps or releases it.
  */
 export function nextStateLease(
   prior: StateRevision | null,
-  write: { name: string; writer: StateWriter; lease?: StateLeaseChange | undefined },
+  write: { name: string; writer: StateWriter } & StateLeaseWrite,
   operation: StateRevision['operation'],
   takenAt: string
 ): StateLease | null {
@@ -194,10 +217,14 @@ export function nextStateLease(
     current === null
       ? null
       : { runId: current.runId, nodePath: current.nodePath, takenAt: current.takenAt };
-  if (write.lease === undefined) return kept;
-  if (write.writer.kind !== 'run') throw new Error('Only a run can take or release a state lease');
+  if (write.lease === undefined && !write.held) return kept;
+  if (write.writer.kind !== 'run')
+    throw new Error('Only a run can take, hold or release a state lease');
   const live = current?.live === true ? kept : null;
+  if (write.held && live?.runId !== write.writer.runId)
+    throw new StateLeaseLostError(write.name, write.writer.runId, live);
   if (live && live.runId !== write.writer.runId) throw new StateLeaseHeldError(write.name, live);
+  if (write.lease === undefined) return kept;
   if (write.lease === 'release') return null;
   return live ?? { runId: write.writer.runId, nodePath: write.writer.nodePath, takenAt };
 }

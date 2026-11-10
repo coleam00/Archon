@@ -19,9 +19,10 @@ import {
   StateRevisionConflictError,
   StateDocumentTooLargeError,
   StateLeaseHeldError,
+  StateLeaseLostError,
   StatePatchError,
   type IStateDocumentStore,
-  type StateLeaseChange,
+  type StateLeaseWrite,
   type StateScope,
   type StateWriter,
 } from '@archon/workflows/state-document-store';
@@ -46,10 +47,12 @@ export interface StateCommandOptions {
   lease?: boolean;
   /** Inside a run: give the document's lease back in this put or patch. */
   releaseLease?: boolean;
+  /** Inside a run: make this put or patch only while the run holds the document's lease. */
+  held?: boolean;
 }
 
 // Scripts branch on these, never on message text.
-const EXIT = { usage: 1, conflict: 3, invalid: 4, storeMismatch: 5 } as const;
+const EXIT = { usage: 1, conflict: 3, invalid: 4, storeMismatch: 5, leaseLost: 6 } as const;
 const commands = ['get', 'put', 'patch', 'log', 'delete', 'list'] as const;
 
 // Windows CI: `Bun.stdin.text()` on a piped stdin stayed pending without holding the
@@ -64,7 +67,7 @@ async function readStdin(): Promise<string> {
 type StateHost = Pick<WorkflowHost, 'deps' | 'records'>;
 type StateCommand = (typeof commands)[number];
 type StateInput = z.infer<typeof stateWriteScopeSchema>;
-type StateWriteInput = StateInput & { lease: StateLeaseChange | undefined };
+type StateWriteInput = StateInput & StateLeaseWrite;
 
 function validateStateOptions(command: StateCommand, options: StateCommandOptions): void {
   if (options.ifRevision !== undefined && !['put', 'patch', 'delete'].includes(command))
@@ -80,16 +83,16 @@ function validateStateOptions(command: StateCommand, options: StateCommandOption
     throw new Error('Use --install or --project, not both');
 }
 
-function parseLeaseChange(
-  command: StateCommand,
-  options: StateCommandOptions
-): StateLeaseChange | undefined {
-  if (!options.lease && !options.releaseLease) return undefined;
+function parseLeaseWrite(command: StateCommand, options: StateCommandOptions): StateLeaseWrite {
+  if (!options.lease && !options.releaseLease && !options.held) return {};
   if (command !== 'put' && command !== 'patch')
-    throw new Error('--lease and --release-lease are only valid for put or patch');
-  if (options.lease && options.releaseLease)
-    throw new Error('Use --lease or --release-lease, not both');
-  return options.lease ? 'take' : 'release';
+    throw new Error('--lease, --release-lease and --held are only valid for put or patch');
+  if (options.lease && (options.releaseLease || options.held))
+    throw new Error('Use --lease alone: it cannot be combined with --release-lease or --held');
+  return {
+    ...(options.lease ? { lease: 'take' } : options.releaseLease ? { lease: 'release' } : {}),
+    ...(options.held ? { held: true } : {}),
+  };
 }
 
 function parseRevision(text: string): number {
@@ -114,7 +117,7 @@ function parseStateArguments(
     options.prefix === undefined ? undefined : stateNamePrefixSchema.parse(options.prefix);
   const ifRevision =
     options.ifRevision === undefined ? undefined : parseRevision(options.ifRevision);
-  const lease = parseLeaseChange(command, options);
+  const lease = parseLeaseWrite(command, options);
 
   const limit =
     options.limit === undefined
@@ -266,9 +269,9 @@ async function executeStateCommand(
     case 'get':
       return getStateDocument(store, scope, name);
     case 'put':
-      return putStateDocument(store, { ...input, lease }, ifRevision, options.raw, readInput);
+      return putStateDocument(store, { ...input, ...lease }, ifRevision, options.raw, readInput);
     case 'patch':
-      return patchStateDocument(store, { ...input, lease }, ifRevision, readInput);
+      return patchStateDocument(store, { ...input, ...lease }, ifRevision, readInput);
     case 'delete':
       return {
         scope,
@@ -315,6 +318,7 @@ function stateErrorCode(error: unknown): number {
   )
     return EXIT.invalid;
   if (error instanceof StateStoreMismatchError) return EXIT.storeMismatch;
+  if (error instanceof StateLeaseLostError) return EXIT.leaseLost;
   return EXIT.usage;
 }
 
@@ -352,8 +356,8 @@ export async function stateCommand(
     const parsed = parseStateArguments(subcommand, args, options);
     const context = await resolveStateContext(host, options, env, dependencies.storeKind);
     const input = { ...context, name: parsed.name };
-    if (parsed.lease !== undefined && context.writer.kind !== 'run')
-      throw new Error('--lease and --release-lease are only valid inside a run');
+    if (Object.keys(parsed.lease).length > 0 && context.writer.kind !== 'run')
+      throw new Error('--lease, --release-lease and --held are only valid inside a run');
     if (parsed.command === 'get' && options.raw) {
       const row = await store.getStateDocument(input.scope, input.name);
       if (typeof row?.value !== 'string')

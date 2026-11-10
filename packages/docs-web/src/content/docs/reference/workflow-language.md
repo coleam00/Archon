@@ -1541,7 +1541,8 @@ engine keeps a lease live while its run can still finish, including when the run
 or failed and can resume, and ends it when the run completes, is cancelled or abandoned, or
 is deleted. A take while another run's lease is live exits `3`; taking over an ended lease is
 an ordinary conditional write. A lease does not block other writers: writes without a lease
-flag keep it. What a document means once its lease has ended stays with the workflow. See
+flag keep it. A run that claimed a document writes it with `--held`, which exits `6` and
+writes nothing once the lease is no longer that run's. What a document means once its lease has ended stays with the workflow. See
 the [CLI reference](/reference/cli/#state) for the fields.
 
 Let the agent judge what to remember, then commit its structured output in a script node

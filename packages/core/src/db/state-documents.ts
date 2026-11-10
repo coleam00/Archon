@@ -17,7 +17,7 @@ import {
   type StateRevision,
   type StateScope,
   type StateLease,
-  type StateLeaseChange,
+  type StateLeaseWrite,
   type StateWriter,
 } from '@archon/workflows/state-document-store';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/run-status';
@@ -152,7 +152,7 @@ export function createSqlStateDocumentStore(
 ): IStateDocumentStore {
   const query: Query = <T>(sql: string, params?: unknown[]) => database().query<T>(sql, params);
   const write = async (
-    input: z.infer<typeof stateDeleteSchema> & { lease?: StateLeaseChange | undefined },
+    input: z.infer<typeof stateDeleteSchema> & StateLeaseWrite,
     operation: StateRevision['operation'],
     compute: (prior: StateRevision | null) => StateRevision['value']
   ): Promise<StateRevision> => {

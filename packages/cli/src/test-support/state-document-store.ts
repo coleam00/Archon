@@ -12,7 +12,7 @@ import {
   StateRevisionConflictError,
   type IStateDocumentStore,
   type StateLease,
-  type StateLeaseChange,
+  type StateLeaseWrite,
   type StateRevision,
   type StateScope,
 } from '@archon/workflows/state-document-store';
@@ -48,9 +48,7 @@ export function createInMemoryStateDocumentStore(
       .sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
   };
   const commit = (
-    input: Parameters<IStateDocumentStore['deleteStateDocument']>[0] & {
-      lease?: StateLeaseChange | undefined;
-    },
+    input: Parameters<IStateDocumentStore['deleteStateDocument']>[0] & StateLeaseWrite,
     operation: StateRevision['operation'],
     value: StateRevision['value']
   ): StateRevision => {
