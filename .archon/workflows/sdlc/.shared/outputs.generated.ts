@@ -1125,3 +1125,17 @@ export const OUTPUT_ENUMS = {
     },
   },
 } as const;
+
+/**
+ * The pack's settings, as `.pack/pack.yaml` declares them under `inputs:`. Every value is
+ * text: a `bool` is `true` or `false`, a `list` is comma-separated. A workflow that declares
+ * an input of a setting's name reads that input instead, which this type does not describe.
+ */
+export interface PackSettings {
+  readonly ci: 'forge' | 'none';
+}
+
+/** The values of every `enum` setting, by setting name. */
+export const PACK_SETTING_ENUMS = {
+  ci: ['forge', 'none'],
+} as const;

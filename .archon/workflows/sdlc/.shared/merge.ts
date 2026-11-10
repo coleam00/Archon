@@ -13,6 +13,7 @@
 
 import { itemPullRequest, type Validation } from './build.ts';
 import { invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
+import { PACK_SETTING_ENUMS } from './outputs.generated.ts';
 import { viewPr } from './pr.ts';
 import { type Attention, type DecisionEntry, withDecision } from './queue.ts';
 import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
@@ -49,8 +50,8 @@ export type MergeAsked =
     }
   | { readonly by: Extract<MergeAskedBy, 'base'>; readonly attention: BaseAttention };
 export const MERGE_METHODS = ['squash', 'merge'] as const;
-/** The pack's `ci` setting; `.pack/pack.yaml` declares the same values. */
-export const CI_MODES = ['forge', 'none'] as const;
+/** The values of the pack's `ci` setting, generated from `.pack/pack.yaml`. */
+export const CI_MODES = PACK_SETTING_ENUMS.ci;
 export type CiMode = (typeof CI_MODES)[number];
 
 /** What the gate trusts at the head besides the verdict: forge checks, or a recorded validation. */

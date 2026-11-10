@@ -302,9 +302,11 @@ own. A script placed outside the type-check globs fails `pack-scripts-validation
 rather than going quietly unchecked.
 
 `.shared/outputs.generated.ts` holds the type of every node output and the values of every
-enum, generated from the workflows' `output_format` schemas. A script reads a node's
-output as `NodeOutput<'<workflow>', '<node>'>` instead of restating the shape. After
-changing an `output_format`, run `bun run generate:workflow-output-types`; CI's
+enum, generated from the workflows' `output_format` schemas, and the pack's settings with
+the values of every enum setting, generated from `.pack/pack.yaml`. A script reads a node's
+output as `NodeOutput<'<workflow>', '<node>'>` and a setting's values as
+`PACK_SETTING_ENUMS.<setting>` instead of restating either. After changing an
+`output_format` or a setting, run `bun run generate:workflow-output-types`; CI's
 `generated-files` check fails while the file is stale.
 
 The scripts' tool-boundary tests live under `.archon/scripts/__tests__/`. CI runs the pack

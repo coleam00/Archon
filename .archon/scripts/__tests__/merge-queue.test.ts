@@ -6,7 +6,6 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { type BuildRecord, buildWaits } from '../../workflows/sdlc/.shared/build';
 import {
-  CI_MODES,
   gateRefusals,
   type MergeAttention,
   type MergeRecord,
@@ -1058,13 +1057,6 @@ describe('the gate under ci: none', () => {
     expect(JSON.parse(red.stdout).refusals).toEqual([`its validation at ${HEAD} failed`]);
     expect([...merges(stale), ...merges(red)]).toEqual([]);
   }, 60_000);
-
-  test('the ci values the scripts accept are the ones the pack declares', () => {
-    const declared = Bun.YAML.parse(readFileSync(resolve(import.meta.dir, '../../workflows/sdlc/.pack/pack.yaml'), 'utf8')) as {
-      inputs: { ci: { values: string[] } };
-    };
-    expect(declared.inputs.ci.values).toEqual([...CI_MODES]);
-  });
 });
 
 describe('the merge queue on the forge', () => {
