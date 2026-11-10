@@ -16,7 +16,7 @@ import { artifactsDir, emit, nullableJson } from '../../.shared/io.ts';
 import { failed, failedPublication } from '../../.shared/report.ts';
 
 const options = {
-  listingFile: process.env.TYPED_ARTIFACTS_FILE,
+  run: process.env.WORKFLOW_ID,
   outcomesFile: process.env.NODE_OUTCOMES_FILE,
 };
 

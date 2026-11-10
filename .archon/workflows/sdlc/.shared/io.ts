@@ -34,6 +34,11 @@ function setFailed(): void {
   process.exitCode = 1;
 }
 
+/** Whether a value is a JSON object: not null, not an array. */
+export function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
 /** A bound input's value, or the empty string when the binding is absent. */
 export function text(value: string | undefined): string {
   return value ?? '';

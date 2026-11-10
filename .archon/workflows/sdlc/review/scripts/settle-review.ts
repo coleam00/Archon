@@ -34,9 +34,8 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { artifactsDir, emit, note, refuse, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, isObject, note, refuse, text } from '../../.shared/io.ts';
 import { FINDING_VALUES, type Finding, readFindings } from '../../.shared/review-item.ts';
-import { isObject } from '../../.shared/typed.ts';
 
 /** The verifier nodes' numbers; each writes review/verify-<n>.json. */
 const VOTERS = [1, 2, 3] as const;

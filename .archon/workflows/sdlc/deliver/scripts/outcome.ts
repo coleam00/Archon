@@ -26,7 +26,7 @@ const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
   summary: string;
 };
 const capped = !rounds.done;
-const notes = caveats(artifactsDir(), { listingFile: process.env.TYPED_ARTIFACTS_FILE });
+const notes = caveats(artifactsDir(), { run: process.env.WORKFLOW_ID });
 const where = rounds.pr_url === '' ? '' : `\n${rounds.pr_url}`;
 const left = rounds.contract_left?.length
   ? `\n\nLeft open, so the pull request does not close its issue:\n${rounds.contract_left.map(item => `- ${item}`).join('\n')}`

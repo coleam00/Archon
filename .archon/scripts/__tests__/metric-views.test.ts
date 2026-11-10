@@ -37,7 +37,7 @@ function emitted(): Map<string, { kind: unknown; calibrates: unknown }> {
   const labeled = { pr: PR, tests: [{ file: 'a.test.ts', name: 'logs the probe', protects: false }] };
   const records: { name?: unknown; kind?: unknown; calibrates?: unknown }[] = [
     ...prMetricRecords(prs, runsByUrl),
-    ...reviewRoundRecords(prs, runsByUrl, reviewed, new Set(), () => ({ ok: false, problem: 'unused' })).metrics,
+    ...reviewRoundRecords(prs, runsByUrl, reviewed, new Set(), () => new Map()).metrics,
     ...testValueRecords(judged, 'judge:abc').metrics,
     ...scoreCalibration(judgeSlots([labeled], [{ tests: [verdict] }]), 'judge:abc').metrics,
   ];

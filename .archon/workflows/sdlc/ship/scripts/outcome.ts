@@ -30,7 +30,7 @@ import { artifactsDir, emit, text } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
 
 const artifacts = artifactsDir();
-const listingFile = process.env.TYPED_ARTIFACTS_FILE;
+const run = process.env.WORKFLOW_ID;
 const route = text(process.env.INPUTS_ROUTE);
 const contract = text(process.env.INPUTS_CONTRACT);
 const blockedReason = text(process.env.INPUTS_BLOCKED_REASON);
@@ -109,7 +109,7 @@ if (delivered === 'null') {
     delivered: false,
     reason: stop.reason,
     pr_url: '',
-    summary: `${stop.text.trim()}\nReport: ${artifacts}/${stop.report}` + caveats(artifacts, { listingFile }),
+    summary: `${stop.text.trim()}\nReport: ${artifacts}/${stop.report}` + caveats(artifacts, { run }),
   });
 } else {
   // Deliver ran, so its outcome is the report; its summary already carries the caveats.

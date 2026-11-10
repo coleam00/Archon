@@ -1,54 +1,75 @@
-import { describe, expect, it } from 'bun:test';
-import { mkdirSync, utimesSync, writeFileSync } from 'node:fs';
+import { afterAll, beforeAll, describe, expect, it } from 'bun:test';
+import { mkdirSync, mkdtempSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { writeNodeArtifactsListing } from '../packages/workflows/src/artifacts-index';
+import { writeNodeArtifact } from '../packages/workflows/src/artifacts-index';
 import { caveats, failed } from '../.archon/workflows/sdlc/.shared/report';
 
 /**
  * The SDLC pack's terminal-report module, tested where the pack lives in this
- * repository. The listing these tests pass in is produced by the engine's own
- * writer, so the JSON contract the pack consumes cannot drift from the contract
- * the engine emits without one of these failing.
+ * repository. The typed outputs these tests read are written by the engine's own
+ * writer and answered by its own `workflow outputs` command, so the JSON contract the
+ * pack consumes cannot drift from the contract the engine emits without one of these
+ * failing.
  */
 const track = trackTempRoots();
+const RUN = 'run';
 
+/**
+ * The host CLI a pack script reaches, and the run it is. `artifactsDir` adds the Archon
+ * home and the output root that CLI answers under.
+ */
+const hostEnv = {
+  ARCHON_CLI_COMMAND: JSON.stringify([
+    process.execPath,
+    join(import.meta.dir, 'fixtures/sdlc-outputs-cli.ts'),
+  ]),
+  WORKFLOW_ID: RUN,
+};
+const HOST_KEYS = [...Object.keys(hostEnv), 'ARCHON_HOME', 'SDLC_OUTPUT_ROOT'];
+const inherited = HOST_KEYS.map(key => [key, process.env[key]] as const);
+
+beforeAll(() => {
+  Object.assign(process.env, hostEnv);
+});
+
+afterAll(() => {
+  for (const [key, value] of inherited) {
+    if (value === undefined) delete process.env[key];
+    else process.env[key] = value;
+  }
+});
+
+/** The artifact directory of the run, in a fresh project under a fresh Archon home. */
 function artifactsDir(): string {
-  const dir = track(join(tmpdir(), `sdlc-report-${Math.random().toString(36).slice(2)}`));
-  mkdirSync(join(dir, 'nodes'), { recursive: true });
+  const home = track(mkdtempSync(join(tmpdir(), 'sdlc-report-home-')));
+  const outputRoot = join(home, 'workspaces', 'acme', 'widget');
+  Object.assign(process.env, { ARCHON_HOME: home, SDLC_OUTPUT_ROOT: outputRoot });
+  const dir = getRunArtifactsDirForRoot(outputRoot, RUN);
+  mkdirSync(dir, { recursive: true });
   return dir;
 }
 
-/** A typed artifact as the engine writes it: the result under nodes/ and its sidecar. */
-function typed(
+/** A typed output as the engine writes it. */
+async function typed(
   dir: string,
-  stem: string,
+  nodeId: string,
   outputType: string,
   producedAt: string,
-  result: Record<string, unknown> | string
-): void {
-  writeFileSync(
-    join(dir, 'nodes', `${stem}.md`),
-    typeof result === 'string' ? result : JSON.stringify(result)
-  );
-  writeFileSync(
-    join(dir, 'nodes', `${stem}.meta.json`),
-    JSON.stringify({
-      nodeId: stem,
-      outputType,
-      path: `nodes/${stem}.md`,
-      runId: 'run',
-      producedAt,
-      size: 1,
-    })
+  result: Record<string, unknown>
+): Promise<void> {
+  await writeNodeArtifact(
+    dir,
+    { nodeId, outputType, runId: RUN, producedAt },
+    JSON.stringify(result)
   );
 }
 
-/** The report as a tail composes it: with the engine listing this node received. */
-async function report(dir: string): Promise<string> {
-  const listingFile = await writeNodeArtifactsListing(dir, 'run');
-  return caveats(dir, { listingFile });
+/** The report as a tail composes it, from its own run's typed outputs. */
+function report(dir: string): string {
+  return caveats(dir, { run: RUN });
 }
 
 describe('discoveries', () => {
@@ -68,40 +89,42 @@ describe('discoveries', () => {
       JSON.stringify([record('Seen by review')])
     );
     utimesSync(join(dir, 'discoveries', 'review-code.json'), 1, 1);
-    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+    const reviewed = new Date('2026-09-10T09:00:00.000Z');
+    await typed(dir, 'review__publish', 'review-report', reviewed.toISOString(), {
       discoveries: [record('Stale mock type')],
     });
-    utimesSync(join(dir, 'nodes', 'review__publish.md'), 2, 2);
     writeFileSync(
       join(dir, 'discoveries', 'review-simplify.json'),
       JSON.stringify([record('Found after review')])
     );
-    const text = await report(dir);
+    const later = new Date(reviewed.getTime() + 60_000);
+    utimesSync(join(dir, 'discoveries', 'review-simplify.json'), later, later);
+    const text = report(dir);
     expect(text).toContain('- Stale mock type [unrelated]');
     expect(text).toContain('- Found after review [unreviewed]');
     expect(text).not.toContain('Seen by review');
     expect(text).toContain('If you are an agent reading this');
   });
 
-  it('relays every raw record when no review ran', async () => {
+  it('relays every raw record when no review ran', () => {
     const dir = artifactsDir();
     mkdirSync(join(dir, 'discoveries'));
     writeFileSync(
       join(dir, 'discoveries', 'plan.json'),
       JSON.stringify([record('Planner found it')])
     );
-    expect(await report(dir)).toContain('- Planner found it [unreviewed]');
+    expect(report(dir)).toContain('- Planner found it [unreviewed]');
   });
 
   it("lists the latest verdict's discoveries with the relay", async () => {
     const dir = artifactsDir();
-    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+    await typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
       discoveries: [record('Old')],
     });
-    typed(dir, 'recheck__publish', 'review-report', '2026-09-10T10:00:00.000Z', {
+    await typed(dir, 'recheck__publish', 'review-report', '2026-09-10T10:00:00.000Z', {
       discoveries: [record('Flaky timeout')],
     });
-    const text = await report(dir);
+    const text = report(dir);
     expect(text).toContain('- Flaky timeout [unrelated]');
     expect(text).not.toContain('- Old');
     expect(text).toContain('If you are an agent reading this');
@@ -109,28 +132,30 @@ describe('discoveries', () => {
 
   it('says nothing when the final verdict recorded no discoveries', async () => {
     const dir = artifactsDir();
-    typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
+    await typed(dir, 'review__publish', 'review-report', '2026-09-10T09:00:00.000Z', {
       discoveries: [],
     });
-    expect(await report(dir)).toBe('');
+    expect(report(dir)).toBe('');
   });
 
-  it('names a missing listing instead of reading as no discoveries', () => {
+  it('names outputs it cannot read instead of reading as no discoveries', () => {
     const dir = artifactsDir();
-    expect(caveats(dir, { listingFile: undefined })).toContain('Discoveries could not be listed');
+    expect(caveats(dir, { run: undefined })).toContain('Discoveries could not be listed');
+    // A run whose output location the engine cannot resolve.
+    process.env.SDLC_OUTPUT_ROOT = join(tmpdir(), 'outside-the-archon-home');
+    expect(report(dir)).toContain('Discoveries could not be listed: run run could not be read');
   });
 });
 
 describe('failed', () => {
-  it('claims no result and still relays the discoveries the run recorded', async () => {
+  it('claims no result and still relays the discoveries the run recorded', () => {
     const dir = artifactsDir();
     mkdirSync(join(dir, 'discoveries'));
     writeFileSync(
       join(dir, 'discoveries', 'implement.json'),
       JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
     );
-    const listingFile = await writeNodeArtifactsListing(dir, 'run');
-    const text = failed(dir, { listingFile, outcomesFile: undefined });
+    const text = failed(dir, { run: RUN, outcomesFile: undefined });
     expect(text.startsWith('Not done:')).toBe(true);
     expect(text).toContain('- Guard refuses an empty diff [unreviewed]');
     expect(text).not.toContain('Ready');
@@ -139,7 +164,7 @@ describe('failed', () => {
 
 /**
  * Each tail's `report` node, run as the engine runs it: the outcome binding as env
- * text and this run's listing, with stdout as the node's result.
+ * text and this run's id, with stdout as the node's result.
  */
 describe.each([
   {
@@ -161,7 +186,7 @@ describe.each([
 ])('$tail report node', ({ tail, result, passed }) => {
   const script = join(import.meta.dir, '..', '.archon/workflows/sdlc', tail, 'scripts/report.ts');
 
-  async function run(outcome: string): Promise<Record<string, unknown>> {
+  function run(outcome: string): Record<string, unknown> {
     const dir = artifactsDir();
     mkdirSync(join(dir, 'discoveries'));
     writeFileSync(
@@ -172,7 +197,6 @@ describe.each([
       env: {
         ...process.env,
         ARTIFACTS_DIR: dir,
-        TYPED_ARTIFACTS_FILE: await writeNodeArtifactsListing(dir, 'run'),
         INPUTS_OUTCOME: outcome,
       },
     });
@@ -181,15 +205,15 @@ describe.each([
     return JSON.parse(child.stdout.toString()) as Record<string, unknown>;
   }
 
-  it('reports a failed run as not done, with the discoveries it recorded', async () => {
-    const report = await run('null');
+  it('reports a failed run as not done, with the discoveries it recorded', () => {
+    const report = run('null');
     expect(report[result]).toBe(false);
     expect(report.reason).toBe('failed');
     expect(String(report.summary)).toStartWith('Not done:');
     expect(String(report.summary)).toContain('- Guard refuses an empty diff [unreviewed]');
   });
 
-  it("relays the outcome node's report unchanged when it ran", async () => {
-    expect(await run(JSON.stringify(passed))).toEqual(passed);
+  it("relays the outcome node's report unchanged when it ran", () => {
+    expect(run(JSON.stringify(passed))).toEqual(passed);
   });
 });

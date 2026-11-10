@@ -5,7 +5,7 @@
  * A review round is one verdict a delivery round's review published on the pull
  * request: the typed `review-report` output of the deliver loop's `review` node. The
  * build queue records a run's verdicts on its build round (`reviews`) when it records
- * the round, from the run's own typed-artifact listing. A pull request's rounds are the
+ * the round, from the run's own typed outputs. A pull request's rounds are the
  * verdicts of every build round that carried it, oldest first.
  *
  * Rounds to Ready counts up to the verdict from which every later verdict is ready: a
@@ -15,12 +15,9 @@
  * its reason, never counted short.
  */
 
-import { existsSync, readdirSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
 import { type BuildRound, KEPT_ROUNDS, type ReviewVerdict } from './build.ts';
 import { type PrFacts, prRuns } from './factory-prs.ts';
-import { record } from './forge.ts';
-import { readTyped } from './typed.ts';
+import { outputsOf, outputsOfRuns, type RunOutputs } from './outputs.ts';
 import type { WorkItem } from './workitem.ts';
 
 /**
@@ -47,50 +44,40 @@ export interface ReviewRoundRecord {
   readonly runs: readonly string[];
 }
 
-/** The review verdicts this run's delivery rounds published, from the engine's typed-artifact listing. */
-export function runReviews(listingFile: string | undefined, artifacts: string): RunReviews {
-  const read = readTyped<{ ready?: unknown }>(listingFile, artifacts, REVIEW_TYPE);
-  if (read.listingProblem !== undefined) return { ok: false, problem: read.listingProblem };
+/** The review verdicts a run's delivery rounds published, from what was read of its typed outputs. */
+function reviewsFrom(runId: string, read: RunOutputs<{ ready?: unknown }>): RunReviews {
+  if (read.state !== 'read') return { ok: false, problem: read.problem };
   // An unreadable record might be one of the verdicts, so none are trusted.
   const unread = read.problems[0];
   if (unread !== undefined) return { ok: false, problem: unread };
   const verdicts: ReviewVerdict[] = [];
-  for (const [index, entry] of (read.entries ?? []).entries()) {
-    if (!REVIEW_NODES.has(entry.nodeId ?? '')) continue;
-    const ready = read.values[index]?.ready;
-    if (typeof ready !== 'boolean' || entry.producedAt === undefined) {
-      return { ok: false, problem: `${entry.path} does not record a review verdict and its time` };
+  for (const output of read.outputs) {
+    if (!REVIEW_NODES.has(output.nodeId)) continue;
+    const ready = output.value?.ready;
+    if (typeof ready !== 'boolean') {
+      return { ok: false, problem: `the ${output.nodeId} output of run ${runId} does not record a review verdict` };
     }
-    verdicts.push({ ready, at: entry.producedAt });
+    verdicts.push({ ready, at: output.producedAt });
   }
   return { ok: true, verdicts };
 }
 
+/** The review verdicts this run's delivery rounds published. */
+export function runReviews(runId: string | undefined): RunReviews {
+  return reviewsFrom(runId ?? '', outputsOf(runId, REVIEW_TYPE));
+}
+
 /**
- * Backfill for build rounds recorded before rounds carried their verdicts: read them
- * from the run's typed-output sidecars (`nodes/<id>.meta.json`). Run artifacts do not
- * last, so a run whose artifacts are gone cannot be counted.
+ * Backfill for build rounds recorded before rounds carried their verdicts: each run's
+ * verdicts, in one read. Run artifacts do not last, so a run whose artifacts are gone
+ * cannot be counted.
  */
-export function backfillRunReviews(runDir: string): RunReviews {
-  if (!existsSync(runDir)) return { ok: false, problem: `the artifacts of ${runDir} are gone` };
-  const nodes = join(runDir, 'nodes');
-  // A run that ended before any node produced typed output published no review.
-  if (!existsSync(nodes)) return { ok: true, verdicts: [] };
-  const verdicts: ReviewVerdict[] = [];
-  try {
-    for (const name of readdirSync(nodes).filter(file => file.endsWith('.meta.json'))) {
-      const meta = record(JSON.parse(readFileSync(join(nodes, name), 'utf8')));
-      if (meta?.outputType !== REVIEW_TYPE || !REVIEW_NODES.has(String(meta.nodeId))) continue;
-      const verdict = typeof meta.path === 'string' ? record(JSON.parse(readFileSync(join(runDir, meta.path), 'utf8'))) : undefined;
-      if (typeof meta.producedAt !== 'string' || typeof verdict?.ready !== 'boolean') {
-        throw new Error(`${name} does not record a review verdict`);
-      }
-      verdicts.push({ ready: verdict.ready, at: meta.producedAt });
-    }
-  } catch (error) {
-    return { ok: false, problem: `${runDir}: ${error instanceof Error ? error.message : String(error)}` };
+export function backfillRunReviews(runIds: readonly string[]): Map<string, RunReviews> {
+  const reviews = new Map<string, RunReviews>();
+  for (const [runId, read] of outputsOfRuns<{ ready?: unknown }>(runIds, REVIEW_TYPE)) {
+    reviews.set(runId, reviewsFrom(runId, read));
   }
-  return { ok: true, verdicts };
+  return reviews;
 }
 
 /** The 1-based round from which every verdict is ready, or null when the latest is not. */
@@ -131,12 +118,15 @@ function prRounds(
   url: string,
   rounds: readonly BuildRound[],
   dropped: ReadonlySet<string>,
-  backfill: (runId: string) => RunReviews
+  backfilled: ReadonlyMap<string, RunReviews>
 ): { readonly rounds: number } | { readonly reason: string } {
   if (dropped.has(url)) return { reason: 'its work item dropped its oldest build rounds' };
   const verdicts: ReviewVerdict[] = [];
   for (const round of rounds) {
-    const read: RunReviews = round.reviews === undefined ? backfill(round.run_id) : { ok: true, verdicts: round.reviews };
+    const read: RunReviews =
+      round.reviews !== undefined
+        ? { ok: true, verdicts: round.reviews }
+        : (backfilled.get(round.run_id) ?? { ok: false, problem: `the verdicts of run ${round.run_id} were not read` });
     if (!read.ok) return { reason: read.problem };
     verdicts.push(...read.verdicts);
   }
@@ -147,15 +137,19 @@ function prRounds(
 /**
  * Each merged pull request's rounds to Ready, with whether it was ready after one round
  * and whether it needed five or more, attributed like the PR outcome records. Pull
- * requests whose rounds cannot be counted are skipped with the reason.
+ * requests whose rounds cannot be counted are skipped with the reason. `backfill` reads,
+ * in one call, the verdicts of the runs whose rounds were recorded without them.
  */
 export function reviewRoundRecords(
   prs: readonly PrFacts[],
   runsByUrl: ReadonlyMap<string, readonly string[]>,
   roundsByUrl: ReadonlyMap<string, readonly BuildRound[]>,
   dropped: ReadonlySet<string>,
-  backfill: (runId: string) => RunReviews
+  backfill: (runIds: readonly string[]) => ReadonlyMap<string, RunReviews>
 ): { metrics: ReviewRoundRecord[]; skipped: { url: string; reason: string }[]; distribution: Record<string, number> } {
+  const counted = prs.filter(pr => pr.state === 'MERGED' && !dropped.has(pr.url));
+  const unrecorded = counted.flatMap(pr => roundsByUrl.get(pr.url) ?? []).filter(round => round.reviews === undefined);
+  const backfilled = backfill([...new Set(unrecorded.map(round => round.run_id))]);
   const metrics: ReviewRoundRecord[] = [];
   const skipped: { url: string; reason: string }[] = [];
   const distribution: Record<string, number> = {};
@@ -163,12 +157,12 @@ export function reviewRoundRecords(
     if (pr.state !== 'MERGED') continue;
     if (pr.mergedAt === null) throw new Error(`the forge reported ${pr.url} merged without a time`);
     const runs = prRuns(runsByUrl, pr.url);
-    const counted = prRounds(pr.url, roundsByUrl.get(pr.url) ?? [], dropped, backfill);
-    if ('reason' in counted) {
-      skipped.push({ url: pr.url, reason: counted.reason });
+    const rounded = prRounds(pr.url, roundsByUrl.get(pr.url) ?? [], dropped, backfilled);
+    if ('reason' in rounded) {
+      skipped.push({ url: pr.url, reason: rounded.reason });
       continue;
     }
-    const { rounds } = counted;
+    const { rounds } = rounded;
     distribution[String(rounds)] = (distribution[String(rounds)] ?? 0) + 1;
     const base = { kind: 'score', subject: pr.url, at: pr.mergedAt, runs } as const;
     metrics.push(

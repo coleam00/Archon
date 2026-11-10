@@ -12,7 +12,8 @@
 
 import { REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
 import { emit, refuse } from '../../.shared/io.ts';
-import { readOutcomes, sameFrames, type LoopFrame } from '../../.shared/outcomes.ts';
+import { readOutcomes, sameFrames } from '../../.shared/outcomes.ts';
+import type { LoopFrame } from '../../.shared/outputs.ts';
 
 /** This node's id in the review block; its path ends in it. */
 const SELF = 'review-complete';

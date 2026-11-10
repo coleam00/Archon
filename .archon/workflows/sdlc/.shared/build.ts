@@ -79,7 +79,7 @@ export interface BuildRound {
   /**
    * Every review verdict the round's delivery published, oldest first. Absent on a round
    * recorded before rounds carried them, recorded at a release, or whose run's
-   * typed-artifact listing could not be read.
+   * typed outputs could not be read.
    */
   readonly reviews?: readonly ReviewVerdict[];
   /** The latest validation the round's delivery ran; absent when it ran none. */

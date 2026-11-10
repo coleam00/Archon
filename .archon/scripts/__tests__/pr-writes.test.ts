@@ -31,8 +31,6 @@ const trackTempRoot = trackTempRoots();
 const MARKER = '<!-- archon-review-report -->';
 const REPORT = 'Round 1: ready';
 
-/** The engine's typed-artifact listing for a run with no typed artifacts yet. */
-const EMPTY_LISTING = JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] });
 const DESCRIPTION = { type: 'archon_artifact', run_id: 'run', path: 'pr-description.md' };
 const PREPARED_BODY = { type: 'archon_artifact', run_id: 'run', path: 'pr-body.md' };
 
@@ -69,10 +67,9 @@ function publishPr(
       WORKFLOW_ID: 'run',
       INPUTS_BODY: prepareBody ? JSON.stringify(PREPARED_BODY) : '',
       INPUTS_DRAFT: 'true',
-      TYPED_ARTIFACTS_FILE: '{ARTIFACTS}/listing.json',
       ...rest.inputs,
     },
-    artifacts: { ...(prepareBody ? { [PREPARED_BODY.path]: 'A body' } : {}), 'listing.json': EMPTY_LISTING, ...rest.artifacts },
+    artifacts: { ...(prepareBody ? { [PREPARED_BODY.path]: 'A body' } : {}), ...rest.artifacts },
   });
   return { ...run, head, cwd };
 }

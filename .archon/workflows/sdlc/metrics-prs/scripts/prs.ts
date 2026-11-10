@@ -6,9 +6,8 @@
  * `skipped`; the metrics no record carries yet are reported in `not_available`.
  */
 
-import { dirname, join } from 'node:path';
 import { factoryPrRuns, factoryPrs, prMetricRecords, readPrFacts } from '../../.shared/factory-prs.ts';
-import { artifactsDir, emit, refuse } from '../../.shared/io.ts';
+import { emit, refuse } from '../../.shared/io.ts';
 import { backfillRunReviews, droppedRoundPrs, prBuildRounds, reviewRoundRecords } from '../../.shared/review-rounds.ts';
 import { stateDocuments } from '../../.shared/state.ts';
 import { read } from '../../.shared/workitem.ts';
@@ -30,12 +29,7 @@ try {
   const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
   const runsByUrl = factoryPrRuns(items);
   const { factory, skipped } = factoryPrs(readPrFacts(runsByUrl.keys()));
-  // The backfill for rounds recorded without their verdicts: every run of a project
-  // keeps its artifacts beside this run's, under its run id, until they are cleaned up.
-  // Not the round's recorded `artifacts`: a round recorded at a release has none.
-  const runs = dirname(artifactsDir());
-  const backfill = (runId: string) => backfillRunReviews(join(runs, runId));
-  const reviews = reviewRoundRecords(factory, runsByUrl, prBuildRounds(items), droppedRoundPrs(items), backfill);
+  const reviews = reviewRoundRecords(factory, runsByUrl, prBuildRounds(items), droppedRoundPrs(items), backfillRunReviews);
   emit({
     metrics: [...prMetricRecords(factory, runsByUrl), ...reviews.metrics],
     skipped,

@@ -6,7 +6,7 @@
  * workflows, then judge the result with the engine's own validator, schemas and naming.
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
@@ -362,8 +362,6 @@ describe('discoveries', () => {
   test('a pass emits facts, an outcome and an answer their nodes admit', () => {
     const at = install('archon-discoveries-home-');
     const outputRoot = track(mkdtempSync(join(tmpdir(), 'archon-discoveries-runs-')));
-    const artifacts = join(outputRoot, 'artifacts', 'runs', RUN);
-    mkdirSync(join(artifacts, 'nodes'), { recursive: true });
     const record = (title: string) => ({
       title,
       claim: `${title}, claimed`,
@@ -371,24 +369,12 @@ describe('discoveries', () => {
       relation: 'unrelated',
       source_nodes: ['implement'],
     });
-    writeFileSync(
-      join(artifacts, 'nodes/review.md'),
-      JSON.stringify({
-        ready: true,
-        discoveries: ['new', 'covered', 'fixed', 'unclear'].map(record),
-      })
-    );
-    writeFileSync(
-      join(artifacts, 'nodes/review.meta.json'),
-      JSON.stringify({
-        nodeId: 'review',
-        outputType: 'review-report',
-        path: 'nodes/review.md',
-        runId: RUN,
-        producedAt: '2026-10-14T01:00:00.000Z',
-        size: 1,
-      })
-    );
+    const review = {
+      nodeId: 'review',
+      outputType: 'review-report',
+      producedAt: '2026-10-14T01:00:00.000Z',
+      value: { ready: true, discoveries: ['new', 'covered', 'fixed', 'unclear'].map(record) },
+    };
     const script = (
       name: 'facts' | 'outcome' | 'answer',
       runs: string[],
@@ -400,6 +386,7 @@ describe('discoveries', () => {
         forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
         tracker: { issue: { number: 7, state: 'open' }, issues: [] },
         artifacts: files,
+        outputs: { [RUN]: { artifactsDir: outputRoot, outputs: [review] } },
         inputs: {
           ...at.env,
           WORKFLOW_ID: 'pass-1',

@@ -24,6 +24,7 @@ import {
   runName,
 } from '../../.shared/discoveries.ts';
 import { artifactsDir, emit, note, refuse, trimmed } from '../../.shared/io.ts';
+import { outputsOfRuns, type RunOutputs } from '../../.shared/outputs.ts';
 import { fetchDefaultBranch, workflowRepo } from '../../.shared/remote.ts';
 import { latestVerdictOf, relayedDiscoveries } from '../../.shared/report.ts';
 import { claimEnded, listRuns, stateDocuments, stateGet, statePut } from '../../.shared/state.ts';
@@ -98,6 +99,32 @@ function claimUndecided<R extends { ref: string }>(
   return records.length === 0 ? null : { records, questions: document.questions ?? [] };
 }
 
+/**
+ * The records a finished run relays and its artifact directory, or null when it has
+ * none to drain now: its artifacts are gone, or something of it could not be read, which
+ * is noted and leaves the run for a later pass.
+ */
+function relayedOf(
+  id: string,
+  read: RunOutputs<unknown>
+): (ReturnType<typeof relayedDiscoveries> & { artifacts: string }) | null {
+  if (read.state === 'gone') return null;
+  let problem: string;
+  if (read.state === 'unknown') {
+    problem = read.problem;
+  } else {
+    try {
+      const relayed = relayedDiscoveries(read.artifactsDir, latestVerdictOf(read));
+      if (relayed.problems.length === 0) return { ...relayed, artifacts: read.artifactsDir };
+      problem = relayed.problems.join('; ');
+    } catch (error) {
+      problem = error instanceof Error ? error.message : String(error);
+    }
+  }
+  note(`run ${id} is left queued: ${problem}`);
+  return null;
+}
+
 function main(): void {
   // Every input is validated before anything is read or written.
   const since = parseTime('since', trimmed(process.env.INPUTS_SINCE));
@@ -117,7 +144,7 @@ function main(): void {
     note(`only the newest ${String(LISTING)} runs are listed; older runs are not drained in this pass`);
   }
   const candidates = listed
-    .filter(run => typeof run.id === 'string' && run.id !== self)
+    .filter((run): run is typeof run & { id: string } => typeof run.id === 'string' && run.id !== self)
     .filter(run => typeof run.status === 'string' && TERMINAL.includes(run.status))
     .map(run => ({
       run,
@@ -130,23 +157,16 @@ function main(): void {
     )
     .sort((left, right) => left.completed - right.completed);
 
+  // Every candidate's review verdicts and artifact directory, in one read.
+  const reviews = outputsOfRuns<unknown>(candidates.map(({ run }) => run.id), 'review-report');
   const queue: QueuedRun[] = [];
   for (const { run } of candidates) {
     if (queue.length >= limit) break;
-    const id = run.id as string;
-    if (typeof run.output_root !== 'string') continue;
-    const artifacts = join(run.output_root, 'artifacts', 'runs', id);
-    let relayed: ReturnType<typeof relayedDiscoveries>;
-    try {
-      relayed = relayedDiscoveries(artifacts, latestVerdictOf(artifacts));
-    } catch (error) {
-      note(`run ${id} is left queued: ${error instanceof Error ? error.message : String(error)}`);
-      continue;
-    }
-    if (relayed.problems.length > 0) {
-      note(`run ${id} is left queued: ${relayed.problems.join('; ')}`);
-      continue;
-    }
+    const { id } = run;
+    const read = reviews.get(id);
+    const relayed = read === undefined ? null : relayedOf(id, read);
+    if (relayed === null) continue;
+    const { artifacts } = relayed;
     const all = relayed.records.map(record => ({ ...record, ref: `${id}:${record.ref}` }));
     const claimed = claimUndecided(id, all, { self, at, snapshot: documents.get(id) });
     if (claimed === null) continue;

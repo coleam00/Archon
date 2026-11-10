@@ -9,7 +9,7 @@
  * write that also releases the claim unless a person is asked; a run that asks keeps
  * its claim until the ruling node records the answer. The round carries the review
  * verdicts its delivery published and the latest validation its CI agent ran, read from
- * this run's typed-artifact listing. A continue then starts the item's
+ * this run's typed outputs. A continue then starts the item's
  * next round at once through the operator's build-queue binding; if it does not start,
  * the item waits for the next queue run.
  *
@@ -33,7 +33,7 @@ import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared
 import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
-import { readTyped } from '../../.shared/typed.ts';
+import { outputsOf } from '../../.shared/outputs.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
 import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
@@ -201,34 +201,30 @@ function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; 
 }
 
 /**
- * The review verdicts this run's delivery published, for the round's record. A listing
- * that cannot be read leaves them out, noted: the round is still recorded, and the
- * review-round metric reads its run's artifacts instead or skips its pull request.
+ * The review verdicts this run's delivery published, for the round's record. Outputs
+ * that cannot be read leave them out, noted: the round is still recorded, and the
+ * review-round metric reads its run's outputs instead or skips its pull request.
  */
 function reviewsOf(): Pick<BuildRound, 'reviews'> {
-  const read = runReviews(process.env.TYPED_ARTIFACTS_FILE, artifactsDir());
+  const read = runReviews(process.env.WORKFLOW_ID);
   if (read.ok) return { reviews: read.verdicts };
   note(`the round records no review verdicts: ${read.problem}`);
   return {};
 }
 
 /**
- * The latest full validation this run's CI agent ran, for the round's record. A listing
- * that cannot be read leaves it out, noted: under `ci: none` the gate then refuses the
+ * The latest full validation this run's CI agent ran, for the round's record. Outputs
+ * that cannot be read leave it out, noted: under `ci: none` the gate then refuses the
  * pull request until a later round records one.
  */
 function validationOf(): Pick<BuildRound, 'validation'> {
-  const read = readTyped<{ validation: Validation | null }>(
-    process.env.TYPED_ARTIFACTS_FILE,
-    artifactsDir(),
-    'ci-report'
-  );
-  const problem = read.listingProblem ?? read.problems[0];
-  if (problem !== undefined) {
-    note(`the round records no validation: ${problem}`);
+  const read = outputsOf<{ validation: Validation | null }>(process.env.WORKFLOW_ID, 'ci-report');
+  const problem = read.state === 'read' ? read.problems[0] : read.problem;
+  if (read.state !== 'read' || problem !== undefined) {
+    note(`the round records no validation: ${String(problem)}`);
     return {};
   }
-  const validation = read.values.filter(report => report.validation !== null).at(-1)?.validation;
+  const validation = read.outputs.filter(report => report.value.validation !== null).at(-1)?.value.validation;
   return validation == null ? {} : { validation };
 }
 

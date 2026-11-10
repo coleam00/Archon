@@ -21,7 +21,7 @@ import { artifactsDir, emit, text } from '../../.shared/io.ts';
 import { caveats } from '../../.shared/report.ts';
 
 const artifacts = artifactsDir();
-const listingFile = process.env.TYPED_ARTIFACTS_FILE;
+const run = process.env.WORKFLOW_ID;
 const action = text(process.env.INPUTS_ACTION);
 const summary = text(process.env.INPUTS_SUMMARY);
 
@@ -31,7 +31,7 @@ if (action === 'no_action') {
     pr_url: '',
     summary:
       `No update needed: ${summary}\nReport: ${artifacts}/upkeep-assessment.md` +
-      caveats(artifacts, { listingFile }),
+      caveats(artifacts, { run }),
   });
 } else {
   // Deliver ran, so its outcome is the report; its summary already carries the caveats.

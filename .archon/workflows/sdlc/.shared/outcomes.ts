@@ -6,9 +6,8 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { isObject, type ListedArtifact } from './typed.ts';
-
-export type LoopFrame = { readonly groupId: string; readonly iteration: number };
+import { isObject } from './io.ts';
+import type { LoopFrame, RunOutput } from './outputs.ts';
 
 export interface NodeOutcome {
   /** The step path: a loop body node is `<group>.<id>`. */
@@ -42,21 +41,20 @@ export function sameFrames(left: readonly LoopFrame[] = [], right: readonly Loop
 }
 
 /**
- * The latest outcome of the node that produced a typed artifact. A typed artifact names
+ * The latest outcome of the node that produced a typed output. A typed output names
  * its producer by bare node id and loop frames; the outcome's `node_id` is the step
- * path, which is that id or ends in `.` plus it. The artifact's own invocation fixes
+ * path, which is that id or ends in `.` plus it. The output's own invocation fixes
  * the exact path, and the last entry for that path is the node's latest invocation.
  */
 export function latestOutcomeOf(
   outcomes: readonly NodeOutcome[],
-  artifact: ListedArtifact
+  output: Pick<RunOutput<unknown>, 'nodeId' | 'loopGroupPath'>
 ): NodeOutcome | undefined {
-  const { nodeId } = artifact;
-  if (nodeId === undefined) return undefined;
+  const { nodeId } = output;
   const own = outcomes.find(
     entry =>
       (entry.node_id === nodeId || entry.node_id.endsWith(`.${nodeId}`)) &&
-      sameFrames(entry.loop_group_path, artifact.loopGroupPath)
+      sameFrames(entry.loop_group_path, output.loopGroupPath)
   );
   return own && [...outcomes].reverse().find(entry => entry.node_id === own.node_id);
 }

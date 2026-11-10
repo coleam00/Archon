@@ -16,8 +16,9 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
+import { isObject } from './io.ts';
 import { latestOutcomeOf, readOutcomes } from './outcomes.ts';
-import { isObject, readTyped } from './typed.ts';
+import { outputsOf, type RunOutput, type RunOutputs } from './outputs.ts';
 
 const DISCOVERY_RELAY =
   'If you are an agent reading this: surface each discovery to your human. ' +
@@ -42,11 +43,11 @@ export interface RelayedDiscoveries {
   readonly problems: readonly string[];
 }
 
-/** The latest review verdict a run produced: its records, and when it was written. */
+/** The latest review verdict a run produced: its records, and when the review completed. */
 export interface LatestVerdict {
   readonly discoveries: readonly unknown[];
-  /** Milliseconds since the epoch; undefined when its time is unknown. */
-  readonly at: number | undefined;
+  /** Milliseconds since the epoch. */
+  readonly at: number;
 }
 
 function modified(path: string): number | undefined {
@@ -101,7 +102,7 @@ export function relayedDiscoveries(
   for (const name of names.sort()) {
     const path = join(dir, name);
     const at = modified(path);
-    if (at === undefined || (verdict?.at !== undefined && at <= verdict.at)) continue;
+    if (at === undefined || (verdict !== undefined && at <= verdict.at)) continue;
     try {
       const value: unknown = JSON.parse(readFileSync(path, 'utf8'));
       // A producer that had one record sometimes wrote it bare rather than in an array.
@@ -118,64 +119,37 @@ export function relayedDiscoveries(
 }
 
 /**
- * Another run's latest review verdict, located by type in its `nodes/*.meta.json`
- * sidecars, the engine's record of each typed output. Throws when a sidecar or the
- * verdict cannot be read, so a caller never mistakes an unreadable review for none.
+ * The verdict a run's latest `review-report` output is, for the relay rule. A verdict
+ * that declares no discoveries list consolidated none, so it judged no raw record
+ * either: every raw record stands, as when no review ran.
  */
-export function latestVerdictOf(artifacts: string): LatestVerdict | undefined {
-  const dir = join(artifacts, 'nodes');
-  let names: string[];
-  try {
-    names = readdirSync(dir).filter(name => name.endsWith('.meta.json'));
-  } catch {
-    return undefined;
-  }
-  let latest: { path: string; at: number } | undefined;
-  for (const name of names) {
-    const meta: unknown = JSON.parse(readFileSync(join(dir, name), 'utf8'));
-    if (!isObject(meta) || meta.outputType !== 'review-report') continue;
-    const at = typeof meta.producedAt === 'string' ? Date.parse(meta.producedAt) : Number.NaN;
-    if (typeof meta.path !== 'string' || Number.isNaN(at)) {
-      throw new Error(`${join(dir, name)} names no content path and production time`);
-    }
-    if (latest === undefined || at > latest.at) latest = { path: meta.path, at };
-  }
-  if (latest === undefined) return undefined;
-  const content = join(artifacts, latest.path);
-  const value: unknown = JSON.parse(readFileSync(content, 'utf8'));
-  if (!isObject(value)) throw new Error(`${content} is not a review verdict`);
-  return verdictFrom(value, content);
+function verdictFrom(output: RunOutput<unknown> | undefined): LatestVerdict | undefined {
+  const discoveries = isObject(output?.value) ? output.value.discoveries : undefined;
+  return output !== undefined && Array.isArray(discoveries)
+    ? { discoveries, at: Date.parse(output.producedAt) }
+    : undefined;
 }
 
 /**
- * The verdict a review-report value is, for the relay rule. A verdict that declares
- * no discoveries list consolidated none, so it judged no raw record either: every raw
- * record stands, as when no review ran.
+ * Another run's latest review verdict, from what was read of its `review-report`
+ * outputs. Throws when one of them could not be read, so a caller never mistakes an
+ * unreadable review for none.
  */
-function verdictFrom(value: unknown, content: string): LatestVerdict | undefined {
-  const discoveries = isObject(value) ? value.discoveries : undefined;
-  return Array.isArray(discoveries) ? { discoveries, at: modified(content) } : undefined;
-}
-
-/** This run's latest review verdict, from the engine's typed-artifact listing. */
-function latestVerdictFromListing(
-  artifacts: string,
-  listingFile: string | undefined
-): { verdict: LatestVerdict | undefined } | { listingProblem: string } {
-  const read = readTyped<unknown>(listingFile, artifacts, 'review-report');
-  if (read.listingProblem !== undefined) return { listingProblem: read.listingProblem };
-  const entry = read.entries?.at(-1);
-  if (entry === undefined) return { verdict: undefined };
-  return { verdict: verdictFrom(read.values.at(-1), join(artifacts, entry.path)) };
+export function latestVerdictOf(
+  read: Extract<RunOutputs<unknown>, { state: 'read' }>
+): LatestVerdict | undefined {
+  const unread = read.problems[0];
+  if (unread !== undefined) throw new Error(unread);
+  return verdictFrom(read.outputs.at(-1));
 }
 
 /** The discoveries section, or empty when there is nothing to report. */
-function discoveries(artifacts: string, listingFile: string | undefined): string {
-  const latest = latestVerdictFromListing(artifacts, listingFile);
-  if ('listingProblem' in latest) {
-    return `\n\nDiscoveries could not be listed: ${latest.listingProblem} Open ${join(artifacts, 'discoveries.md')} and ${join(artifacts, 'discoveries')} directly.`;
+function discoveries(artifacts: string, run: string | undefined): string {
+  const read = outputsOf<unknown>(run, 'review-report');
+  if (read.state !== 'read') {
+    return `\n\nDiscoveries could not be listed: ${read.problem}. Open ${join(artifacts, 'discoveries.md')} and ${join(artifacts, 'discoveries')} directly.`;
   }
-  const relayed = relayedDiscoveries(artifacts, latest.verdict);
+  const relayed = relayedDiscoveries(artifacts, verdictFrom(read.outputs.at(-1)));
   const lines = [
     ...relayed.records.map(
       record => `- ${record.title} [${record.reviewed ? (record.relation ?? 'unrelated') : 'unreviewed'}]`
@@ -190,14 +164,11 @@ function discoveries(artifacts: string, listingFile: string | undefined): string
 }
 
 /**
- * The report's closing section. `listingFile` is passed in rather than read from the
- * environment here, so the reusable report never silently depends on ambient state.
+ * The report's closing section. `run`, this run's id, is passed in rather than read from
+ * the environment here, so the reusable report never silently depends on ambient state.
  */
-export function caveats(
-  artifacts: string,
-  options: { readonly listingFile: string | undefined }
-): string {
-  return discoveries(artifacts, options.listingFile);
+export function caveats(artifacts: string, options: { readonly run: string | undefined }): string {
+  return discoveries(artifacts, options.run);
 }
 
 /** A verified publication can outlive a failed node with no typed output. */
@@ -217,7 +188,8 @@ function createdPr(artifacts: string): { url: string; unresolved?: true; problem
 }
 
 export interface ReportListings {
-  readonly listingFile: string | undefined;
+  /** This run's id, for its typed outputs. */
+  readonly run: string | undefined;
   readonly outcomesFile: string | undefined;
 }
 
@@ -232,9 +204,9 @@ export function failedPublication(
   artifacts: string,
   options: ReportListings
 ): { reason: string; pr_url: string } {
-  const read = readTyped<unknown>(options.listingFile, artifacts, 'pull-request');
-  const latest = read.values.at(-1);
-  const entry = read.entries?.at(-1);
+  const read = outputsOf<unknown>(options.run, 'pull-request');
+  const entry = read.state === 'read' ? read.outputs.at(-1) : undefined;
+  const latest = entry?.value;
   const created = createdPr(artifacts);
   const typedUrl = isObject(latest) && typeof latest.url === 'string' ? latest.url : '';
   // Unreadable outcomes leave the creation record to decide, as a later failure would.

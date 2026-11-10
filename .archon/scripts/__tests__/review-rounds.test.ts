@@ -1,27 +1,23 @@
 /**
  * Review rounds to Ready: which verdicts a run records, where the count stops, the
- * artifact backfill for older rounds, and which merged pull requests are skipped rather
- * than counted short.
+ * backfill for older rounds, and which merged pull requests are skipped rather than
+ * counted short.
  */
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type BuildRound, KEPT_ROUNDS, type ReviewVerdict } from '../../workflows/sdlc/.shared/build';
 import type { PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
 import type { WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import {
   REVIEW_NODES,
-  backfillRunReviews,
   droppedRoundPrs,
   reviewRoundRecords,
   roundsToReady,
   type RunReviews,
 } from '../../workflows/sdlc/.shared/review-rounds';
 import { PACK } from './deliver-checks-harness';
-import { trackTempRoots } from './temp-roots';
 
-const tracked = trackTempRoots();
 const RUN_A = 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa';
 const RUN_B = 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb';
 
@@ -88,28 +84,10 @@ describe('REVIEW_NODES', () => {
   });
 });
 
-describe('backfillRunReviews', () => {
-  function sidecar(run: string, id: string, meta: Record<string, unknown>, content: unknown): void {
-    mkdirSync(join(run, 'nodes'), { recursive: true });
-    const path = `nodes/${id}.md`;
-    writeFileSync(join(run, path), JSON.stringify(content));
-    writeFileSync(join(run, 'nodes', `${id}.meta.json`), JSON.stringify({ path, ...meta }));
-  }
-
-  it("reads an older run's publish verdicts from its sidecars, and reports a run whose artifacts are gone", () => {
-    const root = tracked(mkdtempSync(join(tmpdir(), 'review-rounds-')));
-    const at = '2026-11-06T10:00:00Z';
-    sidecar(root, 'a', { nodeId: 'review__publish', outputType: 'review-report', producedAt: at }, { ready: false });
-    sidecar(root, 'b', { nodeId: 'review__synthesize', outputType: 'review-report', producedAt: at }, { ready: true });
-    sidecar(root, 'c', { nodeId: 'review__publish', outputType: 'pr-record', producedAt: at }, { ready: true });
-    expect(backfillRunReviews(root)).toEqual({ ok: true, verdicts: [{ ready: false, at }] });
-    expect(backfillRunReviews(join(root, RUN_A))).toMatchObject({ ok: false });
-  });
-});
-
 describe('reviewRoundRecords', () => {
-  const unused = (): RunReviews => {
-    throw new Error('a round that carries its verdicts needs no backfill');
+  const unused = (runIds: readonly string[]): Map<string, RunReviews> => {
+    if (runIds.length > 0) throw new Error('a round that carries its verdicts needs no backfill');
+    return new Map();
   };
 
   it('counts a merged pull request across its build rounds and records each share', () => {
@@ -136,7 +114,7 @@ describe('reviewRoundRecords', () => {
       [runOf(2)]: { ok: true, verdicts: verdicts(true, false) },
       [runOf(3)]: { ok: true, verdicts: verdicts(false, true) },
     };
-    const result = reviewRoundRecords(prs, runs, rounds, new Set([pr(1).url]), id => byRun[id] ?? { ok: true, verdicts: verdicts(true) });
+    const result = reviewRoundRecords(prs, runs, rounds, new Set([pr(1).url]), ids => new Map(ids.map(id => [id, byRun[id] ?? { ok: true, verdicts: verdicts(true) }])));
     expect(result.skipped.map(entry => entry.url)).toEqual([pr(1).url, pr(2).url, pr(3).url]);
     expect(result.metrics.filter(record => record.name === 'sdlc.review_rounds').map(record => [record.subject, record.value])).toEqual([[pr(4).url, 2]]);
   });

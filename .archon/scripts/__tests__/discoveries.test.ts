@@ -6,7 +6,7 @@ import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { type AgentDecision, checkDecisions, parseRunDocument } from '../../workflows/sdlc/.shared/discoveries';
 import { latestVerdictOf, relayedDiscoveries } from '../../workflows/sdlc/.shared/report';
-import { type TrackerIssue, gitCheckout, hostCli, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import { type FakeOutput, type TrackerIssue, gitCheckout, hostCli, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -18,6 +18,9 @@ const RUN = 'aaaaaaaa-0000-4000-8000-000000000001';
 function record(title: string): Record<string, unknown> {
   return { title, claim: `${title}, claimed`, evidence: ['a.ts:1'], relation: 'unrelated', source_nodes: ['implement'] };
 }
+
+/** The typed outputs of the runs written under each output root, as `archon workflow outputs` answers for them. */
+const written = new Map<string, Record<string, { artifactsDir: string; outputs: FakeOutput[] }>>();
 
 /** A run's artifact directory: an optional review verdict, then raw records. */
 function runArtifacts(
@@ -34,30 +37,31 @@ function runArtifacts(
     writeFileSync(join(dir, 'discoveries/implement.json'), JSON.stringify(shape.before));
     utimesSync(join(dir, 'discoveries/implement.json'), old, old);
   }
-  if (shape.verdict !== undefined) {
-    mkdirSync(join(dir, 'nodes'));
-    // An earlier verdict that the later one supersedes.
-    writeFileSync(join(dir, 'nodes/first.md'), JSON.stringify({ discoveries: [record('superseded')] }));
-    writeFileSync(
-      join(dir, 'nodes/first.meta.json'),
-      JSON.stringify({ nodeId: 'review', outputType: 'review-report', path: 'nodes/first.md', runId: id, producedAt: old.toISOString(), size: 1 })
-    );
-    writeFileSync(join(dir, 'nodes/review.md'), JSON.stringify({ ready: true, discoveries: shape.verdict }));
-    utimesSync(join(dir, 'nodes/review.md'), verdictAt, verdictAt);
-    writeFileSync(
-      join(dir, 'nodes/review.meta.json'),
-      JSON.stringify({ nodeId: 'review', outputType: 'review-report', path: 'nodes/review.md', runId: id, producedAt: verdictAt.toISOString(), size: 1 })
-    );
-    writeFileSync(
-      join(dir, 'nodes/plan.meta.json'),
-      JSON.stringify({ nodeId: 'plan', outputType: 'plan', path: 'nodes/plan.md', runId: id, producedAt: late.toISOString(), size: 1 })
-    );
-  }
+  const outputs: FakeOutput[] =
+    shape.verdict === undefined
+      ? []
+      : [
+          // An earlier verdict that the later one supersedes.
+          { nodeId: 'review', outputType: 'review-report', producedAt: old.toISOString(), value: { discoveries: [record('superseded')] } },
+          { nodeId: 'review', outputType: 'review-report', producedAt: verdictAt.toISOString(), value: { ready: true, discoveries: shape.verdict } },
+          { nodeId: 'plan', outputType: 'plan', producedAt: late.toISOString(), value: 'a plan' },
+        ];
+  written.set(root, { ...written.get(root), [id]: { artifactsDir: dir, outputs } });
   if (shape.after !== undefined) {
     writeFileSync(join(dir, 'discoveries/structure.json'), JSON.stringify(shape.after));
     utimesSync(join(dir, 'discoveries/structure.json'), late, late);
   }
   return dir;
+}
+
+/** What the pack reads of a written run's review verdicts. */
+function reviewsOf(root: string, id: string): Parameters<typeof latestVerdictOf>[0] {
+  const run = written.get(root)?.[id];
+  if (run === undefined) throw new Error(`no run ${id} was written under ${root}`);
+  const outputs = run.outputs
+    .filter(output => output.outputType === 'review-report')
+    .map(output => ({ nodeId: output.nodeId, producedAt: output.producedAt ?? '', value: output.value }));
+  return { state: 'read', artifactsDir: run.artifactsDir, outputs, problems: [] };
 }
 
 describe("a run's discoveries", () => {
@@ -68,7 +72,7 @@ describe("a run's discoveries", () => {
       verdict: [record('certified')],
       after: [record('written after review')],
     });
-    const relayed = relayedDiscoveries(dir, latestVerdictOf(dir));
+    const relayed = relayedDiscoveries(dir, latestVerdictOf(reviewsOf(root, RUN)));
     expect(relayed.problems).toEqual([]);
     expect(relayed.records.map(entry => [entry.ref, entry.title, entry.reviewed])).toEqual([
       ['review#0', 'certified', true],
@@ -80,7 +84,7 @@ describe("a run's discoveries", () => {
     const root = track(mkdtempSync(join(tmpdir(), 'archon-discoveries-')));
     const dir = runArtifacts(root, RUN, { before: [record('one'), record('two')] });
     writeFileSync(join(dir, 'discoveries/broken.json'), '{');
-    expect(latestVerdictOf(dir)).toBeUndefined();
+    expect(latestVerdictOf(reviewsOf(root, RUN))).toBeUndefined();
     const relayed = relayedDiscoveries(dir, undefined);
     expect(relayed.records.map(entry => entry.ref)).toEqual(['discoveries/implement.json#0', 'discoveries/implement.json#1']);
     expect(relayed.problems).toEqual([expect.stringContaining('broken.json')]);
@@ -166,6 +170,7 @@ function script(at: Install, name: Script, pass: Pass, inputs: Record<string, st
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
     tracker: { issue: { number: 7, state: pass.subject?.state ?? 'open' }, issues: pass.issues ?? [] },
     artifacts,
+    outputs: written.get(at.outputRoot),
     inputs: {
       ...at.env,
       WORKFLOW_ID: pass.runId,

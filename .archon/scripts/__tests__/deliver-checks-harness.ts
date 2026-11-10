@@ -124,6 +124,25 @@ export type ForgeFake =
       readonly okExitCode?: number;
     };
 
+/** One typed output a faked run produced. */
+export interface FakeOutput {
+  readonly nodeId: string;
+  readonly outputType: string;
+  readonly producedAt?: string;
+  readonly loopGroupPath?: readonly { readonly groupId: string; readonly iteration: number }[];
+  readonly value: unknown;
+}
+
+/**
+ * What `archon workflow outputs` answers for one run: its typed outputs in production
+ * order (in `artifactsDir`, by default the script's own), `missing` for a run whose
+ * artifacts are gone, or `unknown` for one the engine cannot read.
+ */
+export type FakeRunOutputs =
+  | { readonly artifactsDir?: string; readonly outputs: readonly FakeOutput[] }
+  | 'missing'
+  | 'unknown';
+
 export interface ScriptRun {
   readonly code: number;
   readonly stdout: string;
@@ -158,6 +177,38 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   if (argv[0] !== 'gh') return guarded(argv, settings);
   require('node:fs').appendFileSync(${JSON.stringify(ghLog)}, argv.slice(1).join(' ') + '\\n');
   return { exitCode: 1, stdout: Buffer.from(''), stderr: Buffer.from('pack scripts never call gh') };
+} });
+}
+`;
+}
+
+/**
+ * A Bun preload that answers `archon workflow outputs <run-id>... --type <type> --json`
+ * with the engine's document shape. A run the test did not name has no typed outputs when
+ * it is the script's own run, and no artifacts left when it is any other.
+ */
+function fakeOutputsPreload(runs: Readonly<Record<string, FakeRunOutputs>>, artifacts: string): string {
+  return `{
+const runs = ${JSON.stringify(runs)};
+const answered = Bun.spawnSync.bind(Bun);
+Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
+  const command = JSON.parse(process.env.ARCHON_CLI_COMMAND || '[]');
+  const rest = argv.slice(command.length);
+  const called = command.length > 0 && command.every((part, index) => argv[index] === part) && rest[0] === 'workflow' && rest[1] === 'outputs';
+  if (!called) return answered(argv, settings);
+  const flags = rest.findIndex(arg => arg.startsWith('--'));
+  const type = rest[rest.indexOf('--type') + 1];
+  const entries = rest.slice(2, flags).map(runId => {
+    const run = runs[runId] ?? (runId === process.env.WORKFLOW_ID ? { outputs: [] } : 'missing');
+    if (run === 'unknown') return { runId, artifacts: 'unknown', error: 'Workflow run not found: ' + runId };
+    if (run === 'missing') return { runId, artifacts: 'missing', artifactsDir: ${JSON.stringify(artifacts)} };
+    const outputs = run.outputs
+      .filter(output => output.outputType === type)
+      .map(output => ({ producedAt: '2026-01-01T00:00:00.000Z', ...output }));
+    return { runId, artifactsDir: run.artifactsDir ?? ${JSON.stringify(artifacts)}, artifacts: 'present', outputs, unreadable: [] };
+  });
+  const failed = entries.some(entry => entry.artifacts === 'unknown');
+  return { exitCode: failed ? 1 : 0, stdout: Buffer.from(JSON.stringify({ runs: entries })), stderr: Buffer.from('') };
 } });
 }
 `;
@@ -356,6 +407,8 @@ export interface ScriptOptions {
   readonly inputs?: Readonly<Record<string, string>>;
   /** Files to write under the run's artifact directory, with the same substitution. */
   readonly artifacts?: Readonly<Record<string, string>>;
+  /** The typed outputs of the runs the script may read, by run id; its own run is `WORKFLOW_ID`. */
+  readonly outputs?: Readonly<Record<string, FakeRunOutputs>>;
   /** The script's working directory, for one that reads a git checkout. Defaults to a scratch directory. */
   readonly cwd?: string;
   /** Command-line arguments, for a script an agent runs rather than a node; `{ARTIFACTS}` resolves as in inputs. */
@@ -444,20 +497,16 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
   writeFileSync(
     preload,
     ghGuardPreload(ghLog) +
+      fakeOutputsPreload(options.outputs ?? {}, artifactPath) +
       (stateful ? fakeForgePreload(options.tracker ?? {}, { forge: forgeLog, requests: requestLog, side: sideLog }) : '') +
       resolveArtifacts(options.preload ?? '')
   );
-
-  // The engine hands every exec node a typed-artifact listing; an empty one by default.
-  const listing = join(root, 'typed-artifacts.json');
-  writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
 
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('INPUTS_'))),
     INPUTS_PR: JSON.stringify(forgePrRecord()),
     INPUTS_EXPECTED: '[]',
     ARTIFACTS_DIR: artifacts,
-    TYPED_ARTIFACTS_FILE: listing,
     ...Object.fromEntries(
       Object.entries(options.inputs ?? {}).map(([key, value]) => [key, resolveArtifacts(value)])
     ),
