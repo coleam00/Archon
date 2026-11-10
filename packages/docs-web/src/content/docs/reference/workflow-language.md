@@ -1358,7 +1358,7 @@ What the binding guarantees, and where it stops:
   `reviews: { outputs: review-report, if_unreadable: null }` delivers the declared value
   (here `null`, never a partial list) and the engine logs the record it could not read. Like
   `if_skipped`, it is data: the script decides what a null means, and should say so in its
-  own output. It covers unreadable records only; an output that is not JSON still fails.
+  own output. The value is `null` or an array, the shape a read delivers. It covers unreadable records only; an output that is not JSON still fails.
 - **Resume reads the same records.** A resumed run keeps its artifact directory, so the
   reader sees what was recorded before the pause or failure. A node replayed as already
   complete has its output recorded again from its stored output, with a new `at`: sort by

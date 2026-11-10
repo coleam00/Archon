@@ -36,9 +36,15 @@ export const typedOutputsDirectiveSchema = z.strictObject({
   /**
    * The value the binding takes when a typed-output record of the run cannot be read.
    * Without it that fails the node. Data, like `if_skipped`: the reader's own code
-   * decides what the value means.
+   * decides what the value means. Null or an array, the shape a read delivers: the
+   * value takes the directive's place in the `with:` map, where an object would be read
+   * as a binding directive and a string as a reference.
    */
-  if_unreadable: jsonValueSchema.optional(),
+  if_unreadable: z
+    .union([z.null(), z.array(jsonValueSchema)], {
+      error: "'if_unreadable' must be null or an array",
+    })
+    .optional(),
 });
 
 export type TypedOutputsDirective = z.infer<typeof typedOutputsDirectiveSchema>;

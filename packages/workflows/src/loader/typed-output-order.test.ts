@@ -120,7 +120,11 @@ describe('typed-outputs binding shape', () => {
     expect(load({ outputs: 'verdict' })).toBe('');
     expect(load({ outputs: 'verdict', if_unreadable: null })).toBe('');
     expect(load({ outputs: 'verdict', latest: true })).toContain(
-      "a typed-outputs binding must be { outputs: '<output_type>', if_unreadable?: <value> }"
+      "a typed-outputs binding must be { outputs: '<output_type>', if_unreadable?: null | [...] }"
+    );
+    // The fallback takes the directive's place, where an object would be read as a directive.
+    expect(load({ outputs: 'verdict', if_unreadable: { ready: false } })).toContain(
+      "'if_unreadable' must be null or an array"
     );
     expect(load({ outputs: '' })).toContain("'outputs' must be a non-empty output_type");
   });
