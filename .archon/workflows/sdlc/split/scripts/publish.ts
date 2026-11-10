@@ -25,7 +25,7 @@
  */
 
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { closeIssue, createIssue, viewIssue } from '../../.shared/issue.ts';
 import { ROUTE_LABEL, writeLabels } from '../../.shared/labels.ts';
 import { upsertComment } from '../../.shared/pr.ts';
@@ -207,8 +207,7 @@ function buildWhole(item: QualifiedPr, runId: string, route: WholeRoute, reason:
 
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   if (path === 'idle') {
     const summary = idleSummary('No item waits for the split queue.', stuckItems(runId));
     emit({ path, item: null, kind: null, issues: [], adopted: [], summary });

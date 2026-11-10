@@ -12,7 +12,7 @@
  */
 
 import { followUp } from '../../.shared/follow-up.ts';
-import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 
 function main(): void {
   const merged = (nullableJson(process.env.INPUTS_MERGED) ?? []) as number[];
@@ -25,8 +25,7 @@ function main(): void {
     emit({ summary: 'discoveries_binding is empty, so no discoveries drain starts.' });
     return;
   }
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const later = 'the next sweep that merges, or a scheduled pass, starts one';
   // The binding names the repository, so the drain takes no inputs.
   emit({ summary: followUp(binding, `discoveries-drain:${runId}`, {}, 'a discoveries drain', later) });
