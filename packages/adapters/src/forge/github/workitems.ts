@@ -92,6 +92,40 @@ export async function readIssue(fetchImpl: Fetch, token: string, ref: PrRef): Pr
 function firstLine(body: string | null): string {
   return (body ?? '').split(/\r?\n/, 1)[0];
 }
+const searchSchema = z.object({ items: z.array(issueSchema) });
+
+/**
+ * The issues that may already carry `marker`, read in two bounded calls rather than by
+ * listing every issue the repository has ever had, which outgrows the plugin's time
+ * limit on a large repository. Search finds an issue of any age by the marker's words;
+ * its index lags new issues by up to a minute, so the newest hundred issues are read
+ * too, which covers an issue a lost create response left moments ago. Callers match
+ * the marker exactly against each body's first line.
+ */
+async function markedCandidates(
+  fetchImpl: Fetch,
+  token: string,
+  root: string,
+  path: string,
+  marker: string
+): Promise<Issue[]> {
+  const words = marker.replace(/<!--|-->/g, ' ').trim();
+  const query = encodeURIComponent(`repo:${path} is:issue in:body "${words}"`);
+  const found = searchSchema.parse(
+    await githubRequest(fetchImpl, token, `${root}/search/issues?q=${query}&per_page=100`)
+  ).items;
+  const newest = z
+    .array(issueSchema)
+    .parse(
+      await githubRequest(
+        fetchImpl,
+        token,
+        `${root}/repos/${path}/issues?state=all&sort=created&direction=desc&per_page=100`
+      )
+    );
+  return [...found, ...newest];
+}
+
 export async function createWorkItem(
   request: Extract<ForgeMutationRequest, { op: 'workitem.create' }>,
   fetchImpl: Fetch,
@@ -99,15 +133,14 @@ export async function createWorkItem(
   submit: Submit
 ): Promise<ForgeResponse> {
   const { root, path } = location(request.repo);
-  const issues = await githubPages(
-    fetchImpl,
-    token,
-    `${root}/repos/${path}/issues?state=all`,
-    raw => z.array(issueSchema).parse(raw)
-  );
-  const matches = issues.filter(
-    item => item.pull_request === undefined && firstLine(item.body) === request.marker
-  );
+  const issues = await markedCandidates(fetchImpl, token, root, path, request.marker);
+  const matches = [
+    ...new Map(
+      issues
+        .filter(item => item.pull_request === undefined && firstLine(item.body) === request.marker)
+        .map(item => [item.number, item])
+    ).values(),
+  ];
   if (matches.length > 1)
     return refused(request, {
       kind: 'conflict',

@@ -34,15 +34,14 @@ function fixture(mode = 'ok') {
   const labels = [{ name: 'other', color: 'abcdef', description: 'operator' }];
   const calls: string[] = [];
   let writes = 0;
-  const issueList = (url: URL, method: string, init?: RequestInit) => {
+  const issueList = (method: string, init?: RequestInit) => {
     if (method === 'POST') {
       const payload = JSON.parse(String(init?.body)) as { title: string; body: string };
       if (mode !== 'unverified') issues.push({ ...issue, ...payload });
       if (mode === 'lost-create') throw new Error('committed but response lost');
       return Response.json(issue, { status: 201 });
     }
-    const page = Number(url.searchParams.get('page'));
-    return Response.json(page === 1 ? issues : []);
+    return Response.json(issues);
   };
   const setLabels = (init?: RequestInit) => {
     if (mode !== 'unverified')
@@ -77,8 +76,11 @@ function fixture(mode = 'ok') {
       if (mode === 'unknown') throw new Error('lost before response');
     }
     if (mode === 'lookup-failed' && method === 'GET') return Response.json({}, { status: 500 });
+    if (path === 'https://api.github.com/search/issues') {
+      return Response.json({ items: issues });
+    }
     if (path === `${root}/issues`) {
-      return issueList(url, method, init);
+      return issueList(method, init);
     }
     if (path === `${root}/issues/1`) {
       return readIssue();
@@ -139,30 +141,43 @@ test('closed recovery preserves edited content, ambiguous and failed lookups nev
   expect(failed.writes()).toBe(0);
 });
 
-test('marker lookup includes later pages and excludes PRs', async () => {
+test('marker lookup finds an old issue by search and a new one search has not indexed, never a PR', async () => {
   const fake = fixture();
-  const page = Array.from({ length: 100 }, (_, index) => ({
-    ...fake.issue,
-    number: index + 2,
-    body: 'unmarked',
-  }));
   const baseFetch = fake.fetch;
-  fake.seed();
-  fake.fetch = async (input, init) => {
-    const url = new URL(String(input));
-    if (url.pathname.endsWith('/issues') && (init?.method ?? 'GET') === 'GET')
-      return Response.json(
-        url.searchParams.get('page') === '1'
-          ? [...page.slice(1), { ...fake.issue, pull_request: {} }]
-          : [fake.issue]
-      );
-    return baseFetch(input, init);
+  const lookup = async (searched: unknown[], newest: unknown[]) => {
+    fake.fetch = async (input, init) => {
+      const url = new URL(String(input));
+      if ((init?.method ?? 'GET') === 'GET' && url.pathname === '/search/issues')
+        return Response.json({ items: searched });
+      if ((init?.method ?? 'GET') === 'GET' && url.pathname.endsWith('/issues'))
+        return Response.json(newest);
+      return baseFetch(input, init);
+    };
+    return run(create, fake);
   };
-  expect(await run(create, fake)).toMatchObject({
+  fake.seed();
+  const unmarked = { ...fake.issue, number: 2, body: 'unmarked' };
+  // Older than the newest hundred: only search sees it.
+  expect(await lookup([fake.issue], [unmarked])).toMatchObject({
+    ok: true,
+    result: { value: { changed: false } },
+  });
+  // Created moments ago, before search indexed it.
+  expect(await lookup([], [fake.issue])).toMatchObject({
+    ok: true,
+    result: { value: { changed: false } },
+  });
+  // Found by both: one issue, not a conflict.
+  expect(await lookup([fake.issue], [fake.issue])).toMatchObject({
     ok: true,
     result: { value: { changed: false } },
   });
   expect(fake.writes()).toBe(0);
+  // A pull request carrying the marker is not the issue.
+  expect(await lookup([{ ...fake.issue, pull_request: {} }], [])).toMatchObject({
+    ok: true,
+    result: { value: { changed: true } },
+  });
 });
 
 test('label set clears, verifies exact sets, no-ops, and never creates missing names', async () => {
