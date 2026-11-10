@@ -4,7 +4,14 @@
  * are read from.
  */
 import { describe, expect, it } from 'bun:test';
-import { factoryPrs, prFacts, prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
+import { mkdtempSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { factoryPrs, prFacts, prMetricRecords, readPrFacts, type PrFacts } from '../../workflows/sdlc/.shared/factory-prs';
+import { forgeOperation } from './deliver-checks-harness';
+import { trackTempRoots } from './temp-roots';
+
+const track = trackTempRoots();
 
 const REPO = { host: 'github.example.com', path: 'acme/widgets' };
 const RUN_A = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -94,5 +101,27 @@ describe('prMetricRecords', () => {
       { name: 'sdlc.prs_opened', value: 1, subject: url(12), at: '2026-10-03T10:00:00Z' },
       { name: 'sdlc.prs_abandoned', value: 0, subject: url(12), at: '2026-10-03T10:00:00Z' },
     ]);
+  });
+});
+
+describe('readPrFacts', () => {
+  /** Read `urls` through a host CLI that answers every forge call with `response`. */
+  function readWith(response: string, urls: string[]): PrFacts[] {
+    const cli = join(track(mkdtempSync(join(tmpdir(), 'archon-factory-prs-'))), 'archon.ts');
+    writeFileSync(cli, `process.stdout.write(${JSON.stringify(response)}); process.exitCode = ${JSON.parse(response).ok ? 0 : 1};`);
+    const previous = process.env.ARCHON_CLI_COMMAND;
+    process.env.ARCHON_CLI_COMMAND = JSON.stringify([process.execPath, cli]);
+    try {
+      return readPrFacts(urls);
+    } finally {
+      if (previous === undefined) delete process.env.ARCHON_CLI_COMMAND;
+      else process.env.ARCHON_CLI_COMMAND = previous;
+    }
+  }
+
+  it('leaves out a URL that names no pull request, and fails when the forge cannot say', () => {
+    expect(readWith(forgeOperation('resolve', { kind: 'none', forge: 'none' }), [url(10)])).toEqual([]);
+    const unavailable = JSON.stringify({ operationId: 'op', ok: false, error: { kind: 'timeout', message: 'forge plugin timed out' } });
+    expect(() => readWith(unavailable, [url(10)])).toThrow('forge plugin timed out');
   });
 });

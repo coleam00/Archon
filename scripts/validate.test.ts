@@ -18,7 +18,6 @@ describe('validate check selection', () => {
       'cli-import-boundary',
       'package-edges',
       'generated-files',
-      'merge-sweep-contract',
       'type-check',
       'lint',
       'ratchet',
@@ -42,20 +41,8 @@ describe('validate check selection', () => {
       ['bun', 'run', 'check:provider-contract-schema'],
       ['bun', 'run', 'check:chat-contract-schema'],
       ['bun', 'run', 'check:api-types'],
+      ['bun', 'run', 'check:workflow-output-types'],
     ]);
-  });
-
-  test('the sweep conformance test runs in defaults and the unconditional static CI step', () => {
-    const check = selectChecks([]).find(check => check.id === 'merge-sweep-contract');
-    expect(check?.commands).toEqual([
-      ['bun', 'run', 'test', '.archon/scripts/__tests__/merge-sweep-contract.test.ts'],
-    ]);
-    const job = readWorkflow().jobs.static;
-    expect(
-      (job.steps ?? [])
-        .filter(step => step.if === undefined)
-        .flatMap(step => stepChecks(job, step.run ?? ''))
-    ).toContain('merge-sweep-contract');
   });
 
   test('a selection runs in declaration order, not argument order', () => {

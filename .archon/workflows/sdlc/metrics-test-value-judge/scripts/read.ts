@@ -8,7 +8,7 @@
 
 import { invokeForge } from '../../.shared/forge.ts';
 import { refuse, report, trimmed } from '../../.shared/io.ts';
-import { prFromUrl } from '../../.shared/merge.ts';
+import { prFromUrl } from '../../.shared/pr.ts';
 import { readCriteria } from '../../.shared/test-value.ts';
 import { holdsTestCode } from './test-code.ts';
 

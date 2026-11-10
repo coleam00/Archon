@@ -619,6 +619,26 @@ nodes:
 
 `output_format` is not AI-only, and it is not only a branching aid: it is how *any* producing node declares the shape of the value it hands downstream, including a workflow's own result. [Result contracts](#result-contracts) is the one description of that ownership: who declares a schema, what an `include:` alias and a `workflow:` sub-run each guarantee, and how a small result points at a large file.
 
+#### TypeScript for `output_format`
+
+A script that reads a node's output should not restate the schema as a hand-written interface. [`archon workflow types`](/reference/cli/#workflow-types) generates the types from the YAML, which stays the one owner of the shape:
+
+```bash
+archon workflow types my-pack            # writes .archon/workflows/my-pack/.shared/outputs.generated.ts
+archon workflow types my-pack --check    # exits 1 while that file is stale
+```
+
+```ts
+import { OUTPUT_ENUMS, type NodeOutput } from '../../.shared/outputs.generated.ts';
+
+type Classified = NodeOutput<'triage', 'classify'>;        // { readonly type: 'BUG' | 'FEATURE'; readonly severity: ... }
+const SEVERITIES = OUTPUT_ENUMS.triage.classify.severity;  // readonly ['low', 'medium', 'high']
+```
+
+The file holds types and `as const` tuples only, with no imports. Each node is emitted once, under the workflow file that declares it, including a `loop_group:` body node; a workflow that includes another reads the included nodes' types under the included workflow's name. A wait node's output is the engine's own shape and is not emitted.
+
+The generator states a schema exactly or refuses it. It reads `type` (a name or a list, `'null'` included), `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, `anyOf` and `oneOf`. Keywords that narrow a value without changing its type, such as `pattern`, `minimum` or `minItems`, are accepted and left to runtime validation. Any other keyword (`$ref`, `allOf`, `not`, tuple `items`, and so on) fails the command with the workflow, the node and the keyword; so does a shape keyword without a `type` beside it. Commit the generated file and run `--check` in CI.
+
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
 
 Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced at the Claude SDK level.

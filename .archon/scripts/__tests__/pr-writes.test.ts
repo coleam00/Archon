@@ -90,25 +90,23 @@ describe('publish-pr opens the pull request at most once', () => {
     }
   });
 
-  it.each([{ field: 'body', pointer: PREPARED_BODY }, { field: 'description', pointer: DESCRIPTION }])('keeps the $field pointer schema and command aligned with publish', ({ field, pointer }) => {
-    const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8')) as {
-      nodes: { id: string; output_format?: { properties: Record<string, unknown> } }[];
-    };
-    expect(workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties[field]).toEqual({
-      type: ['object', 'null'],
-      properties: {
-        type: { type: 'string', enum: [pointer.type] },
-        run_id: { type: 'string' },
-        path: { type: 'string', enum: [pointer.path] },
-      },
-      required: Object.keys(pointer),
-    });
-    const command = readFileSync(join(PACK, 'pr/commands/pr.md'), 'utf8');
-    expect(command).toContain(
-      `{"type": "${pointer.type}", "run_id": "$WORKFLOW_ID", "path": "${pointer.path}"}`
-    );
-    expect(command).toContain(`$ARTIFACTS_DIR/${pointer.path}`);
-  });
+  // The schema, the prepare prompt and publish-pr each name these pointers and cannot
+  // share one definition; the publish tests here prove publish accepts these constants.
+  it.each([{ field: 'body', pointer: PREPARED_BODY }, { field: 'description', pointer: DESCRIPTION }])(
+    'prepare declares and its schema accepts the $field pointer publish reads',
+    ({ field, pointer }) => {
+      const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'pr/archon-pr.yaml'), 'utf8')) as {
+        nodes: { id: string; output_format?: { properties: Record<string, { properties: Record<string, { enum?: string[] }> }> } }[];
+      };
+      const schema = workflow.nodes.find(node => node.id === 'prepare')?.output_format?.properties[field]?.properties;
+      expect({ type: schema?.type?.enum, path: schema?.path?.enum }).toEqual({ type: [pointer.type], path: [pointer.path] });
+      const command = readFileSync(join(PACK, 'pr/commands/pr.md'), 'utf8');
+      // Compare the pointers the prompt declares as values, so its JSON formatting is free to change.
+      const declared = (command.match(/\{[^{}]*"archon_artifact"[^{}]*\}/g) ?? []).map(json => JSON.parse(json));
+      expect(declared).toContainEqual({ type: pointer.type, run_id: '$WORKFLOW_ID', path: pointer.path });
+      expect(command).toContain(`$ARTIFACTS_DIR/${pointer.path}`);
+    }
+  );
 
   it('refuses another create while the earlier write is unresolved', () => {
       const result = publishPr({

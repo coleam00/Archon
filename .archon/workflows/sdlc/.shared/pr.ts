@@ -11,6 +11,28 @@
 import { readFileSync } from 'node:fs';
 import { invokeForge, parsePrRecord, qualifiedRepo, record, type PrRecord, type QualifiedPr } from './forge.ts';
 
+/**
+ * The pull request a web URL names, as the forge plugin resolves it, or undefined when
+ * the URL names none. A URL's shape belongs to the forge, so nothing in the pack parses
+ * one. A forge that cannot answer throws: that is not an answer about the URL.
+ */
+export function resolvePrUrl(url: string): QualifiedPr | undefined {
+  const value = invokeForge('resolve', { remote: url, web: true });
+  const repo = qualifiedRepo(value?.repo);
+  const subject = record(value?.subject);
+  if (value?.kind !== 'resolved' || repo === undefined || subject?.kind !== 'pr' || typeof subject.number !== 'number') {
+    return undefined;
+  }
+  return { repo, number: subject.number };
+}
+
+/** The pull request a web URL names; a URL that names none refuses. */
+export function prFromUrl(url: string): QualifiedPr {
+  const pr = resolvePrUrl(url);
+  if (pr === undefined) throw new Error(`"${url}" is not a pull request URL`);
+  return pr;
+}
+
 export const PR_CREATE_UNRESOLVED = 'pr_create_unresolved';
 /** The reason a tail's report gives when a node failure ended the run. */
 export const RUN_FAILED = 'failed';

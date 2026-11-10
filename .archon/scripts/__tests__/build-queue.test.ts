@@ -54,6 +54,7 @@ function round(runId: string, at: string, reason = 'review_open'): BuildRound {
     delivered: false,
     reason,
     pr_url: 'https://ghe.example.com/example/repo/pull/42',
+    pr_number: 42,
     summary: `Not ready: ${reason}`,
     artifacts: `/runs/${runId}`,
   };
@@ -113,13 +114,8 @@ describe('the build record', () => {
     }
   });
 
-  test("an item's recorded pull request URL from another repository is refused, not guessed around", () => {
-    const foreign = { ...round('r1', AT), pr_url: 'https://ghe.example.com/someone/else/pull/42' };
-    expect(() => itemPullRequest([foreign], TRIAGE, PR.repo)).toThrow('is not a pull request of ghe.example.com/example/repo');
-  });
-
   test("a fresh round's replacement pull request wins over the superseded one and triage's stale reference", () => {
-    const replacement = { ...round('r2', LATER), pr_url: 'https://ghe.example.com/example/repo/pull/43' };
+    const replacement = { ...round('r2', LATER), pr_url: 'https://ghe.example.com/example/repo/pull/43', pr_number: 43 };
     expect(itemPullRequest([round('r1', AT), replacement], { ...TRIAGE, pull_request: 42 }, PR.repo)).toEqual({ repo: PR.repo, number: 43 });
   });
 
@@ -414,6 +410,13 @@ describe('the build queue scripts', () => {
     expect(ok(run(at, 'facts', {}))).toMatchObject({ pull_request: null, continues: null, branch: 'build/7-an-issue-run-1' });
   }, 60_000);
 
+  test("a round's recorded pull request URL from another repository is refused, not guessed around", () => {
+    const at = install();
+    const { pr_number: _, ...legacy } = round('r1', AT);
+    seed(at, triaged({}, record({ rounds: [{ ...legacy, pr_url: 'https://ghe.example.com/someone/else/pull/42' }] })));
+    expect(run(at, 'facts', {}).stderr).toContain('is not a pull request of ghe.example.com/example/repo');
+  }, 60_000);
+
   test('a closed pull request, or one from a fork, is not continued: the round gets a new branch', () => {
     const at = install();
     seed(at, triaged({}, record({ rounds: [round('r1', AT)] })));
@@ -578,7 +581,7 @@ describe('the build queue scripts', () => {
         build: {
           status: 'next',
           brief: 'continue PR 42 on R1',
-          rounds: [{ run_id: 'run-1', reason: 'review_open', artifacts: applied.artifacts }],
+          rounds: [{ run_id: 'run-1', reason: 'review_open', pr_number: 42, artifacts: applied.artifacts }],
           decisions: [{ decision: 'continue', reason: 'R1 is correctable' }],
         },
       },
@@ -586,7 +589,19 @@ describe('the build queue scripts', () => {
     expect(buildWaits(doc as WorkItem)).toBe(true);
   }, 60_000);
 
-  test("the round records the review verdicts the run's delivery published", () => {
+  test("a round whose pull request is in another repository records no pull request number", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const foreign = 'https://ghe.example.com/someone/else/pull/42';
+    const inputs = { ...applyInputs(CONTINUE), INPUTS_ENDING: JSON.stringify({ ...ENDING, pr_url: foreign }) };
+    const applied = run(at, 'apply', inputs);
+    expect(applied.stderr).toContain('is not a pull request of ghe.example.com/example/repo');
+    const [recorded] = (stored(at).value as WorkItem).facts.build?.rounds ?? [];
+    expect(recorded).toMatchObject({ pr_url: foreign });
+    expect(recorded).not.toHaveProperty('pr_number');
+  }, 60_000);
+
+  test("the round records the review verdicts the run's delivery published, and still records the round when they cannot be read", () => {
     const at = install();
     seed(at, triaged(CLAIMED));
     const review = (node: string, ready: boolean, at: string) => ({ node, loop: [], at, value: { ready } });
