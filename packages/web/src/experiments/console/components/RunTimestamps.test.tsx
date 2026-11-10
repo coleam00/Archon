@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter } from 'react-router';
+import { ensureUtc } from '../lib/format';
 import { toRun } from '../primitives/run';
 import { detailFixture } from '../primitives/run.test-fixtures';
 import { ActiveRunCard } from './ActiveRunCard';
@@ -29,13 +30,29 @@ test('run lists, the header and lifecycle show the local start date and time', (
     started_at: '2026-06-12 23:22:53',
     completed_at: '2026-06-12 23:27:05',
   });
+  const localStart = new Date(2026, 5, 13, 13, 22, 53);
+  const localFinish = new Date(2026, 5, 13, 13, 27, 5);
+  expect(new Date(ensureUtc(run.startedAt))).toEqual(localStart);
+  const display = new Intl.DateTimeFormat(undefined, {
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hourCycle: 'h23',
+    timeZoneName: 'short',
+    timeZone: 'Pacific/Kiritimati',
+  });
+  const expectedStart = renderToStaticMarkup(<>{display.format(localStart)}</>);
+  const expectedFinish = renderToStaticMarkup(<>{display.format(localFinish)}</>);
   const row = renderToStaticMarkup(
     <MemoryRouter>
       <RecentRunRow run={run} />
     </MemoryRouter>
   );
   expect(row).toContain('1d ago');
-  expect(row).toMatch(/title="Started Jun 13, 2026\D+13:22:53/);
+  expect(row).toContain(`title="Started ${expectedStart}"`);
   expect(row).toContain('04:12');
 
   const activeCard = renderToStaticMarkup(
@@ -53,17 +70,17 @@ test('run lists, the header and lifecycle show the local start date and time', (
     </MemoryRouter>
   );
   expect(activeCard).toContain('1d ago');
-  expect(activeCard).toMatch(/title="Started Jun 13, 2026\D+13:22:53/);
+  expect(activeCard).toContain(`title="Started ${expectedStart}"`);
 
   const header = renderToStaticMarkup(
     <MemoryRouter>
       <RunDetailHeader run={run} projectName="Archon" projectId={undefined} />
     </MemoryRouter>
   );
-  expect(header).toMatch(/Started[^<]*<time[^>]*>Jun 13, 2026\D+13:22:53/);
-  expect(header).toMatch(/Finished[^<]*<time[^>]*>Jun 13, 2026\D+13:27:05/);
+  expect(header.match(/Started[^<]*<time[^>]*>([^<]*)<\/time>/)?.[1]).toBe(expectedStart);
+  expect(header.match(/Finished[^<]*<time[^>]*>([^<]*)<\/time>/)?.[1]).toBe(expectedFinish);
   expect(header).toContain('04:12');
 
   const lifecycle = renderToStaticMarkup(<RunStartedLine run={run} />);
-  expect(lifecycle).toMatch(/<time[^>]*>Jun 13, 2026\D+13:22:53/);
+  expect(lifecycle.match(/<time[^>]*>([^<]*)<\/time>/)?.[1]).toBe(expectedStart);
 });
