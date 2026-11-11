@@ -98,6 +98,7 @@ export interface WorkflowOutputs {
       readonly head: string | null;
       readonly reviewed: string | null;
       readonly pull_request: number | null;
+      readonly prior_report: string;
     };
     answer: {
       readonly decision: 'done' | 'continue' | 'ask';
@@ -179,6 +180,9 @@ export interface WorkflowOutputs {
     };
   };
   'archon-deliver': {
+    'prior-review': {
+      readonly report: string;
+    };
     'settle-threads': {
       readonly answers: ReadonlyArray<{
         readonly thread: string;

@@ -169,6 +169,8 @@ A round ends one of three ways, recorded on the item:
   item's next round at once by firing the binding file `build_queue_binding` names,
   with the item's `number`. With no binding set, or when the fire is skipped or
   refused, the item waits for the next queue run and the run's summary says why.
+  That round's first review continues from the review the earlier round published:
+  it checks those findings and reads what changed since, not the whole pull request.
 - `ask`: the run pauses as one attention item labelled `build: route`, `build: stop`
   or `build: scope`.
 
