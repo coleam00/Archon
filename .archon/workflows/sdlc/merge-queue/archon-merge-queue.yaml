@@ -107,7 +107,7 @@ nodes:
       properties:
         # One decision per pull request. Each action admits only what it can act on: a
         # return carries the brief the build queue's next round starts from, and an ask
-        # carries its question, with that brief whenever one of its choices returns.
+        # carries its question.
         decisions:
           type: array
           items:
@@ -134,19 +134,21 @@ nodes:
                   head: *head
                   reran: *reran
                   reason: *reason
-                  brief: &brief { type: string, pattern: '\S' }
+                  brief: { type: string, pattern: '\S' }
                   attention: { type: 'null' }
                 required: *decision
               - type: object
                 additionalProperties: false
                 properties:
                   number: *number
-                  action: &ask { type: string, enum: [ask] }
+                  action: { type: string, enum: [ask] }
                   class: *class
                   head: *head
                   reran: *reran
                   reason: *reason
-                  brief: *brief
+                  # The brief a `return` answer starts from. The record script does not
+                  # raise an ask that offers a return without one.
+                  brief: { type: string }
                   attention:
                     type: object
                     additionalProperties: false
@@ -180,41 +182,6 @@ nodes:
                       links: &links { type: array, items: { type: string } }
                     required: &attention [what, why, recommendation, choices, if_unanswered, links]
                 required: *decision
-              # An ask with no brief offers no return.
-              - type: object
-                additionalProperties: false
-                properties:
-                  number: *number
-                  action: *ask
-                  class: *class
-                  head: *head
-                  reran: *reran
-                  reason: *reason
-                  brief: { type: string }
-                  attention:
-                    type: object
-                    additionalProperties: false
-                    properties:
-                      what: *what
-                      why: *why
-                      recommendation: *recommendation
-                      choices:
-                        type: array
-                        minItems: 1
-                        items:
-                          type: object
-                          additionalProperties: false
-                          properties:
-                            id: *choice_id
-                            label: *choice_label
-                            does: *choice_does
-                            effect: { type: string, enum: [merge, park] }
-                            ruling: *ruling
-                          required: *choice
-                      if_unanswered: *if_unanswered
-                      links: *links
-                    required: *attention
-                required: *decision
         # The default branch as the sweep found it; an attention item only when its red holds merges.
         base:
           type: object
@@ -225,8 +192,8 @@ nodes:
               type: [object, 'null']
               additionalProperties: false
               properties:
-                what: { type: string, pattern: '\S' }
-                why: { type: string, pattern: '\S' }
+                what: *what
+                why: *why
                 recommendation: *recommendation
                 choices:
                   type: array
@@ -239,11 +206,11 @@ nodes:
                       label: *choice_label
                       does: *choice_does
                       effect: { type: string, enum: [hold] }
-                      ruling: { type: string }
-                    required: [id, label, does, effect, ruling]
+                      ruling: *ruling
+                    required: *choice
                 if_unanswered: *if_unanswered
                 links: *links
-              required: [what, why, recommendation, choices, if_unanswered, links]
+              required: *attention
           required: [summary, attention]
         summary: { type: string }
       required: [decisions, base, summary]

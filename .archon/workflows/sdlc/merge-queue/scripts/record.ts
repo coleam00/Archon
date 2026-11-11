@@ -121,6 +121,13 @@ function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null 
   return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep did not raise it`;
 }
 
+/** A return answer starts the build queue's next round from the brief, so an ask offering one needs it. */
+function briefless(asked: MergeAsked | null): string[] {
+  if (asked?.by !== 'pr' || asked.brief.trim() !== '') return [];
+  if (!asked.attention.choices.some(choice => choice.effect === 'return')) return [];
+  return [`the ask on PR ${String(asked.pr.number)} offers a return with no brief, so it was not raised`];
+}
+
 interface Outcome {
   readonly status: MergeStatus;
   readonly reason: string;
@@ -294,6 +301,7 @@ function main(): void {
   const contradictions = outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]));
   const silentRed = unraisedRedBase(sweep, base);
   if (silentRed !== null) contradictions.push(silentRed);
+  contradictions.push(...briefless(asked));
   // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for
   // the next sweep, and a red default branch is named in the failure instead.
   if (asked?.by === 'base' && contradictions.length > 0) {

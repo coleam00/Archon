@@ -413,34 +413,6 @@ export interface WorkflowOutputs {
           readonly if_unanswered: string;
           readonly links: ReadonlyArray<string>;
         };
-      } | {
-        readonly number: number;
-        readonly action: 'ask';
-        readonly class: 'clear' | 'unclear';
-        readonly head: string;
-        readonly reran: boolean;
-        readonly reason: string;
-        readonly brief: string;
-        readonly attention: {
-          readonly what: string;
-          readonly why: string;
-          readonly recommendation: {
-            readonly choice: string;
-            readonly why: string;
-            readonly evidence: string;
-            readonly confidence: 'low' | 'medium' | 'high';
-            readonly would_change: string;
-          };
-          readonly choices: ReadonlyArray<{
-            readonly id: string;
-            readonly label: string;
-            readonly does: string;
-            readonly effect: 'merge' | 'park';
-            readonly ruling: string;
-          }>;
-          readonly if_unanswered: string;
-          readonly links: ReadonlyArray<string>;
-        };
       }>;
       readonly base: {
         readonly summary: string;
@@ -942,10 +914,6 @@ export const OUTPUT_ENUMS = {
       'decisions[].anyOf[2].class': ['clear', 'unclear'],
       'decisions[].anyOf[2].attention.recommendation.confidence': ['low', 'medium', 'high'],
       'decisions[].anyOf[2].attention.choices[].effect': ['merge', 'return', 'park'],
-      'decisions[].anyOf[3].action': ['ask'],
-      'decisions[].anyOf[3].class': ['clear', 'unclear'],
-      'decisions[].anyOf[3].attention.recommendation.confidence': ['low', 'medium', 'high'],
-      'decisions[].anyOf[3].attention.choices[].effect': ['merge', 'park'],
       'base.attention.recommendation.confidence': ['low', 'medium', 'high'],
       'base.attention.choices[].effect': ['hold'],
     },
