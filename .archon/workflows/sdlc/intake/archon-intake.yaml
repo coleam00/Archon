@@ -55,7 +55,7 @@ mutates_checkout: false
 
 nodes:
   # Trust is decided here, by a script, from the maintainer list at the default
-  # branch's head. Writes only the request and the claim.
+  # branch's head. Writes only the request, the claim and the claimed item's taken requests.
   - id: facts
     script: facts
     runtime: bun

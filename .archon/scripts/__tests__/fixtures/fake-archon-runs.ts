@@ -11,10 +11,11 @@
  * The real CLI runs as a surface write, outside any run, in `INTAKE_STATE_CWD` when
  * set: inside a run it would refuse with exit 5, because its store has no such run. A
  * surface write cannot hold a lease either, so this fake keeps the documents' leases in
- * `$ARCHON_HOME/fake-leases.json` the way `archon state` reports them: `--lease` and
- * `--release-lease` act for `WORKFLOW_ID`, and a lease is live while its run's status in
- * `INTAKE_RUN_STATUSES` is neither `completed` nor `cancelled`. A run with no status
- * there counts as deleted, so its lease has ended.
+ * `$ARCHON_HOME/fake-leases.json` the way `archon state` reports them: `claim`, `--lease`,
+ * `--release-lease` and `--held` act for `WORKFLOW_ID`, and a lease is live while its
+ * run's status in `INTAKE_RUN_STATUSES` is neither `completed` nor `cancelled`. A run
+ * with no status there counts as deleted, so its lease has ended; the calling run is
+ * always live.
  */
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
@@ -54,18 +55,19 @@ if (argv[0] === 'workflow' && argv[1] === 'runs') {
   process.exitCode = result.status ?? 1;
 }
 
-function host(args: readonly string[]) {
+function host(args: readonly string[], input: string | Buffer = readFileSync(0)) {
   if (!process.env.INTAKE_HOST_CLI) throw new Error('INTAKE_HOST_CLI names no host CLI');
   const [command, ...prefix] = JSON.parse(process.env.INTAKE_HOST_CLI) as string[];
   return spawnSync(command, [...prefix, ...args], {
     cwd: process.env.INTAKE_STATE_CWD || process.cwd(),
     env: { ...process.env, WORKFLOW_ID: '', ARCHON_NODE_EXECUTION: '' },
-    input: readFileSync(0),
+    input,
     encoding: 'utf8',
   });
 }
 
 function live(runId: string): boolean {
+  if (runId === process.env.WORKFLOW_ID) return true;
   const statuses = JSON.parse(process.env.INTAKE_RUN_STATUSES ?? '{}') as Record<string, string>;
   return fakeLeaseLive(statuses[runId]);
 }
@@ -90,19 +92,35 @@ function withLeases(op: string | undefined, output: Record<string, unknown>, lea
   return output;
 }
 
+/** Why the store refuses this write for the calling run, or null when it makes it. */
+function refusal(holder: string | undefined, change: string | undefined): [error: string, reason: string] | null {
+  const self = process.env.WORKFLOW_ID;
+  if (argv.includes('--held') && holder !== self) return ['the run does not hold the lease', 'lease_not_held'];
+  if (change !== undefined && holder !== undefined && holder !== self && live(holder)) {
+    return [`leased by live run ${holder}`, 'lease_held'];
+  }
+  return null;
+}
+
 function state(): void {
   // Declared here, not at module level: the dispatch above runs before later declarations.
   const file = join(process.env.ARCHON_HOME ?? '.', 'fake-leases.json');
   const leases = (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : {}) as Record<string, string>;
   const [, op, name] = argv;
+  const save = (): void => writeFileSync(file, JSON.stringify(leases));
+  if (op === 'claim') {
+    claim(leases, save);
+    return;
+  }
   const change = argv.includes('--lease') ? 'take' : argv.includes('--release-lease') ? 'release' : undefined;
   const holder = name === undefined ? undefined : leases[name];
-  if (change !== undefined && holder !== undefined && holder !== process.env.WORKFLOW_ID && live(holder)) {
-    process.stdout.write(JSON.stringify({ ok: false, error: `leased by live run ${holder}`, code: 3 }));
+  const refused = refusal(holder, change);
+  if (refused !== null) {
+    process.stdout.write(JSON.stringify({ ok: false, error: refused[0], code: 3, reason: refused[1] }));
     process.exitCode = 3;
     return;
   }
-  const result = host(argv.filter(arg => arg !== '--lease' && arg !== '--release-lease'));
+  const result = host(argv.filter(arg => arg !== '--lease' && arg !== '--release-lease' && arg !== '--held'));
   process.stderr.write(result.stderr);
   process.exitCode = result.status ?? 1;
   if (result.status !== 0) {
@@ -113,7 +131,32 @@ function state(): void {
     const after = leaseAfter(op, holder, change);
     if (after === undefined) delete leases[name];
     else leases[name] = after;
-    writeFileSync(file, JSON.stringify(leases));
+    save();
   }
   process.stdout.write(JSON.stringify(withLeases(op, JSON.parse(result.stdout) as Record<string, unknown>, leases)));
+}
+
+/** `state claim`: the first candidate still at its revision that no other live run holds. */
+function claim(leases: Record<string, string>, save: () => void): void {
+  const self = process.env.WORKFLOW_ID ?? '';
+  const skipped: Record<string, unknown>[] = [];
+  let claimed: Record<string, unknown> | null = null;
+  for (const { name, ifRevision } of JSON.parse(readFileSync(0, 'utf8')) as { name: string; ifRevision: number }[]) {
+    const read = JSON.parse(host(['state', 'get', name], '').stdout) as { revision: number; value: unknown };
+    const holder = leases[name];
+    if (read.value === null) skipped.push({ name, reason: 'missing' });
+    else if (read.revision !== ifRevision) skipped.push({ name, reason: 'revision_moved', revision: read.revision });
+    else if (holder !== undefined && holder !== self && live(holder)) skipped.push({ name, reason: 'lease_held', holder: { runId: holder } });
+    else {
+      // A claim adds a revision that repeats the value.
+      const put = host(['state', 'put', name, '--if-revision', String(ifRevision)], JSON.stringify(read.value));
+      if (put.status !== 0) throw new Error(`fake state claim: ${put.stdout}`);
+      leases[name] = self;
+      save();
+      claimed = { name, revision: ifRevision + 1, value: read.value, lease: { runId: self, live: true } };
+      break;
+    }
+  }
+  process.stdout.write(JSON.stringify({ claimed, skipped }));
+  process.exitCode = claimed === null ? 2 : 0;
 }

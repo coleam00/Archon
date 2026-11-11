@@ -45,7 +45,7 @@ mutates_checkout: false
 
 nodes:
   # Claims the item and writes its issue to split/prd.md, the text the slice agent
-  # splits. Writes only the claim.
+  # splits. Writes nothing but the claim.
   - id: facts
     script: facts
     runtime: bun

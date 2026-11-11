@@ -39,7 +39,7 @@ import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
 import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
-import { updateClaimed } from '../../.shared/workitem.ts';
+import { updateHeld } from '../../.shared/workitem.ts';
 
 type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
 type AnswerOutput = NodeOutput<'archon-build-queue', 'answer'>;
@@ -169,7 +169,7 @@ function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; 
     case 'idle':
       return {
         decision: path,
-        summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
+        summary: idleSummary('No item waits for the build queue.', stuckItems()),
       };
     case 'order':
       return { decision: path, summary: text(process.env.INPUTS_ORDER) };
@@ -279,16 +279,19 @@ function main(): void {
     reason: wrote === null ? decision.reason : `${decision.reason} (${wrote})`,
     links,
   };
-  updateClaimed(item, runId, doc =>
-    withBuild(doc, {
-      at,
-      run_id: runId,
-      round,
-      entry,
-      status: STATUS[decision.kind],
-      brief: decision.kind === 'continue' ? decision.brief : '',
-      release: asking === null,
-    })
+  // A run that asks keeps the item while it is paused.
+  updateHeld(
+    item,
+    doc =>
+      withBuild(doc, {
+        at,
+        run_id: runId,
+        round,
+        entry,
+        status: STATUS[decision.kind],
+        brief: decision.kind === 'continue' ? decision.brief : '',
+      }),
+    asking === null
   );
   emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
 }

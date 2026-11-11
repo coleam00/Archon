@@ -40,7 +40,7 @@ import {
   type WholeRoute,
 } from '../../.shared/split.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
-import { newest, readWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { newest, readWorkItem, updateHeld, type WorkItem } from '../../.shared/workitem.ts';
 
 /** One issue as the slice node's schema certified it. */
 interface Planned {
@@ -79,7 +79,6 @@ function filedOn(doc: WorkItem | null): readonly SplitIssue[] {
 function finish(doc: WorkItem, record: SplitRecord, runId: string, outcome: string, summary: string): WorkItem {
   return {
     ...doc,
-    claim: null,
     facts: { ...doc.facts, split: record },
     history: newest([...doc.history, { at: record.at, stage: 'split', run_id: runId, outcome, summary }]),
     links: { runs: newest([...doc.links.runs.filter(id => id !== runId), runId]) },
@@ -169,7 +168,7 @@ function publish(
     const marker = splitMarker(item.number, entry.key);
     const created = createIssue(item.repo, entry.title, `${marker}\n\n${entry.body.trim()}`, marker);
     const filed = { key: entry.key, number: created.issue.number, url: created.url, title: entry.title };
-    const doc = updateClaimed(item, runId, current => ({
+    const doc = updateHeld(item, current => ({
       ...current,
       facts: { ...current.facts, split: recorded([...filedOn(current), filed]) },
     }));
@@ -181,7 +180,7 @@ function publish(
   if (kind === 'prd') writeLabels(item, ['archon-prd'], []);
   if (kind === 'bundle') closeIssue(item, 'completed');
 
-  updateClaimed(item, runId, doc => finish(doc, recorded(issues, 'done'), runId, 'split', summary));
+  updateHeld(item, doc => finish(doc, recorded(issues, 'done'), runId, 'split', summary), true);
   emit({
     path: 'slice',
     item: item.number,
@@ -198,10 +197,11 @@ function buildWhole(item: QualifiedPr, runId: string, route: WholeRoute, reason:
   const lead = 'The split queue found this item can be built as one work item, so it files no issues for it.';
   upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, [COMMENT_MARKER, lead, reason].join('\n\n'));
   writeLabels(item, [ROUTE_LABEL[route]], ['archon-split']);
-  updateClaimed(item, runId, current => ({
-    ...finish(current, { status: 'whole', route, at, run_id: runId }, runId, 'whole', reason),
-    stage: route,
-  }));
+  updateHeld(
+    item,
+    current => ({ ...finish(current, { status: 'whole', route, at, run_id: runId }, runId, 'whole', reason), stage: route }),
+    true
+  );
   emit({ path: 'slice', item: item.number, kind: 'whole', issues: [], adopted: [], summary: `Issue ${String(item.number)}: built whole at ${route}; ${reason}` });
 }
 
@@ -209,7 +209,7 @@ function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
   const runId = workflowRunId();
   if (path === 'idle') {
-    const summary = idleSummary('No item waits for the split queue.', stuckItems(runId));
+    const summary = idleSummary('No item waits for the split queue.', stuckItems());
     emit({ path, item: null, kind: null, issues: [], adopted: [], summary });
     return;
   }
@@ -217,8 +217,10 @@ function main(): void {
   if (path === 'closed') {
     const at = new Date().toISOString();
     const reason = 'the issue is closed; nothing more is filed from it';
-    const doc = updateClaimed(item, runId, current =>
-      finish(current, { status: 'closed', issues: filedOn(current), at, run_id: runId }, runId, 'closed', reason)
+    const doc = updateHeld(
+      item,
+      current => finish(current, { status: 'closed', issues: filedOn(current), at, run_id: runId }, runId, 'closed', reason),
+      true
     );
     emit({ path, item: item.number, kind: null, issues: filedOn(doc), adopted: [], summary: `Issue ${String(item.number)}: ${reason}` });
     return;

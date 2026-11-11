@@ -1,8 +1,8 @@
 /**
  * Claim the split queue's next item and write the issue the slice agent splits.
  *
- * It claims the waiting item that sorts first with intake's claim and order, or the
- * item the `number` input names, and writes only that claim. A named item that cannot
+ * It claims the waiting item that sorts first in intake's order, or the item the
+ * `number` input names, and writes nothing else. A named item that cannot
  * be claimed refuses the run with the reason. A closed issue goes to `closed`, which
  * publish records without an agent. The issues already filed from the item come from
  * its work item, where publish records each one as it files it, and so does triage's
@@ -12,18 +12,16 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { artifactsDir, emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { artifactsDir, emit, refuse, trimmed } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { filedIssues, SPLIT_PICKUP } from '../../.shared/split.ts';
 import { claimNamed, claimNext } from '../../.shared/workitem.ts';
 
 function main(): void {
-  const runId = workflowRunId();
-  const at = new Date().toISOString();
   const named = trimmed(process.env.INPUTS_NUMBER);
   const number = Number(named);
   if (named !== '' && (!Number.isInteger(number) || number <= 0)) throw new Error('number must be a positive integer');
-  const doc = named === '' ? claimNext(at, runId, SPLIT_PICKUP) : claimNamed(number, at, runId, SPLIT_PICKUP);
+  const doc = named === '' ? claimNext(SPLIT_PICKUP) : claimNamed(number, SPLIT_PICKUP);
   if (doc === null) {
     emit({ path: 'idle', item: null, url: '', filed: [], reason: '' });
     return;

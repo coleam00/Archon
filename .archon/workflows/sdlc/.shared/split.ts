@@ -80,7 +80,7 @@ export function adoptedIssues(split: SplitRecord | undefined): readonly AdoptedI
 }
 
 /**
- * Whether an unclaimed item waits for the split queue: its stage is `split` and no
+ * Whether the item waits for the split queue: its stage is `split` and no
  * split finished on it, or a re-triage came after the last one.
  */
 export function splitWaits(doc: WorkItem): boolean {
@@ -90,7 +90,7 @@ export function splitWaits(doc: WorkItem): boolean {
   return (doc.facts.triage?.at ?? '') > split.at;
 }
 
-export const SPLIT_PICKUP: Pickup = { stage: 'split', waits: splitWaits, takesRequests: false };
+export const SPLIT_PICKUP: Pickup = { stage: 'split', waits: splitWaits };
 
 /** The hidden first line of an issue filed from the item, which finds it again on a rerun. */
 export function splitMarker(item: number, key: string): string {

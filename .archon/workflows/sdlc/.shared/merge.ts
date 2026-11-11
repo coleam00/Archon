@@ -5,7 +5,7 @@
  * The merge queue takes the items the build queue finished: a work item whose
  * `facts.build` is `ready`. Its pull request is the latest one a build round recorded,
  * or, when none did, the one triage routed the item to continue. The queue claims them
- * with intake's claim, so an item has one owner at a time across the three queues.
+ * as intake claims its items, so an item has one owner at a time across the queues.
  *
  * Every read and the merge go through the forge contract (./forge.ts), using the
  * operations in `MERGE_QUEUE_FORGE_OPERATIONS`.
@@ -98,7 +98,7 @@ export function answeredMergeDecision(effect: MergeEffect): `answered: ${MergeEf
 
 /**
  * Renewed build readiness waits again after settlement; an abandoned ask waits once
- * its claim is released.
+ * its run's lease has ended.
  */
 export function mergeWaits(doc: WorkItem): boolean {
   const build = doc.facts.build;
@@ -125,7 +125,7 @@ export interface MergeSettled {
   readonly reason: string;
 }
 
-export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits, takesRequests: false };
+export const MERGE_PICKUP: Pickup = { stage: 'merge', waits: mergeWaits };
 
 /**
  * The item's pull request as the build queue resolves it (its latest round's, else the
@@ -143,8 +143,6 @@ export interface MergeChange {
   readonly pr: QualifiedPr | null;
   /** Undefined keeps the approval already recorded. */
   readonly approval?: MergeRecord['approval'];
-  /** Clear the claim in the same write: nothing is left for this run to do. */
-  readonly release: boolean;
 }
 
 /** The work item with one merge decision recorded on it. */
@@ -159,7 +157,6 @@ export function withMerge(doc: WorkItem, change: MergeChange): WorkItem {
   };
   return {
     ...doc,
-    claim: change.release ? null : doc.claim,
     facts: { ...doc.facts, merge },
     links: { runs: [...doc.links.runs.filter(id => id !== change.run_id), change.run_id].slice(-50) },
   };

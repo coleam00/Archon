@@ -117,7 +117,7 @@ describe('build-queue pickup with work orders', () => {
     for (const orders of [{}, { 'work-order/old': order([7], 'done') }]) {
       const env = store({ 'work/7': waiting(7), ...orders });
       expect(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-on')).toMatchObject({ path: 'idle', item: null });
-      expect(inStore(env, () => stateGet('work/7').value)).toMatchObject({ claim: null });
+      expect(inStore(env, () => stateGet('work/7').lease)).toBeNull();
     }
   }, 60_000);
 
@@ -180,7 +180,7 @@ describe('a work order from the run\'s message', () => {
       status: 'open',
       done_at: null,
     });
-    expect(inStore(env, () => stateGet('work/7').value)).toMatchObject({ claim: null });
+    expect(inStore(env, () => stateGet('work/7').lease)).toBeNull();
     const launches = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[1] === 'run');
     expect(launches).toHaveLength(1);
     expect(launches[0]).toEqual(expect.arrayContaining(['archon-intake', 'number=8']));

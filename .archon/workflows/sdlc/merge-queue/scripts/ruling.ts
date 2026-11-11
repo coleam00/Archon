@@ -26,7 +26,7 @@ import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
 import { type Choice, rulingHeading } from '../../.shared/queue.ts';
-import { updateClaimed } from '../../.shared/workitem.ts';
+import { updateHeld } from '../../.shared/workitem.ts';
 
 const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<
   MergeAttention['choices'][number]['effect'],
@@ -84,7 +84,7 @@ function main(): void {
     head: asked.head,
     reran: false,
   };
-  updateClaimed(asked.item, runId, doc => {
+  updateHeld(asked.item, doc => {
     const recorded = withMerge(doc, {
       at,
       run_id: runId,
@@ -92,12 +92,11 @@ function main(): void {
       status: STATUS[choice.effect],
       pr: asked.pr,
       ...(choice.effect === 'merge' ? { approval: { head: asked.head, at } } : {}),
-      release: true,
     });
     if (choice.effect !== 'return') return recorded;
     const brief = `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`;
-    return withBuild(recorded, { at, run_id: runId, round: null, entry, status: 'next', brief, release: true });
-  });
+    return withBuild(recorded, { at, run_id: runId, round: null, entry, status: 'next', brief });
+  }, true);
   emit({
     decision: choice.effect,
     section: heading,

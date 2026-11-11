@@ -49,7 +49,7 @@ import { askFields, attentionWait, withOther } from '../../.shared/queue.ts';
 
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { updateHeld, type WorkItem } from '../../.shared/workitem.ts';
 
 /**
  * The asked item with the queue's `other`, whose effect is what the item can take: a
@@ -177,10 +177,13 @@ interface Writes {
   readonly failed: string[];
 }
 
-/** Change one claimed work item; one that cannot be written is reported and left for the next sweep. */
-function write(writes: Writes, subject: QualifiedPr, name: string, label: string, change: (doc: WorkItem) => WorkItem): boolean {
+/**
+ * Change one work item this run holds, giving it back unless `keep`; one that cannot be
+ * written is reported and left for the next sweep.
+ */
+function write(writes: Writes, subject: QualifiedPr, name: string, label: string, change: (doc: WorkItem) => WorkItem, keep = false): boolean {
   try {
-    updateClaimed(subject, writes.runId, change);
+    updateHeld(subject, change, !keep);
     writes.lines.push(`${name}: ${label}`);
     return true;
   } catch (error) {
@@ -213,12 +216,13 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   }
   const name = `PR ${String(decision.number)}`;
   const written = write(writes, item.item, name, label, doc => {
-    const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr, release: !raised });
+    const recorded = withMerge(doc, { at, run_id: runId, entry, status: raised ? 'asking' : status, pr: item.pr });
     if (status !== 'returned') return recorded;
     const returned = { ...entry, decision: 'returned by the merge queue' };
-    return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief, release: true });
-  });
-  // The claim is released, so the round the fire starts can claim the item.
+    return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief });
+    // A run that asks keeps the item while it is paused; a returned item is always given back.
+  }, raised && status !== 'returned');
+  // The item is given back, so the round the fire starts can claim it.
   if (written && status === 'returned') writes.lines.push(`${name}: ${nextRound(item.item, runId)}`);
   return written;
 }
@@ -227,7 +231,7 @@ function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
   for (const done of settled) {
     const entry = { at: writes.at, run_id: writes.runId, decision: done.decision, reason: done.reason, links: [], head: null, reran: false };
     write(writes, done.item, `Issue ${String(done.item.number)}`, done.status, doc =>
-      withMerge(doc, { at: writes.at, run_id: writes.runId, entry, status: done.status, pr: done.pr, release: true })
+      withMerge(doc, { at: writes.at, run_id: writes.runId, entry, status: done.status, pr: done.pr })
     );
   }
 }
@@ -249,7 +253,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       merged: [],
-      summary: idleSummary('No pull request waits for the merge queue.', stuckItems(text(process.env.WORKFLOW_ID))),
+      summary: idleSummary('No pull request waits for the merge queue.', stuckItems()),
       attention: '',
       options: [],
       recommendation: null,

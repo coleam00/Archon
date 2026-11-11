@@ -21,7 +21,7 @@ import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { type Choice, rulingHeading } from '../../.shared/queue.ts';
-import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
+import { readWorkItem, updateHeld } from '../../.shared/workitem.ts';
 
 interface Asked {
   readonly attention: BuildAttention;
@@ -69,8 +69,9 @@ function main(): void {
     choice.effect === 'continue'
       ? `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`
       : '';
-  updateClaimed(item, runId, doc =>
-    withBuild(doc, {
+  updateHeld(
+    item,
+    doc => withBuild(doc, {
       at,
       run_id: runId,
       round: null,
@@ -84,8 +85,8 @@ function main(): void {
       },
       status: STATUS[choice.effect],
       brief,
-      release: true,
-    })
+    }),
+    true
   );
   const next = {
     continue: () => nextRound(item, runId),

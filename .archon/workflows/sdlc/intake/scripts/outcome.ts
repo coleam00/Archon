@@ -1,6 +1,6 @@
 /**
  * Apply the facts node's decision: write the work item first, then the labels that
- * mirror it, then close an item triage found resolved, then release the claim. A
+ * mirror it, then close an item triage found resolved, then give the item back. A
  * close is checked before the first write; one the forge refuses leaves the item
  * BLOCKED for a maintainer instead. An item no route can start from gets triage's
  * questions as one marked comment. A closed issue gets the document write only.
@@ -11,7 +11,7 @@
 
 import { type ClosePlan, planClose } from '../../.shared/close.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
@@ -23,7 +23,7 @@ import {
   type IntakeDecision,
   mirrorLabels,
   type TriageResult,
-  updateClaimed,
+  updateHeld,
   type WorkItem,
 } from '../../.shared/workitem.ts';
 
@@ -123,7 +123,7 @@ function main(): void {
       trust: null,
       promoted: false,
       labels: [],
-      summary: idleSummary('No item waits for intake.', stuckItems(text(process.env.WORKFLOW_ID))),
+      summary: idleSummary('No item waits for intake.', stuckItems()),
     });
     return;
   }
@@ -147,17 +147,15 @@ function main(): void {
     close = planClose(item, triage.closure);
     if (close.refused !== null) judged = leftToMaintainer(triage, close.refused);
   }
-  const next = updateClaimed(item, runId, doc =>
-    applyDecision(doc, decision, judged, bodyMoved, at, runId)
-  );
+  const next = updateHeld(item, doc => applyDecision(doc, decision, judged, bodyMoved, at, runId));
 
   const delta = labelDelta(next, decision, judged, bodyMoved);
   const labels = delta === null ? [] : writeLabels(item, delta.add, delta.remove);
   if (close !== null && close.refused === null) close.close();
   if (!bodyMoved && triage !== null && triage.questions.length > 0) askAuthor(item, triage.questions);
-  // Clearing the claim is what marks this run's requests honored; a run that stops
-  // before it leaves them for the next pickup to queue again.
-  updateClaimed(item, runId, doc => ({ ...doc, claim: null }));
+  // Dropping the taken requests is what marks them honored; a run that stops before
+  // this leaves them for the next pickup to take again.
+  updateHeld(item, doc => ({ ...doc, taken: [] }), true);
 
   emit({
     path: decision.path,

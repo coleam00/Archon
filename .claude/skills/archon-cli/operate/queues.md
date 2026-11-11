@@ -174,13 +174,12 @@ A round ends one of three ways, recorded on the item:
 An item the merge queue returns waits for a new build round, with the merge queue's
 brief. A re-triage after the queue's last decision starts the item over.
 
-Do not resume a failed build-queue run once a later build-queue run has released its
-claim. A run that names no item releases every finished run's claim, whichever item it
-then picks. A run named for the same `number` releases it too; one named for a
-different `number` leaves it alone. A resume skips the completed `facts` node that
-claimed the item, so the resumed run works the whole round, then its `apply` refuses
-because the item is no longer claimed by it. Launch a fresh run with
-`--input number=<issue>` instead.
+A failed build-queue run keeps its item: the engine reports its lease live, so no
+other run claims the item until the failed run is resumed and finishes, or is abandoned.
+Once a run is abandoned or cancelled, the next run can claim its item. Do not resume the
+ended run after that: a resume skips the completed `facts` node that claimed the item,
+so the resumed run works the whole round, then its `apply` is refused because it no
+longer holds the item. Launch a fresh run with `--input number=<issue>` instead.
 
 ## Merge queue
 

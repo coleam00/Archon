@@ -4,7 +4,8 @@
  *
  * Trust is one fact read here: is the issue's author on the project's maintainer list.
  * A label request counts only when its actor, as the forge event reported it, is on
- * that list. The run's only writes are the request and the claim.
+ * that list. The run's only writes are the request, the claim and taking the claimed
+ * item's requests.
  */
 
 import { emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
@@ -15,9 +16,12 @@ import {
   claimNext,
   decideIntake,
   enqueue,
+  INTAKE_PICKUP,
   type IntakeRequest,
   REQUEST_ACTIONS,
   type RequestAction,
+  updateHeld,
+  withRequestsTaken,
 } from '../../.shared/workitem.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { workflowRepo } from '../../.shared/remote.ts';
@@ -53,11 +57,12 @@ function main(): void {
     enqueue(subject, request);
   }
 
-  const doc = claimNext(at, runId);
-  if (doc === null) {
+  const claimed = claimNext(INTAKE_PICKUP);
+  if (claimed === null) {
     emit({ path: 'idle', item: null, target: '', decision: null });
     return;
   }
+  const doc = updateHeld(claimed.subject, withRequestsTaken);
   const issue = viewIssue(doc.subject);
   const decision = decideIntake(
     doc,

@@ -26,6 +26,7 @@ import {
 import { workflowRunStatusSchema } from '../packages/workflows/src/schemas/run-status';
 import {
   isStateLeaseHolderLive,
+  stateClaimResultSchema,
   stateLeaseViewSchema,
 } from '../packages/workflows/src/state-document-store';
 import { validateStructuredOutput } from '../packages/workflows/src/structured-output';
@@ -42,7 +43,7 @@ import {
 } from '../.archon/workflows/sdlc/review-eval/scripts/runs';
 import type { Closure } from '../.archon/workflows/sdlc/.shared/close';
 import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/forge';
-import { parseLease } from '../.archon/workflows/sdlc/.shared/state';
+import { parseClaimed, parseLease } from '../.archon/workflows/sdlc/.shared/state';
 import { SIZE_LABEL, TYPE_LABEL } from '../.archon/workflows/sdlc/.shared/labels';
 
 registerBuiltinProviders();
@@ -204,6 +205,26 @@ describe('claims', () => {
       expect(fakeLeaseLive(status)).toBe(isStateLeaseHolderLive(status));
     // A run the store no longer has: deleted, so its lease has ended.
     expect(fakeLeaseLive(undefined)).toBe(isStateLeaseHolderLive(null));
+  });
+
+  test("the pack reads the engine's claim result: what it took, and why it passed each earlier candidate over", () => {
+    const holder = { runId: 'run-2', nodePath: 'facts', takenAt: '2026-11-04T00:00:00.000Z' };
+    const result = stateClaimResultSchema.parse({
+      claimed: null,
+      skipped: [
+        { name: 'work/1', reason: 'missing' },
+        { name: 'work/2', reason: 'revision_moved', revision: 4 },
+        { name: 'work/3', reason: 'lease_held', holder },
+      ],
+    });
+    expect(parseClaimed(result)).toEqual({
+      claimed: null,
+      skipped: [
+        { name: 'work/1', reason: 'missing', holder: null },
+        { name: 'work/2', reason: 'revision_moved', holder: null },
+        { name: 'work/3', reason: 'lease_held', holder: 'run-2' },
+      ],
+    });
   });
 });
 

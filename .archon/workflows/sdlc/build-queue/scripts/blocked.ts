@@ -1,9 +1,9 @@
 import { dueBlocked } from '../../.shared/build.ts';
-import { emit, refuse, trimmed } from '../../.shared/io.ts';
+import { emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 
 try {
   const revisits = trimmed(process.env.INPUTS_NUMBER) === '' && trimmed(process.env.INPUTS_REVISIT_BLOCKED) === 'true';
-  const blocked = revisits ? dueBlocked(new Date().toISOString()) : [];
+  const blocked = revisits ? dueBlocked(new Date().toISOString(), workflowRunId()) : [];
   emit({ blocked, blocked_count: blocked.length });
 } catch (error) {
   refuse(`build-queue blocked: ${error instanceof Error ? error.message : String(error)}`);

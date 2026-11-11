@@ -1,11 +1,8 @@
 /**
  * The stored work items no queue pickup can act on, for a queue's idle outcome.
  *
- * Pickup skips a document that does not parse, and holds a claim whose run holds no
- * engine lease on it (a claim written before claims took one), because it never releases
- * a claim it cannot prove ended.
- * Both leave the item stuck on every pass. A queue whose pickup claimed nothing names
- * them, so a person looks, instead of reporting an empty queue.
+ * Pickup skips a document that does not parse, on every pass. A queue whose pickup
+ * claimed nothing names them, so a person looks, instead of reporting an empty queue.
  */
 
 import { stateDocuments } from './state.ts';
@@ -16,24 +13,16 @@ export interface Stuck {
   readonly reason: string;
 }
 
-/** Reads only. `runId` is this run, whose own claims are never stuck. */
-export function stuckItems(runId: string): Stuck[] {
+/** Reads only. */
+export function stuckItems(): Stuck[] {
   const stuck: Stuck[] = [];
   for (const stored of stateDocuments('work/')) {
     if (stored.value === null) continue;
-    let claim: { readonly run_id: string } | null;
     try {
-      claim = parseWorkItem(stored.value).claim;
+      parseWorkItem(stored.value);
     } catch (error) {
       const reason = `its document does not parse: ${error instanceof Error ? error.message : String(error)}`;
       stuck.push({ name: stored.name, reason });
-      continue;
-    }
-    if (claim !== null && claim.run_id !== runId && stored.lease?.runId !== claim.run_id) {
-      stuck.push({
-        name: stored.name,
-        reason: `claimed by run ${claim.run_id}, which holds no engine lease on it; clear the claim with a conditional \`archon state put\``,
-      });
     }
   }
   return stuck;

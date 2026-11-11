@@ -2,15 +2,14 @@
  * Send the blocked items the revisit agent judged unblocked back to intake.
  *
  * Each gets this run's re-triage request and one intake pickup; intake decides whether
- * the item is now ready. Every listed item records the revisit, so the next one waits
- * its turn.
+ * the item is now ready. The listing already recorded the revisit on every listed item.
  *
  * Bound inputs: INPUTS_REPO from start, INPUTS_BLOCKED from blocked, and
  * INPUTS_RETRIAGE from revisit.
  */
 
-import { type BlockedItem, recordRevisit } from '../../.shared/build.ts';
-import { emit, note, nullableJson, refuse, text } from '../../.shared/io.ts';
+import type { BlockedItem } from '../../.shared/build.ts';
+import { emit, nullableJson, refuse, text } from '../../.shared/io.ts';
 import { requestRetriage } from '../../.shared/launch.ts';
 
 function main(): void {
@@ -22,17 +21,8 @@ function main(): void {
   const stray = judged.find(entry => !listed.has(entry.number));
   if (stray !== undefined) throw new Error(`the revisit named issue ${String(stray.number)}, which it was not given`);
 
-  const sent = new Map<number, string>();
-  for (const { number, reason } of judged) {
-    const intake = requestRetriage({ repo, number }, runId);
-    sent.set(number, `asked intake to re-triage (run ${intake}): ${reason}`);
-  }
-  for (const { number } of blocked) {
-    if (!recordRevisit({ repo, number }, runId, sent.get(number) ?? 'judged still blocked')) {
-      note(`issue ${String(number)}: the revisit was not recorded, so the next run judges it again`);
-    }
-  }
-  emit({ retriaged: [...sent.keys()], summary: `Revisited ${String(blocked.length)} blocked item(s); sent ${String(sent.size)} to re-triage.` });
+  for (const { number } of judged) requestRetriage({ repo, number }, runId);
+  emit({ retriaged: judged.map(entry => entry.number), summary: `Revisited ${String(blocked.length)} blocked item(s); sent ${String(judged.length)} to re-triage.` });
 }
 
 try {

@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
-import { stateGet } from '../../workflows/sdlc/.shared/state';
+import { type Lease, stateGet } from '../../workflows/sdlc/.shared/state';
 import {
   bodyDigest,
   decideIntake,
@@ -58,7 +58,7 @@ function triaged(overrides: Partial<TriageFacts> = {}): TriageFacts {
 function item(overrides: Partial<WorkItem> = {}, requests: IntakeRequest[] = []): WorkItem {
   return {
     ...newWorkItem(SUBJECT, AT),
-    claim: { run_id: 'run', at: AT, requests },
+    taken: requests,
     ...overrides,
   };
 }
@@ -204,6 +204,7 @@ describe('pickup', () => {
   test('candidates sort by the keys, untriaged after triaged and oldest first, then by number', () => {
     const at = (number: number, created: string, triage?: TriageFacts) => ({
       doc: { ...newWorkItem({ repo: PR.repo, number }, created), facts: triage ? { triage } : {} },
+      lease: null,
     });
     const sorted = sortCandidates(
       [
@@ -223,25 +224,16 @@ describe('pickup', () => {
     expect(sorted.map(entry => entry.doc.subject.number)).toEqual([4, 5, 3, 0, 2, 1]);
   });
 
-  test('an item whose last attempt failed sorts after every other waiting item', () => {
-    const released = {
+  test('an item whose last owner ended without finishing it sorts after every other waiting item', () => {
+    const urgent = {
       ...newWorkItem({ repo: PR.repo, number: 1 }, '2026-01-01'),
       facts: { triage: triaged({ urgency: { value: 'now', reason: 'r' } }) },
-      history: [{ at: AT, stage: 'intake' as const, run_id: 'r', outcome: 'released', summary: '' }],
     };
-    const fresh = newWorkItem({ repo: PR.repo, number: 2 }, '2026-02-01');
-    const order = (docs: WorkItem[]) =>
-      sortCandidates(
-        docs.map(doc => ({ doc })),
-        PICKUP_ORDER
-      ).map(entry => entry.doc.subject.number);
-    expect(order([released, fresh])).toEqual([2, 1]);
-    // A decision recorded after the release means the item's last attempt finished.
-    const recovered = {
-      ...released,
-      facts: { ...released.facts, intake: { body_digest: DIGEST, at: '2026-10-15T00:00:00.000Z', run_id: 'later', waiting: [] } },
-    };
-    expect(order([recovered, fresh])).toEqual([1, 2]);
+    const fresh = { doc: newWorkItem({ repo: PR.repo, number: 2 }, '2026-02-01'), lease: null };
+    const order = (lease: Lease | null) =>
+      sortCandidates([{ doc: urgent, lease }, fresh], PICKUP_ORDER).map(entry => entry.doc.subject.number);
+    expect(order({ runId: 'r', live: false })).toEqual([2, 1]);
+    expect(order(null)).toEqual([1, 2]);
   });
 
   test('the maintainer list is an array of logins; anything else refuses', () => {
@@ -396,7 +388,6 @@ function expectLeftToMaintainer(at: Install, applied: ScriptRun, refused: string
   const doc = stored(at).value;
   expect(doc).toMatchObject({
     stage: 'blocked',
-    claim: null,
     facts: { triage: { verdict: { contract: 'BLOCKED' } } },
   });
   expect(doc.history.at(-1)).toMatchObject({
@@ -453,13 +444,13 @@ describe('the intake scripts', () => {
       item: SUBJECT,
       decision: { trust: 'maintainer' },
     });
-    expect(stored(at).value.claim?.run_id).toBe('run-1');
+    expect(inProcess(at, () => stateGet('work/7')).lease?.runId).toBe('run-1');
 
     const applied = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(labelWrites(applied, 7)).toEqual({ add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] });
     const doc = stored(at).value;
-    expect(doc).toMatchObject({ stage: 'deliver', trust: 'maintainer', claim: null, requests: [] });
+    expect(doc).toMatchObject({ stage: 'deliver', trust: 'maintainer', requests: [] });
     expect(doc.facts.triage).toMatchObject({
       verdict: { contract: 'READY', route: 'deliver' },
       type: { value: 'feature' },
@@ -496,26 +487,22 @@ describe('the intake scripts', () => {
     expect(labelWrites(applied, 7).remove).toEqual([]);
   }, 60_000);
 
-  test('labels that fail to write leave the stage stored and the claim held, and the next pickup writes them', () => {
+  test('labels that fail to write leave the stage stored and the item held, and the next pickup writes them', () => {
     const at = install();
     const decided = facts(at, { runId: 'run-1' }).output;
     const failed = outcome(at, { runId: 'run-1', writeLost: true }, decided, READY_VERDICT);
     expect(failed.code).not.toBe(0);
-    expect(stored(at).value).toMatchObject({
-      stage: 'deliver',
-      claim: { run_id: 'run-1' },
-    });
+    expect(stored(at).value).toMatchObject({ stage: 'deliver', taken: [{ run_id: 'run-1', action: 'opened' }] });
+    expect(inProcess(at, () => stateGet('work/7')).lease?.runId).toBe('run-1');
 
     const retried = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'cancelled' } });
     expect(retried.output).toMatchObject({ path: 'quiet', item: SUBJECT });
-    expect(stored(at).value.claim).toMatchObject({
-      run_id: 'run-2',
-      requests: [expect.objectContaining({ run_id: 'run-1', action: 'opened' })],
-    });
+    expect(stored(at).value.taken).toEqual([expect.objectContaining({ run_id: 'run-1', action: 'opened' })]);
+    expect(inProcess(at, () => stateGet('work/7')).lease?.runId).toBe('run-2');
     const applied = outcome(at, { runId: 'run-2' }, retried.output, SKIPPED_TRIAGE);
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(labelWrites(applied, 7)).toEqual({ add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] });
-    expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null, requests: [] });
+    expect(stored(at).value).toMatchObject({ stage: 'deliver', taken: [], requests: [] });
   }, 60_000);
 
   test('a promoted item whose body changes while triage runs is demoted, unlabelled and left open', () => {
@@ -550,7 +537,7 @@ describe('the intake scripts', () => {
     expect(labelWrites(applied, 7)).toEqual({ add: [], remove: ['archon-triage'] });
     expect([...applied.closes, ...applied.comments]).toEqual([]);
     const doc = stored(at).value;
-    expect(doc).toMatchObject({ stage: 'needs_maintainer', promoted: null, claim: null });
+    expect(doc).toMatchObject({ stage: 'needs_maintainer', promoted: null });
     expect(doc.history.at(-1)).toMatchObject({
       outcome: 'demoted',
       summary: expect.stringContaining('during triage'),
@@ -567,7 +554,7 @@ describe('the intake scripts', () => {
       { issue: 7, body: expect.stringContaining(ORIGINAL_URL) },
       { issue: 3, body: expect.stringContaining(ISSUE_URL) },
     ]);
-    expect(stored(at).value).toMatchObject({ stage: 'close', claim: null });
+    expect(stored(at).value).toMatchObject({ stage: 'close' });
   }, 60_000);
 
   test('a close repeated after it stopped short writes no second comment and finishes', () => {
@@ -593,7 +580,7 @@ describe('the intake scripts', () => {
     const repeated = outcome(at, closed, decided, DUPLICATE_VERDICT);
     expect({ code: repeated.code, stderr: repeated.stderr }).toEqual({ code: 0, stderr: '' });
     expect([...repeated.closes, ...repeated.comments]).toEqual([]);
-    expect(stored(at).value).toMatchObject({ stage: 'close', claim: null });
+    expect(stored(at).value).toMatchObject({ stage: 'close' });
   }, 60_000);
 
   test('an item someone closed for another reason is refused before any comment', () => {
@@ -670,7 +657,7 @@ describe('the intake scripts', () => {
     expect({ code: asked.code, stderr: asked.stderr }).toEqual({ code: 0, stderr: '' });
     expect(asked.comments).toEqual([{ issue: 7, body: expect.stringContaining('- Which export format is wanted?') }]);
     expect(asked.closes).toEqual([]);
-    expect(stored(at).value).toMatchObject({ stage: 'needs_contract', claim: null });
+    expect(stored(at).value).toMatchObject({ stage: 'needs_contract' });
   }, 60_000);
 
   test('a blocked item closes nothing', () => {
@@ -683,7 +670,7 @@ describe('the intake scripts', () => {
     );
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect([...applied.closes, ...applied.comments]).toEqual([]);
-    expect(stored(at).value).toMatchObject({ stage: 'blocked', claim: null });
+    expect(stored(at).value).toMatchObject({ stage: 'blocked' });
   }, 60_000);
 
   test('a closed issue is recorded and its labels are left alone', () => {
@@ -695,7 +682,7 @@ describe('the intake scripts', () => {
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(labelWrites(applied, 7)).toEqual({ add: [], remove: [] });
     const doc = stored(at).value;
-    expect(doc).toMatchObject({ stage: 'new', trust: null, claim: null, requests: [] });
+    expect(doc).toMatchObject({ stage: 'new', trust: null, requests: [] });
     expect(doc.history.at(-1)).toMatchObject({ outcome: 'closed' });
   }, 60_000);
 
@@ -731,8 +718,8 @@ describe('the intake scripts', () => {
     facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'failed' } });
     const resumed = outcome(at, { runId: 'run-1', statuses: { 'run-1': 'running' } }, decided, READY_VERDICT);
     expect({ code: resumed.code, stderr: resumed.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null });
-    // Clearing the claim gave the run's lease back in the same write.
+    expect(stored(at).value).toMatchObject({ stage: 'deliver' });
+    // The last write gave the run's lease back.
     expect(inProcess(at, () => stateGet('work/7')).lease).toBeNull();
   }, 60_000);
 });

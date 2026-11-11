@@ -1,9 +1,9 @@
 /**
  * Claim the build queue's next item and write the issue the deciding agents read.
  *
- * It claims the waiting item that sorts first with intake's claim and order, or the
- * item the `number` input names, or the one the run's message resolved to, and writes
- * only that claim. A message interpret resolved to nothing refuses the run with its
+ * It claims the waiting item that sorts first in intake's order, or the item the
+ * `number` input names, or the one the run's message resolved to, and writes only the
+ * round's branch on it. A message interpret resolved to nothing refuses the run with its
  * reason; one it resolved to a work order or to new work claims nothing and goes to
  * `order` or `handoff`. With `orders_only` on it
  * first marks done each open work order whose members all finished. A named item that cannot
@@ -13,7 +13,8 @@
  * It also resolves the item's pull request as the forge reports it now. An open one
  * whose head is in the item's repository is the candidate the round continues;
  * otherwise the round opens one from a new branch named after the issue, which it
- * records on the claim.
+ * records on the item. A pull request an earlier run opened and never recorded becomes
+ * that run's round first.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -24,6 +25,7 @@ import {
   buildBranch,
   countedRounds,
   itemPullRequest,
+  withUnrecordedRound,
 } from '../../.shared/build.ts';
 import { type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
 import { artifactsDir, emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
@@ -35,7 +37,7 @@ import {
   claimNext,
   type Pickup,
   readWorkItem,
-  updateClaimed,
+  updateHeld,
   type WorkItem,
   withPlainReports,
 } from '../../.shared/workitem.ts';
@@ -84,7 +86,7 @@ function namedItem(): number | null | 'order' | 'handoff' {
 /**
  * A named number is an issue of the run's repository, and the project's `work/<number>`
  * can belong to another, as in a checkout whose `origin` is a fork. Refuses before the
- * claim, so a release or claim never touches that other repository's item.
+ * claim, so a claim never touches that other repository's item.
  */
 function requireRunRepo(number: number): void {
   const repo = nullableJson(process.env.INPUTS_REPO) as QualifiedPr['repo'];
@@ -120,14 +122,12 @@ const NO_ITEM_PR: ItemPr = { pull_request: null, continues: null, branch: '' };
 
 function resolvePr(
   subject: QualifiedPr,
-  title: string,
+  branch: string,
   doc: WorkItem | null,
-  rounds: readonly BuildRound[],
-  runId: string
+  rounds: readonly BuildRound[]
 ): ItemPr {
   const ref = itemPullRequest(rounds, doc?.facts.triage, subject.repo);
   const pr = ref === null ? null : viewPr(ref).pr;
-  const branch = buildBranch(subject.number, title, runId);
   if (pr !== null && pr.state === 'open' && pr.head_repo !== null && sameRepo(pr.head_repo, subject.repo)) {
     return { pull_request: pr, continues: pr.number, branch };
   }
@@ -176,27 +176,26 @@ function main(): void {
     return;
   }
   if (named !== null) requireRunRepo(named);
-  const doc =
-    named === null
-      ? claimNext(new Date().toISOString(), runId, pickup())
-      : claimNamed(named, new Date().toISOString(), runId, BUILD_PICKUP);
-  if (doc === null) {
+  const claimed = named === null ? claimNext(pickup()) : claimNamed(named, BUILD_PICKUP);
+  if (claimed === null) {
     emit({ path: 'idle', ...NOTHING, ...NO_ITEM_PR });
     return;
   }
-  const issue = viewIssue(doc.subject);
+  const issue = viewIssue(claimed.subject);
   writeIssue(issue.title, issue.url, issue.body);
-  const closed = issue.state === 'closed';
+  if (issue.state === 'closed') {
+    emitItem('closed', claimed.subject, issue.url, claimed, claimed.facts.build?.rounds ?? [], countedRounds(claimed) + 1 >= limit, NO_ITEM_PR);
+    return;
+  }
+  // The branch is stored, not derived later: the title can change before the next round reads it.
+  const branch = buildBranch(claimed.subject.number, issue.title, runId);
+  const doc = updateHeld(claimed.subject, held => ({
+    ...withUnrecordedRound(held, runId, new Date().toISOString()),
+    opening: { run_id: runId, branch },
+  }));
   const rounds = doc.facts.build?.rounds ?? [];
-  const itemPr = closed ? NO_ITEM_PR : resolvePr(doc.subject, issue.title, doc, rounds, runId);
-  // A release reads the branch from the claim: the title can change before then.
-  const recorded = closed
-    ? doc
-    : updateClaimed(doc.subject, runId, held => ({
-        ...held,
-        claim: held.claim && { ...held.claim, branch: itemPr.branch },
-      }));
-  emitItem(closed ? 'closed' : 'route', doc.subject, issue.url, recorded, rounds, countedRounds(doc) + 1 >= limit, itemPr);
+  const itemPr = resolvePr(doc.subject, branch, doc, rounds);
+  emitItem('route', doc.subject, issue.url, doc, rounds, countedRounds(doc) + 1 >= limit, itemPr);
 }
 
 try {

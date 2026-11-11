@@ -1,7 +1,7 @@
 /**
  * Claim the merge queue's items and read the facts the sweep decides from.
  *
- * Live claims, in intake's order, every item the build queue finished, up to `limit`,
+ * Claims, in intake's order, every item the build queue finished, up to `limit`,
  * and reads each pull request in one snapshot: its head, the trusted review
  * verdict, CI and review threads at that head, and whether it merges cleanly, beside
  * the latest validation the item's build rounds recorded. An item
@@ -35,7 +35,7 @@ import {
 } from '../../.shared/merge.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { workflowRepo } from '../../.shared/remote.ts';
-import { claimNext, updateClaimed, type Pickup, type WorkItem } from '../../.shared/workitem.ts';
+import { claimNext, updateHeld, type WorkItem } from '../../.shared/workitem.ts';
 
 interface Item {
   /** The issue whose work item the queue claimed. */
@@ -65,11 +65,10 @@ function quoted(word: string): string {
   return `'${word.replaceAll("'", "'\\''")}'`;
 }
 
-function claimAll(limit: number, runId: string, pickup: Pickup): WorkItem[] {
+function claimAll(limit: number): WorkItem[] {
   const claimed: WorkItem[] = [];
-  const at = new Date().toISOString();
   while (claimed.length < limit) {
-    const doc = claimNext(at, runId, pickup);
+    const doc = claimNext(MERGE_PICKUP, new Set(claimed.map(item => item.subject.number)));
     if (doc === null) break;
     claimed.push(doc);
   }
@@ -107,13 +106,12 @@ function unreadableItem(doc: WorkItem, pr: QualifiedPr | null, error: unknown): 
 function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem {
   if (doc.facts.merge?.decisions.at(-1)?.decision !== UNREADABLE) return doc;
   const at = new Date().toISOString();
-  return updateClaimed(doc.subject, runId, current => withMerge(current, {
+  return updateHeld(doc.subject, current => withMerge(current, {
     at,
     run_id: runId,
     entry: { at, run_id: runId, decision: 'readable', reason: 'its pull request was read successfully', links: [], head: facts.head_revision, reran: false },
     status: 'waiting',
     pr: facts.pr,
-    release: false,
   }));
 }
 
@@ -160,7 +158,7 @@ function main(): void {
   const snapshot = snapshotReader(readMaintainers(repo));
   const items: Item[] = [];
   const settled: MergeSettled[] = [];
-  for (const doc of claimAll(limit, runId, MERGE_PICKUP)) {
+  for (const doc of claimAll(limit)) {
     let pr: QualifiedPr | null = null;
     let facts: PrFacts;
     try {

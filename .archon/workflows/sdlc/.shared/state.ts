@@ -1,13 +1,15 @@
 /**
  * The pack's state store and run reads, through the host's `archon` command.
  *
- * A queue's work item is a state document claimed with a conditional write
- * (`statePut` at the revision read) that also takes the document's engine lease. A
- * claim is released only when the engine reports that lease ended, never on age.
+ * A queue run owns a work item while it holds the document's engine lease, which
+ * `stateClaim` takes; every write the run then makes is `statePutHeld`, which the store
+ * refuses once the lease is no longer the run's. The engine alone says whether a lease
+ * is live.
  */
 
 import { archonCommand, record } from './forge.ts';
 
+const NONE_CLAIMED = 2;
 const STATE_CONFLICT = 3;
 
 function archon(args: readonly string[], input?: string): { code: number; value: unknown } {
@@ -98,6 +100,74 @@ export function statePutClaimed(
   ifRevision: number
 ): 'ok' | 'conflict' {
   return statePut(name, value, ifRevision, value.claim === null ? 'release' : undefined);
+}
+
+/**
+ * A conditional replace the store makes only while this run holds the document's live
+ * lease; `release` gives the lease back in the same write.
+ */
+export function statePutHeld(
+  name: string,
+  value: unknown,
+  ifRevision: number,
+  release: boolean
+): 'ok' | 'revision_moved' | 'lease_not_held' {
+  const result = archon(
+    ['state', 'put', name, '--if-revision', String(ifRevision), '--held', ...(release ? ['--release-lease'] : [])],
+    JSON.stringify(value)
+  );
+  if (result.code === 0) return 'ok';
+  const reason = record(result.value)?.reason;
+  if (result.code === STATE_CONFLICT && (reason === 'revision_moved' || reason === 'lease_not_held')) return reason;
+  throw failed(`state put ${name}`, result);
+}
+
+export interface ClaimCandidate {
+  readonly name: string;
+  readonly ifRevision: number;
+}
+
+/** Why the engine passed a candidate over; `holder` is the run whose live lease held it. */
+export interface ClaimSkip {
+  readonly name: string;
+  readonly reason: string;
+  readonly holder: string | null;
+}
+
+export interface Claimed {
+  readonly claimed: (Stored & { readonly name: string }) | null;
+  readonly skipped: readonly ClaimSkip[];
+}
+
+/** What `archon state claim` printed, as the pack reads it; undefined when it is not a claim result. */
+export function parseClaimed(output: unknown): Claimed | undefined {
+  const value = record(output);
+  if (!Array.isArray(value?.skipped)) return undefined;
+  const skipped: ClaimSkip[] = [];
+  for (const entry of value.skipped) {
+    const skip = record(entry);
+    if (typeof skip?.name !== 'string' || typeof skip.reason !== 'string') return undefined;
+    const holder = record(skip.holder)?.runId;
+    skipped.push({ name: skip.name, reason: skip.reason, holder: typeof holder === 'string' ? holder : null });
+  }
+  if (value.claimed === null) return { claimed: null, skipped };
+  const claimed = record(value.claimed);
+  if (typeof claimed?.name !== 'string' || typeof claimed.revision !== 'number') return undefined;
+  return {
+    claimed: { name: claimed.name, revision: claimed.revision, value: claimed.value ?? null, lease: parseLease(claimed.lease) },
+    skipped,
+  };
+}
+
+/**
+ * Take the lease of the first candidate, in the order given, that is still at its
+ * revision and that no other live run holds. `claimed` is null when none could be taken.
+ */
+export function stateClaim(candidates: readonly ClaimCandidate[]): Claimed {
+  const result = archon(['state', 'claim'], JSON.stringify(candidates));
+  const claimed = result.code === 0 || result.code === NONE_CLAIMED ? parseClaimed(result.value) : undefined;
+  if (claimed === undefined) throw failed('state claim', result);
+  return claimed;
 }
 
 export type StatePatchOp =
