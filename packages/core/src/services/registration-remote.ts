@@ -220,7 +220,47 @@ async function readableRemoteIdentity(project: ProjectIdentity): Promise<string 
   }
 }
 
-type RemoteOwnerCandidate = ProjectIdentity & Pick<Codebase, 'created_at'>;
+type RemoteOwnerCandidate = ProjectIdentity & Pick<Codebase, 'id' | 'created_at'>;
+
+/** Remote identities already read for registered projects; see {@link readRemoteIdentities}. */
+export type RemoteIdentities = ReadonlyMap<string, string | null>;
+export type RemoteIdentityReader = (project: ProjectIdentity) => Promise<string | null>;
+
+/** Every stored field an identity derives from, so a row changed after its read is read again. */
+function identityKey(project: RemoteOwnerCandidate): string {
+  return JSON.stringify([
+    project.id,
+    project.kind,
+    project.repository_url ?? null,
+    project.default_cwd,
+  ]);
+}
+
+// Most reads are one git subprocess; an install with hundreds of projects waits on them serially.
+const IDENTITY_READ_CONCURRENCY = 8;
+
+/**
+ * The remote identity of each registered project, read once per project. Rows found in
+ * `known` are not read again.
+ */
+export async function readRemoteIdentities(
+  registered: readonly RemoteOwnerCandidate[],
+  known: RemoteIdentities = new Map(),
+  read: RemoteIdentityReader = readableRemoteIdentity
+): Promise<RemoteIdentities> {
+  const identities = new Map<string, string | null>();
+  let next = 0;
+  const readNext = async (): Promise<void> => {
+    while (next < registered.length) {
+      const project = registered[next++];
+      const key = identityKey(project);
+      const identity = known.get(key);
+      identities.set(key, identity === undefined ? await read(project) : identity);
+    }
+  };
+  await Promise.all(Array.from({ length: IDENTITY_READ_CONCURRENCY }, readNext));
+  return identities;
+}
 
 /**
  * The project that owns a remote. Older binaries could register one remote
@@ -237,12 +277,12 @@ export async function findRemoteOwner<T extends RemoteOwnerCandidate>(
 
 async function remoteIdentityOwner<T extends RemoteOwnerCandidate>(
   registered: readonly T[],
-  identity: string
+  identity: string,
+  known?: RemoteIdentities,
+  read?: RemoteIdentityReader
 ): Promise<T | null> {
-  const owners: T[] = [];
-  for (const project of registered) {
-    if ((await readableRemoteIdentity(project)) === identity) owners.push(project);
-  }
+  const identities = await readRemoteIdentities(registered, known, read);
+  const owners = registered.filter(project => identities.get(identityKey(project)) === identity);
   owners.sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime());
   if (owners.length > 1) {
     createLogger('registration.remote').warn(
@@ -255,7 +295,9 @@ async function remoteIdentityOwner<T extends RemoteOwnerCandidate>(
 
 export async function assertProjectRegistrationAvailable(
   project: ProjectIdentity,
-  registered: readonly RemoteOwnerCandidate[]
+  registered: readonly RemoteOwnerCandidate[],
+  known?: RemoteIdentities,
+  read?: RemoteIdentityReader
 ): Promise<void> {
   const identity =
     project.kind === 'folder'
@@ -264,7 +306,7 @@ export async function assertProjectRegistrationAvailable(
         ? await remoteIdentity(project.repository_url, project.default_cwd)
         : await readableRemoteIdentity(project);
   if (identity) {
-    const existing = await remoteIdentityOwner(registered, identity);
+    const existing = await remoteIdentityOwner(registered, identity, known, read);
     if (existing) {
       throw new ProjectRegistrationError(
         `Project "${existing.name}" is already registered at ${existing.default_cwd}. ` +

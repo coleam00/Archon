@@ -106,6 +106,19 @@ every author is outside and nothing is triaged or merged.
   unless it is listed.
 
 Committing the file to the default branch is a write to the repository: ask first.
+Then create it and get it onto the default branch on the remote:
+
+```bash
+mkdir -p .archon/sdlc/policy
+echo '["alice", "bob"]' > .archon/sdlc/policy/maintainers.json
+git add .archon/sdlc/policy/maintainers.json
+git commit -m "Name the SDLC pack's maintainers"
+git push origin HEAD:<default-branch>
+```
+
+The file must reach the default branch on the remote, by a direct push as above or by a
+merged pull request, whichever the repository allows. Run the check above again after
+it lands.
 
 ### 5. Labels
 
@@ -151,29 +164,48 @@ Every command here starts a run that writes to the tracker, so ask before each. 
 them from the clone. Replace `42` with an issue a maintainer wrote; its body should
 state the problem, why it matters, the desired outcome, the invariants and acceptance.
 
+Start each run with `--detach`, which returns at once and prints the run's id, then
+wait for it:
+
 ```bash
-archon workflow run archon-intake --input number=42
+archon workflow run archon-intake --input number=42 --detach
+archon workflow wait <run-id> --json
+```
+
+`workflow wait` blocks until the run ends or needs an answer (step 9). If the shell
+that called it times out, run it again; never stop a run because a wait was cut short.
+Roughly, intake takes about 2 minutes, a build round 15 to 40 minutes, and a merge
+sweep about 2 minutes. These are typical times, not limits.
+
+```bash
 archon state get work/42
 ```
 
-Intake labels the issue with its route and records its work item, which the second
-command prints.
+Intake labels the issue with its route and records its work item. The work item is
+where each stage's outcome is read: `value.stage` is intake's route (`deliver`, `plan`,
+`investigate`, or a stage that waits, such as `needs_maintainer`, `needs_contract` or
+`blocked`), `value.facts.build.status` is the build queue's (`next`, `asking`, `ready`
+or `parked`), and `value.facts.merge.status` is the merge queue's (`waiting`, `asking`,
+`merged`, `returned` or `parked`). `archon workflow get <run-id>` shows the run itself:
+its status and its artifacts, not the stage's decision.
 
 ```bash
 archon workflow run archon-build-queue --input number=42 --detach
-archon workflow runs
+archon workflow wait <run-id> --json
+archon state get work/42
 ```
 
 The build queue works the issue toward a reviewed pull request, one round per run.
-`archon workflow get <run-id>` shows how a run ended.
 
 ```bash
-archon workflow run archon-merge-queue
-archon workflow run archon-discoveries
+archon workflow run archon-merge-queue --detach
+archon workflow run archon-discoveries --detach
 ```
 
 The merge queue merges what the build queue finished and the gate allows. The
-discoveries drain files, tracks or drops what runs noticed outside their task.
+discoveries drain files, tracks or drops what runs noticed outside their task. After a
+merge, the clone's default branch is behind the remote: `git pull` brings the merged
+work.
 
 The queues work on the repository the clone's `origin` (or its only remote) names. When
 `origin` is a fork, add `--input repo_host=<host> --input repo_path=<owner>/<repo>`.
@@ -225,7 +257,12 @@ archon pack bindings sdlc \
   --only build-queue,merge-queue,discoveries
 ```
 
-`--host` is a name for this machine. `--cwd` is the checkout the runs launch in; point
+`--host` is the id of the execution host that starts the runs: a name you choose for
+this install, which `archon trigger fire` then serves. Use the one this install already
+uses, the `hostId` in a binding file written earlier or the server's
+`ARCHON_TRIGGER_HOST`; no command reports it. `--out` has no default: give it a
+directory outside the checkout, such as `~/.archon/bindings`, so the binding files do
+not show up as changes in it. `--cwd` is the checkout the runs launch in; point
 it at one that tracks the default branch. The command writes one file per binding and
 prints what registers each. It registers and schedules nothing, and refuses to replace
 a file unless `--force`. A binding whose input names another binding's file needs that
