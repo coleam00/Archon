@@ -23,6 +23,28 @@ export interface WorkflowWaitCompletion {
 
 export type WorkflowWaitPause = { kind: 'started'; stepName: string } | { kind: 'continued' };
 
+/**
+ * The audit row of a new wait pause, written in the pause's transaction by every store.
+ * An attention wait records the labels it opened with, which is what
+ * `countAttentionWaitStarts` counts once the wait is answered and its context is gone.
+ */
+export function waitStartedEvent(
+  workflowRunId: string,
+  wait: WorkflowWaitContext,
+  stepName: string
+): ObservabilityEventInput {
+  return {
+    workflow_run_id: workflowRunId,
+    event_type: 'wait_started',
+    step_name: stepName,
+    data: {
+      kind: wait.kind,
+      ...(wait.kind === 'attention' ? { labels: wait.labels ?? {} } : { resume_at: wait.resumeAt }),
+      ...(wait.kind === 'event' ? { event: wait.event } : {}),
+    },
+  };
+}
+
 /** The audit row of a continued wait pause, written in the pause's transaction by every store. */
 export function waitContinuedEvent(
   workflowRunId: string,

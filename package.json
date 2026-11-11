@@ -30,6 +30,8 @@
     "check:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts --check",
     "generate:workflow-output-types": "bun run cli workflow types .archon/workflows/sdlc",
     "check:workflow-output-types": "bun run cli workflow types .archon/workflows/sdlc --check",
+    "generate:script-api-types": "bun run scripts/generate-script-api-types.ts",
+    "check:script-api-types": "bun run scripts/generate-script-api-types.ts --check",
     "check:schema-upgrades": "bun run scripts/check-schema-upgrades.ts",
     "lens-yield": "bun run scripts/lens-yield.ts",
     "test:install": "bash scripts/test-install.sh",

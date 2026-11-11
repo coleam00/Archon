@@ -78,7 +78,7 @@ describe('durable workflow waits', () => {
     const [, eventParams] = mockQuery.mock.calls[1] as [string, unknown[]];
     expect(JSON.parse(pauseParams[1] as string)).toEqual(attentionWait);
     const eventData = JSON.parse(eventParams[5] as string) as Record<string, unknown>;
-    expect(eventData).toEqual({ kind: 'attention' });
+    expect(eventData).toEqual({ kind: 'attention', labels: {} });
     expect(eventData).not.toHaveProperty('resume_at');
   });
 

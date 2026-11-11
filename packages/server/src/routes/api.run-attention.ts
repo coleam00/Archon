@@ -26,7 +26,10 @@ import {
   selectAttentionQueue,
   type AttentionQueueScope,
 } from '@archon/workflows/attention-queue';
-import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
+import {
+  attentionNeedsSomeoneFilter,
+  type AttentionStreamLine,
+} from '@archon/workflows/attention-watch';
 import type { IWorkflowEngine } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
 import { checkedSSEWriter } from '../adapters/web/sse-writer';
@@ -175,7 +178,8 @@ export function attentionSseIds(): (line: AttentionStreamLine) => string | undef
 
 /**
  * GET /api/runs/attention/stream - The attention queue over SSE: the open set, `ready`,
- * then every change, each line as `--watch --json` writes it. `watchAttention` is the
+ * then every change, each line as `--watch --protocol --json` writes it; with
+ * `needsSomeone=true`, only the lines `--watch` writes by default. `watchAttention` is the
  * engine watcher `--watch` uses. Read-only, so like the list route it needs only the
  * `/api/*` access gate.
  */
@@ -191,6 +195,7 @@ export function registerAttentionStreamRoute(
       return apiError(c, 400, (refusal as Error).message);
     }
     const { scope, request } = parsed;
+    const quiet = c.req.query('needsSomeone') === 'true';
     const lastEventId = c.req.header('last-event-id');
     const after = lastEventId === undefined ? undefined : workflowEventCursor(lastEventId);
 
@@ -202,7 +207,11 @@ export function registerAttentionStreamRoute(
         end = resolve;
       });
       stream.onAbort(end);
+      const wanted = quiet
+        ? attentionNeedsSomeoneFilter({ resumed: after !== undefined })
+        : (): boolean => true;
       const listener = async (line: AttentionStreamLine): Promise<void> => {
+        if (!wanted(line)) return;
         const id = idOf(line);
         try {
           await writer.writeSSE({

@@ -10,6 +10,7 @@ import * as paths from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { readAttentionQueueItem } from './attention-queue';
 import {
+  attentionNeedsSomeoneFilter,
   attentionStreamLineSchema,
   watchAttentionQueue,
   type AttentionStreamLine,
@@ -1605,3 +1606,61 @@ test.each(['all', 'project'] as const)(
     }
   }
 );
+
+test('the quiet watch passes only lines someone has to act on, and the close of an item it passed', () => {
+  const cursor = workflowEventCursor('c');
+  const run = { cursor, project: null, runId: 'r', workflow: 'ci', parentRunId: null };
+  const terminal = { type: 'terminal', ...run, outcome: null, cause: null } as const;
+  const resolved = { type: 'resolved', ...run, occurrence: 'o', reason: 'withdrawn' } as const;
+  const item = {
+    runId: 'r',
+    workflow: 'ci',
+    project: null,
+    parentRunId: null,
+    fanOut: null,
+    revision: 1,
+    labels: {},
+    pausedAt: null,
+    context: { artifactsDir: null, transcript: null, workingPath: null, branch: null },
+    node: 'ask',
+  };
+  const opened: AttentionStreamLine = {
+    type: 'attention',
+    cursor,
+    snapshot: false,
+    project: null,
+    workflow: 'ci',
+    parentRunId: null,
+    item: {
+      ...item,
+      kind: 'attention',
+      occurrence: 'o',
+      message: 'Go?',
+      form: 'message',
+      options: [],
+    },
+  };
+  const limited: AttentionStreamLine = {
+    ...opened,
+    item: { ...item, kind: 'usage_limit', resetAt: '2026-01-01T00:00:00.000Z' },
+  };
+  const quiet: AttentionStreamLine[] = [
+    { type: 'bookmark', cursor },
+    { type: 'ready', cursor },
+    { type: 'resumed', ...run, status: 'running' },
+    resolved,
+    limited,
+    { ...terminal, status: 'completed' },
+    { ...terminal, status: 'cancelled' },
+  ];
+  const needed: AttentionStreamLine[] = [
+    opened,
+    resolved,
+    { ...terminal, status: 'failed' },
+    { ...terminal, status: 'completed', outcome: 'failed' },
+    { type: 'owner_lost', ...run, observedStatus: 'running' },
+    { type: 'error', error: 'cursor_invalid' },
+  ];
+  expect(quiet.filter(attentionNeedsSomeoneFilter())).toEqual([]);
+  expect(needed.filter(attentionNeedsSomeoneFilter())).toEqual(needed);
+});

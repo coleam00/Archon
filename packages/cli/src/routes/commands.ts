@@ -9,6 +9,24 @@ import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from '../a
 import { type CliRouteContext, fail, printUsageFor } from './context';
 import { loadRoute, usesDatabaseStore } from './route-loader';
 
+export async function runScript({
+  subcommand,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
+  if (subcommand !== 'types')
+    return await fail(json, 'Usage: archon script types [--out <file>] [--check]');
+  const { scriptTypesCommand } = await loadRoute(() => import('../commands/script-types'), {
+    providers: false,
+  });
+  return await scriptTypesCommand(cwd, {
+    json,
+    check: values.check === true,
+    out: typeof values.out === 'string' ? values.out : undefined,
+  });
+}
+
 export async function runForge({
   subcommand,
   values,
@@ -120,6 +138,7 @@ export async function runState({
       ...(values.values === true ? { values: true } : {}),
       ...(values.lease === true ? { lease: true } : {}),
       ...(values['release-lease'] === true ? { releaseLease: true } : {}),
+      ...(values.held === true ? { held: true } : {}),
     },
     { storeKind }
   );

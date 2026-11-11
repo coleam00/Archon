@@ -212,6 +212,55 @@ describe('GET /api/runs/attention/stream', () => {
     ]);
   });
 
+  test('needsSomeone=true sends only the lines someone has to act on', async () => {
+    const app = new OpenAPIHono();
+    const cursor = workflowEventCursor('c');
+    registerAttentionStreamRoute(app, async listener => {
+      await listener({ type: 'ready', cursor });
+      await listener({ type: 'bookmark', cursor });
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return { close: async () => undefined };
+    });
+    const linesOf = async (query: string): Promise<string[]> => {
+      const client = sseClient(await app.request(`/api/runs/attention/stream${query}`));
+      await client.done;
+      return client.events.map(event => event.line.type);
+    };
+    expect(await linesOf('?needsSomeone=true')).toEqual(['error']);
+    expect(await linesOf('')).toEqual(['ready', 'bookmark', 'error']);
+  });
+
+  test('a resumed needsSomeone stream sends the close of an item this connection never sent', async () => {
+    const app = new OpenAPIHono();
+    const cursor = workflowEventCursor('c');
+    const closed = {
+      type: 'resolved',
+      cursor,
+      project: null,
+      runId: 'r',
+      workflow: 'ci',
+      parentRunId: null,
+      occurrence: 'o',
+      reason: 'withdrawn',
+    } as const;
+    registerAttentionStreamRoute(app, async listener => {
+      await listener(closed);
+      await listener({ type: 'bookmark', cursor });
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return { close: async () => undefined };
+    });
+    const linesOf = async (headers: Record<string, string>): Promise<string[]> => {
+      const client = sseClient(
+        await app.request('/api/runs/attention/stream?needsSomeone=true', { headers })
+      );
+      await client.done;
+      return client.events.map(event => event.line.type);
+    };
+    // The item may have closed while the client was away; it cannot be told otherwise.
+    expect(await linesOf({ 'Last-Event-ID': 'c' })).toEqual(['resolved', 'error']);
+    expect(await linesOf({})).toEqual(['error']);
+  });
+
   test('scopes the watch by project and label as the list route does', async () => {
     const seen: AttentionWatchOptions[] = [];
     const app = new OpenAPIHono();

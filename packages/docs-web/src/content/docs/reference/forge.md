@@ -11,15 +11,17 @@ Forge operations load only when a caller invokes `archon forge`. Local workflows
 
 ## Install the GitHub plugin
 
-GitHub is an optional, independently executable plugin. Its source is temporarily housed under `packages/adapters/src/forge/github`; the entry point imports the public forge contract and its own vendor code, not Archon's engine or adapter host. The CLI does not inject or require a GitHub implementation.
+GitHub is an optional, independently executable plugin. Its source is temporarily housed under `packages/adapters/src/forge/github`; the entry point imports the public forge contract and its own vendor code, not Archon's engine or adapter host. A release binary does not inject or require a GitHub implementation.
 
-Each Archon release publishes the plugin as a native executable for every platform the CLI ships on. Install it with:
+A source checkout and [Docker](/deployment/docker/#plugins) run the plugin from that source, the way they run the Claude, Codex and Pi providers, so it always matches the checkout. They need no install step and skip any scanned `archon-forge-github` executable, with a notice on stderr; `archon plugin remove coleam00/Archon/plugins/forge-github` removes an installed one. A `github` plugin configured by name under `forge.plugins` or a host mapping still runs instead of the source plugin.
+
+Each Archon release publishes the plugin as a native executable for every platform the CLI ships on. With a release binary, install it with:
 
 ```sh
 archon plugin add coleam00/Archon/plugins/forge-github
 ```
 
-This works the same for the release binary, a source checkout, and [Docker](/deployment/docker/#plugins). Without `@<tag>` it installs from the latest Archon release; `coleam00/Archon/plugins/forge-github@<tag>` pins one. The command:
+Without `@<tag>` it installs from the latest Archon release; `coleam00/Archon/plugins/forge-github@<tag>` pins one. The command:
 
 - resolves the tag to a commit with `git ls-remote` and reads `plugins/forge-github/archon-plugin.json` at that commit. It calls no GitHub API and needs no token.
 - downloads `archon-forge-github-<os>-<arch>[.exe]` from that release and checks it against the release's `checksums.txt`. A mismatch installs nothing.
@@ -86,6 +88,47 @@ With `"web": true`, `resolve` reads the forge's web URL of an issue or a pull re
 `--data-file <path>` reads the same JSON request from a file. Authored content — a pull-request body, a review comment — belongs there rather than in `--data`, so it never appears in any process's argument list.
 
 Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the operation returned a response but its run audit could not be persisted. Stdout retains that response, which may be a success or a failed write with its mutation outcome; read it before retrying or reconciling, because exit 2 alone does not say whether a write happened.
+
+### Check forge access before a run spends
+
+```sh
+archon forge check --json --data '{"host":"github.com","operations":["pr.view","pr.create","pr.merge"]}'
+```
+
+`check` answers three questions for one host without running a forge operation: which plugin serves the host, whether it advertises every name in `operations`, and whether its credential resolves. `operations` takes operation names and any other capability a plugin advertises, such as `resolve:subject`. A workflow runs it in its first node, so a missing plugin or token refuses before any agent runs instead of at the first write.
+
+On success it exits 0 and the result names the plugin and, when the plugin needs a credential, the source it was found in, never the token:
+
+```json
+{
+  "operationId": "…",
+  "ok": true,
+  "result": {
+    "op": "check",
+    "value": {
+      "host": "github.com",
+      "plugin": { "name": "github", "version": "0.14.0" },
+      "operations": ["pr.view", "pr.create", "pr.merge"],
+      "credentialSource": "GH_TOKEN"
+    }
+  }
+}
+```
+
+Otherwise it exits 1 with the first reason that applies, in this order:
+
+| `error.kind` | Meaning |
+| --- | --- |
+| `no_plugin_for_host` | No installed or configured plugin claims the host |
+| `unsupported_op` | The plugin lacks at least one named operation; `unsupported` lists every one it lacks |
+| `no_credential` | The plugin's credential environment is unset or empty |
+| `process_failed` | Plugin discovery failed, or `gh auth token` failed for a GitHub host |
+
+The credential is resolved the way an operation resolves it, so for GitHub the check may run `gh auth token`. It does not contact the forge: a credential that resolves can still be expired or lack access to a repository, which the first operation reports.
+
+### Call the forge from a script
+
+A Bun `script:` node calls an operation with `forge(op, request)` from the `archon:script` module, typed per operation, and gets a `ForgeError` carrying the failure's `kind` and `mutation`. See [The script API](/guides/script-nodes/#the-script-api).
 
 ## What a write reports
 
@@ -164,7 +207,7 @@ GitHub tokens need repository pull-request and check/status read permissions, pl
 
 The bundled SDLC pack reaches the forge only through `archon forge`; it has no other path. For github.com it needs two things:
 
-1. **The plugin.** With the release binary or Homebrew, `archon plugin add coleam00/Archon/plugins/forge-github`. In a source checkout, `bun run cli plugin add coleam00/Archon/plugins/forge-github`, or a plugin you built yourself (see above). In Docker, `docker compose exec -u appuser app bun run cli plugin add coleam00/Archon/plugins/forge-github`.
+1. **The plugin.** With the release binary or Homebrew, `archon plugin add coleam00/Archon/plugins/forge-github`, or a plugin you built yourself (see above). A source checkout and Docker run it from source and need nothing installed.
 2. **A credential.** The host resolves GitHub credentials in order: `GH_TOKEN`, then `GITHUB_TOKEN`, then the `gh` CLI login via `gh auth token --hostname <forge-host>`. It passes the token to the plugin, including released v0.11.1 plugins. If a source is absent, the host tries the next; a selected token rejected by the forge, or an installed `gh` that fails or returns an empty token, is reported without trying another source. Tokens are never logged. Run `archon workflow run archon-forge-check` from the checkout to run the pack's preflight on its own, including the required-operation check. It names the credential source used.
 
 With the release binary, Homebrew or a source install, an existing `gh auth login` works. Alternatively, put `GH_TOKEN` in Archon's env file, `~/.archon/.env`. In Docker, set `GH_TOKEN` in the compose `.env`, or authenticate `gh` inside the container; the host machine's login is not shared automatically. GitHub App mode supplies each run its token. The run shim refreshes installation tokens through the App credential helper without requiring the real `gh` executable. Prefer `GH_TOKEN` when configuring the forge alone: beside `WEBHOOK_SECRET`, `GITHUB_TOKEN` also switches the server's GitHub adapter into token mode.
@@ -177,7 +220,7 @@ The PR and test-value metrics read each pull request's `timestamps` from `pr.vie
 
 `archon-ship`, `archon-deliver` and `archon-pr` run a `forge` node that checks the plugin can act before any agent runs: host metadata inspection (`archon forge metadata --data '{"host":"github.com"}' --json`) must first advertise every required operation, then an authenticated pull-request read (`pr.view` by head, which every released GitHub plugin supports) for the repositories the checkout's remotes name, which proves the token can read the repository but not that it can write: the run's log says so, and write access is first proven by the run's first write. One readable repository, including a readable mirror, is sufficient. A missing plugin or token refuses there, naming both steps, rather than after implementation and review. With per-user GitHub enabled, a run started by a user who has not connected their own GitHub identity has no token, and the refusal names the connect step (`archon auth github` or the Web UI Settings page). When one remote repository fails but another is readable, the successful diagnostic includes the failed repository and its error. The operations themselves still refuse on their own. The run's worktree exists by then: the engine creates it before the first node.
 
-Preflight requires every operation in [`REQUIRED_FORGE_OPERATIONS` in `.archon/workflows/sdlc/.shared/forge-check.ts`](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/.shared/forge-check.ts). The GitHub plugin advertises all of them from v0.13.0; earlier releases lack some and cannot run the pack. Preflight names missing operations and refuses before AI. The merge queue's gate and the PR and test-value metrics also resolve a pull request URL, which needs the `resolve:subject` capability. No release up to v0.14.0 has it; the first release after v0.14.0 does. Preflight does not check `resolve`. On a plugin without `resolve:subject`, the host refuses the resolve, naming the missing support, and the step that called it fails. The build queue resolves a round's pull request URL when it records the round, to store the number; when the resolve fails, the round is still recorded without a number and the run notes why. Its next read of the item's pull request resolves the URL again and refuses there if it still cannot. Host metadata inspection uses trusted plugin discovery without credentials or a plugin operation; it does not change the forge protocol.
+Preflight requires every operation in [`REQUIRED_FORGE_OPERATIONS` in `.archon/workflows/sdlc/.shared/forge-check.ts`](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/.shared/forge-check.ts). The GitHub plugin advertises all of them from v0.13.0; earlier releases lack some and cannot run the pack. Preflight names missing operations and refuses before AI. The merge queue's gate and the PR and test-value metrics also resolve a pull request URL, which needs the `resolve:subject` capability. No release up to v0.14.0 has it; the first release after v0.14.0 does, and a source checkout or Docker always does. Preflight does not check `resolve`. On a plugin without `resolve:subject`, the host refuses the resolve, naming the missing support, and the step that called it fails. The build queue resolves a round's pull request URL when it records the round, to store the number; when the resolve fails, the round is still recorded without a number and the run notes why. Its next read of the item's pull request resolves the URL again and refuses there if it still cannot. Host metadata inspection uses trusted plugin discovery without credentials or a plugin operation; it does not change the forge protocol.
 
 The draft pull request and the canonical review comment are written in deterministic nodes — `publish-pr` and `publish-review` — that publish through the forge and fail unless the result reads back. In delivery, `publish-pr` also writes the description content a round prepared, as a marked section of the description, before that round's review. Two agents write through the forge: `update-pr-body` edits the description after review, and the `ci` agent marks the pull request ready and puts it back to draft on red. The correction agent pushes its commit with plain `git`. Whether a branch already has a pull request is decided by an open-head lookup, so a second one is never opened for it.
 
@@ -208,7 +251,7 @@ HTTPS remotes with explicit `:443` first use that exact claim; if it is absent, 
 
 The GitHub plugin supports explicitly mapped GitHub Enterprise hosts at `https://HOST/api/v3`. Set `GITHUB_URL` to a bare HTTP(S) origin, such as `http://github.example.com:8080` for the mapping above, to preserve its scheme and port for REST and GraphQL calls to that matching host and port. Other hosts keep HTTPS, and github.com always uses its canonical HTTPS endpoints. Invalid `GITHUB_URL` values fail before API dispatch.
 
-Discovery examines configured executables, `~/.archon/plugins`, configured `pluginDirs`, and PATH names beginning with `archon-forge-`. Duplicate identities or host claims fail loudly. Failed explicitly configured or host-selected plugins fail discovery. An unrelated automatically scanned candidate with a failed metadata handshake or file inspection (`stat` or POSIX executable `access` check) is reported on stderr and kept as unavailable evidence. Inspection diagnostics include the command, failed check, and original error. Healthy plugins still serve their claimed hosts. A broken link (`stat` ENOENT) keeps the metadata-handshake failure behavior. A file with no execute bits that fails `access` with EACCES is skipped with a notice and adds no unavailable evidence. Other access failures, including EACCES on a file with execute bits, remain unavailable evidence. When a scanned executable is also configured with the same command and arguments, its inspection failure is preserved and discovery fails as it does for other configured-plugin failures. If no valid plugin serves it and any candidate failed, resolution fails rather than reporting no forge. No forge is injected as an implicit fallback. No remote URL can select an arbitrary executable.
+Discovery examines configured executables, `~/.archon/plugins`, configured `pluginDirs`, and PATH names beginning with `archon-forge-`. In a source checkout or Docker, the GitHub plugin run from source takes the place of every scanned `archon-forge-github`; if it fails its metadata handshake, discovery fails rather than running an installed copy. Duplicate identities or host claims fail loudly. Failed explicitly configured or host-selected plugins fail discovery. An unrelated automatically scanned candidate with a failed metadata handshake or file inspection (`stat` or POSIX executable `access` check) is reported on stderr and kept as unavailable evidence. Inspection diagnostics include the command, failed check, and original error. Healthy plugins still serve their claimed hosts. A broken link (`stat` ENOENT) keeps the metadata-handshake failure behavior. A file with no execute bits that fails `access` with EACCES is skipped with a notice and adds no unavailable evidence. Other access failures, including EACCES on a file with execute bits, remain unavailable evidence. When a scanned executable is also configured with the same command and arguments, its inspection failure is preserved and discovery fails as it does for other configured-plugin failures. If no valid plugin serves it and any candidate failed, resolution fails rather than reporting no forge. No forge is injected as an implicit fallback. No remote URL can select an arbitrary executable.
 
 ## Executable protocol
 

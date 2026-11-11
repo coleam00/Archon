@@ -11,7 +11,7 @@ import { defaultPlatformPolicies } from '@archon/adapters/platform-policies';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { packCommand, type PackBindingsOptions } from './pack';
-import { timerTriggerConfigSchema } from './trigger';
+import { triggerFireConfigSchema } from './trigger';
 
 const DECLARATION = `bindings:
   sweep:
@@ -34,6 +34,10 @@ const DECLARATION = `bindings:
     schedule: { interval_seconds: 60 }
     inputs:
       sweep_binding: { binding: sweep }
+  follow-up:
+    workflow: fixture-sweep
+    resource: follow-up
+    overlap: queue
   opened:
     workflow: fixture-sweep
     resource: opened
@@ -118,7 +122,7 @@ describe('archon pack bindings', () => {
     const sweepFile = await fileFor('sweep');
     const sweepName = sweepFile.replace(/\.json$/, '');
     const sweepPath = join(out, sweepFile);
-    expect(timerTriggerConfigSchema.parse(await readJson(sweepFile))).toEqual({
+    expect(triggerFireConfigSchema.parse(await readJson(sweepFile))).toEqual({
       version: 1,
       sourceInstanceId: sweepName,
       binding: {
@@ -143,12 +147,26 @@ describe('archon pack bindings', () => {
       },
       schedule: { intervalSeconds: 600, runAtLoad: false },
     });
-    const after = timerTriggerConfigSchema.parse(await readJson(await fileFor('after')));
+    const after = triggerFireConfigSchema.parse(await readJson(await fileFor('after')));
     expect(after.binding.resource).toBe('fixture:host-1:after');
     expect(after.binding.launch.inputs).toEqual({ sweep_binding: sweepPath });
     const printed = logSpy.mock.calls.flat().join('\n');
     expect(printed).toContain(`archon trigger fire --config '${sweepPath}'`);
     expect(printed).toContain(`archon trigger schedule install --config '${sweepPath}'`);
+  });
+
+  it('writes a fire-only binding as a trigger fire file with no schedule', async () => {
+    await writePack(DECLARATION);
+    await packCommand('bindings', ['fixture'], options({ only: 'follow-up' }));
+
+    const file = await fileFor('follow-up');
+    const config = triggerFireConfigSchema.parse(await readJson(file));
+    expect(config.schedule).toBeUndefined();
+    expect(config.binding.resource).toBe('fixture:git.example.com/acme/widgets:follow-up');
+    const printed = logSpy.mock.calls.flat().join('\n');
+    expect(printed).toContain('Fire-only bindings');
+    expect(printed).toContain(`archon trigger fire --config '${join(out, file)}'`);
+    expect(printed).not.toContain('schedule install');
   });
 
   it('writes an event binding the GitHub source plugin accepts', async () => {
@@ -196,7 +214,7 @@ describe('archon pack bindings', () => {
     }
     const files = await readdir(out);
     for (const file of files) {
-      const config = timerTriggerConfigSchema.parse(await readJson(file));
+      const config = triggerFireConfigSchema.parse(await readJson(file));
       ids.add(config.binding.bindingId).add(config.sourceInstanceId);
     }
     expect(files.length).toBe(3);
@@ -234,7 +252,7 @@ describe('archon pack bindings', () => {
     expect(await readFile(join(out, sweep), 'utf8')).toBe('mine');
 
     await packCommand('bindings', ['fixture'], options({ only: 'sweep,after', force: true }));
-    expect(timerTriggerConfigSchema.safeParse(await readJson(sweep)).success).toBe(true);
+    expect(triggerFireConfigSchema.safeParse(await readJson(sweep)).success).toBe(true);
   });
 
   it.each([

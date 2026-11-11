@@ -921,7 +921,11 @@ a skipped owner keeps its cursor, or waits to fork until its first executed turn
 
 The source must be a command, prompt, or plain `loop:` node in an enclosing scope with
 a dependency path proving it completes before the group starts. Unordered, non-session,
-and loop-group sources are rejected. A source in the same body works differently; see
+and loop-group sources are rejected. The source may also be an `include:` node: the
+owner then continues the session of the node the included workflow returns (its
+`returns:` node, or its first sink), which must itself be a command, prompt, or plain
+`loop:` node. An include whose returned node produces no session is rejected at load,
+as is an include with `fan_out:`, which has no single session. A source in the same body works differently; see
 [Same-iteration sessions](#same-iteration-sessions). Nested groups get separate owner
 cursors for each enclosing invocation. Nested pauses retain every enclosing
 owner cursor and resume within the paused enclosing iteration before advancing.

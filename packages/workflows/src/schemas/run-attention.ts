@@ -20,6 +20,7 @@ import {
   attentionOptions,
   isWorkflowWaitContext,
   workflowWaitStepName,
+  type WorkflowAttentionWaitContext,
 } from './run-wait';
 import {
   attentionFormSchema,
@@ -110,6 +111,8 @@ const nonTerminalRunAttentionSchemas = [
     occurrence: z.string(),
     form: attentionFormSchema,
     options: z.array(attentionOptionSchema),
+    /** The option with id `other` is the reserved one: an answer choosing it needs text. */
+    other: z.literal(true).optional(),
     recommendation: attentionRecommendationSchema.optional(),
   }),
   z.object({
@@ -289,16 +292,7 @@ function pausedAttention(run: RunAttentionInput): RunAttention | null {
   if (isWorkflowWaitContext(wait) && wait.kind === 'attention') {
     // Answered: like a resolved gate, it waits on the machine, not on an answer.
     if (wait.answer !== undefined) return null;
-    return {
-      kind: 'attention',
-      runId: run.id,
-      nodeId: workflowWaitStepName(wait),
-      message: wait.message,
-      occurrence: attentionOccurrence(wait),
-      form: attentionForm(wait),
-      options: [...attentionOptions(wait)],
-      ...(wait.recommendation !== undefined ? { recommendation: wait.recommendation } : {}),
-    };
+    return openAttention(run.id, wait);
   }
 
   const raw = run.metadata?.approval;
@@ -315,6 +309,21 @@ function pausedAttention(run: RunAttentionInput): RunAttention | null {
         );
   }
   return gateAttention(run.id, raw);
+}
+
+/** The attention an unanswered attention wait asks for. */
+function openAttention(runId: string, wait: WorkflowAttentionWaitContext): RunAttention {
+  return {
+    kind: 'attention',
+    runId,
+    nodeId: workflowWaitStepName(wait),
+    message: wait.message,
+    occurrence: attentionOccurrence(wait),
+    form: attentionForm(wait),
+    options: [...attentionOptions(wait)],
+    ...(wait.other === true ? { other: true } : {}),
+    ...(wait.recommendation !== undefined ? { recommendation: wait.recommendation } : {}),
+  };
 }
 
 /** The attention a recorded gate asks for: none once resolved, else whom to answer. */

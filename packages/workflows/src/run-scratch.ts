@@ -21,16 +21,21 @@
  *   owner gone reclaims the container.
  *
  * Only the scratch child is removed; the rest of the artifacts directory is the
- * workflow's evidence and is never inspected.
+ * workflow's evidence and is never inspected. Git worktrees a node added under scratch are
+ * removed from the repository of the run's checkout first, so their registrations do not
+ * outlive their files. A container run's are not: its paths are the container's.
  */
 
+import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { rm } from 'node:fs/promises';
+import { realpath, rm } from 'node:fs/promises';
+import { execFileAsync, GitFailure } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { isPidProvablyGone } from '@archon/paths/process-owner';
 import {
   getRunArtifactsDirForRoot,
   getRunScratchDir,
+  isPathInside,
   resolveRunStorageRoot,
 } from '@archon/paths/archon-paths';
 import { isContainerRun, readExecutionOwner, type WorkflowRun } from './schemas/workflow-run';
@@ -41,7 +46,7 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-type ScratchRun = Pick<WorkflowRun, 'id' | 'output_root' | 'metadata'>;
+type ScratchRun = Pick<WorkflowRun, 'id' | 'output_root' | 'working_path' | 'metadata'>;
 
 /** Executions of each run in progress in this process; a run can re-enter itself. */
 const executingHere = new Map<string, number>();
@@ -96,7 +101,61 @@ export async function releaseRunScratch(run: ScratchRun): Promise<void> {
     getLog().debug({ workflowRunId: run.id }, 'run_scratch.no_storage_root');
     return;
   }
-  await removeRunScratch(getRunArtifactsDirForRoot(root, run.id), { workflowRunId: run.id });
+  const artifactsDir = getRunArtifactsDirForRoot(root, run.id);
+  if (run.working_path !== null) {
+    await deregisterScratchWorktrees(run.working_path, getRunScratchDir(artifactsDir), {
+      workflowRunId: run.id,
+    });
+  }
+  await removeRunScratch(artifactsDir, { workflowRunId: run.id });
+}
+
+/**
+ * Remove the git worktrees a node added under `scratchDir` from the repository of the
+ * run's checkout, so deleting their files leaves no registration behind in it. Only
+ * worktrees whose resolved path is `scratchDir` or inside it are touched: never the run's
+ * checkout or any other worktree. Each is removed by path; `git worktree prune` is never
+ * run, because it would also drop unrelated registrations whose checkouts are missing. A
+ * worktree of another repository is not found here; its files are still deleted with the
+ * rest of scratch.
+ */
+async function deregisterScratchWorktrees(
+  repoPath: string,
+  scratchDir: string,
+  logContext: Record<string, unknown>
+): Promise<void> {
+  if (!existsSync(scratchDir)) return;
+  // A failure below is logged and the caller still deletes the files. That is safe: a
+  // registration whose checkout is gone holds no work, Git reports it as prunable, and
+  // `git worktree prune` drops it. Keeping scratch instead would keep the run's bulk on
+  // disk for a leftover that costs nothing.
+  const warn = (path: string, error: unknown): void => {
+    getLog().warn({ ...logContext, err: error, path }, 'run_scratch.worktree_deregister_failed');
+  };
+  try {
+    // Git prints resolved paths, so the scratch directory is resolved to compare.
+    const root = await realpath(scratchDir);
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repoPath, 'worktree', 'list', '--porcelain', '-z'],
+      { timeout: 10000 }
+    );
+    for (const field of stdout.split('\0')) {
+      if (!field.startsWith('worktree ')) continue;
+      const path = field.slice('worktree '.length);
+      if (!isPathInside(root, path, { includeRoot: true })) continue;
+      // `--force`: a scratch worktree is throwaway, and uncommitted changes must not keep it.
+      await execFileAsync('git', ['-C', repoPath, 'worktree', 'remove', '--force', path], {
+        timeout: 30000,
+      }).catch((error: unknown) => {
+        warn(path, error);
+      });
+    }
+  } catch (error) {
+    // A run outside a git repository has no worktrees to deregister.
+    if (error instanceof GitFailure && error.kind === 'not_repository') return;
+    warn(scratchDir, error);
+  }
 }
 
 /**

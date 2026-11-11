@@ -26,13 +26,11 @@ function check(
     mirror?: boolean;
     remoteUrl?: string;
     capabilities?: readonly string[];
-    entry?: string;
   } = {}
 ) {
   const {
     mirror,
     remoteUrl,
-    entry = 'deliver',
     capabilities = REQUIRED_FORGE_OPERATIONS,
     ...rest
   } = options;
@@ -53,7 +51,7 @@ function check(
       cwd,
     });
   }
-  return runPackScript(`${entry}/scripts/forge-check`, {
+  return runPackScript('.shared/scripts/forge-check', {
     cwd,
     ...rest,
     inputs: { ARCHON_HOME, ...rest.inputs },

@@ -451,3 +451,135 @@ describe('persist_session capability gating', () => {
     });
   });
 });
+
+describe('a named session source that arrives through an include', () => {
+  const root = useTempWorkflowRoot();
+  const LOOP_BLOCK = `name: build-loop
+description: a build that returns its loop
+nodes:
+  - id: work
+    loop:
+      prompt: Build
+      until: DONE
+      max_iterations: 3
+`;
+  // `returns:` names the command, so the trailing script is not what a caller resumes.
+  const COMMAND_BLOCK = `name: build-command
+description: a build that returns its prompt node
+returns: work
+nodes:
+  - id: work
+    prompt: Build
+  - id: record
+    bash: echo recorded
+    depends_on: [work]
+`;
+  const SCRIPT_BLOCK = `name: build-script
+description: a build whose last node is a script
+nodes:
+  - id: work
+    prompt: Build
+  - id: record
+    bash: echo recorded
+    depends_on: [work]
+`;
+  const parent = (build: string, groupDependsOn = 'build'): string => `name: parent
+description: one owner corrects what the included build made
+nodes:
+${build}
+  - id: other
+    bash: echo other
+  - id: corrections
+    depends_on: [${groupDependsOn}]
+    loop_group:
+      until_bash: exit 0
+      max_iterations: 2
+      nodes:
+        - id: owner
+          prompt: Correct
+          context: { resume: build }
+`;
+  const include = (target: string): string => `  - id: build\n    include: ${target}`;
+
+  async function load(files: Record<string, string>) {
+    const result = await discoverFiles(root(), files);
+    const loaded = result.workflows.find(entry => entry.workflow.name === 'parent')?.workflow;
+    const group = (loaded?.nodes as DagNode[] | undefined)?.find(n => n.id === 'corrections');
+    return {
+      owner: group && isLoopGroupNode(group) ? (group.loop_group.nodes[0] as DagNode) : undefined,
+      error: result.errors.map(e => e.error).join('\n'),
+    };
+  }
+
+  it('resumes the loop an included workflow returns', async () => {
+    const { owner, error } = await load({
+      'block.yaml': LOOP_BLOCK,
+      'parent.yaml': parent(include('build-loop')),
+    });
+    expect(error).toBe('');
+    expect(owner?.context).toEqual({ resume: 'build__work' });
+  });
+
+  it('resumes the declared returns node of an included workflow', async () => {
+    const { owner, error } = await load({
+      'block.yaml': COMMAND_BLOCK,
+      'parent.yaml': parent(include('build-command')),
+    });
+    expect(error).toBe('');
+    expect(owner?.context).toEqual({ resume: 'build__work' });
+  });
+
+  it('resumes through a nested include', async () => {
+    const { owner, error } = await load({
+      'block.yaml': LOOP_BLOCK,
+      'middle.yaml': `name: middle\ndescription: wraps the build\nnodes:\n  - id: inner\n    include: build-loop\n`,
+      'parent.yaml': parent(include('middle')),
+    });
+    expect(error).toBe('');
+    expect(owner?.context).toEqual({ resume: 'build__inner__work' });
+  });
+
+  it('refuses an include whose returned node produces no session, naming both', async () => {
+    const { error } = await load({
+      'block.yaml': SCRIPT_BLOCK,
+      'parent.yaml': parent(include('build-script')),
+    });
+    expect(error).toContain(
+      "Node 'owner' context.resume source 'build' (include returns 'build__record') is not a session-producing command, prompt, or loop node"
+    );
+  });
+
+  it('refuses an include that fans out, which has no single session', async () => {
+    const { error } = await load({
+      'block.yaml': LOOP_BLOCK,
+      'parent.yaml': parent(
+        `  - id: list\n    bash: echo "[]"\n  - id: build\n    include: build-loop\n    depends_on: [list]\n    fan_out: { items: $list.output, as: item }`
+      ),
+    });
+    expect(error).toContain(
+      "context.resume source 'build' is not a session-producing command, prompt, or loop node"
+    );
+  });
+
+  it('refuses a consumer whose provider cannot fork a session', () => {
+    withRegistry(registerCommunityProviders, () => {
+      const result = parseWorkflow(
+        parent(include('build-loop')).replace('description:', 'provider: copilot\ndescription:'),
+        'parent.yaml'
+      );
+      expect(result.error?.error).toContain(
+        "Node 'owner' context.resume requires immutable session forks, but provider 'copilot' does not support sessionFork"
+      );
+    });
+  });
+
+  it('refuses an include the group does not depend on', async () => {
+    const { error } = await load({
+      'block.yaml': LOOP_BLOCK,
+      'parent.yaml': parent(include('build-loop'), 'other'),
+    });
+    expect(error).toContain(
+      "context.resume source 'build' is not an upstream dependency of the loop_group"
+    );
+  });
+});

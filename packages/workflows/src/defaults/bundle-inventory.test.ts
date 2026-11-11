@@ -4,7 +4,12 @@ import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { yamlCountError } from '../workflow-discovery/pack-layout';
-import { collectBundleSources, readBundleContent, readBundleIndex } from './bundle-inventory';
+import {
+  collectBundleSources,
+  readBundleContent,
+  readBundleIndex,
+  readBundleRecords,
+} from './bundle-inventory';
 
 const track = trackTempRoots();
 
@@ -73,6 +78,32 @@ test('the index selects exact runtime files, shared documents and metric views, 
   await expect(readBundleIndex(indexPath)).rejects.toThrow('Duplicate bundle pack');
   await writeFile(indexPath, JSON.stringify({ packs: ['../outside'] }));
   await expect(readBundleIndex(indexPath)).rejects.toThrow('Invalid bundle pack name');
+});
+
+test("a pack's shared script ships once and answers for each workflow without its own", async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-shared-script-')));
+  await writeTree(root, {
+    'workflows/kit/borrows/borrows.yaml': 'name: borrows\n',
+    'workflows/kit/owns/owns.yaml': 'name: owns\n',
+    'workflows/kit/owns/scripts/check.ts': 'console.log("own");\n',
+    'workflows/kit/.shared/scripts/check.ts': 'console.log("shared");\n',
+    'workflows/kit/.shared/helper.ts': 'export const value = 1;\n',
+  });
+  const { scriptPacks } = await readBundleRecords(
+    await collectBundleSources(join(root, 'workflows'), ['kit'])
+  );
+  expect(scriptPacks.kit?.scripts).toEqual({
+    '__archon_pack__bundled:kit:borrows::check': {
+      path: '.shared/scripts/check.ts',
+      runtime: 'bun',
+    },
+    '__archon_pack__bundled:kit:owns::check': { path: 'owns/scripts/check.ts', runtime: 'bun' },
+  });
+  expect(Object.keys(scriptPacks.kit?.files ?? {}).sort()).toEqual([
+    '.shared/helper.ts',
+    '.shared/scripts/check.ts',
+    'owns/scripts/check.ts',
+  ]);
 });
 
 async function writeTree(root: string, files: Record<string, string>): Promise<void> {

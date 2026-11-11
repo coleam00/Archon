@@ -93,15 +93,29 @@ export const workflowHelp: HelpGroup = {
           description: 'Count items per project or per label value',
         },
         {
+          spec: '--since <7d|24h|2w|ISO>',
+          description:
+            'With --count-by: count the attention waits opened since then, answered or\n' +
+            'still open, by the labels each opened with',
+        },
+        {
           spec: '--watch',
           description:
-            'Stream readable changes until stopped; the open set comes first\n' +
-            'A degraded warning means coverage may have gaps. Repair and replay:\n' +
+            'Stream what needs someone until stopped: open items first, then items that\n' +
+            'open, change or close, and runs that fail or lose their owner\n' +
+            'A degraded warning means coverage may have gaps:\n' +
             'https://archon.diy/getting-started/operate/#stream-the-queue',
         },
         {
+          spec: '--protocol',
+          description:
+            'With --watch: the full sync protocol for programs (ready, bookmark,\n' +
+            'every run end and resume)',
+        },
+        {
           spec: '--after <cursor>',
-          description: 'With --watch: replay readable events after a cursor; gaps may remain',
+          description:
+            'With --watch --protocol: replay readable events after a cursor; gaps may remain',
         },
       ],
     },
@@ -254,6 +268,23 @@ export const workflowHelp: HelpGroup = {
         {
           spec: '--out <file>',
           description: 'File to write, relative to the invoking directory',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
+    },
+    {
+      command: 'script',
+      subcommand: 'types',
+      spec: 'script types',
+      description:
+        "Print the TypeScript declaration of the archon:script module a workflow\nscript imports, for an editor or tsc over a pack's scripts",
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write instead of stdout, relative to the invoking directory',
         },
         {
           spec: '--check',

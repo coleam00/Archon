@@ -116,12 +116,13 @@ interface Watcher {
   stop(): Promise<void>;
 }
 
-/** Start `workflow attention --watch --json` and parse its stdout line by line. */
+/** Start `workflow attention --watch --protocol --json` and parse its stdout line by line. */
 function startWatch(fixture: Fixture, extra: string[] = []): Watcher {
   const child = spawnCli(fixture, [
     'workflow',
     'attention',
     '--watch',
+    '--protocol',
     '--json',
     '--all',
     ...extra,
@@ -231,7 +232,7 @@ test('the text stream reports a failed run resuming', async () => {
       '  - id: warmup\n    bash: "echo ready"\n' +
       '  - id: fail\n    depends_on: [warmup]\n    bash: "exit 1"\n',
   });
-  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--all']);
+  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--protocol', '--all']);
   watchers.add(child);
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
@@ -275,7 +276,7 @@ test('the text stream reports a failed run resuming', async () => {
 
 test('the text stream exits 0 at its first line after the reader closes stdout', async () => {
   const fixture = makeFixture({ 'watch-ask': ASK });
-  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--all']);
+  const child = spawnCli(fixture, ['workflow', 'attention', '--watch', '--protocol', '--all']);
   watchers.add(child);
   const reader = child.stdout.getReader();
   const decoder = new TextDecoder();
@@ -298,6 +299,7 @@ test('a cursor this install did not issue exits 4 with a cursor_invalid line', a
     'workflow',
     'attention',
     '--watch',
+    '--protocol',
     '--json',
     '--after',
     'file:1.0',

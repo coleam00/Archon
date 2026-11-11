@@ -1,17 +1,19 @@
 /**
  * The `bindings:` block of a pack declaration, validated when the pack loads.
  *
- * Each binding is a timer (`schedule:`) or an event (`event:`) binding. The checks that
- * span bindings run here, where all are visible: a sibling reference names a declared
- * timer binding, an event field is read only by an event binding, and bindings sharing a
- * resource agree on its capacity, which admission would otherwise refuse at the first
- * start.
+ * Each binding is a timer (`schedule:`), an event (`event:`) or, with neither, a fire-only
+ * binding. The checks that span bindings run here, where all are visible: a sibling
+ * reference names a declared binding that is written as a file `trigger fire` reads (a
+ * timer or fire-only binding), an event field is read only by an event binding, and
+ * bindings sharing a resource agree on its capacity, which admission would otherwise
+ * refuse at the first start.
  */
 import type { Fail } from './pack-settings';
 import {
-  isPackTimerBinding,
+  packBindingKind,
   packBindingNameSchema,
   packEventBindingSchema,
+  packFireBindingSchema,
   packTimerBindingSchema,
   type PackBinding,
 } from './schemas/pack-bindings';
@@ -21,10 +23,17 @@ function parseBinding(id: string, raw: unknown, fail: Fail): PackBinding {
     return fail(`binding '${id}' must be a mapping`);
   }
   const timer = 'schedule' in raw;
-  if (timer === 'event' in raw) {
-    return fail(`binding '${id}' must set exactly one of 'schedule' (a timer) or 'event'`);
+  const event = 'event' in raw;
+  if (timer && event) {
+    return fail(`binding '${id}' must not set both 'schedule' (a timer) and 'event'`);
   }
-  const parsed = (timer ? packTimerBindingSchema : packEventBindingSchema).safeParse(raw);
+  // The key's presence picks the schema, so `schedule:` with no value fails as a timer.
+  const schema = timer
+    ? packTimerBindingSchema
+    : event
+      ? packEventBindingSchema
+      : packFireBindingSchema;
+  const parsed = schema.safeParse(raw);
   if (parsed.success) return parsed.data;
   const issue = parsed.error.issues[0];
   const where = issue?.path.length ? ` at '${issue.path.join('.')}'` : '';
@@ -61,17 +70,19 @@ function checkInputs(
   for (const [name, input] of Object.entries(binding.inputs)) {
     if (typeof input === 'string' || 'repo' in input) continue;
     if ('event' in input) {
-      if (isPackTimerBinding(binding)) {
-        fail(`binding '${id}' input '${name}' reads an event field, but a timer has no event`);
+      if (packBindingKind(binding) !== 'event') {
+        fail(
+          `binding '${id}' input '${name}' reads an event field, but only an event binding has an event`
+        );
       }
       continue;
     }
     const sibling = Object.hasOwn(bindings, input.binding) ? bindings[input.binding] : undefined;
     if (sibling === undefined) {
       fail(`binding '${id}' input '${name}' names unknown binding '${input.binding}'`);
-    } else if (!isPackTimerBinding(sibling)) {
+    } else if (packBindingKind(sibling) === 'event') {
       fail(
-        `binding '${id}' input '${name}' names event binding '${input.binding}'; only a timer binding is a file a run can fire`
+        `binding '${id}' input '${name}' names event binding '${input.binding}'; only a timer or fire-only binding is a file a run can fire`
       );
     }
   }
