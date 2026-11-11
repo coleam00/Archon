@@ -170,7 +170,7 @@ function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; 
     case 'idle':
       return {
         decision: path,
-        ...idleOutcome('No item waits for the build queue.', stuckItems(workflowRunId())),
+        ...idleOutcome('No item waits for the build queue.', stuckItems(workflowRunId(), 'build')),
       };
     case 'order':
       return { decision: path, summary: input('order'), healthy: true };

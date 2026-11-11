@@ -252,7 +252,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       merged: [],
-      ...idleOutcome('No pull request waits for the merge queue.', stuckItems(workflowRunId())),
+      ...idleOutcome('No pull request waits for the merge queue.', stuckItems(workflowRunId(), 'merge')),
       ...NO_ASK,
     });
     return;

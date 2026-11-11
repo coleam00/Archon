@@ -161,7 +161,7 @@ function main(): void {
   const path = input('path').trim();
   const runId = workflowRunId();
   if (path === 'idle') {
-    emit({ path, item: null, kind: null, issues: [], adopted: [], ...idleOutcome('No item waits for the split queue.', stuckItems(runId)) });
+    emit({ path, item: null, kind: null, issues: [], adopted: [], ...idleOutcome('No item waits for the split queue.', stuckItems(runId, 'split')) });
     return;
   }
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);

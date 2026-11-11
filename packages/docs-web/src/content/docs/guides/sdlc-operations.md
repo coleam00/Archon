@@ -82,7 +82,7 @@ Each issue has a work item: the state document `work/<number>` in the project's 
 
 Every queue claims an item with a conditional write, in one order: most urgent, then most important, then smallest, then oldest. An untriaged item sorts after triaged ones, oldest first.
 
-A claim takes the work item's engine lease. The next pickup releases a claim whose lease the engine reports ended: its run completed, was cancelled or abandoned, or was deleted. A claim whose run is pending, running, paused or failed is never released, because a failed run can resume. Abandon the run to free its claim. There is no age timeout. A queue run that claims nothing while a stored item is stuck, because its document does not parse or its claim's run holds no engine lease, names the item and completes with a failed outcome, so the attention watch shows it.
+A claim takes the work item's engine lease. The next pickup releases a claim whose lease the engine reports ended: its run completed, was cancelled or abandoned, or was deleted. A claim whose run is pending, running, paused or failed is never released, because a failed run can resume. Abandon the run to free its claim. There is no age timeout. A queue run that claims nothing while a stored item is stuck, because its document does not parse or its claim's run holds no engine lease, names the item and completes with a failed outcome, so the attention watch shows it. Each stuck item is reported once: the report is recorded in the item's history, and later idle runs leave the item out until something else changes it. A document that does not parse cannot carry that record, so every idle run reports it.
 
 A claim that carries no lease of its run is held, and an idle pass names it. Abandoning its run does not free it. Clear it by writing the document back with `claim` set to `null`, through a conditional `archon state put work/<number> --if-revision <n>`.
 
@@ -153,7 +153,7 @@ The answer is one declared choice, or `other`, which every item offers: its text
 - A `ready` choice hands the pull request to the merge queue as it stands, as after a maintainer finished it by hand. The merge gate still checks it. An item with no pull request refuses the answer.
 - A `park` choice stops working the item until a re-triage.
 
-A run cancelled while it waits leaves the item asking, and only a re-triage starts it over. The same holds for a run abandoned after the wait refused its question. Until then, a queue run that claims nothing names the item and completes with a failed outcome.
+A run cancelled while it waits leaves the item asking, and only a re-triage starts it over. The same holds for a run abandoned after the wait refused its question. Until then, one queue run that claims nothing names the item and completes with a failed outcome.
 
 ### What it records
 
