@@ -155,10 +155,15 @@ first open child, so list the queue to find them all, and answer each child by i
 `runId`. Answers can arrive in any order; the parent stays paused until every child
 finishes.
 
-`workflow wait` follows one run whose id you hold. To follow every run in scope,
+`workflow wait` follows one run whose id you hold. If the shell that called it times
+out, run it again: the run is unaffected. Never cancel or abandon a run to unstick a
+wait.
+
+To follow every run in scope,
 including runs started later by triggers, schedules or other sessions, run
 `archon workflow attention --watch --json --all` as a background task. It prints a
-JSON line only when someone has to act: each `attention` line is an item that needs
+JSON line only when someone has to act. That is the default: without `--protocol`
+there are no heartbeat or sync lines, so every line is worth a turn. Each `attention` line is an item that needs
 attention, carrying the same item the list returns, so treat it as a wake and answer by
 its `runId` and `occurrence`. `resolved` means an item you were sent no longer needs
 you, and `terminal` means a run failed or completed with `outcome: "failed"`. The items already open come first, so a
