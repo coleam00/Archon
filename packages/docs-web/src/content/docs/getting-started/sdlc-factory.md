@@ -1,13 +1,13 @@
 ---
-title: Set up the SDLC factory
-description: Take a GitHub repository from nothing to an issue built by the build queue and merged by the merge queue, and know everything the pack writes.
+title: The SDLC factory
+description: What the bundled sdlc pack's factory is, where its setup guide lives, everything it writes and how to stop it.
 category: getting-started
 audience: [user]
 sidebar:
   order: 4
 ---
 
-The bundled `sdlc` pack is a software factory made of five queues. You write an issue; intake triages it, the split queue files the issues a large item splits into when it can't be built as one, the build queue works it to a reviewed pull request, and the merge queue merges it. When a run reaches a decision it can't make, it pauses as one attention item for you to answer. This page sets that up on one GitHub repository, runs it by hand once, and then shows how to let it run on its own.
+The bundled `sdlc` pack is a software factory made of five queues. You write an issue; intake triages it, the split queue files the issues a large item splits into when it can't be built as one, the build queue works it to a reviewed pull request, and the merge queue merges it. When a run reaches a decision it can't make, it pauses as one attention item for you to answer. This page says what the factory is, what it writes, and how to stop it. The setup steps are in the pack's README.
 
 | Queue | What it does |
 |---|---|
@@ -19,157 +19,13 @@ The bundled `sdlc` pack is a software factory made of five queues. You write an 
 
 Every workflow in the pack is described in [SDLC pack workflows](/reference/sdlc-workflows/).
 
-## Before you start
+## Set it up
 
-You need:
+The pack's README owns the setup: [Set up the pack](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack). It is an ordered guide with the command for each step, the check that proves it and the decisions that are yours, written so you can point your coding agent at it. It covers the forge plugin and credential, the maintainer list, the pack's settings, a first run of each queue by hand, answering what the factory asks, and the trigger bindings that let it run on its own.
 
-- Archon with at least one provider, from the [Quickstart](/getting-started/quick-start/).
-- A local clone of a GitHub repository you can push to.
-- The forge plugin: `archon plugin add coleam00/Archon/plugins/forge-github`.
-- A GitHub credential for the account the pack will act as: `gh auth login`, or `GH_TOKEN` or `GITHUB_TOKEN` in Archon's env file. The plugin uses it, and every label, comment, push and merge is made as that account.
-- CI that reports checks on pull requests. The merge queue merges only when the checks at the pull request's head are green, so a repository with no checks never merges.
+Before the first run, write an issue the factory can build. The issue body is the contract every round is measured against: state the problem, why it is worth solving, why now, the desired outcome, the invariants, and acceptance; see [The input is the contract](/getting-started/quick-start/#the-input-is-the-contract). The build queue asks you for a missing element instead of guessing it.
 
-## 1. Check the forge
-
-```bash
-archon workflow run archon-forge-check     # from the clone
-```
-
-The pack talks to the forge only through `archon forge` and an installed [forge plugin](/reference/forge/); for GitHub, `archon plugin add coleam00/Archon/plugins/forge-github`. The check proves the plugin offers every operation the delivery workflows' scripts call and can read the repository the clone's remotes name. It does not check `checks.logs` or `workitem.search`, which only agents call; a plugin without one refuses that call and the agent reports it. It proves read access only; the first write proves the rest. It does not check the merge queue's operations: the merge queue checks those itself when it starts and refuses a plugin without them before it claims any work.
-
-## 2. Name your maintainers
-
-Create `.archon/sdlc/policy/maintainers.json` and commit it to the default branch. The queues read it from the default branch's head on the remote, so a local copy does nothing.
-
-```json
-["your-login", "teammate"]
-```
-
-Each entry is a GitHub login. With no file, every author is outside. The list decides two things:
-
-- **Whose issues get triaged.** An issue from anyone else gets `archon-needs-maintainer` and starts no agent until a listed maintainer adds `archon-triage` or a route label to it.
-- **Whose review verdicts count.** The merge queue trusts only a review comment written by a listed login. **The login that authors the pack's published review comment must be on the list on the default branch**, or that verdict is ignored. This is the forge plugin's credential identity. Check the published comment's author when choosing which login to list.
-
-## 3. Adjust policy and models (optional)
-
-The queues decide clear cases on their own and ask about unclear ones. The pack's default policy for each decision lives in [`.shared/policy/`](https://github.com/coleam00/Archon/tree/dev/.archon/workflows/sdlc/.shared/policy):
-
-| File | Decides |
-|---|---|
-| `triage.md` | What triage accepts, and what may close without a person |
-| `build.md` | What the build queue continues on its own and what it asks |
-| `merge.md` | Which pull requests merge on their own: by default small fixes, small features, tests and docs. Schemas, auth, large or partial work are asked |
-| `rulings.md` | Answers your maintainers already gave, read before plan or review stops to ask |
-| `discoveries.md` | When a discovery is filed, tracked or dropped |
-
-To change one, put only the lines to add or override in `.archon/sdlc/policy/<file>`. The agent reads the default first, then your file, and your line wins where they conflict. A policy file can be a pointer to documents the project already has.
-
-Each stage picks its model from a concern alias, falling back to the tier it has always used. With nothing set, you get the tier models.
-
-| Alias | Nodes | Falls back to |
-|---|---|---|
-| `@triage` | triage | `medium` |
-| `@planner` | plan | `large` |
-| `@investigator` | investigate | `medium` |
-| `@implementer` | implement | `large` |
-| `@reviewer` | every review agent and simplify | each node's tier |
-| `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier |
-
-```bash
-archon ai alias set @reviewer codex gpt-6.1-sol                                   # every run
-archon workflow run archon-build-queue --model @reviewer=codex/gpt-6.1-sol ...    # one run
-```
-
-## 4. Write an issue the factory can build
-
-The issue body is the contract every round is measured against. State the problem, why it is worth solving, why now, the desired outcome, the invariants, and acceptance; see [The input is the contract](/getting-started/quick-start/#the-input-is-the-contract). The build queue asks you for a missing element instead of guessing it.
-
-## 5. Run the queues by hand
-
-Run each queue once yourself before you automate anything, from your repository's checkout. Replace `42` with the issue number. Each queue works on the repository the checkout's `origin` remote (or its only remote) names; when `origin` is a fork, add `--input repo_host=github.com --input repo_path=<owner>/<repo>` to choose the repository.
-
-Triage the issue:
-
-```bash
-archon workflow run archon-intake --input number=42
-```
-
-Intake labels the issue with its route (`archon-ready`, `archon-plan`, `archon-investigate` or `archon-split`), its type and its size, creating any pack label the repository lacks, and records a work item. Read the item with `archon state get work/42`.
-
-Build it:
-
-```bash
-archon workflow run archon-build-queue --input number=42 --detach
-```
-
-You can also say what to build instead of giving a number, such as `archon workflow run archon-build-queue "build the retry fix" --detach`. An agent finds the issue you mean and claims it, asks you to choose when several match, or files new work as an issue and hands it to intake, which triages it before any queue builds it.
-
-A round is `archon-ship` without its triage, which intake already did: investigate or plan if the route needs it, implement, open a draft pull request, review it, fix the findings, wait for CI and mark it ready. When a round ends on something the contract already answers, such as a review finding or red CI the change caused, the queue starts the next round at once as a new detached run, unless the fix would add machinery the issue does not ask for; then it asks you first. A pull request that changed nothing material since its last review, no commits or only cosmetic edits, never gets another round. The item is done when the pull request's latest review says Ready at its head (when only a check no round can run is left, such as a deferred operator check, the queue asks you for it once at that head), or when a maintainer answers `ready`, for example after finishing the pull request by hand; the merge gate still checks the verdict and CI either way. Follow it with `archon workflow runs` and answer anything it asks (step 6).
-
-Merge it:
-
-```bash
-archon workflow run archon-merge-queue
-```
-
-One sweep agent decides every pull request the build queue made ready. It never pushes, never builds or tests, and never waits for CI. Each merge goes through a gate script that reads the pull request fresh and refuses unless:
-
-- the trusted review verdict says Ready for the current head (a push after the review voids it);
-- CI is green at that head;
-- the default branch's CI is not red (pending does not hold a merge);
-- the head contains the default branch, or GitHub reports it merges cleanly.
-
-The gate merges pinned to that head through the forge's `pr.merge` (squash by default; `--input merge_method=merge` for a merge commit). A conflict, a stale verdict, a review thread that raises a defect, or red the change caused goes back to the build queue with a brief. Red CI in code the pull request doesn't touch gets one rerun of its failed jobs. If the default branch is red, nothing merges, and the queue raises one `merge: base` item whose only choice is `hold`; the forge can't rerun a commit with no pull request, so a flaky default branch is rerun by hand. A pull request it fails to read twice in a row is parked until the build queue readies it again.
-
-Drain what the runs noticed outside their task:
-
-```bash
-archon workflow run archon-discoveries
-```
-
-## 6. Answer what the factory asks
-
-```bash
-archon workflow attention --all --watch
-```
-
-Each item says what is being decided, why it matters, the agent's recommendation with its evidence and confidence, the choices and what each does, and what happens if nobody answers. Its label names the queue and decision, such as `build: scope` or `merge: pr`. Answer with the choice and a reason:
-
-```bash
-archon workflow respond <run-id> <choice> "why"
-```
-
-The reason matters. A build or merge queue answer is written into the issue body as a dated "Current scope" section, and later rounds work from it. Every build item and merge pull-request item offers `other`: its text says what to do instead and becomes the ruling. `park` stops the queue working that item. [Operate runs](/getting-started/operate/) covers answering, resuming and stopping runs in full.
-
-## 7. Let it run on its own
-
-The pack installs no trigger. Nothing starts until you start it, by hand as above or with a binding you add. A binding names the workflow, its inputs, the Archon user it runs as and how starts may overlap. The pack declares the bindings it recommends, and one command writes them as files for your repository:
-
-```bash
-archon trigger whoami   # prints the runAsUserId
-archon pack bindings sdlc \
-  --repo github.com/acme/widgets \
-  --host build-host-1 \
-  --run-as <runAsUserId> \
-  --cwd ~/code/widgets \
-  --out ~/.archon/triggers
-```
-
-`--host` is a name you choose for this machine, and `--cwd` is the clone the runs launch in. The command writes one file per binding and prints what registers each. It registers and schedules nothing, and `--only build-queue,merge-queue,discoveries` writes a subset. See [`pack bindings`](/reference/cli/#pack-bindings).
-
-- **Build, split, merge and discoveries** run on a schedule. Fire each written file once, then install it. The command prints both lines for every file. Set `BINDING` to the path it printed for each one; below it is the `build-queue` file for `github.com/acme/widgets`:
-
-  ```bash
-  BINDING=~/.archon/triggers/sdlc-acme-widgets-build-queue-0297fdfa94d5.json
-  archon trigger fire --config "$BINDING"
-  archon trigger schedule install --config "$BINDING"   # macOS
-  ```
-
-  On Linux or Windows, run the same `trigger fire` command from cron, systemd or Task Scheduler.
-  If you already schedule a queue another way, remove that schedule first, or both start runs for the same queue.
-- **Intake** starts on GitHub issue and label events, through the GitHub source plugin on a running server. The two `intake-*` files are entries for that plugin's `bindings` array ([Configure GitHub event starts](/guides/workflow-triggers/#configure-github-event-starts)). It needs a webhook, so it is the last piece most people add. Until then, run intake by hand for each new issue.
-
-The pack's README says what each binding does and why it has its capacity and overlap: [Bindings](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#bindings). [Workflow triggers](/guides/workflow-triggers/) covers schedules, webhooks, capacity and overlap.
+Once it runs, [Operate the SDLC factory](/guides/sdlc-operations/) says how each queue behaves, and [Operate runs](/getting-started/operate/) covers answering, resuming and stopping runs.
 
 ## What the pack writes
 
@@ -183,7 +39,7 @@ Everything below is written as the `gh` account, to the repository the queues na
 | New issues | Files an issue for a verified discovery, marked so a rerun never files it twice. Adds one evidence comment to an open issue it tracks | Discoveries |
 | Branches | Pushes `build/<issue>-<slug>-<run>`, or pushes onto an open pull request's existing head. Never force-pushes or rebases | Build queue rounds |
 | Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place, replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met and no dated ruling on the issue keeps it open. Before merging, the merge queue rechecks the keyword against the review's stamped coverage and the issue's latest ruling, and corrects it in either direction | Build queue rounds; merge queue |
-| CI | Reruns a pull request's failed jobs once, when the red is outside the change. A red default branch is never rerun: it is raised as a `merge: base` item | Build queue rounds, merge queue |
+| CI | Reruns a pull request's failed jobs once, when the red is outside the change. A red default branch is never rerun: it is raised as a `merge: base` item | Merge queue |
 | Merges | Merges through the gate, pinned to the reviewed head. Deletes no branch | Merge queue |
 | Worktrees and branches | If you schedule it, removes each merged worktree with its local branch, including a branch Archon adopted. Remote branches stay, with a warning | `archon-worktree-cleanup` |
 
@@ -192,5 +48,5 @@ On your machine it keeps state documents (`archon state list --prefix work/`), w
 ## Pause or stop it
 
 - **Stop new runs.** Remove the schedules (`archon trigger schedule remove --config <file>`, or the cron or systemd entry) and the intake webhook bindings. Removing a schedule does not cancel work already accepted.
-- **Stop runs in flight.** A build round that continues starts its next round as a new detached run, and answering `merge` on a merge item starts a sweep at once, so removing schedules alone does not stop a chain. List the runs with `archon workflow status --all` and `archon workflow cancel` or `archon workflow abandon` them.
-- **Stop one item.** Answer its attention item with `park`. A paused run waiting on you does nothing until you answer.
+- **Stop runs in flight.** Runs start follow-ups by firing the binding files directly: a build round that continues fires the next round, a merge-queue return fires a build round, answering `merge` fires a sweep, and a sweep that merged fires a discoveries pass. A run that sends an issue back to intake launches that intake run itself. So removing schedules alone does not stop a chain. List the runs with `archon workflow status --all` and `archon workflow cancel` or `archon workflow abandon` them.
+- **Stop one item.** Answer its attention item with `park`, where the item offers it. A paused run waiting on you does nothing until you answer.

@@ -20,7 +20,7 @@ description: |
   Use when: an operator wants current PR counts, merge rate and review rounds
   (`archon metrics sdlc.pr_merge_rate`), or a schedule binding the operator
   installed starts it
-  (see the SDLC pack README, "Metrics"). The pack installs no binding.
+  (see https://archon.diy/guides/sdlc-metrics/). The pack installs no binding.
   NOT for: pull requests opened by hand. It needs a forge plugin whose pr.view
   reports pull request timestamps, and refuses without them.
 

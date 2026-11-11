@@ -1,5 +1,5 @@
 # The SDLC pack's settings. A project sets them in `.archon/packs/sdlc.yaml`, under
-# `settings:`; the README's "Pack settings" section says what each one does.
+# `settings:`; the README's setup guide says what each one does.
 inputs:
   ci:
     type: enum
@@ -11,8 +11,9 @@ inputs:
       recorded at that same head, for a project with no CI.
 
 # The trigger bindings the pack recommends. Nothing here starts a run: an operator writes
-# them for one repository with `archon pack bindings sdlc` and registers each file. The
-# README's section on each queue says why its capacity and overlap are what they are.
+# them for one repository with `archon pack bindings sdlc` and registers each file.
+# The README's setup guide says how. https://archon.diy/guides/sdlc-operations/ says,
+# queue by queue, why each capacity and overlap is what it is.
 bindings:
   intake-issues:
     workflow: archon-intake

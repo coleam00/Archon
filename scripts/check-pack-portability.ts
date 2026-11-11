@@ -5,7 +5,7 @@ import { resolve } from 'node:path';
 const REPO_ROOT = resolve(import.meta.dir, '..');
 
 /** The bundled SDLC pack: every file under it must work for any project. */
-const PACK_ROOT = '.archon/workflows/sdlc';
+export const PACK_ROOT = '.archon/workflows/sdlc';
 
 /**
  * References that name this repository's owners, trackers or vendors. A project
@@ -19,10 +19,15 @@ const LEAKS: readonly { readonly pattern: RegExp; readonly what: string }[] = [
 
 /**
  * The one exception: the maintained GitHub forge plugin's install id names the
- * repository that publishes it, which is the same for every project.
+ * repository that publishes it, which is the same for every project. It may appear
+ * where the pack defines it, and as the whole install command in the setup guide.
  */
 const ALLOWED: readonly { readonly file: string; readonly line: RegExp }[] = [
   { file: `${PACK_ROOT}/.shared/forge.ts`, line: /^export const GITHUB_FORGE_PLUGIN = / },
+  {
+    file: `${PACK_ROOT}/README.md`,
+    line: /^archon plugin add coleam00\/Archon\/plugins\/forge-github$/,
+  },
 ];
 
 export interface Leak {

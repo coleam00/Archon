@@ -94,4 +94,4 @@ Before declaring, re-read the report: confirm every cited location exists in the
 
 ## Docker verification builds
 
-For disposable Docker verification builds, follow the [Docker verification guidance](../../README.md#docker-verification).
+For disposable Docker verification builds, follow the [Docker verification guidance](https://archon.diy/reference/variables/#disposable-docker-verification-images).

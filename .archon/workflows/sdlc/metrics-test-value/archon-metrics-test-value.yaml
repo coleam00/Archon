@@ -11,7 +11,7 @@ description: |
 
   Use when: an operator wants to see whether factory pull requests carry tests
   that protect nothing, or a schedule binding the operator installed starts it
-  (see the SDLC pack README, "Metrics"). The pack installs no binding.
+  (see https://archon.diy/guides/sdlc-metrics/#test-value). The pack installs no binding.
   NOT for: reviewing an open pull request's tests (review).
 
 # It reads the state store and the forge, not a checkout, so it runs beside any
