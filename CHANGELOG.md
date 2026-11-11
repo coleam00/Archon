@@ -38,7 +38,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The SDLC pack's forge preflights (delivery, the merge queue and the test-value metric) ask `archon forge check` for the plugin, its operations and its credential instead of comparing plugin metadata themselves. Delivery still makes one authenticated read. A missing operation is refused in the host's words (`plugin <name> does not support <operations>`).
 - The SDLC pack's queue questions use the wait's own `other` option. On build and pull-request items it does what the pack's own `other` choice did, and the answer must now carry text; a `merge: base` item now shows it too, and an `other` answer there holds like `hold`.
-- The SDLC pack no longer prunes review and simplify scratch worktrees in a workflow node. A reviewer removes its own worktree when it finishes, and the engine removes what is left when the run ends.
 
 ## [0.14.0] - 2026-11-07
 

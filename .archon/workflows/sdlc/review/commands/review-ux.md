@@ -2,7 +2,7 @@
 
 Use this change as its operator would, and judge whether it is clear, responsive and honest. Other lenses judge whether the code is correct; you judge what a person meets on the screen. Read `$ARTIFACTS_DIR/review/scope.md` first for the change and its work order, and judge the change against what the work order says its user needs.
 
-Start the app from a scratch worktree under this run (`git worktree add --detach "$(mkdir -p "$ARTIFACTS_DIR/.archon/scratch/ux" && mktemp -d "$ARTIFACTS_DIR/.archon/scratch/ux/XXXXXX")" HEAD`; remove it with `git worktree remove --force` when you finish; install its dependencies with the project's own package manager in locked mode) and drive it with playwright-cli: `$playwright-cli` where skills are invoked that way, otherwise the `playwright-cli` command and its `SKILL.md` in the project's or your skills directory. Seed the data a page needs through the app's own API or CLI. Look at it the way its user would, at the sizes they would use it.
+Start the app from a scratch worktree under this run (`git worktree add --detach "$(mkdir -p "$ARTIFACTS_DIR/.archon/scratch/ux" && mktemp -d "$ARTIFACTS_DIR/.archon/scratch/ux/XXXXXX")" HEAD`; the workflow removes it; install its dependencies with the project's own package manager in locked mode) and drive it with playwright-cli: `$playwright-cli` where skills are invoked that way, otherwise the `playwright-cli` command and its `SKILL.md` in the project's or your skills directory. Seed the data a page needs through the app's own API or CLI. Look at it the way its user would, at the sizes they would use it.
 
 What to judge:
 
