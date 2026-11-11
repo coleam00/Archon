@@ -21,8 +21,10 @@
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */
 
+import { join } from 'node:path';
 import { artifactsDir, emit, input } from 'archon:script';
 import { nullableJson } from '../../.shared/inputs.ts';
+import { PUBLISHED_REPORT_FILE } from '../../.shared/review-item.ts';
 
 /** Why a round ended. */
 type Ended =
@@ -86,7 +88,7 @@ emit({
   pr_url: prUrl === 'null' ? input('previous_pr_url') : prUrl,
   // The next round's review continues from the last published report, if any.
   prior_report:
-    reviewReady === 'null' ? input('prior_report') : `${artifactsDir()}/review/report.md`,
+    reviewReady === 'null' ? input('prior_report') : join(artifactsDir(), PUBLISHED_REPORT_FILE),
   // The latest review's open contract items; null until a review has judged coverage.
   contract_left: contractLeft ?? nullableJson(input('previous_contract_left')),
   summary: summary ?? '',
