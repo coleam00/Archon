@@ -8,18 +8,25 @@ const WORKFLOW = readFileSync(resolve(import.meta.dir, '../.github/workflows/tes
 const GATED = jobGates(WORKFLOW);
 
 /**
- * The needs context of a round: `changes` decided `runTests`, and the workspace decision
- * follows it unless given, every other job as given.
+ * The needs context of a round: `changes` decided `runTests`, and every other decision follows
+ * it unless the workspace or push-only decision is given, every other job as given.
  */
 function needs(
   runTests: string,
   results: Record<string, string>,
-  runWorkspaceTests = runTests
+  runWorkspaceTests = runTests,
+  runPushOnly = runTests
 ): Record<string, NeedResult> {
   return {
     changes: {
       result: 'success',
-      outputs: { 'run-tests': runTests, 'run-workspace-tests': runWorkspaceTests },
+      outputs: {
+        'run-tests': runTests,
+        'run-workspace-tests': runWorkspaceTests,
+        'run-full-matrix': runPushOnly,
+        'run-docker-build': runPushOnly,
+        'run-serve-binary': runPushOnly,
+      },
     },
     ...Object.fromEntries(Object.entries(results).map(([job, result]) => [job, { result }])),
   };
@@ -28,6 +35,7 @@ function needs(
 /** Every gated job skipped, as on a prose-only pull request or a push a pull request run proved. */
 const decisionSkips = Object.fromEntries([...GATED.keys()].map(job => [job, 'skipped']));
 const ALWAYS = ['static'];
+const PUSH_ONLY_OUTPUTS = ['run-full-matrix', 'run-docker-build', 'run-serve-binary'];
 const alwaysSuccess = Object.fromEntries(ALWAYS.map(job => [job, 'success']));
 const allSuccess = {
   ...Object.fromEntries([...GATED.keys()].map(job => [job, 'success'])),
@@ -67,6 +75,17 @@ describe('Test Suite aggregate outcome', () => {
     expect(testSuiteFailures(needs('true', results, 'false'), GATED)).toEqual([]);
   });
 
+  test('passes a pull request that leaves the push-only jobs to the push', () => {
+    const pushOnly = [...GATED].flatMap(([job, output]) =>
+      PUSH_ONLY_OUTPUTS.includes(output) ? [job] : []
+    );
+    const results = {
+      ...allSuccess,
+      ...Object.fromEntries(pushOnly.map(job => [job, 'skipped'])),
+    };
+    expect(testSuiteFailures(needs('true', results, 'true', 'false'), GATED)).toEqual([]);
+  });
+
   test('fails the workspace shards skipped when their decision said to run them', () => {
     const results = { ...allSuccess, test: 'skipped' };
     expect(testSuiteFailures(needs('true', results, 'true'), GATED)).toEqual([
@@ -96,10 +115,11 @@ describe('Test Suite aggregate outcome', () => {
 
   test('fails when the decision itself did not succeed or wrote no decision', () => {
     const failed = { ...needs('false', decisionSkips), changes: { result: 'failure' } };
-    expect(testSuiteFailures(failed, GATED)).toEqual([
-      'changes finished with failure and run-workspace-tests=undefined',
-      'changes finished with failure and run-tests=undefined',
-    ]);
+    expect(testSuiteFailures(failed, GATED).sort()).toEqual(
+      [...new Set(GATED.values())]
+        .map(output => `changes finished with failure and ${output}=undefined`)
+        .sort()
+    );
     expect(testSuiteFailures(needs('', decisionSkips, 'false'), GATED)).toEqual([
       'changes finished with success and run-tests=',
     ]);
@@ -143,25 +163,55 @@ describe('CI wiring', () => {
     expect(record(jobs.test).if).toBe("needs.changes.outputs.run-workspace-tests == 'true'");
     expect(record(jobs['test-scripts']).needs).toBe('changes');
     expect(record(jobs['test-scripts']).if).toBe("needs.changes.outputs.run-tests == 'true'");
-    // Gating the pack job on its own decision would skip it on every pull request that leaves
-    // the pack alone, and a skipped job keeps that run from proving its merge.
+    // Gating the pack job on its own decision would skip it on every run that leaves the pack
+    // alone, and a skipped job keeps a run of every job from proving its merge.
     expect(record(jobs['test-pack']).if).toBe("needs.changes.outputs.run-tests == 'true'");
   });
 
   // An undeclared or misspelled output reads as empty, and a step gated on it skips while the
   // job, and so the aggregate, stays green.
-  test.each(['workspace-tests', 'pack-tests', 'pack-fixtures'])(
-    'publishes the %s decision from the deciding step',
-    mode => {
-      const output = `run-${mode}`;
-      const variable = output.replaceAll('-', '_');
-      const changes = record(jobs.changes);
-      expect(record(changes.outputs)[output]).toBe(`\${{ steps.decision.outputs.${output} }}`);
-      const decision = jobSteps(changes).find(step => step.id === 'decision');
-      expect(decision?.run).toContain(
-        `${variable}=$(bun scripts/should-run-test-suite.ts --${mode})`
-      );
-      expect(decision?.run).toContain(`echo "${output}=$${variable}" >> "$GITHUB_OUTPUT"`);
+  // A pull request leaves these to the push unless its change selects them. An ungated job on
+  // another OS would put its queue time back on every pull request.
+  test('every job off Linux, and both builds, run only on a push-only decision', () => {
+    const gate = (id: string): unknown => record(jobs[id]).if;
+    const offLinux = Object.keys(jobs).filter(id => {
+      const job = record(jobs[id]);
+      const os = record(record(job.strategy ?? {}).matrix ?? {}).os ?? job['runs-on'];
+      return JSON.stringify(os) !== '"ubuntu-latest"';
+    });
+    expect(offLinux.sort()).toEqual([
+      'file-store-primitives-macos',
+      'serve-binary',
+      'test-pack-windows',
+      'test-scripts-windows',
+      'test-windows',
+    ]);
+    for (const id of offLinux.filter(id => id !== 'serve-binary')) {
+      expect({ id, if: gate(id) }).toEqual({
+        id,
+        if: "needs.changes.outputs.run-full-matrix == 'true'",
+      });
     }
-  );
+    expect(gate('serve-binary')).toBe("needs.changes.outputs.run-serve-binary == 'true'");
+    expect(gate('docker-build')).toBe("needs.changes.outputs.run-docker-build == 'true'");
+  });
+
+  test.each([
+    'workspace-tests',
+    'pack-tests',
+    'pack-fixtures',
+    'full-matrix',
+    'docker-build',
+    'serve-binary',
+  ])('publishes the %s decision from the deciding step', mode => {
+    const output = `run-${mode}`;
+    const variable = output.replaceAll('-', '_');
+    const changes = record(jobs.changes);
+    expect(record(changes.outputs)[output]).toBe(`\${{ steps.decision.outputs.${output} }}`);
+    const decision = jobSteps(changes).find(step => step.id === 'decision');
+    expect(decision?.run).toContain(
+      `${variable}=$(bun scripts/should-run-test-suite.ts --${mode})`
+    );
+    expect(decision?.run).toContain(`echo "${output}=$${variable}" >> "$GITHUB_OUTPUT"`);
+  });
 });

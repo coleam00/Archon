@@ -13,7 +13,9 @@ import {
   dispatchDecision,
   packRunnerInputs,
   proofFromPullRequestRun,
+  shouldRunEveryJob,
   shouldRunPackTests,
+  shouldRunPushOnlyJob,
   shouldRunTestSuite,
   shouldRunWorkspaceTests,
   workspaceTestInputs,
@@ -559,11 +561,8 @@ describe('pack test selection', () => {
     'packages/workflows/src/executor.ts',
     'packages/forge/src/index.ts',
     'packages/paths/src/archon-paths.ts',
-    'bunfig.toml',
     'scripts/test-preload.ts',
     'scripts/bun-test-command.ts',
-    '.github/workflows/test.yml',
-    'bun.lock',
   ])('runs for %s', file => {
     expect(shouldRunPackTests(['README.md', file], runner)).toBe(true);
   });
@@ -621,6 +620,9 @@ describe('pack test selection', () => {
     ['--pack-fixtures', {}, 'false'],
     [undefined, { 'pack-tests': 'false' }, 'true'],
     ['--workspace-tests', { 'pack-tests': 'false' }, 'true'],
+    ['--full-matrix', {}, 'true'],
+    ['--docker-build', {}, 'true'],
+    ['--serve-binary', {}, 'true'],
   ])('a dispatch with %s and inputs %j decides %s', (mode, inputs, expected) => {
     const result = runDecision(
       track,
@@ -650,6 +652,103 @@ describe('pack test selection', () => {
         default: false,
       });
     }
+  });
+});
+
+describe('what a pull request leaves to the push', () => {
+  const track = trackTempRoots();
+  const runner = packRunnerInputs(resolve(import.meta.dir, '..'));
+  const MODES = ['--full-matrix', '--docker-build', '--serve-binary'] as const;
+
+  test.each([
+    '.github/workflows/test.yml',
+    '.github/workflows/release.yml',
+    'package.json',
+    'bun.lock',
+    'bunfig.toml',
+    'scripts/validate.ts',
+    'scripts/repo-tests.ts',
+    'scripts/bun-test-command.ts',
+    'scripts/should-run-test-suite.ts',
+    'scripts/test-suite-outcome.ts',
+  ])('a change to %s runs every job', file => {
+    expect(shouldRunEveryJob(['README.md', file], runner)).toBe(true);
+  });
+
+  test.each([
+    'packages/core/src/index.ts',
+    'packages/paths/src/archon-paths.ts',
+    'Dockerfile',
+    'scripts/build-binaries.sh',
+    '.github/workflows/README.md',
+  ])('a change to %s does not run every job', file => {
+    expect(shouldRunEveryJob([file], runner)).toBe(false);
+  });
+
+  test('a job comes back for the paths it exists to check, and only that job', () => {
+    expect(shouldRunPushOnlyJob('docker-build', ['README.md', 'Dockerfile'])).toBe(true);
+    expect(shouldRunPushOnlyJob('serve-binary', ['scripts/build-binaries.sh'])).toBe(true);
+    expect(shouldRunPushOnlyJob('serve-binary', ['Dockerfile'])).toBe(false);
+    expect(shouldRunPushOnlyJob('docker-build', ['packages/core/src/index.ts'])).toBe(false);
+    // No path list names platform-dependent code, so only a run of every job has the Windows
+    // legs and the macOS job.
+    expect(shouldRunPushOnlyJob('full-matrix', ['Dockerfile', 'packages/paths/src/a.ts'])).toBe(
+      false
+    );
+  });
+
+  test('the script decides a pull request from its diff', () => {
+    const repo = track(mkdtempSync(join(tmpdir(), 'push-only-decision-')));
+    gitIn(repo, 'init', '-q', '-b', 'main');
+    gitIn(repo, 'config', 'user.email', 'test@example.com');
+    gitIn(repo, 'config', 'user.name', 'Test');
+    mkdirSync(join(repo, 'packages/core'), { recursive: true });
+    mkdirSync(join(repo, '.github/workflows'), { recursive: true });
+    for (const file of ['packages/core/db.ts', 'Dockerfile', '.github/workflows/test.yml']) {
+      writeFileSync(join(repo, file), '');
+    }
+    gitIn(repo, 'add', '.');
+    gitIn(repo, 'commit', '-q', '-m', 'seed');
+    const base = gitIn(repo, 'rev-parse', 'HEAD');
+
+    const decide = (file: string): Record<string, string> => {
+      gitIn(repo, 'checkout', '-q', '-B', 'change', base);
+      writeFileSync(join(repo, file), 'changed\n');
+      gitIn(repo, 'commit', '-q', '-am', `change ${file}`);
+      const head = gitIn(repo, 'rev-parse', 'HEAD');
+      return Object.fromEntries(
+        [...MODES, '--pack-fixtures'].map(mode => {
+          const result = runDecision(
+            track,
+            'pull_request',
+            { pull_request: { base: { sha: base }, head: { sha: head } } },
+            repo,
+            [mode]
+          );
+          expect(result.exitCode).toBe(0);
+          return [mode, result.stdout];
+        })
+      );
+    };
+
+    expect(decide('packages/core/db.ts')).toEqual({
+      '--full-matrix': 'false',
+      '--docker-build': 'false',
+      '--serve-binary': 'false',
+      '--pack-fixtures': 'false',
+    });
+    expect(decide('Dockerfile')).toEqual({
+      '--full-matrix': 'false',
+      '--docker-build': 'true',
+      '--serve-binary': 'false',
+      '--pack-fixtures': 'false',
+    });
+    expect(decide('.github/workflows/test.yml')).toEqual({
+      '--full-matrix': 'true',
+      '--docker-build': 'true',
+      '--serve-binary': 'true',
+      '--pack-fixtures': 'true',
+    });
   });
 });
 
@@ -685,7 +784,7 @@ describe('a push proven by its pull request run', () => {
         total_count: 2,
         jobs: [
           { name: 'changes', conclusion: 'success' },
-          { name: 'test (windows-latest, packages)', conclusion: 'success' },
+          { name: 'test-windows (package-tests, 1/2)', conclusion: 'success' },
         ],
       },
     };
@@ -749,17 +848,17 @@ describe('a push proven by its pull request run', () => {
       'differ',
     ],
     [
-      'a run that skipped a gated job (a prose-only pull request)',
+      'a run that skipped a gated job (prose only, or one that left Windows to the push)',
       (answers: Record<string, unknown>) => {
         answers[JOBS] = {
           total_count: 2,
           jobs: [
             { name: 'changes', conclusion: 'success' },
-            { name: 'test (windows-latest, packages)', conclusion: 'skipped' },
+            { name: 'test-windows (package-tests, 1/2)', conclusion: 'skipped' },
           ],
         };
       },
-      'test (windows-latest, packages)=skipped',
+      'test-windows (package-tests, 1/2)=skipped',
     ],
     [
       'a run whose latest attempt failed a job',
