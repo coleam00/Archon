@@ -195,7 +195,9 @@ archon workflow wait <run-id> --json
 archon state get work/42
 ```
 
-The build queue works the issue toward a reviewed pull request, one round per run.
+The build queue works the issue toward a reviewed pull request, one round per run. A
+round that continues a pull request starts its review from the review the earlier round
+published, not from the start.
 
 ```bash
 archon workflow run archon-merge-queue --detach

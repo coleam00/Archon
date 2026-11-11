@@ -34,14 +34,15 @@
  * its shape, so the engine refuses a malformed one before lenses or synthesis read it.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
- * - INPUTS_PRIOR_REPORT: the previous round's report path, or empty for round one.
+ * - INPUTS_PRIOR_REPORT: the path of the report this round continues from, in this run's
+ *   artifacts or an earlier run's, or empty for a first review.
  * - INPUTS_PART: the run's part assignment as JSON, or empty for the whole contract.
  */
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { readFindingsFile } from '../../.shared/review-item.ts';
+import { readFindingsFile, REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
 import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
 import { artifactsDir, emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 
@@ -56,9 +57,6 @@ function partAssignment(value: string | undefined): unknown {
     throw new Error('the part input is not JSON');
   }
 }
-
-/** Where publish-review records the commit a published report reviewed. */
-const REVIEWED_HEAD = 'reviewed-head';
 
 /** One boolean per lens, true for each lens named in `rerun`. */
 function lensFlags(rerun: ReadonlySet<string>): Record<ReviewLens, boolean> {
@@ -113,7 +111,7 @@ try {
     emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, ...lensFlags(new Set()), part });
   } else {
     if (!isFile(prior)) throw new Error(`the previous review report does not exist: ${prior}`);
-    const recorded = join(dirname(prior), REVIEWED_HEAD);
+    const recorded = join(dirname(prior), REVIEWED_HEAD_FILE);
     if (!existsSync(recorded)) {
       throw new Error(
         `the previous review report records no reviewed commit (${recorded} is missing)`

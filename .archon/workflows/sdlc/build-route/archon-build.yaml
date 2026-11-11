@@ -45,6 +45,11 @@ inputs:
     description: >-
       The pull request a triage of this run routed it to continue, or null. One
       that differs from the caller's refuses the run.
+  prior_report:
+    default: ""
+    description: >-
+      The published review report of the pull request this run continues, forwarded
+      unchanged to delivery. Empty reviews the whole change first.
   branch:
     default: ""
     description: The branch a new pull request opens from, forwarded unchanged to delivery.
@@ -118,6 +123,7 @@ nodes:
 
         $INPUTS.work
       pull_request: "$continues.output.pull_request"
+      prior_report: "$INPUTS.prior_report"
       branch: "$INPUTS.branch"
     # One join into delivery: the direct or continue route, a rooted investigation,
     # or a ready plan. A negative judgment skips delivery; a failed producer fails

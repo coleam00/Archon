@@ -35,6 +35,7 @@ import { upsertComment, viewPr } from '../../.shared/pr.ts';
 import { parseQualifiedPr, record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
 import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
+import { REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
 
 /** The pull request delivery recorded, when the scope is that JSON record. */
 function recordedPr(scope: string): QualifiedPr | undefined {
@@ -96,7 +97,7 @@ try {
     note(`publish-review: canonical review comment at ${comment.url}`);
   }
   // review-round reads this as the next round's cursor.
-  writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
+  writeFileSync(join(dirname(reportPath), REVIEWED_HEAD_FILE), `${head}\n`);
   emit(verdict);
 } catch (error) {
   refuse(`publish-review: ${error instanceof Error ? error.message : String(error)}`);

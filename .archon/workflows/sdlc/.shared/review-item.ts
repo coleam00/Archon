@@ -13,6 +13,8 @@ import { isObject } from './io.ts';
 export const ITEM_FILE = 'item.json';
 export const FINDINGS_FILE = 'review/findings.json';
 export const REPORT_FILE = 'review/report.md';
+/** Beside a published report: the commit it reviewed. publish-review writes it. */
+export const REVIEWED_HEAD_FILE = 'reviewed-head';
 
 export interface ItemDefect {
   readonly id: string;

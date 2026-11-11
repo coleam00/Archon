@@ -29,6 +29,14 @@ inputs:
       The number of an open pull request this delivery continues instead of opening
       one, as a caller resolved it. Empty or `null` when the caller names none; the
       run can still continue one it was launched onto.
+  prior_report:
+    default: ""
+    description: >-
+      Path to the published review report of the pull request this delivery
+      continues, from an earlier run's artifacts (`review/report.md`). The first
+      round's review then continues from it: it checks that report's findings and
+      reviews what changed since the commit it reviewed. Empty makes the first
+      round's review a first review of the whole change.
   branch:
     default: ""
     description: >-
@@ -78,7 +86,8 @@ nodes:
   # threads. Open review findings, simplify's smaller shapes, an unresolved review
   # thread, or a check the change turned red start another round. Each round's
   # implementer is a fresh agent that reads the previous round's review report,
-  # shape.md and ci.md, and each later round's review reads only its delta. The pr
+  # shape.md and ci.md, and each later round's review reads only its delta, as does the
+  # first round's when the caller passed an earlier run's report. The pr
   # step runs every round, so every round's commits are pushed before the review
   # reads the pull request's remote head.
   - id: rounds
@@ -168,20 +177,35 @@ nodes:
             branch: "$INPUTS.branch"
             publish_description: "true"
 
+        # `$LOOP_PREV` is empty on a run's first round, so this names the report the
+        # round's review continues from: the previous round's, else the caller's.
+        - id: prior-review
+          script: prior-review
+          runtime: bun
+          with:
+            previous: "$LOOP_PREV.round.output.prior_report"
+            earlier: "$INPUTS.prior_report"
+          output_format:
+            type: object
+            properties:
+              report: { type: string }
+            required: [report]
+
         - id: review
           include: archon-review
-          depends_on: [pr]
+          depends_on: [pr, prior-review]
           with:
             # The PR node's structured read-back names the pull request, so review
             # never rediscovers an ambient branch→PR mapping. It does not name the
             # commit: every round reviews the checkout's HEAD, which archon-review
             # checks against this PR's remote head before publishing.
             scope: "$pr.output"
-            # A later round reviews only the delta since the previous round's
-            # published report: the code lens, every lens with a blocker that
-            # report left open, and any lens route adds for new ground the delta
-            # reaches in its area.
-            prior_report: "$LOOP_PREV.round.output.prior_report"
+            # A round with a published report to continue from reviews only the
+            # delta since it: the code lens, every lens with a blocker that report
+            # left open, and any lens route adds for new ground the delta reaches in
+            # its area. That is every later round, and the first round of a run that
+            # continues a pull request an earlier run's review already covered.
+            prior_report: "$prior-review.output.report"
             work_order: "$INPUTS.work"
             part: "$INPUTS.part"
             errors: "$INPUTS.errors"
