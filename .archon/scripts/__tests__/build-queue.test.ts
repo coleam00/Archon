@@ -526,11 +526,17 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.claim).toBeNull();
   }, 60_000);
 
-  test("a blocked item judged unblocked gets the run's re-triage request and one intake pickup, and is not listed again until its revisit is due", () => {
+  test("a blocked item is listed with when and on what its verdict blocked it, and one judged unblocked gets the run's re-triage request and one intake pickup, and is not listed again until its revisit is due", () => {
     const at = install();
+    // An item blocked before verdicts stored what they wait on is listed with the verdict's time alone.
     seed(at, triaged({ stage: 'blocked' }));
+    expect(ok(run(at, 'blocked', { INPUTS_REVISIT_BLOCKED: 'true' })).blocked).toEqual([
+      { number: 7, summary: '', blocked_at: TRIAGE.at, blocked_reason: '', blocked_by: [] },
+    ]);
+    const waits = { reason: 'waits on the retry rewrite', by: ['https://ghe.example.com/example/repo/issues/5'] };
+    seed(at, triaged({ stage: 'blocked', facts: { triage: { ...TRIAGE, blocked: waits } } }));
     const blocked = ok(run(at, 'blocked', { INPUTS_REVISIT_BLOCKED: 'true' })).blocked;
-    expect(blocked).toEqual([{ number: 7, summary: '' }]);
+    expect(blocked).toEqual([{ number: 7, summary: '', blocked_at: TRIAGE.at, blocked_reason: waits.reason, blocked_by: waits.by }]);
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const retriage = (judged: unknown[]) =>
       run(at, 'retriage', {

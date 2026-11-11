@@ -127,15 +127,33 @@ export function buildWaits(doc: WorkItem): boolean {
 
 export const BUILD_PICKUP: Pickup = { stage: 'build', waits: buildWaits, takesRequests: false };
 
-/** A blocked item for the revisit agent: which issue, and intake's summary of why it is blocked. */
+/**
+ * A blocked item for the revisit agent: which issue, intake's summary of why it is
+ * blocked, when triage gave that verdict, and what the verdict said it waits on. An item
+ * blocked before verdicts stored that carries an empty reason and no blockers.
+ */
 export interface BlockedItem {
   readonly number: number;
   readonly summary: string;
+  readonly blocked_at: string;
+  readonly blocked_reason: string;
+  readonly blocked_by: readonly string[];
 }
 
 // A scheduled queue would otherwise judge the same blocked items on every run.
 const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
 const REVISITED = 'revisited';
+
+function blockedItem(doc: WorkItem): BlockedItem {
+  const triage = doc.facts.triage;
+  return {
+    number: doc.subject.number,
+    summary: doc.history.filter(entry => entry.outcome === 'blocked').at(-1)?.summary ?? '',
+    blocked_at: triage?.at ?? '',
+    blocked_reason: triage?.blocked?.reason ?? '',
+    blocked_by: triage?.blocked?.by ?? [],
+  };
+}
 
 /** The unclaimed blocked items the queue has not revisited in the last few hours. */
 export function dueBlocked(at: string): BlockedItem[] {
@@ -152,8 +170,7 @@ export function dueBlocked(at: string): BlockedItem[] {
     }
     const last = doc.history.filter(entry => entry.outcome === REVISITED).at(-1)?.at ?? '';
     if (doc.stage !== 'blocked' || doc.claim !== null || last >= due) continue;
-    const triaged = doc.history.filter(entry => entry.outcome === 'blocked').at(-1);
-    items.push({ number: doc.subject.number, summary: triaged?.summary ?? '' });
+    items.push(blockedItem(doc));
   }
   return items;
 }

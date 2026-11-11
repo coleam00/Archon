@@ -101,6 +101,8 @@ export interface TriageFacts {
   readonly urgency: Field<string>;
   /** Overlapping issues, earlier attempts and merged changes triage opened; absent on older items. */
   readonly related?: readonly { readonly url: string; readonly relation: string }[];
+  /** What a BLOCKED verdict waits on, as triage declared it; absent on any other verdict and on older items. */
+  readonly blocked?: { readonly reason: string; readonly by: readonly string[] };
   readonly at: string;
   readonly run_id: string;
 }
