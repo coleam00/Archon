@@ -116,13 +116,15 @@ interface Watcher {
   stop(): Promise<void>;
 }
 
-/** Start `workflow attention --watch --protocol --json` and parse its stdout line by line. */
-function startWatch(fixture: Fixture, extra: string[] = []): Watcher {
+/**
+ * Start `workflow attention --watch --json` and parse its stdout line by line: the full
+ * protocol unless `extra` is given without `--protocol`.
+ */
+function startWatch(fixture: Fixture, extra: string[] = ['--protocol']): Watcher {
   const child = spawnCli(fixture, [
     'workflow',
     'attention',
     '--watch',
-    '--protocol',
     '--json',
     '--all',
     ...extra,
@@ -177,6 +179,18 @@ const ASK =
   '  - id: ask\n    depends_on: [warmup]\n    wait:\n      attention: "Ship it?"\n' +
   '  - id: finish\n    depends_on: [ask]\n    bash: "echo done"\n';
 
+test('the quiet watch writes an open ask to a pipe while it is still running', async () => {
+  const fixture = makeFixture({ 'watch-ask': ASK });
+  const runId = await launchDetached(fixture, 'watch-ask');
+  await statusOf(fixture, runId, 'paused');
+  const watch = startWatch(fixture, []);
+  expect(await watch.next('attention', ofRun(runId, 'attention'), 15_000)).toMatchObject({
+    snapshot: true,
+    needs: 'answer',
+  });
+  await watch.stop();
+}, 120_000);
+
 test('a run launched after the watch reaches it from the store alone, and --after replays it', async () => {
   const fixture = makeFixture({ 'watch-ask': ASK });
   const watch = startWatch(fixture);
@@ -218,7 +232,7 @@ test('a run launched after the watch reaches it from the store alone, and --afte
   ).toEqual(got);
 
   // Everything after the attention line happened before this watch started.
-  const replay = startWatch(fixture, ['--after', String(opened.cursor)]);
+  const replay = startWatch(fixture, ['--protocol', '--after', String(opened.cursor)]);
   const replayed = await replay.next('replayed terminal', ofRun(runId, 'terminal'));
   expect(replayed).toEqual(terminal);
   expect(replay.lines.filter(ofRun(runId, 'attention'))).toEqual([]);
