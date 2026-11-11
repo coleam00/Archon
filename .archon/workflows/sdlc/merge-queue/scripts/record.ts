@@ -106,6 +106,12 @@ function decide(items: readonly Item[], sweep: Sweep | null): Decision[] {
 /** The default branch as facts read it. */
 type Base = ReturnType<typeof readBase>;
 
+/** A gate that could not run merged nothing and judged nothing; a `wait` would hide that. */
+function gateFailure(sweep: Sweep | null): string[] {
+  const error = sweep?.gate_error.trim() ?? '';
+  return error === '' ? [] : [`the merge gate could not run, so nothing was gated or merged: ${error}`];
+}
+
 /** A red default branch the sweep did not raise would hold every merge in silence. */
 function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null {
   if (sweep === null || base?.checks.state !== 'red' || sweep.base.attention !== null) return null;
@@ -286,7 +292,10 @@ function main(): void {
   const maintainers = items.length > 0 ? readMaintainers(items[0]?.pr.repo as QualifiedPr['repo']) : new Set<string>();
 
   const outcomes = decisions.map(decision => ({ decision, ...readBack(decision, itemOf(decision.number), maintainers) }));
-  const contradictions = outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction]));
+  const contradictions = [
+    ...gateFailure(sweep),
+    ...outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction])),
+  ];
   const silentRed = unraisedRedBase(sweep, base);
   if (silentRed !== null) contradictions.push(silentRed);
   // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for

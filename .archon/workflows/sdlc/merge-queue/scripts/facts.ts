@@ -14,7 +14,8 @@
  */
 
 import { join } from 'node:path';
-import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { writeScriptApiPreload } from '../../.shared/host.ts';
 import { type QualifiedPr } from '../../.shared/identity.ts';
 import { latestValidation, type Validation } from '../../.shared/build.ts';
 import {
@@ -189,8 +190,11 @@ function main(): void {
       validation: latestValidation(current),
     });
   }
+  // The sweep agent runs the gate as a plain command, with no engine to give it `archon:script`.
   const gate = [
     process.execPath,
+    '--preload',
+    writeScriptApiPreload(join(artifactsDir(), 'merge-queue', 'archon-script.preload.ts')),
     join(import.meta.dir, 'gate.ts'),
     '--method',
     method,

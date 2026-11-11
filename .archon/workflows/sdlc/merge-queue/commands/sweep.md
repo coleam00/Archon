@@ -42,3 +42,5 @@ Every pull request gets exactly one decision. A `return` always carries a `brief
 Write each as `attention.md` says. On a pull request a choice's `effect` is `merge` (approves it at the head you name, and a later sweep merges it once the gate passes there), `return` (sends it back to the build queue with the brief) or `park` (stops working the item until the build queue readies it again). On a red default branch the one choice is `hold`, so that item has a single choice. The queue's own `other` returns the pull request with the person's text as the ruling when the ask has a brief; without one it records the text and parks, starting no build round.
 
 Declare `summary`: what this sweep merged, sent back and asked, in a few lines.
+
+Declare `gate_error`: empty when every gate call ran, whatever it reported. A refusal is the gate working. When the gate command itself could not run (it did not start, or it printed an error instead of its JSON), `gate_error` is what it printed, the pull requests you would have gated are `wait`, and the run fails so a person sees it.

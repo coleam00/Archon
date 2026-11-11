@@ -1,6 +1,7 @@
 /**
- * Host commands the script API has no function for: launching a run, cleanup, and
- * reading runs. Everything else the pack asks of the host goes through `archon:script`.
+ * Host commands the script API has no function for: launching a run, cleanup, reading
+ * runs, and the preload a pack script needs when something other than a script node
+ * starts it. Everything else the pack asks of the host goes through `archon:script`.
  */
 
 import { isObject } from './inputs.ts';
@@ -27,6 +28,23 @@ export function archonCommand(): readonly string[] {
     throw new Error('ARCHON_CLI_COMMAND must be a non-empty JSON string array');
   }
   return parsed as string[];
+}
+
+/**
+ * The file that gives a Bun process `archon:script`, written by the host to `path`
+ * (`archon script preload`). The engine passes its own copy to a script node only; a
+ * command an agent runs, such as the merge queue's gate, must name one itself.
+ */
+export function writeScriptApiPreload(path: string): string {
+  const result = Bun.spawnSync([...archonCommand(), 'script', 'preload', '--out', path], {
+    env: process.env,
+    stdout: 'pipe',
+    stderr: 'pipe',
+  });
+  if (result.exitCode !== 0) {
+    throw new Error(`archon script preload failed (exit ${String(result.exitCode)}): ${result.stderr.toString().trim()}`);
+  }
+  return path;
 }
 
 /** The JSON object a host command prints; a failed command or any other output throws. */
