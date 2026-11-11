@@ -224,12 +224,14 @@ export interface PrFacts {
 
 /**
  * The facts a `wait` can end on: the head, whether it is a draft, whether it merges,
- * the state of its checks, its open threads, its verdict, and the default branch's head
- * and check state. While they read the same as when the sweep declared the wait, the
- * agent would decide the same, so the item is not handed to it again.
+ * the state of its checks, its open threads, its verdict with its contract coverage, the
+ * default branch's head and check state, and the project's CI setting. While they read
+ * the same as when the sweep declared the wait, the agent would decide the same, so the
+ * item is not handed to it again.
  */
-export function waitedOn(facts: PrFacts, base: BaseFacts | null): string {
+export function waitedOn(facts: PrFacts, base: BaseFacts | null, ci: CiMode): string {
   return JSON.stringify([
+    ci,
     facts.head_revision,
     facts.is_draft,
     facts.mergeable,
@@ -237,6 +239,7 @@ export function waitedOn(facts: PrFacts, base: BaseFacts | null): string {
     [...facts.threads.urls].sort(),
     facts.verdict.state,
     facts.verdict.reviewed,
+    facts.verdict.contract,
     facts.default_head,
     base?.checks.state ?? null,
   ]);

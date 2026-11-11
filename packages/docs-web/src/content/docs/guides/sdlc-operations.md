@@ -167,7 +167,7 @@ A schedule keeps items moving, because a run works one item and a continuation w
 
 The binding's `build_queue_binding` input names the binding's own file, so a run's follow-up rounds start through the same binding. One run of the queue holds a slot of the resource while it fires its follow-up, so the follow-up needs a free slot. Under `overlap: skip`, a follow-up fired while every slot is busy is dropped, and the item waits for the next scheduled run. Without the input, every follow-up waits for the next scheduled run.
 
-Intake's `build_queue_binding` input names the same file, so a run starts as soon as intake routes an item.
+Intake's `build_queue_binding` input names the same file, so a run starts as soon as intake routes an item. An intake binding without that input fires nothing, and its items wait for the next scheduled build-queue run: write `intake-issues` and `intake-labels` again with `--only` and `--force`, and replace their entries in the source plugin's configuration.
 
 ### Work orders
 
@@ -285,7 +285,7 @@ The work item's `facts.merge` holds the item's merge status, any approval pinned
 
 ### What it asks
 
-A sweep asks about every unclear pull request that is due. A run holds one wait, so it raises one attention item: a red default branch, labelled `merge: base`, or else the first pull request the sweep asked about, labelled `merge: pr`. It carries the same fields as a build-queue item. Any other ask waits for the next sweep, which decides it again and raises it.
+A sweep asks about every unclear pull request that is due. A run holds one wait, so it raises one attention item: a red default branch, labelled `merge: base`, or else the first pull request the sweep asked about, labelled `merge: pr`. It carries the same fields as a build-queue item. Any other ask waits for the next sweep, which decides it again and raises it. An ask held back by a red default branch's question is decided again once the branch's head or check state changes.
 
 - **`merge: base`** offers `hold`: merges are held until the default branch is green. An `other` answer there holds too, and its text is not acted on.
 - **`merge`** approves the pull request at the head that was asked about. The answer starts a sweep at once through the merge-queue binding (`merge_queue_binding`), which merges it once the gate passes there.
@@ -301,11 +301,11 @@ A run never changes its checkout, and the claim keeps two runs off the same item
 
 The short schedule is the one thing that starts the merge queue. It is how a ready pull request is picked up, and how one with pending checks gets merged soon after they finish, since the forge delivers no event for checks settling at a head.
 
-A sweep where nothing changed runs no agent. When a sweep declares a `wait`, the record stores what the wait rests on: the head, whether the pull request is a draft and merges cleanly, the state of its checks, its open threads, its verdict, and the default branch's head and check state. An ask held back by a red default branch's question stores the same. A later run releases the item without the agent while all of them read the same, so a red default branch is raised once, not on every tick, while a pull request waits behind it. A change to any of them hands the item to the agent again.
+A sweep where nothing changed runs no agent. When a sweep declares a `wait` while the pull request's checks are pending or the default branch is red, the record stores what the wait rests on: the head, whether the pull request is a draft and merges cleanly, the state of its checks, its open threads, its verdict and contract coverage, the default branch's head and check state, and the `ci` setting. An ask held back by a red default branch's question stores the same. Any other wait, such as a re-run of failed checks or a merge the forge did not complete, stores nothing, and the next sweep decides it again. A later run releases the item without the agent while all of them read the same, so a red default branch is raised once, not on every tick, while a pull request waits behind it. A change to any of them hands the item to the agent again.
 
 Its `merge_queue_binding` input names the binding's own file and `build_queue_binding` the build queue's, so an answer's follow-up fires your own binding. A `merge` answer's sweep is skipped while the answering run holds the queue's one slot, and the next scheduled sweep merges the pull request.
 
-A binding file written with `overlap: queue` keeps every tick that arrives while a sweep runs, without limit. Write it again with `archon pack bindings sdlc --only merge-queue --force`, and remove the old schedule before installing the new one.
+A binding file written with `overlap: queue` keeps every tick that arrives while a sweep runs, without limit. Write it again with `archon pack bindings sdlc --only merge-queue --force` and the `--repo`, `--host`, `--run-as` and `--out` you first wrote it with, and remove the old schedule before installing the new one.
 
 ## Discoveries
 

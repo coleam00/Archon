@@ -13,9 +13,9 @@
  * nothing to decide there is nothing for it to block. An unreadable
  * base reaches record for independent bookkeeping before the run reports the failure.
  *
- * A pull request the last sweep declared a `wait` on, whose facts that wait can end on
- * (`waitedOn`) read the same now, is released without the sweep: the agent would decide
- * the same. When that leaves nothing to decide, the run ends after its script nodes.
+ * A pull request whose last decision stored the facts its wait can end on (`waitedOn`),
+ * and whose facts read the same now, is released without the sweep: the agent would
+ * decide the same. When that leaves nothing to decide, the run ends after its script nodes.
  */
 
 import { join } from 'node:path';
@@ -194,7 +194,7 @@ function main(): void {
       settled.push({ item: doc.subject, pr, status, decision: status, reason: `${facts.url} was ${facts.state} before this sweep` });
       continue;
     }
-    if (current.facts.merge?.decisions.at(-1)?.waited_on === waitedOn(facts, inspection.base)) {
+    if (current.facts.merge?.decisions.at(-1)?.waited_on === waitedOn(facts, inspection.base, ci)) {
       updateClaimed(doc.subject, runId, held => ({ ...held, claim: null }));
       unchanged += 1;
       continue;

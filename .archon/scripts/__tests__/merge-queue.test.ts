@@ -679,15 +679,32 @@ describe('the merge queue facts and gate', () => {
     // Released with nothing recorded, so the next sweep reads it again.
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { decisions: waited.facts.merge?.decisions } } });
 
-    const changes = {
-      'checks settled': { checks: 'green' },
-      'a thread opened': { ...pending, threads: 1 },
-      'a new head': { ...pending, headRefOid: '4'.repeat(40) },
-      'the default branch moved': { ...pending, defaultRevision: '5'.repeat(40) },
-    } as const;
-    for (const [change, pr] of Object.entries(changes)) {
+    const partial = { ...REVIEWED, body: reviewCommentBody(HEAD, true, 'open', '# Review report') };
+    const changes: Record<string, [Parameters<typeof run>[3], Record<string, string>?]> = {
+      'checks settled': [{ pr: { checks: 'green' } }],
+      'a thread opened': [{ pr: { ...pending, threads: 1 } }],
+      'a new head': [{ pr: { ...pending, headRefOid: '4'.repeat(40) } }],
+      'the default branch moved': [{ pr: { ...pending, defaultRevision: '5'.repeat(40) } }],
+      'the review left part of the contract open': [{ pr: pending, comments: [partial] }],
+      'the project stopped trusting forge checks': [{ pr: pending }, { INPUTS_CI: 'none' }],
+    };
+    for (const [change, [options, inputs]] of Object.entries(changes)) {
       seed(at, waited);
-      expect({ change, ...ok(on(at, 'facts', { pr })) }).toMatchObject({ change, path: 'sweep', items: [{ item: SUBJECT }] });
+      expect({ change, ...ok(on(at, 'facts', options, inputs)) }).toMatchObject({ change, path: 'sweep', items: [{ item: SUBJECT }] });
+    }
+  }, 60_000);
+
+  test('a wait the facts cannot end, a re-run of failed checks or a merge that did not complete, is decided again by the next sweep', () => {
+    const waits = {
+      'a re-run of failed checks': [{ checks: 'red' }, decision({ action: 'wait', reran: true, reason: 'reran the failed jobs' })],
+      'a merge that did not complete': [{}, decision({ action: 'wait', reason: 'the forge could not verify the merge' })],
+    } as const;
+    for (const [wait, [pr, declared]] of Object.entries(waits)) {
+      const at = install();
+      seed(at, item());
+      const first = ok(on(at, 'facts', { pr })) as { items: unknown[]; base: unknown };
+      ok(run(at, 'record', { ...recordInputs([declared]), INPUTS_ITEMS: JSON.stringify(first.items), INPUTS_BASE: JSON.stringify(first.base) }, { pr }));
+      expect({ wait, ...ok(on(at, 'facts', { pr })) }).toMatchObject({ wait, path: 'sweep', items: [{ item: SUBJECT }] });
     }
   }, 60_000);
 
