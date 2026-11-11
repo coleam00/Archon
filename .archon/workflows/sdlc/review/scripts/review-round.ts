@@ -43,7 +43,8 @@ import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { readFindingsFile } from '../../.shared/review-item.ts';
 import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
-import { artifactsDir, emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse } from 'archon:script';
+import { nullableJson } from '../../.shared/inputs.ts';
 
 /**
  * The bound part assignment. The refusal drops the parser's message, which quotes
@@ -107,7 +108,7 @@ function prepareReviewDir(): void {
 try {
   prepareReviewDir();
   const part = partAssignment(process.env.INPUTS_PART);
-  const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
+  const prior = input('prior_report').trim();
   const head = nodeStartCommit();
   if (prior === '') {
     emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, ...lensFlags(new Set()), part });

@@ -11,7 +11,7 @@
  */
 
 import { REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
-import { emit, refuse } from '../../.shared/io.ts';
+import { emit, refuse } from 'archon:script';
 import { readOutcomes, sameFrames, type LoopFrame } from '../../.shared/outcomes.ts';
 
 /** This node's id in the review block; its path ends in it. */
@@ -24,7 +24,7 @@ try {
   };
   if (!execution.path.endsWith(SELF)) throw new Error(`this node's path ${execution.path} does not end in ${SELF}`);
   const prefix = execution.path.slice(0, -SELF.length);
-  const outcomes = readOutcomes(process.env.NODE_OUTCOMES_FILE);
+  const outcomes = readOutcomes();
   const state = (lens: ReviewLens): string =>
     outcomes === undefined
       ? 'unreadable'

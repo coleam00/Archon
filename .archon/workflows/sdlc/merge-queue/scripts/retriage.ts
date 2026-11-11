@@ -15,8 +15,9 @@
  * and the workflow input INPUTS_RETRIAGE_MERGED.
  */
 
-import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { requestRetriage } from '../../.shared/launch.ts';
 import type { MergeSettled } from '../../.shared/merge.ts';
@@ -33,14 +34,14 @@ function retriage(issue: QualifiedPr, runId: string): string | null {
 }
 
 function main(): void {
-  if (trimmed(process.env.INPUTS_RETRIAGE_MERGED) !== 'true') {
+  if (input('retriage_merged').trim() !== 'true') {
     emit({ retriaged: [], summary: 'retriage_merged is off; no merged issue is re-triaged.' });
     return;
   }
   const runId = workflowRunId();
-  const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
-  const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
-  const merged = new Set((nullableJson(process.env.INPUTS_MERGED) ?? []) as number[]);
+  const items = (nullableJson(input('items')) ?? []) as Item[];
+  const settled = (nullableJson(input('settled')) ?? []) as MergeSettled[];
+  const merged = new Set((nullableJson(input('merged')) ?? []) as number[]);
   const done = [
     ...items.filter(entry => merged.has(entry.pr.number)),
     ...settled.filter(entry => entry.status === 'merged'),
@@ -60,7 +61,7 @@ function main(): void {
       lines.push(`${name}: still open after PR ${String(pr.number)} merged; asked intake to re-triage (run ${intake})`);
     } catch (error) {
       const failure = `${name}: not re-triaged: ${error instanceof Error ? error.message : String(error)}`;
-      note(`merge-queue retriage: ${failure}`);
+      console.error(`merge-queue retriage: ${failure}`);
       lines.push(failure);
     }
   }

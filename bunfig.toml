@@ -4,5 +4,7 @@
 # Only discover tests in packages/ - prevents finding duplicates in workspace/worktrees
 root = "./packages"
 # Tests get a scratch ARCHON_HOME and no telemetry (scripts/test-preload.ts)
-preload = ["./scripts/test-preload.ts"]
+# Root tests also get the `archon:script` module pack scripts import
+# (.archon/scripts/__tests__/archon-script-preload.ts)
+preload = ["./scripts/test-preload.ts", "./.archon/scripts/__tests__/archon-script-preload.ts"]
 coverageDir = "coverage"

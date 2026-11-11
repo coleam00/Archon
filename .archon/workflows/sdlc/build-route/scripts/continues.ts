@@ -10,10 +10,11 @@
  * - INPUTS_TRIAGE: the number triage's `continue` route names, or `null`.
  */
 
-import { emit, nullableJson, refuse } from '../../.shared/io.ts';
+import { emit, input, refuse } from 'archon:script';
+import { nullableJson } from '../../.shared/inputs.ts';
 
-const caller = nullableJson(process.env.INPUTS_CALLER) as number | null;
-const triage = nullableJson(process.env.INPUTS_TRIAGE) as number | null;
+const caller = nullableJson(input('caller')) as number | null;
+const triage = nullableJson(input('triage')) as number | null;
 
 if (caller !== null && triage !== null && caller !== triage) {
   refuse(

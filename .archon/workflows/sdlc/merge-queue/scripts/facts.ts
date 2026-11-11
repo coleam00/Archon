@@ -14,8 +14,8 @@
  */
 
 import { join } from 'node:path';
-import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { type QualifiedPr } from '../../.shared/identity.ts';
 import { latestValidation, type Validation } from '../../.shared/build.ts';
 import {
   itemPr,
@@ -150,9 +150,9 @@ function emitFacts(
 }
 
 function main(): void {
-  const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
-  const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
-  const ci = parseCiMode(trimmed(process.env.INPUTS_CI));
+  const limit = positive('limit', input('limit').trim());
+  const method = parseMethod(input('merge_method').trim());
+  const ci = parseCiMode(input('ci').trim());
   const repo = workflowRepo();
   const runId = workflowRunId();
 

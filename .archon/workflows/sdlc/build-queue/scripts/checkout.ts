@@ -24,9 +24,10 @@
  * request the round continues: its number, or null for a fresh round.
  */
 
-import type { PrRecord, QualifiedPr } from '../../.shared/forge.ts';
+import { emit, input, refuse } from 'archon:script';
+import { type PrRecord, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
-import { emit, nullableJson, refuse } from '../../.shared/io.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { reviewedHead } from '../../.shared/merge.ts';
 import { viewPr } from '../../.shared/pr.ts';
@@ -34,7 +35,7 @@ import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 
 /** A fresh round stays on the base and continues no pull request. */
 function fresh(): void {
-  const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'> | null;
+  const item = nullableJson(input('item')) as Pick<QualifiedPr, 'repo'> | null;
   if (item === null) throw new Error('facts reported no item for the round');
   const base = fetchDefaultBranch(item.repo);
   if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
@@ -43,9 +44,9 @@ function fresh(): void {
 }
 
 function main(): void {
-  const continues = nullableJson(process.env.INPUTS_CONTINUES) as number | null;
-  const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
-  const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
+  const continues = nullableJson(input('continues')) as number | null;
+  const candidate = nullableJson(input('candidate')) as number | null;
+  const known = nullableJson(input('pull_request')) as PrRecord | null;
   if (continues === null) {
     fresh();
     return;

@@ -7,7 +7,10 @@
  * own; this only moves the first refusal ahead of the spend.
  */
 
-import { archonCommand, GITHUB_FORGE_PLUGIN, invokeForge, type QualifiedPr } from './forge.ts';
+import { forge } from 'archon:script';
+import { archonCommand } from './host.ts';
+import { type QualifiedPr } from './identity.ts';
+import { GITHUB_FORGE_PLUGIN } from './forge.ts';
 import { remoteRepos } from './remote.ts';
 
 export function forgeAccessRead(repo: QualifiedPr['repo']) {
@@ -55,7 +58,7 @@ const probeForge: ForgeProbe = async (op, data) => {
   // A container execution has no host command, so the pack cannot reach the forge there.
   archonCommand();
   let credentialSource: string | undefined;
-  const value = invokeForge(op, data, source => {
+  const value = forge(op, data, source => {
     credentialSource = source;
   });
   return { value, credentialSource };

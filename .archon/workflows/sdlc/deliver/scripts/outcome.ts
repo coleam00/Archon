@@ -14,10 +14,11 @@
  * - INPUTS_REVIEWS: every `review-report` output of this run.
  */
 
-import { artifactsDir, emit, text, typedOutputs } from '../../.shared/io.ts';
+import { artifactsDir, emit, input } from 'archon:script';
+import { typedOutputs } from '../../.shared/inputs.ts';
 import { caveats } from '../../.shared/report.ts';
 
-const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
+const rounds = JSON.parse(input('rounds')) as {
   round: number;
   done: boolean;
   ready: boolean;
@@ -27,7 +28,7 @@ const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
   summary: string;
 };
 const capped = !rounds.done;
-const notes = caveats(artifactsDir(), { reviews: typedOutputs(process.env.INPUTS_REVIEWS) });
+const notes = caveats(artifactsDir(), { reviews: typedOutputs(input('reviews')) });
 const where = rounds.pr_url === '' ? '' : `\n${rounds.pr_url}`;
 const left = rounds.contract_left?.length
   ? `\n\nLeft open, so the pull request does not close its issue:\n${rounds.contract_left.map(item => `- ${item}`).join('\n')}`

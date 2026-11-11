@@ -16,8 +16,8 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
+import { isObject, type TypedOutput, UNREADABLE_OUTPUTS } from './inputs.ts';
 import { latestOutcomeOf, readOutcomes } from './outcomes.ts';
-import { isObject, type TypedOutput, UNREADABLE_OUTPUTS } from './io.ts';
 
 /** One discovery record a run relays, with a reference stable within its run. */
 export interface DiscoveryRecord {
@@ -190,7 +190,6 @@ export interface ReportListings {
   readonly reviews: Reviews;
   /** This run's `pull-request` outputs, as its node bound them; null when unreadable. */
   readonly pullRequests: readonly TypedOutput<unknown>[] | null;
-  readonly outcomesFile: string | undefined;
 }
 
 /**
@@ -211,7 +210,7 @@ export function failedPublication(
   // Unreadable outcomes leave the creation record to decide, as a later failure would.
   const publish =
     typedUrl !== '' && latest !== undefined
-      ? latestOutcomeOf(readOutcomes(options.outcomesFile) ?? [], latest)
+      ? latestOutcomeOf(readOutcomes() ?? [], latest)
       : undefined;
   if (publish !== undefined && publish.state !== 'failed') return { reason: RUN_FAILED, pr_url: typedUrl };
   if (created.unresolved) return { reason: PR_CREATE_UNRESOLVED, pr_url: '' };

@@ -18,10 +18,9 @@
 import { dirname, join } from 'node:path';
 import { inWindow, issueMetricRecords } from '../../.shared/factory-issues.ts';
 import { factoryPrRuns, factoryPrs, prMetricRecords, readPrFacts, sinceTime } from '../../.shared/factory-prs.ts';
-import { artifactsDir, emit, refuse, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse, state } from 'archon:script';
 import { lineRecords, readPrFiles } from '../../.shared/pr-lines.ts';
 import { backfillRunReviews, droppedRoundPrs, prBuildRounds, reviewRoundRecords } from '../../.shared/review-rounds.ts';
-import { stateDocuments } from '../../.shared/state.ts';
 import { read } from '../../.shared/workitem.ts';
 
 /** The review set's metrics that no record the pack writes can count yet. */
@@ -37,16 +36,16 @@ const NOT_AVAILABLE = [
   },
 ];
 
-const since = trimmed(process.env.INPUTS_SINCE) || '7d';
-const until = trimmed(process.env.INPUTS_UNTIL);
-const linesSince = trimmed(process.env.INPUTS_LINES_SINCE);
+const since = input('since').trim() || '7d';
+const until = input('until').trim();
+const linesSince = input('lines_since').trim();
 
 try {
   const window = { from: sinceTime(since), until: until === '' ? Infinity : sinceTime(until) };
   if (window.from >= window.until) {
     throw new Error(`the window is empty: since (${since}) is not before until (${until}); pass both to record an older slice`);
   }
-  const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
+  const items = state.listValues('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
   const runsByUrl = factoryPrRuns(items);
   const changed = (...times: (string | null)[]): boolean => times.some(time => time !== null && inWindow(time, window));
   const prs = factoryPrs(readPrFacts(runsByUrl.keys()));

@@ -14,16 +14,16 @@
  *   output of this run.
  */
 
-import { artifactsDir, emit, nullableJson, typedOutputs } from '../../.shared/io.ts';
+import { artifactsDir, emit, input } from 'archon:script';
+import { nullableJson, typedOutputs } from '../../.shared/inputs.ts';
 import { failed, failedPublication } from '../../.shared/report.ts';
 
 const options = {
-  reviews: typedOutputs(process.env.INPUTS_REVIEWS),
-  pullRequests: typedOutputs(process.env.INPUTS_PULL_REQUESTS),
-  outcomesFile: process.env.NODE_OUTCOMES_FILE,
+  reviews: typedOutputs(input('reviews')),
+  pullRequests: typedOutputs(input('pull_requests')),
 };
 
-const outcome = nullableJson(process.env.INPUTS_OUTCOME);
+const outcome = nullableJson(input('outcome'));
 emit(
   outcome ?? {
     delivered: false,

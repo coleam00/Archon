@@ -24,8 +24,9 @@
  * was closed before a split finished, files nothing, and releases the claim.
  */
 
-import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { closeIssue, createIssue, viewIssue } from '../../.shared/issue.ts';
 import { ROUTE_LABEL, writeLabels } from '../../.shared/labels.ts';
 import { upsertComment } from '../../.shared/pr.ts';
@@ -206,7 +207,7 @@ function buildWhole(item: QualifiedPr, runId: string, route: WholeRoute, reason:
 }
 
 function main(): void {
-  const path = trimmed(process.env.INPUTS_PATH);
+  const path = input('path').trim();
   const runId = workflowRunId();
   if (path === 'idle') {
     const summary = idleSummary('No item waits for the split queue.', stuckItems(runId));
@@ -223,13 +224,13 @@ function main(): void {
     emit({ path, item: item.number, kind: null, issues: filedOn(doc), adopted: [], summary: `Issue ${String(item.number)}: ${reason}` });
     return;
   }
-  const answer = nullableJson(process.env.INPUTS_SPLIT) as Answer | null;
-  const planned = nullableJson(process.env.INPUTS_ISSUES) as Planned[] | null;
-  const later = nullableJson(process.env.INPUTS_LATER) as Later[] | null;
-  const existing = nullableJson(process.env.INPUTS_EXISTING) as Existing[] | null;
+  const answer = nullableJson(input('split')) as Answer | null;
+  const planned = nullableJson(input('issues')) as Planned[] | null;
+  const later = nullableJson(input('later')) as Later[] | null;
+  const existing = nullableJson(input('existing')) as Existing[] | null;
   if (path !== 'slice' || answer === null || planned === null || later === null || existing === null)
     throw new Error(`the ${path} path reached publish with no split`);
-  const summary = text(process.env.INPUTS_SUMMARY);
+  const summary = input('summary');
   if (answer.kind !== 'whole') {
     publish(item, runId, answer.kind, planned, later, existing, summary);
     return;

@@ -25,29 +25,30 @@
  * before delivery skips this node; the workflow's `report` node answers then.
  */
 
-import { artifactsDir, emit, text, typedOutputs } from '../../.shared/io.ts';
+import { artifactsDir, emit, input } from 'archon:script';
+import { typedOutputs } from '../../.shared/inputs.ts';
 import { caveats } from '../../.shared/report.ts';
 
 const artifacts = artifactsDir();
-const reviews = typedOutputs(process.env.INPUTS_REVIEWS);
-const route = text(process.env.INPUTS_ROUTE);
-const contract = text(process.env.INPUTS_CONTRACT);
-const blockedReason = text(process.env.INPUTS_BLOCKED_REASON);
-const summary = text(process.env.INPUTS_SUMMARY);
+const reviews = typedOutputs(input('reviews'));
+const route = input('route');
+const contract = input('contract');
+const blockedReason = input('blocked_reason');
+const summary = input('summary');
 /** A string binding with `if_skipped: null`: the producer's text, or null when it was skipped. */
 function optional(value: string | undefined): string | null {
-  const bound = text(value);
+  const bound = value ?? '';
   return bound === 'null' ? null : bound;
 }
 
 const invVerdict = optional(process.env.INPUTS_INV_VERDICT);
 const invSummary = optional(process.env.INPUTS_INV_SUMMARY);
 const planSummary = optional(process.env.INPUTS_PLAN_SUMMARY);
-const openQuestions = JSON.parse(text(process.env.INPUTS_OPEN_QUESTIONS) || 'null') as
+const openQuestions = JSON.parse(input('open_questions') || 'null') as
   | string[]
   | null;
-const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
-const delivery = text(process.env.INPUTS_DELIVERY);
+const delivered = input('delivered') || 'null';
+const delivery = input('delivery');
 
 /** Why no delivery ran. */
 type Stop = 'no_action' | 'blocked' | 'needs_contract' | 'split' | 'refuted' | 'not_rooted' | 'ask';
@@ -89,8 +90,8 @@ if (delivered === 'null') {
   const open = questions();
   emit({
     delivered: delivered === 'true',
-    reason: text(process.env.INPUTS_DELIVERY_REASON),
-    pr_url: text(process.env.INPUTS_PR_URL),
+    reason: input('delivery_reason'),
+    pr_url: input('pr_url'),
     summary: open === '' ? delivery : `${delivery}\n\nOpen questions the planner judged non-blocking:\n${open}`,
   });
 }

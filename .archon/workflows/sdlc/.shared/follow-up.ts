@@ -10,8 +10,9 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { archonCommand, record } from './forge.ts';
-import { artifactsDir, note, nullableJson } from './io.ts';
+import { artifactsDir } from 'archon:script';
+import { archonCommand } from './host.ts';
+import { nullableJson, record } from './inputs.ts';
 
 /** The admission the fired binding's request got, as `trigger fire` prints its receipt. */
 function disposition(stdout: string): Record<string, unknown> | undefined {
@@ -52,6 +53,6 @@ export function followUp(
     result.exitCode === 0
       ? `its binding ${String(admitted?.status ?? 'admitted nothing')}`
       : (result.stderr.toString().trim().split('\n')[0] ?? '') || `trigger fire exited ${String(result.exitCode)}`;
-  note(`${what} did not start, so ${later}: ${why}`);
+  console.error(`${what} did not start, so ${later}: ${why}`);
   return `${what} did not start (${why}), so ${later}`;
 }

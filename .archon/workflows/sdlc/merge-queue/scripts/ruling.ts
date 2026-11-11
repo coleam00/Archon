@@ -21,8 +21,9 @@
 
 import { nextRound, withBuild } from '../../.shared/build.ts';
 import { followUp } from '../../.shared/follow-up.ts';
-import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
 import { type Choice, rulingHeading } from '../../.shared/queue.ts';
@@ -40,7 +41,7 @@ function continueNow(effect: string, item: QualifiedPr, runId: string): string {
   const { host, path } = item.repo;
   // A sweep merges whatever waits; the binding names the repository, so it takes no inputs.
   const key = `merge-sweep:${host}/${path}#${String(item.number)}:${runId}`;
-  return `; ${followUp(text(process.env.INPUTS_MERGE_QUEUE_BINDING), key, {}, 'a sweep')}`;
+  return `; ${followUp(input('merge_queue_binding'), key, {}, 'a sweep')}`;
 }
 
 /** Write the ruling into the issue body as a dated section; returns its heading, or ''. */
@@ -52,11 +53,11 @@ function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, a
 }
 
 function main(): void {
-  const asked = nullableJson(process.env.INPUTS_ASKED) as MergeAsked | null;
+  const asked = nullableJson(input('asked')) as MergeAsked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const answered = nullableJson(process.env.INPUTS_CHOICE) as Choice<string> | null;
+  const answered = nullableJson(input('choice')) as Choice<string> | null;
   if (answered === null) throw new Error('the answer carries no chosen choice');
-  const words = trimmed(process.env.INPUTS_TEXT);
+  const words = input('text').trim();
   if (asked.by === 'base') {
     emit({
       decision: 'hold',

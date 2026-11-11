@@ -12,7 +12,9 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { invokeForge, record, REMEDY } from './forge.ts';
+import { forge } from 'archon:script';
+import { record } from './inputs.ts';
+import { REMEDY } from './forge.ts';
 
 /** The judge workflow's directory: every file in it is part of the judge. */
 export const JUDGE_DIR = join(import.meta.dir, '..', 'metrics-test-value-judge');
@@ -31,7 +33,7 @@ export const TEST_VALUE_FORGE_OPERATIONS = ['pr.view', 'pr.files', 'repo.file'] 
  */
 export function requireTestValueSource(hosts: Iterable<string>): void {
   for (const host of new Set(hosts)) {
-    const capabilities = invokeForge('metadata', { host })?.capabilities;
+    const capabilities = forge('metadata', { host })?.capabilities;
     if (!Array.isArray(capabilities)) throw new Error('forge metadata returned no operation capabilities');
     const missing = TEST_VALUE_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
     if (missing.length > 0) {

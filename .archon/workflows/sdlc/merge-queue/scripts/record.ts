@@ -28,8 +28,9 @@
  */
 
 import { nextRound, withBuild } from '../../.shared/build.ts';
-import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
   MERGE_PATHS,
@@ -90,7 +91,7 @@ function decide(items: readonly Item[], sweep: Sweep | null): Decision[] {
   const wanted = new Map(items.map(item => [item.pr.number, item]));
   const strays = sweep.decisions.filter(decision => !wanted.has(decision.number)).map(decision => decision.number);
   if (strays.length > 0) {
-    note(`merge-queue record: the sweep decided PR ${strays.join(', ')}, which this run did not claim; not recorded`);
+    console.error(`merge-queue record: the sweep decided PR ${strays.join(', ')}, which this run did not claim; not recorded`);
   }
   const decided = new Map<number, Decision>();
   for (const decision of sweep.decisions) {
@@ -185,7 +186,7 @@ function write(writes: Writes, subject: QualifiedPr, name: string, label: string
     return true;
   } catch (error) {
     const failure = `${name}: not recorded, the next sweep decides it again (${message(error)})`;
-    note(`merge-queue record: ${failure}`);
+    console.error(`merge-queue record: ${failure}`);
     writes.lines.push(failure);
     writes.failed.push(failure);
     return false;
@@ -238,18 +239,18 @@ function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], bas
 }
 
 function main(): void {
-  const path = MERGE_PATHS.find(candidate => candidate === trimmed(process.env.INPUTS_PATH));
+  const path = MERGE_PATHS.find(candidate => candidate === input('path').trim());
   if (path === undefined) throw new Error(`path must be one of ${MERGE_PATHS.join(', ')}`);
-  const items = (nullableJson(process.env.INPUTS_ITEMS) ?? []) as Item[];
-  const settled = (nullableJson(process.env.INPUTS_SETTLED) ?? []) as MergeSettled[];
-  const baseError = text(process.env.INPUTS_BASE_ERROR);
+  const items = (nullableJson(input('items')) ?? []) as Item[];
+  const settled = (nullableJson(input('settled')) ?? []) as MergeSettled[];
+  const baseError = input('base_error');
   const runId = workflowRunId();
   const writes: Writes = { at: new Date().toISOString(), runId, lines: [], failed: [] };
   if (baseError !== '') recordBaseFailure(writes, settled, baseError);
   if (path === 'idle') {
     emit({
       merged: [],
-      summary: idleSummary('No pull request waits for the merge queue.', stuckItems(text(process.env.WORKFLOW_ID))),
+      summary: idleSummary('No pull request waits for the merge queue.', stuckItems((process.env.WORKFLOW_ID ?? ''))),
       attention: '',
       options: [],
       recommendation: null,
@@ -258,10 +259,10 @@ function main(): void {
     });
     return;
   }
-  const sweep = nullableJson(process.env.INPUTS_SWEEP) as Sweep | null;
+  const sweep = nullableJson(input('sweep')) as Sweep | null;
   if (path === 'sweep' && sweep === null) throw new Error('the sweep path reached record with no sweep');
   const decisions = decide(items, sweep);
-  const base = nullableJson(process.env.INPUTS_BASE) as Base | null;
+  const base = nullableJson(input('base')) as Base | null;
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
   const baseAttention = sweep?.base.attention ?? null;

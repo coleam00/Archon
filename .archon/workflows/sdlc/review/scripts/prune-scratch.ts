@@ -6,13 +6,13 @@
  * the review settles. Simplify prunes its own.
  */
 
-import { artifactsDir, refuse, report } from '../../.shared/io.ts';
+import { artifactsDir, refuse } from 'archon:script';
 import { REVIEW_LENSES } from '../../.shared/review-policy.ts';
 import { pruneScratch, scratchDir } from '../../.shared/scratch.ts';
 
 try {
   const removed = [...REVIEW_LENSES, 'synthesize'].flatMap(lens => pruneScratch(scratchDir(artifactsDir(), lens)));
-  report(`prune-scratch: removed ${String(removed.length)} scratch worktree(s)`);
+  console.log(`prune-scratch: removed ${String(removed.length)} scratch worktree(s)`);
 } catch (error) {
   refuse(`prune-scratch: ${error instanceof Error ? error.message : String(error)}`);
 }

@@ -12,7 +12,10 @@
  */
 
 import { itemPullRequest, type Validation } from './build.ts';
-import { invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
+import { forge } from 'archon:script';
+import { type QualifiedPr } from './identity.ts';
+import { record } from './inputs.ts';
+import { REMEDY } from './forge.ts';
 import { viewPr } from './pr.ts';
 import { type Attention, type DecisionEntry, withDecision } from './queue.ts';
 import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
@@ -229,7 +232,7 @@ export const MERGE_QUEUE_FORGE_OPERATIONS = [
  * claimed: every pull request it could not read would otherwise wait, then park.
  */
 export function requireMergeSource(repo: QualifiedPr['repo']): void {
-  const capabilities = invokeForge('metadata', { host: repo.host })?.capabilities;
+  const capabilities = forge('metadata', { host: repo.host })?.capabilities;
   if (!Array.isArray(capabilities)) throw new Error('forge metadata returned no operation capabilities');
   const missing = MERGE_QUEUE_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
   if (missing.length > 0) {
@@ -245,7 +248,7 @@ export interface BaseFacts {
 
 /** The default branch, its head commit and the checks on it. */
 export function readBase(repo: QualifiedPr['repo']): BaseFacts {
-  const value = invokeForge('checks.commit', { repo, at: { kind: 'default_branch' } });
+  const value = forge('checks.commit', { repo, at: { kind: 'default_branch' } });
   if (typeof value?.branch !== 'string' || typeof value.revision !== 'string') {
     throw new Error(`${repo.path} reports no default branch`);
   }
@@ -305,7 +308,7 @@ function checksOf(units: unknown): Checks {
 
 /** How far `head` is behind the default branch and whether it merges, read at that head. */
 function readMergeState(ref: QualifiedPr, url: string, head: string) {
-  const value = invokeForge('pr.merge-state', { ref });
+  const value = forge('pr.merge-state', { ref });
   const mergeable = MERGEABLE.find(state => state === value?.mergeable);
   if (
     typeof value?.head_revision !== 'string' ||
@@ -328,7 +331,7 @@ function readMergeState(ref: QualifiedPr, url: string, head: string) {
 }
 
 function readThreads(ref: QualifiedPr): PrFacts['threads'] {
-  const threads = invokeForge('pr.threads', { ref })?.threads;
+  const threads = forge('pr.threads', { ref })?.threads;
   if (!Array.isArray(threads)) throw new Error('forge pr.threads returned no thread list');
   const unresolved = threads.map(record).filter(thread => {
     if (typeof thread?.resolved !== 'boolean') throw new Error('forge pr.threads returned a thread without its resolution');
@@ -344,7 +347,7 @@ function readThreads(ref: QualifiedPr): PrFacts['threads'] {
 }
 
 function readComments(ref: QualifiedPr): Comment[] {
-  const comments = invokeForge('workitem.comments', { subject: { kind: 'pr', ref } })?.comments;
+  const comments = forge('workitem.comments', { subject: { kind: 'pr', ref } })?.comments;
   if (!Array.isArray(comments)) throw new Error('forge workitem.comments returned no comment list');
   return comments.map(raw => {
     const comment = record(raw);
@@ -366,7 +369,7 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFac
   const { url, head_revision: head } = view.pr;
   if (head === null) throw new Error(`${url} reports no head commit`);
   const mergeState = readMergeState(ref, url, head);
-  const checks = invokeForge('checks.state', { ref });
+  const checks = forge('checks.state', { ref });
   if (checks?.revision !== head) throw new Error(`the checks read for ${url} are not on its head`);
   return {
     pr,
@@ -447,7 +450,7 @@ export function gateRefusals(
  * nothing then shows the merge landed.
  */
 export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): string {
-  const merged = invokeForge('pr.merge', { ref: { repo: pr.repo, number: pr.number }, method, conditions: { head } });
+  const merged = forge('pr.merge', { ref: { repo: pr.repo, number: pr.number }, method, conditions: { head } });
   const commit = record(merged?.landed)?.commit;
   if (typeof commit !== 'string') {
     throw new Error(`forge pr.merge applied the merge of ${pr.repo.path}#${String(pr.number)} at ${head} but named no landed commit`);

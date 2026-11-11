@@ -7,7 +7,8 @@
  * so a name declared anywhere else is a copy that can drift.
  */
 
-import { invokeForge, readRepositoryLabels, type QualifiedPr } from './forge.ts';
+import { forge } from 'archon:script';
+import { type QualifiedPr } from './identity.ts';
 import { viewIssue } from './issue.ts';
 
 interface LabelSpec {
@@ -170,20 +171,20 @@ export function writeLabels(
   // writer adds concurrently survive. Each forge write reads itself back, and a write
   // that does not fails with its outcome, so there is nothing left to re-check here.
   const current = new Set(viewIssue(item).labels);
-  const present = new Set(readRepositoryLabels(item.repo));
+  const present = new Set(forge('repo.labels.list', { repo: item.repo }).labels.map(label => label.name));
   for (const name of add) {
     if (!present.has(name) && isPackLabel(name)) {
-      invokeForge('repo.label.ensure', { repo: item.repo, name, ...PACK_LABELS[name] });
+      forge('repo.label.ensure', { repo: item.repo, name, ...PACK_LABELS[name] });
       present.add(name);
     }
   }
   const applied = [...new Set(add.filter(name => present.has(name)))].sort();
-  const subject = { kind: 'issue', ref: item };
+  const subject = { kind: 'issue', ref: item } as const;
   for (const name of applied.filter(label => !current.has(label))) {
-    invokeForge('workitem.label.add', { subject, name });
+    forge('workitem.label.add', { subject, name });
   }
   for (const name of remove.filter(label => current.has(label))) {
-    invokeForge('workitem.label.remove', { subject, name });
+    forge('workitem.label.remove', { subject, name });
   }
   return applied;
 }

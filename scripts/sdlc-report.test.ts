@@ -5,7 +5,7 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { JsonValue } from '../packages/workflows/src/output-ref';
 import type { TypedOutputRecord } from '../packages/workflows/src/schemas/node-bindings';
-import type { TypedOutput } from '../.archon/workflows/sdlc/.shared/io';
+import type { TypedOutput } from '../.archon/workflows/sdlc/.shared/inputs';
 import { failed } from '../.archon/workflows/sdlc/.shared/report';
 
 /**
@@ -38,7 +38,7 @@ describe('failed', () => {
       join(dir, 'discoveries', 'implement.json'),
       JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
     );
-    const text = failed(dir, { reviews: [], pullRequests: [], outcomesFile: undefined });
+    const text = failed(dir, { reviews: [], pullRequests: [] });
     expect(text.startsWith('Not done:')).toBe(true);
     expect(text).toContain('Discoveries: 1 recorded');
     expect(text).not.toContain('Ready');

@@ -4,7 +4,7 @@
  */
 
 import { existsSync, readFileSync } from 'node:fs';
-import { emit, refuse } from '../../.shared/io.ts';
+import { emit, refuse } from 'archon:script';
 import { CASES_PATH, parseCases } from '../../.shared/test-value.ts';
 
 try {

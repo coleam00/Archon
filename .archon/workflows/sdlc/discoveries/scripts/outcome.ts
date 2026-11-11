@@ -27,11 +27,12 @@ import {
   refRun,
   runName,
 } from '../../.shared/discoveries.ts';
-import { sameRepo } from '../../.shared/forge.ts';
-import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse, state } from 'archon:script';
+import { sameRepo } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { createIssue, viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { stateGet, statePutClaimed } from '../../.shared/state.ts';
+import { putClaimed } from '../../.shared/workitem.ts';
 
 const IDLE = 'No finished run has undecided discoveries.';
 
@@ -52,15 +53,15 @@ function issueBody(decision: AgentDecision & { outcome: 'file' }, sha: string): 
 }
 
 function main(): void {
-  const idle = trimmed(process.env.INPUTS_PATH) === 'idle';
+  const idle = input('path').trim() === 'idle';
   if (idle) {
     emit({ summary: IDLE, written: [], dropped: [], asked: [], waiting: [], question: '' });
     return;
   }
-  const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
+  const repo = nullableJson(input('repo')) as { host: string; path: string };
   const queue = JSON.parse(readFileSync(join(artifactsDir(), 'drain', 'queue.json'), 'utf8')) as Queue;
-  const decisions = (nullableJson(process.env.INPUTS_DECISIONS) ?? []) as AgentDecision[];
-  const summary = text(process.env.INPUTS_SUMMARY);
+  const decisions = (nullableJson(input('decisions')) ?? []) as AgentDecision[];
+  const summary = input('summary');
 
   const problems = checkDecisions(
     queue.runs.flatMap(run => run.records.map(record => record.ref)),
@@ -115,10 +116,10 @@ function main(): void {
   // Then each run's memory: the refs decided this pass, and the questions asked. A run
   // with an asked record keeps this run's claim, so no other pass asks again while the
   // question waits.
-  const self = trimmed(process.env.WORKFLOW_ID);
+  const self = (process.env.WORKFLOW_ID ?? '').trim();
   for (const run of queue.runs) {
     const name = runName(run.id);
-    const read = stateGet(name);
+    const read = state.get(name);
     const document = parseRunDocument(name, read.value);
     if (document?.claim?.run_id !== self) throw new Error(`${name} is no longer claimed by this run`);
     const ofRun = (refs: readonly string[]): string[] => refs.filter(ref => refRun(ref) === run.id);
@@ -146,7 +147,7 @@ function main(): void {
         ...questions,
       ],
     };
-    if (statePutClaimed(name, next, read.revision) === 'conflict') {
+    if (!putClaimed(name, next, read.revision).ok) {
       throw new Error(`${name} changed while this run held its claim`);
     }
   }
