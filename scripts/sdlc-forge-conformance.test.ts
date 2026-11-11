@@ -132,7 +132,11 @@ test('preflight capabilities cover the forge operations the pack calls', () => {
     ...MERGE_QUEUE_FORGE_OPERATIONS,
     ...TEST_VALUE_FORGE_OPERATIONS,
   ]);
-  expect(used.sort()).toEqual([...preflighted].sort());
+  // The merge queue's own calls sit in `.shared/merge.ts` beside its list, which this
+  // scan skips; merge-queue.test.ts holds that list to the operations it calls.
+  expect(used.filter(op => !preflighted.has(op))).toEqual([]);
+  const outsideMerge = [...REQUIRED_FORGE_OPERATIONS, ...TEST_VALUE_FORGE_OPERATIONS];
+  expect(outsideMerge.filter(op => !used.includes(op))).toEqual([]);
 });
 
 test('the pack reads host responses with credential attribution and metadata intact', () => {
