@@ -262,6 +262,24 @@ archon script types --out types/archon-script.d.ts --check   # write nothing; ex
 
 The declaration is embedded in Archon and describes the module that version provides. Write the file again after an upgrade.
 
+### `script preload`
+
+Write the preload file that provides `archon:script`, so a workflow script or its tests run outside a run. It is the file Archon passes to every Bun `script:` node, and it needs nothing else: the module's source is inside it. See [The script API](/guides/script-nodes/#the-script-api).
+
+```bash
+archon script preload --out test/archon-script.preload.ts           # write it
+archon script preload --out test/archon-script.preload.ts --check   # write nothing; exit 1 when stale
+bun --preload ./test/archon-script.preload.ts scripts/triage.ts     # run a script with it
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--out <file>` | The file to write, relative to the invoking directory. Required |
+| `--check` | Compare instead of writing. Exits 1 naming the file when it is missing or its content differs |
+| `--json` | Print `{ ok, path, status }`; `status` is `written`, `unchanged`, `current` or `stale` |
+
+The file is written with LF line endings on every platform, and describes the Archon that wrote it: write it again after an upgrade.
+
 ### `workflow run <name> [message]`
 
 Run a workflow with an optional user message, which the workflow reads as `$ARGUMENTS`.

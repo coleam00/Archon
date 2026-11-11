@@ -311,6 +311,23 @@ export const workflowHelp: HelpGroup = {
         },
       ],
     },
+    {
+      command: 'script',
+      subcommand: 'preload',
+      spec: 'script preload',
+      description:
+        'Write the preload file that provides the archon:script module, to run or\ntest a workflow script outside a run: bun --preload <file> script.ts',
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write, relative to the invoking directory (required)',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
+    },
   ],
   scopedOnly: [
     {
