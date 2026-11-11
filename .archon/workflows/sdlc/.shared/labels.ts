@@ -111,18 +111,11 @@ export const SIZE_LABEL = {
 } as const satisfies Record<Size, PackLabel>;
 
 /**
- * The labels a person adds to ask intake for something: `archon-triage` asks for
- * triage, and a route label on an outside item promotes it. The pack's own write of
- * a route label is not a request; intake recognizes it as the work item's mirror.
+ * The one label a person adds to ask intake for something: a triage, which on an
+ * outside item is also its promotion. The pack never writes it; route and state labels
+ * are the pack's own writes and request nothing.
  */
-export const REQUEST_LABELS: readonly PackLabel[] = [
-  'archon-triage',
-  ...new Set(Object.values(ROUTE_LABEL)),
-];
-
-export function isRequestLabel(name: string): boolean {
-  return (REQUEST_LABELS as readonly string[]).includes(name);
-}
+export const TRIAGE_REQUEST = 'archon-triage' satisfies PackLabel;
 
 /** A triage verdict as far as labels read it: a READY item carries its route. */
 export type LabelVerdict =
