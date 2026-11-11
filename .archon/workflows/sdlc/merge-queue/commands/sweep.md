@@ -35,7 +35,7 @@ Work through those one at a time, in that order.
 
 **An approval holds** when the policy's rule for a pull request a maintainer approved says it does. Judge what changed since the approved head from `git diff <approved>..<head>` against what the default branch brought in. An approval that does not hold is asked again.
 
-Every pull request gets exactly one decision. A `return` always carries a `brief`, and an `ask` always carries its attention item and the `brief` a `return` answer starts from: an ask that offers `return` without a brief is not raised. Every other decision has a null `attention`. Its `number` is the pull request's number (`pr.number`), never its issue's (`item.number`). `head` is always the head your decision is about. `reason` is one line a maintainer can check.
+Every pull request gets exactly one decision. A `return` always carries a `brief`, and an `ask` always carries its attention item and, when it offers `return`, the `brief` that answer starts from. Every other decision has a null `attention`. Its `number` is the pull request's number (`pr.number`), never its issue's (`item.number`). `head` is always the head your decision is about. `reason` is one line a maintainer can check.
 
 ## The attention items
 

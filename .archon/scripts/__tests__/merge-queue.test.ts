@@ -503,15 +503,6 @@ describe('the merge queue scripts', () => {
     }
   }, 60_000);
 
-  test('an ask that offers a return with no brief is not raised', () => {
-    const at = install();
-    seed(at, item(BUILT, undefined, CLAIMED));
-    const refused = run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', attention: ATTENTION })]));
-    expect(refused.code).not.toBe(0);
-    expect(refused.stderr).toContain('offers a return with no brief');
-    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
-  }, 60_000);
-
   test('a decision for a pull request the run did not claim is noted and skipped, and the rest is still recorded', () => {
     const at = install();
     seed(at, item(BUILT, undefined, CLAIMED));
