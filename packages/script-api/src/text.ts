@@ -12,5 +12,9 @@ import declaration from './archon-script.d.ts' with { type: 'text' };
 /** The source of the `archon:script` module: TypeScript that imports only Node and Bun built-ins. */
 export const scriptApiModuleSource: string = moduleSource;
 
-/** The declaration of `archon:script`: the module's public surface and its contract types. */
-export const scriptApiDeclaration: string = declaration;
+/**
+ * The declaration of `archon:script`: the module's public surface and its contract types.
+ * Always LF: a checkout that converts line endings would otherwise embed CRLF, and the
+ * file `archon script types` writes would differ by platform.
+ */
+export const scriptApiDeclaration: string = (declaration as string).replaceAll('\r\n', '\n');
