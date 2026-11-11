@@ -8,14 +8,21 @@
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
  * back to the build queue with its brief and starts its next round through the
- * build-queue binding. A run raises at most one ask, as the sweep wrote it: the first
- * pull request the sweep asked about, in its order. That item keeps its claim while the
- * run waits; every other claim is released, and an ask that was not raised waits for the
- * next sweep, which decides it again.
+ * build-queue binding. A run holds one wait, so it raises one ask, as the sweep wrote it: the
+ * first pull request the sweep asked about, in its order. That item keeps its claim while
+ * the run waits; every other claim is released, and an ask that was not raised waits for
+ * the next sweep, which decides it again. A `wait` the sweep declared while the pull
+ * request's checks were pending or the default branch was red stores the facts it rests
+ * on (`waitedOn`), and so does an ask made while the default branch was red, so the next
+ * sweep hands neither to the agent while they read the same. Any other wait, such as a
+ * re-run of failed checks or a merge the forge did not complete, stores nothing: the
+ * facts cannot show when it ends, so the next sweep decides it again.
  *
  * A red default branch asks nobody: nothing merges, the summary carries the sweep's
  * diagnosis, and `healthy` is false, which the workflow records as a failed outcome.
- * It repeats on every sweep while the branch stays red.
+ * It is reported once per change: the waits it holds back store what they rest on, so
+ * while the branch's head and check state read the same no sweep runs and the run is
+ * idle and healthy; a new head or check state is swept and reported again.
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written is reported and left for the next sweep; neither stops the
@@ -24,7 +31,7 @@
  * leaving open companions untouched, then fail with the original diagnostic.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
- * from facts; INPUTS_SWEEP,
+ * and INPUTS_CI from facts; INPUTS_SWEEP,
  * the sweep's whole output, "null" when it was skipped; the workflow's
  * INPUTS_BUILD_QUEUE_BINDING.
  */
@@ -35,6 +42,7 @@ import { type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
+  type CiMode,
   MERGE_PATHS,
   type MergeAsked,
   type MergeAsk,
@@ -42,10 +50,12 @@ import {
   type MergeRecord,
   type MergeSettled,
   type MergeStatus,
+  parseCiMode,
   type PrFacts,
   readBase,
   readPr,
   type SweepAction,
+  waitedOn,
   withMerge,
 } from '../../.shared/merge.ts';
 import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
@@ -196,13 +206,18 @@ function labelOf(decision: Decision, outcome: Outcome, raised: boolean): string 
   return outcome.contradiction === null ? decision.action : 'claimed merged, not merged';
 }
 
-/** Record one pull request's decision; false when its work item could not be written. */
-function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly decision: Decision }, raised: boolean): boolean {
+/**
+ * Record one pull request's decision; false when its work item could not be written.
+ * `waited` is what the item's wait rests on (`waitedOn`); null records none, so the next
+ * sweep decides the item again.
+ */
+function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly decision: Decision }, raised: boolean, waited: string | null): boolean {
   const { at, runId } = writes;
   const { decision, status, reason, head } = outcome;
   const label = labelOf(decision, outcome, raised);
   const decided = `${label} (${decision.class})`;
-  const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links: [item.url], head, reran: decision.reran };
+  const rests = status === 'waiting' && waited !== null ? { waited_on: waited } : {};
+  const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links: [item.url], head, reran: decision.reran, ...rests };
   if (item.item === null) {
     writes.lines.push(`PR ${String(decision.number)}: ${label}, with no work item to record it on`);
     return false;
@@ -217,6 +232,23 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   // The claim is released, so the round the fire starts can claim the item.
   if (written && status === 'returned') writes.lines.push(`${name}: ${nextRound(item.item, runId)}`);
   return written;
+}
+
+/**
+ * What a decision's wait rests on (`waitedOn`), or null. Only a decision the sweep itself
+ * made, in a record that holds, is one the next sweep may skip: a `wait`, or an ask made
+ * while the default branch is red, when nothing merges whatever the answer. And only while the
+ * facts show what it waits for: the pull request's checks pending under `ci: forge`, or
+ * the default branch red. A wait on anything else ends without the facts changing.
+ */
+function waitFacts(sweep: Sweep | null, base: Base | null, holds: boolean, ci: CiMode): (decision: Decision, facts: PrFacts | null) => string | null {
+  const declared = new Set(holds ? sweep?.decisions.map(decision => decision.number) : []);
+  return (decision, facts) => {
+    if (base === null || facts === null || !declared.has(decision.number)) return null;
+    if (decision.action !== 'wait' && !(decision.action === 'ask' && base.checks.state === 'red')) return null;
+    const visible = (ci === 'forge' && facts.checks.state === 'pending') || base.checks.state === 'red';
+    return visible ? waitedOn(facts, base, ci) : null;
+  };
 }
 
 function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
@@ -258,6 +290,7 @@ function main(): void {
     return;
   }
   const sweep = nullableJson(input('sweep')) as Sweep | null;
+  const ci = parseCiMode(input('ci').trim());
   if (path === 'sweep' && sweep === null) throw new Error('the sweep path reached record with no sweep');
   const decisions = decide(items, sweep);
   const base = nullableJson(input('base')) as Base | null;
@@ -291,9 +324,11 @@ function main(): void {
     asked = null;
   }
 
+  const waited = waitFacts(sweep, base, contradictions.length === 0, ci);
   for (const outcome of outcomes) {
     const raised = asked?.pr.number === outcome.decision.number;
-    if (!recordPr(writes, itemOf(outcome.decision.number), outcome, raised) && raised) asked = null;
+    const item = itemOf(outcome.decision.number);
+    if (!recordPr(writes, item, outcome, raised, waited(outcome.decision, item.facts)) && raised) asked = null;
   }
   const red = redBase(sweep, base);
   if (contradictions.length > 0) {

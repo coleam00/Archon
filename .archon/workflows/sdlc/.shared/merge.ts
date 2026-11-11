@@ -79,6 +79,8 @@ export type MergeStatus = 'waiting' | 'asking' | 'merged' | 'returned' | 'parked
 export interface MergeDecisionEntry extends DecisionEntry {
   readonly head: string | null;
   readonly reran: boolean;
+  /** On a `wait` the sweep declared: the facts it waited on (`waitedOn`). */
+  readonly waited_on?: string;
 }
 
 export interface MergeRecord {
@@ -209,6 +211,29 @@ export interface PrFacts {
   readonly checks: Checks;
   readonly threads: { readonly unresolved: number; readonly urls: readonly string[] };
   readonly verdict: Verdict;
+}
+
+/**
+ * The facts a `wait` can end on: the head, whether it is a draft, whether it merges,
+ * the state of its checks, its open threads, its verdict with its contract coverage, the
+ * default branch's head and check state, and the project's CI setting. While they read
+ * the same as when the sweep declared the wait, the agent would decide the same, so the
+ * item is not handed to it again.
+ */
+export function waitedOn(facts: PrFacts, base: BaseFacts | null, ci: CiMode): string {
+  return JSON.stringify([
+    ci,
+    facts.head_revision,
+    facts.is_draft,
+    facts.mergeable,
+    facts.checks.state,
+    [...facts.threads.urls].sort(),
+    facts.verdict.state,
+    facts.verdict.reviewed,
+    facts.verdict.contract,
+    facts.default_head,
+    base?.checks.state ?? null,
+  ]);
 }
 
 /** The forge operations the merge queue reads and merges through. */

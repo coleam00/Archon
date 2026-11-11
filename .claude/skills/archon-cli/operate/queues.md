@@ -91,7 +91,8 @@ refusal with its reason.
 Optional inputs, with their defaults in each workflow's YAML:
 
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
-  for a label), `label` and `label_actor` for a label event.
+  for a label), `label` and `label_actor` for a label event, and `build_queue_binding`
+  (the binding file a routed item's build-queue run is fired through).
 - `archon-build-queue`: `number` (the issue to build; empty claims the item the
   message names, or the first in order), `orders_only` (`true` claims only members of
   an open work order), `revisit_blocked` (`true`: a run that names no item also sends
@@ -203,11 +204,14 @@ the build queue readies the item again.
 
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
 change, pauses as an attention item labelled `stage: merge` and `kind: approve` with the choices `merge`,
-`return`, `park` and `other`. A red default branch asks nobody: the sweep merges nothing and its run completes
+`return`, `park` and `other`. A red default branch that holds back a pull request asks nobody: the sweep merges nothing and its run completes
 with a failed outcome whose summary (the `record` node's, in `archon workflow get <run-id> --verbose`) names the failing checks, the
-pull requests merged since green and the suspect, on every sweep until the branch is green. A run raises at
+pull requests merged since green and the suspect. It is reported once per change: while the branch's head and check state
+read the same, no agent runs and the run is idle. A run raises at
 most one attention item: the first pull
-request the sweep asked about. A later sweep decides the rest again.
+request the sweep asked about. The next sweep decides the rest again and raises the
+next. The merge queue's schedule is short (5 minutes by default), and a sweep where
+nothing changed since an item's last wait runs no agent.
 
 A `merge` answer approves the pull request at the head it asked about, and a sweep
 the answer fires through `merge_queue_binding` merges it once the gate passes. The approval carries to a later head only when the sweep

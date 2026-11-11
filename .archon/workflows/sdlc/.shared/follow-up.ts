@@ -56,3 +56,13 @@ export function followUp(
   console.error(`${what} did not start, so ${later}: ${why}`);
   return `${what} did not start (${why}), so ${later}`;
 }
+
+/**
+ * Start a build-queue pickup now through the operator's build-queue binding, for an
+ * item intake just routed. The fire names no item: the binding names the repository,
+ * and a pickup takes the waiting item that sorts first under the binding's own
+ * `orders_only`, which a named item would pass.
+ */
+export function nextPickup(binding: string, key: string): string {
+  return followUp(binding, `build-pickup:${key}`, {}, 'a build-queue run');
+}
