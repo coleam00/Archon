@@ -807,10 +807,11 @@ describe('SSE heartbeat lifecycle', () => {
         async function settle(): Promise<void> {
           for (let i = 0; i < 40; i++) await Promise.resolve();
         }
-        const response = await app.request(`/api/stream/${conversationId}`);
-        if (!response.body) throw new Error('Missing SSE response body');
-        const reader = response.body.getReader();
+        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
         try {
+          const response = await app.request(`/api/stream/${conversationId}`);
+          if (!response.body) throw new Error('Missing SSE response body');
+          reader = response.body.getReader();
           expect(new TextDecoder().decode((await reader.read()).value)).toContain(
             '"type":"heartbeat"'
           );
@@ -854,16 +855,19 @@ describe('SSE heartbeat lifecycle', () => {
             expect(warn).not.toHaveBeenCalled();
           }
         } finally {
-          await reader.cancel();
-          for (const wait of waits) wait.reject(new Error('test teardown'));
-          await settle();
-          sleep.mockRestore();
-          write.mockRestore();
-          close.mockRestore();
-          remove.mockRestore();
-          register.mockRestore();
-          warn.mockRestore();
-          transport.stop();
+          try {
+            await reader?.cancel();
+          } finally {
+            for (const wait of waits) wait.reject(new Error('test teardown'));
+            await settle();
+            sleep.mockRestore();
+            write.mockRestore();
+            close.mockRestore();
+            remove.mockRestore();
+            register.mockRestore();
+            warn.mockRestore();
+            transport.stop();
+          }
         }
       }
     );
