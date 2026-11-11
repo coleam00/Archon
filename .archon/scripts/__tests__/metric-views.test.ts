@@ -64,7 +64,7 @@ function emitted(): Map<string, { kind: unknown; calibrates: unknown }> {
     ...reviewRoundRecords(prs, runsByUrl, reviewed, new Set(), () => ({ ok: false, problem: 'unused' })).metrics,
     ...testValueRecords(judged, 'judge:abc').metrics,
     ...scoreCalibration(judgeSlots([labeled], [{ tests: [verdict] }]), 'judge:abc').metrics,
-    ...issueMetricRecords([mergedIssue()]),
+    ...issueMetricRecords([mergedIssue()], { from: 0, until: Infinity }),
   ];
   return new Map(records.map(record => [String(record.name), { kind: record.kind, calibrates: record.calibrates }]));
 }

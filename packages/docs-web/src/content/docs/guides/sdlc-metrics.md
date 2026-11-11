@@ -13,6 +13,12 @@ The bundled `sdlc` pack records what its factory produced as [metrics](/guides/m
 
 Two workflows record them. Neither holds state; each reads its pull requests again on every run, and a re-run replaces the earlier records.
 
+`archon-metrics-prs` records one window per run: the pull requests opened, merged or closed and the issues built or merged in the last seven days, or since `--input since=<date or Nd>`. The engine keeps the latest record per metric and subject, so the records of older pull requests and issues stand. A node's output is capped at 1 MiB, which every record of a long history exceeds. To record an install's history for the first time, run one slice at a time and use a shorter slice if a run fails on the output cap:
+
+```bash
+archon workflow run archon-metrics-prs --input since=2026-01-01 --input until=2026-01-08
+```
+
 ```bash
 archon workflow run archon-metrics-prs
 archon workflow run archon-metrics-test-value --input since=7d

@@ -15,7 +15,9 @@ description: |
   since then also records the lines it added in test files and in production
   files (sdlc.test_lines_added, sdlc.production_lines_added); ones whose lines
   cannot be counted are reported in `lines_skipped`. Re-runs replace earlier
-  records.
+  records. One run records the pull requests and issues that changed in its
+  window, `since` (seven days by default) up to `until`; the records of
+  everything older stand as an earlier run left them.
 
   Use when: an operator wants current PR counts, merge rate and review rounds
   (`archon metrics sdlc.pr_merge_rate`), or a schedule binding the operator
@@ -32,6 +34,19 @@ worktree:
 mutates_checkout: false
 
 inputs:
+  since:
+    required: false
+    description: >-
+      An ISO date or time, or a number of days back from now such as 7d (the
+      default). The run records the pull requests opened, merged or closed and
+      the issues built or merged at or after it. A node's output is capped at
+      1 MiB, so a busy window may not fit: record a long history in several
+      runs, each a slice from `since` up to `until`.
+  until:
+    required: false
+    description: >-
+      The end of the window, in the same form; without it, now. Only for
+      recording an older slice of history.
   lines_since:
     required: false
     description: >-
