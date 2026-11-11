@@ -301,12 +301,15 @@ archon isolation cleanup [days] (default: 7)
    failure immediately stops judgment for that environment, reports the error, and
    retains the worktree without trying later candidates. Lookup failure produces
    `pr-unavailable`; both failures keep the environment and prevent scheduled stale deletion.
-5. Commit association lookup first queries GitHub's object by OID. Only an error-free
-   response with an accessible repository and a null object produces `UNKNOWN_COMMIT`;
-   errors and malformed responses stay `UNAVAILABLE`. An unknown tip does not stop
+5. Commit association lookup first queries GitHub's object by OID in the configured
+   repository. Only an error-free response with an accessible repository and a null
+   object produces `UNKNOWN_COMMIT`; this proves absence only in that repository. It
+   does not establish absence across GitHub. Lookup errors and malformed responses
+   stay `UNAVAILABLE`. An unknown tip does not stop
    inspection of other tips or covering candidates. Without eligible proof, an unknown
-   commit produces `unknown-commit`, reporting that no PR covers all local work and
-   preventing scheduled stale deletion. An open PR then produces `open-pr`; the
+   commit produces `unknown-commit`, reporting that no PR covers all local work because
+   a local commit was not found in the configured repository, and preventing scheduled
+   stale deletion. An open PR then produces `open-pr`; the
    remaining verdicts are `unmerged`, or `unjudgeable` when the branch ref is gone
    and no PR answers.
    Manual merged cleanup reports all of these. Ordinary `unmerged` can still

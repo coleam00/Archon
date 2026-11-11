@@ -194,7 +194,7 @@ export function skipReasonFor(
     case 'unjudgeable':
       return 'branch ref is gone and no PR was found — merge state unverifiable';
     case 'unknown-commit':
-      return 'no pull request covers all local work — a local commit is unknown to the forge';
+      return 'no pull request covers all local work — a local commit was not found in the configured repository';
     case 'pr-unavailable':
       return 'PR state lookup failed — merge state unverifiable';
     case 'unmerged':

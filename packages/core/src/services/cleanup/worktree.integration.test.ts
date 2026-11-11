@@ -1228,7 +1228,7 @@ test.each([
   const lastCommit = spyOn(gitModule, 'getLastCommitDate');
   const reason =
     failure === 'unknown-commit'
-      ? 'no pull request covers all local work — a local commit is unknown to the forge'
+      ? 'no pull request covers all local work — a local commit was not found in the configured repository'
       : 'PR state lookup failed — merge state unverifiable';
   try {
     const manual = await cleanupMergedWorktrees(codebaseId, repo);

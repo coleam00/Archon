@@ -708,7 +708,7 @@ describe('commit-associated PR cleanup', () => {
             reason:
               other === 'UNAVAILABLE'
                 ? 'PR state lookup failed — merge state unverifiable'
-                : 'no pull request covers all local work — a local commit is unknown to the forge',
+                : 'no pull request covers all local work — a local commit was not found in the configured repository',
           },
         ]);
         expect(mockDestroy).not.toHaveBeenCalled();

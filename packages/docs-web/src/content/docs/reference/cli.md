@@ -1747,8 +1747,8 @@ The PR path first checks the PR found by the local branch name. If it cannot pro
 coverage, cleanup discovers PRs associated with the worktree's HEAD, then the local
 branch tip when it is different. This also finds work published under another name.
 An open branch PR does not suppress an independently covering merged PR. When no
-merged candidate proves coverage and no local commit is unknown to the forge, an
-open PR keeps the environment as active review.
+merged candidate proves coverage and every inspected local commit was found in the
+configured repository, an open PR keeps the environment as active review.
 Coverage from different PR heads is never combined. With no local tips remaining,
 a merged branch PR can settle the registration on its own.
 
@@ -1757,9 +1757,11 @@ stops the judgment, reports the error, and keeps the environment. A failed PR lo
 (auth, rate limit, or unreadable response) keeps the environment and reports
 `PR state lookup failed`. The optional `gh` CLI currently supplies GitHub PR evidence;
 without it, or on unsupported remotes, merged cleanup retains unproven environments.
-For commit association lookups, an error-free GitHub object query distinguishes an
-unknown local commit from a lookup failure. Without covering evidence, cleanup reports
-`no pull request covers all local work — a local commit is unknown to the forge`
+For commit association lookups, an error-free GitHub object query distinguishes a
+local commit not found in the configured repository from a lookup failure. This does
+not establish whether the commit exists in another repository. Without covering
+evidence, cleanup reports
+`no pull request covers all local work — a local commit was not found in the configured repository`
 and keeps the environment, including during scheduled cleanup.
 
 Manual `--merged` cleanup reports ordinary retained work as
