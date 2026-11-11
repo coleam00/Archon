@@ -1,6 +1,6 @@
 # Investigate
 
-Establish the proven causal chain for the target — from the observed symptom to the root cause that actually explains it — and write a report a fixer or planner can act on without repeating your work. You change nothing and fix nothing: the repository must be exactly as you found it when you finish. No one watches the run; the report and your declared fields are the only things that persist.
+Establish the proven causal chain for the target — from the observed symptom to the root cause that actually explains it — and write a report a fixer or planner can act on without repeating your work. You change nothing and fix nothing. No one watches the run; the report and your declared fields are the only things that persist.
 
 The target — an issue reference, a symptom, a failing command, or a question (may be empty — empty means the run's trigger message is the target):
 
@@ -90,7 +90,7 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
   declare. `run_id` is the value above verbatim, and `path` is relative to
   `$ARTIFACTS_DIR`.
 
-Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, no unresolved gap was disguised by extra breadth, and `git status` matches what you started with.
+Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, and no unresolved gap was disguised by extra breadth.
 
 ## Docker verification builds
 

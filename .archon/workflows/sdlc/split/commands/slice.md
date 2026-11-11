@@ -29,4 +29,4 @@ A contract another run starts from cold, in the repository's issue template shap
 - `existing` — `{ "number", "why" }` for open issues that own part of the outcome; empty when built whole.
 - `summary` — two or three sentences, posted on the item as the reason: what the item is and why it splits, or why one work item works.
 
-You write nothing to the tracker, the repository or the state store; the next node files and comments. Leave the checkout exactly as you found it.
+You write nothing to the tracker, the repository or the state store; the next node files and comments.

@@ -1,6 +1,6 @@
 # Plan
 
-Turn the decided intent into a plan a competent implementer could execute without asking questions. You decide the approach — the plan records decisions, not options. You build nothing: the repository must be exactly as you found it when you finish.
+Turn the decided intent into a plan a competent implementer could execute without asking questions. You decide the approach — the plan records decisions, not options. You build nothing.
 
 What to plan (may be empty — empty means the run's trigger message is the work):
 
@@ -81,7 +81,7 @@ A proved defect you meet that this work does not need is a discovery, never sile
 
 ## Not your job
 
-Do not implement, modify source files, commit, branch, push, or open or comment on pull requests or issues. Scratch notes live under `$ARTIFACTS_DIR` only — the run fails on any tree change you leave behind.
+Do not implement, modify source files, commit, branch, push, or open or comment on pull requests or issues. Scratch notes live under `$ARTIFACTS_DIR` only.
 
 ## Declare the verdict
 
@@ -98,4 +98,4 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
   declare. `run_id` is the value above verbatim, and `path` is relative to
   `$ARTIFACTS_DIR`.
 
-Before declaring, re-read the plan: confirm every named anchor exists in the current code, every decision has its why and its source, and `git status` matches what you started with.
+Before declaring, re-read the plan: confirm every named anchor exists in the current code, and every decision has its why and its source.
