@@ -11,6 +11,7 @@ import {
   workflowDeprecationSchema,
   workflowInputSpecSchema,
   workflowContainerPolicySchema,
+  workflowWorktreePolicySchema,
 } from '../schemas/workflow';
 import type {
   WorkflowRequirement,
@@ -55,27 +56,28 @@ export function parseOptionalField<S extends z.ZodType>(
   return undefined;
 }
 
-/**
- * Parse workflow-level worktree policy. Same warn-and-ignore pattern used
- * for `modelReasoningEffort` — invalid values are dropped
- * rather than rejected, so a typo in one workflow doesn't nuke the whole
- * discovery pass. Only `worktree.enabled` is recognised today.
- */
+/** Parse worktree policy fields through their schemas, warning and dropping invalid values. */
 export function parseWorktreePolicy(
   raw: unknown,
   filename: string
-): { enabled?: boolean } | undefined {
+): z.infer<typeof workflowWorktreePolicySchema> | undefined {
   if (raw === undefined) return undefined;
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     getLog().warn({ filename, value: raw }, 'invalid_worktree_block_ignored');
     return undefined;
   }
-  const rawEnabled = (raw as Record<string, unknown>).enabled;
-  if (typeof rawEnabled === 'boolean') return { enabled: rawEnabled };
-  if (rawEnabled !== undefined) {
-    getLog().warn({ filename, value: rawEnabled }, 'invalid_worktree_enabled_value_ignored');
+  const rawPolicy = raw as Record<string, unknown>;
+  const policy: Record<string, unknown> = {};
+  for (const [key, schema] of Object.entries(workflowWorktreePolicySchema.shape)) {
+    const value = parseOptionalField(
+      rawPolicy[key],
+      schema,
+      filename,
+      `invalid_worktree_${key}_value_ignored`
+    );
+    if (value !== undefined) policy[key] = value;
   }
-  return undefined;
+  return Object.keys(policy).length > 0 ? workflowWorktreePolicySchema.parse(policy) : undefined;
 }
 
 /**

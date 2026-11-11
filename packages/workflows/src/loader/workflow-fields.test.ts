@@ -3,7 +3,7 @@ import { mockLogger, parseWorkflow, parseWorkflowYaml } from './test-utils';
 import { describe, it, expect } from 'bun:test';
 import { KNOWN_WORKFLOW_KEYS, workflowContainerPolicySchema } from '../schemas/workflow';
 import type { WorkflowDefinition } from '../schemas/workflow';
-import { parseContainerPolicy } from './workflow-fields';
+import { parseContainerPolicy, parseWorktreePolicy } from './workflow-fields';
 
 // ---------------------------------------------------------------------------
 // Workflow signature: inputs / returns (#2470)
@@ -421,6 +421,28 @@ nodes:
     );
     expect(workflow).toBeNull();
     expect(error?.error).toContain('a model ref string or a preference list');
+  });
+});
+
+describe('worktree policy', () => {
+  it.each<[unknown, ReturnType<typeof parseWorktreePolicy>, [unknown, string][]]>([
+    [undefined, undefined, []],
+    [{}, undefined, []],
+    [{ enabled: undefined }, undefined, []],
+    [{ unknown: true }, undefined, []],
+    [{ enabled: false, unknown: true }, { enabled: false }, []],
+    [{ enabled: true }, { enabled: true }, []],
+    [null, undefined, [[null, 'invalid_worktree_block_ignored']]],
+    [[], undefined, [[[], 'invalid_worktree_block_ignored']]],
+    ['yes', undefined, [['yes', 'invalid_worktree_block_ignored']]],
+    [{ enabled: 'yes' }, undefined, [['yes', 'invalid_worktree_enabled_value_ignored']]],
+    [{ enabled: null }, undefined, [[null, 'invalid_worktree_enabled_value_ignored']]],
+  ])('parses %j with field-level warnings', (raw, expected, warnings) => {
+    mockLogger.warn.mockClear();
+    expect(parseWorktreePolicy(raw, 'policy.yaml')).toEqual(expected);
+    expect(mockLogger.warn.mock.calls).toEqual(
+      warnings.map(([value, event]) => [{ filename: 'policy.yaml', value }, event])
+    );
   });
 });
 
