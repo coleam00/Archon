@@ -753,10 +753,10 @@ describe('the merge queue facts and gate', () => {
   test('a pull request that changes a protected path, or any under the manual lane, merges only with an approval at its head', () => {
     const at = install();
     seed(at, item());
-    const pack = { pr: { files: ['.archon/workflows/sdlc/README.md', 'src/a.ts'] } };
+    const pack = { pr: { files: ['.archon/workflows/sdlc/.pack/pack.yaml', 'src/a.ts'] } };
     const protectedPaths = { INPUTS_PROTECTED_PATHS: '.archon/workflows/**, infra/**' };
     const refused = gate(at, pack, protectedPaths);
-    expect(gated(refused).refusals).toEqual(['it changes protected paths (.archon/workflows/sdlc/README.md) and no maintainer approved it at this head']);
+    expect(gated(refused).refusals).toEqual(['it changes protected paths (.archon/workflows/sdlc/.pack/pack.yaml) and no maintainer approved it at this head']);
     expect(merges(refused)).toEqual([]);
     // A change outside them merges on the auto lane, and not under the manual one.
     expect(gated(gate(at, { pr: { files: ['src/a.ts'] } }, { ...protectedPaths, INPUTS_MERGE_LANE: 'manual' })).refusals).toEqual([
