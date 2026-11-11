@@ -491,7 +491,11 @@ nodes:
             properties:
               number: { type: integer, minimum: 1 }
               summary: { type: string }
-            required: [number, summary]
+              # When triage gave the blocked verdict, and what it said the item waits on.
+              blocked_at: { type: string }
+              blocked_reason: { type: string }
+              blocked_by: { type: array, items: { type: string } }
+            required: [number, summary, blocked_at, blocked_reason, blocked_by]
         blocked_count: { type: integer }
       required: [blocked, blocked_count]
 

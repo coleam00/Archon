@@ -673,17 +673,21 @@ describe('the intake scripts', () => {
     expect(stored(at).value).toMatchObject({ stage: 'needs_contract', claim: null });
   }, 60_000);
 
-  test('a blocked item closes nothing', () => {
+  test('a blocked item closes nothing and keeps what its verdict waits on', () => {
     const at = install();
     const applied = outcome(
       at,
       { runId: 'run-1' },
       facts(at, { runId: 'run-1' }).output,
-      verdict({ contract: 'BLOCKED', blocked_reason: 'waits on a release', blocked_by: [] })
+      verdict({ contract: 'BLOCKED', blocked_reason: 'waits on a release', blocked_by: [ORIGINAL_URL] })
     );
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect([...applied.closes, ...applied.comments]).toEqual([]);
-    expect(stored(at).value).toMatchObject({ stage: 'blocked', claim: null });
+    expect(stored(at).value).toMatchObject({
+      stage: 'blocked',
+      claim: null,
+      facts: { triage: { blocked: { reason: 'waits on a release', by: [ORIGINAL_URL] } } },
+    });
   }, 60_000);
 
   test('a closed issue is recorded and its labels are left alone', () => {
