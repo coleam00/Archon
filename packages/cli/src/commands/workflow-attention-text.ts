@@ -13,6 +13,7 @@ import {
   legacyOccurrenceStep,
   type AttentionAnswerer,
 } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowNotice } from '@archon/workflows/workflow-notice';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { formatAge } from './workflow-shared';
 
@@ -163,6 +164,14 @@ function answererText(answeredBy: AttentionAnswerer | null): string {
     : ` by user ${answeredBy.userId}`;
 }
 
+/** A notice as one line short enough to read aloud: when, what it said, its labels. */
+export function noticeText(notice: Pick<WorkflowNotice, 'at' | 'labels' | 'text'>): string {
+  const time = new Date(notice.at);
+  const at = Number.isNaN(time.getTime()) ? notice.at : `${time.toISOString().slice(0, 16)}Z`;
+  const labels = Object.entries(notice.labels).map(([key, value]) => `${key}=${value}`);
+  return [at, notice.text, ...(labels.length > 0 ? [labels.join(' ')] : [])].join('  ');
+}
+
 /** The text for one stream line; none for a bookmark. */
 export function attentionStreamText(
   line: Exclude<AttentionStreamLine, { type: 'error' }>,
@@ -186,6 +195,8 @@ export function attentionStreamText(
       return [terminalText(line)];
     case 'resumed':
       return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
+    case 'notice':
+      return [noticeText(line)];
     case 'owner_lost':
       return [
         `Run ${line.runId} is ${line.observedStatus} but its owner is gone.${runContextText(line)} ` +

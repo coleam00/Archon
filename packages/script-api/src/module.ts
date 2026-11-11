@@ -313,6 +313,20 @@ export function outcomes(): NodeOutcomesListing {
   return JSON.parse(readFileSync(engineEnv('NODE_OUTCOMES_FILE'), 'utf8')) as NodeOutcomesListing;
 }
 
+/**
+ * Tell whoever watches the attention stream what this run did (`archon workflow notice`):
+ * one short line, with labels a reader filters and counts by. It asks nothing of anyone:
+ * the run does not pause and nobody can answer. Emit one when something real happened,
+ * not for a pass that found nothing to do. Throws `HostCommandError` when the host
+ * refuses it: text over the length bound or with a line break, or a run past its notice limit.
+ */
+export function notice(text: string, labels: Readonly<Record<string, string>> = {}): void {
+  const pairs = Object.entries(labels).flatMap(([key, value]) => ['--label', `${key}=${value}`]);
+  // After `--`, so text that starts with a dash is not read as a flag.
+  const answer = archon('workflow notice', ['--json', ...pairs, '--', text]);
+  if (answer.code !== 0) throw failed('workflow notice', answer);
+}
+
 export interface TriggerFireOptions {
   /** One delivery id starts at most one run; build it from values a retry repeats. */
   readonly deliveryId?: string;

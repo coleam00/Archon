@@ -2076,6 +2076,14 @@ declare module 'archon:script' {
    * listed it when this node started.
    */
   export function outcomes(): NodeOutcomesListing;
+  /**
+   * Tell whoever watches the attention stream what this run did (`archon workflow notice`):
+   * one short line, with labels a reader filters and counts by. It asks nothing of anyone:
+   * the run does not pause and nobody can answer. Emit one when something real happened,
+   * not for a pass that found nothing to do. Throws `HostCommandError` when the host
+   * refuses it: text over the length bound or with a line break, or a run past its notice limit.
+   */
+  export function notice(text: string, labels?: Readonly<Record<string, string>>): void;
   export interface TriggerFireOptions {
       /** One delivery id starts at most one run; build it from values a retry repeats. */
       readonly deliveryId?: string;

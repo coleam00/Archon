@@ -191,6 +191,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     getWorkflowRunForAttention: mock(unexpected('getWorkflowRunForAttention')),
     listAttentionQueueRows: mock(unexpected('listAttentionQueueRows')),
     listAttentionWaitStarts: mock(unexpected('listAttentionWaitStarts')),
+    listWorkflowNoticeRows: mock(unexpected('listWorkflowNoticeRows')),
     signalWorkflowWait: mock(unexpected('signalWorkflowWait')),
     resolveApprovalGate: mock(unexpected('resolveApprovalGate')),
     resolveAndCancelApprovalGate: mock(unexpected('resolveAndCancelApprovalGate')),

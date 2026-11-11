@@ -111,7 +111,9 @@ export const workflowHelp: HelpGroup = {
           spec: '--notices',
           description:
             'With --watch: also what happened to work nobody has to act on (a run\n' +
-            'completed, was cancelled or resumed)',
+            'completed, was cancelled or resumed, or emitted a notice)\n' +
+            'With --since and no --watch: list the notices runs emitted since then, one\n' +
+            'line each, or count them with --count-by project|label:<key>',
         },
         {
           spec: '--protocol',
@@ -248,6 +250,16 @@ export const workflowHelp: HelpGroup = {
           spec: '--yes',
           description: 'Confirm cross-scope reset; refused without --scope or --yes',
         },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'notice',
+      spec: 'workflow notice <text>',
+      description:
+        'Inside a workflow node: say what the run did, for whoever watches attention\nwith --notices. Never pauses the run and cannot be answered',
+      scopedFlags: [
+        { spec: '--label <k=v>', description: 'A label to filter and count by; repeatable' },
       ],
     },
     {
