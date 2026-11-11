@@ -680,6 +680,44 @@ describe('commit-associated PR cleanup', () => {
     }
   );
 
+  test.each(
+    (['head', 'branch'] as const).flatMap(unknownTip =>
+      (['NONE', 'OPEN', 'MERGED', 'UNAVAILABLE'] as const).map(other => ({ unknownTip, other }))
+    )
+  )(
+    'unknown $unknownTip with other tip $other preserves evidence and retention',
+    async ({ unknownTip, other }) => {
+      const head = 'a'.repeat(40);
+      const branch = 'b'.repeat(40);
+      mockExecFileAsync.mockImplementation(async (_file, args) => ({
+        stdout: args.includes('HEAD^{commit}') ? head : branch,
+        stderr: '',
+      }));
+      mockGetPrsForCommit.mockImplementation(async sha => {
+        if (sha === (unknownTip === 'head' ? head : branch)) return { state: 'UNKNOWN_COMMIT' };
+        if (other === 'NONE' || other === 'UNAVAILABLE') return { state: other };
+        return { state: 'FOUND', prs: [{ state: other, headSha: 'covering-head' }] };
+      });
+      const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
+      expect(result.errors).toEqual([]);
+      expect(result.removed).toEqual(other === 'MERGED' ? ['local-feature'] : []);
+      if (other !== 'MERGED') {
+        expect(result.skipped).toEqual([
+          {
+            branchName: 'local-feature',
+            reason:
+              other === 'UNAVAILABLE'
+                ? 'PR state lookup failed — merge state unverifiable'
+                : 'no pull request covers all local work — a local commit was not found in the configured repository',
+          },
+        ]);
+        expect(mockDestroy).not.toHaveBeenCalled();
+      }
+      if (unknownTip === 'head' && other !== 'UNAVAILABLE')
+        expect(mockGetPrsForCommit).toHaveBeenCalledWith(branch, '/workspace/repo', 'origin');
+    }
+  );
+
   test('reports unavailable commit lookup', async () => {
     mockGetPrsForCommit.mockResolvedValue({ state: 'UNAVAILABLE' });
     const result = await cleanupMergedWorktrees('codebase-1', '/workspace/repo');
