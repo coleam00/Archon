@@ -75,7 +75,8 @@ nodes:
   # code lens and every lens an open prior blocker names rerun. An include's inputs
   # are substituted as text at load time and cannot be compared in a `when:`. For
   # the same reason it carries the part assignment, so synthesis reads a value
-  # certified against its schema, not raw text.
+  # certified against its schema, not raw text. It also prepares review/, where
+  # every review node writes.
   - id: mode
     script: review-round
     runtime: bun
@@ -120,19 +121,11 @@ nodes:
           required: [delivers, parts]
       required: [continuation, head, cursor, risks, seams, code, tests, errors, docs, ux, part]
 
-  # Every review node writes under review/, and a fresh run's artifacts directory
-  # has none. Agents told to create it have skipped that step, so the declared
-  # scope.md pointer failed and took the whole delivery run down with it. An
-  # earlier round's verifier votes are removed here, so a verifier that fails
-  # this round leaves no vote rather than a stale one.
-  - id: review-dir
-    bash: mkdir -p "$ARTIFACTS_DIR/review" && rm -f "$ARTIFACTS_DIR"/review/verify-*.json
-
   - id: scope
     command: review-scope
     context: fresh
     mutates_checkout: false
-    depends_on: [review-dir, mode]
+    depends_on: [mode]
     output_format:
       type: object
       properties:
