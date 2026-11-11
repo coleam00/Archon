@@ -2128,10 +2128,13 @@ When no candidate can be claimed, `claimed` is `null` and the command exits `2`.
 candidates yourself: the engine does not rank or filter them. `claim` is refused outside a
 run.
 
-An Archon binary from before `state claim` existed does not know the `claim` operation. It
-fails with exit `1` on `state get`, `log`, `list` and any write to a document whose
-revisions it reads include a claim. Once a store holds a claim, use only binaries that
-have `state claim` on it.
+An Archon binary from before `state claim` existed does not know the `claim` operation. On
+a document whose revisions it reads include a claim, it exits `1` on `state get`, `log`,
+`list --values` and any write. On SQLite and PostgreSQL a plain `state list` still works,
+because it does not read the operation; on the files store `list` fails too. Once a store
+holds a claim, use only binaries that have `state claim` on it. A source checkout and an
+installed release can share one Archon home: after the first claim, the older of the two
+fails on that document, so update both.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
