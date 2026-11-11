@@ -1221,6 +1221,11 @@ test.each([
       return { stdout: 'https://github.com/test/repo.git', stderr: '' };
     }
     if (file === 'gh') {
+      if (failure === 'unknown-commit' && args[0] === 'api' && !args.includes('graphql'))
+        throw Object.assign(new Error('association rejected'), {
+          code: 1,
+          stdout: JSON.stringify({ status: '422' }),
+        });
       if (
         (args.includes('graphql') ? 'graphql' : args[0] === 'api' ? 'pulls' : args[0]) ===
         failedGhCommand

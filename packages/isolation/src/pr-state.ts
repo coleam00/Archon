@@ -194,6 +194,16 @@ function parseCommitPrs(
   return prs.length ? { state: 'FOUND', prs } : { state: 'NONE' };
 }
 
+function isCommitAssociationRejected(error: unknown): boolean {
+  if (!isRecord(error) || error.code !== 1 || typeof error.stdout !== 'string') return false;
+  try {
+    const response: unknown = JSON.parse(error.stdout);
+    return isRecord(response) && response.status === '422';
+  } catch {
+    return false;
+  }
+}
+
 async function commitExistsOnGithub(
   sha: string,
   repository: string,
@@ -288,6 +298,9 @@ export async function getPrsForCommit(
     stage = 'commit';
     const commitExists = await commitExistsOnGithub(sha, repository.nameWithOwner, repoPath);
     if (result.state === 'UNAVAILABLE') {
+      // GitHub rejects missing SHAs with 422; only the object query proves absence.
+      if (!commitExists && isCommitAssociationRejected(result.error))
+        return { state: 'UNKNOWN_COMMIT' };
       stage = 'pulls';
       throw result.error;
     }

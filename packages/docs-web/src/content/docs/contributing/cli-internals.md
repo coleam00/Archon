@@ -303,11 +303,12 @@ archon isolation cleanup [days] (default: 7)
    `pr-unavailable`; both failures keep the environment and prevent scheduled stale deletion.
 5. Commit association lookup first requests associated PRs. A nonempty result skips
    commit inspection. If the lookup fails or returns no PRs, it queries GitHub's object
-   by OID in the configured repository. After a successful empty association, an
+   by OID in the configured repository. After an empty association or a structured HTTP 422 rejection, an
    error-free response with an accessible repository and a null object produces
    `UNKNOWN_COMMIT`; this proves absence only in that repository. It does not
    establish absence across GitHub. Lookup errors and malformed responses stay
-   `UNAVAILABLE`, even if object inspection returns null. An unknown tip does not stop
+   `UNAVAILABLE`, even if object inspection returns null, except for that confirmed
+   422 rejection. HTTP 422 alone does not prove absence. An unknown tip does not stop
    inspection of other tips or covering candidates. Without eligible proof, an unknown
    commit produces `unknown-commit`, reporting that no PR covers all local work because
    a local commit was not found in the configured repository, and preventing scheduled

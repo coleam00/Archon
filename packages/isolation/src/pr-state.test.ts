@@ -424,6 +424,34 @@ describe('getPrsForCommit', () => {
     ]);
   });
 
+  test.each([
+    { status: '422', missing: true, expected: 'UNKNOWN_COMMIT' },
+    { status: '422', missing: false, expected: 'UNAVAILABLE' },
+    { status: '401', missing: true, expected: 'UNAVAILABLE' },
+    { status: '403', missing: true, expected: 'UNAVAILABLE' },
+    { status: '429', missing: true, expected: 'UNAVAILABLE' },
+    { status: '500', missing: true, expected: 'UNAVAILABLE' },
+  ])(
+    'classifies HTTP $status with missing=$missing as $expected',
+    async ({ status, missing, expected }) => {
+      mockLogger.warn.mockClear();
+      setupCommitResponse(
+        undefined,
+        'pulls',
+        Object.assign(new Error('credential-bearing error'), {
+          code: 1,
+          stdout: JSON.stringify({ message: 'arbitrary wording', status }),
+        }),
+        undefined,
+        { data: { repository: { object: missing ? null : { __typename: 'Commit', oid: COMMIT } } } }
+      );
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: expected });
+      expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
+      if (expected === 'UNKNOWN_COMMIT') expect(mockLogger.warn).not.toHaveBeenCalled();
+      else expect(mockLogger.warn).toHaveBeenCalled();
+    }
+  );
+
   test.each(['empty', 'failed', 'malformed-json', 'malformed-pr'] as const)(
     'a null Git object preserves the result of a %s association',
     async association => {
