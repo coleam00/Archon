@@ -604,6 +604,10 @@ archon workflow status --json --verbose
 
 If `cwd` is an unregistered Git checkout, the command falls back to install-wide active runs and says so. Every successful JSON result carries `scopeFallback`: `true` for that fallback and `false` for a resolved project or explicit `--all` request. A registry lookup failure fails the command instead of returning install-wide runs under the fallback label. A registered folder project scopes normally; an unregistered non-repository directory is rejected with `Not in a git repository` before status lookup.
 
+Each run carries the latest [notice](#workflow-notice) it emitted, which says what the run
+is about: a `Notice:` line in text, and `notice` (`{ at, node, text, labels }` or null) in
+JSON. `archon workflow status --all` therefore answers "what is running right now, and on what".
+
 The normal human and JSON views include every active node without fetching each run's event
 history. In JSON, `active_nodes` is the ordered list of unresolved node starts: `node_started` adds
 an identifier and `node_suspended` keeps it active, while `node_completed`, `node_failed`, `node_skipped`, and
@@ -1122,7 +1126,9 @@ archon workflow attention --json --count-by answerer --since 30d
 archon workflow attention <run-id> --json                          # one item
 archon workflow attention --watch --json --all                     # what needs someone, as it happens
 archon workflow attention --watch --json --label merge=pr          # one class of question
-archon workflow attention --watch --notices --json                 # also runs that ended or resumed
+archon workflow attention --watch --notices --json                 # also runs that ended or resumed, and notices
+archon workflow attention --notices --since 24h --json             # the notices runs emitted in a window
+archon workflow attention --notices --since 24h --count-by label:kind
 archon workflow attention --watch --protocol --json                # the full sync protocol, for programs
 archon workflow attention --watch --protocol --json --after <cursor>  # resume it
 ```
@@ -1181,9 +1187,15 @@ filter in the pipe can hold lines until the watch ends. Scope and `--label` work
 [Stream the queue](/getting-started/operate/#stream-the-queue).
 
 **`--notices`**, with `--watch`, also writes the `needs: "nothing"` lines that say what
-happened to work: a run that completed, was cancelled or resumed, and a usage-limit wait
-opening or closing. It leaves out `ready` and `bookmark`. It cannot be combined with
-`--protocol`.
+happened to work: a run that completed, was cancelled or resumed, a usage-limit wait
+opening or closing, and each [`workflow notice`](#workflow-notice) a run emits. It leaves
+out `ready` and `bookmark`. It cannot be combined with `--protocol`.
+
+**`--notices --since <7d|24h|2w|ISO>`**, without `--watch`, lists the notices runs emitted
+in the window, oldest first, one line each: time, text, labels. Scope and
+`--label` apply as for the list. `--count-by project|label:<key>` counts them instead.
+`--json` prints `{ ok, action: "attention", scope, since, notices }`. A run id, `--sort`
+and `--count-by answerer` are refused.
 
 **`--protocol`**, with `--watch`, writes the full sync protocol, for a program that keeps its
 own copy of the open set: one `attention` line per open
@@ -1217,6 +1229,30 @@ HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sor
 `countBy` (`project` or `label:<key>`; it counts open items, so not `answerer`), and returns `items` beside the console's `runs`, or `{ counts }`. A server has
 no working directory, so without `project` it covers the whole install.
 `GET /api/runs/<run-id>/attention` reads one item.
+
+### `workflow notice`
+
+Say what a run did, from inside one of its nodes, for whoever watches attention with
+`--notices`. The run does not pause and nobody can answer. See
+[Notices](/getting-started/operate/#notices-what-the-work-did).
+
+```bash
+archon workflow notice "Merged pull request 7 into dev" --label kind=merged --label pr=7
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--label <k=v>` | A label readers filter and count by; repeatable, at most 16, each value at most 200 characters |
+| `--json` | Print `{ ok, action: "notice", runId, count, limit }`, or `{ ok: false, error }` with `reason` when the engine refused the notice itself |
+
+The text is one line of at most 300 characters with no control characters, which labels
+may not contain either, and a run may emit 50 notices. The command
+exits 1 without recording anything when the text or labels are outside those bounds
+(`reason: "invalid"`), when the run has reached its limit (`run_limit`), when the run is
+not running (`run_not_running`), and, with no `reason`, when a label is not `key=value` or
+it is not called from a workflow node: it reads
+`WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` from the node's environment, and the two must
+name the same run. Put the text after `--` when it may start with a dash.
 
 ### `workflow attention label`
 

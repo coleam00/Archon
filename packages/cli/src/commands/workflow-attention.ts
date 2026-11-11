@@ -29,8 +29,9 @@ import {
   type AttentionQueueSource,
 } from '@archon/workflows/attention-queue';
 import { resolveMetricsWindow } from '@archon/workflows/metrics';
+import { countWorkflowNotices, listWorkflowNotices } from '@archon/workflows/workflow-notice';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { attentionItemLines, attentionStreamText } from './workflow-attention-text';
+import { attentionItemLines, attentionStreamText, noticeText } from './workflow-attention-text';
 import {
   getLog,
   inheritedWorkflowCodebase,
@@ -59,8 +60,9 @@ export interface WorkflowAttentionOptions {
    */
   protocol?: boolean;
   /**
-   * With `watch`: also write what happened to work that nobody has to act on, such as a
-   * run that completed or resumed.
+   * With `watch`: also write what happened to work that nobody has to act on: a run that
+   * completed or resumed, and the notices runs emit. With `since` and no `watch`: list
+   * the notices emitted in that window, or count them with `countBy`.
    */
   notices?: boolean;
   /** With `watch` and `protocol`: replay readable feed events strictly after this cursor. */
@@ -214,6 +216,8 @@ export async function workflowAttentionCommand(
 
     const { labels, order, countBy } = parseAttentionQueueRequest(opts);
     const scope = await attentionScope(host, cwd, opts);
+    if (opts.notices && opts.since !== undefined)
+      return await noticesCommand(host, scope, labels, countBy, opts.since, opts.json);
     if (opts.since !== undefined && countBy !== undefined) {
       const { since } = resolveMetricsWindow({ since: opts.since });
       return await renderAttentionCounts(
@@ -253,11 +257,55 @@ function rejectFlagsWithoutTheirMode(opts: WorkflowAttentionOptions): void {
     throw new Error(`workflow attention ${flag} needs ${mode}`);
   };
   if (opts.protocol && !opts.watch) needs('--protocol', '--watch');
-  if (opts.notices && !opts.watch) needs('--notices', '--watch');
+  if (opts.notices && !opts.watch && opts.since === undefined)
+    needs('--notices', '--watch, or --since to list the notices of a window');
   if (opts.notices && opts.protocol)
     throw new Error('workflow attention --watch takes --notices or --protocol, not both');
   if (opts.after !== undefined && !opts.protocol) needs('--after', '--watch --protocol');
-  if (opts.since !== undefined && opts.countBy === undefined) needs('--since', '--count-by');
+  if (opts.since !== undefined && opts.countBy === undefined && !opts.notices)
+    needs('--since', '--count-by or --notices');
+  if (opts.since !== undefined && opts.watch)
+    throw new Error('workflow attention --watch takes no --since; the stream starts now');
+}
+
+/**
+ * `workflow attention --notices --since <window>`: the notices runs emitted in the window,
+ * oldest first, or how many fall under each project or label value.
+ */
+async function noticesCommand(
+  host: WorkflowHost,
+  scope: AttentionQueueScope,
+  labels: AttentionQueueItem['labels'],
+  countBy: ReturnType<typeof parseAttentionQueueRequest>['countBy'],
+  sinceText: string,
+  json: boolean | undefined
+): Promise<number> {
+  const { since } = resolveMetricsWindow({ since: sinceText });
+  const source = { store: host.deps.store };
+  if (countBy !== undefined) {
+    if (countBy.by === 'answerer') throw new Error('A notice has no answerer to count by');
+    return await renderAttentionCounts(
+      await countWorkflowNotices(source, { scope, labels, since, countBy }),
+      scope,
+      json,
+      [],
+      'No notices in that window.'
+    );
+  }
+  const notices = await listWorkflowNotices(source, { scope, labels, since });
+  if (json) {
+    await writeJsonLine({
+      ok: true,
+      action: 'attention',
+      scope,
+      since: since.toISOString(),
+      notices,
+    });
+    return 0;
+  }
+  for (const notice of notices) console.log(noticeText(notice));
+  if (notices.length === 0) console.log('No notices in that window.');
+  return 0;
 }
 
 function rejectConflictingAttentionOptions(
@@ -266,6 +314,8 @@ function rejectConflictingAttentionOptions(
 ): void {
   rejectFlagsWithoutTheirMode(opts);
   const shaped = opts.sort !== undefined || opts.countBy !== undefined;
+  if (opts.notices && !opts.watch && (runId !== undefined || opts.sort !== undefined))
+    throw new Error('workflow attention --notices --since takes no run id or --sort');
   if (opts.watch && (runId !== undefined || shaped))
     throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
   const scoped = opts.project !== undefined || opts.all || opts.labels.length > 0;

@@ -7353,6 +7353,25 @@ export interface components {
         }
       | {
           /** @enum {string} */
+          type: 'notice';
+          cursor: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          runId: string;
+          workflow: string | null;
+          parentRunId: string | null;
+          at: string;
+          text: string;
+          labels: {
+            [key: string]: string;
+          };
+          node: string | null;
+        }
+      | {
+          /** @enum {string} */
           type: 'owner_lost';
           cursor: string;
           project: {
