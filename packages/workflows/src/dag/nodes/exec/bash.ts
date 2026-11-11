@@ -258,6 +258,7 @@ async function recordBashFailure(
       {
         status: 'failed',
         error: errorMsg,
+        exitCode: formatted.exitCode,
         failureKind: contractFailure
           ? 'output_contract'
           : err.cancelled
@@ -267,7 +268,7 @@ async function recordBashFailure(
               : 'exec_failed',
         ...(contractFailure ? { retryable: false as const } : {}),
       },
-      { output: { text: '' } }
+      formatted.stdoutTail !== undefined ? { output: { text: formatted.stdoutTail } } : {}
     )
   );
 }

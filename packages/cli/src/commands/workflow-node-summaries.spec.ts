@@ -437,6 +437,60 @@ describe('buildNodeSummaries session ids', () => {
   });
 });
 
+describe('buildNodeSummaries - failed bash/script node structured fields', () => {
+  it('exposes exitCode on a failed node when exit_code is recorded', () => {
+    const summaries = buildNodeSummaries([
+      event('f-start', 'node_started', 'check', '2026-11-12T10:00:00.000Z'),
+      event('f-failed', 'node_failed', 'check', '2026-11-12T10:00:01.000Z', {
+        error: "Bash node 'check' failed [exit 1]: line1\nline2",
+        exit_code: 1,
+      }),
+    ]);
+    expect(summaries[0]).toMatchObject({ state: 'failed', error: expect.any(String), exitCode: 1 });
+  });
+
+  it('omits exitCode when exit_code is absent (spawn failure, timeout, cancel)', () => {
+    const summaries = buildNodeSummaries([
+      event('f-start', 'node_started', 'check', '2026-11-12T10:00:00.000Z'),
+      event('f-failed', 'node_failed', 'check', '2026-11-12T10:00:01.000Z', {
+        error: "Bash node 'check' cancelled",
+      }),
+    ]);
+    expect(summaries[0]).not.toHaveProperty('exitCode');
+  });
+
+  it('exposes captured stdout on a failed node when node_output is recorded', () => {
+    const summaries = buildNodeSummaries([
+      event('f-start', 'node_started', 'check', '2026-11-12T10:00:00.000Z'),
+      event('f-failed', 'node_failed', 'check', '2026-11-12T10:00:01.000Z', {
+        error: "Bash node 'check' failed [exit 1]: line1",
+        exit_code: 1,
+        node_output: 'line1',
+      }),
+    ]);
+    expect(summaries[0]).toMatchObject({
+      state: 'failed',
+      exitCode: 1,
+      output: 'line1',
+      outputPreview: 'line1',
+      outputTruncated: false,
+    });
+  });
+
+  it('omits output fields on a failed node when no stdout was captured', () => {
+    const summaries = buildNodeSummaries([
+      event('f-start', 'node_started', 'check', '2026-11-12T10:00:00.000Z'),
+      event('f-failed', 'node_failed', 'check', '2026-11-12T10:00:01.000Z', {
+        error: "Bash node 'check' failed [exit 1]: no output",
+        exit_code: 1,
+      }),
+    ]);
+    expect(summaries[0]).not.toHaveProperty('output');
+    expect(summaries[0]).not.toHaveProperty('outputPreview');
+    expect(summaries[0]).not.toHaveProperty('outputTruncated');
+  });
+});
+
 describe('NODE_SUMMARY_EVENT_TYPES', () => {
   it('names every event type the fold reads: fetching only those changes nothing', () => {
     // One row of every event type, each carrying fields the fold would pick up.

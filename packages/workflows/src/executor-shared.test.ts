@@ -356,6 +356,36 @@ describe('formatSubprocessFailure', () => {
     expect(userMessage).not.toContain('[exit');
     expect(userMessage).toContain('diagnostic');
   });
+
+  it('returns exitCode as a number when code is numeric', () => {
+    const result = formatSubprocessFailure(
+      { message: 'Command failed: bash -c script\n', stderr: 'err', code: 2 },
+      "Bash node 'b1'"
+    );
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('returns exitCode undefined when code is a string (spawn error)', () => {
+    const result = formatSubprocessFailure(
+      { message: 'spawn bash ENOENT', code: 'ENOENT' },
+      "Bash node 'b1'"
+    );
+    expect(result.exitCode).toBeUndefined();
+  });
+
+  it('returns stdoutTail when stdout is present, undefined when absent', () => {
+    const withStdout = formatSubprocessFailure(
+      { message: 'Command failed: bash -c script\n', stdout: 'captured output', code: 1 },
+      "Bash node 'b1'"
+    );
+    expect(withStdout.stdoutTail).toBe('captured output');
+
+    const withoutStdout = formatSubprocessFailure(
+      { message: 'Command failed: bash -c script\n', stderr: 'only stderr', code: 1 },
+      "Bash node 'b1'"
+    );
+    expect(withoutStdout.stdoutTail).toBeUndefined();
+  });
 });
 
 describe('getRetryDelayMs', () => {

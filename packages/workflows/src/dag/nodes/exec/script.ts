@@ -382,10 +382,11 @@ async function recordScriptFailure(
       {
         status: 'failed',
         error: errorMsg,
+        exitCode: formatted.exitCode,
         failureKind: scriptFailureKind(err, contractFailure, isTimeout),
         ...(contractFailure ? { retryable: false as const } : {}),
       },
-      { output: { text: '' } }
+      formatted.stdoutTail !== undefined ? { output: { text: formatted.stdoutTail } } : {}
     )
   );
 }

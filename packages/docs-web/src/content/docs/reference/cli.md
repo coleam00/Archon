@@ -906,8 +906,12 @@ replayed prior successes and to `workflow runs --json --verbose`. Empty output i
 means the persisted text is incomplete, even though `output` returns all of that text.
 Successful bash and script output stays bounded to 32 KiB in persistence; this view
 does not load spill files. Human output keeps the short preview. Failed nodes include
-`error` (or `Unknown error` when none was recorded). A node a resume reset for
-re-running (`always_run`, or a stale cached success) reads `pending` until its new attempt starts, matching `terminal_record.nodes`.
+`error` (or `Unknown error` when none was recorded). Failed `bash:` and `script:` nodes
+also include `exitCode` (the numeric process exit code, absent for spawn failures,
+timeouts, and cancellations) and, when the subprocess wrote to stdout before failing,
+the same `output`, `outputTruncated`, and `outputPreview` fields that completed nodes
+carry. A node a resume reset for re-running (`always_run`, or a stale cached success)
+reads `pending` until its new attempt starts, matching `terminal_record.nodes`.
 Nodes whose provider reported a session include `sessionIds`: the full
 session id of each attempt and loop iteration, in order. Human `--verbose` output prints
 them on a `Session:` or `Sessions:` line, so you can continue a node's conversation in

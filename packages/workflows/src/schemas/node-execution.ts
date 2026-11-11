@@ -145,6 +145,8 @@ export const executionLifecycleSchema = z.discriminatedUnion('status', [
     failureKind: nodeFailureKindSchema.optional(),
     /** The provider's own typed failure, unchanged, when a provider reported one. */
     providerFailure: providerFailureSchema.optional(),
+    /** Numeric exit code from the subprocess, when one was available. Absent for spawn failures, timeouts, and cancellations. */
+    exitCode: z.number().optional(),
   }),
   z.object({ status: z.literal('skipped'), reason: nodeSkipReasonSchema, cause: skipCauseSchema }),
   z.object({

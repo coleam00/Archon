@@ -34,6 +34,7 @@ export interface NodeSummary {
   output?: string;
   outputTruncated?: boolean;
   error?: string;
+  exitCode?: number;
   /** Set when the failure is "a live child run blocks this node"; abandoning it unblocks. */
   blockedOnChildRunId?: string;
   cause?: SkipCause;
@@ -252,6 +253,8 @@ function failedNodeSummary(
     startedAt: existing?.startedAt,
     durationMs: nodeDurationMs(record, createdAt, startTime),
     error: data.error ?? 'Unknown error',
+    ...(data.exit_code !== undefined ? { exitCode: data.exit_code } : {}),
+    ...outputFields(data),
     ...(data.blocked_on_child_run_id === undefined
       ? {}
       : { blockedOnChildRunId: data.blocked_on_child_run_id }),

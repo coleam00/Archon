@@ -311,7 +311,7 @@ export function formatSubprocessFailure(
     >
   >,
   label: string
-): { userMessage: string; logFields: Record<string, unknown> } {
+): { userMessage: string; logFields: Record<string, unknown>; exitCode: number | undefined; stdoutTail: string | undefined } {
   const stderr = (err.stderr ?? '').trim();
   const stdout = (err.stdout ?? '').trim();
   const rawMessage = (err.message ?? '').trim();
@@ -341,15 +341,18 @@ export function formatSubprocessFailure(
         ? ` [error ${errorCode}]`
         : '';
 
+  const exitCode = typeof err.code === 'number' ? err.code : undefined;
   return {
     userMessage: `${label} failed${codeSuffix}: ${truncated}`,
     logFields: {
-      exitCode: typeof err.code === 'number' ? err.code : undefined,
+      exitCode,
       errorCode,
       killed: err.killed === true,
       stderrTail,
       stdoutTail,
     },
+    exitCode,
+    stdoutTail,
   };
 }
 
