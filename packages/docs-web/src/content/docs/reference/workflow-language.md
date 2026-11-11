@@ -45,9 +45,9 @@ Workflows live in `.archon/workflows/` relative to the working directory:
 │               └── publish.ts
 ```
 
-The two directories form a fixed package boundary: `.archon/workflows/<pack>/<workflow>/`. A packaged workflow contains exactly one YAML definition; bare `command:` and named `script:` references resolve only from its own `commands/` and `scripts/` directories, with no shared or cross-scope fallback. Included workflows retain their own resource folder, so two workflows may reuse names such as `review.md` without collisions.
+The two directories form a fixed package boundary: `.archon/workflows/<pack>/<workflow>/`. A packaged workflow contains exactly one YAML definition; a bare `command:` reference resolves only from its own `commands/` directory, and a named `script:` reference from its own `scripts/` directory, then from the pack's [shared scripts](/guides/script-nodes/#share-a-script-between-workflows-of-a-pack) in `<pack>/.shared/scripts/`. Neither falls back to another pack or scope. Included workflows retain their own resource folder, so two workflows may reuse names such as `review.md` without collisions.
 
-Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, `.md` documents and the pack's `metric-views.json`, not workflow definitions or `script:` targets. A node reads a document the pack ships through [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack), for example `$PACK_DIR/.shared/policy/triage.md`. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
+Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, `.md` documents, the pack's `metric-views.json` and its shared scripts in `.shared/scripts/`; it holds no workflow definitions. A node reads a document the pack ships through [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack), for example `$PACK_DIR/.shared/policy/triage.md`. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
 
 The same tree works under `~/.archon/workflows/` for home-scoped workflows. Existing flat `.archon/workflows/foo.yaml`, one-level grouped YAML, shared `.archon/commands/`, and shared `.archon/scripts/` remain supported for compatibility.
 
@@ -91,7 +91,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `command` | string | Command name. Packaged workflows resolve it only from their own `commands/`; legacy workflows use shared repo → home → bundled lookup. Optional `with:` binds upstream values by name into the file's `$INPUTS.<name>` surface. See [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes) |
 | `prompt` | string | Inline prompt string |
 | `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms; without one the node runs until it exits); `on_timeout: skip` makes a timeout skipped instead of failed |
-| `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`): inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms; without one the node runs until it exits); `on_timeout: skip` makes a timeout skipped instead of failed; optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars. See [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
+| `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`): inline code or named reference. Packaged workflows resolve named scripts from their own `scripts/`, then the pack's `.shared/scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms; without one the node runs until it exits); `on_timeout: skip` makes a timeout skipped instead of failed; optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars. See [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
 | `loop` | object | Iterative AI prompt until a declared completion condition is met. Reaching `max_iterations` unmet fails the node, or completes it with the last output under `on_exhausted: complete`. See [Loop Nodes](/guides/loop-nodes/) |
 | `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. Takes `on_exhausted` like `loop`. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 | `approval` | object | **Deprecated.** Use `wait: { attention: <message>, form: approval }` instead. See [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates) |
@@ -214,7 +214,7 @@ nodes:
     depends_on: [lens-a, lens-b]
 ```
 
-`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. Inside a `loop_group` body, the source takes one of two forms:
+`synthesize` forks the exact provider session produced by `scope`; the parallel lenses do not change that ancestry. The source must be a transitively upstream command, prompt, or plain `loop:` node, and the consumer must be a command or prompt node. The source may be an `include:` node: the reference then names the node the included workflow returns (its `returns:` node, or its first sink when it declares none), exactly as `$<includeId>.output` does. That node must be a command, prompt, or plain `loop:` node, or the workflow fails to load with both ids named. An include with `fan_out:` runs one instance per item and has no single session, so it is not a source. Inside a `loop_group` body, the source takes one of two forms:
 
 - **An enclosing ancestor** that completes before entry into the group: a command, prompt, or plain `loop:` node outside the body. The first owner turn forks that source; later iterations continue the private branch with the same session ID. Fresh reviewers and `fresh_context: true` leave that branch intact. Terminal body attention waits and other durable waits, and the deprecated interactive gates and terminal body approvals, restore its provider-tagged cursor. A missing cursor snapshot, lost session, or changed session ID fails rather than silently starting over. Failure resume still restarts the group at iteration 1. See [Named owner sessions](/guides/loop-nodes/#named-owner-sessions) for an example.
 - **An upstream node in the same body**: each iteration's consumer forks that iteration's session of the source. It never continues an earlier iteration's branch. A nested group's pause between the source and the consumer resumes within the paused iteration, which re-runs the source, so the consumer forks the re-run source. A terminal body attention wait compares the question on the first answer and may ask again in the same iteration; after one re-ask, it accepts the next answer even if the question changes again. Once an answer is accepted, `until_bash` determines whether the group completes or starts the next iteration. See [Same-iteration sessions](/guides/loop-nodes/#same-iteration-sessions).
@@ -754,6 +754,7 @@ An attention wait pauses until someone answers it, in the form it declares. For 
           does: "Rebases the branch onto main."   # optional; shown with the option
           value: { base: main }                   # optional, select only; returned with the answer
         - { id: use-dev }
+      other: true                        # optional, select only; adds a free-text "other" option
       recommendation:                    # optional; select and approval only
         option: use-main
         why: "Main already has the fix."
@@ -771,11 +772,12 @@ An attention wait pauses until someone answers it, in the form it declares. For 
 
 - `options` is required for `select` and `multi_select` and a load error on the other forms. Option ids are unique and kebab-case; `label` is display text only.
 - An option may say what choosing it does in `does`, which every surface shows with the option. A `select` option may also carry `value`, any JSON value. The engine never interprets it, and no console, CLI text or chat surface renders it, but it is part of the wait: the JSON attention output (`--json`), the API and the run record return it with the options, so do not put secrets in it. When the answer chooses that option, the wait's output includes its `value` unchanged, so the next node reads what the choice means as `$ask.output.value` instead of looking the id up again. An option without `value` leaves the output as `{ decision, text }`. Read `value` whole, for example as a script binding; its fields are not declared in the wait's output contract, so `$ask.output.value.<field>` is a load error. `value` on a `multi_select` option is a load error.
+- `other: true` adds one option with the reserved id `other` after the declared options of a `select` wait, for "none of these; here is what to do instead". An answer that chooses it is refused on every surface unless it carries non-empty text. The next node reads `{ decision: "other", text }`: `decision` is the literal `other`, `text` is the instruction, and there is no `value`. The option appears in the persisted wait, the attention queue item (which also carries `other: true`), the CLI and the console like a declared one. A chat plugin's notice offers only the declared options as controls, because a control sends no text, and its message says how to answer in your own words with `respond <run-id> other <text>`. A declared option with the id `other` on the same wait is a load error, or a node failure when the options are a reference; without `other: true`, `other` is an ordinary id and needs no text. `other: true` on another form is a load error. A recommendation cannot name the reserved option. An Archon binary from before `other` reads such a wait as a plain `select` and accepts `other` without text, so answer it with a binary that knows the field.
 - `recommendation` names the option the workflow recommends, `why`, and optionally a `confidence` of `low`, `medium` or `high`. It is valid on `select` and `approval` waits (where it names `approve` or `reject`). A recommendation of an option the wait does not offer is a load error. The console, the CLI and the conversation's pause notice show it ahead of the choices. It is display only: the answer may choose any declared option.
 - `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`, and so may `recommendation`, `recommendation: "$plan.output.recommendation"`. A reference is read when the wait pauses and must pass the same rules as its literal form, and the resolved recommendation must name a resolved option. If it does not, the wait node fails with an error naming the producer; it never pauses with a question nobody can answer. For plain-property declarations in the producer's `output_format`, the loader also checks that an options field is an array of `{ id, label?, does?, value? }`, where `value` may have any type. When the options declaration uses `allOf`, `anyOf`, or `oneOf` along its field path, in its items, or in an item property, its declared path is checked at load and its option shape is checked at runtime. Composition in unrelated fields does not bypass the plain-property check.
 - `form` is always a literal, because it fixes the node's output contract, so a strict `$ask.output.decision` reference is checked at load time.
 - An undeclared option is refused on every surface. In the `approval` form `reject` is an answer like any other and never cancels the run; wire `cancel:` with `when: "$ask.output.decision == 'reject'"` if a rejection should end it.
-- `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/getting-started/operate/) by them.
+- `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/getting-started/operate/) by them. The wait's `wait_started` event records the labels it opened with, which is what [`archon workflow attention --count-by … --since …`](/reference/cli/#workflow-attention) counts, including waits already answered.
 
 Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer that names its occurrence is refused if it targets an earlier pause of the same run. For HTTP `/approve`, `/reject` and `/respond`, include the optional `expectedGate` using the [gate identity instructions in the API reference](/reference/api/#approve--reject-a-paused-run); omitting it answers the current pause. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
 
@@ -1648,7 +1650,8 @@ exit `3` instead of being silently replaced. Appending an item, or setting a key
 write, can patch the latest revision without it.
 An absent document starts as `{}`; appending to `/seen` creates the array. Invalid patches
 or oversized values exit `4` and write nothing. Exit `5` means the CLI opened a different
-store than the run's. Exit `1` means usage or storage failure.
+store than the run's. Exit `2` means `claim` found nothing claimable. Exit `1` means usage
+or storage failure.
 The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.
 
 A run can claim a document with a lease: `put` or `patch` with `--lease` takes it in the
@@ -1659,8 +1662,14 @@ engine keeps a lease live while its run can still finish, including when the run
 or failed and can resume, and ends it when the run completes, is cancelled or abandoned, or
 is deleted. A take while another run's lease is live exits `3`; taking over an ended lease is
 an ordinary conditional write. A lease does not block other writers: writes without a lease
-flag keep it. What a document means once its lease has ended stays with the workflow. See
-the [CLI reference](/reference/cli/#state) for the fields.
+flag keep it. To make a write depend on the lease, pass `--held` to `put`, `patch` or
+`delete`: the write happens only if the calling run holds the live lease, and otherwise
+exits `3` with `reason: "lease_not_held"`. To hand out work, rank the candidates in a
+script and pipe them to `archon state claim` as `[{"name", "ifRevision"}, ...]`: it takes
+the lease of the first one that is unchanged and not leased by a live run, reports why it
+passed over the earlier ones, and exits `2` when none is claimable. What a document means
+once its lease has ended stays with the workflow. See the
+[CLI reference](/reference/cli/#state) for the fields.
 
 Let the agent judge what to remember, then commit its structured output in a script node
 when the write must happen. For example, a review agent returns a completed PR identifier;
@@ -2332,11 +2341,19 @@ bindings:
       actions: [opened]
     inputs:
       number: { event: subject.number }   # an event field; event bindings only
+  follow-up:                          # neither schedule nor event: fire-only
+    workflow: review-follow-up
+    resource: follow-up
+    overlap: queue
 ```
 
-Each binding sets exactly one of `schedule:` (a timer binding, written as a file
-`archon trigger fire --config` reads) or `event:` (an entry for the GitHub source plugin's
-`bindings` array). `capacity`, `overlap` and `isolation` mean what they mean in a
+A binding sets `schedule:` (a timer binding, written as a file
+`archon trigger fire --config` reads), `event:` (an entry for the GitHub source plugin's
+`bindings` array), or neither. With neither it is a
+[fire-only binding](/guides/workflow-triggers/#start-a-binding-only-with-trigger-fire): the
+same file as a timer binding without a schedule, started only when a run or an operator fires
+it. Setting both is refused, and so is a `schedule:` or `event:` key with an invalid value.
+`capacity`, `overlap` and `isolation` mean what they mean in a
 [binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
 resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
 same `resource` share its slots. With `resource_scope: host` it is
@@ -2344,7 +2361,7 @@ same `resource` share its slots. With `resource_scope: host` it is
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
-input must name a declared timer binding, an `{ event: <field> }` input belongs to an event
+input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an event
 binding, and bindings sharing a resource must declare the same capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 

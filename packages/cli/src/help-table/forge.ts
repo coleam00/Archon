@@ -78,6 +78,20 @@ export const forgeHelp: HelpGroup = {
         },
       ],
     },
+    {
+      command: 'forge',
+      subcommand: 'check',
+      spec: 'forge check',
+      description:
+        'Check before a run spends that a plugin serves a host, supports the named\noperations and has a credential; runs no forge operation. Exits 1 with the reason',
+      scopedFlags: [
+        {
+          spec: '--data <json>',
+          description:
+            'JSON object with host and operations, for example\n{"host":"github.com","operations":["pr.view","pr.merge"]}',
+        },
+      ],
+    },
     ...Object.entries(forgeOperationDescriptions)
       .filter(([op]) => op !== 'resolve')
       .map(([subcommand, description]) => ({

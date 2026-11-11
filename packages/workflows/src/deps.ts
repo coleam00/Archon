@@ -15,7 +15,7 @@ import type {
 } from '@archon/provider-contract';
 import type { IWorkflowStore, WorkflowStoreKind } from './store';
 import type { ModelReasoningEffort, WebSearchMode } from './schemas';
-import type { AttentionOption } from './schemas/wait-node';
+import { OTHER_ATTENTION_OPTION, type AttentionOption } from './schemas/wait-node';
 import {
   describeAttentionRecommendation,
   legacyOccurrenceStep,
@@ -157,7 +157,7 @@ export function attentionAnswerLines(
   surface: WorkflowCommandSurface,
   attention: Pick<
     Extract<RunAttention, { kind: 'attention' }>,
-    'runId' | 'form' | 'options' | 'occurrence' | 'recommendation'
+    'runId' | 'form' | 'options' | 'other' | 'occurrence' | 'recommendation'
   >
 ): string[] {
   const { runId, options, recommendation } = attention;
@@ -187,7 +187,9 @@ export function attentionAnswerLines(
         ...recommended,
         ...options.map(
           option =>
-            `${choice(option)}: ${does(option)}${command(`respond ${runId} ${option.id} [text]`)}`
+            `${choice(option)}: ${does(option)}${command(
+              `respond ${runId} ${option.id} ${attention.other === true && option.id === OTHER_ATTENTION_OPTION.id ? '<text>' : '[text]'}`
+            )}`
         ),
       ];
     case 'multi_select':

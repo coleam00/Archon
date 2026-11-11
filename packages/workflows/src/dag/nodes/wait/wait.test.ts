@@ -359,6 +359,102 @@ describe('executeDagWorkflow -- durable wait node', () => {
     );
   });
 
+  it("persists the reserved option of a select wait declared with 'other: true'", async () => {
+    const store = createMockStore();
+    const platform = createMockPlatform();
+    const ask = (id: string, other: boolean) => ({
+      id,
+      kind: 'wait' as const,
+      wait: {
+        attention: 'Merge it?',
+        form: 'select' as const,
+        options: [{ id: 'merge' }],
+        ...(other ? { other } : {}),
+      },
+    });
+    const pausedWait = async (runId: string, other: boolean) => {
+      store.pauseWorkflowRunForWait.mockClear();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform,
+          conversationId: `conv-${runId}`,
+          cwd: testDir,
+          workflow: { name: 'attention-other-test', nodes: [ask('ask', other)] },
+          workflowRun: makeWorkflowRun(runId),
+        })
+      );
+      return store.pauseWorkflowRunForWait.mock.calls[0]?.[1];
+    };
+
+    expect(await pausedWait('attention-other', true)).toMatchObject({
+      options: [{ id: 'merge' }, { id: 'other', label: 'Other' }],
+      other: true,
+    });
+    const notice = (platform.sendMessage as ReturnType<typeof mock>).mock.calls
+      .map(call => String(call[1]))
+      .join('\n');
+    expect(notice).toContain('respond attention-other other <text>');
+
+    const plain = await pausedWait('attention-plain', false);
+    expect(plain).toMatchObject({ options: [{ id: 'merge' }] });
+    expect(plain).not.toHaveProperty('other');
+  });
+
+  it("completes a select wait answered 'other' with the text and no value", async () => {
+    const store = createMockStore();
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Merge it?',
+      pauseId: 'ask-1',
+      form: 'select',
+      options: [
+        { id: 'merge', value: { effect: 'merge' } },
+        {
+          id: 'other',
+          label: 'Other',
+          does: 'None of these. The answer text says what to do instead.',
+        },
+      ],
+      other: true,
+      answer: { decision: 'other', text: 'Rebase first.' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+
+    const result = await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        conversationId: 'conv-attention-other-answered',
+        cwd: testDir,
+        workflow: {
+          name: 'attention-other-answered-test',
+          nodes: [
+            {
+              id: 'ask',
+              kind: 'wait',
+              wait: {
+                attention: 'Merge it?',
+                form: 'select',
+                options: [{ id: 'merge', value: { effect: 'merge' } }],
+                other: true,
+              },
+            },
+          ],
+        },
+        workflowRun: makeWorkflowRun('attention-other-answered', {
+          metadata: { wait: persisted },
+        }),
+      })
+    );
+
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(JSON.parse(String(result))).toEqual({ decision: 'other', text: 'Rebase first.' });
+  });
+
   it('completes an answered select wait with its answer as typed output', async () => {
     const store = createMockStore();
     const persisted: WorkflowWaitContext = {

@@ -252,6 +252,31 @@ test('the queue scopes by project the way archon state names it, across a rename
     },
   });
 
+  // From events: the labels each wait opened with, so the later relabel does not show.
+  const started = await captured(() =>
+    workflowAttentionCommand(host, registeredDir, undefined, {
+      json: true,
+      all: true,
+      labels: [],
+      countBy: 'label:ci',
+      since: '1h',
+    })
+  );
+  expect(started.json).toMatchObject({
+    counts: {
+      counts: [
+        { value: 'other', count: 2 },
+        { value: 'pr', count: 1 },
+      ],
+    },
+  });
+  for (const opts of [{ since: '1h' }, { countBy: 'project', since: 'soon' }]) {
+    const refused = await captured(() =>
+      workflowAttentionCommand(host, registeredDir, undefined, { json: true, labels: [], ...opts })
+    );
+    expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+  }
+
   const one = await captured(() =>
     workflowAttentionCommand(host, scratchDir, unregistered, { json: true, labels: [] })
   );
@@ -322,6 +347,82 @@ async function streamed(
   }
 }
 
+test('watch writes only open items in the label filter and failed runs', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-quiet-watch-cli-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  const host = createHost();
+  const { store } = host.deps;
+  mkdirSync(join(root, 'alpha'));
+  const dir = realpathSync(join(root, 'alpha'));
+  const running = async (): Promise<string> => {
+    const run = await store.createWorkflowRun({ workflow_name: 'ci', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.updateWorkflowRun(run.id, {
+      output_root: getProjectStoragePaths(resolveProjectStorageKey(null, dir)).root,
+    });
+    return run.id;
+  };
+  const recommendation = { option: 'merge', why: 'Review is ready.' };
+  const paused = async (merge: string): Promise<string> => {
+    const id = await running();
+    await store.pauseWorkflowRunForWait(
+      id,
+      {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: new Date().toISOString(),
+        message: 'Merge it?',
+        pauseId: `pause-${id}`,
+        form: 'select',
+        options: [{ id: 'merge' }, { id: 'hold' }],
+        recommendation,
+        labels: { merge },
+      },
+      { kind: 'started', stepName: 'ask' }
+    );
+    return id;
+  };
+  const asked = await paused('pr');
+  await paused('other');
+  const completing = await running();
+  const failing = await running();
+
+  let acted = false;
+  const { code, lines } = await streamed(
+    () =>
+      workflowAttentionCommand(host, dir, undefined, {
+        json: true,
+        labels: ['merge=pr'],
+        watch: true,
+      }),
+    seen => {
+      // The snapshot is out, so the stream follows the feed: end one run well, one badly.
+      if (!acted && seen.length > 0) {
+        acted = true;
+        void store
+          .completeWorkflowRun(completing, { duration_ms: 1 })
+          .then(() => store.failWorkflowRun(failing, 'boom'));
+      }
+      return seen.some(line => line.type === 'terminal');
+    }
+  );
+  expect(code).toBe(0);
+  expect(lines).toMatchObject([
+    { type: 'attention', item: { runId: asked, recommendation, labels: { merge: 'pr' } } },
+    { type: 'terminal', runId: failing, status: 'failed' },
+  ]);
+  expect(lines).toHaveLength(2);
+
+  // The protocol flags belong to the watch, and a replay cursor to the protocol.
+  for (const opts of [{ protocol: true }, { watch: true, after: 'x' }]) {
+    const refused = await captured(() =>
+      workflowAttentionCommand(host, dir, undefined, { json: true, labels: [], ...opts })
+    );
+    expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+  }
+});
+
 test('watch streams the queue by project, refuses list-only flags, and exits 4 on a foreign cursor', async () => {
   const root = track(mkdtempSync(join(tmpdir(), 'attention-watch-cli-')));
   process.env.ARCHON_HOME = join(root, 'home');
@@ -363,6 +464,7 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
           json: true,
           labels: [],
           watch: true,
+          protocol: true,
           ...opts,
         }),
       lines => lines.some(line => line.type === 'ready')
@@ -420,6 +522,7 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
         json: true,
         labels: [],
         watch: true,
+        protocol: true,
         after: 'sql:1',
       })
     )
@@ -489,6 +592,7 @@ test.each([true, false])(
         all: true,
         labels: [],
         watch: true,
+        protocol: true,
       });
     try {
       if (json) {
@@ -563,6 +667,7 @@ test("watch text names a child run's parent and a failure with no recorded error
           all: true,
           labels: [],
           watch: true,
+          protocol: true,
         }),
       text => text.includes('Run top failed')
     );
@@ -643,6 +748,7 @@ test.each([
         all: true,
         labels: [],
         watch: true,
+        protocol: true,
       });
       expect(result).toBe(code === 'EPIPE' ? (type === 'error' ? 4 : 0) : 1);
       expect(rejected).toBe(code === 'EPIPE' ? undefined : failure);
@@ -747,6 +853,7 @@ test.each(['beta', 'scratch'])(
           json: true,
           labels: [],
           watch: true,
+          protocol: true,
           project: projectKeyForCodebase(alpha.project, alpha.project.default_cwd),
         }),
       lines => lines.some(line => line.type === 'ready')

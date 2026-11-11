@@ -15,6 +15,7 @@
       "!packages/provider-contract/schema",
       "!packages/chat-contract/schema",
       "!**/*.generated.ts",
+      "!packages/script-api/src/archon-script.d.ts",
       "!.archon/commands",
       "!.archon/workflows/**/commands",
       "!.archon/workflows/**/fixtures",

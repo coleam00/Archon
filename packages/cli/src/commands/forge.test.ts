@@ -1,10 +1,10 @@
 import { expect, test } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getPluginsPath } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { forgeCommand } from './forge';
+import { forgeCommand, sourceForgePlugins } from './forge';
 import {
   forgeAuditResponse,
   type ForgeRequest,
@@ -402,7 +402,8 @@ test('new work-item mutations use file requests and record content-free verified
             },
           ],
         }),
-        env: { WORKFLOW_ID: 'workitems-run' },
+        // Real discovery runs here, so it scans this home and never the developer's.
+        env: { HOME: directory, ARCHON_HOME: directory, WORKFLOW_ID: 'workitems-run' },
         write: async value => {
           output.push(value);
         },
@@ -513,4 +514,166 @@ test('host metadata exposes selected plugin capabilities without credentials or 
     ok: true,
     result: { op: 'metadata', value: { capabilities: ['pr.view', 'resolve'] } },
   });
+});
+
+/** An Archon home whose installed GitHub forge plugin is a file no host can execute. */
+function homeWithUnusableInstalledGithubPlugin(): string {
+  const home = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-source-')));
+  const plugins = getPluginsPath(home);
+  mkdirSync(plugins, { recursive: true });
+  const exe = process.platform === 'win32' ? '.exe' : '';
+  writeFileSync(join(plugins, `archon-forge-github${exe}`), 'not an executable', { mode: 0o755 });
+  return home;
+}
+
+async function githubMetadata(
+  home: string,
+  dependencies: Parameters<typeof forgeCommand>[2] = {}
+): Promise<unknown> {
+  const output: unknown[] = [];
+  await forgeCommand(
+    'metadata',
+    { data: JSON.stringify({ host: 'github.com' }) },
+    {
+      env: { HOME: home, ARCHON_HOME: home, PATH: process.env.PATH },
+      readConfig: async () => ({ scanPath: false }),
+      write: async value => {
+        output.push(value);
+      },
+      ...dependencies,
+    }
+  );
+  return output[0];
+}
+
+test('a source checkout runs the GitHub plugin from source, whatever is installed', async () => {
+  expect(await githubMetadata(homeWithUnusableInstalledGithubPlugin())).toMatchObject({
+    ok: true,
+    result: {
+      op: 'metadata',
+      value: { name: 'github', capabilities: expect.arrayContaining(['resolve:subject']) },
+    },
+  });
+});
+
+test('a release binary loads the installed GitHub plugin and nothing from source', async () => {
+  expect(sourceForgePlugins(true)).toEqual([]);
+  expect(
+    await githubMetadata(homeWithUnusableInstalledGithubPlugin(), { sourcePlugins: [] })
+  ).toMatchObject({
+    ok: false,
+    error: { kind: 'process_failed', message: 'discovery:github: metadata handshake failed' },
+  });
+});
+
+async function checkForge(
+  data: object,
+  env: NodeJS.ProcessEnv,
+  mode = 'token'
+): Promise<{ code: number; response: unknown }> {
+  const output: unknown[] = [];
+  const code = await forgeCommand(
+    'check',
+    { data: JSON.stringify(data) },
+    {
+      env,
+      readConfig: async () => ({
+        scanPath: false,
+        plugins: [
+          {
+            plugin: 'test',
+            command: process.execPath,
+            args: [
+              '--no-env-file',
+              join(import.meta.dir, '../../../forge/src/fixtures/test-plugin.ts'),
+              '--mode',
+              mode,
+            ],
+          },
+        ],
+      }),
+      dispatch: async () => {
+        throw new Error('forge check must not dispatch an operation');
+      },
+      write: async value => {
+        output.push(value);
+      },
+    }
+  );
+  return { code, response: output[0] };
+}
+
+test('forge check names the plugin and credential source without dispatching or printing the token', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = { HOME: root, ARCHON_HOME: root, PATH: '', TEST_FORGE_TOKEN: 'secret-token-value' };
+  const { code, response } = await checkForge(
+    { host: 'Forge.Example', operations: ['checks.state'] },
+    env
+  );
+  expect(code).toBe(0);
+  expect(response).toMatchObject({
+    ok: true,
+    result: {
+      op: 'check',
+      value: {
+        host: 'forge.example',
+        plugin: { name: 'test', version: '1.0.0' },
+        operations: ['checks.state'],
+        credentialSource: 'TEST_FORGE_TOKEN',
+      },
+    },
+  });
+  expect(JSON.stringify(response)).not.toContain('secret-token-value');
+});
+
+test('forge check exits 1 with a typed reason for a missing plugin, capability or credential', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = { HOME: root, ARCHON_HOME: root, PATH: '' };
+
+  const unclaimed = await checkForge({ host: 'other.example', operations: [] }, env);
+  expect(unclaimed.code).toBe(1);
+  expect(unclaimed.response).toMatchObject({ ok: false, error: { kind: 'no_plugin_for_host' } });
+
+  // Capabilities are refused before the credential is read, so the absent token is not the reason.
+  const unsupported = await checkForge(
+    { host: 'forge.example', operations: ['checks.state', 'pr.merge'] },
+    env
+  );
+  expect(unsupported.code).toBe(1);
+  expect(unsupported.response).toMatchObject({
+    ok: false,
+    error: { kind: 'unsupported_op', message: 'plugin test does not support pr.merge' },
+    unsupported: ['pr.merge'],
+  });
+
+  const noCredential = await checkForge(
+    { host: 'forge.example', operations: ['checks.state'] },
+    env
+  );
+  expect(noCredential.code).toBe(1);
+  expect(noCredential.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
+});
+
+test('forge check under a source checkout answers for the source GitHub plugin', async () => {
+  const home = homeWithUnusableInstalledGithubPlugin();
+  const output: unknown[] = [];
+  const code = await forgeCommand(
+    'check',
+    { data: JSON.stringify({ host: 'github.com', operations: ['resolve:subject'] }) },
+    {
+      env: { HOME: home, ARCHON_HOME: home, PATH: process.env.PATH, GH_TOKEN: 'secret-token' },
+      readConfig: async () => ({ scanPath: false }),
+      write: async value => {
+        output.push(value);
+      },
+    }
+  );
+  expect(output[0]).toMatchObject({
+    ok: true,
+    result: {
+      op: 'check',
+      value: { host: 'github.com', plugin: { name: 'github' }, operations: ['resolve:subject'] },
+    },
+  });
+  expect(code).toBe(0);
 });

@@ -89,16 +89,17 @@ function sessionConsumerError(
   providers: ProviderRegistry
 ): string | null {
   if (!isNodeContextResume(node.context)) return null;
+  // An include is not in `sources`: its returned node's provider is the included
+  // workflow's to set, so only the consumer's own provider is known here.
   const sourceEntry = sources.get(node.context.resume);
-  if (sourceEntry === undefined) return null;
-  const source = sourceEntry.node;
-  const sourceProvider = sourceEntry.provider;
+  const sourceProvider = sourceEntry?.provider;
   if (
+    sourceEntry !== undefined &&
     consumerProvider !== undefined &&
     sourceProvider !== undefined &&
     consumerProvider !== sourceProvider
   ) {
-    return `Node '${node.id}' context.resume source '${source.id}' uses provider '${sourceProvider}', but the consumer uses '${consumerProvider}'`;
+    return `Node '${node.id}' context.resume source '${sourceEntry.node.id}' uses provider '${sourceProvider}', but the consumer uses '${consumerProvider}'`;
   }
 
   const knownProvider = consumerProvider ?? sourceProvider;

@@ -77,6 +77,21 @@ test('a select wait is answered with the chosen option at its occurrence, never 
   }
 });
 
+test("the reserved 'other' option cannot be chosen without text", () => {
+  const html = renderToStaticMarkup(
+    <AttentionAnswerPanel
+      run={run}
+      attention={{
+        ...attention,
+        other: true,
+        options: [...attention.options, { id: 'other', label: 'Other' }],
+      }}
+    />
+  );
+  expect(html).toMatch(/<button[^>]*disabled=""[^>]*>Other<\/button>/);
+  expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>Use main<\/button>/);
+});
+
 test('the recommendation and what each option does are shown before the choices', () => {
   const recommended = {
     ...attention,

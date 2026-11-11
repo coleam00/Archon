@@ -1,4 +1,5 @@
 import { scriptInvocation } from '../../script-invocation';
+import { scriptApiPreload } from '../../script-api/preload';
 import { bashInvocation } from '../../bash-invocation';
 import { mkdir } from 'node:fs/promises';
 import { execFileAsync, resolveBashPath } from '@archon/git';
@@ -107,10 +108,20 @@ async function resolveCodeInvocation(
     return { command: resolveBashPath(), ...bashInvocation(code) };
   }
   if (isInlineScript(code)) {
-    return scriptInvocation(node.runtime, { kind: 'inline', code }, node.deps);
+    return scriptInvocation(
+      node.runtime,
+      { kind: 'inline', code },
+      node.deps,
+      scriptApiPreload(node.runtime, ctx.artifactsDir)
+    );
   }
   await assertWorkflowSourceIntegrity(ctx.sourceRoots);
   const script = (await discoverScriptsForCwd(ctx.cwd, ctx.sourceRoots)).get(code);
   if (!script) throw new Error(`Named script '${code}' was not found`);
-  return scriptInvocation(script.runtime, { kind: 'file', path: script.path }, node.deps);
+  return scriptInvocation(
+    script.runtime,
+    { kind: 'file', path: script.path },
+    node.deps,
+    scriptApiPreload(script.runtime, ctx.artifactsDir)
+  );
 }

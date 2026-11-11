@@ -185,6 +185,23 @@ process.exit(9);`,
     }
   });
 
+  test('an executed script imports the archon:script module', async () => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'script-api',
+        nodes: [
+          {
+            id: 'code',
+            runtime: 'bun',
+            script: "import { emit, runId } from 'archon:script';\nemit({ run: runId() });",
+          },
+        ],
+      }),
+      execCode: true,
+    });
+    expect(result).toMatchObject({ outcome: 'completed', summary: '{"run":"dry-run"}' });
+  });
+
   test('reports a missing script runtime as a spawn failure', async () => {
     const result = await dryRunWorkflow({
       workflow: makeTestWorkflow({

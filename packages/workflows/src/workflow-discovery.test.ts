@@ -352,7 +352,9 @@ nodes:
       expect(result.errors).toEqual([
         expect.objectContaining({
           errorType: 'validation_error',
-          error: expect.stringContaining('Named packaged script'),
+          // A module beside `.shared/scripts/` is not a script; both searched places are named.
+          error:
+            "Named script 'helper' was not found in module-pack/release/scripts/ or module-pack/.shared/scripts/.",
         }),
       ]);
     });

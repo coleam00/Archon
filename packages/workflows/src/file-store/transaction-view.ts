@@ -36,6 +36,7 @@ import {
   answeredAttentionWait,
   attentionLabeledEvent,
   waitContinuedEvent,
+  waitStartedEvent,
   sourceReleaseMetadata,
   executionClaim,
   EXECUTION_CLAIM_METADATA_KEY,
@@ -549,17 +550,7 @@ export function createTransactionView(
       delete run.metadata.approval;
       run.metadata.wait = workflowWaitContextSchema.parse(wait);
       run.metadata[PAUSE_CAUSE_METADATA_KEY] = pauseCauseOfWait(wait);
-      if (pause.kind === 'started')
-        record({
-          workflow_run_id: id,
-          event_type: 'wait_started',
-          step_name: pause.stepName,
-          data: {
-            kind: wait.kind,
-            ...(wait.kind !== 'attention' ? { resume_at: wait.resumeAt } : {}),
-            ...(wait.kind === 'event' ? { event: wait.event } : {}),
-          },
-        });
+      if (pause.kind === 'started') record(waitStartedEvent(id, wait, pause.stepName));
       else record(waitContinuedEvent(id, wait));
     },
     clearWorkflowWaitContext: async (id, wait, completion) => {

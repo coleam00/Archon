@@ -123,7 +123,7 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `script` | string | Yes | Inline code, or a named script in the owning workflow's `scripts/` directory (packaged workflows) or shared script directories (legacy workflows) |
+| `script` | string | Yes | Inline code, or a named script in the owning workflow's `scripts/` directory or the pack's `.shared/scripts/` (packaged workflows) or shared script directories (legacy workflows) |
 | `runtime` | `'bun'` \| `'uv'` | Yes | Which runtime executes the script. Must match the file extension for named scripts |
 | `deps` | string[] | No | Python dependencies to install for this run. **uv only** — ignored with a warning for `bun` |
 | `timeout` | number (ms) | No | Milliseconds before Archon sends `SIGTERM` to the node. Omitted: no timeout, the node runs until it exits |
@@ -159,16 +159,16 @@ identifier, add a trailing comment or newline to force inline mode.
 
 Named scripts use one of two resolution modes:
 
-- **Packaged workflow:** resolve only from the owning workflow's `scripts/` directory. Bundled package scripts use the same ownership rule and are embedded for binary distribution.
+- **Packaged workflow:** resolve from the owning workflow's `scripts/` directory, then from the pack's shared scripts in `<pack>/.shared/scripts/`. The workflow's own script wins. Bundled package scripts use the same rule and are embedded for binary distribution.
 - **Legacy workflow:** resolve shared scripts from `<repoRoot>/.archon/scripts/`, then `~/.archon/scripts/`.
 
-Workflow-local lookup is scoped to the workflow that declared the node, including through `include:` expansion. Authors still write only the bare name (`script: publish`); the ownership key is internal.
+Workflow-local lookup is scoped to the workflow that declared the node, including through `include:` expansion. Authors still write only the bare name (`script: publish`); the ownership key is internal. A lookup never leaves the pack: a name in neither place fails the workflow at load time, and the error names both directories.
 
 Packaged scripts can import modules from their pack's `.shared/` directory. Keep package dependencies out of that tree: packaged scripts must not depend on the target project's `package.json`, `node_modules`, or `tsconfig.json`. Python dependencies can still be declared with `deps:`. Imports across packs and npm dependencies are outside the packaged-module contract.
 
 ### Share code within a pack
 
-Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules, `.md` documents and the pack's [`metric-views.json`](/guides/metrics/#overview-cards-a-pack-declares): its files are neither workflows nor named script targets. Documents ship with the pack in every build, beside the modules. Any node reads one through `$PACK_DIR`, the pack's directory in the run's source: a prompt or command file names `$PACK_DIR/.shared/policy/triage.md`, and a `bash:` or `script:` node also gets `PACK_DIR` in its environment. See [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack). A packaged workflow that names an unavailable script, including a shared module, fails at load time.
+Put reusable `.ts`, `.js`, or `.py` modules under `<pack>/.shared/`. Module subdirectories are supported. Use regular files; the binary generator rejects symlinks under `.shared`. `.shared` is reserved for modules, `.md` documents, the pack's [`metric-views.json`](/guides/metrics/#overview-cards-a-pack-declares) and its [shared scripts](#share-a-script-between-workflows-of-a-pack): its files are not workflows, and only those under `.shared/scripts/` are named script targets. Documents ship with the pack in every build, beside the modules. Any node reads one through `$PACK_DIR`, the pack's directory in the run's source: a prompt or command file names `$PACK_DIR/.shared/policy/triage.md`, and a `bash:` or `script:` node also gets `PACK_DIR` in its environment. See [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack). A packaged workflow that names an unavailable script, including a shared module, fails at load time.
 
 ```text
 my-pack/
@@ -193,6 +193,26 @@ import { summary } from '../../.shared/result.ts';
 console.log(summary);
 ```
 
+### Share a script between workflows of a pack
+
+When several workflows of a pack run the same script, put one copy in `<pack>/.shared/scripts/`. A `script:` node of any workflow in the pack that names it finds it there, unless the workflow has a script of that name in its own `scripts/`, which wins. As in a workflow's `scripts/`, a script sits directly in the directory or one folder below it, and its name is the file name without the extension.
+
+```text
+my-pack/
+├── .shared/
+│   ├── result.ts
+│   └── scripts/
+│       └── preflight.ts        # script: preflight, from release and inspect
+├── release/
+│   └── release.yaml
+└── inspect/
+    ├── inspect.yaml
+    └── scripts/
+        └── preflight.ts        # inspect runs its own
+```
+
+A shared script imports the pack's modules from one level up (`import { summary } from '../result.ts';`).
+
 Python scripts run as files, so package-relative syntax such as `from ...shared` does not apply. Add the pack's shared directory using Python's standard library:
 
 ```python
@@ -209,6 +229,65 @@ print(summary)
 Archon preserves these relative paths in project and global source trees, bundled binaries, and frozen captures. A binary caches each pack's scripts and modules as one unit; changing a shared module creates a new unit. Authored scripts remain the only entry points, so workflow nodes still use names such as `script: publish`.
 
 Keep output under the supplied `ARTIFACTS_DIR` or `STATE_DIR`, never beside a script. Bun module loading does not add files beside these sources, and Archon disables Python bytecode caching in both workflow execution and executable fixtures. This prevents import caches from changing the frozen source; it does not prevent your script from writing there explicitly.
+
+### The script API
+
+A Bun script imports what it needs from the host by name:
+
+```typescript
+import { emit, forge, input, refuse, state } from 'archon:script';
+
+const number = Number(input('pr-number'));
+if (!Number.isInteger(number)) {
+  refuse('pr-number is not a number');
+} else {
+  const ref = { repo: { host: 'github.com', path: 'owner/repository' }, number };
+  const view = forge('pr.view', { selector: { kind: 'number', ref } });
+  emit({ draft: view?.pr.is_draft ?? null });
+}
+```
+
+Archon provides the `archon:script` module to every `runtime: bun` script: named scripts, inline bodies, the modules they import, and scripts executed by a dry run or a fixture with `exec-code`. A pack carries no file for it and needs no `node_modules`. The module is a thin wrapper over what every runtime already has (the `INPUTS_*` and engine environment variables, JSON on stdout, exit codes, and the CLI named by `ARCHON_CLI_COMMAND`), so a Python script, or a Bun script that prefers to, uses those directly. A script that does not import the module runs as it always has. A process your script starts is not given the module.
+
+| Export | What it does |
+| --- | --- |
+| `input(name)` | A `with:` binding or workflow input by its declared name, as text. Empty when nothing bound it |
+| `runId()`, `artifactsDir()`, `packDir()` | The run's id, its artifact directory, and the directory of the pack the workflow belongs to. Each throws when the engine did not set it, as `packDir()` does outside a pack |
+| `emit(value)` | Writes the node's result: one JSON document on stdout |
+| `refuse(reason)` | Fails the node: the reason on stderr and exit code 1. Return after calling it |
+| `forge(op, request)` | Runs one [forge operation](/reference/forge/) and returns its typed result |
+| `state.get`, `put`, `patch`, `delete`, `list`, `listValues`, `claim` | Reads and writes the project's [state documents](/reference/cli/#state) as this run and node |
+| `outcomes()` | The engine's listing of what each node of the run has recorded (`$NODE_OUTCOMES_FILE`) |
+| `trigger.fire(binding, inputs, options)` | Fires a trigger binding (`archon trigger fire`) and returns the admission its request got |
+
+Write `input('<name>')` with a string literal. Archon checks at load that every input a script reads is provided, and it reads `input('pr-number')` in the node's own script the way it reads `process.env.INPUTS_PR_NUMBER`. A computed name, or a read inside an imported module, is not checked.
+
+Do not call `process.exit()`. Bun exits without draining stdout, so a large result written to a pipe arrives cut short and reads as a complete one. `refuse` sets the exit code instead; let the script end.
+
+**Forge errors.** `forge` throws `ForgeError` when the host answers with a failure. `kind` is the typed reason, and `mutation` is set for a write: `mutation.outcome` says whether it was refused, applied but unverified, or left with an unknown outcome. Never retry a write past an unknown outcome.
+
+```typescript
+import { ForgeError, forge } from 'archon:script';
+
+try {
+  forge('pr.ready', { ref });
+} catch (error) {
+  if (error instanceof ForgeError && error.mutation?.outcome === 'outcome_unknown') {
+    console.error(error.message); // report it, do not retry it
+  }
+  throw error;
+}
+```
+
+Every function that calls the host throws `HostCommandError` when the CLI gives no answer at all; after a write, treat it as possibly applied. The host validates each forge request and result against the forge contract, so the module does not validate them again. To refuse early when a host has no plugin, lacks an operation or has no credential, call `forge('check', { host, operations })` in the workflow's first node; see [Check forge access before a run spends](/reference/forge/#check-forge-access-before-a-run-spends).
+
+**State writes.** `state.put`, `patch` and `delete` return `{ ok: true, revision }`, or `{ ok: false, conflict }` when the store refused the write: `revision_moved`, `lease_held` or `lease_not_held`. Their options are `ifRevision`, `lease: 'take' | 'release'` and `held`, which are the CLI's `--if-revision`, `--lease`, `--release-lease` and `--held`. `state.claim(candidates)` returns `{ claimed, skipped }`; `claimed` is null when nothing could be taken.
+
+**Types in an editor.** `archon script types --out archon-script.d.ts` writes the module's declaration: every export above, and the request and result type of every forge operation. Include that file in the `tsconfig.json` that covers your scripts, and a wrong operation name, request field or result field is a compile error. The file describes the Archon that wrote it, so write it again after an upgrade; `--check` exits 1 when it is stale.
+
+**Where it sits.** The script API is the author-facing entry of Archon's SDK family: what code running inside a workflow calls. It has no dependencies and speaks only the CLI wire. The host-facing entry, for a program that embeds the engine to define, run, govern and query workflows, is separate and is not part of this module. Every export of `archon:script` is public contract; the declaration `archon script types` writes is the complete list.
+
+**Container runs.** A script in a [container execution](/guides/container-isolation/) imports the module the same way, and `input`, `emit`, `refuse`, `outcomes` and the accessors work. A container run does not receive `ARCHON_CLI_COMMAND`, so `forge`, `state` and `trigger.fire` throw `HostCommandError` there.
 
 ### Frozen source integrity
 
@@ -383,9 +462,9 @@ for the full story.
 `archon validate workflows <name>` checks script nodes for:
 
 - **Script file exists** — for named scripts, the basename must exist in the
-  owning workflow's `scripts/` directory or the legacy shared search path, with
-  a matching extension for the declared runtime. Missing files fail validation
-  with a hint showing the expected path.
+  owning workflow's `scripts/` directory, the pack's `.shared/scripts/`, or the
+  legacy shared search path, with a matching extension for the declared runtime.
+  Missing files fail validation, naming the directories that were searched.
 - **Runtime available on PATH** — `bun` or `uv` must be installed. Missing
   runtimes emit a warning with the official install command:
   - `curl -fsSL https://bun.sh/install | bash`

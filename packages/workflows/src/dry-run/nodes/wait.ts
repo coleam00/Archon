@@ -2,8 +2,7 @@ import { resolveAttentionDeclaration, substituteWaitMessage } from '../../dag/re
 import {
   type AttentionAnswer,
   attentionAnswerSchema,
-  attentionChoiceProblem,
-  attentionOptions,
+  attentionAnswerProblem,
 } from '../../schemas/workflow-run';
 import {
   waitCondition,
@@ -78,12 +77,15 @@ function stubAnswerOutput(
   outputs: ReadonlyMap<string, NodeOutput>
 ): DryRunStubValue {
   const { options } = resolveAttentionDeclaration(node.id, condition, outputs);
-  const declared = attentionOptions({ form: condition.form, options }).map(option => option.id);
   // The output contract already held, so a string stub is one JSON document.
   const raw: unknown = typeof answer === 'string' ? JSON.parse(answer) : answer;
   const { value: stubbed, ...fields } = isPlainRecord(raw) ? raw : {};
   const parsed = attentionAnswerSchema.safeParse(fields);
-  const problem = attentionChoiceProblem(condition.form, declared, chosenIds(parsed.data));
+  const chosen = chosenIds(parsed.data);
+  const problem = attentionAnswerProblem(
+    { form: condition.form, options, other: condition.other },
+    { choose: chosen, text: parsed.data?.text ?? '' }
+  );
   if (problem !== undefined)
     throw new Error(`Stub for node '${node.id}' (form '${condition.form}') ${problem}`);
   if (parsed.data === undefined) return answer;

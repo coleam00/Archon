@@ -3,7 +3,7 @@ import { getDatabase } from '@archon/core/db/connection';
 import { hasAnyAttentionNotice } from '@archon/core/db/workflow-events';
 import type { AttentionNotice } from '@archon/core/services/attention-notices';
 import { attentionNoticeRouteId, type AttentionNoticeRoute } from '@archon/core/config';
-import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
+import { getApprovalDecisions, OTHER_ATTENTION_OPTION } from '@archon/workflows/schemas/dag-node';
 import {
   isApprovalContext,
   isTerminalRunStatus,
@@ -42,7 +42,12 @@ function gateNotice(run: WorkflowRun): ChatAttentionNotice {
   };
 }
 
-function waitNotice(run: WorkflowRun): ChatAttentionNotice {
+/**
+ * A chat control sends an option with no text, and the reserved `other` option of a wait
+ * declared with `other: true` is refused without text. So it is never offered as a
+ * control: the message says how to answer in words, and the plugin gets the rest.
+ */
+function waitNotice(run: WorkflowRun, commandPrefix: string): ChatAttentionNotice {
   const attention = runAttention(run);
   if (attention?.kind !== 'attention')
     throw new Error(`Run ${run.id} is no longer paused at an attention wait`);
@@ -53,10 +58,16 @@ function waitNotice(run: WorkflowRun): ChatAttentionNotice {
     workflowName: run.workflow_name,
     nodeId: attention.nodeId,
     ...(pauseId ? { pauseId } : {}),
-    message: attention.message,
+    message:
+      attention.other === true
+        ? `${attention.message}\n\nNone of these? Answer in your own words: \`${commandPrefix}respond ${run.id} ${OTHER_ATTENTION_OPTION.id} <your answer>\``
+        : attention.message,
     form: attention.form,
     // An option's `value` is the workflow's own data; a plugin gets what it can show.
-    options: attention.options.map(({ id, label, does }) => ({
+    options: (attention.other === true
+      ? attention.options.filter(option => option.id !== OTHER_ATTENTION_OPTION.id)
+      : attention.options
+    ).map(({ id, label, does }) => ({
       id,
       ...(label !== undefined ? { label } : {}),
       ...(does !== undefined ? { does } : {}),
@@ -82,12 +93,16 @@ function terminalNotice(run: WorkflowRun): ChatAttentionNotice {
  * The chat projection of a selected notice. Selection already read `runAttention`; a run
  * that moved since then throws, so the router logs the failure and selects again next scan.
  */
-export function chatAttentionNotice(notice: AttentionNotice): ChatAttentionNotice {
+export function chatAttentionNotice(
+  notice: AttentionNotice,
+  /** How the plugin's platform spells a workflow command; the core chat grammar otherwise. */
+  commandPrefix = '/workflow '
+): ChatAttentionNotice {
   switch (notice.kind) {
     case 'gate':
       return gateNotice(notice.run);
     case 'attention':
-      return waitNotice(notice.run);
+      return waitNotice(notice.run, commandPrefix);
     case 'terminal':
       return terminalNotice(notice.run);
   }
@@ -144,7 +159,7 @@ export class ChatAttentionDestination implements PushDestination {
     const params = {
       destination: this.route.destination,
       ...(previous?.conversationId ? { conversationId: previous.conversationId } : {}),
-      notice: chatAttentionNotice(notice),
+      notice: chatAttentionNotice(notice, supervisor.plugin.descriptor.workflowCommand?.prefix),
     };
     return supervisor.request(chat => chat.attentionNotice(params));
   }

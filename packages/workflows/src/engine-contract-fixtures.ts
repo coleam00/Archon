@@ -87,6 +87,9 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     deleteStateDocument: async () => {
       throw new Error('Unsupported state documents');
     },
+    claimStateDocument: async () => {
+      throw new Error('Unsupported state documents');
+    },
     pruneStateRevisions: async () => ({ count: 0 }),
     getActiveWorkflowRunByPath: async () => null,
     findChildRuns: async () => [],
