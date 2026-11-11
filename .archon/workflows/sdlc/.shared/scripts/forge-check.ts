@@ -4,7 +4,7 @@ import { checkForgeAccess } from '../forge-check.ts';
 import { refuse, report } from '../io.ts';
 
 try {
-  report(await checkForgeAccess());
+  report(checkForgeAccess());
 } catch (error) {
   refuse(`forge-check: ${error instanceof Error ? error.message : String(error)}`);
 }

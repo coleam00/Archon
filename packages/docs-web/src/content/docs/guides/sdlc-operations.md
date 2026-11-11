@@ -285,7 +285,7 @@ The work item's `facts.merge` holds the item's merge status, any approval pinned
 
 A run raises at most one attention item: a red default branch, labelled `merge: base`, or else the first pull request the sweep asked about, labelled `merge: pr`. It carries the same fields as a build-queue item. Any other ask waits for a later sweep, which decides it again.
 
-- **`merge: base`** offers `hold` alone: merges are held until the default branch is green.
+- **`merge: base`** offers `hold`: merges are held until the default branch is green. An `other` answer there holds too, and its text is not acted on.
 - **`merge`** approves the pull request at the head that was asked about. The answer starts a sweep at once through the merge-queue binding (`merge_queue_binding`), which merges it once the gate passes there.
 - **`return`** hands the item back to the build queue, whose next round starts at once through the build-queue binding.
 - **`park`** stops working the item until the build queue readies it again.

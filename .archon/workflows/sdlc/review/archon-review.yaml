@@ -400,12 +400,3 @@ nodes:
       contract_left: { from: "$settle.output.contract_left" }
     output_type: review-report
     output_format: *review_verdict
-
-  # Reviewers' scratch worktrees are removed by the workflow once every lens and
-  # the deciding agent have settled, whether they succeeded or failed. It waits
-  # for publish too, so a standalone run's first completed sink is the verdict.
-  - id: prune-scratch
-    script: prune-scratch
-    runtime: bun
-    depends_on: [synthesize, publish]
-    trigger_rule: all_done

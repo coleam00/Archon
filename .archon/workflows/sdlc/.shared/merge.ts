@@ -12,7 +12,7 @@
  */
 
 import { itemPullRequest, type Validation } from './build.ts';
-import { invokeForge, record, REMEDY, type QualifiedPr } from './forge.ts';
+import { invokeForge, record, type QualifiedPr } from './forge.ts';
 import { viewPr } from './pr.ts';
 import { type Attention, type DecisionEntry, withDecision } from './queue.ts';
 import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
@@ -22,6 +22,11 @@ import type { Pickup, WorkItem } from './workitem.ts';
 export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
 export type MergeEffect = (typeof MERGE_EFFECTS)[number];
 export type MergeAttention = Attention<MergeEffect>;
+
+/** What an `other` answer does with an asked pull request: a return when the sweep wrote a brief, a park otherwise. */
+export function otherEffect(brief: string): MergeEffect {
+  return brief.trim() === '' ? 'park' : 'return';
+}
 
 /** The one answer to a red default branch: the queue holds merges until it is green again. */
 export const BASE_EFFECTS = ['hold'] as const;
@@ -225,16 +230,12 @@ export const MERGE_QUEUE_FORGE_OPERATIONS = [
 ] as const;
 
 /**
- * Refuse a plugin that lacks a merge-queue operation before anything is
- * claimed: every pull request it could not read would otherwise wait, then park.
+ * Refuse a plugin that lacks a merge-queue operation or has no credential
+ * (`archon forge check`) before anything is claimed: every pull request it could not
+ * read would otherwise wait, then park.
  */
 export function requireMergeSource(repo: QualifiedPr['repo']): void {
-  const capabilities = invokeForge('metadata', { host: repo.host })?.capabilities;
-  if (!Array.isArray(capabilities)) throw new Error('forge metadata returned no operation capabilities');
-  const missing = MERGE_QUEUE_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
-  if (missing.length > 0) {
-    throw new Error(`the forge plugin for ${repo.host} lacks the merge queue's ${missing.join(', ')}. ${REMEDY.unsupported_op}`);
-  }
+  invokeForge('check', { host: repo.host, operations: MERGE_QUEUE_FORGE_OPERATIONS });
 }
 
 export interface BaseFacts {

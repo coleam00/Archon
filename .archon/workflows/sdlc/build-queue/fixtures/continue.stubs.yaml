@@ -43,7 +43,6 @@ review__scope:
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__code: "0 findings"
-review__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 review__synthesize:
   ready: true
   action: none
@@ -60,7 +59,6 @@ review__publish:
   discoveries: []
   contract_left: []
 simplify__simplify: { findings: false }
-simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 threads: { open: 0, summary: "stub: no review thread is unresolved" }
 ci: { state: ready, summary: "stub: no check red at the head; marked ready", validation: null }
 ship__deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }

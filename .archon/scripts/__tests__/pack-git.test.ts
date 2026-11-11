@@ -1,16 +1,14 @@
 /**
  * The pack's git steps, against real repositories: which remote holds a repository
- * (by URL, never by name), publish-pr's push, the base-sync verification,
- * and reviewer scratch cleanup.
+ * (by URL, never by name), publish-pr's push and the base-sync verification.
  */
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, sep } from 'node:path';
+import { join } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
-import { scratchDir } from '../../workflows/sdlc/.shared/scratch';
 import { PR, forgePrRecord, gitCheckout, packScriptRunner } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -165,63 +163,5 @@ describe('pushHead', () => {
     const run = runPackScript('../../scripts/__tests__/push-pr-head', { cwd, inputs: { INPUTS_PR: JSON.stringify(forgePrRecord()) } });
     expect(run.code).not.toBe(0);
     expect(run.stderr).toContain('ambiguous');
-  });
-});
-
-describe('prune-scratch', () => {
-  it('removes a symlinked scratch directory as a link, leaving its target', () => {
-    const cwd = gitCheckout({}, track);
-    const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
-    const target = track(mkdtempSync(join(tmpdir(), 'archon-scratch-target-')));
-    writeFileSync(join(target, 'keep.txt'), 'kept');
-    // A junction needs no privilege on Windows; elsewhere the type is ignored.
-    mkdirSync(scratchDir(artifacts, ''), { recursive: true });
-    symlinkSync(target, scratchDir(artifacts, 'code'), 'junction');
-
-    const run = spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
-      cwd,
-      env: { ...process.env, ARTIFACTS_DIR: artifacts },
-      encoding: 'utf8',
-    });
-    expect(run.status).toBe(0);
-    expect(existsSync(scratchDir(artifacts, 'code'))).toBe(false);
-    expect(existsSync(join(target, 'keep.txt'))).toBe(true);
-  });
-
-  it("removes the review's scratch worktrees and nothing else, not even simplify's", () => {
-    const cwd = gitCheckout({}, track);
-    const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-scratch-')));
-    const scratch = scratchDir(artifacts, 'code');
-    mkdirSync(scratch, { recursive: true });
-    git(cwd, 'worktree', 'add', '-q', '--detach', join(scratch, 'one'), 'HEAD');
-    const oneSpellings = [join(scratch, 'one'), realpathSync.native(join(scratch, 'one'))].map(path =>
-      path.split(sep).join('/')
-    );
-    const simplify = scratchDir(artifacts, 'simplify');
-    mkdirSync(simplify, { recursive: true });
-    git(cwd, 'worktree', 'add', '-q', '--detach', join(simplify, 'live'), 'HEAD');
-    const user = track(mkdtempSync(join(tmpdir(), 'archon-user-wt-')));
-    git(cwd, 'worktree', 'add', '-q', '--detach', join(user, 'mine'), 'HEAD');
-    writeFileSync(join(cwd, 'untracked.txt'), 'kept');
-
-    const run = spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
-      cwd,
-      env: { ...process.env, ARTIFACTS_DIR: artifacts },
-      encoding: 'utf8',
-    });
-    expect(run.status).toBe(0);
-    // git prints a worktree's long, forward-slash path; tmpdir() can be a symlink (macOS)
-    // or an 8.3 short name (Windows). Every path is compared in both spellings.
-    const slashes = (path: string): string => path.split(sep).join('/');
-    const spellings = (path: string): string[] => [slashes(path), slashes(realpathSync.native(path))];
-    const listed = git(cwd, 'worktree', 'list', '--porcelain')
-      .split('\n')
-      .filter(line => line.startsWith('worktree '))
-      .map(line => slashes(line.slice('worktree '.length)));
-    expect(listed.some(path => oneSpellings.includes(path))).toBe(false);
-    expect(listed.some(path => spellings(join(user, 'mine')).includes(path))).toBe(true);
-    expect(listed.some(path => spellings(join(simplify, 'live')).includes(path))).toBe(true);
-    expect(existsSync(scratch)).toBe(false);
-    expect(existsSync(join(cwd, 'untracked.txt'))).toBe(true);
   });
 });

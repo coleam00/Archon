@@ -9,9 +9,10 @@ file after it, and where the two conflict, the project's line wins.
   checkout, not even to revert: sibling reviewers read it at the same time, and the
   engine fails a reviewer that leaves it changed.
 - **Scratch.** Try a mutation in a scratch worktree, made with the command your prompt
-  gives; the workflow removes it. Before running anything there, install its
-  dependencies with the project's own package manager in locked mode, never updating a
-  lockfile. Any other scratch file you write, such as a probe script, a note or
+  gives. Before running anything there, install its dependencies with the project's
+  own package manager in locked mode, never updating a lockfile. Remove the worktree
+  with `git worktree remove --force` when you finish: a checkout with its dependencies
+  is large, and the engine removes what is left only when the run ends. Any other scratch file you write, such as a probe script, a note or
   captured output, goes under the run's artifacts directory, never in the checkout.
 - **A finding touches the change.** A defect that touches the change, on the path it
   changed, made reachable or visible by it, or a claim it makes false, is a finding,
