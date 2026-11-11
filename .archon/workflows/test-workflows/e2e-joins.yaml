@@ -49,8 +49,9 @@ nodes:
 
   # Running AFTER a skipped upstream is `trigger_rule: all_done`, NOT `always_run`.
   # `always_run` is a RESUME-CACHE opt-out ("re-run on resume even if a prior run
-  # completed it") — dag-node.ts:229-231. It cannot be observed without a resume, so
-  # it is declared here for coverage but nothing asserts on it.
+  # completed it") — see packages/workflows/src/schemas/dag-node-base.ts.
+  # It cannot be observed without a resume, so it is declared here for coverage
+  # but nothing asserts on it.
   - id: after-skip
     depends_on: [skipped]
     trigger_rule: all_done

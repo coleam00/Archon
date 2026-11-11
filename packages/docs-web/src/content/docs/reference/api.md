@@ -767,7 +767,7 @@ These are Server-Sent Events (SSE) endpoints -- connect with `EventSource` in a 
 curl -N http://localhost:3090/api/stream/your-conversation-id
 ```
 
-Events are JSON-encoded with a `type` field. See the [Web UI documentation](/adapters/web/#sse-streaming) for the full list of event types.
+Events are JSON-encoded with a `type` field.
 
 ---
 
