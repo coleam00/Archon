@@ -240,11 +240,9 @@ recommends under `bindings:` in `.pack/pack.yaml`:
 
 - `intake-issues` and `intake-labels` start intake on GitHub issue and label events.
 - `build-queue`, `split-queue`, `merge-queue` and `discoveries` start the queues on a
-  schedule.
-  Each stage also starts the next when it finishes, by firing the next queue's
-  binding file: intake starts the build queue, a build that ends ready starts a merge
-  sweep, and a merge-queue return starts the build queue again. The schedules pick up
-  what a fire did not start.
+  schedule. Intake also starts the build queue for an item it routed, by firing the
+  `build-queue` file. The merge queue's schedule is short, and a sweep where nothing
+  changed runs no agent.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
 - `worktree-cleanup` removes merged worktrees, for an install that runs no server.
 

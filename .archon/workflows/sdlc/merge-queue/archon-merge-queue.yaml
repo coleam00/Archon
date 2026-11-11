@@ -3,15 +3,15 @@ description: |
   The merge queue: merges the pull requests the build queue finished, and stops only
   for decisions that belong to a person. Each run claims every waiting item with
   intake's claim, up to limit. One sweep agent decides each pull request and merges
-  everything policy allows, each in its turn, through a gate script that refuses unless the
+  what policy allows, one at a time, through a gate script that refuses unless the
   trusted review verdict says Ready at the head, what the pack's ci setting trusts
   passes there (green checks, or a recorded validation), the head contains
   the default branch or merges into it cleanly, and the default branch's CI is not
   red, and merges pinned to that head. The queue never pushes and never waits for CI:
   a conflict, a stale verdict or red the change caused goes back to the build queue,
   and the default branch's CI after a merge is the next sweep's first fact. A clear
-  case acts on its own; anything unclear pauses as an attention item whose answer is
-  a declared choice. A run holds one question, and starts a sweep for the others.
+  case acts on its own; anything unclear pauses as one attention item whose answer is
+  a declared choice.
 
   Use when: a trigger binding the operator installed starts it (see
   https://archon.diy/guides/sdlc-operations/#merge-queue).
@@ -44,19 +44,18 @@ inputs:
     default: ""
     description: >-
       The absolute path of the operator's timer-binding config for this repository's
-      merge queue. A maintainer's merge answer fires it with `archon trigger fire`, and
-      so does a run that asked about more pull requests than the one it raises, so
-      the sweep that merges, or raises the next question, is admitted under that
-      binding's resource, capacity and overlap policy, at most once per answer and
-      once per run. Empty starts no follow-up; the next sweep takes them.
+      merge queue. A maintainer's merge answer fires it with `archon trigger fire`, so
+      the sweep that merges is admitted under that binding's resource, capacity and
+      overlap policy, at most once per answer. Empty starts no follow-up; the next
+      sweep merges it.
   build_queue_binding:
     default: ""
     description: >-
-      The absolute path of the operator's binding config for this repository's
+      The absolute path of the operator's timer-binding config for this repository's
       build queue. A sweep's return or a return answer fires it for the item's next round with
       `archon trigger fire`, so the round is admitted under that binding's resource,
       capacity and overlap policy, at most once per decision. Empty starts no
-      follow-up; the next queue run takes the item.
+      follow-up; the next queue run picks the item up.
   discoveries_binding:
     default: ""
     description: >-
@@ -250,8 +249,7 @@ nodes:
       required: [decisions, base, summary]
 
   # Checks the decisions, reads back every pull request and records one decision per
-  # item; raises one attention item and starts a sweep for any other ask. It also runs
-  # when no sweep was due.
+  # item; raises at most one attention item. It also runs when no sweep was due.
   - id: record
     script: record
     runtime: bun
@@ -319,8 +317,8 @@ nodes:
         summary: { type: string }
       required: [summary]
 
-  # A paused run gives its resource slot back, so the next sweep can merge other pull
-  # requests, and raise the next question, while this one waits.
+  # A paused run gives its resource slot back, so the next scheduled sweep can merge
+  # other pull requests while this one waits.
   - id: ask
     depends_on: [record]
     when: "$record.output.attention != ''"

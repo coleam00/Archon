@@ -586,31 +586,6 @@ describe('the merge queue scripts', () => {
     readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
   const inputsOf = (fire: string[] | undefined): unknown => JSON.parse(readFileSync(fire?.[fire.indexOf('--inputs') + 1] ?? '', 'utf8'));
 
-  test('a sweep that asked about two pull requests raises the first and starts a sweep for the other', () => {
-    const at = install();
-    seed(at, item(BUILT, undefined, CLAIMED));
-    seed(at, { ...item(BUILT, undefined, CLAIMED), subject: OTHER });
-    const ask = (number: number) => decision({ number, action: 'ask', class: 'unclear', attention: ATTENTION, brief: `rework PR ${String(number)}` });
-    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    const recorded = ok(run(at, 'record', { ...recordInputs([ask(42), ask(43)]), INPUTS_ITEMS: BOTH_ITEMS, ...SELECTED, ARCHON_CALL_LOG: calls }));
-    expect(recorded).toMatchObject({ class: 'pr', asked: { pr: PR } });
-    // The raised item keeps its claim; the other is released and waits, so the started sweep can claim it.
-    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
-    const other = stored(at, OTHER.number).value as WorkItem;
-    expect(other).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
-    expect(mergeWaits(other)).toBe(true);
-    const fire = fireOf(calls);
-    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/merge-queue.json', '--delivery-id', 'merge-sweep:asks:run-1']);
-    expect(inputsOf(fire)).toEqual({});
-
-    // One ask is the run's own question: nothing is left for another sweep.
-    seed(at, item(BUILT, undefined, CLAIMED));
-    const alone = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    writeFileSync(alone, '');
-    ok(run(at, 'record', { ...recordInputs([ask(42)]), ...SELECTED, ARCHON_CALL_LOG: alone }));
-    expect(readFileSync(alone, 'utf8')).not.toContain('"trigger"');
-  }, 60_000);
-
   test("a maintainer's merge approves the pull request at the head they were asked about", () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
@@ -689,6 +664,28 @@ describe('the merge queue facts and gate', () => {
     for (const [change, pr] of Object.entries(changes)) {
       seed(at, waited);
       expect({ change, ...ok(on(at, 'facts', { pr })) }).toMatchObject({ change, path: 'sweep', items: [{ item: SUBJECT }] });
+    }
+  }, 60_000);
+
+  test('a red default branch that reads the same as when it was raised reaches no agent, and a green or moved one does', () => {
+    const at = install();
+    seed(at, item());
+    const red = { baseChecks: 'red' } as const;
+    const first = ok(on(at, 'facts', { pr: red })) as { path: string; items: unknown[]; base: unknown };
+    expect(first.path).toBe('sweep');
+    // The branch's question takes the run's wait, so the pull request's own ask is held back.
+    const held = decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' });
+    const raised = ok(run(at, 'record', { ...recordInputs([held], BASE_RED), INPUTS_ITEMS: JSON.stringify(first.items), INPUTS_BASE: JSON.stringify(first.base) }));
+    expect(raised).toMatchObject({ class: 'base' });
+    const waiting = stored(at).value as WorkItem;
+
+    const same = on(at, 'facts', { pr: red });
+    expect(same.code).toBe(0);
+    expect(JSON.parse(same.stdout)).toMatchObject({ path: 'idle', items: [] });
+
+    for (const pr of [{}, { ...red, defaultRevision: '5'.repeat(40) }]) {
+      seed(at, waiting);
+      expect(ok(on(at, 'facts', { pr }))).toMatchObject({ path: 'sweep', items: [{ item: SUBJECT }] });
     }
   }, 60_000);
 

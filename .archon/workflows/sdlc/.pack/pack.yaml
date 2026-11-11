@@ -63,7 +63,6 @@ bindings:
       repo_host: { repo: host }
       repo_path: { repo: path }
       build_queue_binding: { binding: build-queue }
-      merge_queue_binding: { binding: merge-queue }
   split-queue:
     workflow: archon-split
     resource: split

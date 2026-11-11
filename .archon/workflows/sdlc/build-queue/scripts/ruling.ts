@@ -8,19 +8,17 @@
  * work item as the item's next owner, and the claim is released: `continue` keeps it in
  * the build queue, `ready` hands its pull request to the merge queue, and `park` stops
  * all work until a re-triage. A `continue` then starts the item's next build-queue run
- * at once through the operator's build-queue binding, and a `ready` a merge sweep
- * through the merge-queue binding; if it does not start, the item waits for the next
- * queue run.
+ * at once through the operator's build-queue binding; if it does not start, the item
+ * waits for the next queue run as before.
  *
  * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE,
  * the chosen choice (the answer's value), and INPUTS_TEXT, the answer's text;
- * INPUTS_BUILD_QUEUE_BINDING and INPUTS_MERGE_QUEUE_BINDING, the workflow's inputs.
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
 import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
-import { nextSweep } from '../../.shared/follow-up.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { type Choice, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
@@ -91,8 +89,7 @@ function main(): void {
   );
   const next = {
     continue: () => nextRound(item, runId),
-    ready: () =>
-      nextSweep(text(process.env.INPUTS_MERGE_QUEUE_BINDING), `${item.repo.host}/${item.repo.path}#${String(item.number)}:${runId}`),
+    ready: () => 'its pull request waits for the merge queue',
     park: () => 'the queue stops working it until a re-triage',
   }[choice.effect]();
   emit({ decision: choice.effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });

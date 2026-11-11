@@ -11,10 +11,11 @@
  * build-queue binding. A run holds one wait, so it raises one attention item: the
  * sweep's item for a red default branch first, because it holds every merge, otherwise
  * the first pull request the sweep asked about, in its order. That item keeps its claim
- * while the run waits; every other claim is released. When the run raises a pull
- * request's question and the sweep asked about others, it starts a sweep through the
- * merge-queue binding, which claims them, decides them again and raises the next, so
- * every question is open without waiting for a schedule.
+ * while the run waits; every other claim is released, and an ask that was not raised
+ * waits for the next sweep, which decides it again. A `wait` the sweep declared stores
+ * the facts it rests on (`waitedOn`), and so does an ask held back by a red default
+ * branch's question, so the next sweep hands neither to the agent while they read the
+ * same.
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written is reported and left for the next sweep; neither stops the
@@ -25,11 +26,10 @@
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
  * from facts; INPUTS_SWEEP,
  * the sweep's whole output, "null" when it was skipped; the workflow's
- * INPUTS_BUILD_QUEUE_BINDING and INPUTS_MERGE_QUEUE_BINDING.
+ * INPUTS_BUILD_QUEUE_BINDING.
  */
 
 import { nextRound, withBuild } from '../../.shared/build.ts';
-import { nextSweep } from '../../.shared/follow-up.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
@@ -198,14 +198,14 @@ function write(writes: Writes, subject: QualifiedPr, name: string, label: string
 function labelOf(decision: Decision, outcome: Outcome, raised: boolean): string {
   if (raised) return 'ask';
   if (outcome.status === 'merged') return 'merged';
-  if (decision.action === 'ask') return 'ask (raised by a later sweep)';
+  if (decision.action === 'ask') return 'ask (not raised this run)';
   return outcome.contradiction === null ? decision.action : 'claimed merged, not merged';
 }
 
 /**
  * Record one pull request's decision; false when its work item could not be written.
- * `against` is the default branch a `wait` is recorded against; null records none, so
- * the next sweep decides the item again.
+ * `against` is the default branch the item's wait is recorded against; null records
+ * none, so the next sweep decides the item again.
  */
 function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly decision: Decision }, raised: boolean, against: Base | null): boolean {
   const { at, runId } = writes;
@@ -214,7 +214,7 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   const decided = `${label} (${decision.class})`;
   const links = [item.url, ...(decision.attention?.links ?? [])];
   const waited =
-    decision.action === 'wait' && status === 'waiting' && against !== null && item.facts !== null
+    status === 'waiting' && against !== null && item.facts !== null
       ? { waited_on: waitedOn(item.facts, against) }
       : {};
   const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran, ...waited };
@@ -235,42 +235,15 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
 }
 
 /**
- * The run holds one question. Each other ask is released and waiting, so a sweep
- * started now claims them and raises the next while this run waits on its own. Under a
- * red default branch no sweep starts: it would raise the same branch again.
+ * The default branch a decision's wait is recorded against, or null. Only a decision the
+ * sweep itself made, in a record that holds, is one the next sweep may skip: a `wait`,
+ * or an ask held back because the red default branch's question took the run's wait.
  */
-function raiseOtherAsks(writes: Writes, asked: MergeAsked | null, outcomes: readonly (Outcome & { readonly decision: Decision })[]): void {
-  if (asked?.by !== 'pr') return;
-  const raised = asked.pr.number;
-  if (!outcomes.some(({ decision, status }) => decision.action === 'ask' && status === 'waiting' && decision.number !== raised)) return;
-  writes.lines.push(`The other asks: ${nextSweep(text(process.env.INPUTS_MERGE_QUEUE_BINDING), `asks:${writes.runId}`)}`);
-}
-
-/** The pull requests the sweep itself decided; none for a record that does not hold. */
-function declaredBy(sweep: Sweep | null): ReadonlySet<number> {
-  return new Set(sweep?.decisions.map(decision => decision.number));
-}
-
-/** Record every decision; returns what the run raises, nothing when the raised item could not be written. */
-function recordOutcomes(
-  writes: Writes,
-  outcomes: readonly (Outcome & { readonly decision: Decision })[],
-  itemOf: (number: number) => Item,
-  asked: MergeAsked | null,
-  against: (number: number) => Base | null
-): MergeAsked | null {
-  let raising = asked;
-  for (const outcome of outcomes) {
-    const { number } = outcome.decision;
-    const raised = raisedPr(raising) === number;
-    if (!recordPr(writes, itemOf(number), outcome, raised, against(number)) && raised) raising = null;
-  }
-  return raising;
-}
-
-/** The pull request whose question the run raises, or null. */
-function raisedPr(asked: MergeAsked | null): number | null {
-  return asked?.by === 'pr' ? asked.pr.number : null;
+function waitBase(sweep: Sweep | null, base: Base | null, asked: MergeAsked | null, holds: boolean): (decision: Decision) => Base | null {
+  const declared = new Set(holds ? sweep?.decisions.map(decision => decision.number) : []);
+  const baseAsked = asked?.by === 'base';
+  return decision =>
+    declared.has(decision.number) && (decision.action === 'wait' || (decision.action === 'ask' && baseAsked)) ? base : null;
 }
 
 function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
@@ -355,13 +328,14 @@ function main(): void {
     asked = null;
   }
 
-  // Only a wait the sweep itself declared, in a record that holds, is one the next sweep may skip.
-  const declared = declaredBy(contradictions.length === 0 ? sweep : null);
-  asked = recordOutcomes(writes, outcomes, itemOf, asked, number => (declared.has(number) ? base : null));
+  const against = waitBase(sweep, base, asked, contradictions.length === 0);
+  for (const outcome of outcomes) {
+    const raised = asked?.by === 'pr' && asked.pr.number === outcome.decision.number;
+    if (!recordPr(writes, itemOf(outcome.decision.number), outcome, raised, against(outcome.decision)) && raised) asked = null;
+  }
   if (contradictions.length > 0) {
     throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
   }
-  raiseOtherAsks(writes, asked, outcomes);
 
   emit({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
