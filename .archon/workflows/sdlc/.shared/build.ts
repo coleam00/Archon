@@ -12,7 +12,7 @@ import { type QualifiedPr, sameRepo } from './identity.ts';
 import { followUp } from './follow-up.ts';
 import type { NodeOutput } from './outputs.generated.ts';
 import { findPrByHead, PR_CREATE_UNRESOLVED, prFromUrl } from './pr.ts';
-import { type Attention, clipped, type DecisionEntry, withDecision } from './queue.ts';
+import { type Ask, clipped, type DecisionEntry, withDecision } from './queue.ts';
 import {
   type Claim,
   type HistoryEntry,
@@ -32,9 +32,9 @@ import {
  */
 export const BUILD_EFFECTS = ['continue', 'ready', 'park'] as const;
 export type BuildEffect = (typeof BUILD_EFFECTS)[number];
-export type BuildAttention = Attention<BuildEffect>;
+export type BuildAsk = Ask<BuildEffect>;
 
-/** Which decision raised an attention item: its class label, which the YAML also declares. */
+/** Which decision raised an ask: its `kind` label, which the YAML also declares. */
 export type AskedBy = 'route' | 'stop' | 'scope';
 
 /** The stages a triaged item can be launched from: a READY verdict's routes. */

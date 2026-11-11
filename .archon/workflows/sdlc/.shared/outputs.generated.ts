@@ -33,6 +33,11 @@ export interface WorkflowOutputs {
           readonly number: number;
         };
       }>;
+      readonly recommendation: {
+        readonly option: string;
+        readonly why: string;
+        readonly confidence: 'low' | 'medium' | 'high';
+      } | null;
       readonly order: {
         readonly id: string;
         readonly members: ReadonlyArray<number>;
@@ -73,25 +78,22 @@ export interface WorkflowOutputs {
       readonly ready_head: string | null;
       readonly brief: string;
       readonly reason: string;
-      readonly attention: {
-        readonly what: string;
-        readonly why: string;
-        readonly recommendation: {
-          readonly choice: string;
-          readonly why: string;
-          readonly evidence: string;
-          readonly confidence: 'low' | 'medium' | 'high';
-          readonly would_change: string;
-        };
-        readonly choices: ReadonlyArray<{
+      readonly ask: {
+        readonly question: string;
+        readonly options: ReadonlyArray<{
           readonly id: string;
           readonly label: string;
           readonly does: string;
-          readonly effect: 'continue' | 'ready' | 'park';
-          readonly ruling: string;
+          readonly value: {
+            readonly effect: 'continue' | 'ready' | 'park';
+            readonly ruling: string;
+          };
         }>;
-        readonly if_unanswered: string;
-        readonly links: ReadonlyArray<string>;
+        readonly recommendation: {
+          readonly option: string;
+          readonly why: string;
+          readonly confidence: 'low' | 'medium' | 'high';
+        };
       } | null;
     };
     checkout: {
@@ -112,25 +114,22 @@ export interface WorkflowOutputs {
       } | null;
       readonly reason: string;
       readonly ask_class: 'stop' | 'scope';
-      readonly attention: {
-        readonly what: string;
-        readonly why: string;
-        readonly recommendation: {
-          readonly choice: string;
-          readonly why: string;
-          readonly evidence: string;
-          readonly confidence: 'low' | 'medium' | 'high';
-          readonly would_change: string;
-        };
-        readonly choices: ReadonlyArray<{
+      readonly ask: {
+        readonly question: string;
+        readonly options: ReadonlyArray<{
           readonly id: string;
           readonly label: string;
           readonly does: string;
-          readonly effect: 'continue' | 'ready' | 'park';
-          readonly ruling: string;
+          readonly value: {
+            readonly effect: 'continue' | 'ready' | 'park';
+            readonly ruling: string;
+          };
         }>;
-        readonly if_unanswered: string;
-        readonly links: ReadonlyArray<string>;
+        readonly recommendation: {
+          readonly option: string;
+          readonly why: string;
+          readonly confidence: 'low' | 'medium' | 'high';
+        };
       } | null;
     };
     handoff: {
@@ -142,7 +141,7 @@ export interface WorkflowOutputs {
     apply: {
       readonly decision: 'idle' | 'order' | 'handoff' | 'parked' | 'ready' | 'continue' | 'asked' | 'launch';
       readonly summary: string;
-      readonly attention: string;
+      readonly question: string;
       readonly options: ReadonlyArray<{
         readonly id: string;
         readonly label: string;
@@ -151,6 +150,8 @@ export interface WorkflowOutputs {
       }>;
       readonly recommendation: Readonly<Record<string, unknown>> | null;
       readonly class: '' | 'route' | 'stop' | 'scope';
+      readonly item: string;
+      readonly pr: string;
       readonly asked: Readonly<Record<string, unknown>> | null;
     };
     ruling: {
@@ -382,7 +383,7 @@ export interface WorkflowOutputs {
         readonly reran: boolean;
         readonly reason: string;
         readonly brief: string;
-        readonly attention: null;
+        readonly ask: null;
       } | {
         readonly number: number;
         readonly action: 'return';
@@ -391,7 +392,7 @@ export interface WorkflowOutputs {
         readonly reran: boolean;
         readonly reason: string;
         readonly brief: string;
-        readonly attention: null;
+        readonly ask: null;
       } | {
         readonly number: number;
         readonly action: 'ask';
@@ -400,25 +401,22 @@ export interface WorkflowOutputs {
         readonly reran: boolean;
         readonly reason: string;
         readonly brief: string;
-        readonly attention: {
-          readonly what: string;
-          readonly why: string;
-          readonly recommendation: {
-            readonly choice: string;
-            readonly why: string;
-            readonly evidence: string;
-            readonly confidence: 'low' | 'medium' | 'high';
-            readonly would_change: string;
-          };
-          readonly choices: ReadonlyArray<{
+        readonly ask: {
+          readonly question: string;
+          readonly options: ReadonlyArray<{
             readonly id: string;
             readonly label: string;
             readonly does: string;
-            readonly effect: 'merge' | 'return' | 'park';
-            readonly ruling: string;
+            readonly value: {
+              readonly effect: 'merge' | 'return' | 'park';
+              readonly ruling: string;
+            };
           }>;
-          readonly if_unanswered: string;
-          readonly links: ReadonlyArray<string>;
+          readonly recommendation: {
+            readonly option: string;
+            readonly why: string;
+            readonly confidence: 'low' | 'medium' | 'high';
+          };
         };
       } | {
         readonly number: number;
@@ -428,48 +426,42 @@ export interface WorkflowOutputs {
         readonly reran: boolean;
         readonly reason: string;
         readonly brief: string;
-        readonly attention: {
-          readonly what: string;
-          readonly why: string;
-          readonly recommendation: {
-            readonly choice: string;
-            readonly why: string;
-            readonly evidence: string;
-            readonly confidence: 'low' | 'medium' | 'high';
-            readonly would_change: string;
-          };
-          readonly choices: ReadonlyArray<{
+        readonly ask: {
+          readonly question: string;
+          readonly options: ReadonlyArray<{
             readonly id: string;
             readonly label: string;
             readonly does: string;
-            readonly effect: 'merge' | 'park';
-            readonly ruling: string;
+            readonly value: {
+              readonly effect: 'merge' | 'park';
+              readonly ruling: string;
+            };
           }>;
-          readonly if_unanswered: string;
-          readonly links: ReadonlyArray<string>;
+          readonly recommendation: {
+            readonly option: string;
+            readonly why: string;
+            readonly confidence: 'low' | 'medium' | 'high';
+          };
         };
       }>;
       readonly base: {
         readonly summary: string;
-        readonly attention: {
-          readonly what: string;
-          readonly why: string;
-          readonly recommendation: {
-            readonly choice: string;
-            readonly why: string;
-            readonly evidence: string;
-            readonly confidence: 'low' | 'medium' | 'high';
-            readonly would_change: string;
-          };
-          readonly choices: ReadonlyArray<{
+        readonly ask: {
+          readonly question: string;
+          readonly options: ReadonlyArray<{
             readonly id: string;
             readonly label: string;
             readonly does: string;
-            readonly effect: 'hold';
-            readonly ruling: string;
+            readonly value: {
+              readonly effect: 'hold';
+              readonly ruling: string;
+            };
           }>;
-          readonly if_unanswered: string;
-          readonly links: ReadonlyArray<string>;
+          readonly recommendation: {
+            readonly option: string;
+            readonly why: string;
+            readonly confidence: 'low' | 'medium' | 'high';
+          };
         } | null;
       };
       readonly summary: string;
@@ -478,7 +470,7 @@ export interface WorkflowOutputs {
     record: {
       readonly merged: ReadonlyArray<number>;
       readonly summary: string;
-      readonly attention: string;
+      readonly question: string;
       readonly options: ReadonlyArray<{
         readonly id: string;
         readonly label: string;
@@ -486,7 +478,9 @@ export interface WorkflowOutputs {
         readonly value: Readonly<Record<string, unknown>>;
       }>;
       readonly recommendation: Readonly<Record<string, unknown>> | null;
-      readonly class: '' | 'pr' | 'base';
+      readonly kind: '' | 'approve' | 'base';
+      readonly item: string;
+      readonly pr: string;
       readonly asked: Readonly<Record<string, unknown>> | null;
     };
     retriage: {
@@ -866,6 +860,7 @@ export const OUTPUT_ENUMS = {
   'archon-build-queue': {
     interpret: {
       decision: ['build', 'choose', 'order', 'intake', 'none'],
+      'recommendation.confidence': ['low', 'medium', 'high'],
     },
     facts: {
       path: ['idle', 'closed', 'route', 'order', 'handoff'],
@@ -873,14 +868,14 @@ export const OUTPUT_ENUMS = {
     route: {
       decision: ['launch', 'ask', 'ready'],
       route: ['investigate', 'plan', 'deliver', 'continue'],
-      'attention.recommendation.confidence': ['low', 'medium', 'high'],
-      'attention.choices[].effect': ['continue', 'ready', 'park'],
+      'ask.options[].value.effect': ['continue', 'ready', 'park'],
+      'ask.recommendation.confidence': ['low', 'medium', 'high'],
     },
     answer: {
       decision: ['done', 'continue', 'ask'],
       ask_class: ['stop', 'scope'],
-      'attention.recommendation.confidence': ['low', 'medium', 'high'],
-      'attention.choices[].effect': ['continue', 'ready', 'park'],
+      'ask.options[].value.effect': ['continue', 'ready', 'park'],
+      'ask.recommendation.confidence': ['low', 'medium', 'high'],
     },
     apply: {
       decision: ['idle', 'order', 'handoff', 'parked', 'ready', 'continue', 'asked', 'launch'],
@@ -948,17 +943,17 @@ export const OUTPUT_ENUMS = {
       'decisions[].anyOf[1].class': ['clear', 'unclear'],
       'decisions[].anyOf[2].action': ['ask'],
       'decisions[].anyOf[2].class': ['clear', 'unclear'],
-      'decisions[].anyOf[2].attention.recommendation.confidence': ['low', 'medium', 'high'],
-      'decisions[].anyOf[2].attention.choices[].effect': ['merge', 'return', 'park'],
+      'decisions[].anyOf[2].ask.options[].value.effect': ['merge', 'return', 'park'],
+      'decisions[].anyOf[2].ask.recommendation.confidence': ['low', 'medium', 'high'],
       'decisions[].anyOf[3].action': ['ask'],
       'decisions[].anyOf[3].class': ['clear', 'unclear'],
-      'decisions[].anyOf[3].attention.recommendation.confidence': ['low', 'medium', 'high'],
-      'decisions[].anyOf[3].attention.choices[].effect': ['merge', 'park'],
-      'base.attention.recommendation.confidence': ['low', 'medium', 'high'],
-      'base.attention.choices[].effect': ['hold'],
+      'decisions[].anyOf[3].ask.options[].value.effect': ['merge', 'park'],
+      'decisions[].anyOf[3].ask.recommendation.confidence': ['low', 'medium', 'high'],
+      'base.ask.options[].value.effect': ['hold'],
+      'base.ask.recommendation.confidence': ['low', 'medium', 'high'],
     },
     record: {
-      class: ['', 'pr', 'base'],
+      kind: ['', 'approve', 'base'],
     },
     ruling: {
       decision: ['merge', 'return', 'park', 'hold'],

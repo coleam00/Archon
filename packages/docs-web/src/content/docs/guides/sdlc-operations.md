@@ -117,7 +117,7 @@ Two bindings in the GitHub source plugin's configuration start intake: `intake-i
 - **A named item.** `--input number=<n>` makes the run claim that issue instead of the first in order. One launch per issue lets you choose what a run builds and, with the launch's config, which provider builds it. An issue that cannot be claimed refuses the run before any agent, with why: it has no work item, its work item belongs to another repository, another run holds it, or its stage and build status show it does not wait.
 - **A message.** A run with no `number` and a message, such as `archon workflow run archon-build-queue "build the retry fix"`, has an agent resolve the message through the forge's reads to one typed decision:
   - build one issue, which the run then claims as a named item;
-  - choose between several, which pauses as a `build: message` attention item and claims the issue you pick;
+  - choose between several, which pauses as an attention item labelled `kind: pick`, recommending the issue the message most likely means, and claims the issue you pick;
   - write a [work order](#work-orders) for several issues to build, claiming none of them;
   - file new work no issue covers, such as a pasted brief or a file, as an issue, and hand it to `archon-intake` detached, so the run builds nothing;
   - refuse the run with the agent's reason.
@@ -147,7 +147,7 @@ Two bindings in the GitHub source plugin's configuration start intake: `intake-i
 
 ### What it asks
 
-An unclear decision pauses the run as one attention item labelled `build: route`, `build: stop` or `build: scope`. It says what the decision is, why it matters, the agent's recommendation with its evidence, confidence and what would change it, the choices and what each does, what happens if nobody answers, and the links to the evidence.
+An unclear decision pauses the run as one attention item labelled `stage: build` and `kind: route`, `kind: stop` or `kind: scope`, with the issue number as `item` and its pull request's as `pr`. The deciding agent writes the item, and it reaches you as written: a question whose first sentence names the issue and the decision and which carries the evidence, what happens if nobody answers and the links; the options and what each does; and a recommendation with its reason and confidence. No script checks the item first. One the wait cannot ask, because two options share an id or the recommendation names no option, fails the run after the item is recorded as asking: abandon that run and re-triage the item.
 
 The answer is one declared choice, or `other`, which every item offers: its text says what to do instead and becomes the ruling, and the item continues from it. The queue never reads the answer's prose for a decision. It writes the choice's ruling and your words into the issue body as one dated "Current scope" section, reads it back, and records the answer.
 
@@ -285,9 +285,9 @@ The work item's `facts.merge` holds the item's merge status, any approval pinned
 
 ### What it asks
 
-A sweep asks about every unclear pull request that is due. A run holds one wait, so it raises one attention item: a red default branch, labelled `merge: base`, or else the first pull request the sweep asked about, labelled `merge: pr`. It carries the same fields as a build-queue item. Any other ask waits for the next sweep, which decides it again and raises it. An ask held back by a red default branch's question is decided again once the branch's head or check state changes.
+A sweep asks about every unclear pull request that is due. A run holds one wait, so it raises one attention item, labelled `stage: merge`: a red default branch, labelled `kind: base`, or else the first pull request the sweep asked about, labelled `kind: approve` with the issue number as `item` and the pull request's as `pr`. The sweep writes it as the build queue's agents write theirs, and it reaches you as written. Any other ask waits for the next sweep, which decides it again and raises it. An ask held back by a red default branch's question is decided again once the branch's head or check state changes.
 
-- **`merge: base`** offers `hold`: merges are held until the default branch is green. An `other` answer there holds too, and its text is not acted on.
+- **`kind: base`** offers `hold`: merges are held until the default branch is green. An `other` answer there holds too, and its text is not acted on.
 - **`merge`** approves the pull request at the head that was asked about. The answer starts a sweep at once through the merge-queue binding (`merge_queue_binding`), which merges it once the gate passes there.
 - **`return`** hands the item back to the build queue, whose next round starts at once through the build-queue binding.
 - **`park`** stops working the item until the build queue readies it again.
@@ -319,7 +319,7 @@ A binding file written with `overlap: queue` keeps every tick that arrives while
   - ask a maintainer;
   - wait, for a discovery about code still on an open pull request. Nothing is written, and its record stays undecided until a later pass decides it, after that pull request merged or closed.
 - **Writes.** Before any write, the pass checks that every queued record is decided exactly once and that a tracking issue is open and in the repository. A filed issue's body begins with a hidden marker, and the create looks for that marker across every issue first; the evidence comment carries the same marker and is replaced in place. So a pass run again after a stop, or a discovery filed twice, never opens a second issue. Filed issues carry no labels: intake triages them like any other issue, which it does only when the install's forge identity is on `maintainers.json`.
-- **Questions.** Every ask in a pass becomes one attention item labelled `discoveries: question`. The answer is stored on the asking run's document. The runs those records came from stay claimed by the asking run until it ends, so no other pass asks again; the next pass then decides them with the answer beside the records.
+- **Questions.** Every ask in a pass becomes one attention item labelled `stage: discoveries` and `kind: question`. The answer is stored on the asking run's document. The runs those records came from stay claimed by the asking run until it ends, so no other pass asks again; the next pass then decides them with the answer beside the records.
 
 The `discoveries` binding starts a pass on a schedule, with `overlap: skip`: a start is skipped while a pass still runs, and a pass paused on a question gives its slot back. Naming the same binding file as the merge queue's `discoveries_binding` also starts a pass after each sweep that merged a pull request, when the records about the merged code can first be decided. A fired pass that finds one already running is skipped like a scheduled one, and the next merging sweep or scheduled tick starts it.
 

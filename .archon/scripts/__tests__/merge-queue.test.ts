@@ -7,7 +7,7 @@ import { trackTempRoots } from './temp-roots';
 import type { BuildRecord } from '../../workflows/sdlc/.shared/build';
 import {
   gateRefusals,
-  type MergeAttention,
+  type MergeAsk,
   type MergeRecord,
   type MergeSettled,
   mergeWaits,
@@ -307,12 +307,6 @@ function run(
   });
 }
 
-/** The answer's value: the wait returns the chosen choice itself. */
-function choiceOf(asked: string, id: string): string {
-  const { attention } = JSON.parse(asked) as { attention: { choices: { id: string }[] } };
-  return JSON.stringify(attention.choices.find(choice => choice.id === id));
-}
-
 function ok(result: ScriptRun): Record<string, unknown> {
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
   return JSON.parse(result.stdout) as Record<string, unknown>;
@@ -330,23 +324,20 @@ function merges(result: ScriptRun): string[] {
 
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
 const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null }]);
-const BASE_GREEN = { summary: 'dev is green', attention: null };
+const BASE_GREEN = { summary: 'dev is green', ask: null };
 
-const ATTENTION: MergeAttention = {
-  what: 'PR 42 changes the SDLC pack; merge it?',
-  why: 'Merging changes every pack run; holding it leaves the fix out.',
-  recommendation: { choice: 'merge', why: 'reviewed Ready', evidence: 'the review report', confidence: 'medium', would_change: 'a failing bench' },
-  choices: [
-    { id: 'merge', label: 'Merge it', does: 'merges it once the gate passes at this head', effect: 'merge', ruling: '' },
-    { id: 'return', label: 'Rework it', does: 'sends it back to the build queue', effect: 'return', ruling: 'Keep the old prompt wording.' },
-    { id: 'park', label: 'Park it', does: 'stops working it', effect: 'park', ruling: '' },
+const QUESTION: MergeAsk = {
+  question: `PR 42 changes the SDLC pack; merge it?\n\nMerging changes every pack run; holding it leaves the fix out.\n\n${PR_URL}`,
+  options: [
+    { id: 'merge', label: 'Merge it', does: 'merges it once the gate passes at this head', value: { effect: 'merge', ruling: '' } },
+    { id: 'return', label: 'Rework it', does: 'sends it back to the build queue', value: { effect: 'return', ruling: 'Keep the old prompt wording.' } },
+    { id: 'park', label: 'Park it', does: 'stops working it', value: { effect: 'park', ruling: '' } },
   ],
-  if_unanswered: 'It waits; nothing else is blocked.',
-  links: [PR_URL],
+  recommendation: { option: 'merge', why: 'reviewed Ready', confidence: 'medium' },
 };
 
 function decision(overrides: Record<string, unknown>): Record<string, unknown> {
-  return { number: 42, action: 'merged', class: 'clear', head: HEAD, reran: false, reason: 'a small fix', brief: '', attention: null, ...overrides };
+  return { number: 42, action: 'merged', class: 'clear', head: HEAD, reran: false, reason: 'a small fix', brief: '', ask: null, ...overrides };
 }
 
 const FACTS_BASE_GREEN = { branch: 'dev', head: OLD, checks: { state: 'green', failing: [], pending: [] } };
@@ -372,10 +363,10 @@ const BOTH_ITEMS = JSON.stringify([
   { item: OTHER, pr: OTHER_PR, url: OTHER_URL, facts: { ...FACTS, pr: OTHER_PR, url: OTHER_URL }, record: null },
   ...JSON.parse(ITEMS),
 ]);
-const HOLD = { id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', effect: 'hold', ruling: '' };
+const HOLD = { id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', value: { effect: 'hold', ruling: '' } };
 const BASE_RED = {
   summary: 'lint red on dev',
-  attention: { ...ATTENTION, what: 'dev is red since PR 43 merged', choices: [HOLD], recommendation: { ...ATTENTION.recommendation, choice: 'hold' } },
+  ask: { question: 'dev is red since PR 43 merged', options: [HOLD], recommendation: { ...QUESTION.recommendation, option: 'hold' } },
 };
 
 describe('the merge queue scripts', () => {
@@ -569,13 +560,13 @@ describe('the merge queue scripts', () => {
   test('a merge the forge reads back is recorded and released at its head, whatever the sweep says', () => {
     const at = install();
     const merged = { state: 'MERGED' } as const;
-    const released = { merged: [42], attention: '', class: '', asked: null };
+    const released = { merged: [42], question: '', kind: '', asked: null };
     // Declared merged; declared at another head; merged by hand, declared wait; merged by hand under an ask.
     const cases = [
       [decision({}), BASE_GREEN],
       [decision({ head: OLD }), BASE_GREEN],
       [decision({ action: 'wait', reason: 'CI pending' }), BASE_GREEN],
-      [decision({ action: 'ask', attention: ATTENTION, brief: 'rework PR 42' }), BASE_GREEN],
+      [decision({ action: 'ask', ask: QUESTION, brief: 'rework PR 42' }), BASE_GREEN],
     ] as const;
     for (const [decided, base] of cases) {
       seed(at, item(BUILT, undefined, CLAIMED));
@@ -583,6 +574,15 @@ describe('the merge queue scripts', () => {
       expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ decision: 'merged (clear)', head: HEAD }] } } });
       expect(mergeWaits(stored(at).value as WorkItem)).toBe(false);
     }
+  }, 60_000);
+
+  test("an asked pull request keeps its claim, and the wait gets the sweep's question, options and recommendation unchanged, with its labels", () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const asked = { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', ask: QUESTION };
+    const raised = ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', ask: QUESTION, brief: 'rework PR 42' })])));
+    expect(raised).toEqual({ merged: [], summary: 'swept\nPR 42: ask', ...QUESTION, kind: 'approve', item: '7', pr: '42', asked });
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
   test('a decision for a pull request the run did not claim is noted and skipped, and the rest is still recorded', () => {
@@ -594,7 +594,7 @@ describe('the merge queue scripts', () => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ reason: 'CI pending' }] } } });
   }, 60_000);
 
-  const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
+  const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', ask: QUESTION });
   const SELECTED = { INPUTS_MERGE_QUEUE_BINDING: '/bindings/merge-queue.json', INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json' };
   const fireOf = (calls: string): string[] | undefined =>
     readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
@@ -604,7 +604,7 @@ describe('the merge queue scripts', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'merge'), INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
+    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_DECISION: 'merge', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', approval: { head: HEAD } } } });
     expect(mergeWaits(doc)).toBe(true);
@@ -618,7 +618,7 @@ describe('the merge queue scripts', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'return'), INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_DECISION: 'return', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
     const heading = ok(ruled).section as string;
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the merge queue's question on PR 42, \d{4}-\d{2}-\d{2}\)$/);
     // The returned round starts at once through the build queue's binding, for the item.
@@ -632,11 +632,11 @@ describe('the merge queue scripts', () => {
     expect(doc.facts.build?.brief).toContain(heading);
   }, 60_000);
 
-  test('an `other` answer, which returns no choice, parks a pull request the sweep wrote no brief for', () => {
+  test('an `other` answer, which names no option, parks a pull request the sweep wrote no brief for', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const asked = JSON.stringify({ ...(JSON.parse(ASKED) as object), brief: '' });
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: '', INPUTS_TEXT: 'Wait for the release.', ...SELECTED });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_DECISION: 'other', INPUTS_TEXT: 'Wait for the release.', ...SELECTED });
     expect(ok(ruled)).toMatchObject({ decision: 'park' });
     expect(ruled.bodies[0]).toContain("The maintainer's words: Wait for the release.");
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
@@ -715,9 +715,9 @@ describe('the merge queue facts and gate', () => {
     const first = ok(on(at, 'facts', { pr: red })) as { path: string; items: unknown[]; base: unknown };
     expect(first.path).toBe('sweep');
     // The branch's question takes the run's wait, so the pull request's own ask is held back.
-    const held = decision({ action: 'ask', class: 'unclear', attention: ATTENTION, brief: 'rework PR 42' });
+    const held = decision({ action: 'ask', class: 'unclear', ask: QUESTION, brief: 'rework PR 42' });
     const raised = ok(run(at, 'record', { ...recordInputs([held], BASE_RED), INPUTS_ITEMS: JSON.stringify(first.items), INPUTS_BASE: JSON.stringify(first.base) }));
-    expect(raised).toMatchObject({ class: 'base' });
+    expect(raised).toMatchObject({ kind: 'base' });
     const waiting = stored(at).value as WorkItem;
 
     const same = on(at, 'facts', { pr: red });

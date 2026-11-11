@@ -38,9 +38,9 @@ The implement-review-fix loop is one composed run; queues sit between stages, ne
 
 ## Stops the pack can't answer pause
 
-An unanswerable stop pauses as an attention item labelled with its stage and class, such as `build: scope` or `merge: base`.
+An unanswerable stop pauses as an attention item. The deciding agent writes the question, its options and its recommendation, and they reach the person as written. Every item carries four labels: `stage` (the queue that asks), `kind` (the decision, such as `scope` or `approve`), `item` (the issue number) and `pr` (the pull request number, or empty).
 
-- Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by label:build` shows which build classes recur.
+- Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by label:kind --since 30d` shows which decisions recur and how often the answer followed the recommendation.
 - Direction: a recurring class gets a small handler workflow that answers its items through the normal answer channel, without changing the main path or the engine.
 
 ## Smaller is the default

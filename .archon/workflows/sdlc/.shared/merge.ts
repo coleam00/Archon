@@ -17,14 +17,14 @@ import { record } from './inputs.ts';
 import { requireForge } from './forge-check.ts';
 import { forge } from 'archon:script';
 import { viewPr } from './pr.ts';
-import { type Attention, type DecisionEntry, withDecision } from './queue.ts';
+import { type Ask, type DecisionEntry, withDecision } from './queue.ts';
 import { type ContractCoverage, type ReviewStamp, readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
-/** What a merge choice does when a person picks it; archon-merge-queue.yaml declares the same enum. */
+/** What a merge option does when a person picks it; archon-merge-queue.yaml declares the same enum. */
 export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
 export type MergeEffect = (typeof MERGE_EFFECTS)[number];
-export type MergeAttention = Attention<MergeEffect>;
+export type MergeAsk = Ask<MergeEffect>;
 
 /** What an `other` answer does with an asked pull request: a return when the sweep wrote a brief, a park otherwise. */
 export function otherEffect(brief: string): MergeEffect {
@@ -33,7 +33,7 @@ export function otherEffect(brief: string): MergeEffect {
 
 /** The one answer to a red default branch: the queue holds merges until it is green again. */
 export const BASE_EFFECTS = ['hold'] as const;
-export type BaseAttention = Attention<(typeof BASE_EFFECTS)[number]>;
+export type BaseAsk = Ask<(typeof BASE_EFFECTS)[number]>;
 
 /** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
 export type SweepAction = 'merged' | 'return' | 'ask' | 'wait';
@@ -41,7 +41,7 @@ export const POLICY_CLASSES = ['clear', 'unclear'] as const;
 export type PolicyClass = (typeof POLICY_CLASSES)[number];
 export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
 export type MergePath = (typeof MERGE_PATHS)[number];
-/** Which attention item a run raised: its class label, which the YAML also declares. */
+/** Which ask a run raised. */
 export type MergeAskedBy = 'pr' | 'base';
 /** What the record node asked, which the ruling node needs to act on the answer. */
 export type MergeAsked =
@@ -51,9 +51,9 @@ export type MergeAsked =
       readonly pr: QualifiedPr;
       readonly head: string;
       readonly brief: string;
-      readonly attention: MergeAttention;
+      readonly ask: MergeAsk;
     }
-  | { readonly by: Extract<MergeAskedBy, 'base'>; readonly attention: BaseAttention };
+  | { readonly by: Extract<MergeAskedBy, 'base'>; readonly ask: BaseAsk };
 export const MERGE_METHODS = ['squash', 'merge'] as const;
 /** The pack's `ci` setting; `.pack/pack.yaml` declares the same values. */
 export const CI_MODES = ['forge', 'none'] as const;
