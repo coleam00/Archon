@@ -807,7 +807,7 @@ describe('SSE heartbeat lifecycle', () => {
         async function settle(): Promise<void> {
           for (let i = 0; i < 40; i++) await Promise.resolve();
         }
-        let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
+        let reader: Pick<ReadableStreamDefaultReader<Uint8Array>, 'read' | 'cancel'> | undefined;
         try {
           const response = await app.request(`/api/stream/${conversationId}`);
           if (!response.body) throw new Error('Missing SSE response body');
