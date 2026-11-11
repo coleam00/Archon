@@ -13,7 +13,7 @@ This page is the operator manual for the bundled `sdlc` pack. Set the pack up fi
 
 ## Pack settings
 
-A project sets the pack's settings in `.archon/packs/sdlc.yaml`: what the merge gate trusts (`ci`), whether the build and merge queues act by themselves or ask first (`build_lane`, `merge_lane`), and the paths whose changes a maintainer approves before they merge (`protected_paths`). The pack's README says what each setting means and how to choose it: [Choose the pack settings](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#6-choose-the-pack-settings).
+A project sets the pack's settings in `.archon/packs/sdlc.yaml`: what the merge gate trusts (`ci`), whether the build and merge queues act by themselves or ask first (`auto_build_queue`, `auto_merge_queue`), and the paths whose changes a maintainer approves before they merge (`protected_paths`). The pack's README says what each setting means and how to choose it: [Choose the pack settings](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#6-choose-the-pack-settings).
 
 ## Bindings
 
@@ -253,7 +253,7 @@ The sweep agent declares which pull requests merge. A script node then merges th
 - the default branch's CI is not red (pending does not hold a merge);
 - the pull request is open, not a draft, into the default branch, at the head the sweep named;
 - that head contains the default branch's head, or the forge reports it merges cleanly;
-- under `merge_lane: manual`, or when the pull request changes a path `protected_paths` matches, the work item holds a maintainer's approval at exactly that head.
+- with `auto_merge_queue: false`, or when the pull request changes a path `protected_paths` matches, the work item holds a maintainer's approval at exactly that head.
 
 Open review threads are the sweep's judgment, not the gate's: the sweep holds a merge only for a thread that raises a defect in code the pull request changes or makes reachable. The gate merges pinned to that head, by squash unless `--input merge_method=merge` asks for a merge commit. A merge moves the default branch, so the forge may not have computed the next pull request's merge yet: the script reads it again a few times before it refuses. A pull request the gate refuses, or whose merge the forge cannot verify, as when it queues merges, is recorded as waiting with the gate's reasons, and the next sweep decides it again.
 

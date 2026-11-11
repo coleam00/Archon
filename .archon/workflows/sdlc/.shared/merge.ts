@@ -15,7 +15,7 @@ import { itemPullRequest, type Validation } from './build.ts';
 import { type QualifiedPr } from './identity.ts';
 import { record } from './inputs.ts';
 import { requireForge } from './forge-check.ts';
-import { forge } from 'archon:script';
+import { forge, input } from 'archon:script';
 import { viewPr } from './pr.ts';
 import { type Ask, type DecisionEntry, withDecision } from './queue.ts';
 import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
@@ -400,7 +400,7 @@ function ciRefusal(checks: Checks, head: string, ci: CiTrust): string | null {
  * means someone else pushed after the review. Pending CI on the default branch
  * does not hold a merge: the next sweep reads its result. Whether an open review thread
  * holds the merge is the sweep's judgment, from the thread facts it reads. Under the
- * manual lane, or with a protected path changed, a maintainer's approval at `head` is
+ * `auto_merge_queue` setting off, or with a protected path changed, a maintainer's approval at `head` is
  * required. The rest keep
  * the merge on an open, non-draft pull request into the default branch at exactly the
  * commit that was judged, and that commit either containing the default branch's head
@@ -434,7 +434,7 @@ export function gateRefusals(
     refusals.push(`the default branch ${facts.default_branch} is red at ${base.head} (${base.checks.failing.join(', ')})`);
   }
   if (lane.approved !== head) {
-    if (lane.manual) refusals.push('the merge lane is manual and no maintainer approved it at this head');
+    if (lane.manual) refusals.push('auto_merge_queue is off and no maintainer approved it at this head');
     else if (lane.protected.length > 0) {
       refusals.push(`it changes protected paths (${lane.protected.join(', ')}) and no maintainer approved it at this head`);
     }
@@ -443,7 +443,7 @@ export function gateRefusals(
 }
 
 /**
- * What decides whether a pull request may merge without a person: the `merge_lane`
+ * What decides whether a pull request may merge without a person: the `auto_merge_queue`
  * setting, the changed paths the `protected_paths` setting matches, and the head a
  * maintainer approved, null when none did.
  */
@@ -453,14 +453,11 @@ export interface Lane {
   readonly approved: string | null;
 }
 
-/** The pack's lane settings; `.pack/pack.yaml` declares the same values. */
-export const LANES = ['auto', 'manual'] as const;
-
-/** A lane setting as a run reads it; anything else refuses. */
-export function parseLane(name: string, value: string): (typeof LANES)[number] {
-  const lane = LANES.find(candidate => candidate === value);
-  if (lane === undefined) throw new Error(`the ${name} setting must be one of ${LANES.join(', ')}, not "${value}"`);
-  return lane;
+/** A `bool` setting as a run reads it; anything else refuses. */
+export function boolSetting(name: string): boolean {
+  const value = input(name).trim();
+  if (value !== 'true' && value !== 'false') throw new Error(`the ${name} setting must be true or false, not "${value}"`);
+  return value === 'true';
 }
 
 /** A `list` setting's items. */

@@ -9,28 +9,27 @@ inputs:
       What the merge gate trusts at a pull request's head besides a Ready review verdict.
       forge: green checks on the forge. none: the full validation delivery ran and
       recorded at that same head, for a project with no CI.
-  build_lane:
-    type: enum
-    values: [auto, manual]
-    default: auto
+  auto_build_queue:
+    type: bool
+    default: true
     description: >-
-      auto: the build queue launches a clear item's round by itself. manual: no round
-      launches until a maintainer answered the queue's question about the item, so every
-      launch comes to the attention queue with a recommendation.
-  merge_lane:
-    type: enum
-    values: [auto, manual]
-    default: auto
+      true: the build queue launches a clear item's round by itself. false: its agent
+      still judges every item, but a launch it would have made becomes a question with
+      that launch as the recommendation, and no round starts until a maintainer answered.
+  auto_merge_queue:
+    type: bool
+    default: true
     description: >-
-      auto: the merge queue merges a clear pull request by itself. manual: nothing merges
-      until a maintainer approved the pull request at its head, so every merge comes to
-      the attention queue with a recommendation.
+      true: the merge queue merges a clear pull request by itself. false: its agent
+      still judges every pull request, but a merge it would have made becomes a question
+      with `merge` as the recommendation, and the gate merges nothing a maintainer did
+      not approve at its head.
   protected_paths:
     type: list
     default: ""
     description: >-
       Comma-separated globs, such as `.archon/workflows/**,infra/**`. A pull request
-      that changes a matching path never merges on the auto lane: it merges only once a
+      that changes a matching path never merges on the queue's own judgment: it merges only once a
       maintainer approved it at its head.
 
 # The trigger bindings the pack recommends. Nothing here starts a run: an operator writes

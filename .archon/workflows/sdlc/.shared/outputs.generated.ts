@@ -369,7 +369,6 @@ export interface WorkflowOutputs {
       readonly base_error: string;
       readonly items: ReadonlyArray<Readonly<Record<string, unknown>>>;
       readonly settled: ReadonlyArray<Readonly<Record<string, unknown>>>;
-      readonly lane: string;
       readonly ci: string;
     };
     sweep: {

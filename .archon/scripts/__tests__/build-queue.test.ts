@@ -240,7 +240,7 @@ function run(
       INPUTS_REPO_PATH: PR.repo.path,
       INPUTS_REPO: JSON.stringify(PR.repo),
       INPUTS_ROUND_LIMIT: '3',
-      INPUTS_BUILD_LANE: 'auto',
+      INPUTS_AUTO_BUILD_QUEUE: 'true',
       INPUTS_ROUTE: 'deliver',
       INPUTS_ITEM: JSON.stringify(SUBJECT),
       ...inputs,
@@ -933,12 +933,12 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     // The round's start is said once, with the labels "what is building?" filters by.
     expect(notices(calls)).toEqual([{ text: 'Issue 7: build round started (deliver)', labels: ['stage=build', 'kind=started', 'item=7'] }]);
 
-    // Under the manual build lane a round starts only on a maintainer's answer.
-    const manual = { ...fresh, INPUTS_BUILD_LANE: 'manual' };
+    // With auto_build_queue off a round starts only on a maintainer's answer.
+    const manual = { ...fresh, INPUTS_AUTO_BUILD_QUEUE: 'false' };
     seed(at, triaged(CLAIMED, record({ status: 'next', decisions: [{ at: AT, run_id: 'run-0', decision: 'continue', reason: 'R1 is correctable', links: [] }] })));
     const unanswered = run(at, 'checkout', manual);
     expect(unanswered.code).not.toBe(0);
-    expect(unanswered.stderr).toContain('the build lane is manual and no maintainer answered for issue 7');
+    expect(unanswered.stderr).toContain('auto_build_queue is off and no maintainer answered for issue 7');
     const answer = { choice: 'relax', text: '', at: AT };
     seed(at, triaged(CLAIMED, record({ status: 'next', decisions: [{ at: AT, run_id: 'run-0', decision: 'answered: continue', reason: 'Relax it', links: [], answer }] })));
     expect(ok(run(at, 'checkout', manual))).toEqual({ head: null, reviewed: null, pull_request: null });

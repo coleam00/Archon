@@ -7,8 +7,8 @@
  * checks under `forge`; under `none`, a passing validation the item's build rounds
  * recorded at that head), the default branch's CI is not red, and the pull request is
  * open, not a draft, into the default branch, still at that head, and the head contains
- * the default branch's head or the forge reports it merges cleanly. Under the `manual`
- * merge lane, and for a pull request that changes a protected path, it also refuses
+ * the default branch's head or the forge reports it merges cleanly. With the
+ * `auto_merge_queue` setting off, and for a pull request that changes a protected path, it also refuses
  * unless the item's record holds a maintainer's approval at exactly that head.
  *
  * A passing gate merges pinned to the head. A merge moves the default branch, so the
@@ -18,7 +18,7 @@
  * pull request against the forge and leaves a refused one for the next sweep.
  *
  * Bound inputs: INPUTS_ITEMS from facts; INPUTS_SWEEP, the sweep's whole output; the
- * workflow's INPUTS_MERGE_METHOD and the pack settings INPUTS_CI, INPUTS_MERGE_LANE and
+ * workflow's INPUTS_MERGE_METHOD and the pack settings INPUTS_CI, INPUTS_AUTO_MERGE_QUEUE and
  * INPUTS_PROTECTED_PATHS.
  */
 
@@ -29,13 +29,13 @@ import { nullableJson } from '../../.shared/inputs.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import {
   type CiTrust,
+  boolSetting,
   gateRefusals,
   listSetting,
   MERGE_METHODS,
   type MergeMethod,
   mergeAtHead,
   parseCiMode,
-  parseLane,
   type PrFacts,
   protectedChanges,
   readBase,
@@ -97,7 +97,7 @@ function main(): void {
   const settings: GateSettings = {
     method,
     ci: parseCiMode(input('ci').trim()),
-    manual: parseLane('merge_lane', input('merge_lane').trim()) === 'manual',
+    manual: !boolSetting('auto_merge_queue'),
     protectedPaths: listSetting(input('protected_paths')),
   };
   const merges = (sweep?.decisions ?? []).filter(decision => decision.action === 'merge');

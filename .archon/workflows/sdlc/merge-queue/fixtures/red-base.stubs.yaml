@@ -13,7 +13,6 @@ facts:
       validation: null
       protected: []
   settled: []
-  lane: auto
   ci: forge
 sweep:
   decisions:
