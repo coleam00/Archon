@@ -1200,7 +1200,7 @@ test.each([
     'commit-pulls-null-object': 'pulls',
     'malformed-pulls-null-object': undefined,
     'commit-object': 'graphql',
-    'unknown-commit': undefined,
+    'unknown-commit': 'pulls',
   }[failure];
   const ghOutput: Record<string, string> = {
     pr: failure === 'branch-response' ? '{}' : '[]',
@@ -1214,6 +1214,13 @@ test.each([
       ? null
       : tip
   );
+  const ghFailure =
+    failure === 'unknown-commit'
+      ? Object.assign(new Error('association rejected'), {
+          code: 1,
+          stdout: JSON.stringify({ status: '422' }),
+        })
+      : Object.assign(new Error('missing gh'), { code: 'ENOENT' });
   const originalExec = gitModule.execFileAsync;
   const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(async (file, args, options) => {
     if (file === 'git' && args.includes('get-url')) {
@@ -1221,16 +1228,11 @@ test.each([
       return { stdout: 'https://github.com/test/repo.git', stderr: '' };
     }
     if (file === 'gh') {
-      if (failure === 'unknown-commit' && args[0] === 'api' && !args.includes('graphql'))
-        throw Object.assign(new Error('association rejected'), {
-          code: 1,
-          stdout: JSON.stringify({ status: '422' }),
-        });
       if (
         (args.includes('graphql') ? 'graphql' : args[0] === 'api' ? 'pulls' : args[0]) ===
         failedGhCommand
       )
-        throw Object.assign(new Error('missing gh'), { code: 'ENOENT' });
+        throw ghFailure;
       return {
         stdout: args.includes('graphql') ? commitObjectOutput : ghOutput[args[0]],
         stderr: '',
