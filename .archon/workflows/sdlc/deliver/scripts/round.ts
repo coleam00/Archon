@@ -88,5 +88,5 @@ emit({
     reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
   // The latest review's open contract items; null until a review has judged coverage.
   contract_left: contractLeft ?? nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT),
-  summary: `Round ${round}: ${reason}. ${text(summary)}`,
+  summary: text(summary),
 });

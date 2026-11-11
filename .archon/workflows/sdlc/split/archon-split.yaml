@@ -6,9 +6,10 @@ description: |
   claim, or the one the number input names. One agent checks triage's reason first:
   when one work item would work after all, it hands the item to the build queue
   whole, with why. Otherwise it files only the current piece: a PRD's current phase,
-  an epic's current increment, or every task of a bundle. Later phases are recorded
-  on the item, each with what the earlier work must show first, and filed by a later
-  split. A script files each issue once and records it on the item's work item. A
+  an epic's current increment, or every task of a bundle. The agent's comment on the
+  item names the later phases, each with what the earlier work must show first, and a
+  later split files them. A script files each issue once and records it on the item's
+  work item. A
   PRD is labelled archon-prd and stays open until its hypothesis has a verdict; an
   epic stays open until its increments merge; a bundle is closed with links to its
   issues. The filed issues come back through intake like any other.
@@ -114,17 +115,6 @@ nodes:
               title: { type: string, pattern: '\S' }
               body: { type: string, pattern: '\S' }
             required: [key, title, body]
-        # Later phases or increments, recorded on the item and not filed yet, each
-        # with what the earlier work must show before it is filed.
-        later:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            properties:
-              title: { type: string, pattern: '\S' }
-              signal: { type: string, pattern: '\S' }
-            required: [title, signal]
         # Existing open issues that already own part of the outcome, listed instead
         # of filed again.
         existing:
@@ -136,13 +126,17 @@ nodes:
               number: { type: integer, minimum: 1 }
               why: { type: string, pattern: '\S' }
             required: [number, why]
+        # The comment posted on the item as written: the plan, with each later phase
+        # and what the earlier work must show before it is filed, or why one work
+        # item works. The next split and a later triage read it.
+        comment: { type: string, pattern: '\S' }
         summary: { type: string, pattern: '\S' }
-      required: [split, issues, later, existing, summary]
+      required: [split, issues, existing, comment, summary]
 
-  # Files each current issue once, records it on the work item as it goes, comments
-  # the list and the later phases on the item, then labels a PRD or closes a bundle,
-  # and releases the claim. An item
-  # built whole gets the comment with why and moves to its build route instead.
+  # Files each current issue once, records it on the work item as it goes, posts the
+  # agent's comment on the item with the filed issues listed under it, then labels a
+  # PRD or closes a bundle, and releases the claim. An item built whole gets the
+  # agent's comment and moves to its build route instead.
   - id: publish
     script: publish
     runtime: bun
@@ -153,8 +147,8 @@ nodes:
       item: { from: "$facts.output.item" }
       split: { from: "$slice.output.split", if_skipped: null }
       issues: { from: "$slice.output.issues", if_skipped: null }
-      later: { from: "$slice.output.later", if_skipped: null }
       existing: { from: "$slice.output.existing", if_skipped: null }
+      comment: { from: "$slice.output.comment", if_skipped: null }
       summary: { from: "$slice.output.summary", if_skipped: null }
     output_format:
       type: object
