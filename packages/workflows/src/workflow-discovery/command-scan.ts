@@ -1,7 +1,7 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import * as archonPaths from '@archon/paths';
-import type { DagNode, IncludeDirective, WorkflowDefinition, WorkflowSource } from '../schemas';
+import type { DagNode, IncludeDirective, WorkflowDefinition } from '../schemas';
 import { isComposeFanOutNode, isIncludeDirective, isLoopGroupNode } from '../schemas';
 import { BUNDLED_COMMANDS, isBinaryBuild } from '../defaults/bundled-defaults';
 import { bundlesPackagedResources } from '../defaults/bundle-inventory';
@@ -29,11 +29,6 @@ export interface CommandScanConfig {
 
 type PackagedCommandReference = NonNullable<ReturnType<typeof parsePackagedResourceReference>>;
 
-export interface CommandSourceForScan {
-  content: IncludeCommandContent;
-  file?: { path: string; source: WorkflowSource };
-}
-
 /**
  * Resolve a command name to its file CONTENT, mirroring the runtime/validator search
  * order (repo `.archon/commands/` + configured `commandFolder` → `~/.archon/commands/` →
@@ -47,35 +42,32 @@ export async function resolveCommandContentForScan(
   commandName: string,
   config: CommandScanConfig
 ): Promise<IncludeCommandContent> {
-  return (await resolveCommandSourceForScan(roots, commandName, config)).content;
-}
+  if (!isValidCommandName(commandName)) return null;
 
-export async function resolveCommandSourceForScan(
-  roots: WorkflowSourceRoots,
-  commandName: string,
-  config: CommandScanConfig
-): Promise<CommandSourceForScan> {
-  if (!isValidCommandName(commandName)) return { content: null };
   const packaged = parsePackagedResourceReference(commandName);
   if (packaged !== null) return resolvePackagedCommand(roots, commandName, packaged, config);
 
-  const dirs: { path: string; source: WorkflowSource }[] = [];
+  const dirs: string[] = [];
   if (roots.project !== null) {
+    // Pass the configured folder so a repo with a custom command directory is scanned
+    // (not silently skipped → downgraded to WARN). Matches getCommandFolderSearchPaths use
+    // in the validator/executor.
     for (const folder of archonPaths.getCommandFolderSearchPaths(config.commandFolder)) {
-      dirs.push({ path: join(roots.project, folder), source: 'project' });
+      dirs.push(join(roots.project, folder));
     }
   }
-  dirs.push({ path: roots.globalCommands, source: 'global' });
+  dirs.push(roots.globalCommands);
+
   for (const dir of dirs) {
-    const result = await readCommandFromDir(dir.path, commandName, dir.source);
-    if (result !== undefined) return result;
+    const content = await readCommandFromDir(dir, commandName);
+    if (content !== undefined) return content;
   }
 
-  // Only older captures have flat bundled commands.
-  if (config.loadDefaultCommands === false || roots.kind !== 'captured') return { content: null };
-  return (
-    (await readCommandFromDir(roots.bundledCommands, commandName, 'bundled')) ?? { content: null }
-  );
+  // Every bundled command a build ships now is packaged and resolved above. A run captured
+  // by an older build may have frozen flat bundled commands and keeps the basename walk
+  // over them — unless the repo opted out (loadDefaultCommands: false), matching discovery.
+  if (config.loadDefaultCommands === false || roots.kind !== 'captured') return null;
+  return (await readCommandFromDir(roots.bundledCommands, commandName)) ?? null;
 }
 
 async function resolvePackagedCommand(
@@ -83,58 +75,49 @@ async function resolvePackagedCommand(
   commandName: string,
   packaged: PackagedCommandReference,
   config: CommandScanConfig
-): Promise<CommandSourceForScan> {
+): Promise<IncludeCommandContent> {
   if (packaged.owner.source === 'bundled') {
-    if (config.loadDefaultCommands === false) return { content: null };
+    if (config.loadDefaultCommands === false) return null;
     // A captured run reads the bundled bytes IT froze; the capture materialized a
     // binary's embedded constants to files.
-    if (isBinaryBuild() && roots.kind === 'live')
-      return { content: BUNDLED_COMMANDS[commandName] ?? null };
+    if (isBinaryBuild() && roots.kind === 'live') return BUNDLED_COMMANDS[commandName] ?? null;
     if (roots.kind === 'live' && !(await bundlesPackagedResources(packaged.owner.pack)))
-      return { content: null };
+      return null;
   }
 
   const workflowDir = await packagedWorkflowDirectory(roots, packaged.owner);
-  if (workflowDir === null) return { content: null };
+  if (workflowDir === null) return null;
   const commandPath = join(workflowDir, 'commands', `${packaged.name}.md`);
   try {
-    return {
-      content: await readFile(commandPath, 'utf-8'),
-      file: { path: commandPath, source: packaged.owner.source },
-    };
+    return await readFile(commandPath, 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') return { content: null };
-    return {
-      content: { path: commandPath, message: err.message, operation: 'read', cause: error },
-    };
+    if (err.code === 'ENOENT') return null;
+    return { path: commandPath, message: err.message, operation: 'read', cause: error };
   }
 }
 
 /** A command's content from one search directory; `undefined` when the directory lacks it. */
 async function readCommandFromDir(
   dir: string,
-  commandName: string,
-  source: WorkflowSource
-): Promise<CommandSourceForScan | undefined> {
+  commandName: string
+): Promise<IncludeCommandContent | undefined> {
   let entries: Awaited<ReturnType<typeof archonPaths.findCommandFiles>>;
   try {
     entries = await archonPaths.findCommandFiles(dir);
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
     if (err.code === 'ENOENT') return undefined;
-    return { content: { path: dir, message: err.message, operation: 'inspect', cause: error } };
+    return { path: dir, message: err.message, operation: 'inspect', cause: error };
   }
   const match = entries.find(e => e.commandName === commandName);
   if (!match) return undefined;
   const commandPath = join(dir, match.relativePath);
   try {
-    return { content: await readFile(commandPath, 'utf-8'), file: { path: commandPath, source } };
+    return await readFile(commandPath, 'utf-8');
   } catch (error) {
     const err = error as NodeJS.ErrnoException;
-    return {
-      content: { path: commandPath, message: err.message, operation: 'read', cause: error },
-    };
+    return { path: commandPath, message: err.message, operation: 'read', cause: error };
   }
 }
 

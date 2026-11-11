@@ -1,7 +1,3 @@
-import { findRepoRoot } from '@archon/git';
-import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
-import { createCliWorkflowHost } from '../utils/workflow-host';
-import { getLog } from './workflow-shared';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { providerRegistry } from '@archon/providers';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
@@ -15,44 +11,16 @@ import type { WorkflowLoadResult } from '@archon/workflows/schemas/workflow';
  * checkout decides which command folder its command nodes name. What the run then DOES
  * is governed separately by the target's config, loaded inside `executeWorkflow`.
  */
-export async function loadWorkflows(
-  cwd: string,
-  options: { reportIgnoredFiles?: boolean } = {}
-): Promise<WorkflowLoadResult> {
+export async function loadWorkflows(cwd: string): Promise<WorkflowLoadResult> {
   try {
     // Home-scoped workflows at ~/.archon/workflows/ are discovered automatically —
     // no option needed since the discovery helper reads them unconditionally.
-    if (!options.reportIgnoredFiles)
-      return await discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry);
-    const diagnostics = await resolveIgnoreDiagnostics(cwd);
-    const result = await discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry, undefined, {
-      gitIgnoreRoot: diagnostics.root,
-    });
-    return diagnostics.warning
-      ? { ...result, sourceWarnings: [...(result.sourceWarnings ?? []), diagnostics.warning] }
-      : result;
+    return await discoverWorkflowsWithConfig(cwd, loadConfig, providerRegistry);
   } catch (error) {
     const err = error as Error;
     throw new Error(
       `Error loading workflows: ${err.message}\nHint: Check permissions on .archon/workflows/ directory.`
     );
-  }
-}
-
-async function resolveIgnoreDiagnostics(cwd: string): Promise<{ root?: string; warning?: string }> {
-  try {
-    const host = await createCliWorkflowHost();
-    const { repoRoot } = await resolveCodebaseForPath(cwd, host.records.codebases);
-    return { root: repoRoot ?? undefined };
-  } catch (error) {
-    getLog().warn({ err: error }, 'cli.workflow_source_project_lookup_failed');
-    try {
-      // As with discovery cwd resolution, local authoring works without registration storage.
-      return { root: (await findRepoRoot(cwd)) ?? undefined };
-    } catch (gitError) {
-      getLog().warn({ err: gitError }, 'cli.workflow_source_ignore_check_failed');
-      return { warning: 'Could not determine the project checkout for the Git ignore check.' };
-    }
   }
 }
 
