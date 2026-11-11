@@ -199,8 +199,10 @@ interface FakePr {
   readonly state?: 'OPEN' | 'MERGED' | 'CLOSED';
   readonly headRefOid?: string;
   /** CI at the head; `unknown` is a forge unit state that is neither green nor pending. */
-  readonly checks?: 'green' | 'red' | 'unknown';
+  readonly checks?: 'green' | 'pending' | 'red' | 'unknown';
   readonly threads?: number;
+  /** The default branch's head as the pull request's merge state reports it. */
+  readonly defaultRevision?: string;
   /** Fail every pull request read, or only the listed pull requests. */
   readonly unreadable?: boolean | readonly number[];
   /** The merge is accepted and the pull request stays open, as when the forge queues merges. */
@@ -257,7 +259,7 @@ const forgeOp = (op, request) => {
     const url = ${JSON.stringify(PR_URL.replace(/42$/, ''))} + ref.number;
     return out(true, { title: 'Fix the thing', body: '', pr: { schemaVersion: 1, repo: ref.repo, number: ref.number, url, head: 'feature', base: 'dev', is_draft: false, state: state(), head_repo: ref.repo, head_revision: forgePr.headRefOid, base_revision: null, maintainer_can_modify: null } });
   }
-  if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.mergeStateHead ?? forgePr.headRefOid, default_branch: 'dev', default_revision: ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
+  if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.mergeStateHead ?? forgePr.headRefOid, default_branch: 'dev', default_revision: forgePr.defaultRevision ?? ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
   if (op === 'checks.state') return out(true, { ref, revision: forgePr.checksRevision ?? forgePr.headRefOid, units: units(forgePr.checks) });
   if (op === 'pr.threads') return out(true, { ref, threads: Array.from({ length: forgePr.threads }, (_, index) => ({ id: 'thread-' + index, resolved: false, comments: [{ url: 'thread' }] })) });
   if (op === 'workitem.comments') return out(true, { comments: comments.filter(row => row.issue === undefined).map(row => ({
@@ -403,7 +405,8 @@ describe('the merge queue scripts', () => {
       expect(output.items.map(entry => entry.item)).toEqual([OTHER]);
       expect(output.settled[0]?.reason).toContain('HTTP 502');
       ok(run(at, 'record', {
-        ...recordInputs([decision({ number: OTHER_PR.number, action: 'wait', reason: 'CI pending' })]),
+        // Left undecided, so the next sweep reads it again whatever its facts.
+        ...recordInputs([]),
         INPUTS_ITEMS: JSON.stringify(output.items),
         INPUTS_SETTLED: JSON.stringify(output.settled),
       }));
@@ -655,6 +658,38 @@ describe('the merge queue facts and gate', () => {
     expect(output.gate).toContain('gate.ts');
     expect(stored(at).value?.claim?.run_id).toBe('run-1');
     expect(ok(on(at, 'facts', {}, { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
+  }, 60_000);
+
+  test('a pull request that reads the same as at its last wait reaches no agent, and any change to what it waited on does', () => {
+    const at = install();
+    seed(at, item());
+    const pending = { checks: 'pending' } as const;
+    const first = ok(on(at, 'facts', { pr: pending })) as { path: string; items: unknown[]; base: unknown };
+    expect(first.path).toBe('sweep');
+    ok(run(at, 'record', {
+      ...recordInputs([decision({ action: 'wait', reason: 'CI pending' })]),
+      INPUTS_ITEMS: JSON.stringify(first.items),
+      INPUTS_BASE: JSON.stringify(first.base),
+    }));
+    const waited = stored(at).value as WorkItem;
+
+    const same = on(at, 'facts', { pr: pending });
+    expect(same.code).toBe(0);
+    expect(JSON.parse(same.stdout)).toMatchObject({ path: 'idle', items: [], settled: [] });
+    expect(same.stderr).toContain('1 pull request(s) read the same as at their last wait; not swept');
+    // Released with nothing recorded, so the next sweep reads it again.
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { decisions: waited.facts.merge?.decisions } } });
+
+    const changes = {
+      'checks settled': { checks: 'green' },
+      'a thread opened': { ...pending, threads: 1 },
+      'a new head': { ...pending, headRefOid: '4'.repeat(40) },
+      'the default branch moved': { ...pending, defaultRevision: '5'.repeat(40) },
+    } as const;
+    for (const [change, pr] of Object.entries(changes)) {
+      seed(at, waited);
+      expect({ change, ...ok(on(at, 'facts', { pr })) }).toMatchObject({ change, path: 'sweep', items: [{ item: SUBJECT }] });
+    }
   }, 60_000);
 
   test('a review comment from anyone but a listed maintainer is no verdict', () => {

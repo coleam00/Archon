@@ -45,6 +45,7 @@ import {
   readBase,
   readPr,
   type SweepAction,
+  waitedOn,
   withMerge,
 } from '../../.shared/merge.ts';
 import { askFields, attentionWait, withOther } from '../../.shared/queue.ts';
@@ -201,14 +202,22 @@ function labelOf(decision: Decision, outcome: Outcome, raised: boolean): string 
   return outcome.contradiction === null ? decision.action : 'claimed merged, not merged';
 }
 
-/** Record one pull request's decision; false when its work item could not be written. */
-function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly decision: Decision }, raised: boolean): boolean {
+/**
+ * Record one pull request's decision; false when its work item could not be written.
+ * `against` is the default branch a `wait` is recorded against; null records none, so
+ * the next sweep decides the item again.
+ */
+function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly decision: Decision }, raised: boolean, against: Base | null): boolean {
   const { at, runId } = writes;
   const { decision, status, reason, head } = outcome;
   const label = labelOf(decision, outcome, raised);
   const decided = `${label} (${decision.class})`;
   const links = [item.url, ...(decision.attention?.links ?? [])];
-  const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran };
+  const waited =
+    decision.action === 'wait' && status === 'waiting' && against !== null && item.facts !== null
+      ? { waited_on: waitedOn(item.facts, against) }
+      : {};
+  const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran, ...waited };
   if (item.item === null) {
     writes.lines.push(`PR ${String(decision.number)}: ${label}, with no work item to record it on`);
     return false;
@@ -235,6 +244,33 @@ function raiseOtherAsks(writes: Writes, asked: MergeAsked | null, outcomes: read
   const raised = asked.pr.number;
   if (!outcomes.some(({ decision, status }) => decision.action === 'ask' && status === 'waiting' && decision.number !== raised)) return;
   writes.lines.push(`The other asks: ${nextSweep(text(process.env.INPUTS_MERGE_QUEUE_BINDING), `asks:${writes.runId}`)}`);
+}
+
+/** The pull requests the sweep itself decided; none for a record that does not hold. */
+function declaredBy(sweep: Sweep | null): ReadonlySet<number> {
+  return new Set(sweep?.decisions.map(decision => decision.number));
+}
+
+/** Record every decision; returns what the run raises, nothing when the raised item could not be written. */
+function recordOutcomes(
+  writes: Writes,
+  outcomes: readonly (Outcome & { readonly decision: Decision })[],
+  itemOf: (number: number) => Item,
+  asked: MergeAsked | null,
+  against: (number: number) => Base | null
+): MergeAsked | null {
+  let raising = asked;
+  for (const outcome of outcomes) {
+    const { number } = outcome.decision;
+    const raised = raisedPr(raising) === number;
+    if (!recordPr(writes, itemOf(number), outcome, raised, against(number)) && raised) raising = null;
+  }
+  return raising;
+}
+
+/** The pull request whose question the run raises, or null. */
+function raisedPr(asked: MergeAsked | null): number | null {
+  return asked?.by === 'pr' ? asked.pr.number : null;
 }
 
 function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
@@ -319,10 +355,9 @@ function main(): void {
     asked = null;
   }
 
-  for (const outcome of outcomes) {
-    const raised = asked?.by === 'pr' && asked.pr.number === outcome.decision.number;
-    if (!recordPr(writes, itemOf(outcome.decision.number), outcome, raised) && raised) asked = null;
-  }
+  // Only a wait the sweep itself declared, in a record that holds, is one the next sweep may skip.
+  const declared = declaredBy(contradictions.length === 0 ? sweep : null);
+  asked = recordOutcomes(writes, outcomes, itemOf, asked, number => (declared.has(number) ? base : null));
   if (contradictions.length > 0) {
     throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
   }

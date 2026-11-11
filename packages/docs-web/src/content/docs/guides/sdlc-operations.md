@@ -163,18 +163,13 @@ The work item's `facts.build` holds the item's status, which says who owns it: t
 
 ### Its binding
 
-The pack declares two bindings for the build queue, on one resource with one capacity. Each run changes its checkout, so both launch in a worktree.
+A schedule keeps items moving when a handoff did not start. Each run changes its checkout, so every run needs its own worktree: the `build-queue` binding launches in a worktree, with `overlap: skip`.
 
-- **`build-handoff`** is what runs fire: intake for an item it routed, a round that continues, and a merge-queue return or answer. It has no schedule and `overlap: queue`. The firing run may itself hold a slot, and other builds may hold the rest, so a fire that finds every slot busy waits in line and starts when one frees, at the host's next drain. A server drains every few seconds; a CLI-only host needs `archon trigger drain` scheduled. Every `build_queue_binding` input the pack declares names this file.
-- **`build-queue`** is the schedule, with `overlap: skip`. It is the backstop: it picks up an item whose handoff did not start, as after the host was down or on an install without the handoff binding. A tick that finds every slot busy, or a handoff waiting in line, is skipped.
-
-Without the inputs, every stage waits for the next scheduled run, or for the run you start by hand.
-
-A binding file written before the handoff binding existed names the scheduled file as `build_queue_binding`. It still works, but a follow-up fired while every slot is busy is dropped. Write the files again with `archon pack bindings sdlc --force`, and carry over any input you set by hand.
+Every `build_queue_binding` input the pack declares names this binding's file, so intake, a round that continues and a merge-queue return all start the build queue through it. A fire that finds every slot busy is skipped, and the item waits for the next scheduled run. Without the inputs, every stage waits for the next scheduled run, or for the run you start by hand.
 
 ### Work orders
 
-A work order is the set of work items you approved for the factory, so the queue's schedule can stay on while you choose what builds. Set `"orders_only": "true"` in the `launch.inputs` of both build-queue binding files, `build-queue` and `build-handoff`, and a run that names no item claims only a waiting item that is a member of an open order, in the usual pickup order. With no open order it claims nothing. A named item (`number`) is claimed either way, so a member's follow-up rounds still start. Intake's handoff names no item, so it starts nothing outside an order. The default, `"false"`, picks from every waiting item.
+A work order is the set of work items you approved for the factory, so the queue's schedule can stay on while you choose what builds. Set `"orders_only": "true"` in the binding's `launch.inputs`, and a run that names no item claims only a waiting item that is a member of an open order, in the usual pickup order. With no open order it claims nothing. A named item (`number`) is claimed either way, so a member's follow-up rounds still start. Intake's handoff names no item, so it starts nothing outside an order. The default, `"false"`, picks from every waiting item.
 
 An order is one state document, `work-order/<id>`, in the project's state scope, whose key is the repository's `owner/repo`. The easiest way to write one is to name its members in a build-queue run's message:
 
@@ -245,7 +240,7 @@ One agent decides every pull request and orders them, least risk first. The queu
 - **Merge.** A Ready pull request with green CI that the forge reports merges cleanly into the default branch merges, even when it is behind. The default branch's CI on the merge is the next sweep's first fact. Every pull request that can merge in a sweep merges in it.
 - **Return.** What the build queue can fix goes back to it with a brief: a verdict that is not Ready or is for another commit (a push after the review), a conflict with the default branch, an unresolved thread that raises a defect in the change, and red the change caused. On a conflict the round merges the default branch in and resolves it, regenerating generated files with their owning script.
 - **Rerun.** Red CI in code a pull request does not touch gets one rerun of its failed jobs, counted only when the forge reports it applied. The record stores the head it re-ran at, so the sweep never reruns twice at one head.
-- **Wait.** A pull request whose checks are still pending waits for a later sweep: nothing starts one when its checks finish, so the scheduled sweep picks it up.
+- **Wait.** A pull request whose checks are still pending waits for a later sweep. No event starts one when its checks finish, so the [short schedule](#its-binding-1) picks it up.
 - **Ask.** An unclear pull request is asked about as soon as its verdict is Ready at its head, even while its CI is pending or it conflicts. The approval is pinned to that head and a later sweep merges it once the gate passes. An approval carries to a later head only when the sweep judges that everything since the approved head is merges of the default branch and their conflict resolutions, and the verdict is Ready at the later head. Any doubt voids it.
 
 The sweep measures each diff with git against the merge base, not the forge's counts.
@@ -289,7 +284,7 @@ The work item's `facts.merge` holds the item's merge status, any approval pinned
 
 ### What it asks
 
-A sweep asks about every unclear pull request that is due. A run holds one wait, so it raises one attention item: a red default branch, labelled `merge: base`, or else the first pull request the sweep asked about, labelled `merge: pr`. It carries the same fields as a build-queue item. When the sweep asked about other pull requests too, the run releases them and starts a sweep through the merge-queue binding (`merge_queue_binding`), keyed by the run. That sweep starts when this run pauses, claims them, decides them again and raises the next, and so on until every question is open. With no binding set, or under a red default branch, the other asks wait for the next sweep.
+A sweep asks about every unclear pull request that is due. A run holds one wait, so it raises one attention item: a red default branch, labelled `merge: base`, or else the first pull request the sweep asked about, labelled `merge: pr`. It carries the same fields as a build-queue item. When the sweep asked about other pull requests too, the run releases them and fires the merge-queue binding (`merge_queue_binding`), keyed by the run. The next sweep, that one or the next scheduled one, claims them, decides them again and raises the next, until every question is open.
 
 - **`merge: base`** offers `hold` alone: merges are held until the default branch is green.
 - **`merge`** approves the pull request at the head that was asked about. The answer starts a sweep at once through the merge-queue binding (`merge_queue_binding`), which merges it once the gate passes there.
@@ -301,9 +296,13 @@ An answer's ruling and your words are written into the issue body as a dated "Cu
 
 ### Its binding
 
-A run never changes its checkout, and the claim keeps two runs off the same item, so the `merge-queue` binding runs in the launch checkout, with `overlap: queue`.
+A run never changes its checkout, and the claim keeps two runs off the same item, so the `merge-queue` binding runs in the launch checkout. It is scheduled every 5 minutes with `overlap: skip`: a tick that finds a sweep running is skipped.
 
-Its `merge_queue_binding` input names the binding's own file and `build_queue_binding` the build queue's handoff binding, so a follow-up starts through your own binding. The schedule is the backstop: it merges a pull request whose checks finished after the last sweep, and whatever a handoff did not start. The answering run still holds the merge queue's only slot when it fires the sweep, which is why the binding queues: the sweep a `merge` answer fires waits in line and starts as soon as the answering run ends, at the host's next drain. A server drains every few seconds; a CLI-only host needs `archon trigger drain` scheduled. A scheduled tick that finds a sweep running also waits in line instead of being dropped. With `overlap: skip` the answer's sweep would be skipped and the next scheduled sweep would merge the pull request. Without the inputs, follow-ups wait for the next scheduled run.
+The short interval is how a pull request with pending checks gets merged soon after they finish, since the forge delivers no event for checks settling at a head. It costs little. When a sweep declares a `wait`, the record stores what the wait rests on: the head, whether the pull request is a draft and merges cleanly, the state of its checks, its open threads, its verdict, and the default branch's head and check state. A later run releases the item without the agent while all of them read the same, and a run where nothing changed ends after its script nodes. A change to any of them hands the item to the agent again.
+
+Its `merge_queue_binding` input names the binding's own file and `build_queue_binding` the build queue's. A fire from a build-queue run starts a sweep at once when none is running. A fire from inside a merge-queue run, as after a `merge` answer or for a sweep's other questions, is skipped while that run holds the queue's one slot, and the next scheduled sweep does the work within the interval. Without the inputs, follow-ups wait for the next scheduled run.
+
+A binding file written with `overlap: queue` keeps every tick that arrives while a sweep runs or waits for its checkout, without limit. Write it again with `archon pack bindings sdlc --only merge-queue --force`, and remove the old schedule before installing the new one.
 
 ## Discoveries
 

@@ -241,11 +241,10 @@ recommends under `bindings:` in `.pack/pack.yaml`:
 - `intake-issues` and `intake-labels` start intake on GitHub issue and label events.
 - `build-queue`, `split-queue`, `merge-queue` and `discoveries` start the queues on a
   schedule.
-- `build-handoff` has no schedule. Runs fire it: each stage starts the next when it
-  finishes, so intake starts the build queue, a build that ends ready starts a merge
-  sweep, and a merge-queue return starts the build queue again. With it, the build and
-  merge schedules are a backstop for a handoff that did not start, as after the host
-  was down.
+  Each stage also starts the next when it finishes, by firing the next queue's
+  binding file: intake starts the build queue, a build that ends ready starts a merge
+  sweep, and a merge-queue return starts the build queue again. The schedules pick up
+  what a fire did not start.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
 - `worktree-cleanup` removes merged worktrees, for an install that runs no server.
 
@@ -259,7 +258,7 @@ archon pack bindings sdlc \
   --run-as <the id whoami printed> \
   --cwd /path/to/the/clone \
   --out /path/for/binding/files \
-  --only build-queue,build-handoff,merge-queue,discoveries
+  --only build-queue,merge-queue,discoveries
 ```
 
 `--host` is the id of the execution host that starts the runs: a name you choose for
@@ -286,8 +285,6 @@ Registering a file starts runs, so ask first:
 
   On Linux or Windows, run the same `trigger fire` command from cron, systemd or Task
   Scheduler. If a queue is already scheduled another way, remove that schedule first.
-- **A fire-only binding** (`build-handoff`) is a whole file that needs no registering:
-  the other bindings' inputs name its path, and their runs fire it.
 - **An event binding** is one entry for the GitHub source plugin's `bindings` array on
   a running server with a webhook. See
   [Configure GitHub event starts](https://archon.diy/guides/workflow-triggers/#configure-github-event-starts).
