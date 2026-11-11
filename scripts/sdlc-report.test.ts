@@ -40,7 +40,7 @@ describe('failed', () => {
     );
     const text = failed(dir, { reviews: [], pullRequests: [], outcomesFile: undefined });
     expect(text.startsWith('Not done:')).toBe(true);
-    expect(text).toContain('- Guard refuses an empty diff [unreviewed]');
+    expect(text).toContain('Discoveries: 1 recorded');
     expect(text).not.toContain('Ready');
   });
 });
@@ -95,7 +95,7 @@ describe.each([
     expect(report[result]).toBe(false);
     expect(report.reason).toBe('failed');
     expect(String(report.summary)).toStartWith('Not done:');
-    expect(String(report.summary)).toContain('- Guard refuses an empty diff [unreviewed]');
+    expect(String(report.summary)).toContain('Discoveries: 1 recorded');
   });
 
   it("relays the outcome node's report unchanged when it ran", async () => {
