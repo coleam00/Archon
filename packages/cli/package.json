@@ -259,7 +259,7 @@
     ],
     [
       "src/commands/forge.test.ts",
-      "src/commands/forge-types.test.ts"
+      "src/commands/script-types.test.ts"
     ],
     [
       "src/commands/plugin.test.ts",

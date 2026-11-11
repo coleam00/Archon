@@ -15,7 +15,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - A source checkout and Docker run the GitHub forge plugin from source, as they run the maintained providers, and skip an installed `archon-forge-github`. Release binaries still load the installed plugin.
-- `archon forge types --out <file>` writes the request and result types of every forge operation and a typed `invokeForge` client into one TypeScript file; `--check` exits 1 when the file is missing or stale.
+- A Bun `script:` node imports the host's API by name: `import { input, emit, refuse, forge, state, outcomes, trigger } from 'archon:script'`. Archon provides the module to named scripts, inline bodies and executed dry runs, so a pack carries no client code and needs no `node_modules`. `forge(op, request)` is typed per operation and throws a `ForgeError` with the failure's kind and what is known of a failed write; `state` wraps `archon state` with typed conflicts. The CLI stays the wire underneath for other runtimes. The load-time input check reads `input('<name>')` like `process.env.INPUTS_<NAME>`.
+- `archon script types [--out <file>] [--check]` writes the TypeScript declaration of `archon:script`, including every forge operation's request and result type, for an editor or `tsc` over a pack's scripts.
 - `archon forge check` answers whether a plugin serves a host, supports the named operations and has a credential, without running a forge operation. It exits 1 with a typed reason, so a workflow can refuse before it spends on agents.
 - `archon state put|patch|delete --held` writes only if the calling run holds the document's live lease, and otherwise exits 3 with `lease_not_held`.
 - `archon state claim` takes the lease on the first claimable document of a candidate list and reports why it skipped each of the others.

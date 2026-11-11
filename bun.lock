@@ -222,6 +222,16 @@
         "typescript": "^5.0.0",
       },
     },
+    "packages/script-api": {
+      "name": "@archon/script-api",
+      "version": "0.14.0",
+      "devDependencies": {
+        "@archon/paths": "workspace:*",
+      },
+      "peerDependencies": {
+        "typescript": "^5.0.0",
+      },
+    },
     "packages/server": {
       "name": "@archon/server",
       "version": "0.14.0",
@@ -299,6 +309,7 @@
         "@archon/paths": "workspace:*",
         "@archon/plugin-manifest": "workspace:*",
         "@archon/provider-contract": "workspace:*",
+        "@archon/script-api": "workspace:*",
         "ajv": "^8.20.0",
         "zod": "^4.4.3",
       },
@@ -369,6 +380,8 @@
     "@archon/provider-contract": ["@archon/provider-contract@workspace:packages/provider-contract"],
 
     "@archon/providers": ["@archon/providers@workspace:packages/providers"],
+
+    "@archon/script-api": ["@archon/script-api@workspace:packages/script-api"],
 
     "@archon/server": ["@archon/server@workspace:packages/server"],
 

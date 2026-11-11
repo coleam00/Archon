@@ -35,6 +35,7 @@
     "./model-validation": "./src/model-validation.ts",
     "./run-config": "./src/run-config.ts",
     "./script-discovery": "./src/script-discovery.ts",
+    "./script-api": "./src/script-api/preload.ts",
     "./command-validation": "./src/command-validation.ts",
     "./fixture-layout": "./src/fixture-layout.ts",
     "./pack-layout": "./src/workflow-discovery/pack-layout.ts",
@@ -43,7 +44,6 @@
     "./validation-config": "./src/validation-config.ts",
     "./dry-run": "./src/dry-run.ts",
     "./output-types": "./src/output-types.ts",
-    "./output-types/schema-to-ts": "./src/output-types/schema-to-ts.ts",
     "./graph-plan": "./src/graph-plan.ts",
     "./utils/tool-formatter": "./src/utils/tool-formatter.ts",
     "./utils/github-token-policy": "./src/utils/github-token-policy.ts",
@@ -85,6 +85,7 @@
     "@archon/paths": "workspace:*",
     "@archon/provider-contract": "workspace:*",
     "@archon/plugin-manifest": "workspace:*",
+    "@archon/script-api": "workspace:*",
     "zod": "^4.4.3",
     "ajv": "^8.20.0"
   },

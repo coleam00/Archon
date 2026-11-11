@@ -1,4 +1,5 @@
 import { scriptInvocation } from '../../../script-invocation';
+import { scriptApiPreload } from '../../../script-api/preload';
 import {
   hostSpawnFailure,
   isSubprocessTimeout,
@@ -216,10 +217,12 @@ function resolveScriptInvocation(
   namedScripts: ScriptSource['namedScripts']
 ): ScriptInvocation | { errorMsg: string } {
   if (isInlineScript(finalScript)) {
+    const runtime = node.runtime === 'bun' ? 'bun' : 'uv';
     return scriptInvocation(
-      node.runtime === 'bun' ? 'bun' : 'uv',
+      runtime,
       { kind: 'inline', code: finalScript },
-      node.deps
+      node.deps,
+      scriptApiPreload(runtime, ctx.artifactsDir)
     );
   }
   if (namedScripts instanceof Error) {
@@ -236,7 +239,12 @@ function resolveScriptInvocation(
       errorMsg: `Script node '${node.id}': named script '${finalScript}' not found in .archon/scripts/ or ~/.archon/scripts/`,
     };
   }
-  return scriptInvocation(scriptDef.runtime, { kind: 'file', path: scriptDef.path }, node.deps);
+  return scriptInvocation(
+    scriptDef.runtime,
+    { kind: 'file', path: scriptDef.path },
+    node.deps,
+    scriptApiPreload(scriptDef.runtime, ctx.artifactsDir)
+  );
 }
 
 async function recordScriptConfigFailure(

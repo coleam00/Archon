@@ -244,6 +244,24 @@ A relative path target and `--out` resolve from the invoking directory. A workfl
 
 Output is deterministic: workflows sorted by name, nodes and fields in YAML order. The command exits 1 without writing when a workflow of the pack does not load, when no node declares `output_format`, or when a schema uses a keyword the generator cannot state as a type; that error names the workflow, the node and the keyword. See [the supported keywords](/reference/workflow-language/#typescript-for-output_format).
 
+### `script types`
+
+Print the TypeScript declaration of `archon:script`, the module Archon provides to every Bun `script:` node. It declares the module's functions and the request and result type of every forge operation, so an editor or `tsc` checks a pack's scripts with no `node_modules`. See [The script API](/guides/script-nodes/#the-script-api).
+
+```bash
+archon script types                                   # print the declaration
+archon script types --out types/archon-script.d.ts    # write it to a file
+archon script types --out types/archon-script.d.ts --check   # write nothing; exit 1 when stale
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--out <file>` | The file to write, relative to the invoking directory. Without it the declaration goes to stdout |
+| `--check` | Compare instead of writing. Exits 1 naming the file when it is missing or its content differs. Needs `--out` |
+| `--json` | Print `{ ok, path, status }`; `status` is `written`, `unchanged`, `current` or `stale`. Needs `--out` |
+
+The declaration is embedded in Archon and describes the module that version provides. Write the file again after an upgrade.
+
 ### `workflow run <name> [message]`
 
 Run a workflow with an optional user message, which the workflow reads as `$ARGUMENTS`.
@@ -2284,7 +2302,7 @@ archon trigger schedule install --config "$BINDING"
 
 `archon forge check --data '{"host":"github.com","operations":["pr.view","pr.merge"]}' --json` answers, before a workflow spends on agents, whether a plugin serves the host, supports every named operation and has a credential. It runs no forge operation and exits 1 with a typed reason when one of the three is missing. See [Check forge access before a run spends](/reference/forge/#check-forge-access-before-a-run-spends).
 
-`archon forge types --out <file>` writes one TypeScript file with the request and result types of every operation and a typed `invokeForge` client that calls this CLI. With `--check` it writes nothing and exits 1 when the file is missing or stale. `--out` resolves from the invoking directory. See [Call the forge from a script](/guides/script-nodes/#call-the-forge-from-a-script).
+A Bun `script:` node calls these operations through `forge(op, request)` from the `archon:script` module; see [`script types`](#script-types).
 
 See [Forge operations](/reference/forge/) for request shapes, plugin configuration, credentials and audit behavior. The bundled SDLC pack reaches the forge only through a plugin that implements every operation it needs. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 

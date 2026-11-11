@@ -437,6 +437,9 @@ export const stateRefusalReasonSchema = z.enum([
 ]);
 export type StateRefusalReason = z.infer<typeof stateRefusalReasonSchema>;
 const refusal = stateRefusalReasonSchema.enum;
+/** Why a store refused a write without making it; `missing` is only ever a claim skip. */
+export const stateConflictSchema = stateRefusalReasonSchema.exclude(['missing']);
+export type StateConflict = z.infer<typeof stateConflictSchema>;
 
 /** The reason a store error stands for, or undefined when it is not a refusal. */
 export function stateRefusalReason(error: unknown): StateRefusalReason | undefined {
