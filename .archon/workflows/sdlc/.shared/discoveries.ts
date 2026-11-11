@@ -12,10 +12,10 @@
  * key twice recovers the issue instead of opening another.
  */
 
-import type { QualifiedPr } from './forge.ts';
+import { type QualifiedPr } from './identity.ts';
+import { isObject } from './inputs.ts';
 import type { fetchDefaultBranch } from './remote.ts';
 import type { DiscoveryRecord } from './report.ts';
-import { isObject } from './io.ts';
 
 export const RUNS_PREFIX = 'discoveries/runs/';
 const KEY = /^[a-z0-9][a-z0-9-]{2,80}$/;

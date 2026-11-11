@@ -470,6 +470,7 @@ export interface WorkflowOutputs {
         } | null;
       };
       readonly summary: string;
+      readonly gate_error: string;
     };
     record: {
       readonly merged: ReadonlyArray<number>;
@@ -732,14 +733,11 @@ export interface WorkflowOutputs {
         readonly title: string;
         readonly body: string;
       }>;
-      readonly later: ReadonlyArray<{
-        readonly title: string;
-        readonly signal: string;
-      }>;
       readonly existing: ReadonlyArray<{
         readonly number: number;
         readonly why: string;
       }>;
+      readonly comment: string;
       readonly summary: string;
     };
     publish: {

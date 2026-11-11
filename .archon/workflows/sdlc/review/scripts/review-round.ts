@@ -9,6 +9,13 @@
  * PR's remote head before the verdict goes public, then records it beside the
  * report as the next round's cursor.
  *
+ * A scope that is a pull request's URL names its pull request before any agent
+ * reads it, so the same head rule (../../.shared/review-head.ts) runs here: a
+ * checkout that is not at that pull request's head refuses now, not after the
+ * lenses have run. Every other scope waits for publish-review: a number, a branch
+ * or an empty scope names its pull request only once the scope agent resolves it,
+ * and delivery's recorded pull request was pushed a moment ago by the run itself.
+ *
  * A continuation round's cursor is that recorded commit. The head must descend
  * from it: a head that is the cursor's ancestor, or off its history, would make
  * the delta run backwards or cover commits the previous round never read, so the
@@ -34,6 +41,7 @@
  * its shape, so the engine refuses a malformed one before lenses or synthesis read it.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
+ * - INPUTS_SCOPE: the review's requested scope.
  * - INPUTS_PRIOR_REPORT: the path of the report this round continues from, in this run's
  *   artifacts or an earlier run's, or empty for a first review.
  * - INPUTS_PART: the run's part assignment as JSON, or empty for the whole contract.
@@ -44,7 +52,10 @@ import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { readFindingsFile, REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
 import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
-import { artifactsDir, emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse } from 'archon:script';
+import { nullableJson } from '../../.shared/inputs.ts';
+import { resolvePrUrl } from '../../.shared/pr.ts';
+import { requirePrHead } from '../../.shared/review-head.ts';
 
 /**
  * The bound part assignment. The refusal drops the parser's message, which quotes
@@ -56,6 +67,17 @@ function partAssignment(value: string | undefined): unknown {
   } catch {
     throw new Error('the part input is not JSON');
   }
+}
+
+/**
+ * Refuse a scope that is a pull request's web URL when the checkout is not at that
+ * pull request's head. The forge resolves the URL; a URL that names no pull request
+ * is the scope agent's to read.
+ */
+function requireUrlScopeHead(scope: string, head: string): void {
+  if (!URL.canParse(scope) || !['http:', 'https:'].includes(new URL(scope).protocol)) return;
+  const pr = resolvePrUrl(scope);
+  if (pr) requirePrHead(pr, head);
 }
 
 /** One boolean per lens, true for each lens named in `rerun`. */
@@ -105,8 +127,9 @@ function prepareReviewDir(): void {
 try {
   prepareReviewDir();
   const part = partAssignment(process.env.INPUTS_PART);
-  const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
+  const prior = input('prior_report').trim();
   const head = nodeStartCommit();
+  requireUrlScopeHead(input('scope').trim(), head);
   if (prior === '') {
     emit({ continuation: false, head, cursor: '', risks: FULL_REVIEW_RISKS, ...lensFlags(new Set()), part });
   } else {

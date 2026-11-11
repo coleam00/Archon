@@ -373,8 +373,8 @@ back. So "the write failed" and "the write may have landed" stay different outco
 the pack as in the forge contract. A new public write gets a script node of its own, or
 joins the one that already owns that surface; it does not go into a prompt.
 
-Every forge read and write goes through `archon forge`:
-[`.shared/forge.ts`](.shared/forge.ts) is the client, [`.shared/pr.ts`](.shared/pr.ts)
+Every forge read and write goes through `archon forge`: `forge()` of the engine's
+`archon:script` module is the client, [`.shared/pr.ts`](.shared/pr.ts)
 owns the pull-request operations and [`.shared/issue.ts`](.shared/issue.ts) the issue
 operations. Nothing falls back to another tool when the plugin cannot answer. Every
 pack label is declared in [`.shared/labels.ts`](.shared/labels.ts), and every stage
@@ -418,16 +418,16 @@ tests and the workflow fixtures on a pull request that changes the pack. Run the
 
 Three rules, each protecting something a script cannot get back on its own:
 
-- **Read every binding as a literal `process.env.INPUTS_<NAME>`.** The engine scans
-  each script's own source at load and refuses a workflow whose script reads a
-  binding no `with:` clause provides. It matches that literal form only, and it never
-  follows imports, so a helper that built the key from a name would hide every read
-  in the pack from that check, and a renamed binding would surface as a wrong result
-  at the end of a paid run instead of a refusal before it started. Pass the value to
-  `.shared/io.ts`, never the name.
+- **Read every binding as a literal `input('<name>')`** from `archon:script`, in the
+  node's own script. The engine scans each script's own source at load and refuses a
+  workflow whose script reads a binding no `with:` clause provides. It matches that
+  literal form (and `process.env.INPUTS_<NAME>`) only, and it never follows imports,
+  so a helper that built the name would hide every read in the pack from that check,
+  and a renamed binding would surface as a wrong result at the end of a paid run
+  instead of a refusal before it started. Pass the value to a helper, never the name.
 - **Never call `process.exit()`.** Bun leaves without draining stdout: a 500 KB
-  write to a pipe arrives as 131072 bytes, silently. Set `process.exitCode` and
-  return; `.shared/io.ts` is the only place that should need to know this.
+  write to a pipe arrives as 131072 bytes, silently. Call `refuse()` from
+  `archon:script`, which sets `process.exitCode`, and return.
 - **Nothing the target project provides is available.** No `package.json`, no
   `node_modules`, no `tsconfig.json`, no npm dependency. Relative imports within
   the pack and the standard library are the whole surface, which is what keeps

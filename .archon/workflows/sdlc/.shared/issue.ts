@@ -1,6 +1,6 @@
 /**
  * The pack's one issue read, its close, and its create-or-recover by marker, through
- * the forge contract (./forge.ts).
+ * the forge contract (`forge` of `archon:script`).
  *
  * The forge proves the number names an issue on the tracker before anything is
  * returned or written, so a pull request with the same number is never read or
@@ -8,7 +8,9 @@
  * `appendSection` adds a dated section to the body, the one body write the pack makes.
  */
 
-import { invokeForge, parseQualifiedPr, record, samePr, type QualifiedPr } from './forge.ts';
+import { forge } from 'archon:script';
+import { parseQualifiedPr, type QualifiedPr, samePr } from './identity.ts';
+import { record } from './inputs.ts';
 
 export interface IssueView {
   readonly title: string;
@@ -44,7 +46,7 @@ function login(value: unknown): string | null {
 }
 
 export function viewIssue(item: QualifiedPr): IssueView {
-  const value = invokeForge('workitem.view', { ref: item });
+  const value = forge('workitem.view', { ref: item });
   const observed = parseQualifiedPr(JSON.stringify(value?.ref));
   if (samePr(item, observed) && value?.kind === 'pr') {
     throw new NotAnIssueError(`${item.repo.host}/${item.repo.path}#${String(item.number)}`);
@@ -95,7 +97,7 @@ export function createIssue(
   marker: string
 ): CreatedIssue {
   if (firstLine(body) !== marker) throw new Error('the issue body must begin with its marker');
-  const value = invokeForge('workitem.create', { repo, title, body, marker });
+  const value = forge('workitem.create', { repo, title, body, marker });
   const item = record(value?.workitem);
   const ref = parseQualifiedPr(JSON.stringify(item?.ref));
   if (
@@ -119,7 +121,7 @@ export type CloseReason = (typeof CLOSE_REASONS)[number];
  * forge contract does.
  */
 export function closeIssue(item: QualifiedPr, reason: CloseReason): void {
-  const value = invokeForge('workitem.close', { ref: item, reason });
+  const value = forge('workitem.close', { ref: item, reason });
   if (record(value?.workitem)?.state !== 'closed' || value?.reason !== reason)
     throw new Error('forge returned no verified close');
 }
@@ -135,5 +137,5 @@ export function appendSection(item: QualifiedPr, heading: string, text: string):
   const body = viewIssue(item).body;
   if (body.trimEnd().endsWith(section.trimEnd())) return;
   // `workitem.edit-body` reads its own write back, and a failure throws with its outcome.
-  invokeForge('workitem.edit-body', { ref: item, body: `${body.trimEnd()}\n\n\n${section}` });
+  forge('workitem.edit-body', { ref: item, body: `${body.trimEnd()}\n\n\n${section}` });
 }

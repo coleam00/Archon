@@ -168,6 +168,7 @@ describe('messages', () => {
 
       const sql = mockQuery.mock.calls[0]?.[0] as string;
       expect(sql).toContain("metadata->>'workflowResult'");
+      expect(sql).toContain('ORDER BY created_at DESC, id DESC');
       expect(sql).not.toContain('json_extract');
     });
 
@@ -179,6 +180,7 @@ describe('messages', () => {
 
       const sql = mockQuery.mock.calls[0]?.[0] as string;
       expect(sql).toContain("json_extract(metadata, '$.workflowResult')");
+      expect(sql).toContain('ORDER BY created_at DESC, rowid DESC');
       expect(sql).not.toContain("->>'" + 'workflowResult');
     });
 

@@ -7,24 +7,21 @@
  * know whether the item waits for it.
  */
 
-import { type QualifiedPr, sameRepo } from './forge.ts';
+import { input, state } from 'archon:script';
+import { type QualifiedPr, sameRepo } from './identity.ts';
 import { followUp } from './follow-up.ts';
-import { note, text } from './io.ts';
 import type { NodeOutput } from './outputs.generated.ts';
 import { findPrByHead, PR_CREATE_UNRESOLVED, prFromUrl } from './pr.ts';
 import { type Attention, clipped, type DecisionEntry, withDecision } from './queue.ts';
-import { stateDocuments, statePut } from './state.ts';
 import {
   type Claim,
   type HistoryEntry,
   newest,
   type Pickup,
   parseWorkItem,
-  read,
   type Stage,
   type TriageFacts,
   type WorkItem,
-  workItemName,
 } from './workitem.ts';
 
 /**
@@ -137,37 +134,35 @@ export interface BlockedItem {
 const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
 const REVISITED = 'revisited';
 
-/** The unclaimed blocked items the queue has not revisited in the last few hours. */
-export function dueBlocked(at: string): BlockedItem[] {
+/**
+ * The unclaimed blocked items no run has revisited in the last few hours, each recorded
+ * as revisited by this run before it is listed. The record is a conditional write at the
+ * revision read, so of several runs that list at once exactly one gets each item; a run
+ * whose write loses leaves the item to the run that won.
+ */
+export function dueBlocked(at: string, runId: string): BlockedItem[] {
   const due = new Date(Date.parse(at) - REVISIT_EVERY_MS).toISOString();
   const items: BlockedItem[] = [];
-  for (const stored of stateDocuments('work/')) {
+  for (const stored of state.listValues('work/')) {
     if (stored.value === null) continue;
     let doc: WorkItem;
     try {
       doc = parseWorkItem(stored.value);
     } catch (error) {
-      note(`revisit skips ${stored.name}: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`revisit skips ${stored.name}: ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
     const last = doc.history.filter(entry => entry.outcome === REVISITED).at(-1)?.at ?? '';
     if (doc.stage !== 'blocked' || doc.claim !== null || last >= due) continue;
+    const entry: HistoryEntry = { at, stage: 'build', run_id: runId, outcome: REVISITED, summary: 'listed for the revisit agent' };
+    if (!state.put(stored.name, { ...doc, history: newest([...doc.history, entry]) }, { ifRevision: stored.revision }).ok) {
+      console.error(`revisit leaves ${stored.name} to the run that changed it`);
+      continue;
+    }
     const triaged = doc.history.filter(entry => entry.outcome === 'blocked').at(-1);
     items.push({ number: doc.subject.number, summary: triaged?.summary ?? '' });
   }
   return items;
-}
-
-/** Record that the queue revisited the item, re-reading on a conflict; false if it never landed. */
-export function recordRevisit(subject: QualifiedPr, runId: string, summary: string): boolean {
-  const entry: HistoryEntry = { at: new Date().toISOString(), stage: 'build', run_id: runId, outcome: REVISITED, summary };
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const stored = read(workItemName(subject.number));
-    if (stored === undefined) return false;
-    const doc = { ...stored.doc, history: newest([...stored.doc.history, entry]) };
-    if (statePut(stored.name, doc, stored.revision) === 'ok') return true;
-  }
-  return false;
 }
 
 /**
@@ -279,7 +274,7 @@ export const ENDED_UNDECIDED = 'ended_undecided';
 export function nextRound(item: QualifiedPr, runId: string): string {
   const { host, path } = item.repo;
   return followUp(
-    text(process.env.INPUTS_BUILD_QUEUE_BINDING),
+    input('build_queue_binding'),
     `build-round:${host}/${path}#${String(item.number)}:${runId}`,
     { repo_host: host, repo_path: path, number: String(item.number) },
     'its next round'

@@ -290,34 +290,48 @@ const mergedPr = {
 
 function setupCommitResponse(
   payload: unknown = [[mergedPr]],
-  failure?: 'remote' | 'repository' | 'pulls',
+  failure?: 'remote' | 'repository' | 'commit' | 'pulls',
   error = new Error('lookup failed'),
-  remoteUrl = 'git@github.com:owner/repo.git'
+  remoteUrl = 'git@github.com:owner/repo.git',
+  commitPayload: unknown = {
+    data: { repository: { object: { __typename: 'Commit', oid: COMMIT } } },
+  }
 ): void {
   mockExecFileAsync.mockReset().mockImplementation(async (cmd, args) => {
-    const stage = cmd === 'git' ? 'remote' : args[0] === 'repo' ? 'repository' : 'pulls';
+    let stage = 'pulls';
+    if (cmd === 'git') stage = 'remote';
+    else if (args[0] === 'repo') stage = 'repository';
+    else if (args.includes('graphql')) stage = 'commit';
     if (stage === failure) throw error;
-    return {
-      stdout:
-        stage === 'remote'
-          ? remoteUrl
-          : stage === 'repository'
-            ? JSON.stringify({ nameWithOwner: 'owner/repo' })
-            : typeof payload === 'string'
-              ? payload
-              : Array.isArray(payload)
-                ? payload.map(page => JSON.stringify(page)).join('\n')
-                : JSON.stringify(payload),
-      stderr: '',
+    const outputs: Record<string, unknown> = {
+      remote: remoteUrl,
+      repository: { nameWithOwner: 'owner/repo' },
+      commit: commitPayload,
+      pulls: payload,
     };
+    const output = outputs[stage];
+    if (stage === 'pulls' && Array.isArray(output))
+      return { stdout: output.map(page => JSON.stringify(page)).join('\n'), stderr: '' };
+    return { stdout: typeof output === 'string' ? output : JSON.stringify(output), stderr: '' };
   });
 }
 
 describe('getPrsForCommit', () => {
+  test('a successful association makes one API request and skips commit inspection', async () => {
+    setupCommitResponse(undefined, 'commit');
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+      state: 'FOUND',
+      prs: [{ state: 'MERGED', headSha: HEAD }],
+    });
+    const apiCalls = mockExecFileAsync.mock.calls.filter(([, args]) => args[0] === 'api');
+    expect(apiCalls).toHaveLength(1);
+    expect(apiCalls[0][1]).toContain('--paginate');
+  });
+
   test('the subprocess projection feeds the parser for every PR state', async () => {
     setupCommitResponse();
     await getPrsForCommit(COMMIT, REPO);
-    const args = mockExecFileAsync.mock.calls.find(([, args]) => args[0] === 'api')?.[1];
+    const args = mockExecFileAsync.mock.calls.find(([, args]) => args.includes('--paginate'))?.[1];
     if (!args) throw new Error('Missing commit lookup');
     const projection = args[args.indexOf('--jq') + 1];
     const proc = Bun.spawn(['jq', '-c', projection], {
@@ -410,9 +424,106 @@ describe('getPrsForCommit', () => {
     ]);
   });
 
+  test.each([
+    { status: '422', missing: true, expected: 'UNKNOWN_COMMIT' },
+    { status: '422', missing: false, expected: 'UNAVAILABLE' },
+    { status: '401', missing: true, expected: 'UNAVAILABLE' },
+    { status: '403', missing: true, expected: 'UNAVAILABLE' },
+    { status: '429', missing: true, expected: 'UNAVAILABLE' },
+    { status: '500', missing: true, expected: 'UNAVAILABLE' },
+  ])(
+    'classifies HTTP $status with missing=$missing as $expected',
+    async ({ status, missing, expected }) => {
+      mockLogger.warn.mockClear();
+      setupCommitResponse(
+        undefined,
+        'pulls',
+        Object.assign(new Error('credential-bearing error'), {
+          code: 1,
+          stdout: JSON.stringify({ message: 'arbitrary wording', status }),
+        }),
+        undefined,
+        { data: { repository: { object: missing ? null : { __typename: 'Commit', oid: COMMIT } } } }
+      );
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: expected });
+      expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
+      if (expected === 'UNKNOWN_COMMIT') expect(mockLogger.warn).not.toHaveBeenCalled();
+      else expect(mockLogger.warn).toHaveBeenCalled();
+    }
+  );
+
+  test.each(['empty', 'failed', 'malformed-json', 'malformed-pr'] as const)(
+    'a null Git object preserves the result of a %s association',
+    async association => {
+      mockLogger.warn.mockClear();
+      setupCommitResponse(
+        association === 'malformed-json'
+          ? 'not JSON'
+          : association === 'malformed-pr'
+            ? [[{ ...mergedPr, head: {} }]]
+            : [[]],
+        association === 'failed' ? 'pulls' : undefined,
+        Object.assign(new Error('https://user:secret@github.com/owner/repo'), { code: 1 }),
+        undefined,
+        {
+          data: { repository: { object: null } },
+        }
+      );
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+        state: association === 'empty' ? 'UNKNOWN_COMMIT' : 'UNAVAILABLE',
+      });
+      expect(mockExecFileAsync.mock.calls[2][1]).toContain('--paginate');
+      expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
+      if (association === 'empty') expect(mockLogger.warn).not.toHaveBeenCalled();
+      else {
+        expect(mockLogger.warn).toHaveBeenLastCalledWith(
+          { repoPath: REPO, stage: 'pulls', code: association === 'failed' ? 1 : undefined },
+          'isolation.commit_pr_lookup_failed'
+        );
+        expect(JSON.stringify(mockLogger.warn.mock.calls)).not.toContain('secret');
+      }
+    }
+  );
+
+  test.each([
+    null,
+    {},
+    { data: null },
+    { data: { repository: null } },
+    { data: { repository: {} } },
+    { data: { repository: { object: {} } } },
+    { data: { repository: { object: { __typename: 'Tree', oid: COMMIT } } } },
+    { data: { repository: { object: { __typename: 'Commit', oid: HEAD } } } },
+    { data: { repository: { object: null } }, errors: [{ type: 'FORBIDDEN' }] },
+    { data: { repository: { object: null } }, errors: {} },
+  ])('rejects incomplete or failed object inspection: %j', async payload => {
+    setupCommitResponse([[]], undefined, undefined, undefined, payload);
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+    expect(mockExecFileAsync.mock.calls[2][1]).toContain('--paginate');
+    expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
+  });
+
   test('empty pages are successful absence', async () => {
     setupCommitResponse([[]]);
     expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'NONE' });
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'gh',
+      [
+        'api',
+        '--hostname',
+        'github.com',
+        'graphql',
+        '-f',
+        'query=query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){__typename oid}}}',
+        '-f',
+        'owner=owner',
+        '-f',
+        'name=repo',
+        '-f',
+        `oid=${COMMIT}`,
+      ],
+      expect.any(Object)
+    );
   });
 
   test.each(
@@ -435,13 +546,16 @@ describe('getPrsForCommit', () => {
     expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
   });
 
-  test.each(['remote', 'repository', 'pulls'] as const)('retains failure at %s', async stage => {
-    setupCommitResponse(undefined, stage);
-    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
-  });
+  test.each(['remote', 'repository', 'commit', 'pulls'] as const)(
+    'retains failure at %s',
+    async stage => {
+      setupCommitResponse([[]], stage);
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+    }
+  );
 
   test.each([
-    'unknown commit (422)',
+    'validation failure (422)',
     'authentication (401)',
     'rate limit (403)',
     'partial pagination (502)',
@@ -455,24 +569,30 @@ describe('getPrsForCommit', () => {
     expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
   });
 
-  test('logs the failed stage and exit code without credentials or response bodies', async () => {
-    mockLogger.warn.mockClear();
-    setupCommitResponse(
-      undefined,
-      'repository',
-      Object.assign(new Error('https://user:secret@github.com/owner/repo'), { code: 1 })
-    );
-    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
-    expect(mockLogger.warn).toHaveBeenLastCalledWith(
-      { repoPath: REPO, stage: 'repository', code: 1 },
-      'isolation.commit_pr_lookup_failed'
-    );
-  });
+  test.each(['repository', 'commit', 'pulls'] as const)(
+    'logs failed %s and exit code without credentials or response bodies',
+    async stage => {
+      mockLogger.warn.mockClear();
+      setupCommitResponse(
+        [[]],
+        stage,
+        Object.assign(new Error('https://user:secret@github.com/owner/repo'), { code: 1 })
+      );
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+      expect(mockLogger.warn).toHaveBeenLastCalledWith(
+        { repoPath: REPO, stage, code: 1 },
+        'isolation.commit_pr_lookup_failed'
+      );
+    }
+  );
 
-  test.each(['repository', 'pulls'] as const)('missing gh at %s is unavailable', async stage => {
-    setupCommitResponse(undefined, stage, Object.assign(new Error('missing'), { code: 'ENOENT' }));
-    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
-  });
+  test.each(['repository', 'commit', 'pulls'] as const)(
+    'missing gh at %s is unavailable',
+    async stage => {
+      setupCommitResponse([[]], stage, Object.assign(new Error('missing'), { code: 'ENOENT' }));
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+    }
+  );
 
   test.each(['https://gitlab.com/owner/repo', 'https://github.com.example.org/owner/repo'])(
     'does not query an unsupported remote %s',

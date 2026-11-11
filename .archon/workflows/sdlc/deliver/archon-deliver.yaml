@@ -14,8 +14,7 @@ description: |
   read, answered and resolved through the forge plugin. Each
   round's pr step publishes description content the round prepared before its
   review reads the PR, and the description is corrected and linked once the
-  rounds end; the report relays discoveries to the operator on every ending,
-  a failure included. There is no in-run approval
+  rounds end. There is no in-run approval
   gate — the human gate is PR review and merge on the forge, outside the run.
 
   Use when: decided work should become a reviewed, ready-to-merge PR —
@@ -374,11 +373,10 @@ nodes:
     trigger_rule: none_failed_min_one_success
     with:
       rounds: { from: "$rounds.output" }
-      reviews: { outputs: review-report, if_unreadable: null }
 
   # The workflow's terminal report on every ending. A node failure skips `outcome`
   # (never fails it), so `all_done` still runs this node and the binding reads null.
-  # `always_run` because it reads discoveries its dependency edge does not carry.
+  # `always_run` because it reads publication records its dependency edge does not carry.
   - id: report
     script: report
     runtime: bun
@@ -387,7 +385,6 @@ nodes:
     trigger_rule: all_done
     with:
       outcome: { from: "$outcome.output", if_skipped: null }
-      reviews: { outputs: review-report, if_unreadable: null }
       pull_requests: { outputs: pull-request, if_unreadable: null }
     output_format:
       type: object

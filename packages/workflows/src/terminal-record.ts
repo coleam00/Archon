@@ -1,4 +1,3 @@
-import { z } from 'zod';
 import { getRunArtifactsDirForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
 import {
   type ArtifactManifest,
@@ -44,11 +43,6 @@ export interface TerminalRecordEvent {
   step_name?: string | null;
   data: unknown;
 }
-const eventDataSchema = z.record(z.string(), z.unknown());
-function eventData(value: unknown): Record<string, unknown> {
-  return eventDataSchema.parse(typeof value === 'string' ? JSON.parse(value) : (value ?? {}));
-}
-
 function withFanOutOutcome(
   state: RunNodeState,
   fanOutOutcome: FanOutOutcome | undefined
@@ -361,7 +355,7 @@ export function getTerminalRecord(
   for (let index = events.length - 1; index >= 0; index--) {
     const event = events[index];
     if (event?.event_type !== `workflow_${runStatus}`) continue;
-    const data = eventData(event.data);
+    const data = readNodeRecordData(event.data);
     if (data.terminal_record === undefined) return null;
     const record = terminalRecordSchema.parse(data.terminal_record);
     if (record.status !== runStatus)

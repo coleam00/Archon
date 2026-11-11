@@ -22,6 +22,7 @@
   "include": [
     "*.ts",
     "fixtures/*.ts",
+    "../packages/script-api/src/archon-script.d.ts",
     "../packages/workflows/src/defaults/text-imports.d.ts",
     "../packages/core/src/sql-text-imports.d.ts"
   ]

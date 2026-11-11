@@ -9,15 +9,15 @@
  * Bound inputs: INPUTS_REPO from start, INPUTS_ISSUE (title and body) from interpret.
  */
 
-import { record } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { nullableJson, record } from '../../.shared/inputs.ts';
 import { createIssue } from '../../.shared/issue.ts';
 import { launchDetached } from '../../.shared/launch.ts';
 
 function main(): void {
   const runId = workflowRunId();
-  const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
-  const issue = record(nullableJson(process.env.INPUTS_ISSUE));
+  const repo = nullableJson(input('repo')) as { host: string; path: string };
+  const issue = record(nullableJson(input('issue')));
   if (typeof issue?.title !== 'string' || typeof issue.body !== 'string' || issue.title.trim() === '' || issue.body.trim() === '') {
     throw new Error('interpret declared new work without a title and body');
   }

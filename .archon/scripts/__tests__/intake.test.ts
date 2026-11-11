@@ -5,7 +5,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
-import { stateGet } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import {
   bodyDigest,
   decideIntake,
@@ -733,6 +733,6 @@ describe('the intake scripts', () => {
     expect({ code: resumed.code, stderr: resumed.stderr }).toEqual({ code: 0, stderr: '' });
     expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null });
     // Clearing the claim gave the run's lease back in the same write.
-    expect(inProcess(at, () => stateGet('work/7')).lease).toBeNull();
+    expect(inProcess(at, () => state.get('work/7')).lease).toBeNull();
   }, 60_000);
 });

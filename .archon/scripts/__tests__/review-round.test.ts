@@ -11,7 +11,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { trackTempRoots } from './temp-roots';
-import { packScriptRunner, type ScriptRun } from './deliver-checks-harness';
+import { PR, PR_URL, packScriptRunner, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 
@@ -119,6 +119,29 @@ describe('review-round', () => {
     expect(priorReview('/run/review/report.md', join(earlier, 'report.md'))).toBe('/run/review/report.md');
     // Neither: a first review of the whole change.
     expect(mode(priorReview('', ''))).toMatchObject({ continuation: false, head: newer, cursor: '', code: false, tests: false });
+  });
+
+  // A standalone review of a pull request started from another checkout: the round
+  // refuses at its first node, before any agent has spent anything on it.
+  it("refuses a pull-request URL scope when the checkout is not at that pull request's head", () => {
+    const { cwd, older, newer } = history();
+    const scoped = (head: string): ScriptRun =>
+      runPackScript('review/scripts/review-round', {
+        cwd,
+        tracker: { pr: { headRefOid: newer } },
+        inputs: { INPUTS_SCOPE: PR_URL, ARCHON_NODE_EXECUTION: JSON.stringify(execution(head)) },
+      });
+
+    const wrong = scoped(older);
+    expect(wrong.code).not.toBe(0);
+    expect(wrong.stdout).toBe('');
+    expect(wrong.stderr).toContain(
+      `review-round: this round reviewed ${older}, but ${PR.repo.host}/${PR.repo.path}#${String(PR.number)} is at ${newer}: push the commits under review, or review from a checkout of the pull request's head`
+    );
+
+    const matching = scoped(newer);
+    expect(matching.code).toBe(0);
+    expect(JSON.parse(matching.stdout)).toMatchObject({ continuation: false, head: newer });
   });
 
 

@@ -7,7 +7,7 @@
  * that list. The run's only writes are the request and the claim.
  */
 
-import { emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { viewIssue } from '../../.shared/issue.ts';
 import { TRIAGE_REQUEST } from '../../.shared/labels.ts';
 import {
@@ -24,10 +24,10 @@ import { workflowRepo } from '../../.shared/remote.ts';
 
 function main(): void {
   const runId = workflowRunId();
-  const number = Number(trimmed(process.env.INPUTS_NUMBER));
+  const number = Number(input('number').trim());
   if (!Number.isInteger(number) || number <= 0) throw new Error('a positive issue number is required');
   const repo = workflowRepo();
-  const action = trimmed(process.env.INPUTS_ACTION) as RequestAction;
+  const action = input('action').trim() as RequestAction;
   if (!REQUEST_ACTIONS.includes(action)) {
     throw new Error(`action must be one of ${REQUEST_ACTIONS.join(', ')}, not "${action}"`);
   }
@@ -35,18 +35,18 @@ function main(): void {
   const maintainers = readMaintainers(repo);
   const at = new Date().toISOString();
   const subject = { repo, number };
-  const label = trimmed(process.env.INPUTS_LABEL);
+  const label = input('label').trim();
   // Intake works issues. A pull request's event, or a label that asks for nothing,
   // records no request; the run still picks up whatever waits. A run that asks for a
   // re-triage recorded its own request before starting this pickup.
-  const kind = trimmed(process.env.INPUTS_KIND);
+  const kind = input('kind').trim();
   if (kind === 'issue' && action !== 'retriage' && (action !== 'added' || label === TRIAGE_REQUEST)) {
     const request: IntakeRequest = {
       at,
       run_id: runId,
       action,
       label: action === 'added' ? label : null,
-      actor: action === 'added' ? trimmed(process.env.INPUTS_LABEL_ACTOR) || null : null,
+      actor: action === 'added' ? input('label_actor').trim() || null : null,
       // A promotion pins the body as it was when the request was recorded.
       body_digest: action === 'added' ? bodyDigest(viewIssue(subject).body) : null,
     };

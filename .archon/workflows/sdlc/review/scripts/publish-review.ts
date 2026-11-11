@@ -7,10 +7,12 @@
  * verdict passes through unchanged either way: publication is not what makes a
  * review true.
  *
- * This is the review's one head check. A report goes public only about the
- * commit its round fixed at the start (review-round): the checkout must still be
- * at it and the pull request's remote head must be it. Any mismatch refuses, so a verdict about one commit can never
- * stand as the verdict on another. This node stamps that commit and the certified
+ * A report goes public only about the commit its round fixed at the start
+ * (review-round): the checkout must still be at it and the pull request's remote
+ * head must be it (../../.shared/review-head.ts). review-round already refused a
+ * pull-request URL whose head was another commit; this check is the one that covers
+ * every scope, after a review long enough for the head to move. Any mismatch
+ * refuses, so a verdict about one commit can never stand as the verdict on another. This node stamps that commit and the certified
  * verdict on the comment itself (../../.shared/review-comment.ts) rather than trusting
  * the report's text to name them; the merge queue's gate reads both. Once published, the
  * report, its `findings.json` and that commit are kept together under `published/`
@@ -32,10 +34,12 @@
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { upsertComment, viewPr } from '../../.shared/pr.ts';
-import { parseQualifiedPr, record, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, refuse, text } from '../../.shared/io.ts';
+import { upsertComment } from '../../.shared/pr.ts';
+import { emit, input, refuse } from 'archon:script';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
+import { record } from '../../.shared/inputs.ts';
 import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
+import { requirePrHead } from '../../.shared/review-head.ts';
 import { PUBLISHED_DIR, REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
 
 /** The pull request delivery recorded, when the scope is that JSON record. */
@@ -55,47 +59,36 @@ function declaredPr(value: string): QualifiedPr | undefined {
   return JSON.parse(target) === null ? undefined : parseQualifiedPr(target);
 }
 
-function label(pr: QualifiedPr | undefined): string {
-  return pr ? `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}` : 'no pull request';
-}
-
 try {
   const verdict = {
-    ready: JSON.parse(text(process.env.INPUTS_READY)) as boolean,
-    action: text(process.env.INPUTS_ACTION),
-    findings_summary: text(process.env.INPUTS_SUMMARY),
-    report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
-    discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
-    contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
+    ready: JSON.parse(input('ready')) as boolean,
+    action: input('action'),
+    findings_summary: input('summary'),
+    report: JSON.parse(input('report_pointer')) as unknown,
+    discoveries: JSON.parse(input('discoveries')) as unknown,
+    contract_left: JSON.parse(input('contract_left')) as unknown,
   };
   // Complete only on an empty list: a review that left anything open never lets a merge close the issue.
   const coverage = Array.isArray(verdict.contract_left) && verdict.contract_left.length === 0 ? 'complete' : 'open';
-  const pr = recordedPr(text(process.env.INPUTS_SCOPE)) ?? declaredPr(text(process.env.INPUTS_PR));
-  const head = text(process.env.INPUTS_HEAD).trim();
-  const reportPath = text(process.env.INPUTS_REPORT);
+  const pr = recordedPr(input('scope')) ?? declaredPr(input('pr'));
+  const head = input('head').trim();
+  const reportPath = input('report');
   const report = readFileSync(reportPath, 'utf8');
   if (report.trim() === '') throw new Error('the review report is empty');
   const checkout = nodeStartCommit();
   if (checkout !== head) {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
-  if (pr) {
-    const remote = viewPr(pr).pr.head_revision;
-    if (remote !== head) {
-      throw new Error(
-        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: push the commits under review, or review from a checkout of the pull request's head`
-      );
-    }
-  }
+  if (pr) requirePrHead(pr, head);
   if (!pr) {
-    note('publish-review: the review scope is a working diff, so no comment was published.');
+    console.error('publish-review: the review scope is a working diff, so no comment was published.');
   } else {
     const comment = upsertComment(
       { kind: 'pr', ref: pr },
       REVIEW_MARKER,
       reviewCommentBody(head, verdict.ready, coverage, report)
     );
-    note(`publish-review: canonical review comment at ${comment.url}`);
+    console.error(`publish-review: canonical review comment at ${comment.url}`);
   }
   // The set a later review continues from. The commit goes last: review-round reads it
   // as the cursor, and a set without it continues nothing.

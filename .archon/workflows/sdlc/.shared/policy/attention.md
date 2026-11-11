@@ -15,7 +15,7 @@ A maintainer decides from the item without opening the run, so each field stands
   `effect` from the list the prompt gives, and a `ruling`. The chosen ruling is written
   into the issue body as a dated scope section, so write it as the contract sentence
   the next run reads, such as "Downstream nodes may gate on head_matches too". Leave it
-  empty when the choice changes no scope. The queue adds `other` itself, for an answer
+  empty when the choice changes no scope. The wait adds `other` itself, for an answer
   none of your choices covers; don't declare it.
 - `if_unanswered`: whether the item waits, blocks other work, or goes stale as the base
   moves.

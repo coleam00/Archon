@@ -93,8 +93,34 @@ bun run test --plan pack                    # when changing .archon/workflows or
 ```
 
 `scripts/validate.ts` owns the check commands and CI selects them by ID.
-CI runs formatting and every default check on ready pull requests, except that a change
-touching only prose or files no check reads skips the test, service and binary jobs.
+
+A ready pull request runs the Linux jobs its change can affect: `static` (type-check, lint,
+format, generated files, the ratchet), the Linux test jobs (`test`, `test-scripts`,
+`test-pack`), `schema-upgrade` and `postgres-parity`. A push to `dev` or `main` runs every
+job on every platform, and that run is the complete verification of a merge. These jobs wait
+for the push:
+
+| Job | Also runs on a pull request that changes |
+| --- | --- |
+| `test-windows`, `test-scripts-windows`, `test-pack-windows`, `file-store-primitives-macos` | nothing narrower than the list below |
+| `docker-build` | `Dockerfile`, `.dockerignore`, `docker-entrypoint.sh`, or a script the image build or its upgrade test runs |
+| `serve-binary` | `scripts/build-binaries.sh` or a smoke test the job runs |
+
+A pull request runs every job, as a push does, when it changes `.github/workflows/`, the root
+`package.json`, `bun.lock`, `bunfig.toml`, `scripts/validate.ts`, `scripts/repo-tests.ts` or a
+script they import, or the two scripts that decide and judge the run.
+`EVERY_JOB_INPUTS` and `PUSH_ONLY_MODES` in `scripts/should-run-test-suite.ts` are the
+authoritative lists.
+
+To run every job on a branch before it merges, for example when a change touches path
+handling, process spawning or anything else that differs on Windows or macOS, dispatch the
+workflow on the branch: `gh workflow run test.yml --ref <branch>`. The results appear in the
+pull request's checks. Dispatching needs write access, and the branch must be in this
+repository, so on a pull request from a fork a maintainer decides whether to push the branch
+here and dispatch it. A break that only another platform shows otherwise appears in the push
+run on `dev`.
+
+A change touching only prose or files no check reads skips the test, service and binary jobs.
 `scripts/should-run-test-suite.ts` decides which files those are: Markdown and the docs site
 count as prose unless `BUILD_INPUTS` or `isPackPrompt` names them (pack `commands/` and
 `.shared/` documents). `BUILD_INPUTS` is the authoritative list of other exceptions, including
@@ -106,12 +132,12 @@ lists the non-prose files no check reads. On a pull request, `workspaceTestInput
 file decides whether the `cli` and `packages` legs of the `test` job run: a change limited to
 root `scripts/` files that no package test or CI entry point reads skips them, the
 `test-scripts` job still runs, and the `test-suite` check accepts the skip because the gate
-said so. A push to `dev` or `main` skips those jobs only when
-a pull request run already passed every job on the same tree, and otherwise runs them, so a
-prose change's test-visible effects are checked on `dev`.
+said so. A push to `dev` or `main` skips its jobs only when
+a pull request run already passed every job on the same tree, the ones that wait for the push
+included, and otherwise runs them, so a prose change's test-visible effects are checked on `dev`.
 
 The tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-run in the `test-pack` job when a pull request or an unproven push changes the pack or a
+run in the `test-pack` job (and `test-pack-windows` when it runs) when a pull request or an unproven push changes the pack or a
 contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
 those paths. Run them locally with `bun run test --plan pack` and
 `bun run validate --only workflow-fixtures`; a single test file runs with
@@ -133,7 +159,7 @@ or other-platform CI results.
 
 #### What `bun run validate` deliberately leaves out
 
-These additional PR-gating jobs need services or build environments a contributor may
+These additional CI jobs need services or build environments a contributor may
 not have. Run applicable service checks only against scratch databases you create and
 drop; never run destructive verification against a configured live database.
 

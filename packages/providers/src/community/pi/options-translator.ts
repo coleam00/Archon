@@ -151,9 +151,9 @@ function buildPiTool(
 
 export interface ResolvedTools {
   /**
-   * The tools array to pass to Pi, or `undefined` to leave Pi's default
-   * tools in place. An empty array means "no tools —
-   * LLM-only response" which is a valid explicit setting.
+   * The built-in tools payload, or `undefined` to leave Pi's defaults in place.
+   * An empty array selects no built-in tools; separately supplied Archon tools
+   * and user extension tools are outside this filter.
    */
   tools: PiTool[] | undefined;
   /** Unknown tool names in allowed_tools / denied_tools (e.g. Claude-specific like WebFetch). */
@@ -224,10 +224,10 @@ export function freshPiToolNames(
  *   - neither allow/deny set, env present → return the session's default tools
  *     (see `buildDefaultPiTools`) with an env-aware bash, so codebase env vars
  *     reach bash subprocesses
- *   - allowed_tools: [] → return [] (explicit no-tools; valid Archon idiom)
- *   - allowed_tools: [X, Y] → only X, Y (normalized to lowercase)
+ *   - allowed_tools: [] → return [] (no selected built-in tools)
+ *   - allowed_tools: [X, Y] → only supported built-ins X, Y (normalized to lowercase)
  *   - denied_tools subtracts from allowed_tools (or full set if allowed_tools absent)
- *   - tool names not in Pi's built-in set are silently dropped but reported
+ *   - tool names not in PI_TOOL_NAMES are dropped from this payload but reported
  *     via `unknownTools` so the caller can surface a warning.
  *
  * The `env` parameter is the caller's `requestOptions.env` merged with any

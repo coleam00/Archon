@@ -29,9 +29,6 @@ inputs:
   contract:
     default: "READY"
     description: Triage's contract verdict, for the report of a route that runs nothing.
-  blocked_reason:
-    default: ""
-    description: What a BLOCKED item waits on, for the report.
   summary:
     default: ""
     description: Triage's summary, for the report of a route that runs nothing.
@@ -155,21 +152,18 @@ nodes:
     with:
       route: "$INPUTS.route"
       contract: "$INPUTS.contract"
-      blocked_reason: "$INPUTS.blocked_reason"
       summary: "$INPUTS.summary"
       inv_verdict: { from: "$inv.output.verdict", if_skipped: null }
       inv_summary: { from: "$inv.output.summary", if_skipped: null }
       plan_summary: { from: "$planned.output.summary", if_skipped: null }
-      open_questions: { from: "$planned.output.open_questions", if_skipped: null }
       delivered: { from: "$deliver.output.ready", if_skipped: null }
       delivery: { from: "$deliver.output.summary", if_skipped: null }
       delivery_reason: { from: "$deliver.output.reason", if_skipped: null }
       pr_url: { from: "$deliver.output.pr_url", if_skipped: null }
-      reviews: { outputs: review-report, if_unreadable: null }
 
   # The block's terminal report on every ending. A node failure skips `outcome`
   # (never fails it), so `all_done` still runs this node and the binding reads null.
-  # `always_run` because it reads discoveries its dependency edge does not carry.
+  # `always_run` because it reads publication records its dependency edge does not carry.
   - id: report
     script: report
     runtime: bun
@@ -178,7 +172,6 @@ nodes:
     trigger_rule: all_done
     with:
       outcome: { from: "$outcome.output", if_skipped: null }
-      reviews: { outputs: review-report, if_unreadable: null }
       pull_requests: { outputs: pull-request, if_unreadable: null }
     output_format:
       type: object

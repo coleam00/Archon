@@ -61,12 +61,28 @@ const TEST_SHARDS: readonly TestShard[] = [
 ];
 
 /**
+ * A root-owned run: `bun test` with the pack's preload, which gives the pack scripts these
+ * tests import and start the `archon:script` module. Only these runs get it; it asks the
+ * CLI `rootTestEnv` names, which no other `bun test` under the repository root has.
+ */
+export function rootTestCommand(selectors: readonly string[]): string[] {
+  const [bun, test, ...rest] = bunTestCommand(selectors);
+  return [
+    bun as string,
+    test as string,
+    '--preload',
+    './.archon/scripts/__tests__/archon-script-preload.ts',
+    ...rest,
+  ];
+}
+
+/**
  * The command one plan step runs. Each workspace runs its own `test` script, which owns that
  * package's group splitting and concurrency.
  */
 export function planStepCommand(step: RootTestStep): string[] {
   if (step.kind === 'workspace') return ['bun', '--filter', step.package, 'test'];
-  if (step.kind === 'root') return bunTestCommand(step.selectors);
+  if (step.kind === 'root') return rootTestCommand(step.selectors);
   // A negated filter alone already leaves out the root package, so no `'*'` goes beside it.
   const solo = ROOT_TEST_PLAN.flatMap((other: RootTestStep): string[] =>
     other.kind === 'workspace' ? ['--filter', `!${other.package}`] : []
@@ -246,7 +262,7 @@ async function runRequested(requested: string[]): Promise<number> {
   for (const { owner, args } of runs) {
     const runOwner = (ownerArgs: string[]) =>
       run(
-        owner.cwd === REPO_ROOT ? bunTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
+        owner.cwd === REPO_ROOT ? rootTestCommand(ownerArgs) : ['bun', 'run', 'test', ...ownerArgs],
         owner.cwd
       );
     if (destination === undefined) {

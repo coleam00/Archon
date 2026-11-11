@@ -29,10 +29,11 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
+import { emit, input, refuse } from 'archon:script';
 import type { BuildRound } from '../../.shared/build.ts';
-import type { PrRecord, QualifiedPr } from '../../.shared/forge.ts';
+import { type PrRecord, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
-import { emit, note, nullableJson, refuse } from '../../.shared/io.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { publishedReview } from '../../.shared/merge.ts';
 import type { ReviewStamp } from '../../.shared/review-comment.ts';
@@ -50,14 +51,14 @@ import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
  */
 function priorReport(review: ReviewStamp, head: string): string {
   if (git('merge-base', '--is-ancestor', review.reviewed, head).code !== 0) return '';
-  const rounds = nullableJson(process.env.INPUTS_ROUNDS) as readonly BuildRound[];
+  const rounds = nullableJson(input('rounds')) as readonly BuildRound[];
   for (const round of [...rounds].reverse()) {
     if (round.artifacts === '') continue;
     const report = join(round.artifacts, PUBLISHED_REPORT_FILE);
     const recorded = join(dirname(report), REVIEWED_HEAD_FILE);
     if (!existsSync(recorded) || readFileSync(recorded, 'utf8').trim() !== review.reviewed) continue;
     if (readFileSync(report, 'utf8').trim() === review.report.trim()) return report;
-    note(
+    console.error(
       `build-queue checkout: run ${round.run_id} kept a review at ${review.reviewed}, but the pull request's review comment shows another report; it is not continued`
     );
   }
@@ -66,7 +67,7 @@ function priorReport(review: ReviewStamp, head: string): string {
 
 /** A fresh round stays on the base and continues no pull request. */
 function fresh(): void {
-  const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'> | null;
+  const item = nullableJson(input('item')) as Pick<QualifiedPr, 'repo'> | null;
   if (item === null) throw new Error('facts reported no item for the round');
   const base = fetchDefaultBranch(item.repo);
   if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
@@ -75,9 +76,9 @@ function fresh(): void {
 }
 
 function main(): void {
-  const continues = nullableJson(process.env.INPUTS_CONTINUES) as number | null;
-  const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
-  const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
+  const continues = nullableJson(input('continues')) as number | null;
+  const candidate = nullableJson(input('candidate')) as number | null;
+  const known = nullableJson(input('pull_request')) as PrRecord | null;
   if (continues === null) {
     fresh();
     return;

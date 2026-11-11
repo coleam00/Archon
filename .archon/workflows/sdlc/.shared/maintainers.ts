@@ -7,7 +7,7 @@
  * Every listed login is a maintainer, whose labels and review comments the queues trust.
  */
 
-import type { QualifiedPr } from './forge.ts';
+import { type QualifiedPr } from './identity.ts';
 import { gitOrThrow } from './git.ts';
 import { fetchDefaultBranch } from './remote.ts';
 

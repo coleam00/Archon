@@ -14,8 +14,7 @@ import {
 } from '../../workflows/sdlc/.shared/build';
 import { reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { mergeWaits } from '../../workflows/sdlc/.shared/merge';
-import { attentionWait, withOther } from '../../workflows/sdlc/.shared/queue';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import {
   newWorkItem,
   parseWorkItem,
@@ -200,16 +199,16 @@ function inProcess<T>(at: Install, body: () => T): T {
 /** Store the item; a claimed one takes its run's lease, as a real claim does. */
 function seed(at: Install, doc: WorkItem): void {
   inProcess(at, () => {
-    const stored = stateGet('work/7');
+    const stored = state.get('work/7');
     if (doc.claim !== null) process.env.WORKFLOW_ID = doc.claim.run_id;
-    const lease = doc.claim === null ? undefined : 'take';
-    expect(statePut('work/7', doc, stored.revision, lease)).toBe('ok');
+    const lease = doc.claim === null ? {} : { lease: 'take' as const };
+    expect(state.put('work/7', doc, { ifRevision: stored.revision, ...lease }).ok).toBe(true);
   });
 }
 
 function stored(at: Install): { revision: number; value: WorkItem | null } {
   return inProcess(at, () => {
-    const read = stateGet('work/7');
+    const read = state.get('work/7');
     return { revision: read.revision, value: read.value === null ? null : parseWorkItem(read.value) };
   });
 }
@@ -526,11 +525,13 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.claim).toBeNull();
   }, 60_000);
 
-  test("a blocked item judged unblocked gets the run's re-triage request and one intake pickup, and is not listed again until its revisit is due", () => {
+  test("a blocked item is listed for one run at a time, and one judged unblocked gets the run's re-triage request and one intake pickup", () => {
     const at = install();
     seed(at, triaged({ stage: 'blocked' }));
     const blocked = ok(run(at, 'blocked', { INPUTS_REVISIT_BLOCKED: 'true' })).blocked;
     expect(blocked).toEqual([{ number: 7, summary: '' }]);
+    // A second run that lists while the first run's agent is still judging gets none of its items.
+    expect(ok(run(at, 'blocked', { WORKFLOW_ID: 'run-2', INPUTS_REVISIT_BLOCKED: 'true' })).blocked).toEqual([]);
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const retriage = (judged: unknown[]) =>
       run(at, 'retriage', {
@@ -661,12 +662,12 @@ describe('the build queue scripts', () => {
     expect(applied).toMatchObject({
       decision: 'asked',
       class: 'stop',
-      asked: { attention: withOther(ATTENTION, 'continue'), brief: 'continue PR 42 under the ruling', by: 'stop' },
+      asked: { attention: ATTENTION, brief: 'continue PR 42 under the ruling', by: 'stop' },
     });
     // The wait carries the choices and the recommendation; the message carries the rest.
-    const wait = attentionWait('Build queue, issue 7: stop decision', withOther(ATTENTION, 'continue'));
-    expect(applied).toMatchObject({ attention: wait.message, options: wait.options, recommendation: wait.recommendation });
-    expect((applied.options as { id: string }[]).map(option => option.id)).toEqual(['relax', 'park', 'other']);
+    expect((applied.options as { id: string; value: unknown }[]).map(option => [option.id, option.value])).toEqual(
+      ATTENTION.choices.map(choice => [choice.id, choice])
+    );
     expect(applied.recommendation).toEqual({ option: 'relax', why: ATTENTION.recommendation.why, confidence: 'medium' });
     for (const part of [
       ATTENTION.what,
@@ -776,6 +777,18 @@ describe('the build queue scripts', () => {
     expect(build).toMatchObject({ status: 'next', decisions: [{ decision: 'answered: continue', answer: { choice: 'relax', text: 'Only for this item.' } }] });
     expect(build?.brief).toContain('continue PR 42 under the ruling');
     expect(build?.brief).toContain(heading);
+  }, 60_000);
+
+  test("an `other` answer, which returns no choice, writes the person's text as the ruling and continues the item", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
+    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_CHOICE: '', INPUTS_TEXT: 'Split it in two.' });
+    expect(ok(ruled)).toMatchObject({ decision: 'continue' });
+    expect(ruled.bodies[0]).toContain("The maintainer's words: Split it in two.");
+    expect(stored(at).value).toMatchObject({
+      claim: null,
+      facts: { build: { status: 'next', decisions: [{ decision: 'answered: continue', answer: { choice: 'other', text: 'Split it in two.' } }] } },
+    });
   }, 60_000);
 
   test('a park with no ruling and no words writes no section and stops working the item', () => {

@@ -8,6 +8,6 @@
  * - INPUTS_EARLIER: the delivery's `prior_report` input.
  */
 
-import { emit, trimmed } from '../../.shared/io.ts';
+import { emit, input } from 'archon:script';
 
-emit({ report: trimmed(process.env.INPUTS_PREVIOUS) || trimmed(process.env.INPUTS_EARLIER) });
+emit({ report: input('previous').trim() || input('earlier').trim() });

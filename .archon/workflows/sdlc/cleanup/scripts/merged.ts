@@ -1,9 +1,9 @@
 /** Runs the host CLI's merged-worktree cleanup across every registered project. */
 
-import { archonCommand } from '../../.shared/forge.ts';
-import { refuse, text } from '../../.shared/io.ts';
+import { input, refuse } from 'archon:script';
+import { archonCommand } from '../../.shared/host.ts';
 
-const includeClosed = text(process.env.INPUTS_INCLUDE_CLOSED);
+const includeClosed = input('include_closed');
 if (includeClosed !== 'true' && includeClosed !== 'false') {
   refuse(`include_closed must be "true" or "false"; received ${JSON.stringify(includeClosed)}`);
 } else {

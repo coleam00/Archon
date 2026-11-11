@@ -89,7 +89,6 @@ nodes:
         order.
       related: "$triage.output.related"
       contract: "$triage.output.decision.contract"
-      blocked_reason: "$triage.output.decision.blocked_reason"
       summary: "$triage.output.summary"
       pull_request: "$INPUTS.pull_request"
       triage_pull_request: "$triage.output.decision.pull_request"

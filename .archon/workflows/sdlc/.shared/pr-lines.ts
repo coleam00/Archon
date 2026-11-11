@@ -9,7 +9,7 @@
  */
 
 import { type PrFacts, prRuns } from './factory-prs.ts';
-import { invokeForge } from './forge.ts';
+import { forge } from 'archon:script';
 import { prFromUrl } from './pr.ts';
 
 /** A test file, by its path: under a `__tests__`, `test(s)` or `spec` directory, `*.test.*`, `*_spec.*`, or `test_*`. Every other file is production. */
@@ -34,7 +34,7 @@ export interface LineRecord {
 /** The pull request's changed files, read through the forge. */
 export function readPrFiles(url: string): PrFile[] {
   const pr = prFromUrl(url);
-  const files = invokeForge('pr.files', { ref: { repo: pr.repo, number: pr.number } })?.files;
+  const files = forge('pr.files', { ref: { repo: pr.repo, number: pr.number } })?.files;
   if (!Array.isArray(files)) throw new Error(`forge pr.files returned no file list for ${url}`);
   return files.map(row => {
     const file = row as Record<string, unknown>;

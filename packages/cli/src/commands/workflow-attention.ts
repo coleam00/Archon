@@ -32,13 +32,10 @@ import {
   type AttentionQueueScope,
   type AttentionQueueSource,
 } from '@archon/workflows/attention-queue';
-import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
-import type { AttentionAnswerer } from '@archon/workflows/schemas/workflow-run';
 import { resolveMetricsWindow } from '@archon/workflows/metrics';
-import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
+import { attentionItemLines, attentionStreamText } from './workflow-attention-text';
 import {
-  formatAge,
   getLog,
   inheritedWorkflowCodebase,
   printJsonWriteError,
@@ -115,116 +112,6 @@ export async function attentionScope(
       ? await attentionProjectForCwd(host.records.codebases, cwd)
       : await resolveAttentionProject(host.records.codebases, opts.project);
   return { kind: 'project', project };
-}
-
-function attentionItemLines(item: AttentionQueueItem): string[] {
-  const paused =
-    item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
-  const lines = [
-    `  ${item.runId}  ${item.workflow}  ${item.project?.name ?? '(no project)'}  ${paused}`,
-  ];
-  if (item.fanOut !== null)
-    lines.push(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
-  else if (item.parentRunId !== null) lines.push(`    child of run ${item.parentRunId}`);
-  const labels = Object.entries(item.labels);
-  if (labels.length > 0)
-    lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
-  switch (item.kind) {
-    case 'attention':
-      lines.push(`    ${item.node}: ${item.message}`);
-      for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, item))
-        lines.push(`    ${line}`);
-      break;
-    case 'awaiting_response':
-      lines.push(
-        `    gate '${item.node}': ${item.message}`,
-        `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
-      );
-      break;
-    case 'usage_limit':
-      lines.push(
-        `    ${item.node}: provider usage or rate limit reached; tries again by itself at ${item.resetAt}`,
-        `    Retry sooner with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `resume ${item.runId}`)}, or stop it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${item.runId}`)}.`
-      );
-      break;
-    case 'unreadable':
-      lines.push(`    needs a look: ${item.detail}`);
-      break;
-  }
-  return lines;
-}
-
-export function printAttentionItem(item: AttentionQueueItem): void {
-  for (const line of attentionItemLines(item)) console.log(line);
-}
-
-type RunLine = Extract<AttentionStreamLine, { runId: string }>;
-
-/** What the run is part of, as a trailing sentence; empty when the stream could not read it. */
-function runContextText(line: RunLine): string {
-  if (line.workflow === null) return '';
-  return line.parentRunId === null
-    ? ` Workflow ${line.workflow}.`
-    : ` Workflow ${line.workflow}, child of run ${line.parentRunId}.`;
-}
-
-function terminalText(line: Extract<AttentionStreamLine, { type: 'terminal' }>): string {
-  const outcome = line.outcome === null ? '' : ` (${line.outcome})`;
-  const cause =
-    line.cause === null
-      ? ''
-      : `: node ${line.cause.node} (${line.cause.errorClass ?? 'error class not recorded'})`;
-  return `Run ${line.runId} ${line.status}${outcome}${cause}.`;
-}
-
-/** Who answered, as a trailing clause: a declared name is marked as the claim it is. */
-function answererText(answeredBy: AttentionAnswerer | null): string {
-  if (answeredBy === null) return '';
-  return 'declared' in answeredBy
-    ? ` by ${answeredBy.declared} (self-declared)`
-    : ` by user ${answeredBy.userId}`;
-}
-
-/** The text for one stream line; none for a bookmark. */
-function attentionStreamText(
-  line: Exclude<AttentionStreamLine, { type: 'error' }>,
-  scope: AttentionQueueScope
-): string[] {
-  switch (line.type) {
-    case 'attention':
-      return [
-        line.snapshot ? 'Needs attention:' : 'Needs attention now:',
-        ...attentionItemLines(line.item),
-      ];
-    case 'resolved':
-      return [
-        (line.reason === 'answered'
-          ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}${answererText(line.answeredBy)}.`
-          : `Run ${line.runId} no longer needs attention.`) + runContextText(line),
-      ];
-    case 'unmatched':
-      return [`Run ${line.runId} no longer matches the label filter.${runContextText(line)}`];
-    case 'terminal':
-      return [terminalText(line) + runContextText(line)];
-    case 'resumed':
-      return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
-    case 'owner_lost':
-      return [
-        `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +
-          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.` +
-          runContextText(line),
-      ];
-    case 'ready':
-      return [
-        `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,
-      ];
-    case 'degraded':
-      return [
-        'Attention stream coverage may be incomplete because a run could not be read. Check the operator log; reconnect after repairing the read failure.',
-      ];
-    case 'bookmark':
-      return [];
-  }
 }
 
 /**
@@ -409,7 +296,7 @@ async function attentionRunCommand(
   }
   if (json) await writeJsonLine({ ok: true, action: 'attention', runId: resolvedId, item });
   else if (item === null) console.log(`Run ${resolvedId} needs no attention now.`);
-  else printAttentionItem(item);
+  else for (const line of attentionItemLines(item, 'full')) console.log(line);
   return 0;
 }
 
@@ -508,7 +395,7 @@ async function renderAttentionItems(
   }
   console.log(`\n${String(selected.length)} run(s) need attention in ${where}:\n`);
   for (const item of selected) {
-    printAttentionItem(item);
+    for (const line of attentionItemLines(item, 'brief')) console.log(line);
     console.log('');
   }
   return 0;

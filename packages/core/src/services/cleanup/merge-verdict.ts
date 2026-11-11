@@ -53,7 +53,8 @@ export type MergeVerdict =
   | 'open-pr'
   | 'unmerged'
   | 'unjudgeable'
-  | 'pr-unavailable';
+  | 'pr-unavailable'
+  | 'unknown-commit';
 
 export interface MergeJudgmentInput {
   repoPath: RepoPath;
@@ -117,13 +118,25 @@ export async function judgeBranchForRemoval(input: MergeJudgmentInput): Promise<
     }
     return null;
   }
+  let hasUnknownCommit = false;
   for (const sha of await resolveTips(input, tips)) {
     const candidates = await getPrsForCommit(sha, repoPath, remote);
-    if (candidates.state === 'UNAVAILABLE') return 'pr-unavailable';
-    if (candidates.state === 'NONE') continue;
-    const verdict = await judgeCandidates(candidates.prs);
-    if (verdict) return verdict;
+    switch (candidates.state) {
+      case 'UNAVAILABLE':
+        return 'pr-unavailable';
+      case 'UNKNOWN_COMMIT':
+        hasUnknownCommit = true;
+        break;
+      case 'NONE':
+        break;
+      case 'FOUND': {
+        const verdict = await judgeCandidates(candidates.prs);
+        if (verdict) return verdict;
+        break;
+      }
+    }
   }
+  if (hasUnknownCommit) return 'unknown-commit';
   if (hasOpenPr) return 'open-pr';
   return hasClosedPr || pr.state !== 'NONE' || tips.refExists ? 'unmerged' : 'unjudgeable';
 }
@@ -180,6 +193,8 @@ export function skipReasonFor(
       return 'PR is open (active review)';
     case 'unjudgeable':
       return 'branch ref is gone and no PR was found — merge state unverifiable';
+    case 'unknown-commit':
+      return 'no pull request covers all local work — a local commit was not found in the configured repository';
     case 'pr-unavailable':
       return 'PR state lookup failed — merge state unverifiable';
     case 'unmerged':

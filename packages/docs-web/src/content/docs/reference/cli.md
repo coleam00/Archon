@@ -262,6 +262,24 @@ archon script types --out types/archon-script.d.ts --check   # write nothing; ex
 
 The declaration is embedded in Archon and describes the module that version provides. Write the file again after an upgrade.
 
+### `script preload`
+
+Write the preload file that provides `archon:script`, so a workflow script or its tests run outside a run. It is the file Archon passes to every Bun `script:` node, and it needs nothing else: the module's source is inside it. See [The script API](/guides/script-nodes/#the-script-api).
+
+```bash
+archon script preload --out test/archon-script.preload.ts           # write it
+archon script preload --out test/archon-script.preload.ts --check   # write nothing; exit 1 when stale
+bun --preload ./test/archon-script.preload.ts scripts/triage.ts     # run a script with it
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--out <file>` | The file to write, relative to the invoking directory. Required |
+| `--check` | Compare instead of writing. Exits 1 naming the file when it is missing or its content differs |
+| `--json` | Print `{ ok, path, status }`; `status` is `written`, `unchanged`, `current` or `stale` |
+
+The file is written with LF line endings on every platform, and describes the Archon that wrote it: write it again after an upgrade.
+
 ### `workflow run <name> [message]`
 
 Run a workflow with an optional user message, which the workflow reads as `$ARGUMENTS`.
@@ -1151,7 +1169,13 @@ heartbeat, so a silent stream does not prove it is reading. Every JSON line carr
 `needs`: `answer`, `look` or `nothing`, and the watch writes the first two
 ([what each means](/getting-started/operate/#stream-the-queue)). Combine it with `--label k=v`
 to watch one queue or class of question. With `--json` each line is one compact JSON
-object; without it, a short sentence per line. Scope and `--label` work as for the list;
+object. Without it each line is text a reader can act on: an ask is a short block with its
+labels, the question's first line, the recommendation and its reason, each option with what
+it does, and the commands that answer that occurrence, including the `--recommended` form
+when a recommendation exists; a failed run, a lost owner and an unreadable item name the
+command that shows more; the close of an ask is one line. The list prints the same blocks,
+and `workflow attention <run-id>` prints the whole message. Read the watch unfiltered: a
+filter in the pipe can hold lines until the watch ends. Scope and `--label` work as for the list;
 `--sort`, `--count-by` and a run id are refused. See
 [Stream the queue](/getting-started/operate/#stream-the-queue).
 
@@ -1820,15 +1844,22 @@ The PR path first checks the PR found by the local branch name. If it cannot pro
 coverage, cleanup discovers PRs associated with the worktree's HEAD, then the local
 branch tip when it is different. This also finds work published under another name.
 An open branch PR does not suppress an independently covering merged PR. When no
-merged candidate proves coverage, an open PR keeps the environment as active review.
+merged candidate proves coverage and every inspected local commit was found in the
+configured repository, an open PR keeps the environment as active review.
 Coverage from different PR heads is never combined. With no local tips remaining,
 a merged branch PR can settle the registration on its own.
 
 Missing PR heads are fetched by SHA from the configured remote. A failed comparison
 stops the judgment, reports the error, and keeps the environment. A failed PR lookup
-(auth, rate limit, unknown commit, or unreadable response) keeps the environment and reports
+(auth, rate limit, or unreadable response) keeps the environment and reports
 `PR state lookup failed`. The optional `gh` CLI currently supplies GitHub PR evidence;
 without it, or on unsupported remotes, merged cleanup retains unproven environments.
+For commit association lookups, an error-free GitHub object query distinguishes a
+local commit not found in the configured repository from a lookup failure. This does
+not establish whether the commit exists in another repository. Without covering
+evidence, cleanup reports
+`no pull request covers all local work — a local commit was not found in the configured repository`
+and keeps the environment, including during scheduled cleanup.
 
 Manual `--merged` cleanup reports ordinary retained work as
 `no cleanup evidence covers all local tips`. A missing branch ref with no discovered PR is
