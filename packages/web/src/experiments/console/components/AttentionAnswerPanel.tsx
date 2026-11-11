@@ -11,6 +11,16 @@ export function isLegacyAttention(attention: Attention): boolean {
   return attention.occurrence.startsWith('legacy:');
 }
 
+/** The reserved `other` option of a wait declared with `other: true` is answered with text. */
+function needsText(attention: Attention, optionId: string, text: string): boolean {
+  return attention.other === true && optionId === 'other' && text.trim() === '';
+}
+
+function textPlaceholder(attention: Attention): string {
+  if (attention.form === 'message') return 'Your answer';
+  return attention.other === true ? 'Optional text; required for Other' : 'Optional text';
+}
+
 /**
  * Answer a paused attention wait in its declared form: free text for a message, one
  * option for approval and select, one or more for multi_select. The answer names the
@@ -112,7 +122,7 @@ export function AttentionAnswerPanel({
         onChange={event => {
           setText(event.target.value);
         }}
-        placeholder={attention.form === 'message' ? 'Your answer' : 'Optional text'}
+        placeholder={textPlaceholder(attention)}
         rows={2}
         className="rounded border border-border bg-surface px-2 py-1 text-[12px] text-text-primary"
       />
@@ -131,7 +141,7 @@ export function AttentionAnswerPanel({
             <button
               key={option.id}
               type="button"
-              disabled={busy}
+              disabled={busy || needsText(attention, option.id, text)}
               onClick={() => void answer([option.id])}
               className={
                 recommendation?.option === option.id ? `${button} ring-1 ring-warning` : button

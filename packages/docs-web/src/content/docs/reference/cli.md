@@ -1081,6 +1081,7 @@ archon workflow attention --json --all                             # the whole i
 archon workflow attention --json --project acme/web --label ci=other
 archon workflow attention --json --sort label:urgency
 archon workflow attention --json --all --count-by label:class
+archon workflow attention --json --count-by label:class --answered --since 30d
 archon workflow attention <run-id> --json                          # one item
 archon workflow attention --watch --json --all                     # stream readable changes
 archon workflow attention --watch --json --after <cursor>          # resume a stream
@@ -1089,6 +1090,8 @@ archon workflow attention --watch --json --after <cursor>          # resume a st
 The default scope is the current project, resolved from the working directory as [`state`](#state) resolves it. `--all` covers the install. `--project` takes a codebase id, a codebase name, or a project key such as `@cwd/scratch-<digest>`; copy the exact key from `items[].project.key` in `archon workflow attention --all --json`. A run is in scope when its codebase id matches, when both sides have one, and otherwise when its project key matches, so a run paused before its codebase was renamed is still listed under the new name. Under [`--chat-project-id`](#global-options), list, count and watch use the selected project whatever the working directory; `--all` and a `--project` naming another project are rejected.
 
 `--label k=v` filters must all match. `--sort label:<key>` compares the label's value as a plain string and puts items without it last. `--count-by` replaces the list with counts.
+
+`--count-by` counts the items open now. Add `--answered` to count every attention wait that was started instead, whether it has been answered or is still open, so a class of question that recurs stays visible after its runs continue. `--since` narrows that count to waits started since a duration ago (`24h`, `7d`, `2w`) or an ISO date or time; without it every recorded wait counts. Scope and `--label` filters apply as they do to the open count. This count reads each wait's `wait_started` event, so it uses the labels the wait opened with and ignores later [`attention label`](#workflow-attention-label) writes. A wait started by an Archon version that did not record labels on that event counts under no label (`value: null`, shown as `(no '<key>' label)`). Gates, usage-limit waits and waits of deleted runs are not counted. `--answered` needs `--count-by`, and `--since` needs `--answered`.
 
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where

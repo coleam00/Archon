@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import {
   APPROVAL_ATTENTION_OPTIONS,
+  OTHER_ATTENTION_OPTION,
   attentionFormSchema,
   attentionLabelsSchema,
   attentionOptionSchema,
@@ -67,7 +68,8 @@ export type AttentionAnswer = z.infer<typeof attentionAnswerSchema>;
  * wait carries its occurrence, its form, resolved options and recommendation, and once
  * answered, the answer with the surface it came through and when. `labels` holds the
  * node's resolved labels merged with every label write since, and `revision` counts those
- * writes from 1; a wait without them has no labels and is at revision 1.
+ * writes from 1; a wait without them has no labels and is at revision 1. `other` marks a
+ * wait whose last option is the reserved `OTHER_ATTENTION_OPTION`.
  */
 const workflowWaitAttentionFields = {
   kind: z.literal('attention'),
@@ -76,6 +78,7 @@ const workflowWaitAttentionFields = {
   pauseId: z.string().min(1).optional(),
   form: attentionFormSchema.optional(),
   options: z.array(attentionOptionSchema).optional(),
+  other: z.literal(true).optional(),
   recommendation: attentionRecommendationSchema.optional(),
   answer: attentionAnswerSchema.optional(),
   answeredVia: recordSurfaceSchema.optional(),
@@ -220,6 +223,20 @@ export function attentionChoiceProblem(
   return choose.length === 1
     ? undefined
     : `takes exactly one option. Declared options: ${declared.join(', ')}.`;
+}
+
+/**
+ * Why an answer choosing the reserved `other` option is refused, or undefined when it is
+ * not: on a wait declared with `other: true`, that choice must carry text.
+ */
+export function otherTextProblem(
+  other: boolean | undefined,
+  choose: readonly string[],
+  text: string
+): string | undefined {
+  return other === true && choose.includes(OTHER_ATTENTION_OPTION.id) && text.trim() === ''
+    ? `needs text with option '${OTHER_ATTENTION_OPTION.id}': say what to do instead.`
+    : undefined;
 }
 
 /** An attention wait's current labels. */

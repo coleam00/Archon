@@ -4973,6 +4973,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -5727,6 +5729,7 @@ export interface components {
             labels?: {
               [key: string]: string;
             };
+            other?: boolean;
           };
       cancel?: string;
       script?: string;
@@ -6502,6 +6505,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -6644,6 +6649,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -6730,6 +6737,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -6913,6 +6922,8 @@ export interface components {
               does?: string;
               value?: unknown;
             }[];
+            /** @enum {boolean} */
+            other?: true;
             recommendation?: {
               option: string;
               why: string;
@@ -7093,6 +7104,8 @@ export interface components {
                   does?: string;
                   value?: unknown;
                 }[];
+                /** @enum {boolean} */
+                other?: true;
                 recommendation?: {
                   option: string;
                   why: string;

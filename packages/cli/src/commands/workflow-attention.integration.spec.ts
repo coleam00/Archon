@@ -252,6 +252,32 @@ test('the queue scopes by project the way archon state names it, across a rename
     },
   });
 
+  // From events: the labels each wait opened with, so the later relabel does not show.
+  const started = await captured(() =>
+    workflowAttentionCommand(host, registeredDir, undefined, {
+      json: true,
+      all: true,
+      labels: [],
+      countBy: 'label:ci',
+      answered: true,
+      since: '1h',
+    })
+  );
+  expect(started.json).toMatchObject({
+    counts: {
+      counts: [
+        { value: 'other', count: 2 },
+        { value: 'pr', count: 1 },
+      ],
+    },
+  });
+  for (const opts of [{ answered: true }, { countBy: 'project', since: '1h' }]) {
+    const refused = await captured(() =>
+      workflowAttentionCommand(host, registeredDir, undefined, { json: true, labels: [], ...opts })
+    );
+    expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+  }
+
   const one = await captured(() =>
     workflowAttentionCommand(host, scratchDir, unregistered, { json: true, labels: [] })
   );

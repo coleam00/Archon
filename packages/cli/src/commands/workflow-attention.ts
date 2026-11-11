@@ -16,6 +16,7 @@ import {
 } from '@archon/core/operations/attention-queue';
 import {
   countAttentionQueue,
+  countAttentionWaitStarts,
   listAttentionQueue,
   parseAttentionLabelPairs,
   parseAttentionQueueRequest,
@@ -27,6 +28,7 @@ import {
   type AttentionQueueSource,
 } from '@archon/workflows/attention-queue';
 import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
+import { resolveMetricsWindow } from '@archon/workflows/metrics';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import {
@@ -45,6 +47,10 @@ export interface WorkflowAttentionOptions {
   labels: readonly string[];
   sort?: string;
   countBy?: string;
+  /** With `countBy`: count every attention wait started, answered or open, from events. */
+  answered?: boolean;
+  /** With `answered`: only waits started since this duration ago or ISO time. */
+  since?: string;
   /** Stream every change in scope instead of reading the queue once. */
   watch?: boolean;
   /** With `watch`: replay readable feed events strictly after this cursor. */
@@ -285,6 +291,20 @@ export async function workflowAttentionCommand(
 
     const { labels, order, countBy } = parseAttentionQueueRequest(opts);
     const scope = await attentionScope(host, cwd, opts);
+    if (opts.answered && countBy !== undefined) {
+      const since =
+        opts.since === undefined ? undefined : resolveMetricsWindow({ since: opts.since }).since;
+      return await renderAttentionCounts(
+        await countAttentionWaitStarts(
+          { store: host.deps.store },
+          { scope, labels, countBy, ...(since === undefined ? {} : { since }) }
+        ),
+        scope,
+        opts.json,
+        [],
+        'No attention waits were started.'
+      );
+    }
     const { values: items, degraded } = splitAttentionRead(await listAttentionQueue(source));
     const reports = scopeAttentionDegraded(degraded, scope).degraded ?? [];
     if (countBy !== undefined)
@@ -311,6 +331,10 @@ function rejectConflictingAttentionOptions(
 ): void {
   if (opts.after !== undefined && !opts.watch)
     throw new Error('workflow attention --after needs --watch');
+  if (opts.answered && opts.countBy === undefined)
+    throw new Error('workflow attention --answered needs --count-by');
+  if (opts.since !== undefined && !opts.answered)
+    throw new Error('workflow attention --since needs --answered');
   const shaped = opts.sort !== undefined || opts.countBy !== undefined;
   if (opts.watch && (runId !== undefined || shaped))
     throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
@@ -354,7 +378,8 @@ async function renderAttentionCounts(
   counts: AttentionQueueCounts,
   scope: AttentionQueueScope,
   json: boolean | undefined,
-  degraded: AttentionDegraded[]
+  degraded: AttentionDegraded[],
+  none = 'No runs need attention.'
 ): Promise<number> {
   if (json) {
     await writeJsonLine({
@@ -377,7 +402,7 @@ async function renderAttentionCounts(
   if (rows.length === 0)
     console.log(
       degraded.length === 0
-        ? 'No runs need attention.'
+        ? none
         : 'No readable matching runs need attention; counts are incomplete.'
     );
   return 0;

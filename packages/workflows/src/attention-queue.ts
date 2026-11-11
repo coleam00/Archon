@@ -114,6 +114,8 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     message: z.string(),
     form: attentionFormSchema,
     options: z.array(attentionOptionSchema),
+    /** The option with id `other` is the reserved one: an answer choosing it needs text. */
+    other: z.literal(true).optional(),
     recommendation: attentionRecommendationSchema.optional(),
   }),
   z.object({
@@ -228,6 +230,7 @@ export function toAttentionQueueItem(
         message: attention.message,
         form: attention.form,
         options: attention.options,
+        ...(attention.other === true ? { other: true } : {}),
         ...(attention.recommendation !== undefined
           ? { recommendation: attention.recommendation }
           : {}),
@@ -260,7 +263,7 @@ export interface AttentionQueueSource {
 type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
 
 function codebaseFor(
-  source: Pick<AttentionQueueSource, 'store'>,
+  source: { store: Pick<IWorkflowStore, 'getCodebase'> },
   run: WorkflowRun,
   codebases: CodebaseCache
 ): Promise<AttentionQueueItemSources['codebase']> {
@@ -272,7 +275,7 @@ function codebaseFor(
 
 /** The project `run` belongs to, by the rule its queue item reports. */
 export async function runProject(
-  source: Pick<AttentionQueueSource, 'store'>,
+  source: { store: Pick<IWorkflowStore, 'getCodebase'> },
   run: WorkflowRun,
   codebases: CodebaseCache = new Map()
 ): Promise<ProjectRef | null> {
@@ -511,7 +514,10 @@ export function matchesAttentionLabels(
   );
 }
 
-function inQuery(item: AttentionQueueItem, query: AttentionQueueQuery): boolean {
+/** What scope, label filters and counts read of an item. */
+type AttentionCounted = Pick<AttentionQueueItem, 'project' | 'labels'>;
+
+function inQuery(item: AttentionCounted, query: AttentionQueueQuery): boolean {
   return (
     isInAttentionScope(item.project, query.scope) && matchesAttentionLabels(item, query.labels)
   );
@@ -572,7 +578,7 @@ export type AttentionQueueCounts = z.infer<typeof attentionQueueCountsSchema>;
  * its key. A group shows the project of its first item in `items`' order.
  */
 export function countAttentionQueue(
-  items: readonly AttentionQueueItem[],
+  items: readonly AttentionCounted[],
   query: AttentionQueueQuery & { countBy: AttentionQueueCountBy }
 ): AttentionQueueCounts {
   const selected = items.filter(item => inQuery(item, query));
@@ -587,7 +593,7 @@ export function countAttentionQueue(
 }
 
 function countQueueByProject(
-  items: readonly AttentionQueueItem[]
+  items: readonly AttentionCounted[]
 ): Extract<AttentionQueueCounts, { by: 'project' }> {
   const groups = new Map<string, { project: ProjectRef | null; count: number }>();
   for (const item of items) {
@@ -610,7 +616,7 @@ function countQueueByProject(
 }
 
 function countQueueByLabel(
-  items: readonly AttentionQueueItem[],
+  items: readonly AttentionCounted[],
   key: string
 ): Extract<AttentionQueueCounts, { by: 'label' }> {
   const groups = new Map<string | null, number>();
@@ -625,4 +631,35 @@ function countQueueByLabel(
       .map(([value, count]) => ({ value, count }))
       .sort((a, b) => b.count - a.count || compareStrings(a.value ?? '', b.value ?? '')),
   };
+}
+
+/**
+ * `countAttentionQueue` over every attention wait started at or after `since`, answered
+ * or still open, from the labels each wait opened with. A wait started before labels
+ * were recorded on its `wait_started` row counts as having none.
+ */
+export async function countAttentionWaitStarts(
+  source: {
+    store: Pick<IWorkflowStore, 'listAttentionWaitStarts' | 'getWorkflowRunsByIds' | 'getCodebase'>;
+  },
+  query: AttentionQueueQuery & { countBy: AttentionQueueCountBy; since?: Date }
+): Promise<AttentionQueueCounts> {
+  const { since } = query;
+  const starts = (await source.store.listAttentionWaitStarts()).filter(
+    start => since === undefined || Date.parse(start.startedAt) >= since.getTime()
+  );
+  const runIds = [...new Set(starts.map(start => start.runId))];
+  const runs = new Map((await source.store.getWorkflowRunsByIds(runIds)).map(run => [run.id, run]));
+  const codebases: CodebaseCache = new Map();
+  const counted: AttentionCounted[] = [];
+  for (const start of starts) {
+    const run = runs.get(start.runId);
+    if (run === undefined) continue;
+    const labels = attentionLabelsSchema.safeParse(start.labels);
+    counted.push({
+      project: await runProject(source, run, codebases),
+      labels: labels.success ? labels.data : {},
+    });
+  }
+  return countAttentionQueue(counted, query);
 }

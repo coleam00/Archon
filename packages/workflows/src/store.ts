@@ -91,6 +91,14 @@ export interface IRunTreeStore {
   getRunAncestry(runId: string): Promise<WorkflowRun[]>;
 }
 
+/** One attention wait as its `wait_started` row recorded it. */
+export interface AttentionWaitStart {
+  runId: string;
+  startedAt: string;
+  /** The row's raw `data.labels`: absent on a wait started before labels were recorded. */
+  labels: unknown;
+}
+
 /** A `node_completed` row whose `structured_output` carries a `metrics` key. */
 export interface MetricRecordRow {
   eventId: string;
@@ -290,6 +298,12 @@ export interface IWorkflowStore
    * `@archon/workflows/attention-queue` builds items from readable rows.
    */
   listAttentionQueueRows(): Promise<AttentionRead<WorkflowRun>[]>;
+  /**
+   * The `wait_started` row of every attention wait on the install, open or answered,
+   * oldest first, for runs that still exist. Rows are raw: `countAttentionWaitStarts`
+   * decides which count.
+   */
+  listAttentionWaitStarts(): Promise<AttentionWaitStart[]>;
   /** Atomically record an unexpired event signal and its audit event without changing lifecycle. */
   signalWorkflowWait(
     id: string,

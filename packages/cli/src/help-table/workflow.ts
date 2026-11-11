@@ -93,6 +93,15 @@ export const workflowHelp: HelpGroup = {
           description: 'Count items per project or per label value',
         },
         {
+          spec: '--answered',
+          description:
+            'With --count-by: count every attention wait started, answered or still open',
+        },
+        {
+          spec: '--since <7d|24h|2w|ISO>',
+          description: 'With --answered: only waits started since then',
+        },
+        {
           spec: '--watch',
           description:
             'Stream readable changes until stopped; the open set comes first\n' +
