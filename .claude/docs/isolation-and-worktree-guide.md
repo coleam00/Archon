@@ -210,7 +210,7 @@ If merged cleanup frees space → proceed with creation. If not → block with f
 
 If Git does not prove integration, cleanup looks up a PR by the local branch name, then discovers candidates through GitHub's commit-to-PR lookup for each existing local tip. This also finds PRs published under a different branch name. One **MERGED PR** must cover every existing local tip: each tip must equal or be an ancestor of that same PR head (`isRevCoveredBy` fetches a missing head). Manual `--include-closed` also accepts a closed but unmerged PR with the same coverage check; scheduled cleanup and `makeRoom()` do not opt in.
 
-A tip past the proving PR head stays: run branch names get reused, and a detached HEAD can hold commits no ref protects. If base inspection fails, eligible PR coverage can independently settle the work. Otherwise unresolved Git errors retain the worktree and are reported. A failed PR lookup (`UNAVAILABLE`) retains and reports it when Git has not already proved integration; it never counts as merged.
+A tip past the proving PR head stays: run branch names get reused, and a detached HEAD can hold commits no ref protects. A base inspection or candidate comparison error immediately stops judgment for that environment, retains the worktree, and is reported. Cleanup does not try PR evidence after a base inspection error or later candidates after a comparison error. A failed PR lookup (`UNAVAILABLE`) retains and reports it when Git has not already proved integration; it never counts as merged.
 
 ---
 

@@ -298,9 +298,9 @@ archon isolation cleanup [days] (default: 7)
    candidate must cover both tips by itself. An open branch PR does not suppress
    a covering merged candidate, and coverage is never combined across PR heads.
 4. Missing candidate heads are fetched from the configured remote. A comparison
-   failure allows later candidates to be tried, but remains an error if none
-   proves coverage. Lookup failure produces `pr-unavailable`; both failures keep
-   the environment and prevent scheduled stale deletion.
+   failure immediately stops judgment for that environment, reports the error, and
+   retains the worktree without trying later candidates. Lookup failure produces
+   `pr-unavailable`; both failures keep the environment and prevent scheduled stale deletion.
 5. Without eligible proof, an open PR produces `open-pr`; otherwise the verdict is
    `unmerged`, or `unjudgeable` when the branch ref is gone and no PR answers.
    Manual merged cleanup reports all of these. Ordinary `unmerged` can still
@@ -313,9 +313,9 @@ archon isolation cleanup [days] (default: 7)
 
 Manual `includeClosed` also authorizes closed PRs whose head covers every local tip,
 with a `pr-closed` verdict and `PR closed` release reason. Scheduled cleanup does not
-opt in. If base inspection fails, an eligible PR can independently prove coverage;
-otherwise the error retains the worktree. The optional `gh` CLI currently
-provides GitHub evidence. An unsupported remote returns `NONE` (no PR proof).
+opt in. A base inspection failure immediately stops judgment for that environment,
+reports the error, and retains the worktree without trying PR evidence. The optional
+`gh` CLI currently provides GitHub evidence. An unsupported remote returns `NONE` (no PR proof).
 For a GitHub remote, missing `gh` or another lookup failure returns `UNAVAILABLE`,
 retaining and reporting the worktree and blocking scheduled stale deletion when
 Git has not already proved integration. A failed lookup is never an empty
