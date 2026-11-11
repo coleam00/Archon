@@ -13,8 +13,8 @@ description: |
   epic stays open until its increments merge; a bundle is closed with links to its
   issues. The filed issues come back through intake like any other.
 
-  Use when: a trigger binding the operator installed starts it (see the SDLC pack
-  README, "Split queue").
+  Use when: a trigger binding the operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#split-queue).
   NOT for: writing a PRD, triaging (archon-intake), or building the filed issues
   (archon-build-queue).
 
@@ -77,7 +77,7 @@ nodes:
     command: slice
     depends_on: [facts]
     when: "$facts.output.path == 'slice'"
-    model: large
+    model: ['@split', large]
     with:
       url: "$facts.output.url"
       filed: { from: "$facts.output.filed" }

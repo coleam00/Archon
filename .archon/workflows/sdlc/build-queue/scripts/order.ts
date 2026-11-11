@@ -24,7 +24,9 @@ interface Declared {
 
 function main(): void {
   const runId = workflowRunId();
-  const declared = nullableJson(process.env.INPUTS_ORDER) as Declared;
+  const declared = nullableJson(process.env.INPUTS_ORDER) as Declared | null;
+  // interpret's schema admits a null order beside any decision, the `order` decision included.
+  if (declared === null) throw new Error('interpret decided a work order and declared none');
   const name = `${ORDER_PREFIX}${declared.id}`;
   const by = runUser(runId);
   if (by === null) throw new Error(`the run records no user to approve ${name}; write it with archon state put`);

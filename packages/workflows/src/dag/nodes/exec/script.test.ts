@@ -90,7 +90,11 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
       ];
       expect(cmd).toBe('bun');
       // Source is byte-identical to the author's body — the payload never appears in it.
-      expect(args).toEqual(['--no-env-file', '-']);
+      expect(args).toEqual([
+        '--no-env-file',
+        expect.stringMatching(/^--preload=.*script-api/),
+        '-',
+      ]);
       expect(args.join(' ')).not.toContain('execSync');
       expect(opts.input).toBe('console.log(process.env.ARGUMENTS)');
       // The value reaches the script via env vars instead.
@@ -129,7 +133,11 @@ describe('executeDagWorkflow -- script node injection hardening (#2115)', () => 
 
       const [, args, opts] = execSpy.mock.calls[0] as [string, string[], { input?: string }];
       // The dangerous payload is NOT interpolated into the source; $ARGUMENTS stays literal.
-      expect(args).toEqual(['--no-env-file', '-']);
+      expect(args).toEqual([
+        '--no-env-file',
+        expect.stringMatching(/^--preload=.*script-api/),
+        '-',
+      ]);
       expect(opts.input).toBe('console.log("value: $ARGUMENTS")');
       expect(opts.input).not.toContain('rm -rf');
     } finally {
@@ -1661,7 +1669,7 @@ describe('executeDagWorkflow -- script nodes', () => {
 
     expect(execSpy).toHaveBeenCalledWith(
       'bun',
-      ['--no-env-file', '-'],
+      ['--no-env-file', expect.stringMatching(/^--preload=.*script-api/), '-'],
       expect.objectContaining({
         env: expect.objectContaining({ MY_SECRET: 'abc123' }),
         input: 'console.log("ok")',

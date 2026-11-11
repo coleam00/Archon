@@ -118,7 +118,29 @@ Use the current run's identity to opt disposable images into terminal cleanup:
 docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
 ```
 
-See the [SDLC Docker verification guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#docker-verification) for build requirements, cleanup eligibility and safe manual recovery.
+`docker buildx build --load` takes the same `--label`. Give each run unique tags, one tag per image, and use the same Docker context as the Archon host. A child run uses its own `$WORKFLOW_ID`. Remove verification containers when the check finishes, including stopped containers.
+
+**When images are removed.** Archon attempts cleanup when a completed run, or a cancelled run that cannot resume, stops writing. Nothing watches for containers removed later. These keep their images:
+
+- Failed runs, including ones interrupted by SIGINT or SIGTERM, because they can resume under the same run ID. Abandon the run, or recover by hand as below, to release them.
+- Fan-out children cancelled in a way that can resume. Abandoning does not release their images; recover by hand.
+- Images a container uses, and images whose owning run is live or cannot be established.
+- Unlabelled images and other runs' images. Shared build cache also stays: Docker cannot filter it by this label.
+
+Docker errors are reported, and the run's terminal status is unchanged.
+
+**When cleanup cannot list images.** If the first listing of a host run's verification images fails, Archon keeps the run's own exit code and reports a warning that names the run, with manual recovery guidance, whatever caused the failure. Cleanup is then inconclusive and images may remain: restore access to the intended Docker context and recover by hand. A failure after the listing (inspection, container-use checks or removal) fails an otherwise successful foreground command, as does a container run's cleanup failure. A host run skips image cleanup only when Docker is absent at both host setup and cleanup. Container runs always require Docker.
+
+**Recover by hand.** Cleanup deletes immutable image IDs without force or parent pruning, and Docker refuses an ID with several repository references, so an image with several tags needs manual cleanup under exclusive control of its tags. After removing late test containers and confirming the run cannot resume or write:
+
+```bash
+docker image ls --all --no-trunc --filter "label=archon.run_id=<run-id>"
+docker image inspect <full-id>
+docker container ls --all --filter ancestor=<full-id>
+docker image rm --no-prune <full-id>    # only for a confirmed owned, unused image
+```
+
+If several tags prevent removal, verify and remove those references by hand, only while no other build or operator can reassign them. Never force removal or prune shared images or cache.
 
 ### `$PACK_DIR`: the workflow's own pack
 

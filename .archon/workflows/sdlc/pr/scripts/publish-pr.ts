@@ -146,27 +146,6 @@ async function applyDescription(pr: PrRecord, section: string): Promise<void> {
   editPrBody(ref, body);
 }
 
-/**
- * Read an existing pull request back until it reports the commit just pushed.
- * GitHub's pull request API can keep reporting the previous head for a while after
- * the remote branch has moved (pushHead already proved the branch with ls-remote).
- * Review compares that recorded head with its checkout, so recording a stale one
- * fails the round with a false head mismatch.
- */
-function awaitHead(read: () => PrRecord, pushed: string, first: PrRecord = read()): PrRecord {
-  let pr = first;
-  for (let attempt = 0; pr.head_revision !== pushed && attempt < 12; attempt++) {
-    Bun.sleepSync(5_000);
-    pr = read();
-  }
-  if (pr.head_revision !== pushed) {
-    throw new Error(
-      `pushed ${pushed}, but pull request ${String(pr.number)} still reports head ${pr.head_revision ?? 'none'} after 60s`
-    );
-  }
-  return pr;
-}
-
 function recordPublishedPr(claimPath: string, pr: PrRecord, required: boolean): void {
   if (!required) return;
   try {
@@ -207,12 +186,13 @@ function publish(hasDescription: boolean): PrRecord {
     if (prHeadRepo === null) {
       throw new Error(`pull request ${String(existing)}'s head repository is gone; nothing is pushed`);
     }
-    const pushed = pushHead({ repo, head_repo: prHeadRepo, head: view.pr.head });
+    pushHead({ repo, head_repo: prHeadRepo, head: view.pr.head });
     // The run continues a named pull request: its draft state belongs to its author,
     // and its description changes only by the section publish() applies when allowed.
-    const pr = awaitHead(() => viewPr({ repo, number: existing }).pr, pushed);
-    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr, hasDescription);
-    return pr;
+    // The record names the pull request; its `head_revision` is the read before the
+    // push, and no reader takes the pushed commit from it.
+    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), view.pr, hasDescription);
+    return view.pr;
   }
 
   const head = branch || text(process.env.INPUTS_HEAD);
@@ -221,9 +201,8 @@ function publish(hasDescription: boolean): PrRecord {
   const open = findOpenPrByHead(repo, headRepo, head);
   if (open) {
     note(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
-    const pr = awaitHead(() => viewPr({ repo, number: open.pr.number }).pr, headRevision, open.pr);
-    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr, hasDescription);
-    return pr;
+    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), open.pr, hasDescription);
+    return open.pr;
   }
 
   const body = record(nullableJson(process.env.INPUTS_BODY));

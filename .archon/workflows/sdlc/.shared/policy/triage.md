@@ -6,6 +6,29 @@ after it, and where the two conflict, the project's line wins.
 
 - **Scope.** Judge whether an item is in scope against the project's direction
   document. When the project has none, say so rather than invent its scope.
+- **Ready means a run can start.** An item is ready when it says what outcome is
+  wanted clearly enough for one of the routes to start from it. A strong item states
+  the problem, why it is worth solving, why now, the outcome, the invariants and
+  acceptance. Triage records which of these the item states and which it leaves out,
+  for the next stage to read; one that is missing is not by itself a reason to refuse.
+  Scale the bar by the work:
+  - A small bug needs the problem, the expected behavior and a way to recognise the
+    fix, such as a reproduction, a failing test or a log.
+  - A larger change, or one that leaves product or design choices open, needs a clear
+    outcome. Planning shapes the rest and raises what it cannot decide.
+- **Plan an item that is routable but under-shaped.** When the outcome is clear and
+  elements are missing or choices are open, route `plan` and say in the handoff what is
+  missing, so the planner shapes it. Size, length and vagueness are reasons to plan,
+  never reasons to split.
+- **Deliver directly when the work is small and specified.** The item names the
+  behavior to change and how to recognise the result, the current code shows where it
+  lives, and no design choice is left. A well-specified small defect is delivered.
+- **Investigate only a symptom whose cause is unknown or disputed.** A defect whose
+  cause the report and the current code already show is not investigated.
+- **Ask when no route can start.** An item that does not say what outcome is wanted, or
+  that leaves so many questions open that planning could not start, gets questions:
+  at most five, each one specific enough for its author to answer. Triage never
+  rewrites the author's text.
 - **Closing without a person.** Only two kinds of item may be closed without a
   maintainer: a duplicate of an issue that is still open, and an item whose outcome a
   merged change already delivered. Name that open issue or that merged change.
@@ -53,10 +76,9 @@ after it, and where the two conflict, the project's line wins.
   disproves it, with the command that measures that signal; and a threshold the
   signal must reach, with the time window it is judged over. A command that does not
   exist yet is acceptable when the PRD says what it must print; the work then builds
-  the measurement first. A PRD missing any of the three needs contract work, and the
-  proposed edits name the missing piece and what would fill it from the PRD's own
-  content. The bar holds whether the PRD is split or built whole. The verdict, judged
+  the measurement first. A PRD missing any of the three is asked for it: the questions
+  name the missing piece. The bar holds whether the PRD is split or built whole. The verdict, judged
   on real use over the window after release, is not a piece of work: the PRD stays
   open for it either way, so it is never on its own a reason to split. A list of tasks
   under a PRD title, with no hypothesis, is not a PRD: it is judged as an epic or a
-  bundle, and needs contract work when it was meant to be a PRD.
+  bundle, and is asked for its hypothesis when it was meant to be a PRD.

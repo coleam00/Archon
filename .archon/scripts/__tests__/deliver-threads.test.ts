@@ -22,7 +22,7 @@ function ok(result: ScriptRun): { open: number; summary: string } {
   return JSON.parse(result.stdout) as { open: number; summary: string };
 }
 
-const listing = (result: ScriptRun): string => readFileSync(join(result.artifacts, 'threads.md'), 'utf8');
+const listing = (result: ScriptRun): string => readFileSync(join(result.artifacts, 'threads.json'), 'utf8');
 
 describe("deliver's review threads", () => {
   const ref = PR;
@@ -82,7 +82,7 @@ describe("deliver's review threads", () => {
       inputs: { INPUTS_ANSWERS: 'null' },
     });
     expect(ok(result).open).toBe(1);
-    expect(listing(result)).toContain('- id: `T1`');
+    expect(JSON.parse(listing(result))).toMatchObject([{ id: 'T1', resolved: false }]);
     expect(result.forge.map(argv => argv.split(' ')[1])).toEqual(['pr.view', 'pr.threads', 'pr.draft']);
   });
 

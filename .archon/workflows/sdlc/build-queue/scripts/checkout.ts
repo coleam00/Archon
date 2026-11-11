@@ -34,7 +34,8 @@ import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 
 /** A fresh round stays on the base and continues no pull request. */
 function fresh(): void {
-  const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'>;
+  const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'> | null;
+  if (item === null) throw new Error('facts reported no item for the round');
   const base = fetchDefaultBranch(item.repo);
   if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
     throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);

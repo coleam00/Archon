@@ -12,7 +12,7 @@ description: |
   draft PR for this branch".
   NOT for: implementing (implement), reviewing (review), or merging (always human).
 
-model: medium
+model: ['@pr-prepare', medium]
 
 inputs:
   draft:

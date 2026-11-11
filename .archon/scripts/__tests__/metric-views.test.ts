@@ -1,7 +1,6 @@
 /**
  * The pack's overview cards name only metrics its scripts emit, with the kinds the card
  * shapes read: a misspelled or renamed metric would otherwise show "not recorded" forever.
- * And the issue metrics count what the work item says.
  */
 import { expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -11,6 +10,7 @@ import { prMetricRecords, type PrFacts } from '../../workflows/sdlc/.shared/fact
 import { reviewRoundRecords } from '../../workflows/sdlc/.shared/review-rounds';
 import { judgeSlots, scoreCalibration, testValueRecords } from '../../workflows/sdlc/.shared/test-value';
 import { newWorkItem, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
+import { packScriptRunner } from './deliver-checks-harness';
 
 const PR = 'https://github.example.com/acme/widgets/pull/1';
 const RUN = 'aaaaaaaa-0000-4000-8000-000000000001';
@@ -51,25 +51,6 @@ function mergedIssue(): WorkItem {
   };
 }
 
-it('a merged issue records its outcome in total and under the route its first round took', () => {
-  const records = issueMetricRecords([mergedIssue(), newWorkItem({ repo: { host: 'h', path: 'o/r' }, number: 8 }, AT)]);
-  const values = Object.fromEntries(records.map(record => [record.name, record.value]));
-  expect(values).toEqual({
-    'sdlc.issues_built': 1,
-    'sdlc.issues_built.plan': 1,
-    'sdlc.issues_merged': 1,
-    'sdlc.issues_merged.plan': 1,
-    'sdlc.issue_lead_time': 24,
-    'sdlc.issue_lead_time.plan': 24,
-    'sdlc.issue_build_rounds': 2,
-    'sdlc.issue_build_rounds.plan': 2,
-    'sdlc.issue_asks': 1,
-    'sdlc.issue_asks.plan': 1,
-  });
-  expect(new Set(records.map(record => record.subject))).toEqual(new Set(['github.example.com/acme/widgets#7']));
-  expect(records[0]?.runs).toEqual([RUN, OTHER_RUN]);
-});
-
 /** Every record the pack's emitters make, from inputs that reach each of their branches. */
 function emitted(): Map<string, { kind: unknown; calibrates: unknown }> {
   const prs = [pr(1, { state: 'MERGED', mergedAt: AT }), pr(2, { state: 'CLOSED', closedAt: AT })];
@@ -84,7 +65,7 @@ function emitted(): Map<string, { kind: unknown; calibrates: unknown }> {
     ...reviewRoundRecords(prs, runsByUrl, reviewed, new Set(), () => ({ ok: false, problem: 'unused' })).metrics,
     ...testValueRecords(judged, 'judge:abc').metrics,
     ...scoreCalibration(judgeSlots([labeled], [{ tests: [verdict] }]), 'judge:abc').metrics,
-    ...issueMetricRecords([mergedIssue()]),
+    ...issueMetricRecords([mergedIssue()], { from: 0, until: Infinity }),
   ];
   return new Map(records.map(record => [String(record.name), { kind: record.kind, calibrates: record.calibrates }]));
 }
@@ -115,4 +96,13 @@ it('every metric the declaration names is one the pack emits, and every counted 
     if (calibration === undefined) continue;
     expect(metrics.get(calibration.metric)).toEqual({ kind: 'score', calibrates: card.numerator });
   }
+});
+
+it('the pull request metrics refuse an empty window before reading anything', () => {
+  // `until` alone leaves `since` at its default of seven days back, after that end.
+  const run = packScriptRunner().runPackScript('metrics-prs/scripts/prs', { inputs: { INPUTS_UNTIL: '2020-01-01' } });
+  expect(run.code).not.toBe(0);
+  expect(run.stdout).toBe('');
+  expect(run.stderr).toContain('the window is empty');
+  expect(run.forge).toEqual([]);
 });

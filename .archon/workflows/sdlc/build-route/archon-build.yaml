@@ -89,16 +89,6 @@ nodes:
         $INPUTS.work
     when: "$INPUTS.route == 'investigate'"
 
-  # Usage data for the planner, when the item could turn on it. The node names no
-  # MCP server, so it runs on every provider and in a repository with no MCP
-  # config; until one is named here it judges relevance and reports that no
-  # source is connected when data would have mattered.
-  - id: intel
-    command: intel
-    model: medium
-    mutates_checkout: false
-    when: "$INPUTS.route == 'plan'"
-
   # The planner makes the design calls. Calls it cannot make itself come back as
   # open questions, which stop the run before delivery.
   - id: planned
@@ -107,12 +97,10 @@ nodes:
       work: >-
         Plan the work item named below. Read what it names first, preserve its
         verified outcome and constraints, and decide the implementation questions
-        it leaves open. Read $ARTIFACTS_DIR/intel.md too: what usage data says
-        about this work, or why there is none.
+        it leaves open.
 
         $INPUTS.work
       related: "$INPUTS.related"
-    depends_on: [intel]
     when: "$INPUTS.route == 'plan'"
 
   - id: deliver

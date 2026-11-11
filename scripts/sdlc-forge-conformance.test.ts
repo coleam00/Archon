@@ -101,13 +101,7 @@ const AGENT_READ_OPERATIONS: readonly ForgeRequest['op'][] = ['workitem.search',
 test('preflight capabilities cover the forge operations the pack calls', () => {
   const root = join(import.meta.dir, '../.archon/workflows/sdlc');
   const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
-    // The generated client types every operation the host has; it calls none.
-    .filter(
-      file =>
-        file !== '.shared/forge-check.ts' &&
-        file !== '.shared/merge.ts' &&
-        file !== '.shared/forge.generated.ts'
-    )
+    .filter(file => file !== '.shared/forge-check.ts' && file !== '.shared/merge.ts')
     .map(file => ({ file, text: readFileSync(join(root, file), 'utf8') }));
   const named = (op: string, kind: '.ts' | '.md'): string[] =>
     sources
@@ -138,7 +132,11 @@ test('preflight capabilities cover the forge operations the pack calls', () => {
     ...MERGE_QUEUE_FORGE_OPERATIONS,
     ...TEST_VALUE_FORGE_OPERATIONS,
   ]);
-  expect(used.sort()).toEqual([...preflighted].sort());
+  // The merge queue's own calls sit in `.shared/merge.ts` beside its list, which this
+  // scan skips; merge-queue.test.ts holds that list to the operations it calls.
+  expect(used.filter(op => !preflighted.has(op))).toEqual([]);
+  const outsideMerge = [...REQUIRED_FORGE_OPERATIONS, ...TEST_VALUE_FORGE_OPERATIONS];
+  expect(outsideMerge.filter(op => !used.includes(op))).toEqual([]);
 });
 
 test('the pack reads host responses with credential attribution and metadata intact', () => {

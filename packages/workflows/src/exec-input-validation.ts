@@ -255,10 +255,14 @@ function scanEnvironmentReads(
   runtime: ExecNode['runtime']
 ): readonly EnvironmentRead[] {
   const matches: { name: string; offset: number }[] = [];
-  const collect = (pattern: RegExp, nameIndex: number): void => {
+  const collect = (
+    pattern: RegExp,
+    nameIndex: number,
+    envName: (name: string) => string = name => name
+  ): void => {
     for (const match of source.matchAll(pattern)) {
       const name = match[nameIndex];
-      if (name !== undefined) matches.push({ name, offset: match.index });
+      if (name !== undefined) matches.push({ name: envName(name), offset: match.index });
     }
   };
 
@@ -268,6 +272,10 @@ function scanEnvironmentReads(
   } else if (runtime === 'bun') {
     collect(/\bprocess\.env\.([A-Za-z_][A-Za-z0-9_]*)\b/g, 1);
     collect(/\bprocess\.env\s*\[\s*(["'])([A-Za-z_][A-Za-z0-9_]*)\1\s*\]/g, 2);
+    // `input('<name>')` from `archon:script` reads the same variable. Only a literal name
+    // can be checked: a computed one is the script's own lookup, like `process.env[key]`.
+    if (/(["'])archon:script\1/.test(source))
+      collect(/(?<![\w.$])input\s*\(\s*(["'])([A-Za-z0-9_-]+)\1\s*\)/g, 2, inputEnvKey);
   } else {
     collect(new RegExp(`\\$\\{(${INPUT_ENV_PREFIX}[A-Z0-9_]+)\\}`, 'g'), 1);
     collect(new RegExp(`\\$(${INPUT_ENV_PREFIX}[A-Z0-9_]+)\\b`, 'g'), 1);

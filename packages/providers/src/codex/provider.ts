@@ -435,6 +435,13 @@ export class CodexProvider implements IAgentProvider {
       requestOptions?.env,
       requestOptions?.userCredentialEnvKeys
     );
+    const config = {
+      ...launch.config,
+      modelReasoningEffort: resolveModelReasoningEffort(
+        requestOptions?.nodeConfig,
+        launch.config.modelReasoningEffort
+      ),
+    };
     const model = requestOptions?.model ?? launch.config.model;
     const titleRequest = requestOptions?.purpose === 'title-generation';
     const nativeTools = titleRequest ? undefined : requestOptions?.nativeTools;
@@ -462,8 +469,8 @@ export class CodexProvider implements IAgentProvider {
         model,
         titleRequest,
         nodePlugins,
-        threadConfig: buildThreadConfig(launch.config, mcpServers, nodePlugins !== undefined),
-        modelReasoningEffort: launch.config.modelReasoningEffort,
+        threadConfig: buildThreadConfig(config, mcpServers, nodePlugins !== undefined),
+        modelReasoningEffort: config.modelReasoningEffort,
         splitsStructuredOutput: !titleRequest && splitsStructuredOutput(launch.config, model),
         run,
       });
@@ -492,7 +499,7 @@ export class CodexProvider implements IAgentProvider {
         abortSignal,
       });
       if (call.toolTurnResult && finalTurn) {
-        const finalRequest = finalTurnRequestOf(request, finalTurn.turnParams, launch.config);
+        const finalRequest = finalTurnRequestOf(request, finalTurn.turnParams, config);
         yield* this.finalTurn(
           run,
           finalRequest,
@@ -707,10 +714,7 @@ function turnRequestOf(
   finalTurn: { model: string; turnParams: TurnRequest['turnParams'] } | undefined;
 } {
   const { outputSchema, hasOutputFormat } = buildOutputSchema(requestOptions);
-  const effort = resolveModelReasoningEffort(
-    requestOptions?.nodeConfig,
-    inputs.modelReasoningEffort
-  );
+  const effort = inputs.modelReasoningEffort;
   const { model, run } = inputs;
   // `splitsStructuredOutput` implies a model; the check narrows it for the final turn.
   const split = inputs.splitsStructuredOutput && outputSchema !== undefined && model !== undefined;

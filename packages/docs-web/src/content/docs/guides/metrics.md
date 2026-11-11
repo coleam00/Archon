@@ -322,8 +322,8 @@ archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
   request being merged, to resolve. Read a comparison after the after cohort has settled.
 
 A comparison is observational. The cohorts differ in the change and in everything else
-that changed around the cut, and in the work each cohort happened to run: the SDLC pack,
-for example, routes larger work to Claude and small work to Codex. The text output of
+that changed around the cut, and in the work each cohort happened to run: an install
+that sends different kinds of work to different models, for example, changes both at once. The text output of
 `archon metrics --compare` ends with a line that says so. Showing that a change caused a difference needs runs
 assigned to each side independently of the work.
 
@@ -364,8 +364,8 @@ archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.r
 - `--by-model` and `--compare` cannot be combined in one query.
 
 A model split is observational, like a cohort comparison. Each model ran the work it was
-routed: the SDLC pack sends larger and riskier work to Claude and small work to Codex, so a
-difference mixes the model with the task. The text output ends with a line that says so.
+routed: an install that sends different kinds of work to different models mixes the model
+with the task in any difference it shows. The text output ends with a line that says so.
 Showing a model effect needs work assigned to each model independently of its size.
 
 Metric names are shared by every project on the install. Pass `--project` to read one

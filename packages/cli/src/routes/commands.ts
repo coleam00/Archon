@@ -9,28 +9,29 @@ import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from '../a
 import { type CliRouteContext, fail, printUsageFor } from './context';
 import { loadRoute, usesDatabaseStore } from './route-loader';
 
+export async function runScript({
+  subcommand,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
+  if (subcommand !== 'types')
+    return await fail(json, 'Usage: archon script types [--out <file>] [--check]');
+  const { scriptTypesCommand } = await loadRoute(() => import('../commands/script-types'), {
+    providers: false,
+  });
+  return await scriptTypesCommand(cwd, {
+    json,
+    check: values.check === true,
+    out: typeof values.out === 'string' ? values.out : undefined,
+  });
+}
+
 export async function runForge({
   subcommand,
   values,
   forgeTrustedEnv,
-  cwd,
-  json,
 }: CliRouteContext): Promise<number> {
-  if (subcommand === 'types') {
-    try {
-      const { forgeTypesCommand } = await loadRoute(() => import('../commands/forge-types'), {
-        providers: false,
-      });
-      return await forgeTypesCommand(cwd, {
-        json,
-        check: values.check === true,
-        out: typeof values.out === 'string' ? values.out : undefined,
-      });
-    } catch (error) {
-      const { message } = error as Error;
-      return await fail(json, json ? message : `Error: ${message}`);
-    }
-  }
   const { forgeCommand } = await loadRoute(() => import('../commands/forge'));
   return await forgeCommand(subcommand, {
     data: typeof values.data === 'string' ? values.data : undefined,

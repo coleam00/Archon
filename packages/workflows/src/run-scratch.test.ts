@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { chmod, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execFileAsync } from '@archon/git';
 import {
   getArchonWorkspacesPath,
@@ -115,8 +115,12 @@ test("deregisters the worktrees a node added under scratch from the run's reposi
 
   expect(existsSync(scratch)).toBe(false);
   const { stdout } = await git('worktree', 'list', '--porcelain');
-  const listed = stdout.split('\n').filter(line => line.startsWith('worktree '));
-  expect(listed).toEqual([`worktree ${repo}`, `worktree ${sibling}`]);
+  // Git prints forward slashes on Windows; `resolve` returns the platform's spelling.
+  const listed = stdout
+    .split('\n')
+    .filter(line => line.startsWith('worktree '))
+    .map(line => resolve(line.slice('worktree '.length).trim()));
+  expect(listed).toEqual([resolve(repo), resolve(sibling)]);
   expect(existsSync(join(sibling, '.git'))).toBe(true);
 });
 

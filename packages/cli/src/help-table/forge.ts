@@ -92,23 +92,6 @@ export const forgeHelp: HelpGroup = {
         },
       ],
     },
-    {
-      command: 'forge',
-      subcommand: 'types',
-      spec: 'forge types',
-      description:
-        "Generate one TypeScript file with every forge operation's request and result\ntypes and a typed client that calls this CLI, for scripts to commit and import",
-      scopedFlags: [
-        {
-          spec: '--out <file>',
-          description: 'File to write, relative to the invoking directory (required)',
-        },
-        {
-          spec: '--check',
-          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
-        },
-      ],
-    },
     ...Object.entries(forgeOperationDescriptions)
       .filter(([op]) => op !== 'resolve')
       .map(([subcommand, description]) => ({

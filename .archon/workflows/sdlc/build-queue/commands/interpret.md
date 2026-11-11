@@ -1,6 +1,6 @@
 # Resolve What to Build
 
-A person started this build-queue run and said in words what to build, instead of naming an issue number. Work out which work items they mean. The next nodes act on what you declare: they claim the item you name, ask the person to choose between the items you list, write a work order for several items, or file new work and hand it to intake. You write nothing to the tracker, the repository or the state store yourself, and the checkout must be exactly as you found it when you finish.
+A person started this build-queue run and said in words what to build, instead of naming an issue number. Work out which work items they mean. The next nodes act on what you declare: they claim the item you name, ask the person to choose between the items you list, write a work order for several items, or file new work and hand it to intake. You write nothing to the tracker, the repository or the state store yourself.
 
 The message:
 

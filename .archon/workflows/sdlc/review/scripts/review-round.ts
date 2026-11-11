@@ -38,12 +38,12 @@
  * - INPUTS_PART: the run's part assignment as JSON, or empty for the whole contract.
  */
 
-import { existsSync, readFileSync, statSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { readFindingsFile } from '../../.shared/review-item.ts';
 import { FULL_REVIEW_RISKS, REVIEW_LENSES, type ReviewLens } from '../../.shared/review-policy.ts';
-import { emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, nullableJson, refuse, trimmed } from '../../.shared/io.ts';
 
 /**
  * The bound part assignment. The refusal drops the parser's message, which quotes
@@ -91,7 +91,21 @@ function descends(head: string, cursor: string): boolean {
   );
 }
 
+/**
+ * Every review node writes under review/, and a fresh run's artifacts directory has
+ * none: agents told to create it have skipped that step. An earlier round's verifier
+ * votes go, so a verifier that fails this round leaves no vote rather than a stale one.
+ */
+function prepareReviewDir(): void {
+  const dir = join(artifactsDir(), 'review');
+  mkdirSync(dir, { recursive: true });
+  for (const name of readdirSync(dir)) {
+    if (name.startsWith('verify-') && name.endsWith('.json')) rmSync(join(dir, name));
+  }
+}
+
 try {
+  prepareReviewDir();
   const part = partAssignment(process.env.INPUTS_PART);
   const prior = trimmed(process.env.INPUTS_PRIOR_REPORT);
   const head = nodeStartCommit();

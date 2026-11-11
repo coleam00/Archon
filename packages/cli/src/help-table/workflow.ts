@@ -294,6 +294,23 @@ export const workflowHelp: HelpGroup = {
         },
       ],
     },
+    {
+      command: 'script',
+      subcommand: 'types',
+      spec: 'script types',
+      description:
+        "Print the TypeScript declaration of the archon:script module a workflow\nscript imports, for an editor or tsc over a pack's scripts",
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write instead of stdout, relative to the invoking directory',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
+    },
   ],
   scopedOnly: [
     {

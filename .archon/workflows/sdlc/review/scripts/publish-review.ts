@@ -9,9 +9,7 @@
  *
  * This is the review's one head check. A report goes public only about the
  * commit its round fixed at the start (review-round): the checkout must still be
- * at it and the pull request's remote head must be it. The head is checked before the scope agent's declaration, so a
- * correction that was never pushed is named as that rather than as a scope
- * mismatch. Any mismatch refuses, so a verdict about one commit can never
+ * at it and the pull request's remote head must be it. Any mismatch refuses, so a verdict about one commit can never
  * stand as the verdict on another. This node stamps that commit and the certified
  * verdict on the comment itself (../../.shared/review-comment.ts) rather than trusting
  * the report's text to name them; the merge queue's gate reads both. Once published, the
@@ -21,7 +19,8 @@
  * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
  *   pull-request record here, and that record is then the only write target.
  * - INPUTS_PR: the qualified pull request the scope agent declared it reviewed,
- *   or `null` for a working diff. It names the target of a standalone review.
+ *   or `null` for a working diff. It names the target of a standalone review;
+ *   under delivery the recorded pull request is the target whatever this says.
  * - INPUTS_REPORT: path to the report this node publishes.
  * - INPUTS_HEAD: the commit this round reviewed, as review-round fixed it.
  * - INPUTS_READY / INPUTS_ACTION / INPUTS_SUMMARY / INPUTS_REPORT_POINTER /
@@ -33,12 +32,7 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment, viewPr } from '../../.shared/pr.ts';
-import {
-  parseQualifiedPr,
-  record,
-  sameRepo,
-  type QualifiedPr,
-} from '../../.shared/forge.ts';
+import { parseQualifiedPr, record, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, refuse, text } from '../../.shared/io.ts';
 import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
 
@@ -56,12 +50,7 @@ function recordedPr(scope: string): QualifiedPr | undefined {
 /** The pull request the scope agent declared, or undefined for a working diff. */
 function declaredPr(value: string): QualifiedPr | undefined {
   const target = value.trim() || 'null';
-  const parsed: unknown = JSON.parse(target);
-  // Older persisted scope output used `{}` for a working diff.
-  if (parsed === null || (typeof parsed === 'object' && Object.keys(parsed).length === 0)) {
-    return undefined;
-  }
-  return parseQualifiedPr(target);
+  return JSON.parse(target) === null ? undefined : parseQualifiedPr(target);
 }
 
 function label(pr: QualifiedPr | undefined): string {
@@ -79,9 +68,7 @@ try {
   };
   // Complete only on an empty list: a review that left anything open never lets a merge close the issue.
   const coverage = Array.isArray(verdict.contract_left) && verdict.contract_left.length === 0 ? 'complete' : 'open';
-  const recorded = recordedPr(text(process.env.INPUTS_SCOPE));
-  const declared = declaredPr(text(process.env.INPUTS_PR));
-  const pr = recorded ?? declared;
+  const pr = recordedPr(text(process.env.INPUTS_SCOPE)) ?? declaredPr(text(process.env.INPUTS_PR));
   const head = text(process.env.INPUTS_HEAD).trim();
   const reportPath = text(process.env.INPUTS_REPORT);
   const report = readFileSync(reportPath, 'utf8');
@@ -97,14 +84,6 @@ try {
         `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: push the commits under review, or review from a checkout of the pull request's head`
       );
     }
-  }
-  if (
-    recorded &&
-    (declared?.number !== recorded.number || !sameRepo(declared.repo, recorded.repo))
-  ) {
-    throw new Error(
-      `the review scope declared ${label(declared)}, but delivery recorded ${label(recorded)}`
-    );
   }
   if (!pr) {
     note('publish-review: the review scope is a working diff, so no comment was published.');
