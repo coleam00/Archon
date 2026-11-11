@@ -895,22 +895,6 @@ export interface WorkflowOutputs {
       };
     };
   };
-  'archon-upkeep': {
-    assess: {
-      readonly action: 'update' | 'no_action';
-      readonly summary: string;
-      readonly report: {
-        readonly type: 'archon_artifact';
-        readonly run_id: string;
-        readonly path: 'upkeep-assessment.md';
-      };
-    };
-    outcome: {
-      readonly delivered: boolean;
-      readonly pr_url: string;
-      readonly summary: string;
-    };
-  };
 }
 
 /** One node's output, for example `NodeOutput<'archon-build', 'continues'>`. */
@@ -1115,13 +1099,6 @@ export const OUTPUT_ENUMS = {
       'closure.anyOf[2].kind': ['delivered'],
       'report.type': ['archon_artifact'],
       'report.path': ['triage.md'],
-    },
-  },
-  'archon-upkeep': {
-    assess: {
-      action: ['update', 'no_action'],
-      'report.type': ['archon_artifact'],
-      'report.path': ['upkeep-assessment.md'],
     },
   },
 } as const;

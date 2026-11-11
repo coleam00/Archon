@@ -200,18 +200,6 @@ Use the fork's actual clone URL, head ref and full head SHA, and choose a review
 
 ### Maintenance
 
-#### `archon-upkeep`
-
-Keeps one dependency current. It grounds the update against the repository (locked version, blast radius, breaking changes that touch real usage), then either stops with the reason or takes the bump through the reviewed delivery tail.
-
-**When to use it**: A dependency update or security advisory should become a reviewed PR. One target per run.
-
-```bash
-archon workflow run archon-upkeep "Address the undici advisory"
-```
-
-**What it produces**: A PR marked ready for review, or an explained stop when the locked version is already current.
-
 #### `archon-metrics-prs`
 
 Records the outcomes of the pull requests the build queue opened as metrics: how many were opened, merged and abandoned, the merge rate, the review rounds each merged one took to reach Ready, and the issues the queue built and merged, by route. One run records the pull requests and issues that changed in the last seven days, or in the window `--input since=<date or Nd>` and `--input until=<date>` name. With `--input lines_since=<window>` it also records the test and production lines each merged pull request added. Each record is attributed to the build-queue runs that built its pull request, so `archon metrics --compare` splits pull requests by when those runs started. Pull requests a round only continued count in no metric. [SDLC factory metrics](/guides/sdlc-metrics/) defines every metric.
@@ -283,7 +271,6 @@ archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out
 | `archon-pr` | Open a PR for committed work | Yes | No |
 | `archon-deliver` | Decided work to reviewed PR | Yes | Yes |
 | `archon-review` | Review a PR or the working diff | No (comments on a PR) | No |
-| `archon-upkeep` | Update one dependency | Yes | Yes |
 | `archon-metrics-prs` | Count factory PRs, their merge rate and review rounds | No | No |
 | `archon-metrics-test-value` | Count factory tests that protect nothing on their own merits | No | No |
 | `archon-metrics-test-value-calibrate` | Score the test-value judge against hand labels | No | No |

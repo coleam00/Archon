@@ -249,7 +249,6 @@ When you send a message, an AI "router" decides what to do:
 │   "fix this issue"          ───────▶     archon-ship                   │
 │   "review this PR"          ───────▶     archon-review                 │
 │   "what does X do?"         ───────▶     answered directly, no workflow│
-│   "update sharp"            ───────▶     archon-upkeep                 │
 │                                                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
@@ -292,11 +291,6 @@ The table below lists the key workflows in the bundled `sdlc` pack. All bundled 
 │   ┌─────────────────────────────────────────────────────────────────┐  │
 │   │ archon-deliver            "deliver this plan"     Implement +    │  │
 │   │                           "take this to a PR"     PR + review    │  │
-│   └─────────────────────────────────────────────────────────────────┘  │
-│                                                                         │
-│   ┌─────────────────────────────────────────────────────────────────┐  │
-│   │ archon-upkeep             "update sharp"          One dependency │  │
-│   │                           "bump X to latest"      bump + PR      │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
