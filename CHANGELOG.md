@@ -10,7 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking
 
 - A state document claim is recorded as its own operation (`claim`) in the state log. Archon binaries older than this release cannot read a document revision written by `archon state claim` and exit 1; once a store holds a claim, use only this release or later on it.
-- `archon workflow attention --watch` writes only what needs someone: an item that opens or changes, the close of an item it wrote, a run that failed or lost its owner, and a coverage warning. It no longer writes `ready`, `bookmark`, `resumed`, or a line for a run that completed or was cancelled. A program that reads those lines or resumes with `--after` must add `--protocol`, which is the previous stream unchanged; `--after` without `--protocol` is refused.
+- `archon workflow attention --watch` writes only what needs someone: an item that opens or changes, the close of an item it wrote, a run that failed, completed with a failed outcome or lost its owner, and a coverage warning. It no longer writes `ready`, `bookmark`, `resumed`, or a line for a run that completed with any other outcome or was cancelled. A program that reads those lines or resumes with `--after` must add `--protocol`, which is the previous stream unchanged; `--after` without `--protocol` is refused.
 
 ### Added
 

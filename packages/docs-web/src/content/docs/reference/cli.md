@@ -1122,8 +1122,9 @@ readable parent instead. Read again after repair.
 someone has to act: `attention` for an item that takes an answer or a look (the open
 items first, each with its message, options and recommendation), `resolved` or
 `unmatched` when an item it wrote closes or leaves the `--label` filter, `terminal` for a
-run that failed, `owner_lost`, `degraded` when a run could not be read, and `error`. It
-writes nothing for a run that completed, was cancelled or resumed, and it has no
+run that failed or that completed with `outcome: "failed"`, `owner_lost`, `degraded` when
+a run could not be read, and `error`. It writes nothing for a run that completed with any
+other outcome, was cancelled or resumed, and it has no
 heartbeat, so a silent stream does not prove it is reading. Combine it with `--label k=v`
 to watch one queue or class of question. With `--json` each line is one compact JSON
 object; without it, a short sentence per line. Scope and `--label` work as for the list;

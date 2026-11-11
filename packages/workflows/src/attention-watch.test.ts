@@ -1657,6 +1657,7 @@ test('the quiet watch passes only lines someone has to act on, and the close of 
     opened,
     resolved,
     { ...terminal, status: 'failed' },
+    { ...terminal, status: 'completed', outcome: 'failed' },
     { type: 'owner_lost', ...run, observedStatus: 'running' },
     { type: 'error', error: 'cursor_invalid' },
   ];

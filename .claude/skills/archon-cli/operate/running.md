@@ -163,7 +163,7 @@ prints a JSON line only when someone has to act:
   options and recommendation; answer it by its `runId` and `occurrence` (see
   `managing-runs.md`). The items already open come first.
 - `resolved`: an item you were sent no longer needs attention. Stop working on it.
-- `terminal`: a run failed. `cause` names the node; read the run.
+- `terminal`: a run failed, or completed with `outcome: "failed"`. On a failed run `cause` names the node; read the run.
 - `owner_lost`: a run says it is running but its process is gone.
 - `degraded`: the stream could not read a run and may have missed something.
 

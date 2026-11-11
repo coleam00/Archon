@@ -155,7 +155,7 @@ including runs started later by triggers, schedules or other sessions, run
 JSON line only when someone has to act: each `attention` line is an item that needs
 attention, carrying the same item the list returns, so treat it as a wake and answer by
 its `runId` and `occurrence`. `resolved` means an item you were sent no longer needs
-you, and `terminal` means a run failed. The items already open come first, so a
+you, and `terminal` means a run failed or completed with `outcome: "failed"`. The items already open come first, so a
 restarted watch needs no cursor. Exit `4` means the store cannot read the stream's
 position: start it again.
 

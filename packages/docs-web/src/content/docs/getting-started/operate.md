@@ -279,14 +279,14 @@ archon workflow attention --watch --json --label merge=pr # one class of questio
 | `attention` | An item that takes an answer or a look opened or changed. The line carries the item with its message, options and recommendation. The items open at the start come first, with `snapshot: true` |
 | `resolved` | An item this stream wrote closed: `reason` is `answered`, or `withdrawn` when the run resumed, ended, was deleted or moved to a different pause. Stop working on it |
 | `unmatched` | A label write moved an item this stream wrote outside `--label`. It is no longer yours |
-| `terminal` | A run in scope ended with `status: "failed"`; `cause` says where |
+| `terminal` | A run in scope ended with `status: "failed"`, where `cause` says where, or completed with `outcome: "failed"`: it ran to the end and judged the work unsuccessful |
 | `owner_lost` | A running run's owner process on this host is gone |
 | `degraded` | A run could not be read, so the stream may have missed something. The operator log names the run |
 | `error` | The store can no longer read the stream's position. The last line; exit 4. Start the watch again |
 
 The lines have the shape the [full protocol](#the-full-protocol-for-programs) gives them, and its table lists their fields. Without `--json` each line prints as a sentence, and a line on stderr says what is being watched.
 
-The watch writes nothing else. A run that completed or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
+The watch writes nothing else. A run that completed with any other outcome or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
 
 - **`--label` turns a queue or a class on or off.** Labels are the only routing: `--label merge=pr` writes only the items a wait labelled `merge=pr`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
 - **A silent stream proves nothing.** The watch has no heartbeat, so no line can mean that nothing needs you or that the stream stopped reading. A program that must tell the two apart uses `--protocol` and its `bookmark` lines.

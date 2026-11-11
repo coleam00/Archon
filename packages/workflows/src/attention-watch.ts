@@ -146,7 +146,8 @@ export type AttentionStreamLine = z.infer<typeof attentionStreamLineSchema>;
  * The one rule for what the quiet watch passes: the lines someone has to act on. A fresh
  * filter per stream answers, line by line: an item that takes an answer or a look; the
  * close of an item it passed, so nobody keeps working on an ask that was answered or
- * moved; a run that failed or lost its owner; and a stream that lost coverage or ended.
+ * moved; a run that failed, completed with a failed outcome, or lost its owner; and a
+ * stream that lost coverage or ended.
  * It drops what only a program syncing the full protocol needs, and a usage-limit wait,
  * which continues by itself, unless that wait replaces an item it passed.
  */
@@ -162,7 +163,8 @@ export function attentionNeedsSomeoneFilter(): (line: AttentionStreamLine) => bo
       case 'unmatched':
         return passed.delete(line.runId);
       case 'terminal':
-        return line.status === 'failed';
+        // A run that ran to the end and judged its work unsuccessful needs a look too.
+        return line.status === 'failed' || line.outcome === 'failed';
       case 'owner_lost':
       case 'degraded':
       case 'error':
