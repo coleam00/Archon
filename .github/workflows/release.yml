@@ -317,6 +317,10 @@ jobs:
         if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
         run: bun packages/core/src/test/provider-plugin-smoke.ts pi-bedrock dist/archon-provider-pi-linux-x64
 
+      - name: Smoke-test Pi OAuth credential check in the compiled plugin
+        if: matrix.target == 'bun-linux-x64' && runner.os == 'Linux'
+        run: bun packages/core/src/test/provider-plugin-smoke.ts pi-oauth dist/archon-provider-pi-linux-x64
+
       - name: Upload binary artifact
         uses: actions/upload-artifact@v4
         with:
