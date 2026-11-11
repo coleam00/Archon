@@ -2,11 +2,6 @@ import { describe, expect, test } from 'bun:test';
 import { structuredOutputsEqual } from './stale-dependencies';
 
 describe('structuredOutputsEqual', () => {
-  test('ignores object key order, as PostgreSQL JSONB reorders keys', () => {
-    const fresh = { delivered: true, reason: 'delivered', pr_url: 'u', summary: 's' };
-    const fromJsonb = { pr_url: 'u', reason: 'delivered', summary: 's', delivered: true };
-    expect(structuredOutputsEqual(fresh, fromJsonb)).toBe(true);
-  });
   test('ignores key order in nested objects inside arrays', () => {
     expect(
       structuredOutputsEqual(

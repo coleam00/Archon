@@ -4,20 +4,9 @@
  * and an answered wait applies its stored answer only on the same condition, because
  * the answer was given to the question those dependencies rendered.
  */
+import { isDeepStrictEqual } from 'node:util';
 import type { DagNode, NodeOutput } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
-
-function withSortedKeys(value: unknown): unknown {
-  if (Array.isArray(value)) return value.map(withSortedKeys);
-  if (value !== null && typeof value === 'object') {
-    const sorted: Record<string, unknown> = Object.create(null);
-    for (const key of Object.keys(value as Record<string, unknown>).sort()) {
-      sorted[key] = withSortedKeys((value as Record<string, unknown>)[key]);
-    }
-    return sorted;
-  }
-  return value;
-}
 
 /**
  * PostgreSQL JSONB may reorder object keys on persistence. Ignore that order when
@@ -28,7 +17,7 @@ export function structuredOutputsEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
   if (a === undefined || b === undefined) return false;
   try {
-    return JSON.stringify(withSortedKeys(a)) === JSON.stringify(withSortedKeys(b));
+    return isDeepStrictEqual(JSON.parse(JSON.stringify(a)), JSON.parse(JSON.stringify(b)));
   } catch {
     return false;
   }
