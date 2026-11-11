@@ -7,7 +7,6 @@ import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
 import { stateGet } from '../../workflows/sdlc/.shared/state';
 import {
-  assertNoSelfPromotion,
   bodyDigest,
   decideIntake,
   type IntakeRequest,
@@ -103,13 +102,13 @@ describe('the intake decision', () => {
     );
   });
 
-  test('a route label added by a login not in maintainers.json promotes nothing', () => {
+  test('archon-triage added by a login not in maintainers.json promotes nothing', () => {
     for (const actor of ['stranger', null]) {
       const decision = decide(
         item({ trust: 'outside', stage: 'needs_maintainer' }, [
-          labelRequest('archon-ready', actor),
+          labelRequest('archon-triage', actor),
         ]),
-        issue({ labels: ['archon-ready'] })
+        issue({ labels: ['archon-triage'] })
       );
       expect(decision).toMatchObject({ path: 'outside', promoted: null });
       expect(decision.notes).toEqual([
@@ -163,46 +162,16 @@ describe('the intake decision', () => {
     ]);
   });
 
-  test("the pack's own label write is an echo, and recorded trust never changes", () => {
-    // The install wrote archon-ready on a promoted outside item; its event comes back
-    // with the install's own login, which is not on the list. It is neither refused
-    // nor a promotion.
-    const promoted = {
-      at: AT,
-      via: 'label' as const,
-      by: 'maintainer',
-      label: 'archon-triage',
-      pin: { body_digest: DIGEST },
-    };
-    const doc = item(
-      { trust: 'outside', stage: 'deliver', promoted, facts: { triage: triaged() } },
-      [labelRequest('archon-ready', 'install')]
+  test('a route label requests nothing, whoever adds it; archon-triage re-triages', () => {
+    const outside = decide(
+      item({ trust: 'outside', stage: 'needs_maintainer' }, [labelRequest('archon-ready', 'maintainer')]),
+      issue({ labels: ['archon-ready'] })
     );
-    expect(decide(doc, issue({ author: 'maintainer', labels: ['archon-ready'] }))).toMatchObject({
-      path: 'quiet',
-      trust: 'outside',
-      notes: [],
-    });
-  });
-
-  test("a maintainer's route label on a maintainer item is reconciled; archon-triage re-triages", () => {
-    const base = {
-      trust: 'maintainer' as const,
-      stage: 'deliver' as const,
-      facts: { triage: triaged() },
-    };
-    const reconciled = decide(
-      item(base, [labelRequest('archon-plan', 'maintainer')]),
-      issue({ labels: ['archon-plan'] })
-    );
-    expect(reconciled).toMatchObject({ path: 'quiet', stage: 'deliver' });
-    expect(reconciled.notes[0]).toMatchObject({ outcome: 'reconciled' });
-    expect(
-      decide(
-        item(base, [labelRequest('archon-triage', 'maintainer')]),
-        issue({ labels: ['archon-triage'] })
-      ).path
-    ).toBe('triage');
+    expect(outside).toMatchObject({ path: 'outside', promoted: null, notes: [] });
+    const base = { trust: 'maintainer' as const, stage: 'deliver' as const, facts: { triage: triaged() } };
+    const routed = decide(item(base, [labelRequest('archon-plan', 'maintainer')]), issue({ labels: ['archon-plan'] }));
+    expect(routed).toMatchObject({ path: 'quiet', stage: 'deliver', notes: [] });
+    expect(decide(item(base, [labelRequest('archon-triage', 'maintainer')]), issue({ labels: ['archon-triage'] })).path).toBe('triage');
   });
 
   test("a run's re-triage request re-triages a maintainer's or a promoted item, naming the run, and never promotes an outside one", () => {
@@ -228,20 +197,6 @@ describe('the intake decision', () => {
     );
     expect(decision).toMatchObject({ path: 'outside', promoted: null });
     expect(decision.notes[0]).toMatchObject({ outcome: 'void' });
-  });
-
-  test('the outcome refuses to add a request label to an outside item no maintainer promoted', () => {
-    const outside = item({
-      trust: 'outside',
-      facts: { intake: { body_digest: DIGEST, at: AT, run_id: 'run', waiting: [] } },
-    });
-    expect(() => assertNoSelfPromotion(outside, ['archon-ready'])).toThrow(
-      'no maintainer promoted'
-    );
-    expect(() => assertNoSelfPromotion(outside, ['archon-needs-maintainer'])).not.toThrow();
-    expect(() =>
-      assertNoSelfPromotion({ ...outside, trust: 'maintainer' }, ['archon-ready'])
-    ).not.toThrow();
   });
 });
 

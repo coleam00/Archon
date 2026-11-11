@@ -27,7 +27,7 @@ import { note } from './io.ts';
 import {
   type LabelVerdict,
   type PackLabel,
-  isRequestLabel,
+  TRIAGE_REQUEST,
   type Route,
   type Size,
   type WorkType,
@@ -369,23 +369,6 @@ function promotedAt(promoted: Promotion | null, digest: string): boolean {
   return promoted !== null && promoted.pin.body_digest === digest;
 }
 
-/**
- * The install's own forge identity must never promote an outside item, so the
- * outcome node refuses to add a request label to one that is not promoted at the
- * body it just recorded.
- */
-export function assertNoSelfPromotion(doc: WorkItem, add: readonly string[]): void {
-  const digest = doc.facts.intake?.body_digest ?? '';
-  if (doc.trust === 'outside' && !promotedAt(doc.promoted, digest)) {
-    const promoting = add.filter(isRequestLabel);
-    if (promoting.length > 0) {
-      throw new Error(
-        `refusing to add ${promoting.join(', ')} to an outside item no maintainer promoted`
-      );
-    }
-  }
-}
-
 // --- the decision ---------------------------------------------------------------
 
 export interface IssueFacts {
@@ -421,20 +404,13 @@ export function decideIntake(
   let trust = doc.trust;
   let promoted = doc.promoted;
   const notes: HistoryEntry[] = [];
-  const mirror = new Set<string>(mirrorLabels(doc));
   const claimed = new Set((doc.claim?.requests ?? []).map(request => request.label));
   const waited = new Set(doc.facts.intake?.waiting ?? []);
-  // A request label this run neither claimed a request for nor wrote itself may have
-  // a request on its way, landing at any point of this run or after it, so the label
-  // waits for the run that claims it. It waits one pickup: a label still unclaimed
-  // after that has no request coming. On a maintainer's item only archon-triage
-  // waits, because any route label's request is reconciled away.
-  const waits = (label: string): boolean =>
-    isRequestLabel(label) &&
-    !mirror.has(label) &&
-    !claimed.has(label) &&
-    !waited.has(label) &&
-    (trust !== 'maintainer' || label === 'archon-triage');
+  // The request label, when this run claimed no request for it, may have a request on
+  // its way, landing at any point of this run or after it, so the label waits for the
+  // run that claims it. It waits one pickup: a label still unclaimed after that has no
+  // request coming.
+  const waits = (label: string): boolean => label === TRIAGE_REQUEST && !claimed.has(label) && !waited.has(label);
   const noted = (outcome: string, summary: string): void => {
     notes.push({ at, stage: 'intake', run_id: runId, outcome, summary });
   };
@@ -475,10 +451,7 @@ export function decideIntake(
   let retriage = runAsked(requests, noted);
   for (const request of requests) {
     const label = request.label;
-    if (request.action !== 'added' || label === null || !isRequestLabel(label)) continue;
-    // The pack writes the work item before any label, so a label already in the
-    // document's mirror is the pack's own write coming back as an event.
-    if (mirror.has(label)) continue;
+    if (request.action !== 'added' || label !== TRIAGE_REQUEST) continue;
     if (!issue.labels.includes(label)) {
       noted('void', `${label} was removed before intake read it`);
       continue;
@@ -491,12 +464,7 @@ export function decideIntake(
       continue;
     }
     if (trust === 'maintainer') {
-      if (label === 'archon-triage') retriage = true;
-      else
-        noted(
-          'reconciled',
-          `${label} added by ${request.actor} disagrees with the work item and is removed; add archon-triage to re-triage`
-        );
+      retriage = true;
       continue;
     }
     if (request.body_digest !== issue.digest) {

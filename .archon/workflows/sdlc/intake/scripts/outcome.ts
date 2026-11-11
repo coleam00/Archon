@@ -19,7 +19,6 @@ import { type LabelVerdict, isPackLabel, type PackLabel, triageLabels, wantedLab
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
   applyDecision,
-  assertNoSelfPromotion,
   bodyDigest,
   type IntakeDecision,
   mirrorLabels,
@@ -98,7 +97,6 @@ function labelDelta(
     decision.path === 'triage' && !bodyMoved && triage !== null
       ? triage.labels
       : mirrorLabels(next);
-  assertNoSelfPromotion(next, add);
   // A request label added again after this run claimed its request is the next
   // pickup's to read, when its new request already waits in next.requests.
   const requested = new Set(next.requests.map(request => request.label));

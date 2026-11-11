@@ -676,6 +676,12 @@ jobs:
       - name: Smoke-test Pi Bedrock in the compiled plugin
         shell: bash
         run: bun packages/core/src/test/provider-plugin-smoke.ts pi-bedrock dist/archon-provider-pi-*
+      - name: Smoke-test Pi OAuth credential check in the compiled plugin
+        shell: bash
+        run: bun packages/core/src/test/provider-plugin-smoke.ts pi-oauth dist/archon-provider-pi-*
+      - name: Smoke-test archon doctor on Pi OAuth logins
+        shell: bash
+        run: bun packages/core/src/test/provider-plugin-smoke.ts pi-oauth-doctor dist/${{ matrix.binary }} dist/archon-provider-pi-*
 
   test-suite:
     name: Test Suite

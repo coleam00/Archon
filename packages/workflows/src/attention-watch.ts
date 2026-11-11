@@ -147,6 +147,48 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
 export type AttentionStreamLine = z.infer<typeof attentionStreamLineSchema>;
 
 /**
+ * The one rule for what the quiet watch passes: the lines someone has to act on. A fresh
+ * filter per stream answers, line by line: an item that takes an answer or a look; the
+ * close of an item it passed, so nobody keeps working on an ask that was answered or
+ * moved; a run that failed, completed with a failed outcome, or lost its owner; and a
+ * stream that lost coverage or ended.
+ * It drops what only a program syncing the full protocol needs, and a usage-limit wait,
+ * which continues by itself, unless that wait replaces an item it passed.
+ *
+ * `resumed` is for a stream that continues an earlier one from a cursor. The filter did
+ * not see what that earlier stream passed, so it passes every close: telling a reader
+ * that an item it never held has closed is harmless, and dropping the close of one it
+ * holds leaves it working on an ask that is gone.
+ */
+export function attentionNeedsSomeoneFilter(
+  options: { resumed?: boolean } = {}
+): (line: AttentionStreamLine) => boolean {
+  const passed = new Set<string>();
+  return line => {
+    switch (line.type) {
+      case 'attention':
+        if (line.item.kind === 'usage_limit') return passed.delete(line.item.runId);
+        passed.add(line.item.runId);
+        return true;
+      case 'resolved':
+      case 'unmatched':
+        return passed.delete(line.runId) || options.resumed === true;
+      case 'terminal':
+        // A run that ran to the end and judged its work unsuccessful needs a look too.
+        return line.status === 'failed' || line.outcome === 'failed';
+      case 'owner_lost':
+      case 'degraded':
+      case 'error':
+        return true;
+      case 'resumed':
+      case 'ready':
+      case 'bookmark':
+        return false;
+    }
+  };
+}
+
+/**
  * Watches one execution claim until its owner is lost (`observedStatus`), the claim
  * changes, or it stops needing an owner (null). Rejects or resolves early when `signal` aborts.
  */

@@ -9,7 +9,7 @@
 
 import { emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
-import { isRequestLabel } from '../../.shared/labels.ts';
+import { TRIAGE_REQUEST } from '../../.shared/labels.ts';
 import {
   bodyDigest,
   claimNext,
@@ -40,7 +40,7 @@ function main(): void {
   // records no request; the run still picks up whatever waits. A run that asks for a
   // re-triage recorded its own request before starting this pickup.
   const kind = trimmed(process.env.INPUTS_KIND);
-  if (kind === 'issue' && action !== 'retriage' && (action !== 'added' || isRequestLabel(label))) {
+  if (kind === 'issue' && action !== 'retriage' && (action !== 'added' || label === TRIAGE_REQUEST)) {
     const request: IntakeRequest = {
       at,
       run_id: runId,
