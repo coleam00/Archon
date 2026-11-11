@@ -520,7 +520,6 @@ export function registerWorkflowListRoute(app: OpenAPIHono): void {
       if (!workingDir.valid) return apiError(c, 400, INVALID_CWD);
       return await listWorkflows(c, workingDir.path);
     } catch (error) {
-      // Workflow discovery can fail if cwd is stale or deleted — return empty with warning
       const err = error instanceof Error ? error : new Error(String(error));
       getLog().error({ err }, 'workflow_discovery_failed');
       return apiError(c, 500, `Workflow discovery failed: ${err.message}`);
