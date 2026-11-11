@@ -15,7 +15,8 @@
  * refuses, so a verdict about one commit can never stand as the verdict on another. This node stamps that commit and the certified
  * verdict on the comment itself (../../.shared/review-comment.ts) rather than trusting
  * the report's text to name them; the merge queue's gate reads both. Once published, the
- * commit is recorded beside the report as the next round's cursor.
+ * report, its `findings.json` and that commit are kept together under `published/`
+ * beside the report: the set a later review continues from, with the commit as its cursor.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_SCOPE: the review's requested scope. Delivery passes its verified
@@ -30,7 +31,7 @@
  *   node forwards.
  */
 
-import { readFileSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment } from '../../.shared/pr.ts';
@@ -39,6 +40,7 @@ import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { record } from '../../.shared/inputs.ts';
 import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
 import { requirePrHead } from '../../.shared/review-head.ts';
+import { PUBLISHED_DIR, REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
 
 /** The pull request delivery recorded, when the scope is that JSON record. */
 function recordedPr(scope: string): QualifiedPr | undefined {
@@ -88,8 +90,15 @@ try {
     );
     console.error(`publish-review: canonical review comment at ${comment.url}`);
   }
-  // review-round reads this as the next round's cursor.
-  writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);
+  // The set a later review continues from. The commit goes last: review-round reads it
+  // as the cursor, and a set without it continues nothing.
+  const published = join(dirname(reportPath), PUBLISHED_DIR);
+  rmSync(published, { recursive: true, force: true });
+  mkdirSync(published);
+  writeFileSync(join(published, 'report.md'), report);
+  const findings = join(dirname(reportPath), 'findings.json');
+  if (existsSync(findings)) copyFileSync(findings, join(published, 'findings.json'));
+  writeFileSync(join(published, REVIEWED_HEAD_FILE), `${head}\n`);
   emit(verdict);
 } catch (error) {
   refuse(`publish-review: ${error instanceof Error ? error.message : String(error)}`);

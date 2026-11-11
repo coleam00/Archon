@@ -17,22 +17,30 @@
  * INPUTS_PULL_REQUEST, the item's pull request from facts, or null;
  * INPUTS_CANDIDATE, the number facts found continuable, else empty or `null`;
  * INPUTS_CONTINUES, the number route declared the round continues, else empty or `null`;
- * INPUTS_ROUTE, the route route declared for the round.
+ * INPUTS_ROUTE, the route route declared for the round;
+ * INPUTS_ROUNDS, the item's earlier build rounds from facts, oldest first.
  * Route may decline the candidate, never name another pull request. INPUTS_BUILD_LANE
  * is the pack's setting.
  *
  * It emits the commit the continued pull request's review last named, or null, so the
  * answer can tell whether the round changed anything since that review, and the pull
- * request the round continues: its number, or null for a fresh round.
+ * request the round continues: its number, or null for a fresh round. It also emits the
+ * report the round's first review continues from, so a pull request reviewed in an
+ * earlier run is not reviewed from the start again.
  */
 
+import { existsSync, readFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
 import { emit, input, refuse } from 'archon:script';
+import type { BuildRound } from '../../.shared/build.ts';
 import { type PrRecord, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { parseLane, reviewedHead } from '../../.shared/merge.ts';
+import { parseLane, publishedReview } from '../../.shared/merge.ts';
 import { announce } from '../../.shared/queue.ts';
+import type { ReviewStamp } from '../../.shared/review-comment.ts';
+import { PUBLISHED_REPORT_FILE, REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 import { read, workItemName } from '../../.shared/workitem.ts';
@@ -54,13 +62,37 @@ function started(item: QualifiedPr): void {
   announce(`Issue ${number}: build round started (${input('route')})`, { stage: 'build', kind: 'started', item: number });
 }
 
+/**
+ * The report the round's first review continues from: the one an earlier round of this
+ * item kept when it published `review`, the pull request's trusted review comment, at
+ * the commit that comment names and with the report it shows. Empty, so that review
+ * reads the whole change, when no kept round's artifacts on this machine hold that
+ * review (another install published it, a review outside the queue replaced it, or the
+ * artifacts are gone), or when the head no longer descends from that commit.
+ */
+function priorReport(review: ReviewStamp, head: string): string {
+  if (git('merge-base', '--is-ancestor', review.reviewed, head).code !== 0) return '';
+  const rounds = nullableJson(input('rounds')) as readonly BuildRound[];
+  for (const round of [...rounds].reverse()) {
+    if (round.artifacts === '') continue;
+    const report = join(round.artifacts, PUBLISHED_REPORT_FILE);
+    const recorded = join(dirname(report), REVIEWED_HEAD_FILE);
+    if (!existsSync(recorded) || readFileSync(recorded, 'utf8').trim() !== review.reviewed) continue;
+    if (readFileSync(report, 'utf8').trim() === review.report.trim()) return report;
+    console.error(
+      `build-queue checkout: run ${round.run_id} kept a review at ${review.reviewed}, but the pull request's review comment shows another report; it is not continued`
+    );
+  }
+  return '';
+}
+
 /** A fresh round stays on the base and continues no pull request. */
 function fresh(item: QualifiedPr): void {
   const base = fetchDefaultBranch(item.repo);
   if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
     throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
   started(item);
-  emit({ head: null, reviewed: null, pull_request: null });
+  emit({ head: null, reviewed: null, pull_request: null, prior_report: '' });
 }
 
 function main(): void {
@@ -92,8 +124,14 @@ function main(): void {
   const branch = gitOrThrow('branch', '--show-current');
   gitOrThrow('checkout', '-q', ...(branch === '' ? ['--detach'] : ['-B', branch]), head);
   const ref = { repo: pr.repo, number: continues };
+  const review = publishedReview(ref, readMaintainers(pr.repo));
   started(item);
-  emit({ head, reviewed: reviewedHead(ref, readMaintainers(pr.repo)), pull_request: continues });
+  emit({
+    head,
+    reviewed: review?.reviewed ?? null,
+    pull_request: continues,
+    prior_report: review === null ? '' : priorReport(review, head),
+  });
 }
 
 try {

@@ -885,17 +885,34 @@ describe('the build queue checkout', () => {
     const reviewed = git(at.checkout, 'rev-parse', 'feature~1');
     const branch = 'build/7-continued-round';
     git(at.checkout, 'checkout', '-q', '-b', branch, 'dev');
-    const result = run(
-      at,
-      'checkout',
-      { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
-      { pr: { headRefOid: head }, comments: [{ id: 1, author: 'Maintainer', body: reviewCommentBody(reviewed, false, 'open', '# Review report') }] }
-    );
-    expect(ok(result)).toEqual({ head, reviewed, pull_request: 42 });
-    const inputs = { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) };
-    // A pull request never reviewed has no baseline, and is not mistaken for one reviewed at its head.
-    expect(ok(run(at, 'checkout', inputs, { pr: { headRefOid: head } }))).toEqual({ head, reviewed: null, pull_request: 42 });
+    // Two earlier rounds kept their review: an older one at the base, the latest at `reviewed`.
+    const published = (commit: string, report = '# Review report\n'): string => {
+      const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-build-round-')));
+      mkdirSync(join(artifacts, 'review/published'), { recursive: true });
+      writeFileSync(join(artifacts, 'review/published/report.md'), report);
+      writeFileSync(join(artifacts, 'review/published/reviewed-head'), `${commit}\n`);
+      return artifacts;
+    };
+    const rounds = [published(git(at.checkout, 'rev-parse', 'dev')), published(reviewed), ''].map(artifacts => ({ artifacts }));
+    const inputs = {
+      INPUTS_CANDIDATE: '42',
+      INPUTS_CONTINUES: '42',
+      INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }),
+      INPUTS_ROUNDS: JSON.stringify(rounds),
+    };
     const review = { id: 1, author: 'Maintainer', body: reviewCommentBody(reviewed, false, 'open', '# Review report') };
+    // The first review continues from the report a round published at the commit the comment names.
+    const prior_report = join(rounds[1]?.artifacts ?? '', 'review/published/report.md');
+    expect(ok(run(at, 'checkout', inputs, { pr: { headRefOid: head }, comments: [review] }))).toEqual({ head, reviewed, pull_request: 42, prior_report });
+    // A review no kept round recorded, such as one another install published, is not continued.
+    expect(ok(run(at, 'checkout', { ...inputs, INPUTS_ROUNDS: JSON.stringify(rounds.slice(0, 1)) }, { pr: { headRefOid: head }, comments: [review] }))).toMatchObject({ reviewed, prior_report: '' });
+    // Nor is a kept review at that commit whose report the comment no longer shows, such as one a review run by hand replaced.
+    const replaced = { ...inputs, INPUTS_ROUNDS: JSON.stringify([{ artifacts: published(reviewed, '# An older report\n'), run_id: 'run-0' }]) };
+    const other = run(at, 'checkout', replaced, { pr: { headRefOid: head }, comments: [review] });
+    expect(other.stderr).toContain('run-0 kept a review');
+    expect(JSON.parse(other.stdout)).toMatchObject({ reviewed, prior_report: '' });
+    // A pull request never reviewed has no baseline, and is not mistaken for one reviewed at its head.
+    expect(ok(run(at, 'checkout', inputs, { pr: { headRefOid: head } }))).toEqual({ head, reviewed: null, pull_request: 42, prior_report: '' });
     const duplicate = run(at, 'checkout', inputs, { pr: { headRefOid: head }, comments: [review, { ...review, id: 2 }] });
     expect(duplicate.code).not.toBe(0);
     expect(duplicate.stderr).toContain('more than one trusted review comment');
@@ -916,7 +933,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   return { exitCode: value === null ? 1 : 0, stdout: Buffer.from(JSON.stringify(body)), stderr: Buffer.from('') };
 } });
 `;
-    expect(ok(run(at, 'checkout', inputs, { preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42 });
+    expect(ok(run(at, 'checkout', inputs, { preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42, prior_report });
   }, 60_000);
 
   test('a round route declares fresh stays on the base and continues no pull request, and route cannot name one facts did not offer', () => {
@@ -928,7 +945,8 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const item = JSON.stringify(SUBJECT);
     const calls = callLog();
     const fresh = { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr };
-    expect(ok(run(at, 'checkout', { ...fresh, ARCHON_CALL_LOG: calls }))).toEqual({ head: null, reviewed: null, pull_request: null });
+    const started = { head: null, reviewed: null, pull_request: null, prior_report: '' };
+    expect(ok(run(at, 'checkout', { ...fresh, ARCHON_CALL_LOG: calls }))).toEqual(started);
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
     // The round's start is said once, with the labels "what is building?" filters by.
     expect(notices(calls)).toEqual([{ text: 'Issue 7: build round started (deliver)', labels: ['stage=build', 'kind=started', 'item=7'] }]);
@@ -941,7 +959,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     expect(unanswered.stderr).toContain('the build lane is manual and no maintainer answered for issue 7');
     const answer = { choice: 'relax', text: '', at: AT };
     seed(at, triaged(CLAIMED, record({ status: 'next', decisions: [{ at: AT, run_id: 'run-0', decision: 'answered: continue', reason: 'Relax it', links: [], answer }] })));
-    expect(ok(run(at, 'checkout', manual))).toEqual({ head: null, reviewed: null, pull_request: null });
+    expect(ok(run(at, 'checkout', manual))).toEqual(started);
     expect(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
   }, 60_000);
 
