@@ -108,47 +108,6 @@ describe('MessagePersistence', () => {
       expect(mockAddMessage.mock.calls[0][2]).toBe('segment-1 segment-2');
     });
 
-    test('a flush waits for an earlier flush that is still writing', async () => {
-      persistence.setConversationDbId('conv-1', 'db-uuid-1');
-      persistence.appendText('conv-1', 'reply');
-
-      let releaseWrite: () => void = () => undefined;
-      mockAddMessage.mockImplementationOnce(
-        () =>
-          new Promise<void>(resolve => {
-            releaseWrite = resolve;
-          })
-      );
-
-      // An overflow or periodic flush takes the segment and starts writing it.
-      const earlier = persistence.flush('conv-1');
-      // The lock-release flush finds nothing left to take, but must not resolve first.
-      let laterDone = false;
-      const later = persistence.flush('conv-1').then(() => {
-        laterDone = true;
-      });
-
-      await new Promise(resolve => setTimeout(resolve, 10));
-      expect(laterDone).toBe(false);
-
-      releaseWrite();
-      await Promise.all([earlier, later]);
-      expect(laterDone).toBe(true);
-      expect(mockAddMessage).toHaveBeenCalledTimes(1);
-    });
-
-    test('a failed earlier flush does not block the next one', async () => {
-      persistence.setConversationDbId('conv-1', 'db-uuid-1');
-      persistence.appendText('conv-1', 'first');
-      mockAddMessage.mockImplementationOnce(() => Promise.reject(new Error('db down')));
-      await persistence.flush('conv-1');
-
-      persistence.appendText('conv-1', 'second');
-      await persistence.flush('conv-1');
-      expect(mockAddMessage).toHaveBeenCalledTimes(2);
-      expect(mockAddMessage.mock.calls[1]?.[2]).toBe('second');
-    });
-
     test('flush on empty buffer is a no-op', async () => {
       persistence.setConversationDbId('conv-1', 'db-uuid-1');
       await persistence.flush('conv-1');

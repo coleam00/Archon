@@ -149,22 +149,6 @@ export function ChatPage(): ReactElement {
     };
   }, [busy, activeConvId]);
 
-  // Browsers throttle timers and can stall SSE in background tabs, so a reply
-  // that lands while the tab is hidden may never trigger a refetch. Reload the
-  // history whenever the tab becomes visible or the window regains focus.
-  useEffect(() => {
-    if (activeConvId === null) return;
-    const refresh = (): void => {
-      if (document.visibilityState === 'visible') invalidate(K.messages(activeConvId));
-    };
-    document.addEventListener('visibilitychange', refresh);
-    window.addEventListener('focus', refresh);
-    return (): void => {
-      document.removeEventListener('visibilitychange', refresh);
-      window.removeEventListener('focus', refresh);
-    };
-  }, [activeConvId]);
-
   // Reveal the raw tool trace inline (toggled from the working indicator).
   const [showTools, setShowTools] = useState(false);
 
