@@ -326,6 +326,7 @@ nodes:
       attention: "$record.output.attention"
       form: select
       options: "$record.output.options"
+      other: true
       recommendation: "$record.output.recommendation"
       labels:
         merge: "$record.output.class"

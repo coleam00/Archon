@@ -35,6 +35,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The forge contract can search a repository's issues and pull requests by text (`workitem.search`) and read the end of a check's log (`checks.logs`). The GitHub plugin implements both, and the SDLC pack's agents use them instead of `gh`.
 - A script node can bind every output of an `output_type` its run produced: `with: { reviews: { outputs: review-report } }` delivers them as one JSON array, across loop iterations and included blocks. The loader refuses a producer the node could race and a type no node declares. A record that cannot be read fails the node, or delivers the binding's `if_unreadable` value (null or an array) when it declares one.
 
+### Changed
+
+- The SDLC pack's forge preflights (delivery, the merge queue and the test-value metric) ask `archon forge check` for the plugin, its operations and its credential instead of comparing plugin metadata themselves. Delivery still makes one authenticated read. A missing operation is refused in the host's words (`plugin <name> does not support <operations>`).
+- The SDLC pack's queue questions use the wait's own `other` option. On build and pull-request items it does what the pack's own `other` choice did, and the answer must now carry text; a `merge: base` item now shows it too, and an `other` answer there holds like `hold`.
+
 ## [0.14.0] - 2026-11-07
 
 The SDLC pack reaches GitHub only through the forge plugin, packs can declare settings, and `archon metrics` measures the factory.

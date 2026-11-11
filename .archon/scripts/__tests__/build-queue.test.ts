@@ -14,7 +14,6 @@ import {
 } from '../../workflows/sdlc/.shared/build';
 import { reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { mergeWaits } from '../../workflows/sdlc/.shared/merge';
-import { attentionWait, withOther } from '../../workflows/sdlc/.shared/queue';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
 import {
   newWorkItem,
@@ -663,12 +662,12 @@ describe('the build queue scripts', () => {
     expect(applied).toMatchObject({
       decision: 'asked',
       class: 'stop',
-      asked: { attention: withOther(ATTENTION, 'continue'), brief: 'continue PR 42 under the ruling', by: 'stop' },
+      asked: { attention: ATTENTION, brief: 'continue PR 42 under the ruling', by: 'stop' },
     });
     // The wait carries the choices and the recommendation; the message carries the rest.
-    const wait = attentionWait('Build queue, issue 7: stop decision', withOther(ATTENTION, 'continue'));
-    expect(applied).toMatchObject({ attention: wait.message, options: wait.options, recommendation: wait.recommendation });
-    expect((applied.options as { id: string }[]).map(option => option.id)).toEqual(['relax', 'park', 'other']);
+    expect((applied.options as { id: string; value: unknown }[]).map(option => [option.id, option.value])).toEqual(
+      ATTENTION.choices.map(choice => [choice.id, choice])
+    );
     expect(applied.recommendation).toEqual({ option: 'relax', why: ATTENTION.recommendation.why, confidence: 'medium' });
     for (const part of [
       ATTENTION.what,
@@ -778,6 +777,18 @@ describe('the build queue scripts', () => {
     expect(build).toMatchObject({ status: 'next', decisions: [{ decision: 'answered: continue', answer: { choice: 'relax', text: 'Only for this item.' } }] });
     expect(build?.brief).toContain('continue PR 42 under the ruling');
     expect(build?.brief).toContain(heading);
+  }, 60_000);
+
+  test("an `other` answer, which returns no choice, writes the person's text as the ruling and continues the item", () => {
+    const at = install();
+    seed(at, triaged(CLAIMED, record({ status: 'asking', brief: '' })));
+    const ruled = run(at, 'ruling', { INPUTS_ITEM: JSON.stringify(SUBJECT), INPUTS_ASKED: ASKED, INPUTS_CHOICE: '', INPUTS_TEXT: 'Split it in two.' });
+    expect(ok(ruled)).toMatchObject({ decision: 'continue' });
+    expect(ruled.bodies[0]).toContain("The maintainer's words: Split it in two.");
+    expect(stored(at).value).toMatchObject({
+      claim: null,
+      facts: { build: { status: 'next', decisions: [{ decision: 'answered: continue', answer: { choice: 'other', text: 'Split it in two.' } }] } },
+    });
   }, 60_000);
 
   test('a park with no ruling and no words writes no section and stops working the item', () => {

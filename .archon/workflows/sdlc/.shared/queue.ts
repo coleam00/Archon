@@ -4,11 +4,11 @@
  *
  * An agent decides each item. A clear case acts on its own; anything unclear becomes
  * one attention item that a person can decide without opening the run. The answer is
- * one of the choices the agent declared, or `other`, which every item offers: the
- * person's text is then the ruling, and the queue does what that choice's effect says
- * with it. Each choice rides on its wait option as the option's `value`, so the answer
- * returns the chosen choice itself and the queue acts on it, never on the answer's
- * prose. A choice's effect vocabulary belongs to the queue that declares it.
+ * one of the choices the agent declared, or the wait's own `other` (`other: true`): the
+ * person's text is then the ruling, and the queue does one fixed effect with it. Each
+ * choice rides on its wait option as the option's `value`, so the answer returns the
+ * chosen choice itself and the queue acts on it, never on the answer's prose. A
+ * choice's effect vocabulary belongs to the queue that declares it.
  */
 
 /** One answer the person can give, and what the queue does when it is chosen. */
@@ -90,33 +90,15 @@ export function withDecision<Entry extends DecisionEntry>(prior: readonly Entry[
   return [...(prior ?? []), { ...entry, reason: clipped(entry.reason) }].slice(-KEPT_DECISIONS);
 }
 
-/** The choice every item offers when none of the declared ones fits. */
-export const OTHER = 'other';
+/** The wait's reserved free-text option, which no declared choice may use as its id. */
+const OTHER = 'other';
 
 /**
- * The item with `other` added: the person says in the answer's text what to do instead,
- * and that text is written into the issue body as the ruling. `effect` is what the queue
- * does with it, normally its continue-the-work effect.
+ * The choice an answer chose. An `other` answer returns no choice: its text is the
+ * ruling, written into the issue body, and the queue does `effect` with it.
  */
-export function withOther<Effect extends string>(
-  attention: Attention<Effect>,
-  effect: Effect,
-  does = 'Do what the answer text says. The text is written into the issue body as the ruling, and the next round works from it.'
-): Attention<Effect> {
-  // The queue owns `other`: an agent-declared one is replaced, so its effect is always this one.
-  return {
-    ...attention,
-    choices: [
-      ...attention.choices.filter(choice => choice.id !== OTHER),
-      {
-        id: OTHER,
-        label: 'Something else',
-        does,
-        effect,
-        ruling: '',
-      },
-    ],
-  };
+export function answeredChoice<Effect extends string>(value: Choice<Effect> | null, effect: Effect): Choice<Effect> {
+  return value ?? { id: OTHER, label: 'Something else', does: 'Do what the answer text says.', effect, ruling: '' };
 }
 
 /** What a `select` attention wait asks with: its message, its options and its recommendation. */
@@ -139,10 +121,12 @@ export interface AttentionWait<Effect extends string> {
 /**
  * The wait's fields for an attention item. The engine shows the recommendation and what
  * each choice does; the message carries the rest, in the order a person reads it.
+ * `other` says what the queue does with an `other` answer's text.
  */
 export function attentionWait<Effect extends string>(
   title: string,
-  attention: Attention<Effect>
+  attention: Attention<Effect>,
+  other = ''
 ): AttentionWait<Effect> {
   const { recommendation } = attention;
   return {
@@ -158,10 +142,12 @@ export function attentionWait<Effect extends string>(
       '',
       `**If nobody answers.** ${attention.if_unanswered}`,
       '',
+      ...(other === '' ? [] : [`**If you answer \`other\`.** ${other}`, '']),
       '**Evidence links.**',
       ...attention.links.map(link => `- ${link}`),
     ].join('\n'),
-    options: attention.choices.map(choice => ({
+    // The wait owns `other`, and refuses a declared option of that id.
+    options: attention.choices.filter(choice => choice.id !== OTHER).map(choice => ({
       id: choice.id,
       label: choice.label,
       does: choice.does,

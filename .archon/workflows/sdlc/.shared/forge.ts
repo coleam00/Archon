@@ -97,11 +97,7 @@ export class ForgeOperationError extends Error {
  * The request travels as a file so authored content — a pull-request body, a
  * review report — never appears in any process's argv.
  */
-export function invokeForge(
-  op: string,
-  request: Record<string, unknown>,
-  credential?: (source: string) => void
-): Record<string, unknown> | null {
+export function invokeForge(op: string, request: Record<string, unknown>): Record<string, unknown> | null {
   const command = archonCommand();
   const directory = mkdtempSync(join(tmpdir(), 'archon-forge-'));
   const path = join(directory, 'request.json');
@@ -119,25 +115,19 @@ export function invokeForge(
       const detail = result.stderr.toString().trim();
       throw new Error(`forge ${op} failed${detail === '' ? '' : `: ${detail}`}`);
     }
-    return forgeResult(op, parsed, result.exitCode, credential);
+    return forgeResult(op, parsed, result.exitCode);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
 }
 
-export function forgeResult(
-  op: string,
-  parsed: unknown,
-  exitCode: number,
-  credential?: (source: string) => void
-): Record<string, unknown> | null {
+export function forgeResult(op: string, parsed: unknown, exitCode: number): Record<string, unknown> | null {
   const response = record(parsed);
   if (!response || typeof response.operationId !== 'string' || response.operationId === '') {
     throw new Error(`forge ${op} returned an unexpected response envelope`);
   }
   const source =
     typeof response.credentialSource === 'string' ? response.credentialSource : undefined;
-  if (source) credential?.(source);
   // Exit 2 is the host saying it could not audit an operation that did complete.
   // The response on stdout is the real outcome, so the result is still a result;
   // losing it here would report a performed write as a failure.
