@@ -50,9 +50,10 @@ export interface WorkflowAttentionOptions {
   labels: readonly string[];
   sort?: string;
   countBy?: string;
-  /** With `countBy`: count every attention wait started, answered or open, from events. */
-  answered?: boolean;
-  /** With `answered`: only waits started since this duration ago or ISO time. */
+  /**
+   * With `countBy`: count the attention waits opened since this duration ago or ISO time,
+   * answered or still open, from events, in place of the items open now.
+   */
   since?: string;
   /** Stream every change in scope instead of reading the queue once. */
   watch?: boolean;
@@ -297,18 +298,17 @@ export async function workflowAttentionCommand(
 
     const { labels, order, countBy } = parseAttentionQueueRequest(opts);
     const scope = await attentionScope(host, cwd, opts);
-    if (opts.answered && countBy !== undefined) {
-      const since =
-        opts.since === undefined ? undefined : resolveMetricsWindow({ since: opts.since }).since;
+    if (opts.since !== undefined && countBy !== undefined) {
+      const { since } = resolveMetricsWindow({ since: opts.since });
       return await renderAttentionCounts(
         await countAttentionWaitStarts(
           { store: host.deps.store },
-          { scope, labels, countBy, ...(since === undefined ? {} : { since }) }
+          { scope, labels, countBy, since }
         ),
         scope,
         opts.json,
         [],
-        'No attention waits were started.'
+        'No attention waits opened in that window.'
       );
     }
     const { values: items, degraded } = splitAttentionRead(await listAttentionQueue(source));
@@ -338,8 +338,7 @@ function rejectFlagsWithoutTheirMode(opts: WorkflowAttentionOptions): void {
   };
   if (opts.after !== undefined && !opts.watch) needs('--after', '--watch');
   if (opts.needsMe && !opts.watch) needs('--needs-me', '--watch');
-  if (opts.answered && opts.countBy === undefined) needs('--answered', '--count-by');
-  if (opts.since !== undefined && !opts.answered) needs('--since', '--answered');
+  if (opts.since !== undefined && opts.countBy === undefined) needs('--since', '--count-by');
 }
 
 function rejectConflictingAttentionOptions(

@@ -122,10 +122,10 @@ Labels are a flat map from string to string. A key is one token with no `=` or w
 
 ```bash
 archon workflow attention --json --all --count-by label:ci
-archon workflow attention --json --all --count-by label:ci --answered --since 30d
+archon workflow attention --json --all --count-by label:ci --since 30d
 ```
 
-The first counts the items open now. With `--answered` the count covers every attention wait started in the window, answered or still open, by the labels each wait opened with.
+The first counts the items open now. With `--since` the count covers every attention wait opened in the window, whether it has been answered or is still open, by the labels each wait opened with.
 
 This handler answers delivery runs whose CI went red for a reason outside the change, labelled `ci=other`. Start it from a [schedule](/guides/workflow-triggers/) so it polls the queue.
 
@@ -198,7 +198,7 @@ Everything above is also JSON, for scripts and agents. The list, the single read
 | Operation | CLI | HTTP |
 |---|---|---|
 | List | `archon workflow attention --json [--project <id\|name\|key> \| --all] [--label k=v]… [--sort age\|label:<key>]` | `GET /api/runs/attention?project=…&label=…&sort=…` |
-| Count | `archon workflow attention --json --count-by project\|label:<key> [--answered [--since <duration\|ISO>]]` | `GET /api/runs/attention?countBy=…` |
+| Count | `archon workflow attention --json --count-by project\|label:<key> [--since <duration\|ISO>]` | `GET /api/runs/attention?countBy=…` |
 | Stream | `archon workflow attention --watch --json [--project … \| --all] [--label k=v]… [--after <cursor>]` | `GET /api/runs/attention/stream?project=…&label=…` (SSE) |
 | Read one | `archon workflow attention <run-id> --json` | `GET /api/runs/<run-id>/attention` |
 | Label | `archon workflow attention label <run-id> --occurrence <id> [--set k=v]… [--unset k]…` | `POST /api/runs/<run-id>/attention/labels` |

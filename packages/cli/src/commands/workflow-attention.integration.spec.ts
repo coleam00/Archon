@@ -259,7 +259,6 @@ test('the queue scopes by project the way archon state names it, across a rename
       all: true,
       labels: [],
       countBy: 'label:ci',
-      answered: true,
       since: '1h',
     })
   );
@@ -271,7 +270,7 @@ test('the queue scopes by project the way archon state names it, across a rename
       ],
     },
   });
-  for (const opts of [{ answered: true }, { countBy: 'project', since: '1h' }]) {
+  for (const opts of [{ since: '1h' }, { countBy: 'project', since: 'soon' }]) {
     const refused = await captured(() =>
       workflowAttentionCommand(host, registeredDir, undefined, { json: true, labels: [], ...opts })
     );
