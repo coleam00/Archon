@@ -143,6 +143,24 @@ export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size):
 }
 
 /**
+ * Every label a triage output puts on its item: the pack labels its decision derives
+ * and the area labels triage picked, sorted. A pack label among the area labels
+ * refuses: it would be added beside the derived ones, or read as a request.
+ */
+export function triageLabels(triage: {
+  readonly decision: LabelVerdict;
+  readonly type: { readonly value: WorkType };
+  readonly size: { readonly value: Size };
+  readonly area_labels: readonly string[];
+}): string[] {
+  if (triage.area_labels.some(isPackLabel)) {
+    throw new Error('area_labels may not name a pack label; those derive from the verdict');
+  }
+  const wanted = wantedLabels(triage.decision, triage.type.value, triage.size.value);
+  return [...new Set([...wanted, ...triage.area_labels])].sort();
+}
+
+/**
  * Add and remove labels on an issue as a delta, then read the result back.
  *
  * The issue's identity is verified before anything is written. A missing pack

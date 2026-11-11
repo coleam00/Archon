@@ -227,21 +227,23 @@ it('preserves inherited-property labels through a non-GitHub tracker', () => {
   writeFileSync(host.statePath, JSON.stringify(seeded));
   const repo = { host: 'tracker.example', path: 'group/team/project' };
   const inputs = {
-    INPUTS_ITEM: JSON.stringify({ repo, number: 7 }),
     INPUTS_PUBLISH: 'true',
-    INPUTS_DECISION: JSON.stringify({ contract: 'READY', route: 'deliver' }),
-    INPUTS_TYPE: '{"value":"feature","reason":"new behavior"}',
-    INPUTS_SIZE: '{"value":"s","reason":"one script"}',
-    INPUTS_COMPLEXITY: '{"value":"low","reason":"clear change"}',
-    INPUTS_IMPORTANCE: '{"value":"medium","reason":"on direction"}',
-    INPUTS_URGENCY: '{"value":"none","reason":"nothing waits on it"}',
-    INPUTS_SUMMARY: 'Ready',
-    INPUTS_AREA_LABELS: JSON.stringify(['area', 'nonexistent', 'constructor']),
-    INPUTS_RELATED: '[]',
-    INPUTS_REPORT: '{"path":"triage.md"}',
+    INPUTS_TRIAGE: JSON.stringify({
+      decision: { contract: 'READY', route: 'deliver' },
+      type: { value: 'feature', reason: 'new behavior' },
+      size: { value: 's', reason: 'one script' },
+      complexity: { value: 'low', reason: 'clear change' },
+      importance: { value: 'medium', reason: 'on direction' },
+      urgency: { value: 'none', reason: 'nothing waits on it' },
+      item: { repo, number: 7 },
+      area_labels: ['area', 'nonexistent', 'constructor'],
+      related: [],
+      summary: 'Ready',
+      report: { path: 'triage.md' },
+    }),
   };
   const options = { forge: { kind: 'command' as const, argv: host.argv } };
-  const triage = runPackScript('triage/scripts/verdict', { ...options, inputs });
+  const triage = runPackScript('triage/scripts/labels', { ...options, inputs });
   expect({ code: triage.code, stderr: triage.stderr }).toMatchObject({ code: 0 });
   expect(JSON.parse(triage.stdout)).toMatchObject({
     published: true,

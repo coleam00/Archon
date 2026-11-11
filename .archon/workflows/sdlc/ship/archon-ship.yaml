@@ -80,7 +80,7 @@ nodes:
     include: archon-build
     depends_on: [triage]
     with:
-      route: "$triage.output.route"
+      route: "$triage.output.decision.route"
       work: >-
         The work item's assessment is $ARTIFACTS_DIR/triage.md, written by this
         run's triage against the current repository. It records which route the
@@ -88,11 +88,11 @@ nodes:
         the question to investigate, the decisions to plan, or the verified work
         order.
       related: "$triage.output.related"
-      contract: "$triage.output.contract"
-      blocked_reason: "$triage.output.blocked_reason"
+      contract: "$triage.output.decision.contract"
+      blocked_reason: "$triage.output.decision.blocked_reason"
       summary: "$triage.output.summary"
       pull_request: "$INPUTS.pull_request"
-      triage_pull_request: "$triage.output.pull_request"
+      triage_pull_request: "$triage.output.decision.pull_request"
       branch: "$INPUTS.branch"
       ci: "$INPUTS.ci"
       errors: "$INPUTS.errors"

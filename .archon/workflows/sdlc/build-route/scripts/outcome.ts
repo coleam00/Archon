@@ -63,7 +63,7 @@ function questions(): string {
 }
 
 function stopped(): { readonly reason: Stop; readonly text: string; readonly report: string } {
-  if (route === 'no_action') {
+  if (contract !== 'READY') {
     if (contract === 'NO_ACTION') {
       return { reason: 'no_action', text: `No delivery needed: ${summary}`, report: 'triage.md' };
     }

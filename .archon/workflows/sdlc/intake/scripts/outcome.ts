@@ -4,24 +4,17 @@
  * close is checked before the first write; one the forge refuses leaves the item
  * BLOCKED for a maintainer instead. A closed issue gets the document write only.
  *
- * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; triage's
- * verdict fields, each "null" when triage did not run.
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; INPUTS_TRIAGE,
+ * the triage node's typed output, "null" when triage did not run.
  */
 
-import { type Closure, type ClosePlan, planClose } from '../../.shared/close.ts';
+import { type ClosePlan, planClose } from '../../.shared/close.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
-import {
-  type Contract,
-  type LabelVerdict,
-  isPackLabel,
-  type PackLabel,
-  type Route,
-  wantedLabels,
-  writeLabels,
-} from '../../.shared/labels.ts';
+import { type LabelVerdict, isPackLabel, type PackLabel, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
   applyDecision,
   assertNoSelfPromotion,
@@ -33,41 +26,24 @@ import {
   type WorkItem,
 } from '../../.shared/workitem.ts';
 
-/**
- * A string field of triage's verdict, or null when triage did not run. The engine
- * binds a string raw, not as JSON, and a skipped producer's `if_skipped: null` as
- * the text `null`.
- */
-function verdictText(value: string | undefined): string | null {
-  const raw = text(value);
-  return raw === 'null' ? null : raw;
-}
-
-/** Triage's verdict, or null when triage did not run on this path. */
+/** Triage's verdict from its node's typed output, or null when triage did not run on this path. */
 function triageResult(): TriageResult | null {
-  const contract = verdictText(process.env.INPUTS_CONTRACT) as Contract | null;
-  if (contract === null) return null;
-  const route = verdictText(process.env.INPUTS_ROUTE) as Route;
-  const closure = nullableJson(process.env.INPUTS_CLOSURE) as Closure | null;
-  // A missing binding reads as null; a NO_ACTION verdict without its closure would
-  // label the item for a close that never happens.
-  if ((contract === 'NO_ACTION') !== (closure !== null)) {
-    throw new Error('a NO_ACTION verdict, and only that one, carries a closure');
-  }
-  const verdict: LabelVerdict = contract === 'READY' ? { contract, route } : { contract };
+  const triage = nullableJson(process.env.INPUTS_TRIAGE) as NodeOutput<'archon-triage-block', 'triage'> | null;
+  if (triage === null) return null;
+  const { decision } = triage;
   return {
-    verdict,
-    pull_request: nullableJson(process.env.INPUTS_PULL_REQUEST) as number | null,
-    type: nullableJson(process.env.INPUTS_TYPE) as TriageResult['type'],
-    size: nullableJson(process.env.INPUTS_SIZE) as TriageResult['size'],
-    complexity: nullableJson(process.env.INPUTS_COMPLEXITY) as TriageResult['complexity'],
-    importance: nullableJson(process.env.INPUTS_IMPORTANCE) as TriageResult['importance'],
-    urgency: nullableJson(process.env.INPUTS_URGENCY) as TriageResult['urgency'],
-    related: (nullableJson(process.env.INPUTS_RELATED) as TriageResult['related']) ?? [],
-    closure,
-    labels: nullableJson(process.env.INPUTS_LABELS) as string[],
-    summary: text(process.env.INPUTS_SUMMARY),
-    report: nullableJson(process.env.INPUTS_REPORT) as TriageResult['report'],
+    verdict: decision.contract === 'READY' ? { contract: 'READY', route: decision.route } : { contract: decision.contract },
+    pull_request: 'pull_request' in decision ? decision.pull_request : null,
+    type: triage.type,
+    size: triage.size,
+    complexity: triage.complexity,
+    importance: triage.importance,
+    urgency: triage.urgency,
+    related: triage.related,
+    closure: decision.contract === 'NO_ACTION' ? decision.closure : null,
+    labels: triageLabels(triage),
+    summary: triage.summary,
+    report: triage.report,
   };
 }
 

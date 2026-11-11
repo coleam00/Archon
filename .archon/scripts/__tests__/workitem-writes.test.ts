@@ -9,29 +9,32 @@ import {
 
 const { runPackScript } = packScriptRunner();
 
-const inputs = {
-  INPUTS_ITEM: JSON.stringify({ repo: PR.repo, number: 7 }),
-  INPUTS_PUBLISH: 'true',
-  INPUTS_DECISION: JSON.stringify({ contract: 'READY', route: 'deliver' }),
-  INPUTS_TYPE: '{"value":"feature","reason":"new behavior"}',
-  INPUTS_SIZE: '{"value":"s","reason":"one script"}',
-  INPUTS_COMPLEXITY: '{"value":"low","reason":"clear change"}',
-  INPUTS_IMPORTANCE: '{"value":"medium","reason":"on direction"}',
-  INPUTS_URGENCY: '{"value":"none","reason":"nothing waits on it"}',
-  INPUTS_SUMMARY: 'Ready',
-  INPUTS_AREA_LABELS: '["area","nonexistent"]',
-  INPUTS_RELATED: '[]',
-  INPUTS_REPORT: '{"path":"triage.md"}',
+const TRIAGE = {
+  decision: { contract: 'READY', route: 'deliver' } as Record<string, unknown>,
+  type: { value: 'feature', reason: 'new behavior' },
+  size: { value: 's', reason: 'one script' },
+  complexity: { value: 'low', reason: 'clear change' },
+  importance: { value: 'medium', reason: 'on direction' },
+  urgency: { value: 'none', reason: 'nothing waits on it' },
+  item: { repo: PR.repo, number: 7 } as Record<string, unknown>,
+  area_labels: ['area', 'nonexistent'],
+  related: [],
+  summary: 'Ready',
+  report: { path: 'triage.md' },
 };
 
+/** The labels node's inputs: the triage node's typed output, patched, under publish. */
+function labelInputs(patch: Partial<typeof TRIAGE> = {}, publish = 'true'): Record<string, string> {
+  return { INPUTS_TRIAGE: JSON.stringify({ ...TRIAGE, ...patch }), INPUTS_PUBLISH: publish };
+}
+const inputs = labelInputs();
+
 test('unpublished and non-tracker triage never invoke either transport', () => {
-  for (const patch of [
-    { INPUTS_PUBLISH: 'false' },
-    { INPUTS_ITEM: '{"repo":{"host":"","path":""},"number":0}' },
+  for (const unpublished of [
+    labelInputs({}, 'false'),
+    labelInputs({ item: { repo: { host: '', path: '' }, number: 0 } }),
   ]) {
-    const run = runPackScript('triage/scripts/verdict', {
-      inputs: { ...inputs, ...patch },
-    });
+    const run = runPackScript('triage/scripts/labels', { inputs: unpublished });
     expect(run.code).toBe(0);
     expect(run.forge).toEqual([]);
     expect(JSON.parse(run.stdout).published).toBe(false);
@@ -41,11 +44,8 @@ test('unpublished and non-tracker triage never invoke either transport', () => {
 const DELIVERED: Closure = { kind: 'delivered', url: 'https://ghe.example.com/example/repo/pull/5' };
 
 test('a published close verdict labels the item and closes nothing; intake owns the close', () => {
-  const run = runPackScript('triage/scripts/verdict', {
-    inputs: {
-      ...inputs,
-      INPUTS_DECISION: JSON.stringify({ contract: 'NO_ACTION', closure: DELIVERED }),
-    },
+  const run = runPackScript('triage/scripts/labels', {
+    inputs: labelInputs({ decision: { contract: 'NO_ACTION', closure: DELIVERED } }),
   });
   expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
   expect(JSON.parse(run.stdout).published).toBe(true);
@@ -53,7 +53,7 @@ test('a published close verdict labels the item and closes nothing; intake owns 
 });
 
 test('forge publication fails without label facts rather than assuming no labels', () => {
-  const run = runPackScript('triage/scripts/verdict', {
+  const run = runPackScript('triage/scripts/labels', {
     inputs,
     forge: {
       kind: 'fake',
@@ -69,7 +69,7 @@ test('forge publication fails without label facts rather than assuming no labels
 });
 
 test('forge failures preserve unknown outcome evidence and never fall back or retry', () => {
-  const run = runPackScript('triage/scripts/verdict', {
+  const run = runPackScript('triage/scripts/labels', {
     inputs,
     forge: { kind: 'fake', response: forgeFailure('workitem.view', 'outcome_unknown', 'response lost') },
   });
@@ -80,8 +80,8 @@ test('forge failures preserve unknown outcome evidence and never fall back or re
 });
 
 test('a pack label is never accepted as an area label', () => {
-  const run = runPackScript('triage/scripts/verdict', {
-    inputs: { ...inputs, INPUTS_AREA_LABELS: '["archon-ready"]' },
+  const run = runPackScript('triage/scripts/labels', {
+    inputs: labelInputs({ area_labels: ['archon-ready'] }),
   });
   expect(run.code).not.toBe(0);
   expect(run.forge).toEqual([]);
@@ -91,7 +91,7 @@ test('a pack label is never accepted as an area label', () => {
 test('forge triage adds the labels it lacks and removes only the stale one it owns', () => {
   const item = { ref: { repo: PR.repo, number: 7 }, kind: 'issue', url: 'https://ghe.example.com/example/repo/issues/7', state: 'open' };
   const applied = (op: string) => forgeOperation(op, { outcome: 'applied' });
-  const run = runPackScript('triage/scripts/verdict', {
+  const run = runPackScript('triage/scripts/labels', {
     inputs,
     forge: {
       kind: 'fake',

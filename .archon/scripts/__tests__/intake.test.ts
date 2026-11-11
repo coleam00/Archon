@@ -399,22 +399,25 @@ function facts(at: Install, event: Event): { run: ScriptRun; output: Record<stri
   return { run: result, output: JSON.parse(result.stdout) as Record<string, unknown> };
 }
 
-const READY_VERDICT = {
-  INPUTS_CONTRACT: 'READY',
-  INPUTS_ROUTE: 'deliver',
-  INPUTS_PULL_REQUEST: 'null',
-  INPUTS_TYPE: '{"value":"feature","reason":"new behavior"}',
-  INPUTS_SIZE: '{"value":"s","reason":"one script"}',
-  INPUTS_COMPLEXITY: '{"value":"low","reason":"clear"}',
-  INPUTS_IMPORTANCE: '{"value":"high","reason":"on direction"}',
-  INPUTS_URGENCY: '{"value":"soon","reason":"next release"}',
-  INPUTS_LABELS: '["archon-ready","archon-size-s","archon-type-feature"]',
-  INPUTS_SUMMARY: 'Ready to deliver',
-  INPUTS_CLOSURE: 'null',
-  INPUTS_RELATED: '[{"url":"https://ghe.example.com/example/repo/issues/5","relation":"an earlier attempt, closed"}]',
-  INPUTS_REPORT: '{"type":"archon_artifact","run_id":"run-1","path":"triage.md"}',
+const READY_TRIAGE = {
+  decision: { contract: 'READY', route: 'deliver' } as Record<string, unknown>,
+  type: { value: 'feature', reason: 'new behavior' },
+  size: { value: 's', reason: 'one script' },
+  complexity: { value: 'low', reason: 'clear' },
+  importance: { value: 'high', reason: 'on direction' },
+  urgency: { value: 'soon', reason: 'next release' },
+  item: SUBJECT,
+  area_labels: [],
+  related: [{ url: 'https://ghe.example.com/example/repo/issues/5', relation: 'an earlier attempt, closed' }],
+  summary: 'Ready to deliver',
+  report: { type: 'archon_artifact', run_id: 'run-1', path: 'triage.md' },
 };
-const SKIPPED_TRIAGE = Object.fromEntries(Object.keys(READY_VERDICT).map(key => [key, 'null']));
+/** The outcome node's triage binding: the triage node's typed output with this decision. */
+function verdict(decision: Record<string, unknown>): Record<string, string> {
+  return { INPUTS_TRIAGE: JSON.stringify({ ...READY_TRIAGE, decision }) };
+}
+const READY_VERDICT = verdict(READY_TRIAGE.decision);
+const SKIPPED_TRIAGE = { INPUTS_TRIAGE: 'null' };
 
 const ISSUE_URL = 'https://ghe.example.com/example/repo/issues/7';
 const ORIGINAL_URL = 'https://ghe.example.com/example/repo/issues/3';
@@ -422,13 +425,7 @@ const ORIGINAL: TrackerIssue = { number: 3, title: 'The original', body: 'Its bo
 const MERGED_URL = 'https://ghe.example.com/example/repo/pull/5';
 
 function closeVerdict(closure: Closure): Record<string, string> {
-  return {
-    ...READY_VERDICT,
-    INPUTS_CONTRACT: 'NO_ACTION',
-    INPUTS_ROUTE: 'no_action',
-    INPUTS_LABELS: '["archon-close","archon-type-feature"]',
-    INPUTS_CLOSURE: JSON.stringify(closure),
-  };
+  return verdict({ contract: 'NO_ACTION', closure });
 }
 const DUPLICATE_VERDICT = closeVerdict({
   kind: 'duplicate',
@@ -682,19 +679,6 @@ describe('the intake scripts', () => {
     expectLeftToMaintainer(at, applied, 'repo#5 is a pull request, not an issue');
   }, 60_000);
 
-  test('a NO_ACTION verdict that arrives without its closure is refused', () => {
-    const at = install();
-    const applied = outcome(
-      at,
-      { runId: 'run-1' },
-      facts(at, { runId: 'run-1' }).output,
-      { ...DUPLICATE_VERDICT, INPUTS_CLOSURE: 'null' }
-    );
-    expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain('only that one, carries a closure');
-    expect(labelWrites(applied, 7)).toEqual({ add: [], remove: [] });
-  }, 60_000);
-
   test('a delivered item is closed as completed, linked to the merged change', () => {
     const at = install();
     const applied = outcome(
@@ -730,13 +714,7 @@ describe('the intake scripts', () => {
       at,
       { runId: 'run-1' },
       facts(at, { runId: 'run-1' }).output,
-      {
-        ...READY_VERDICT,
-        INPUTS_CONTRACT: 'BLOCKED',
-        INPUTS_ROUTE: 'no_action',
-        INPUTS_LABELS: '["archon-blocked","archon-size-s","archon-type-feature"]',
-        INPUTS_CLOSURE: 'null',
-      }
+      verdict({ contract: 'BLOCKED', blocked_reason: 'waits on a release', blocked_by: [] })
     );
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect([...applied.closes, ...applied.comments]).toEqual([]);
