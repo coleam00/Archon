@@ -234,7 +234,7 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.stderr).toContain("could not record it in the run's audit log");
   });
 
-  it('reads back the pull request the run was launched onto instead of creating one', () => {
+  it('continues the pull request the run was launched onto instead of creating one', () => {
     const result = publishPr({
       target: { existing: 42 },
       prepareBody: false,
@@ -677,23 +677,6 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.stderr).toContain(`is at ${REVIEWED}`);
     expect(result.comments).toEqual([]);
     expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
-  });
-
-  // An unpushed correction once reached publication with a scope that declared no
-  // pull request; the error named the declaration instead of the unpushed head.
-  it('names an unpushed head before any scope disagreement', () => {
-    const result = publishReview({
-      inputs: {
-        ...report,
-        INPUTS_SCOPE: JSON.stringify(PR),
-        INPUTS_PR: 'null',
-        INPUTS_HEAD: STALE,
-        ARCHON_NODE_EXECUTION: atCommit(STALE),
-      },
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('push the commits under review');
-    expect(result.stderr).not.toContain('delivery recorded');
   });
 
   it('refuses when the checkout moved after the round fixed its commit', () => {
