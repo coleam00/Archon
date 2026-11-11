@@ -3,13 +3,19 @@
  * mirror it, then close an item triage found resolved, then release the claim. A
  * close is checked before the first write; one the forge refuses leaves the item
  * BLOCKED for a maintainer instead. An item no route can start from gets triage's
- * questions as one marked comment. A closed issue gets the document write only.
+ * questions as one marked comment. A closed issue gets the document write only. An
+ * item the run leaves waiting for the build queue starts a build-queue pickup through
+ * the operator's build-queue binding; if it does not start, the next build-queue run
+ * takes the item.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; INPUTS_TRIAGE,
- * the triage node's typed output, "null" when triage did not run.
+ * the triage node's typed output, "null" when triage did not run;
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
+import { buildWaits } from '../../.shared/build.ts';
 import { type ClosePlan, planClose } from '../../.shared/close.ts';
+import { nextPickup } from '../../.shared/follow-up.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
@@ -108,9 +114,13 @@ function labelDelta(
   };
 }
 
+/** Called once the claim is released, so the build-queue run this starts can claim the item. */
 function summary(item: QualifiedPr, next: WorkItem, runId: string): string {
   const latest = next.history.at(-1);
-  return `Issue ${String(item.number)}: ${next.stage}${latest?.run_id === runId ? `; ${latest.summary}` : ''}`;
+  const stage = `Issue ${String(item.number)}: ${next.stage}${latest?.run_id === runId ? `; ${latest.summary}` : ''}`;
+  if (!buildWaits(next)) return stage;
+  const key = `${item.repo.host}/${item.repo.path}#${String(item.number)}:${runId}`;
+  return `${stage}; ${nextPickup(text(process.env.INPUTS_BUILD_QUEUE_BINDING), key)}`;
 }
 
 function main(): void {

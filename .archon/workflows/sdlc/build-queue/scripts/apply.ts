@@ -10,13 +10,14 @@
  * its claim until the ruling node records the answer. The round carries the review
  * verdicts its delivery published and the latest validation its CI agent ran. A
  * continue then starts the item's next round at once through the operator's
- * build-queue binding; if it does not start, the item waits for the next queue run.
+ * build-queue binding, and a ready item a merge sweep through the merge-queue binding;
+ * if it does not start, the item waits for the next queue run.
  *
  * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ORDER and INPUTS_HANDOFF,
  * the order's and the handoff's summaries, empty when skipped; INPUTS_ROUTE,
  * INPUTS_ENDING (archon-build's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
- * INPUTS_BUILD_QUEUE_BINDING, the workflow's input; INPUTS_REVIEWS and INPUTS_CI, every
+ * INPUTS_BUILD_QUEUE_BINDING and INPUTS_MERGE_QUEUE_BINDING, the workflow's inputs; INPUTS_REVIEWS and INPUTS_CI, every
  * `review-report` and `ci-report` output of this run.
  */
 
@@ -30,6 +31,7 @@ import {
   type Validation,
   withBuild,
 } from '../../.shared/build.ts';
+import { nextSweep } from '../../.shared/follow-up.ts';
 import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
 import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed, typedOutputs, UNREADABLE_OUTPUTS, workflowRunId } from '../../.shared/io.ts';
@@ -157,10 +159,17 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
   return `${subject}${decision.kind}. ${decision.reason}`;
 }
 
-/** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
+/**
+ * The summary once the writes are done. The claim is released by then, so the run this
+ * starts can claim the item: a continue starts its next round, and a ready one a merge
+ * sweep.
+ */
 function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
   const written = wrote === null ? summary : `${summary} (${wrote})`;
-  return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
+  if (decision.kind === 'continue') return `${written}; ${nextRound(item, runId)}`;
+  if (decision.kind !== 'ready') return written;
+  const key = `${item.repo.host}/${item.repo.path}#${String(item.number)}:${runId}`;
+  return `${written}; ${nextSweep(text(process.env.INPUTS_MERGE_QUEUE_BINDING), key)}`;
 }
 
 /** The summary of a path with no item, so nothing is written or asked; null on an item's path. */

@@ -29,6 +29,7 @@ bindings:
       number: { event: subject.number }
       kind: { event: subject.kind }
       action: { event: event.action }
+      build_queue_binding: { binding: build-handoff }
   intake-labels:
     workflow: archon-intake
     resource: intake
@@ -50,6 +51,9 @@ bindings:
       action: { event: event.action }
       label: { event: label.name }
       label_actor: { event: label.actor.login }
+      build_queue_binding: { binding: build-handoff }
+  # The schedule is the backstop for a handoff that did not start, as on a host that was
+  # down: a tick that finds every slot busy is skipped.
   build-queue:
     workflow: archon-build-queue
     resource: build
@@ -60,7 +64,22 @@ bindings:
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }
-      build_queue_binding: { binding: build-queue }
+      build_queue_binding: { binding: build-handoff }
+      merge_queue_binding: { binding: merge-queue }
+  # What a run fires to start the build queue: intake for an item it routed, a round
+  # that continues, a merge-queue return. No clock starts it, and a fire that finds
+  # every slot busy waits in line for one.
+  build-handoff:
+    workflow: archon-build-queue
+    resource: build
+    capacity: 2
+    overlap: queue
+    isolation: { kind: worktree }
+    inputs:
+      repo_host: { repo: host }
+      repo_path: { repo: path }
+      build_queue_binding: { binding: build-handoff }
+      merge_queue_binding: { binding: merge-queue }
   split-queue:
     workflow: archon-split
     resource: split
@@ -78,7 +97,7 @@ bindings:
       repo_host: { repo: host }
       repo_path: { repo: path }
       merge_queue_binding: { binding: merge-queue }
-      build_queue_binding: { binding: build-queue }
+      build_queue_binding: { binding: build-handoff }
       discoveries_binding: { binding: discoveries }
   discoveries:
     workflow: archon-discoveries

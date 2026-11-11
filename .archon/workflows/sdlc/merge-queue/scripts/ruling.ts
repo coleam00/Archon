@@ -20,7 +20,7 @@
  */
 
 import { nextRound, withBuild } from '../../.shared/build.ts';
-import { followUp } from '../../.shared/follow-up.ts';
+import { nextSweep } from '../../.shared/follow-up.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { appendSection } from '../../.shared/issue.ts';
@@ -38,9 +38,7 @@ function continueNow(effect: string, item: QualifiedPr, runId: string): string {
   if (effect === 'return') return `; ${nextRound(item, runId)}`;
   if (effect !== 'merge') return '';
   const { host, path } = item.repo;
-  // A sweep merges whatever waits; the binding names the repository, so it takes no inputs.
-  const key = `merge-sweep:${host}/${path}#${String(item.number)}:${runId}`;
-  return `; ${followUp(text(process.env.INPUTS_MERGE_QUEUE_BINDING), key, {}, 'a sweep')}`;
+  return `; ${nextSweep(text(process.env.INPUTS_MERGE_QUEUE_BINDING), `${host}/${path}#${String(item.number)}:${runId}`)}`;
 }
 
 /** Write the ruling into the issue body as a dated section; returns its heading, or ''. */

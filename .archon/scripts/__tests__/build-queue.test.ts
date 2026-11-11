@@ -650,7 +650,7 @@ describe('the build queue scripts', () => {
     });
     expect(applied.code).toBe(0);
     expect(applied.stderr).toContain('its next round did not start');
-    expect((JSON.parse(applied.stdout) as { summary: string }).summary).toContain('its next round did not start (refused), so the next queue run picks it up');
+    expect((JSON.parse(applied.stdout) as { summary: string }).summary).toContain('its next round did not start (refused), so the next queue run takes the item');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'next', brief: 'continue PR 42 on R1' } } });
   }, 60_000);
 
@@ -722,9 +722,13 @@ describe('the build queue scripts', () => {
     const at = install();
     seed(at, triaged(CLAIMED));
     const done = { decision: 'done', brief: '', ...PUSH, reason: 'Ready at the head and CI green', attention: null };
-    const applied = ok(run(at, 'apply', applyInputs(done)));
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const applied = ok(run(at, 'apply', { ...applyInputs(done), INPUTS_MERGE_QUEUE_BINDING: '/bindings/merge-queue.json', ARCHON_CALL_LOG: calls }));
     expect(applied).toMatchObject({ decision: 'ready', attention: '', asked: null });
     expectPushed(at, applied);
+    // The ready pull request starts a merge sweep through the merge queue's binding, once per decision.
+    const fire = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/merge-queue.json', '--delivery-id', 'merge-sweep:ghe.example.com/example/repo#7:run-1']);
     const doc = stored(at).value;
     expect(doc).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', decisions: [{ decision: 'ready' }] } } });
     expect(doc?.facts.build?.rounds).toHaveLength(1);

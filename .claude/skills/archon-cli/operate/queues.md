@@ -65,7 +65,10 @@ limits.
   default, the project's line wins.
 - The pack installs no trigger bindings. Nothing runs on its own until the operator
   adds one. `archon pack bindings sdlc` writes the recommended binding per queue; until
-  then, launch by hand.
+  then, launch by hand. With the bindings in place each stage starts the next when it
+  finishes: intake fires a build-queue run, a build that ends ready fires a merge
+  sweep, and a merge-queue return fires the build queue. The schedules are the backstop
+  for a handoff that did not start.
 
 ## Inputs
 
@@ -91,13 +94,15 @@ refusal with its reason.
 Optional inputs, with their defaults in each workflow's YAML:
 
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
-  for a label), `label` and `label_actor` for a label event.
+  for a label), `label` and `label_actor` for a label event, and `build_queue_binding`
+  (the binding file a routed item's build-queue run is fired through).
 - `archon-build-queue`: `number` (the issue to build; empty claims the item the
   message names, or the first in order), `orders_only` (`true` claims only members of
   an open work order), `revisit_blocked` (`true`: a run that names no item also sends
   blocked items that no longer look blocked back to intake), `round_limit` (default
   `3`), the rounds after which a run that wants another also judges whether the rounds
-  converge, and `build_queue_binding` (the binding file follow-up rounds fire).
+  converge, and `build_queue_binding` and `merge_queue_binding` (the binding files a
+  follow-up round and a ready item's merge sweep fire).
 - `archon-merge-queue`: `limit` (default `10` items claimed), `merge_method`
   (`squash` or `merge`), `retriage_merged` (`true`: an issue still open after its
   pull request merged goes back to intake), and `merge_queue_binding`,
@@ -157,8 +162,8 @@ queue. Launch one run per item you want worked at the same time; the launch's
 
 A round ends one of three ways, recorded on the item:
 
-- `done`: the pull request's latest review says Ready at its head. The merge queue
-  takes it from there. When only a check no round can run is left, the run asks once
+- `done`: the pull request's latest review says Ready at its head. The run fires a
+  merge sweep through `merge_queue_binding`, and the merge queue takes it from there. When only a check no round can run is left, the run asks once
   for it instead. A pull request already reviewed Ready at its head is marked
   ready without another round.
 - `continue`: the issue already answers what stopped the round, and the correction
@@ -202,9 +207,12 @@ the build queue readies the item again.
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
 change, pauses as an attention item labelled `merge: pr` with the choices `merge`,
 `return`, `park` and `other`. A red default branch pauses as `merge: base` with the
-one choice `hold`, and the gate refuses every merge until it is green. A run raises at
-most one attention item: the red default branch first, otherwise the first pull
-request the sweep asked about. A later sweep decides the rest again.
+one choice `hold`, and the gate refuses every merge until it is green. A run holds one
+attention item: the red default branch first, otherwise the first pull request the
+sweep asked about. When the sweep asked about more pull requests, the run fires
+another sweep through `merge_queue_binding`, which raises the next, so every question
+is open at once. A pull request whose checks are pending waits for the next scheduled
+sweep.
 
 A `merge` answer approves the pull request at the head it asked about, and a sweep
 the answer fires through `merge_queue_binding` merges it once the gate passes. The approval carries to a later head only when the sweep

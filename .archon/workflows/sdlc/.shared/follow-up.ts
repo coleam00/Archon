@@ -5,7 +5,8 @@
  * overlap policy, like a scheduled pass, and the delivery key makes one decision start
  * at most one run. The binding owns the workflow, its inputs, run-as user, host and
  * resource; the follow-up names only the item. A follow-up that does not start is
- * noted, and the item waits for the next queue run.
+ * noted, and the item waits for the next queue run. No binding set starts nothing: a
+ * stage run by hand hands off to the next run someone starts.
  */
 
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -31,9 +32,9 @@ export function followUp(
   deliveryId: string,
   inputs: Record<string, string>,
   what: string,
-  later = 'the next queue run picks it up'
+  later = 'the next queue run takes the item'
 ): string {
-  if (binding === '') return `no follow-up binding is set, so the next queue run picks up ${what}`;
+  if (binding === '') return `${what} did not start (no binding is set), so ${later}`;
   // Stable key order: the receipt digest covers the inputs as written.
   const sorted = Object.fromEntries(Object.entries(inputs).sort(([a], [b]) => (a < b ? -1 : 1)));
   const dir = join(artifactsDir(), 'follow-up');
@@ -54,4 +55,23 @@ export function followUp(
       : (result.stderr.toString().trim().split('\n')[0] ?? '') || `trigger fire exited ${String(result.exitCode)}`;
   note(`${what} did not start, so ${later}: ${why}`);
   return `${what} did not start (${why}), so ${later}`;
+}
+
+/**
+ * Start a build-queue pickup now through the operator's build-queue binding, for an
+ * item intake just routed. The fire names no item: the binding names the repository,
+ * and a pickup takes the waiting item that sorts first under the binding's own
+ * `orders_only`, which a named item would pass.
+ */
+export function nextPickup(binding: string, key: string): string {
+  return followUp(binding, `build-pickup:${key}`, {}, 'a build-queue run');
+}
+
+/**
+ * Start a merge sweep now through the operator's merge-queue binding. A sweep takes
+ * every item that waits and the binding names the repository, so the fire carries no
+ * inputs.
+ */
+export function nextSweep(binding: string, key: string): string {
+  return followUp(binding, `merge-sweep:${key}`, {}, 'a sweep');
 }

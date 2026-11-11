@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
@@ -455,9 +455,22 @@ describe('the intake scripts', () => {
     });
     expect(stored(at).value.claim?.run_id).toBe('run-1');
 
-    const applied = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const applied = run(at, 'outcome', { runId: 'run-1' }, {
+      INPUTS_PATH: String(decided.path),
+      INPUTS_ITEM: JSON.stringify(decided.item),
+      INPUTS_DECISION: JSON.stringify(decided.decision),
+      ...READY_VERDICT,
+      INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-handoff.json',
+      ARCHON_CALL_LOG: calls,
+    });
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(labelWrites(applied, 7)).toEqual({ add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] });
+    // The routed item starts a build-queue pickup, once per run. The fire names no item, so
+    // the binding's own orders_only decides what the pickup may take.
+    const fire = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-handoff.json', '--delivery-id', 'build-pickup:ghe.example.com/example/repo#7:run-1']);
+    expect(JSON.parse(readFileSync(fire?.[fire.indexOf('--inputs') + 1] ?? '', 'utf8'))).toEqual({});
     const doc = stored(at).value;
     expect(doc).toMatchObject({ stage: 'deliver', trust: 'maintainer', claim: null, requests: [] });
     expect(doc.facts.triage).toMatchObject({

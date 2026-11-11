@@ -8,12 +8,13 @@
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
  * back to the build queue with its brief and starts its next round through the
- * build-queue binding. A run raises at most one attention item: the
+ * build-queue binding. A run holds one wait, so it raises one attention item: the
  * sweep's item for a red default branch first, because it holds every merge, otherwise
  * the first pull request the sweep asked about, in its order. That item keeps its claim
- * while the run waits;
- * every other claim is released, and an ask that was not raised waits for the next sweep,
- * which decides it again.
+ * while the run waits; every other claim is released. When the run raises a pull
+ * request's question and the sweep asked about others, it starts a sweep through the
+ * merge-queue binding, which claims them, decides them again and raises the next, so
+ * every question is open without waiting for a schedule.
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written is reported and left for the next sweep; neither stops the
@@ -24,10 +25,11 @@
  * Bound inputs: INPUTS_PATH, INPUTS_ITEMS, INPUTS_SETTLED, INPUTS_BASE and INPUTS_BASE_ERROR
  * from facts; INPUTS_SWEEP,
  * the sweep's whole output, "null" when it was skipped; the workflow's
- * INPUTS_BUILD_QUEUE_BINDING.
+ * INPUTS_BUILD_QUEUE_BINDING and INPUTS_MERGE_QUEUE_BINDING.
  */
 
 import { nextRound, withBuild } from '../../.shared/build.ts';
+import { nextSweep } from '../../.shared/follow-up.ts';
 import type { QualifiedPr } from '../../.shared/forge.ts';
 import { emit, note, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
@@ -195,7 +197,7 @@ function write(writes: Writes, subject: QualifiedPr, name: string, label: string
 function labelOf(decision: Decision, outcome: Outcome, raised: boolean): string {
   if (raised) return 'ask';
   if (outcome.status === 'merged') return 'merged';
-  if (decision.action === 'ask') return 'ask (not raised this run)';
+  if (decision.action === 'ask') return 'ask (raised by a later sweep)';
   return outcome.contradiction === null ? decision.action : 'claimed merged, not merged';
 }
 
@@ -221,6 +223,18 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   // The claim is released, so the round the fire starts can claim the item.
   if (written && status === 'returned') writes.lines.push(`${name}: ${nextRound(item.item, runId)}`);
   return written;
+}
+
+/**
+ * The run holds one question. Each other ask is released and waiting, so a sweep
+ * started now claims them and raises the next while this run waits on its own. Under a
+ * red default branch no sweep starts: it would raise the same branch again.
+ */
+function raiseOtherAsks(writes: Writes, asked: MergeAsked | null, outcomes: readonly (Outcome & { readonly decision: Decision })[]): void {
+  if (asked?.by !== 'pr') return;
+  const raised = asked.pr.number;
+  if (!outcomes.some(({ decision, status }) => decision.action === 'ask' && status === 'waiting' && decision.number !== raised)) return;
+  writes.lines.push(`The other asks: ${nextSweep(text(process.env.INPUTS_MERGE_QUEUE_BINDING), `asks:${writes.runId}`)}`);
 }
 
 function recordSettled(writes: Writes, settled: readonly MergeSettled[]): void {
@@ -312,6 +326,7 @@ function main(): void {
   if (contradictions.length > 0) {
     throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
   }
+  raiseOtherAsks(writes, asked, outcomes);
 
   emit({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
