@@ -120,7 +120,7 @@ describe('Test Suite aggregate outcome', () => {
         .map(output => `changes finished with failure and ${output}=undefined`)
         .sort()
     );
-    expect(testSuiteFailures(needs('', decisionSkips, 'false'), GATED)).toEqual([
+    expect(testSuiteFailures(needs('', decisionSkips, 'false', 'false'), GATED)).toEqual([
       'changes finished with success and run-tests=',
     ]);
   });
