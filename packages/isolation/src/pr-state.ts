@@ -127,6 +127,7 @@ export async function getPrState(
 
 export type CommitPrLookup =
   | Extract<PrLookup, { state: 'NONE' | 'UNAVAILABLE' }>
+  | { state: 'UNKNOWN_COMMIT' }
   | { state: 'FOUND'; prs: readonly Extract<PrLookup, { headSha: string }>[] };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -190,13 +191,53 @@ function parseCommitPrs(stdout: string, repository: string): CommitPrLookup {
   return prs.length ? { state: 'FOUND', prs } : { state: 'NONE' };
 }
 
+async function commitExistsOnGithub(
+  sha: string,
+  repository: string,
+  repoPath: RepoPath
+): Promise<boolean> {
+  const [owner, name] = repository.split('/');
+  const { stdout } = await execFileAsync(
+    'gh',
+    [
+      'api',
+      '--hostname',
+      'github.com',
+      'graphql',
+      '-f',
+      'query=query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){__typename oid}}}',
+      '-f',
+      `owner=${owner}`,
+      '-f',
+      `name=${name}`,
+      '-f',
+      `oid=${sha}`,
+    ],
+    { timeout: 15000, cwd: repoPath }
+  );
+  const response: unknown = JSON.parse(stdout);
+  if (
+    !isRecord(response) ||
+    ('errors' in response && !(Array.isArray(response.errors) && response.errors.length === 0)) ||
+    !isRecord(response.data) ||
+    !isRecord(response.data.repository)
+  )
+    throw new Error('Invalid commit inspection response');
+  const object = response.data.repository.object;
+  // Only an error-free null object in an accessible repository proves absence.
+  if (object === null) return false;
+  if (!isRecord(object) || object.__typename !== 'Commit' || object.oid !== sha)
+    throw new Error('Invalid commit object');
+  return true;
+}
+
 /** Associations are candidates only; callers must prove local tips against a candidate head. */
 export async function getPrsForCommit(
   sha: string,
   repoPath: RepoPath,
   remote = 'origin'
 ): Promise<CommitPrLookup> {
-  let stage: 'remote' | 'repository' | 'pulls' = 'remote';
+  let stage: 'remote' | 'repository' | 'commit' | 'pulls' = 'remote';
   try {
     const { stdout: remoteOutput } = await execFileAsync(
       'git',
@@ -220,6 +261,9 @@ export async function getPrsForCommit(
     ) {
       throw new Error('Invalid repository identity');
     }
+    stage = 'commit';
+    if (!(await commitExistsOnGithub(sha, repository.nameWithOwner, repoPath)))
+      return { state: 'UNKNOWN_COMMIT' };
     stage = 'pulls';
     const { stdout } = await execFileAsync(
       'gh',

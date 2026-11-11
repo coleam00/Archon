@@ -65,6 +65,12 @@ function ghJsonOutput(command: string, payload: unknown): string {
   return JSON.stringify(payload);
 }
 
+function ghCommitObject(oid: string | null): string {
+  return JSON.stringify({
+    data: { repository: { object: oid === null ? null : { __typename: 'Commit', oid } } },
+  });
+}
+
 async function git(path: string, ...args: string[]): Promise<string> {
   const proc = Bun.spawn(['git', '-C', path, ...args], {
     stdout: 'pipe',
@@ -1123,6 +1129,11 @@ test.each([
     if (file === 'git' && args.includes('get-url'))
       return { stdout: 'https://github.com/test/repo.git', stderr: '' };
     if (file === 'gh') {
+      if (args.includes('graphql'))
+        return {
+          stdout: ghCommitObject(args.at(-1)?.slice(4) ?? ''),
+          stderr: '',
+        };
       const payload =
         args[0] === 'pr'
           ? []
@@ -1165,7 +1176,9 @@ test.each([
   'missing-gh',
   'commit-repository',
   'commit-pulls',
-] as const)('cleanup retains and reports failed PR inspection: %s', async failure => {
+  'commit-object',
+  'unknown-commit',
+] as const)('cleanup retains and reports PR inspection: %s', async failure => {
   await git(repo, 'remote', 'rename', 'upstream', 'origin');
   await git(join(root, 'remote.git'), 'symbolic-ref', 'HEAD', 'refs/heads/main');
   await writeFile(join(env.working_path, 'feature'), 'unmerged work');
@@ -1181,13 +1194,16 @@ test.each([
     'branch-response': undefined,
     'missing-gh': 'pr',
     'commit-repository': 'repo',
-    'commit-pulls': 'api',
+    'commit-pulls': 'pulls',
+    'commit-object': 'graphql',
+    'unknown-commit': undefined,
   }[failure];
   const ghOutput: Record<string, string> = {
     pr: failure === 'branch-response' ? '{}' : '[]',
     repo: '{"nameWithOwner":"test/repo"}',
     api: '[]',
   };
+  const commitObjectOutput = ghCommitObject(failure === 'unknown-commit' ? null : tip);
   const originalExec = gitModule.execFileAsync;
   const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(async (file, args, options) => {
     if (file === 'git' && args.includes('get-url')) {
@@ -1195,10 +1211,13 @@ test.each([
       return { stdout: 'https://github.com/test/repo.git', stderr: '' };
     }
     if (file === 'gh') {
-      if (args[0] === failedGhCommand)
+      if (
+        (args.includes('graphql') ? 'graphql' : args[0] === 'api' ? 'pulls' : args[0]) ===
+        failedGhCommand
+      )
         throw Object.assign(new Error('missing gh'), { code: 'ENOENT' });
       return {
-        stdout: ghOutput[args[0]],
+        stdout: args.includes('graphql') ? commitObjectOutput : ghOutput[args[0]],
         stderr: '',
       };
     }
@@ -1207,20 +1226,22 @@ test.each([
   const selected = (await isolationDb.listAllActiveWithCodebase()).filter(row => row.id === env.id);
   const selection = spyOn(isolationDb, 'listAllActiveWithCodebase').mockResolvedValue(selected);
   const lastCommit = spyOn(gitModule, 'getLastCommitDate');
+  const reason =
+    failure === 'unknown-commit'
+      ? 'no pull request covers all local work — a local commit is unknown to the forge'
+      : 'PR state lookup failed — merge state unverifiable';
   try {
     const manual = await cleanupMergedWorktrees(codebaseId, repo);
     expect(manual.errors).toEqual([]);
     expect(manual.removed).toEqual([]);
-    expect(manual.skipped).toEqual([
-      { branchName: env.branch_name, reason: 'PR state lookup failed — merge state unverifiable' },
-    ]);
+    expect(manual.skipped).toEqual([{ branchName: env.branch_name, reason }]);
     const scheduled = await runScheduledCleanup();
     expect(scheduled.errors).toEqual([]);
     expect(scheduled.removed).toEqual([]);
     expect(lastCommit).not.toHaveBeenCalled();
     expect(scheduled.skipped).toContainEqual({
       id: env.id,
-      reason: 'PR state lookup failed — merge state unverifiable',
+      reason,
     });
     expect(existsSync(env.working_path)).toBe(true);
     expect(await status()).toBe('active');
@@ -1248,23 +1269,25 @@ test.each([false, true])(
     const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(
       async (file, args, options) => {
         if (file === 'git' && args.includes('get-url')) return { stdout: remoteUrl, stderr: '' };
-        if (file === 'gh') {
-          const repoFlag = args.indexOf('--repo');
-          const selectedRepo = repoFlag === -1 ? process.env.GH_REPO : args[repoFlag + 1];
-          const payload =
-            args[0] === 'pr'
-              ? selectedRepo === remoteUrl && !merged
-                ? []
-                : [{ state: 'MERGED', headRefOid: sharedTip }]
-              : args[0] === 'repo'
-                ? { nameWithOwner: 'test/repo' }
-                : [[]];
+        if (file !== 'gh') return originalExec(file, args, options);
+        if (args.includes('graphql'))
           return {
-            stdout: ghJsonOutput(args[0], payload),
+            stdout: ghCommitObject(args.at(-1)?.slice(4) ?? ''),
             stderr: '',
           };
-        }
-        return originalExec(file, args, options);
+        const repoFlag = args.indexOf('--repo');
+        const selectedRepo = repoFlag === -1 ? process.env.GH_REPO : args[repoFlag + 1];
+        let payload: unknown = [[]];
+        if (args[0] === 'pr')
+          payload =
+            selectedRepo === remoteUrl && !merged
+              ? []
+              : [{ state: 'MERGED', headRefOid: sharedTip }];
+        if (args[0] === 'repo') payload = { nameWithOwner: 'test/repo' };
+        return {
+          stdout: ghJsonOutput(args[0], payload),
+          stderr: '',
+        };
       }
     );
     try {
