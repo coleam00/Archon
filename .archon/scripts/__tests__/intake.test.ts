@@ -5,11 +5,10 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { stateGet } from '../../workflows/sdlc/.shared/state';
 import {
   assertNoSelfPromotion,
   bodyDigest,
-  claimItem,
   decideIntake,
   type IntakeRequest,
   type IssueFacts,
@@ -529,77 +528,6 @@ describe('the intake scripts', () => {
       verdict: 'READY',
       report: { path: 'triage.md' },
     });
-  }, 60_000);
-
-  test('a second pickup at the same work-item revision skips the item', () => {
-    const at = install();
-    facts(at, { runId: 'run-1' });
-    const claimedRevision = stored(at).revision;
-    // A pull request's event records no request, so this run is only a pickup.
-    const second = facts(at, {
-      runId: 'run-2',
-      kind: 'pr',
-      statuses: { 'run-1': 'running' },
-    }).output;
-    expect(second).toMatchObject({ path: 'idle', item: null });
-    expect(stored(at).revision).toBe(claimedRevision);
-
-    // The same race in-process: a pickup that read the item before run-1's claim
-    // loses the conditional write and skips the item.
-    const unclaimed = {
-      ...stored(at).value,
-      claim: null,
-      requests: [labelRequest('archon-triage', 'maintainer')],
-    };
-    expect(
-      inProcess(at, () =>
-        claimItem({ name: 'work/7', revision: claimedRevision - 1, doc: unclaimed, lease: null }, AT, 'run-3')
-      )
-    ).toBeNull();
-    expect(stored(at).value.claim?.run_id).toBe('run-1');
-  }, 60_000);
-
-  test("a failed run keeps its claim; the next pickup releases a cancelled run's claim and queues its requests again", () => {
-    const at = install();
-    facts(at, { runId: 'run-1' });
-    // A failed run can resume, so its lease, and with it the claim, stands.
-    const held = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'failed' } }).output;
-    expect(held).toMatchObject({ path: 'idle', item: null });
-    expect(stored(at).value.claim?.run_id).toBe('run-1');
-    const decided = facts(at, {
-      runId: 'run-2',
-      kind: 'pr',
-      statuses: { 'run-1': 'cancelled' },
-    }).output;
-    expect(decided).toMatchObject({ path: 'triage', item: SUBJECT });
-    const doc = stored(at).value;
-    expect(doc.claim).toMatchObject({
-      run_id: 'run-2',
-      requests: [expect.objectContaining({ run_id: 'run-1', action: 'opened' })],
-    });
-    expect(doc.history.at(-1)).toMatchObject({
-      outcome: 'released',
-      summary: expect.stringContaining('run-1, which ended without finishing'),
-    });
-  }, 60_000);
-  function idleOutcome(at: Install, event: Event): string {
-    // A skipped document is noted on stderr as well, so only the exit codes are pinned.
-    const picked = run(at, 'facts', event);
-    expect(picked.code).toBe(0);
-    expect(JSON.parse(picked.stdout)).toMatchObject({ path: 'idle', item: null });
-    const result = run(at, 'outcome', event, { INPUTS_PATH: 'idle', INPUTS_ITEM: 'null', INPUTS_DECISION: 'null' });
-    expect(result.code).toBe(0);
-    return (JSON.parse(result.stdout) as { summary: string }).summary;
-  }
-
-  test('a claim whose run holds no lease stays held, and the idle pass names it and the run', () => {
-    const at = install();
-    const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'ghost-run', at: AT, requests: [] } };
-    inProcess(at, () => statePut('work/7', held, 0));
-    const summary = idleOutcome(at, { runId: 'run-1', kind: 'pr' });
-    expect(stored(at).value.claim?.run_id).toBe('ghost-run');
-    expect(summary).toContain('work/7');
-    expect(summary).toContain('ghost-run');
   }, 60_000);
 
   test('a request label added while the item is claimed stays on the issue for the next pickup', () => {

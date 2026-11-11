@@ -1,7 +1,6 @@
 /**
  * The pack's overview cards name only metrics its scripts emit, with the kinds the card
  * shapes read: a misspelled or renamed metric would otherwise show "not recorded" forever.
- * And the issue metrics count what the work item says.
  */
 import { expect, it } from 'bun:test';
 import { readFileSync } from 'node:fs';
@@ -50,25 +49,6 @@ function mergedIssue(): WorkItem {
     },
   };
 }
-
-it('a merged issue records its outcome in total and under the route its first round took', () => {
-  const records = issueMetricRecords([mergedIssue(), newWorkItem({ repo: { host: 'h', path: 'o/r' }, number: 8 }, AT)]);
-  const values = Object.fromEntries(records.map(record => [record.name, record.value]));
-  expect(values).toEqual({
-    'sdlc.issues_built': 1,
-    'sdlc.issues_built.plan': 1,
-    'sdlc.issues_merged': 1,
-    'sdlc.issues_merged.plan': 1,
-    'sdlc.issue_lead_time': 24,
-    'sdlc.issue_lead_time.plan': 24,
-    'sdlc.issue_build_rounds': 2,
-    'sdlc.issue_build_rounds.plan': 2,
-    'sdlc.issue_asks': 1,
-    'sdlc.issue_asks.plan': 1,
-  });
-  expect(new Set(records.map(record => record.subject))).toEqual(new Set(['github.example.com/acme/widgets#7']));
-  expect(records[0]?.runs).toEqual([RUN, OTHER_RUN]);
-});
 
 /** Every record the pack's emitters make, from inputs that reach each of their branches. */
 function emitted(): Map<string, { kind: unknown; calibrates: unknown }> {

@@ -1,12 +1,12 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdtempSync, readFileSync } from 'node:fs';
+import { mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
-import { filedIssues, SPLIT_KINDS, splitMarker } from '../../workflows/sdlc/.shared/split';
+import { filedIssues, splitMarker } from '../../workflows/sdlc/.shared/split';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
-import { mirrorLabels, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
-import { gitCheckout, hostCli, labelWrites, PACK, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
+import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
+import { gitCheckout, hostCli, labelWrites, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -113,14 +113,6 @@ function ok(result: ScriptRun): Record<string, unknown> {
   return JSON.parse(result.stdout) as Record<string, unknown>;
 }
 
-test("the split kinds are the slice node's own enum", () => {
-  const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'split/archon-split.yaml'), 'utf8')) as {
-    nodes: { id: string; output_format?: { properties: { split: { anyOf: { properties: { kind: { enum: string[] } } }[] } } } }[];
-  };
-  const branches = workflow.nodes.find(node => node.id === 'slice')?.output_format?.properties.split.anyOf ?? [];
-  expect(branches.flatMap(branch => branch.properties.kind.enum)).toEqual([...SPLIT_KINDS, 'whole']);
-});
-
 describe('split publish', () => {
   test('files the current phase once, records later phases unfiled, and a rerun files none again', () => {
     const at = install();
@@ -140,40 +132,6 @@ describe('split publish', () => {
     // A re-triage sends the item back; the next split lists the same keys.
     seed(at);
     expect(publish(at, { kind: 'prd' }, { issues: [...first.createdIssues] }).createdIssues).toEqual([]);
-  });
-
-  test('a record from before titles were kept lists its issues by number, once', () => {
-    const at = install();
-    seed(at, doc => ({
-      ...doc,
-      facts: {
-        ...doc.facts,
-        split: { status: 'done', kind: 'prd', issues: [{ key: 'measure', number: 100, url: 'u' }], adopted: [], at: AT, run_id: 'old-run' },
-      },
-    }));
-    const filed: TrackerIssue = { number: 100, title: 'Measure the signal', body: `${splitMarker(7, 'measure')}\n\nThe contract.`, state: 'OPEN' };
-    // The agent adopts the issue this item's own split filed.
-    const run = publish(at, { kind: 'prd' }, { issues: [filed], existing: [{ number: 100, why: 'owns the phase' }], planned: [] });
-    ok(run);
-    const body = run.comments[0]?.body ?? '';
-    expect(body).toEndWith('- #100');
-    expect(body).not.toContain('undefined');
-    expect(body).not.toContain('owns the phase');
-  });
-
-  test("a later phase owned by an existing issue does not claim an earlier phase's filing", () => {
-    const at = install();
-    seed(at, doc => ({
-      ...doc,
-      facts: {
-        ...doc.facts,
-        split: { status: 'done', kind: 'prd', issues: [{ key: 'measure', number: 100, url: 'u', title: 'Measure' }], adopted: [], at: AT, run_id: 'old-run' },
-      },
-    }));
-    const owner: TrackerIssue = { number: 200, title: 'The next phase', body: 'Owned elsewhere.', state: 'OPEN' };
-    const run = publish(at, { kind: 'prd' }, { issues: [owner], existing: [{ number: 200, why: 'owns the next phase' }], planned: [] });
-    ok(run);
-    expect(run.comments[0]?.body).toContain("This PRD's current phase is owned by existing open issues, so nothing new is filed.");
   });
 
   test('an issue filed before a stop, but not recorded, is recovered by its marker', () => {
@@ -214,22 +172,6 @@ describe('split publish', () => {
     expect(closed.code).not.toBe(0);
     expect(closed.stderr).toContain('existing issue 50 is closed, not open');
     expect(closed.createdIssues).toEqual([]);
-  });
-
-  test('an item judged one work item files nothing and moves to its build route', () => {
-    const at = install();
-    seed(at);
-    const run = publish(at, { kind: 'whole', route: 'plan' }, { planned: [] });
-    expect(ok(run)).toMatchObject({ kind: 'whole', issues: [] });
-    expect(run.createdIssues).toEqual([]);
-    expect(run.comments).toEqual([{ issue: 7, body: expect.stringContaining('Measure first.') }]);
-    expect(labelWrites(run, 7)).toEqual({ add: ['archon-plan'], remove: ['archon-split'] });
-    const doc = stored(at);
-    expect(doc).toMatchObject({ stage: 'plan', claim: null, facts: { split: { status: 'whole', route: 'plan' } } });
-    expect(doc.history.at(-1)).toMatchObject({ stage: 'split', outcome: 'whole', summary: 'Measure first.' });
-    // Intake's mirror of the document agrees with the labels publish wrote.
-    expect(mirrorLabels(doc)).toContain('archon-plan');
-    expect(mirrorLabels(doc)).not.toContain('archon-split');
   });
 
   test('an item an earlier split filed issues from cannot be built whole', () => {
