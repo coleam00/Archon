@@ -12,9 +12,9 @@ description: |
   Set include_closed to true to also accept a closed but unmerged PR whose head
   covers every existing local tip.
 
-  Use when: a schedule binding the operator installed starts it (see the SDLC
-  pack README, "Worktree cleanup"), or an operator runs it by hand. The pack
-  installs no binding.
+  Use when: a schedule binding the operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#worktree-cleanup), or an operator runs
+  it by hand. The pack installs no binding.
   NOT for: uncovered worktrees (a completed run releases its own clean checkout;
   the age sweep and `archon complete` handle the rest).
 

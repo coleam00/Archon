@@ -1,7 +1,7 @@
 # Dry-run fixture, a later round: the item already has open pull request 1 in its
 # repository, and route declares `deliver`, not `continue`. The pull request facts
-# resolved still reaches delivery through the round's real `continues` script: the
-# implementer and prepare are both told to finish it. No triage runs in the round.
+# resolved still reaches delivery through the round's real `continues` script, and the
+# round's real report names it to the answer node. No triage runs in the round.
 start:
   repo: { host: github.com, path: example/repo }
   message: false
@@ -84,7 +84,5 @@ fixture:
   expect: completed
   reached: [facts, route, ship__continues, ship__report, answer, apply]
   resolved-text-contains:
-    implement__implement: "resolved it (empty or `null` when it named none): 1. When it names one"
-    pr__prepare: "the caller resolved it (`1`"
     answer: '"pr_url":"https://github.com/example/repo/pull/1"'
 exec-code: true

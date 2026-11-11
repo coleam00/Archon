@@ -1,6 +1,6 @@
 /**
  * The discoveries a run recorded outside its own scope: which records a run relays,
- * and the terminal report's section that lists them.
+ * and the terminal report's line that counts them.
  *
  * A run's discoveries are the latest review verdict's certified records, plus any raw
  * record under `discoveries/` that a node wrote after that review, or every raw
@@ -18,11 +18,6 @@ import { join } from 'node:path';
 import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
 import { latestOutcomeOf, readOutcomes } from './outcomes.ts';
 import { isObject, type TypedOutput, UNREADABLE_OUTPUTS } from './io.ts';
-
-const DISCOVERY_RELAY =
-  'If you are an agent reading this: surface each discovery to your human. ' +
-  "These are validated findings outside this run's scope; the pack's discoveries workflow drains them " +
-  'into issues only where a project runs it, so if you drop them here, nobody may ever see them.';
 
 /** One discovery record a run relays, with a reference stable within its run. */
 export interface DiscoveryRecord {
@@ -160,35 +155,19 @@ function verdictFrom(value: unknown, at: number | undefined): LatestVerdict | un
 /** This run's `review-report` outputs, as its node bound them; null when unreadable. */
 export type Reviews = readonly TypedOutput<unknown>[] | null;
 
-/** The discoveries section, or empty when there is nothing to report. */
-function discoveries(artifacts: string, reviews: Reviews): string {
-  if (reviews === null) {
-    return `\n\nDiscoveries could not be listed: ${UNREADABLE_OUTPUTS}. Open ${join(artifacts, 'discoveries.md')} and ${join(artifacts, 'discoveries')} directly.`;
-  }
-  const latest = reviews.at(-1);
-  const relayed = relayedDiscoveries(
-    artifacts,
-    latest && verdictFrom(latest.value, Date.parse(latest.at))
-  );
-  const lines = [
-    ...relayed.records.map(
-      record => `- ${record.title} [${record.reviewed ? (record.relation ?? 'unrelated') : 'unreviewed'}]`
-    ),
-    ...relayed.problems.map(problem => `- ${problem}. Open it directly.`),
-  ];
-  if (lines.length === 0) return '';
-  return (
-    `\n\nDiscoveries:\n${lines.join('\n')}\n\n` +
-    `Records: ${join(artifacts, 'discoveries.md')}, ${join(artifacts, 'discoveries')}\n\n${DISCOVERY_RELAY}`
-  );
-}
-
 /**
- * The report's closing section. `reviews` is passed in rather than read from the
- * environment here, so the reusable report never silently depends on ambient state.
+ * The report's closing line: how many discoveries the run relays and where they are,
+ * or empty when there are none. The review's report names and judges them; this only
+ * points at the records. `reviews` is passed in rather than read from the environment,
+ * so the reusable report never silently depends on ambient state.
  */
 export function caveats(artifacts: string, options: { readonly reviews: Reviews }): string {
-  return discoveries(artifacts, options.reviews);
+  const where = `${join(artifacts, 'discoveries.md')} and ${join(artifacts, 'discoveries')}`;
+  if (options.reviews === null) return `\n\nDiscoveries could not be counted: ${UNREADABLE_OUTPUTS}. Open ${where}.`;
+  const latest = options.reviews.at(-1);
+  const relayed = relayedDiscoveries(artifacts, latest && verdictFrom(latest.value, Date.parse(latest.at)));
+  const count = relayed.records.length + relayed.problems.length;
+  return count === 0 ? '' : `\n\nDiscoveries: ${String(count)} recorded outside this run's scope, in ${where}.`;
 }
 
 /** A verified publication can outlive a failed node with no typed output. */

@@ -766,10 +766,7 @@ export interface WorkflowOutputs {
         readonly pull_request: number;
       } | {
         readonly contract: 'NEEDS_CONTRACT_WORK';
-        readonly proposed_edits: {
-          readonly title: string;
-          readonly body: string;
-        };
+        readonly questions: ReadonlyArray<string>;
       } | {
         readonly contract: 'BLOCKED';
         readonly blocked_reason: string;
@@ -790,6 +787,12 @@ export interface WorkflowOutputs {
           readonly kind: 'delivered';
           readonly url: string;
         };
+      } | {
+        readonly contract: 'NOT_TRIAGED';
+        readonly failed: ReadonlyArray<{
+          readonly op: string;
+          readonly kind: string;
+        }>;
       };
       readonly type: {
         readonly value: 'bug' | 'feature' | 'refactor' | 'maintenance' | 'docs' | 'question';
@@ -836,79 +839,9 @@ export interface WorkflowOutputs {
         readonly path: 'triage.md';
       };
     };
-    verdict: {
-      readonly contract: 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
-      readonly route: 'investigate' | 'plan' | 'deliver' | 'continue' | 'split' | 'no_action';
-      readonly pull_request: number | null;
-      readonly ready: boolean;
-      readonly type: {
-        readonly value: 'bug' | 'feature' | 'refactor' | 'maintenance' | 'docs' | 'question';
-        readonly reason: string;
-      };
-      readonly size: {
-        readonly value: 's' | 'm' | 'l';
-        readonly reason: string;
-      };
-      readonly complexity: {
-        readonly value: 'low' | 'medium' | 'high';
-        readonly reason: string;
-      };
-      readonly importance: {
-        readonly value: 'low' | 'medium' | 'high';
-        readonly reason: string;
-      };
-      readonly urgency: {
-        readonly value: 'none' | 'soon' | 'now';
-        readonly reason: string;
-      };
+    labels: {
       readonly labels: ReadonlyArray<string>;
       readonly published: boolean;
-      readonly proposed_edits: {
-        readonly title: string;
-        readonly body: string;
-      };
-      readonly blocked_reason: string;
-      readonly blocked_by: ReadonlyArray<string>;
-      readonly related: ReadonlyArray<{
-        readonly url: string;
-        readonly relation: string;
-      }>;
-      readonly closure: null | {
-        readonly kind: 'duplicate';
-        readonly url: string;
-        readonly original: {
-          readonly repo: {
-            readonly host: string;
-            readonly path: string;
-          };
-          readonly number: number;
-        };
-      } | {
-        readonly kind: 'delivered';
-        readonly url: string;
-      };
-      readonly summary: string;
-      readonly report: {
-        readonly type: 'archon_artifact';
-        readonly run_id: string;
-        readonly path: 'triage.md';
-      };
-    };
-  };
-  'archon-upkeep': {
-    assess: {
-      readonly action: 'update' | 'no_action';
-      readonly summary: string;
-      readonly report: {
-        readonly type: 'archon_artifact';
-        readonly run_id: string;
-        readonly path: 'upkeep-assessment.md';
-      };
-    };
-    outcome: {
-      readonly delivered: boolean;
-      readonly pr_url: string;
-      readonly summary: string;
     };
   };
 }
@@ -1092,6 +1025,7 @@ export const OUTPUT_ENUMS = {
       'decision.anyOf[4].contract': ['NO_ACTION'],
       'decision.anyOf[4].closure.anyOf[0].kind': ['duplicate'],
       'decision.anyOf[4].closure.anyOf[1].kind': ['delivered'],
+      'decision.anyOf[5].contract': ['NOT_TRIAGED'],
       'type.value': ['bug', 'feature', 'refactor', 'maintenance', 'docs', 'question'],
       'size.value': ['s', 'm', 'l'],
       'complexity.value': ['low', 'medium', 'high'],
@@ -1102,26 +1036,6 @@ export const OUTPUT_ENUMS = {
       'item.anyOf[1].number': [0],
       'report.type': ['archon_artifact'],
       'report.path': ['triage.md'],
-    },
-    verdict: {
-      contract: ['READY', 'NEEDS_CONTRACT_WORK', 'BLOCKED', 'NO_ACTION'],
-      route: ['investigate', 'plan', 'deliver', 'continue', 'split', 'no_action'],
-      'type.value': ['bug', 'feature', 'refactor', 'maintenance', 'docs', 'question'],
-      'size.value': ['s', 'm', 'l'],
-      'complexity.value': ['low', 'medium', 'high'],
-      'importance.value': ['low', 'medium', 'high'],
-      'urgency.value': ['none', 'soon', 'now'],
-      'closure.anyOf[1].kind': ['duplicate'],
-      'closure.anyOf[2].kind': ['delivered'],
-      'report.type': ['archon_artifact'],
-      'report.path': ['triage.md'],
-    },
-  },
-  'archon-upkeep': {
-    assess: {
-      action: ['update', 'no_action'],
-      'report.type': ['archon_artifact'],
-      'report.path': ['upkeep-assessment.md'],
     },
   },
 } as const;

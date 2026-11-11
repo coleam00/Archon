@@ -4,11 +4,9 @@
  *
  * Delivery is accepted when the deliver branch ran and reported its pull request
  * ready; a delivery that ended not ready reports deliver's own reason. Every other
- * completion reports, in the producing node's
- * own words, why nothing was delivered — and says plainly when requested work was
- * not done, so a completed run that shipped nothing never reads as a success it is
- * not. `delivered` is this workflow's authored outcome: an honest "no work is owed"
- * is a successful run that shipped nothing, and the two facts are separate.
+ * completion reports why nothing was delivered: a typed reason and the deciding node's
+ * own summary, led by "No delivery", so a completed run that shipped nothing never
+ * reads as a success it is not.
  *
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_ROUTE / INPUTS_CONTRACT / INPUTS_BLOCKED_REASON / INPUTS_SUMMARY:
@@ -62,46 +60,19 @@ function questions(): string {
   return (openQuestions ?? []).map(question => `- ${question}`).join('\n');
 }
 
+/**
+ * Why no delivery ran: the reason the build queue reads, the words of the node that
+ * decided it, and that node's report.
+ */
 function stopped(): { readonly reason: Stop; readonly text: string; readonly report: string } {
-  if (route === 'no_action') {
-    if (contract === 'NO_ACTION') {
-      return { reason: 'no_action', text: `No delivery needed: ${summary}`, report: 'triage.md' };
-    }
-    if (contract === 'BLOCKED') {
-      return { reason: 'blocked', text: `Not done: blocked on ${blockedReason}. ${summary}`, report: 'triage.md' };
-    }
-    return {
-      reason: 'needs_contract',
-      text: `Not done: the work item needs contract work before a run can start. ${summary}`,
-      report: 'triage.md',
-    };
-  }
-  if (route === 'split') {
-    return {
-      reason: 'split',
-      text: `Not done: triage judged that the item cannot be built as one work item, so archon-split files its pieces as separate issues. ${summary}`,
-      report: 'triage.md',
-    };
-  }
+  if (contract === 'NO_ACTION') return { reason: 'no_action', text: summary, report: 'triage.md' };
+  if (contract === 'BLOCKED') return { reason: 'blocked', text: `${summary} Blocked on: ${blockedReason}`, report: 'triage.md' };
+  if (contract !== 'READY') return { reason: 'needs_contract', text: summary, report: 'triage.md' };
+  if (route === 'split') return { reason: 'split', text: summary, report: 'triage.md' };
   if (route === 'investigate') {
-    if (invVerdict === 'refuted') {
-      return {
-        reason: 'refuted',
-        text: `No work owed in this repository: ${invSummary ?? ''}`,
-        report: 'investigation.md',
-      };
-    }
-    return {
-      reason: 'not_rooted',
-      text: `Not done: the investigation was inconclusive. ${invSummary ?? ''}`,
-      report: 'investigation.md',
-    };
+    return { reason: invVerdict === 'refuted' ? 'refuted' : 'not_rooted', text: invSummary ?? '', report: 'investigation.md' };
   }
-  return {
-    reason: 'ask',
-    text: `Not done: planning stopped on calls it cannot make itself. ${planSummary ?? ''}\n${questions() || '- The planner named no question; read the plan.'}`,
-    report: 'plan.md',
-  };
+  return { reason: 'ask', text: `${planSummary ?? ''}\n${questions() || '- The planner named no question; read the plan.'}`, report: 'plan.md' };
 }
 
 if (delivered === 'null') {
@@ -110,7 +81,7 @@ if (delivered === 'null') {
     delivered: false,
     reason: stop.reason,
     pr_url: '',
-    summary: `${stop.text.trim()}\nReport: ${artifacts}/${stop.report}` + caveats(artifacts, { reviews }),
+    summary: `No delivery (${stop.reason}): ${stop.text.trim()}\nReport: ${artifacts}/${stop.report}` + caveats(artifacts, { reviews }),
   });
 } else {
   // Deliver ran, so its outcome is the report; its summary already carries the caveats.

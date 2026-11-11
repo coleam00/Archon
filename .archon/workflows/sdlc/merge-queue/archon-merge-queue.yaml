@@ -13,8 +13,8 @@ description: |
   case acts on its own; anything unclear pauses as one attention item whose answer is
   a declared choice.
 
-  Use when: a trigger binding the operator installed starts it (see the SDLC pack
-  README, "Merge queue").
+  Use when: a trigger binding the operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#merge-queue).
   NOT for: delivering or fixing a pull request (archon-build-queue, archon-ship), or
   reviewing one by hand (archon-review).
 
@@ -96,7 +96,7 @@ nodes:
     command: sweep
     depends_on: [facts]
     when: "$facts.output.path == 'sweep'"
-    model: large
+    model: ['@sweep', large]
     with:
       base: { from: "$facts.output.base" }
       items: { from: "$facts.output.items" }
@@ -225,8 +225,8 @@ nodes:
               type: [object, 'null']
               additionalProperties: false
               properties:
-                what: { type: string, pattern: '\S' }
-                why: { type: string, pattern: '\S' }
+                what: *what
+                why: *why
                 recommendation: *recommendation
                 choices:
                   type: array
@@ -239,11 +239,11 @@ nodes:
                       label: *choice_label
                       does: *choice_does
                       effect: { type: string, enum: [hold] }
-                      ruling: { type: string }
-                    required: [id, label, does, effect, ruling]
+                      ruling: *ruling
+                    required: *choice
                 if_unanswered: *if_unanswered
                 links: *links
-              required: [what, why, recommendation, choices, if_unanswered, links]
+              required: *attention
           required: [summary, attention]
         summary: { type: string }
       required: [decisions, base, summary]

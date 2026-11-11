@@ -107,4 +107,4 @@ Before declaring `green: true`, verify it: re-read the full diff of this run (`g
 
 ## Docker verification builds
 
-For disposable Docker verification builds, follow the [Docker verification guidance](../../README.md#docker-verification).
+For disposable Docker verification builds, follow the [Docker verification guidance](https://archon.diy/reference/variables/#disposable-docker-verification-images).

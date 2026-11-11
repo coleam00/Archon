@@ -24,7 +24,7 @@ import {
 } from '../../workflows/sdlc/.shared/workitem';
 import {
   type TrackerSubject, type TrackerComment, type TrackerPr, type ScriptOptions, type ScriptRun,
-  forgeCalls, forgePrRecord, gitCheckout, hostCli, labelWrites, PACK, packScriptRunner, PR,
+  forgeCalls, forgePrRecord, gitCheckout, hostCli, labelWrites, packScriptRunner, PR,
 } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -835,17 +835,6 @@ describe('the build queue checkout', () => {
     return result.stdout.trim();
   }
 
-  /** What checkout emitted, after checking it carries exactly the keys its node's output format requires. */
-  function emitted(result: ScriptRun): unknown {
-    const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'build-queue/archon-build-queue.yaml'), 'utf8')) as {
-      nodes: { id: string; output_format?: { required: string[] } }[];
-    };
-    const output = ok(result) as Record<string, unknown>;
-    const required = workflow.nodes.find(node => node.id === 'checkout')?.output_format?.required;
-    expect(Object.keys(output).sort()).toEqual([...(required ?? [])].sort());
-    return output;
-  }
-
   test('a continued round starts at the PR head on its queue branch and reports the head its last review named', () => {
     const at = install();
     git(at.checkout, 'checkout', '-q', 'dev');
@@ -866,10 +855,10 @@ describe('the build queue checkout', () => {
       { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) },
       { pr: { headRefOid: head }, comments: [{ id: 1, author: 'Maintainer', body: reviewCommentBody(reviewed, false, 'open', '# Review report') }] }
     );
-    expect(emitted(result)).toEqual({ head, reviewed, pull_request: 42 });
+    expect(ok(result)).toEqual({ head, reviewed, pull_request: 42 });
     const inputs = { INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: JSON.stringify({ repo: PR.repo, number: 42 }) };
     // A pull request never reviewed has no baseline, and is not mistaken for one reviewed at its head.
-    expect(emitted(run(at, 'checkout', inputs, { pr: { headRefOid: head } }))).toEqual({ head, reviewed: null, pull_request: 42 });
+    expect(ok(run(at, 'checkout', inputs, { pr: { headRefOid: head } }))).toEqual({ head, reviewed: null, pull_request: 42 });
     const review = { id: 1, author: 'Maintainer', body: reviewCommentBody(reviewed, false, 'open', '# Review report') };
     const duplicate = run(at, 'checkout', inputs, { pr: { headRefOid: head }, comments: [review, { ...review, id: 2 }] });
     expect(duplicate.code).not.toBe(0);
@@ -891,7 +880,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
   return { exitCode: value === null ? 1 : 0, stdout: Buffer.from(JSON.stringify(body)), stderr: Buffer.from('') };
 } });
 `;
-    expect(emitted(run(at, 'checkout', inputs, { preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42 });
+    expect(ok(run(at, 'checkout', inputs, { preload: forge, pr: { headRefOid: head } }))).toEqual({ head, reviewed, pull_request: 42 });
   }, 60_000);
 
   test('a round route declares fresh stays on the base and continues no pull request, and route cannot name one facts did not offer', () => {
@@ -901,7 +890,7 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const base = git(at.checkout, 'rev-parse', 'HEAD');
     const pr = JSON.stringify({ repo: PR.repo, number: 42 });
     const item = JSON.stringify(SUBJECT);
-    expect(emitted(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, reviewed: null, pull_request: null });
+    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, reviewed: null, pull_request: null });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
     expect(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
   }, 60_000);

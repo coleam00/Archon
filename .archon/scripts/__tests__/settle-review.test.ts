@@ -45,23 +45,6 @@ function settle(findings: Finding[], votes: Record<number, unknown[]>, gaps: str
 }
 
 describe('settle-review', () => {
-  it('demotes blockers two verifiers reject, keeps a pre-existing one as a discovery, and turns Ready', () => {
-    const { verdict, findings, read } = settle([blocker('R1', ['code']), blocker('R2', ['seams'])], {
-      1: [vote('R1', false, true), vote('R2', true, false)],
-      2: [vote('R1', false, false), vote('R2', true, false)],
-      3: [vote('R1', true, true), vote('R2', true, true)],
-    });
-    expect(verdict).toMatchObject({ ready: true, action: 'none' });
-    expect(findings.map(f => [f.id, f.severity, f.status])).toEqual([['R1', 'note', 'disproved'], ['R2', 'note', 'open']]);
-    expect(verdict.discoveries).toEqual([
-      expect.objectContaining({ title: 'R2 predates this change', relation: 'unrelated', source_nodes: ['seams', 'verify'] }),
-    ]);
-    expect(read('discoveries.md')).toContain('R2 predates this change');
-    for (const name of ['review/report.md', 'review/report-round-1.md']) {
-      expect(read(name)).toStartWith('> **Verification.**');
-    }
-  });
-
   it('upholds a blocker a missing verifier leaves at one vote against, and never demotes a contract finding', () => {
     const findings = [blocker('R1', ['code']), blocker('R2', ['code', 'contract'])];
     const settled = settle(findings, {
@@ -72,29 +55,6 @@ describe('settle-review', () => {
     expect(settled.verdict).toMatchObject({ ready: false, action: 'correct' });
     expect(settled.findings).toEqual(findings);
     expect(settled.read('review/report.md')).toBe('Not ready.\n');
-  });
-
-  // The demoted blocker was the only reason to ask; the failed lens only needs the next round.
-  it('stays not ready on a coverage gap when every blocker is demoted, without the demoted blocker\'s ask', () => {
-    const { verdict, findings } = settle(
-      [blocker('R1', ['code'], 'ask')],
-      { 1: [vote('R1', false, true)], 2: [vote('R1', false, true)] },
-      ['the tests lens failed'],
-      'ask'
-    );
-    expect(findings[0]).toMatchObject({ severity: 'note', status: 'disproved' });
-    expect(verdict).toMatchObject({ ready: false, action: 'correct' });
-  });
-
-  it('demotes a mixed rejection without a provenance claim, and takes the action the remaining blocker needs', () => {
-    const { verdict, findings } = settle(
-      [blocker('R1', ['seams'], 'ask'), blocker('R2', ['code'])],
-      { 1: [vote('R1', false, true)], 2: [vote('R1', true, false)] },
-      [],
-      'ask'
-    );
-    expect(findings[0]).toMatchObject({ severity: 'note', status: 'open' });
-    expect(verdict).toMatchObject({ ready: false, action: 'correct', discoveries: [] });
   });
 
   it('refuses findings it cannot settle soundly rather than settling around them', () => {

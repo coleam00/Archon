@@ -5,7 +5,6 @@
  * the previous round reviewed: its delta would run backwards and reopen findings
  * the newer commits fixed.
  */
-import { FULL_REVIEW_RISKS } from '../../workflows/sdlc/.shared/review-policy';
 import { describe, expect, it } from 'bun:test';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -85,29 +84,6 @@ function round(
 }
 
 describe('review-round', () => {
-
-  it("continues from the previous round's reviewed commit with code and every lens owing a blocker", () => {
-    const { cwd, older, newer } = history();
-    const part = { delivers: 1, parts: [{ part: 2, items: ['later'] }] };
-    const finding = (id: string, severity: string, status: string, sources: string[]): object => ({
-      id, severity, status, sources, claim: id, round: 1, ...(severity === 'blocking' ? { action: 'correct' } : {}),
-    });
-    const findings = [
-      finding('R1', 'blocking', 'open', ['seams', 'contract']),
-      finding('R2', 'note', 'open', ['tests']),
-      finding('R3', 'blocking', 'fixed', ['errors']),
-    ];
-    const run = round(cwd, newer, older, { part: JSON.stringify(part), findings });
-    expect(run.code).toBe(0);
-    expect(JSON.parse(run.stdout)).toEqual({
-      continuation: true,
-      head: newer,
-      cursor: older,
-      risks: FULL_REVIEW_RISKS,
-      seams: true, code: true, tests: false, errors: false, docs: false, ux: false,
-      part,
-    });
-  });
 
   it("refuses a continuation whose previous report has no findings.json beside it", () => {
     const { cwd, older, newer } = history();

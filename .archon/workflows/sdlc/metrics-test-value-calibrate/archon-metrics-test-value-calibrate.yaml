@@ -10,7 +10,8 @@ description: |
   pr.files and repo.file.
 
   Use when: the judge's files, the criteria it inlines, or the model behind its
-  tier changed, or the labels grew (see the SDLC pack README, "Metrics").
+  tier changed, or the labels grew (see
+  https://archon.diy/guides/sdlc-metrics/#calibrate-the-judge).
   NOT for: judging new pull requests (archon-metrics-test-value).
 
 # It reads the labels from the checkout it starts in and changes nothing there, so it
