@@ -136,6 +136,8 @@ export const stateWriteScopeSchema = z.object({
   scope: stateScopeSchema,
   name: stateDocumentNameSchema,
   writer: stateWriterSchema,
+  /** Present, the write is refused unless the writing run holds the document's live lease. */
+  held: z.literal(true).optional(),
 });
 /**
  * What a put or patch does to the document's lease. Absent, the write keeps whatever
@@ -177,26 +179,47 @@ export class StateLeaseHeldError extends Error {
     super(`State document '${name}' is leased by live run ${holder.runId}`);
   }
 }
+/** A `held` write by a writer that does not hold the document's live lease; nothing was written. */
+export class StateLeaseNotHeldError extends Error {
+  constructor(
+    public readonly name: string,
+    /** The live lease another run holds, or null when the document has no live lease. */
+    public readonly holder: StateLease | null
+  ) {
+    super(
+      `State document '${name}' lease is not held by the writing run: ${holder ? `live run ${holder.runId} holds it` : 'it has no live lease'}`
+    );
+  }
+}
 /**
  * The lease the next revision records. A delete clears it, a write that names no change
  * keeps it, and a take or release by a run is refused while another run's lease is live.
- * A run that already holds a live lease keeps it as taken.
+ * A run that already holds a live lease keeps it as taken. A `held` write of any kind is
+ * refused unless its run holds the live lease. Stores call this inside the transaction
+ * that reads `prior` and writes the revision, so the check and the write are one step.
  */
 export function nextStateLease(
   prior: StateRevision | null,
-  write: { name: string; writer: StateWriter; lease?: StateLeaseChange | undefined },
+  write: {
+    name: string;
+    writer: StateWriter;
+    lease?: StateLeaseChange | undefined;
+    held?: true | undefined;
+  },
   operation: StateRevision['operation'],
   takenAt: string
 ): StateLease | null {
-  if (operation.op === 'delete') return null;
   const current = prior?.lease ?? null;
   const kept: StateLease | null =
     current === null
       ? null
       : { runId: current.runId, nodePath: current.nodePath, takenAt: current.takenAt };
+  const live = current?.live === true ? kept : null;
+  if (write.held && (write.writer.kind !== 'run' || live?.runId !== write.writer.runId))
+    throw new StateLeaseNotHeldError(write.name, live);
+  if (operation.op === 'delete') return null;
   if (write.lease === undefined) return kept;
   if (write.writer.kind !== 'run') throw new Error('Only a run can take or release a state lease');
-  const live = current?.live === true ? kept : null;
   if (live && live.runId !== write.writer.runId) throw new StateLeaseHeldError(write.name, live);
   if (write.lease === 'release') return null;
   return live ?? { runId: write.writer.runId, nodePath: write.writer.nodePath, takenAt };
@@ -377,6 +400,79 @@ export function statePatchOperation(
     ops: input.ops,
     ...(input.ifRevision !== undefined ? { ifRevision: input.ifRevision } : {}),
   };
+}
+
+/** Documents a run offers to claim, in its own order of preference. */
+export const stateClaimCandidatesSchema = z
+  .array(
+    z.object({ name: stateDocumentNameSchema, ifRevision: z.number().int().positive() }).strict()
+  )
+  .min(1);
+export const stateClaimSkipSchema = z.discriminatedUnion('reason', [
+  z.object({ name: stateDocumentNameSchema, reason: z.literal('missing') }).strict(),
+  z
+    .object({
+      name: stateDocumentNameSchema,
+      reason: z.literal('revision_moved'),
+      revision: z.number().int().nonnegative(),
+    })
+    .strict(),
+  z
+    .object({
+      name: stateDocumentNameSchema,
+      reason: z.literal('lease_held'),
+      holder: stateLeaseSchema,
+    })
+    .strict(),
+]);
+export const stateClaimResultSchema = z.object({
+  claimed: stateRevisionSchema.nullable(),
+  skipped: z.array(stateClaimSkipSchema),
+});
+export type StateClaimResult = z.infer<typeof stateClaimResultSchema>;
+/**
+ * Takes the lease of the first candidate whose revision still matches and whose lease is
+ * free, ended or the run's own, and reports why each earlier candidate was passed over.
+ * Each attempt is the store's conditional put of the value just read, so a candidate is
+ * taken atomically or not at all; the revision it writes records a `put`.
+ */
+export async function claimStateDocument(
+  store: Pick<IStateDocumentStore, 'getStateDocument' | 'putStateDocument'>,
+  input: {
+    scope: StateScope;
+    writer: Extract<StateWriter, { kind: 'run' }>;
+    candidates: z.infer<typeof stateClaimCandidatesSchema>;
+  }
+): Promise<StateClaimResult> {
+  const { scope, writer } = input;
+  const skipped: StateClaimResult['skipped'] = [];
+  for (const { name, ifRevision } of stateClaimCandidatesSchema.parse(input.candidates)) {
+    const current = await store.getStateDocument(scope, name);
+    if (current === null || current.value === null) {
+      skipped.push({ name, reason: 'missing' });
+      continue;
+    }
+    try {
+      if (current.revision !== ifRevision)
+        throw new StateRevisionConflictError(name, ifRevision, current.revision);
+      const claimed = await store.putStateDocument({
+        scope,
+        name,
+        writer,
+        value: current.value,
+        ifRevision,
+        lease: 'take',
+      });
+      return { claimed, skipped };
+    } catch (error) {
+      if (error instanceof StateRevisionConflictError)
+        skipped.push({ name, reason: 'revision_moved', revision: error.actual });
+      else if (error instanceof StateLeaseHeldError)
+        skipped.push({ name, reason: 'lease_held', holder: error.holder });
+      else throw error;
+    }
+  }
+  return { claimed: null, skipped };
 }
 
 export interface IStateDocumentStore {

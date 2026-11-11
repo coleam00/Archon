@@ -80,6 +80,7 @@ export const cliArgOptions: CliArgOptions = {
   values: { type: 'boolean' },
   lease: { type: 'boolean' },
   'release-lease': { type: 'boolean' },
+  held: { type: 'boolean' },
   timeout: { type: 'string' },
   follow: { type: 'boolean' },
   format: { type: 'string' },

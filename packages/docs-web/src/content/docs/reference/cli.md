@@ -2039,6 +2039,10 @@ archon state list --project acme/widgets
 # inside a run: claim the document in the same write, and give it back with the outcome
 printf '{"stage":"building"}' | archon state put work/7 --if-revision 4 --lease
 printf '{"stage":"done"}' | archon state put work/7 --if-revision 5 --release-lease
+# inside a run: write only while this run holds the lease
+printf '{"ops":[{"op":"append","path":"/log","value":"built"}]}' | archon state patch work/7 --held
+# inside a run: take the first document that is still claimable
+printf '[{"name":"work/7","ifRevision":4},{"name":"work/9","ifRevision":2}]' | archon state claim
 ```
 
 Every command writes JSON and names the scope it used: `{kind: "project", key}` or
@@ -2064,6 +2068,35 @@ will not continue, abandon that run. A take or release while another run's lease
 exits `3` naming the holder and writes nothing. Taking an ended lease, or one the run
 already holds, succeeds. A write without a lease flag keeps the document's lease unchanged,
 whoever writes it, and `delete` clears it. The lease flags are refused outside a run.
+
+**Writing under a lease.** Inside a run, `put`, `patch` and `delete` accept `--held`. The
+write is made only if the calling run holds the document's live lease; the store checks
+that in the same step as the write. Otherwise it exits `3` with `reason: "lease_not_held"`
+and writes nothing. A document with no lease, or with an ended one, is held by nobody.
+`--held` combines with `--if-revision` and with the lease flags, so
+`put --held --release-lease` records an outcome and gives the lease back only if the run
+still owns it. `--held` is refused outside a run.
+
+Every exit `3` carries a `reason` beside `error` and `code`: `revision_conflict`,
+`lease_held` (a take or release against another run's live lease) or `lease_not_held`.
+
+**Claiming one of several documents.** Inside a run, `archon state claim` reads a JSON
+array of `{"name", "ifRevision"}` candidates from stdin and tries them in the order given.
+It takes the lease of the first document that is still at the named revision and whose
+lease is free, ended or already the run's own, and stops there. The claim writes a new
+revision with the same value, recorded as a `put` by the calling run and node. The output
+is `{scope, claimed, skipped}`: `claimed` is that new revision, and `skipped` lists every
+earlier candidate with a `reason`:
+
+| `reason` | Meaning | Extra field |
+| --- | --- | --- |
+| `missing` | No document has this name, or it was deleted | |
+| `revision_moved` | The document is at another revision | `revision`: the current one |
+| `lease_held` | Another run's lease is live | `holder`: `{runId, nodePath, takenAt}` |
+
+When no candidate can be claimed, `claimed` is `null` and the command exits `2`. Order the
+candidates yourself: the engine does not rank or filter them. `claim` is refused outside a
+run.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from
