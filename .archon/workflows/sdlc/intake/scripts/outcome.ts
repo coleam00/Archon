@@ -15,7 +15,7 @@ import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../
 import { viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
-import { type LabelVerdict, isPackLabel, type PackLabel, requireTriaged, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
+import { type LabelVerdict, isPackLabel, type PackLabel, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
   applyDecision,
@@ -32,7 +32,8 @@ import {
 function triageResult(): TriageResult | null {
   const triage = nullableJson(process.env.INPUTS_TRIAGE) as NodeOutput<'archon-triage-block', 'triage'> | null;
   if (triage === null) return null;
-  const decision = requireTriaged(triage.decision);
+  // The triage block's labels node refuses a NOT_TRIAGED decision, so none reaches intake.
+  const decision = triage.decision as Exclude<typeof triage.decision, { contract: 'NOT_TRIAGED' }>;
   return {
     verdict: decision.contract === 'READY' ? { contract: 'READY', route: decision.route } : { contract: decision.contract },
     pull_request: 'pull_request' in decision ? decision.pull_request : null,

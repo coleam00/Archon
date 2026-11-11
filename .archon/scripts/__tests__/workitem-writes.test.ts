@@ -79,6 +79,16 @@ test('forge failures preserve unknown outcome evidence and never fall back or re
   expect(run.stdout).toBe('');
 });
 
+test('a triage that could not read the forge is refused before any label is read or written', () => {
+  const run = runPackScript('triage/scripts/labels', {
+    inputs: labelInputs({ decision: { contract: 'NOT_TRIAGED', failed: [{ op: 'workitem.search', kind: 'forge_error' }] } }),
+  });
+  expect(run.code).not.toBe(0);
+  expect(run.stdout).toBe('');
+  expect(run.forge).toEqual([]);
+  expect(run.stderr).toContain('workitem.search (forge_error)');
+});
+
 test('a pack label is never accepted as an area label', () => {
   const run = runPackScript('triage/scripts/labels', {
     inputs: labelInputs({ area_labels: ['archon-ready'] }),

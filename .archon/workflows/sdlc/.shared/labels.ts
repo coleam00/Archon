@@ -142,23 +142,6 @@ export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size):
   return wanted;
 }
 
-/** A decision triage could not make because a forge read failed; never a verdict about the item. */
-export interface NotTriaged {
-  readonly contract: 'NOT_TRIAGED';
-  readonly failed: readonly { readonly op: string; readonly kind: string }[];
-}
-
-/** Refuse a decision triage could not make, so nothing is recorded and the run fails. */
-export function requireTriaged<Decision extends { readonly contract: string }>(
-  decision: Decision | NotTriaged
-): Exclude<Decision, NotTriaged> {
-  if (decision.contract === 'NOT_TRIAGED') {
-    const failed = (decision as NotTriaged).failed.map(read => `${read.op} (${read.kind})`).join(', ');
-    throw new Error(`triage could not read the forge: ${failed}; no verdict is recorded, and the item stays untriaged`);
-  }
-  return decision as Exclude<Decision, NotTriaged>;
-}
-
 /**
  * Every label a triage output puts on its item: the pack labels its decision derives
  * and the area labels triage picked, sorted. A pack label among the area labels

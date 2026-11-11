@@ -718,17 +718,6 @@ describe('the intake scripts', () => {
     expect(stored(at).value).toMatchObject({ stage: 'needs_contract', claim: null });
   }, 60_000);
 
-  test('a triage that could not read the forge records nothing', () => {
-    const at = install();
-    const decided = facts(at, { runId: 'run-1' }).output;
-    const before = stored(at).revision;
-    const failed = outcome(at, { runId: 'run-1' }, decided, verdict({ contract: 'NOT_TRIAGED', failed: [{ op: 'workitem.search', kind: 'forge_error' }] }));
-    expect(failed.code).not.toBe(0);
-    expect(failed.stderr).toContain('workitem.search (forge_error)');
-    expect([...failed.comments, ...failed.closes]).toEqual([]);
-    expect(stored(at).revision).toBe(before);
-  }, 60_000);
-
   test('a blocked item closes nothing', () => {
     const at = install();
     const applied = outcome(

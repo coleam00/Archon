@@ -13,8 +13,18 @@
  */
 
 import { emit, refuse, text } from '../../.shared/io.ts';
-import { PACK_LABEL_NAMES, requireTriaged, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
+import { PACK_LABEL_NAMES, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
+
+type Decision = NodeOutput<'archon-triage-block', 'triage'>['decision'];
+type NotTriaged = Extract<Decision, { contract: 'NOT_TRIAGED' }>;
+
+/** Refuse a decision triage could not make, so nothing is recorded and the run fails. */
+function requireTriaged(decision: Decision): Exclude<Decision, NotTriaged> {
+  if (decision.contract !== 'NOT_TRIAGED') return decision;
+  const failed = decision.failed.map(read => `${read.op} (${read.kind})`).join(', ');
+  throw new Error(`triage could not read the forge: ${failed}; no verdict is recorded, and the item stays untriaged`);
+}
 
 try {
   const output = JSON.parse(text(process.env.INPUTS_TRIAGE)) as NodeOutput<'archon-triage-block', 'triage'>;
