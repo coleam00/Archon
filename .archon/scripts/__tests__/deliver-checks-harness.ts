@@ -450,16 +450,11 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
       resolveArtifacts(options.preload ?? '')
   );
 
-  // The engine hands every exec node a typed-artifact listing; an empty one by default.
-  const listing = join(root, 'typed-artifacts.json');
-  writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
-
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('INPUTS_'))),
     INPUTS_PR: JSON.stringify(forgePrRecord()),
     INPUTS_EXPECTED: '[]',
     ARTIFACTS_DIR: artifacts,
-    TYPED_ARTIFACTS_FILE: listing,
     ...Object.fromEntries(
       Object.entries(options.inputs ?? {}).map(([key, value]) => [key, resolveArtifacts(value)])
     ),

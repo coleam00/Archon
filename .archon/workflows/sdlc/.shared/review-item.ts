@@ -8,7 +8,7 @@
 
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { isObject } from './typed.ts';
+import { isObject } from './io.ts';
 
 export const ITEM_FILE = 'item.json';
 export const FINDINGS_FILE = 'review/findings.json';

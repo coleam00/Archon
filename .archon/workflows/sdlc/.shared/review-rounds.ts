@@ -5,7 +5,7 @@
  * A review round is one verdict a delivery round's review published on the pull
  * request: the typed `review-report` output of the deliver loop's `review` node. The
  * build queue records a run's verdicts on its build round (`reviews`) when it records
- * the round, from the run's own typed-artifact listing. A pull request's rounds are the
+ * the round, from the run's own typed outputs. A pull request's rounds are the
  * verdicts of every build round that carried it, oldest first.
  *
  * Rounds to Ready counts up to the verdict from which every later verdict is ready: a
@@ -20,7 +20,7 @@ import { join } from 'node:path';
 import { type BuildRound, KEPT_ROUNDS, type ReviewVerdict } from './build.ts';
 import { type PrFacts, prRuns } from './factory-prs.ts';
 import { record } from './forge.ts';
-import { readTyped } from './typed.ts';
+import type { TypedOutput } from './io.ts';
 import type { WorkItem } from './workitem.ts';
 
 /**
@@ -47,23 +47,11 @@ export interface ReviewRoundRecord {
   readonly runs: readonly string[];
 }
 
-/** The review verdicts this run's delivery rounds published, from the engine's typed-artifact listing. */
-export function runReviews(listingFile: string | undefined, artifacts: string): RunReviews {
-  const read = readTyped<{ ready?: unknown }>(listingFile, artifacts, REVIEW_TYPE);
-  if (read.listingProblem !== undefined) return { ok: false, problem: read.listingProblem };
-  // An unreadable record might be one of the verdicts, so none are trusted.
-  const unread = read.problems[0];
-  if (unread !== undefined) return { ok: false, problem: unread };
-  const verdicts: ReviewVerdict[] = [];
-  for (const [index, entry] of (read.entries ?? []).entries()) {
-    if (!REVIEW_NODES.has(entry.nodeId ?? '')) continue;
-    const ready = read.values[index]?.ready;
-    if (typeof ready !== 'boolean' || entry.producedAt === undefined) {
-      return { ok: false, problem: `${entry.path} does not record a review verdict and its time` };
-    }
-    verdicts.push({ ready, at: entry.producedAt });
-  }
-  return { ok: true, verdicts };
+/** The review verdicts this run's delivery rounds published, among its `review-report` outputs. */
+export function runReviews(reviews: readonly TypedOutput<{ ready: boolean }>[]): ReviewVerdict[] {
+  return reviews
+    .filter(review => REVIEW_NODES.has(review.node))
+    .map(review => ({ ready: review.value.ready, at: review.at }));
 }
 
 /**

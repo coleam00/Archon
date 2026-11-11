@@ -1137,7 +1137,7 @@ that built it:
 A review round is one verdict a delivery round's review published on the pull request:
 the `review-report` output of the deliver loop's `review` node. The build queue records each run's
 verdicts on its build round (`reviews` on the work item) when it records the round, from
-the run's typed-artifact listing, and the metric reads only the work item. Every build
+the run's `review-report` outputs bound into that node, and the metric reads only the work item. Every build
 round that carried the pull request counts, oldest verdict first. Rounds to Ready counts up to the
 verdict from which every later verdict is ready, so a Ready review that a later review
 overturned does not end the count. A pull request Ready on its first review and on every
@@ -1293,9 +1293,9 @@ pull request judged twice keeps its latest record. The `metrics-test-value` bind
 [`archon-worktree-cleanup`](cleanup/archon-worktree-cleanup.yaml) runs the host CLI's
 `archon isolation cleanup --merged` across every project registered on the install. It
 removes each merged worktree with its local branch, including a branch the worktree
-adopted rather than created. Git ancestry or patch equivalence proves a merge without a
-pull request; otherwise the branch's merged pull request does. Remote
-branches are retained with a warning: after registration retirement, a Git commit
+adopted rather than created. Removal accepts Git base ancestry, patch equivalence, or one merged pull request head
+covering every existing local tip (worktree HEAD and branch ref). Cleanup can discover that pull request
+by local commits even when its published branch name differs. Remote branches are retained with a warning: after registration retirement, a Git commit
 ID cannot prove whether the branch belongs to a replacement registration. Force
 does not bypass this refusal. For manual cleanup, follow the
 [remote branch recovery procedure](https://archon.diy/reference/cli/#recovering-remote-branch-cleanup)
@@ -1304,9 +1304,11 @@ On GitHub, enable **Automatically delete head branches** in repository settings 
 GitHub remove merged pull requests' branches automatically.
 
 A worktree with uncommitted changes, a run
-that can still claim it, or a commit the merge does not cover stays and is reported. With `include_closed: "true"`
-it also removes worktrees whose pull request was closed without merging. It runs in place
-and creates no worktree of its own.
+that can still claim it, or a commit the merge does not cover stays and is reported.
+Set `include_closed` to `"true"` to also accept a closed but unmerged PR whose head
+covers every existing local tip. The default is `"false"`.
+Other values refuse the run.
+It runs in place and creates no worktree of its own.
 
 Who removes each checkout:
 

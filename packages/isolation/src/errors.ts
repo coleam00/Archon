@@ -144,6 +144,8 @@ const FAILURE_MESSAGES = {
     '`bun run build:runner-image` (tags `archon-runner:<version>` + `:latest`), ' +
     'or build your configured `container.image` from ' +
     '`packages/isolation/docker/runner.Dockerfile`.',
+  coverage_fetch: undefined,
+  coverage_ancestry: undefined,
   unclassified: undefined,
   branch_checked_out: undefined,
   branch_exists: undefined,
