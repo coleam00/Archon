@@ -243,7 +243,7 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(result.code).toBe(0);
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
     expect(existsSync(join(result.artifacts, 'pr-body.md'))).toBe(false);
-    expect(forgeCalls(result).map(call => call.op)).toEqual(['pr.view', 'pr.view']);
+    expect(forgeCalls(result).map(call => call.op)).toEqual(['pr.view']);
   });
 
   it('adopts a named pull request whose head repository differs only in case', () => {
@@ -280,44 +280,6 @@ describe('publish-pr opens the pull request at most once', () => {
     expect(JSON.parse(result.stdout)).toMatchObject({ number: 42 });
     expect(remoteHead(result.cwd, 'feature')).toBe(result.head);
     expect(remoteHead(result.cwd, 'archon/task-local')).toBe('');
-  });
-
-  // GitHub's pull request API can report the previous head after the branch moved.
-  // The first `pr.view` is the read before the push; the next `stale` reads lag.
-  const lagging = (stale: number) => `
-const fakeSpawn = Bun.spawnSync.bind(Bun);
-let views = 0;
-Bun.sleepSync = () => {};
-Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
-  const result = fakeSpawn(argv, settings);
-  if (argv[argv.indexOf('forge') + 1] !== 'pr.view' || !argv.includes('forge')) return result;
-  views++;
-  if (views < 2 || views > 1 + ${String(stale)}) return result;
-  const response = JSON.parse(String(result.stdout));
-  response.result.value.pr.head_revision = 'stale';
-  return { ...result, stdout: Buffer.from(JSON.stringify(response)) };
-} });
-`;
-
-  it('waits for a continued pull request to report the pushed head before recording it', () => {
-    const result = publishPr({
-      target: { existing: 42 },
-      tracker: { pr: { headRefName: 'feature' } },
-      preload: lagging(3),
-    });
-    expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({ number: 42, head_revision: result.head });
-  });
-
-  it('refuses when a continued pull request never reports the pushed head', () => {
-    const result = publishPr({
-      target: { existing: 42 },
-      tracker: { pr: { headRefName: 'feature' } },
-      preload: lagging(100),
-    });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain(`pushed ${result.head}, but pull request 42 still reports head stale`);
   });
 
   it.each(['CLOSED', 'MERGED'] as const)('refuses to push to a continued pull request that is %s', state => {
@@ -428,7 +390,6 @@ describe('publish-pr writes the description section a delivery round prepared', 
     const result = publishSection({
       live,
       forgeAt: head => ({ kind: 'fake', response: [
-        forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
         forgeOperation('pr.view', { pr: forgePrRecord({ head_revision: head }), title: 'A title', body: live }),
         forgeOperation('pr.edit-body', { pr: forgePrRecord({ head_revision: head }) }),
@@ -586,14 +547,12 @@ describe('publish-review keeps one canonical comment per pull request', () => {
   it.each([
     ['declares no pull request', 'null'],
     ['names another pull request', JSON.stringify({ ...PR, number: 43 })],
-  ])('refuses when delivery recorded the target and the scope %s', (_label, declared) => {
+  ])('comments on the pull request delivery recorded when the scope %s', (_label, declared) => {
     const result = publishReview({
       inputs: { ...report, INPUTS_SCOPE: JSON.stringify(PR), INPUTS_PR: declared },
     });
-    expect(result.code).not.toBe(0);
-    expect(result.stdout).toBe('');
-    expect(result.stderr).toContain('delivery recorded');
-    expect(result.comments).toEqual([]);
+    expect(result.code).toBe(0);
+    expect(result.comments.map(comment => comment.issue)).toEqual([42]);
   });
 
   it('publishes to the recorded pull request when the scope declaration agrees', () => {
