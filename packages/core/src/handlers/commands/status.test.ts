@@ -101,7 +101,7 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(true);
         expect(result.message).toEndWith(
-          'Worktrees: 3 total\n  • 1 merged (can auto-remove)\n  • 1 stale (14+ days inactive)\n  • 1 active'
+          'Worktrees: 3 total\n  • 1 integrated into base (cleanup checks PR coverage and blockers)\n  • 1 stale (14+ days inactive)\n  • 1 active'
         );
       });
 
