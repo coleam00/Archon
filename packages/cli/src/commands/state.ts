@@ -19,7 +19,10 @@ import {
   StateRevisionConflictError,
   StateDocumentTooLargeError,
   StateLeaseHeldError,
+  StateLeaseNotHeldError,
   StatePatchError,
+  claimFirstStateDocument,
+  stateClaimCandidatesSchema,
   type IStateDocumentStore,
   type StateLeaseChange,
   type StateScope,
@@ -46,11 +49,15 @@ export interface StateCommandOptions {
   lease?: boolean;
   /** Inside a run: give the document's lease back in this put or patch. */
   releaseLease?: boolean;
+  /** Inside a run: refuse the put, patch or delete unless the run holds the live lease. */
+  held?: boolean;
 }
 
 // Scripts branch on these, never on message text.
-const EXIT = { usage: 1, conflict: 3, invalid: 4, storeMismatch: 5 } as const;
-const commands = ['get', 'put', 'patch', 'log', 'delete', 'list'] as const;
+const EXIT = { usage: 1, noneClaimed: 2, conflict: 3, invalid: 4, storeMismatch: 5 } as const;
+const commands = ['get', 'put', 'patch', 'log', 'delete', 'list', 'claim'] as const;
+/** Commands that address the scope, not one document. */
+const unnamed: readonly StateCommand[] = ['list', 'claim'];
 
 // Windows CI: `Bun.stdin.text()` on a piped stdin stayed pending without holding the
 // event loop open, so the CLI exited 0 having written nothing. The Node stream keeps
@@ -64,7 +71,7 @@ async function readStdin(): Promise<string> {
 type StateHost = Pick<WorkflowHost, 'deps' | 'records'>;
 type StateCommand = (typeof commands)[number];
 type StateInput = z.infer<typeof stateWriteScopeSchema>;
-type StateWriteInput = StateInput & { lease: StateLeaseChange | undefined };
+type StateWriteInput = StateInput & { lease?: StateLeaseChange | undefined };
 
 function validateStateOptions(command: StateCommand, options: StateCommandOptions): void {
   if (options.ifRevision !== undefined && !['put', 'patch', 'delete'].includes(command))
@@ -76,6 +83,8 @@ function validateStateOptions(command: StateCommand, options: StateCommandOption
   if (options.values && command !== 'list') throw new Error('--values is only valid for list');
   if (options.raw && !['get', 'put'].includes(command))
     throw new Error('--raw is only valid for get or put');
+  if (options.held && !['put', 'patch', 'delete'].includes(command))
+    throw new Error('--held is only valid for put, patch or delete');
   if (options.install && options.project !== undefined)
     throw new Error('Use --install or --project, not both');
 }
@@ -104,12 +113,13 @@ function parseStateArguments(
 ) {
   const command = commands.find(candidate => candidate === subcommand);
   if (!command) throw new Error(`Expected state ${commands.join('|')}`);
-  if (args.length !== (command === 'list' ? 0 : 1))
+  const named = !unnamed.includes(command);
+  if (args.length !== (named ? 1 : 0))
     throw new Error(
-      command === 'list' ? 'state list takes no document name' : 'Expected one document name'
+      named ? 'Expected one document name' : `state ${command} takes no document name`
     );
   validateStateOptions(command, options);
-  const name = command === 'list' ? '' : stateDocumentNameSchema.parse(args[0]);
+  const name = named ? stateDocumentNameSchema.parse(args[0]) : '';
   const prefix =
     options.prefix === undefined ? undefined : stateNamePrefixSchema.parse(options.prefix);
   const ifRevision =
@@ -253,6 +263,21 @@ async function patchStateDocument(
   };
 }
 
+async function claimStateDocuments(
+  store: IStateDocumentStore,
+  { scope, writer }: StateInput,
+  readInput: () => Promise<string>
+) {
+  if (writer.kind !== 'run') throw new Error('state claim is only valid inside a run');
+  const candidates = stateClaimCandidatesSchema.safeParse(JSON.parse(await readInput()));
+  if (!candidates.success)
+    throw new Error('Invalid claim input; expected [{"name": "...", "ifRevision": <n>}, ...]');
+  return {
+    scope,
+    ...(await claimFirstStateDocument(store, { scope, writer, candidates: candidates.data })),
+  };
+}
+
 async function executeStateCommand(
   store: IStateDocumentStore,
   input: StateInput,
@@ -262,18 +287,26 @@ async function executeStateCommand(
 ): Promise<object> {
   const { scope, name } = input;
   const { command, ifRevision, limit, prefix, lease } = parsed;
+  // `lease` is only ever set for put and patch, `held` for put, patch and delete.
+  const write: StateWriteInput = {
+    ...input,
+    ...(lease !== undefined ? { lease } : {}),
+    ...(options.held ? { held: true } : {}),
+  };
   switch (command) {
     case 'get':
       return getStateDocument(store, scope, name);
     case 'put':
-      return putStateDocument(store, { ...input, lease }, ifRevision, options.raw, readInput);
+      return putStateDocument(store, write, ifRevision, options.raw, readInput);
     case 'patch':
-      return patchStateDocument(store, { ...input, lease }, ifRevision, readInput);
+      return patchStateDocument(store, write, ifRevision, readInput);
+    case 'claim':
+      return claimStateDocuments(store, input, readInput);
     case 'delete':
       return {
         scope,
         ...(await store.deleteStateDocument({
-          ...input,
+          ...write,
           ...(ifRevision !== undefined ? { ifRevision } : {}),
         })),
       };
@@ -305,9 +338,37 @@ async function executeStateCommand(
   throw new Error(`Unhandled state subcommand: ${command satisfies never}`);
 }
 
+/** Why a write exited `3`; scripts read this, not the message. */
+function stateConflictReason(
+  error: unknown
+): 'revision_conflict' | 'lease_held' | 'lease_not_held' | undefined {
+  if (error instanceof StateRevisionConflictError) return 'revision_conflict';
+  if (error instanceof StateLeaseHeldError) return 'lease_held';
+  if (error instanceof StateLeaseNotHeldError) return 'lease_not_held';
+  return undefined;
+}
+
+function stateErrorReason(error: unknown): { reason?: string } {
+  const reason = stateConflictReason(error);
+  return reason === undefined ? {} : { reason };
+}
+
+function refuseRunOnlyFlags(
+  parsed: ReturnType<typeof parseStateArguments>,
+  options: StateCommandOptions
+): void {
+  if (parsed.lease !== undefined)
+    throw new Error('--lease and --release-lease are only valid inside a run');
+  if (options.held) throw new Error('--held is only valid inside a run');
+}
+
+/** Nothing claimable is an answer, not a failure; it has its own exit code. */
+function stateResultCode(result: object): number {
+  return 'claimed' in result && result.claimed === null ? EXIT.noneClaimed : 0;
+}
+
 function stateErrorCode(error: unknown): number {
-  if (error instanceof StateRevisionConflictError || error instanceof StateLeaseHeldError)
-    return EXIT.conflict;
+  if (stateConflictReason(error) !== undefined) return EXIT.conflict;
   if (
     error instanceof StateDocumentTooLargeError ||
     error instanceof StatePatchError ||
@@ -352,20 +413,21 @@ export async function stateCommand(
     const parsed = parseStateArguments(subcommand, args, options);
     const context = await resolveStateContext(host, options, env, dependencies.storeKind);
     const input = { ...context, name: parsed.name };
-    if (parsed.lease !== undefined && context.writer.kind !== 'run')
-      throw new Error('--lease and --release-lease are only valid inside a run');
+    if (context.writer.kind !== 'run') refuseRunOnlyFlags(parsed, options);
     if (parsed.command === 'get' && options.raw) {
       const row = await store.getStateDocument(input.scope, input.name);
       if (typeof row?.value !== 'string')
         throw new StateValueNotTextError(`State document '${input.name}' has no text value`);
       await writeRaw(row.value);
     } else {
-      await write(await executeStateCommand(store, input, parsed, options, readInput));
+      const result = await executeStateCommand(store, input, parsed, options, readInput);
+      await write(result);
+      return stateResultCode(result);
     }
     return 0;
   } catch (error) {
     const code = stateErrorCode(error);
-    await write({ ok: false, error: stateErrorMessage(error), code });
+    await write({ ok: false, error: stateErrorMessage(error), code, ...stateErrorReason(error) });
     return code;
   }
 }

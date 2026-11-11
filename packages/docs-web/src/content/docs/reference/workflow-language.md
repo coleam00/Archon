@@ -1648,7 +1648,8 @@ exit `3` instead of being silently replaced. Appending an item, or setting a key
 write, can patch the latest revision without it.
 An absent document starts as `{}`; appending to `/seen` creates the array. Invalid patches
 or oversized values exit `4` and write nothing. Exit `5` means the CLI opened a different
-store than the run's. Exit `1` means usage or storage failure.
+store than the run's. Exit `2` means `claim` found nothing claimable. Exit `1` means usage
+or storage failure.
 The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.
 
 A run can claim a document with a lease: `put` or `patch` with `--lease` takes it in the
@@ -1659,8 +1660,14 @@ engine keeps a lease live while its run can still finish, including when the run
 or failed and can resume, and ends it when the run completes, is cancelled or abandoned, or
 is deleted. A take while another run's lease is live exits `3`; taking over an ended lease is
 an ordinary conditional write. A lease does not block other writers: writes without a lease
-flag keep it. What a document means once its lease has ended stays with the workflow. See
-the [CLI reference](/reference/cli/#state) for the fields.
+flag keep it. To make a write depend on the lease, pass `--held` to `put`, `patch` or
+`delete`: the write happens only if the calling run holds the live lease, and otherwise
+exits `3` with `reason: "lease_not_held"`. To hand out work, rank the candidates in a
+script and pipe them to `archon state claim` as `[{"name", "ifRevision"}, ...]`: it takes
+the lease of the first one that is unchanged and not leased by a live run, reports why it
+passed over the earlier ones, and exits `2` when none is claimable. What a document means
+once its lease has ended stays with the workflow. See the
+[CLI reference](/reference/cli/#state) for the fields.
 
 Let the agent judge what to remember, then commit its structured output in a script node
 when the write must happen. For example, a review agent returns a completed PR identifier;

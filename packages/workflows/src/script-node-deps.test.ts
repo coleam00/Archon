@@ -80,6 +80,9 @@ function createMockStore(): IWorkflowStore {
     deleteStateDocument: mock<IWorkflowStore['deleteStateDocument']>(() => {
       throw new Error('Unexpected deleteStateDocument');
     }),
+    claimStateDocument: mock<IWorkflowStore['claimStateDocument']>(() => {
+      throw new Error('Unexpected claimStateDocument');
+    }),
     listStateRevisions: mock<IWorkflowStore['listStateRevisions']>(() => {
       throw new Error('Unexpected listStateRevisions');
     }),

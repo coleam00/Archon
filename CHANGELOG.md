@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Breaking
+
+- A state document claim is recorded as its own operation (`claim`) in the state log. Archon binaries older than this release cannot read a document revision written by `archon state claim` and exit 1; once a store holds a claim, use only this release or later on it.
+
 ### Added
 
 - The forge contract can search a repository's issues and pull requests by text (`workitem.search`) and read the end of a check's log (`checks.logs`). The GitHub plugin implements both, and the SDLC pack's agents use them instead of `gh`.

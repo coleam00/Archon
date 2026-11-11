@@ -207,7 +207,7 @@ Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
-  state <get|put|patch|log|delete|list>
+  state <get|put|patch|log|delete|list|claim>
                              Read and audit durable project or install JSON documents
   metrics [name]             Aggregate metric records by name, window and instrument
   forge resolve              Resolve an explicit remote through optional forge plugins

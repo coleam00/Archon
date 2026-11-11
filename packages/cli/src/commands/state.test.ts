@@ -135,6 +135,82 @@ test('a run takes a lease in its write, another run is refused until the holder 
   expect(await invoke('put', '{}', { ifRevision: '3', releaseLease: true }, otherEnv)).toBe(0);
   expect(output.at(-1)).toMatchObject({ revision: 4, lease: null });
 });
+test('--held fences a write to the lease holder, and claim takes the first claimable document', async () => {
+  const { invoke, output, store, run, host, root } = await fixture();
+  const other = await store.createWorkflowRun({ workflow_name: 'state', user_message: '' });
+  await store.updateWorkflowRun(other.id, {
+    output_root: getProjectStoragePaths({ kind: 'repo', owner: 'owner', repo: 'repo' }).root,
+  });
+  const otherEnv = {
+    WORKFLOW_ID: other.id,
+    ARCHON_NODE_EXECUTION: JSON.stringify({ runId: other.id, path: 'claim' }),
+  };
+  const ops = '{"ops":[{"op":"set","path":"/stage","value":"done"}]}';
+  expect(await invoke('put', '{"stage":"next"}', { ifRevision: '0', lease: true })).toBe(0);
+  expect(await invoke('patch', ops, { held: true }, otherEnv)).toBe(3);
+  expect(output.at(-1)).toEqual({
+    ok: false,
+    code: 3,
+    reason: 'lease_not_held',
+    error: expect.stringContaining(run.id),
+  });
+  expect(await invoke('delete', '', { held: true }, otherEnv)).toBe(3);
+  expect(await invoke('patch', ops, { held: true, ifRevision: '9' })).toBe(3);
+  expect(output.at(-1)).toMatchObject({ reason: 'revision_conflict' });
+  expect(await invoke('patch', ops, { held: true, project: 'owner/repo' }, {})).toBe(1);
+  expect(output.at(-1)).toMatchObject({ error: '--held is only valid inside a run' });
+  expect(await invoke('get', '', { held: true })).toBe(1);
+  expect(await store.listStateRevisions(project, 'review/123')).toHaveLength(1);
+  expect(await invoke('patch', ops, { held: true })).toBe(0);
+  expect(output.at(-1)).toMatchObject({ revision: 2, value: { stage: 'done' } });
+
+  const claim = (input: string, env: NodeJS.ProcessEnv) =>
+    stateCommand(
+      host,
+      'claim',
+      [],
+      { cwd: root },
+      {
+        env,
+        readInput: async () => input,
+        write: async value => {
+          output.push(value);
+        },
+      }
+    );
+  await store.putStateDocument({
+    scope: project,
+    name: 'review/free',
+    value: { n: 1 },
+    ifRevision: 0,
+    writer: { kind: 'surface', via: 'cli' },
+  });
+  const leased = { name: 'review/123', ifRevision: 2 };
+  const candidates = [leased, { name: 'review/free', ifRevision: 1 }];
+  expect(await claim(JSON.stringify(candidates), otherEnv)).toBe(0);
+  expect(output.at(-1)).toEqual({
+    scope: project,
+    claimed: expect.objectContaining({
+      name: 'review/free',
+      revision: 2,
+      value: { n: 1 },
+      operation: { op: 'claim' },
+      lease: expect.objectContaining({ runId: other.id, nodePath: 'claim', live: true }),
+    }),
+    skipped: [
+      {
+        name: 'review/123',
+        reason: 'lease_held',
+        holder: { runId: run.id, nodePath: 'review/commit', takenAt: expect.any(String) },
+      },
+    ],
+  });
+  expect(await claim(JSON.stringify([leased]), otherEnv)).toBe(2);
+  expect(output.at(-1)).toMatchObject({ claimed: null, skipped: [{ reason: 'lease_held' }] });
+  expect(await claim('[{"name":"review/123"}]', otherEnv)).toBe(1);
+  expect(await claim(JSON.stringify([leased]), {})).toBe(1);
+  expect(output.at(-1)).toMatchObject({ error: 'state claim is only valid inside a run' });
+});
 test('get on a deleted document returns the revision a recreating put must name', async () => {
   const { invoke, output } = await fixture();
   expect(await invoke('put', '{"a":1}', { ifRevision: '0' })).toBe(0);

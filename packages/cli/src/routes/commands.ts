@@ -137,6 +137,7 @@ export async function runState({
       ...(values.values === true ? { values: true } : {}),
       ...(values.lease === true ? { lease: true } : {}),
       ...(values['release-lease'] === true ? { releaseLease: true } : {}),
+      ...(values.held === true ? { held: true } : {}),
     },
     { storeKind }
   );

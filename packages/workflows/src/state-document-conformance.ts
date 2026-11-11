@@ -3,7 +3,9 @@ import {
   StateRevisionConflictError,
   StateDocumentTooLargeError,
   StateLeaseHeldError,
+  StateLeaseNotHeldError,
   StatePatchError,
+  claimFirstStateDocument,
   stateValueSchema,
   statePutSchema,
   stateWriterSchema,
@@ -533,6 +535,120 @@ export function describeStateDocumentConformance(
         ).toEqual([null, true, null, true, true]);
       }
     );
+    check('a held write is refused unless its run holds the live lease', async harness => {
+      const { store, runs } = harness;
+      const scope = p('lease-held');
+      const holder = await runs.create();
+      const other = await runs.create();
+      const input = { scope, name: 'item', held: true as const };
+      const ops = [{ op: 'set' as const, path: '/stage', value: 'stolen' }];
+      await store.putStateDocument({ scope, name: 'item', value: {}, ifRevision: 0, writer });
+      // No lease yet: nobody holds it.
+      expect(
+        await rejection(store.patchStateDocument({ ...input, ops, writer: leaseWriter(holder) }))
+      ).toMatchObject({ holder: null });
+      const taken = await store.patchStateDocument({
+        scope,
+        name: 'item',
+        ops: [{ op: 'set', path: '/stage', value: 'building' }],
+        writer: leaseWriter(holder),
+        lease: 'take',
+      });
+      for (const refused of [
+        () => store.patchStateDocument({ ...input, ops, writer: leaseWriter(other) }),
+        () =>
+          store.putStateDocument({
+            ...input,
+            value: {},
+            ifRevision: 2,
+            writer: leaseWriter(other),
+          }),
+        () => store.deleteStateDocument({ ...input, writer: leaseWriter(other) }),
+        () => store.patchStateDocument({ ...input, ops, writer }),
+      ]) {
+        const error = await rejection(refused());
+        expect(error).toBeInstanceOf(StateLeaseNotHeldError);
+        expect(error).toMatchObject({ holder: { runId: holder } });
+      }
+      expect(await store.getStateDocument(scope, 'item')).toEqual(taken);
+      const written = await store.patchStateDocument({
+        ...input,
+        ops: [{ op: 'set', path: '/stage', value: 'done' }],
+        writer: leaseWriter(holder),
+      });
+      expect(written).toMatchObject({ revision: 3, value: { stage: 'done' }, lease: taken.lease });
+      // An ended lease is held by nobody, its former holder included.
+      await runs.setStatus(holder, 'running');
+      await runs.setStatus(holder, 'completed');
+      expect(
+        await rejection(store.deleteStateDocument({ ...input, writer: leaseWriter(holder) }))
+      ).toBeInstanceOf(StateLeaseNotHeldError);
+      expect(await store.listStateRevisions(scope, 'item')).toHaveLength(3);
+    });
+    check('a claim takes the first candidate that is still claimable', async harness => {
+      const { store, runs } = harness;
+      const scope = p('claim');
+      const holder = await runs.create();
+      const ended = await runs.create();
+      const claimer = await runs.create();
+      const put = (name: string, runId?: string): Promise<unknown> =>
+        store.putStateDocument({
+          scope,
+          name,
+          value: { name },
+          ifRevision: 0,
+          writer: runId ? leaseWriter(runId) : writer,
+          ...(runId ? { lease: 'take' as const } : {}),
+        });
+      await put('leased', holder);
+      await put('moved');
+      await store.patchStateDocument({
+        scope,
+        name: 'moved',
+        ops: [{ op: 'set', path: '/v', value: 2 }],
+        writer,
+      });
+      await put('dead', ended);
+      await runs.setStatus(ended, 'running');
+      await runs.setStatus(ended, 'cancelled');
+      await put('free');
+      const candidates = ['absent', 'leased', 'moved', 'dead', 'free'].map(name => ({
+        name,
+        ifRevision: 1,
+      }));
+      const input = { scope, writer: { kind: 'run' as const, runId: claimer, nodePath: 'claim' } };
+      const result = await claimFirstStateDocument(store, { ...input, candidates });
+      expect(result.skipped).toEqual([
+        { name: 'absent', reason: 'missing' },
+        {
+          name: 'leased',
+          reason: 'lease_held',
+          holder: { runId: holder, nodePath: 'claim', takenAt: expect.any(String) },
+        },
+        { name: 'moved', reason: 'revision_moved', revision: 2 },
+      ]);
+      // The dead lease is taken over; the value is unchanged and `free` is never tried.
+      expect(result.claimed).toMatchObject({
+        name: 'dead',
+        revision: 2,
+        value: { name: 'dead' },
+        lease: { runId: claimer, live: true },
+      });
+      expect(await store.getStateDocument(scope, 'dead')).toEqual(result.claimed);
+      // The log tells a claim from a write.
+      expect((await store.listStateRevisions(scope, 'dead')).map(row => row.operation)).toEqual([
+        { op: 'claim' },
+        { op: 'put' },
+      ]);
+      expect((await store.getStateDocument(scope, 'free'))?.revision).toBe(1);
+      const none = await claimFirstStateDocument(store, {
+        ...input,
+        candidates: candidates.slice(0, 3),
+      });
+      expect(none.claimed).toBeNull();
+      expect(none.skipped).toEqual(result.skipped);
+      expect((await store.getStateDocument(scope, 'leased'))?.revision).toBe(1);
+    });
     check('runs racing to take one lease: exactly one wins', async harness => {
       const { store, runs } = harness;
       const scope = p('lease-race');
