@@ -44,6 +44,10 @@ export const cliArgOptions: CliArgOptions = {
   occurrence: { type: 'string' },
   // Repeatable: `--choose a --choose b` answers a multi_select attention wait with both.
   choose: { type: 'string', multiple: true },
+  // `workflow respond|answer --recommended`: answer with the option the wait recommends.
+  recommended: { type: 'boolean' },
+  // `workflow approve|reject|respond|answer --as <name>`: the name the answerer declares.
+  as: { type: 'string' },
   // Repeatable attention-queue filters and label writes: `--label k=v`, `--set k=v`, `--unset k`.
   label: { type: 'string', multiple: true },
   set: { type: 'string', multiple: true },
@@ -52,6 +56,8 @@ export const cliArgOptions: CliArgOptions = {
   'count-by': { type: 'string' },
   // `workflow attention --watch --protocol`: the full sync protocol, for programs.
   protocol: { type: 'boolean' },
+  // `workflow attention --watch --notices`: also what happened to work nobody has to act on.
+  notices: { type: 'boolean' },
   // `workflow attention --watch --after <cursor>`: replay the stream after an earlier line.
   after: { type: 'string' },
   port: { type: 'string' },

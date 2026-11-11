@@ -188,6 +188,17 @@ export const orderedFlags: FlagHelp[] = [
     ],
   },
   {
+    spec: '--as <name>',
+    description:
+      "For 'workflow approve/reject/respond/answer': the name the answerer declares for itself,\nrecorded with an attention wait's answer as a claim (never checked; a gate answer records none)",
+    owners: [
+      { command: 'workflow', subcommand: 'approve' },
+      { command: 'workflow', subcommand: 'reject' },
+      { command: 'workflow', subcommand: 'respond' },
+      { command: 'workflow', subcommand: 'answer' },
+    ],
+  },
+  {
     spec: '--detach',
     description:
       "Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)",

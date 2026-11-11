@@ -1082,9 +1082,11 @@ archon workflow attention --json --project acme/web --label ci=other
 archon workflow attention --json --sort label:urgency
 archon workflow attention --json --all --count-by label:class
 archon workflow attention --json --count-by label:class --since 30d
+archon workflow attention --json --count-by answerer --since 30d
 archon workflow attention <run-id> --json                          # one item
 archon workflow attention --watch --json --all                     # what needs someone, as it happens
 archon workflow attention --watch --json --label merge=pr          # one class of question
+archon workflow attention --watch --notices --json                 # also runs that ended or resumed
 archon workflow attention --watch --protocol --json                # the full sync protocol, for programs
 archon workflow attention --watch --protocol --json --after <cursor>  # resume it
 ```
@@ -1094,6 +1096,8 @@ The default scope is the current project, resolved from the working directory as
 `--label k=v` filters must all match. `--sort label:<key>` compares the label's value as a plain string and puts items without it last. `--count-by` replaces the list with counts.
 
 `--count-by` counts the items open now. Add `--since` to count the attention waits opened in a window instead, whether each has been answered or is still open, so a class of question that recurs stays visible after its runs continue. `--since` takes a duration back from now (`24h`, `7d`, `2w`) or an ISO date or time. Scope and `--label` filters apply as they do to the open count. This count reads each wait's `wait_started` event, so it uses the labels the wait opened with and ignores later [`attention label`](#workflow-attention-label) writes. A wait opened by an Archon version that did not record labels on that event counts under no label (`value: null`, shown as `(no '<key>' label)`). Gates, usage-limit waits and waits of deleted runs are not counted. `--since` needs `--count-by`.
+
+Each group of a `--since` count also carries `recommendations: { asked, answered, followed }`: the waits that opened with a recommendation, those of them that were answered, and those answers that chose the recommended option. Text output prints them after the group when any wait carried one. `--count-by answerer`, which needs `--since`, groups the waits by who answered: each entry has `answeredBy`, which is `{ declared }` for a name given with [`--as`](#workflow-answer), `{ userId }` for an answer through a chat platform, and null for waits still open and answers that named nobody. These numbers come from the `wait_started` and `wait_answered` events alone. `wait_started` records the wait's `occurrence`, `form`, the `options` ids offered, `other` when the reserved option is offered, and the recommendation's `option` and `confidence`; it never records the message, an option's label or the recommendation's reason. A wait opened by an Archon version that did not record them counts as carrying no recommendation.
 
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
@@ -1125,11 +1129,18 @@ items first, each with its message, options and recommendation), `resolved` or
 run that failed or that completed with `outcome: "failed"`, `owner_lost`, `degraded` when
 a run could not be read, and `error`. It writes nothing for a run that completed with any
 other outcome, was cancelled or resumed, and it has no
-heartbeat, so a silent stream does not prove it is reading. Combine it with `--label k=v`
+heartbeat, so a silent stream does not prove it is reading. Every JSON line carries
+`needs`: `answer`, `look` or `nothing`, and the watch writes the first two
+([what each means](/getting-started/operate/#stream-the-queue)). Combine it with `--label k=v`
 to watch one queue or class of question. With `--json` each line is one compact JSON
 object; without it, a short sentence per line. Scope and `--label` work as for the list;
 `--sort`, `--count-by` and a run id are refused. See
 [Stream the queue](/getting-started/operate/#stream-the-queue).
+
+**`--notices`**, with `--watch`, also writes the `needs: "nothing"` lines that say what
+happened to work: a run that completed, was cancelled or resumed, and a usage-limit wait
+opening or closing. It leaves out `ready` and `bookmark`. It cannot be combined with
+`--protocol`.
 
 **`--protocol`**, with `--watch`, writes the full sync protocol, for a program that keeps its
 own copy of the open set: one `attention` line per open
@@ -1157,7 +1168,7 @@ the [Operate page](/getting-started/operate/#the-full-protocol-for-programs). Ex
 closed stdout stops the stream (a closed stdout is noticed at the next line), `1` when it
 cannot start or an output write fails for another reason, `4` when the store cannot read the stream's cursor, an `--after` cursor this
 install did not issue or the stream's own position (with `--json`, the last line is
-`{"type":"error","error":"cursor_invalid"}`; rerun without `--after`).
+`{"type":"error","error":"cursor_invalid","needs":"look"}`; rerun without `--after`).
 
 HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sort` and
 `countBy`, and returns `items` beside the console's `runs`, or `{ counts }`. A server has
@@ -1194,6 +1205,11 @@ including for `approve` and `reject`. An undeclared decision is refused with the
 allowed ids, and the run stays paused. Without authored decisions, use `approve`
 or `reject`.
 
+`archon workflow respond <run-id> --recommended [text]` answers an attention wait with the
+option it recommends, as [`workflow answer --recommended`](#workflow-answer) does;
+`--occurrence` is optional here. It takes no `--detach`. `--as <name>` declares who is
+answering, as on `answer`.
+
 ### `workflow answer`
 
 Answer a paused [attention wait](/reference/workflow-language/#attention-waits) in the form
@@ -1206,6 +1222,7 @@ archon workflow answer <run-id> --occurrence <id> --text "Rotated the key"      
 archon workflow answer <run-id> --occurrence <id> --choose reject --text "Not yet"   # approval
 archon workflow answer <run-id> --occurrence <id> --choose use-dev                   # select
 archon workflow answer <run-id> --occurrence <id> --choose lint --choose test --json # multi_select
+archon workflow answer <run-id> --occurrence <id> --recommended --as triage-agent    # accept the recommendation
 ```
 
 `--choose` names a declared option id; repeat it for a `multi_select`, and omit it for a
@@ -1214,12 +1231,28 @@ number of options, or an option on a `message` wait is refused and the run stays
 The next node reads the answer as `$<wait-id>.output`: `{ text }`, `{ decision, text }`, or
 `{ decisions, text }`. In the `approval` form `reject` never cancels the run.
 
-The answer records `answeredVia` and `answeredAt` on the run's `metadata.wait`, and a
-`wait_answered` event carries the surface as `via` and the `occurrence`. Like `approve`,
+`--recommended` takes the place of `--choose` and chooses the option the wait's
+recommendation names. It records the same answer as naming that option and passes the
+same validation. It is refused, and the run stays paused, when the wait has no
+recommendation, when the wait's form is `message` or `multi_select`, and when the
+recommended option is the reserved `other`, whose answer needs text of its own.
+
+`--as <name>` records the name the answerer declares for itself, 1 to 64 characters on
+one line. It is a claim: Archon does not check it and no permission depends on it. Use
+it to tell an agent's answers from a person's. `approve`, `reject` and `respond` take it
+too; it is recorded when they answer an attention wait, and a gate's answer records none.
+
+The answer records `answeredVia` and `answeredAt` on the run's `metadata.wait`, and
+`answeredBy` when the answerer is known: `{ declared }` for `--as`, or `{ userId }` for
+the Archon user of an answer through a chat platform. A
+`wait_answered` event carries the surface as `via`, the `occurrence`, the answer, and the
+answerer as `by`. Like `approve`,
 human mode continues the run inline, and `--json` records the answer and returns
 `{ ok, runId, action: "answer", answer, workflowName, resumable }` without continuing
 it; `archon serve` or [`workflow wake`](#workflow-wake) continues it. The HTTP equivalent
-is `POST /api/workflows/runs/<run-id>/answer` with `{ occurrence, choose?, text? }`.
+is `POST /api/workflows/runs/<run-id>/answer` with
+`{ occurrence, choose?, recommended?, text?, as? }`, where `recommended: true` takes the
+place of `choose`.
 
 `approve`, `reject` and `respond <option>` also answer an attention wait, as shorthand:
 `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses

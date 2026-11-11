@@ -21,6 +21,7 @@
     "./store": "./src/store.ts",
     "./attention-queue": "./src/attention-queue.ts",
     "./attention-watch": "./src/attention-watch.ts",
+    "./attention-needs": "./src/attention-needs.ts",
     "./end-turn-request": "./src/end-turn-request.ts",
     "./run-attention-resolution": "./src/run-attention-resolution.ts",
     "./terminal-record": "./src/terminal-record.ts",

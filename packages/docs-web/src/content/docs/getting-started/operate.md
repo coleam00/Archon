@@ -57,6 +57,7 @@ Copy the command the item prints, or write it yourself:
 
 ```bash
 archon workflow respond <run-id> <choice> "why"                # any declared choice
+archon workflow respond <run-id> --recommended "why"           # the choice the item recommends
 archon workflow approve <run-id> "Looks good"
 archon workflow reject <run-id> --reason "Not this week"
 archon workflow answer <run-id> --occurrence <id> --choose use-dev
@@ -64,6 +65,10 @@ archon workflow answer <run-id> --occurrence <id> --text "Rotated the key"
 ```
 
 `respond`, `approve` and `reject` work on both gates and attention waits: each verb picks the option with its id. `answer` speaks the attention wait's own form. `--choose` names a declared option, repeated for a `multi_select` and left out for a `message`. `--text` records free text with the answer. An undeclared choice is refused and the run stays paused. A `select` wait declared with [`other: true`](/reference/workflow-language/#attention-waits) also offers `other`, which needs text: `archon workflow respond <run-id> other "what to do instead"`.
+
+`--recommended` answers an attention wait with the option its recommendation names, in place of a choice on `respond` or of `--choose` on `answer`. Text stays optional. It is the same answer as naming that option, so it is validated the same way. It is refused when the wait has no recommendation, when its form is `message` or `multi_select`, which take none, and when the recommended option is the reserved `other`, which needs text of its own.
+
+`--as <name>` records who is answering, on `answer`, `respond`, `approve` and `reject`: `archon workflow respond <run-id> --recommended --as triage-agent`. The name is whatever the answerer declares, up to 64 characters. Archon does not check it, and nothing is allowed or refused because of it. It tells an agent's answers from a person's when you read the record later. An attention wait's answer stores it as `answeredBy: { "declared": "<name>" }`; an answer through a chat platform stores the Archon user instead, as `{ "userId": "<id>" }`. A gate's answer records the surface only.
 
 `--occurrence` pins the answer to one pause. If the run has moved on to a different pause, the answer is refused and the refusal names the current occurrence. A second answer to the same pause is refused too, so two answerers never both win.
 
@@ -126,6 +131,8 @@ archon workflow attention --json --all --count-by label:ci --since 30d
 ```
 
 The first counts the items open now. With `--since` the count covers every attention wait opened in the window, whether it has been answered or is still open, by the labels each wait opened with.
+
+A `--since` count also says how the recommendations fared. Each group carries `recommendations: { asked, answered, followed }`: how many of its waits opened with a recommendation, how many of those were answered, and how many of those answers chose the recommended option. A class where `followed` stays close to `answered` is one an agent could answer. `--count-by answerer --since 30d` groups the same waits by who answered them. Both read events only: each wait's `wait_started` event records its form, the option ids it offered and the recommended option with its confidence, never the message or the reason, and its `wait_answered` event records the answer. A wait opened by an Archon version that did not record these counts as carrying no recommendation.
 
 This handler answers delivery runs whose CI went red for a reason outside the change, labelled `ci=other`. Start it from a [schedule](/guides/workflow-triggers/) so it polls the queue.
 
@@ -198,8 +205,8 @@ Everything above is also JSON, for scripts and agents. The list, the single read
 | Operation | CLI | HTTP |
 |---|---|---|
 | List | `archon workflow attention --json [--project <id\|name\|key> \| --all] [--label k=v]… [--sort age\|label:<key>]` | `GET /api/runs/attention?project=…&label=…&sort=…` |
-| Count | `archon workflow attention --json --count-by project\|label:<key> [--since <duration\|ISO>]` | `GET /api/runs/attention?countBy=…` |
-| Stream | `archon workflow attention --watch [--protocol [--after <cursor>]] --json [--project … \| --all] [--label k=v]…` | `GET /api/runs/attention/stream?project=…&label=…` (SSE) |
+| Count | `archon workflow attention --json --count-by project\|label:<key>\|answerer [--since <duration\|ISO>]` | `GET /api/runs/attention?countBy=…` |
+| Stream | `archon workflow attention --watch [--notices \| --protocol [--after <cursor>]] --json [--project … \| --all] [--label k=v]…` | `GET /api/runs/attention/stream?project=…&label=…&level=…` (SSE) |
 | Read one | `archon workflow attention <run-id> --json` | `GET /api/runs/<run-id>/attention` |
 | Label | `archon workflow attention label <run-id> --occurrence <id> [--set k=v]… [--unset k]…` | `POST /api/runs/<run-id>/attention/labels` |
 | Answer | `archon workflow answer <run-id> --occurrence <id> …`, or `respond`, `approve`, `reject` | `POST /api/workflows/runs/<run-id>/answer` |
@@ -286,7 +293,15 @@ archon workflow attention --watch --json --label merge=pr # one class of questio
 
 The lines have the shape the [full protocol](#the-full-protocol-for-programs) gives them, and its table lists their fields. Without `--json` each line prints as a sentence, and a line on stderr says what is being watched.
 
-The watch writes nothing else. A run that completed with any other outcome or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
+Every JSON line carries `needs`, which says what the line asks of you:
+
+| `needs` | Meaning | Lines |
+|---|---|---|
+| `answer` | Someone has to answer | `attention` for an attention wait or a gate |
+| `look` | Someone has to look, and the action is run control or stopping work | `attention` for an unreadable item; `resolved` and `unmatched` for an item that needed someone; a `usage_limit` wait that replaces such an item; a failed `terminal`; `owner_lost`; `degraded`; `error` |
+| `nothing` | Nobody has to act | every other line |
+
+The watch writes the `answer` and `look` lines and nothing else. A run that completed with any other outcome or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. `--watch --notices` adds those `nothing` lines, for a reader that also wants to know what happened to the work: every run that ended or resumed, and usage-limit waits opening and closing. It still leaves out `ready` and `bookmark`, which only a program on `--protocol` reads. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
 
 - **`--label` turns a queue or a class on or off.** Labels are the only routing: `--label merge=pr` writes only the items a wait labelled `merge=pr`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
 - **A silent stream proves nothing.** The watch has no heartbeat, so no line can mean that nothing needs you or that the stream stopped reading. A program that must tell the two apart uses `--protocol` and its `bookmark` lines.
@@ -302,7 +317,7 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 | `type` | When | Fields |
 |---|---|---|
 | `attention` | An item opened or changed | `cursor`, `snapshot`, `project`, `workflow`, `parentRunId`, `item` |
-| `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia` and `answeredAt` |
+| `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia`, `answeredBy` and `answeredAt` |
 | `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `occurrence`, `revision` |
 | `terminal` | A run ended | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status`, `outcome`, `cause` |
 | `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused or stale-running run resumed and cleared a stored error | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status: "running"` |
@@ -312,6 +327,8 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 | `degraded` | A snapshot item cannot be read or projected, or repeated failure to project a run; coverage may be incomplete. The stream keeps running | `cursor`, `reason: "run_unreadable"` |
 | `error` | `--after` named a cursor this install did not issue, or the store no longer reads the stream's position. The last line; exit 4 | `error: "cursor_invalid"` |
 
+- **Every line carries `needs`**, as the [plain watch](#stream-the-queue) describes it. A stream started with `--after` cannot know which items the earlier stream held, so it marks every `resolved` and `unmatched` line `look`.
+- **`answeredBy` is who answered an attention wait**, when the answer recorded it: `{ "declared": "<name>" }` for a name given with `--as`, which is a claim Archon does not check, or `{ "userId": "<id>" }` for an answer through a chat platform. It is null for a gate and for an answer that named nobody.
 - **Keep an open set keyed by `runId`.** Each `attention` line replaces that run's item, including when its kind or `resetAt` changes while `revision` stays 1. `resolved` removes it. Its `reason` is `answered`, or `withdrawn` when the run resumed, ended, was deleted or moved to a different pause. For a fan-out child, remove only that child.
 - **Deliveries are at least once.** Replacing by `runId` is idempotent. Dedupe answerable pauses on `(runId, occurrence, revision)`, and `terminal` and `resumed` on `(runId, cursor)`. Don't dedupe every kind by occurrence: usage-limit waits have none. `owner_lost` is a live observation and is not replayed. Only a run whose recorded owner is on this host and user can be reported lost.
 - **Reconnect from a cursor before any event you did not finish.** A cursor names a feed event, and one event can emit two lines with the same cursor (`resolved` then `attention`, or `resolved` then `terminal`). `--after <cursor>` skips the whole event, so checkpoint only on a handled `bookmark` or from before the partly handled event. The new stream sends the snapshot and `ready`, then replays readable changes after the cursor. If the cursor is rejected, reconnect without `--after`.
@@ -326,7 +343,7 @@ The stream only reads. Stopping it affects no run.
 
 ### Stream over HTTP
 
-`GET /api/runs/attention/stream` is the full protocol as server-sent events. Add `needsSomeone=true` to receive only the lines the plain `--watch` writes. A `needsSomeone=true` stream that resumes from `Last-Event-ID` also sends every `resolved` and `unmatched` line, because the server cannot know which items the earlier connection sent; ignore one for an item you do not hold. Each line above is one event, and the event's `data` is the line exactly as `--watch --protocol --json` writes it, so switch on its `type`. Events have no `event` name, so one `onmessage` handler receives every line. The scope is the whole install unless `project` names one; `label=k=v` repeats as on the list route. It needs the same API access as the list route.
+`GET /api/runs/attention/stream` is the full protocol as server-sent events. Add `level=quiet` to receive only the lines the plain `--watch` writes, or `level=notices` for the lines `--watch --notices` writes; `level=protocol` is the default. A `level=quiet` stream that resumes from `Last-Event-ID` also sends every `resolved` and `unmatched` line, because the server cannot know which items the earlier connection sent; ignore one for an item you do not hold. Each line above is one event, and the event's `data` is the line exactly as `--watch --protocol --json` writes it, `needs` included, so switch on its `type`. Events have no `event` name, so one `onmessage` handler receives every line. The scope is the whole install unless `project` names one; `label=k=v` repeats as on the list route. It needs the same API access as the list route.
 
 The event `id` is a cursor to resume from. A browser `EventSource` sends the last one back as `Last-Event-ID` when it reconnects, which works as `--after` does: the new stream sends the snapshot and `ready`, then replays readable changes after that cursor. The id is the cursor of the last event whose lines were all sent, so a reconnect can repeat lines of the event in progress but never skips one. Dedupe repeats with the keys above. Some lines carry no `id`; the client keeps the one it has.
 

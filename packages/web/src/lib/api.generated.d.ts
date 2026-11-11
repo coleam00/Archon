@@ -2077,7 +2077,7 @@ export interface paths {
           project?: string;
           all?: 'true' | 'false';
           label?: string | string[];
-          needsSomeone?: 'true' | 'false';
+          level?: 'quiet' | 'notices' | 'protocol';
         };
         header?: {
           'last-event-id'?: string;
@@ -6527,6 +6527,13 @@ export interface components {
                 text: string;
               };
           answeredVia?: string;
+          answeredBy?:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              };
           /** Format: date-time */
           answeredAt?: string;
           labels?: {
@@ -6671,6 +6678,13 @@ export interface components {
                 text: string;
               };
           answeredVia?: string;
+          answeredBy?:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              };
           /** Format: date-time */
           answeredAt?: string;
           labels?: {
@@ -6871,6 +6885,11 @@ export interface components {
               name: string;
             } | null;
             count: number;
+            recommendations?: {
+              asked: number;
+              answered: number;
+              followed: number;
+            };
           }[];
         }
       | {
@@ -6880,6 +6899,31 @@ export interface components {
           counts: {
             value: string | null;
             count: number;
+            recommendations?: {
+              asked: number;
+              answered: number;
+              followed: number;
+            };
+          }[];
+        }
+      | {
+          /** @enum {string} */
+          by: 'answerer';
+          counts: {
+            answeredBy:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            count: number;
+            recommendations?: {
+              asked: number;
+              answered: number;
+              followed: number;
+            };
           }[];
         };
     AttentionQueueItemResponse: {
@@ -7052,7 +7096,7 @@ export interface components {
       };
       unset?: string[];
     };
-    AttentionStreamLine:
+    AttentionStreamLine: (
       | {
           /** @enum {string} */
           type: 'attention';
@@ -7235,6 +7279,14 @@ export interface components {
               /** @enum {string} */
               reason: 'answered';
               answeredVia: string | null;
+              answeredBy:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
               answeredAt: string | null;
             }
           | {
@@ -7356,7 +7408,11 @@ export interface components {
           type: 'error';
           /** @enum {string} */
           error: 'cursor_invalid';
-        };
+        }
+    ) & {
+      /** @enum {string} */
+      needs: 'answer' | 'look' | 'nothing';
+    };
     DashboardRunsResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
       total: number;
@@ -7428,7 +7484,10 @@ export interface components {
     AnswerWorkflowRunBody: {
       occurrence: string;
       choose?: string[];
+      /** @enum {boolean} */
+      recommended?: true;
       text?: string;
+      as?: string;
     };
     ResetWorkflowNodeSessionsResponse: {
       success: boolean;

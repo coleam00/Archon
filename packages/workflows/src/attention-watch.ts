@@ -35,6 +35,7 @@ import { followWorkflowEventFeed, type WorkflowEventFeedFollower } from './run-s
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
+  attentionAnswererSchema,
   attentionOccurrence,
   gateOccurrence,
   isApprovalContext,
@@ -44,6 +45,7 @@ import {
   terminalWorkflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowRunStatusSchema,
+  type AttentionAnswerer,
   type RunTerminalStatus,
   type WorkflowRun,
   type WorkflowRunStatus,
@@ -102,6 +104,8 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
       occurrence: z.string().nullable(),
       reason: z.literal('answered'),
       answeredVia: recordSurfaceSchema.nullable(),
+      /** Who answered an attention wait, when the answer recorded it; a declared name is a claim. */
+      answeredBy: attentionAnswererSchema.nullable(),
       /** Null when the row had already moved past the answer when the stream read it. */
       answeredAt: z.string().nullable(),
     }),
@@ -143,48 +147,6 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
 export type AttentionStreamLine = z.infer<typeof attentionStreamLineSchema>;
 
 /**
- * The one rule for what the quiet watch passes: the lines someone has to act on. A fresh
- * filter per stream answers, line by line: an item that takes an answer or a look; the
- * close of an item it passed, so nobody keeps working on an ask that was answered or
- * moved; a run that failed, completed with a failed outcome, or lost its owner; and a
- * stream that lost coverage or ended.
- * It drops what only a program syncing the full protocol needs, and a usage-limit wait,
- * which continues by itself, unless that wait replaces an item it passed.
- *
- * `resumed` is for a stream that continues an earlier one from a cursor. The filter did
- * not see what that earlier stream passed, so it passes every close: telling a reader
- * that an item it never held has closed is harmless, and dropping the close of one it
- * holds leaves it working on an ask that is gone.
- */
-export function attentionNeedsSomeoneFilter(
-  options: { resumed?: boolean } = {}
-): (line: AttentionStreamLine) => boolean {
-  const passed = new Set<string>();
-  return line => {
-    switch (line.type) {
-      case 'attention':
-        if (line.item.kind === 'usage_limit') return passed.delete(line.item.runId);
-        passed.add(line.item.runId);
-        return true;
-      case 'resolved':
-      case 'unmatched':
-        return passed.delete(line.runId) || options.resumed === true;
-      case 'terminal':
-        // A run that ran to the end and judged its work unsuccessful needs a look too.
-        return line.status === 'failed' || line.outcome === 'failed';
-      case 'owner_lost':
-      case 'degraded':
-      case 'error':
-        return true;
-      case 'resumed':
-      case 'ready':
-      case 'bookmark':
-        return false;
-    }
-  };
-}
-
-/**
  * Watches one execution claim until its owner is lost (`observedStatus`), the claim
  * changes, or it stops needing an owner (null). Rejects or resolves early when `signal` aborts.
  */
@@ -221,7 +183,12 @@ function occurrenceOf(item: AttentionQueueItem): string | null {
 }
 
 type Resolution =
-  | { reason: 'answered'; answeredVia: string | null; answeredAt: string | null }
+  | {
+      reason: 'answered';
+      answeredVia: string | null;
+      answeredBy: AttentionAnswerer | null;
+      answeredAt: string | null;
+    }
   | { reason: 'withdrawn' };
 
 /** How `occurrence` closed, from the row when it still records the answer. */
@@ -233,6 +200,7 @@ function rowResolution(run: WorkflowRun, occurrence: string | null): Resolution 
       ? {
           reason: 'answered',
           answeredVia: approval.answeredVia ?? null,
+          answeredBy: null,
           answeredAt: approval.answeredAt ?? null,
         }
       : undefined;
@@ -245,6 +213,7 @@ function rowResolution(run: WorkflowRun, occurrence: string | null): Resolution 
     return {
       reason: 'answered',
       answeredVia: wait.answeredVia ?? null,
+      answeredBy: wait.answeredBy ?? null,
       answeredAt: wait.answeredAt ?? null,
     };
   return undefined;
@@ -252,18 +221,21 @@ function rowResolution(run: WorkflowRun, occurrence: string | null): Resolution 
 
 const answerKey = (runId: string, occurrence: string): string => `${runId}\u0000${occurrence}`;
 
-/** The surface of each answer event in a page, by run and occurrence. */
-function indexAnswers(page: WorkflowEventPage): Map<string, string | null> {
-  const answers = new Map<string, string | null>();
+type AnswerOrigin = Pick<Extract<Resolution, { reason: 'answered' }>, 'answeredVia' | 'answeredBy'>;
+
+/** The surface and answerer of each answer event in a page, by run and occurrence. */
+function indexAnswers(page: WorkflowEventPage): Map<string, AnswerOrigin> {
+  const answers = new Map<string, AnswerOrigin>();
   for (const { event } of page.events) {
     if (event.event_type !== 'approval_received' && event.event_type !== 'wait_answered') continue;
-    const { occurrence, via } = event.data;
+    const { occurrence, via, by } = event.data;
     if (typeof occurrence !== 'string') continue;
     const surface = recordSurfaceSchema.safeParse(via);
-    answers.set(
-      answerKey(event.workflow_run_id, occurrence),
-      surface.success ? surface.data : null
-    );
+    const answerer = attentionAnswererSchema.safeParse(by);
+    answers.set(answerKey(event.workflow_run_id, occurrence), {
+      answeredVia: surface.success ? surface.data : null,
+      answeredBy: answerer.success ? answerer.data : null,
+    });
   }
   return answers;
 }
@@ -479,7 +451,7 @@ export async function watchAttentionQueue(
   // was read, so the row reflects at least every event in it.
   let views = new Map<string, Promise<RunView | null>>();
   let codebases = new Map<string, ReturnType<IWorkflowStore['getCodebase']>>();
-  let answers = new Map<string, string | null>();
+  let answers = new Map<string, AnswerOrigin>();
   const projectRun = async (
     runId: string,
     cache = new Map<string, ReturnType<IWorkflowStore['getCodebase']>>()
@@ -590,11 +562,11 @@ export async function watchAttentionQueue(
   ): Promise<void> => {
     const occurrence = occurrenceOf(prev);
     const fromRow = run === null ? undefined : rowResolution(run, occurrence);
-    const via = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
+    const origin = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
     const resolution: Resolution =
       fromRow ??
-      (via !== undefined
-        ? { reason: 'answered', answeredVia: via, answeredAt: null }
+      (origin !== undefined
+        ? { reason: 'answered', ...origin, answeredAt: null }
         : { reason: 'withdrawn' });
     await emit({
       type: 'resolved',

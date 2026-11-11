@@ -212,12 +212,23 @@ describe('GET /api/runs/attention/stream', () => {
     ]);
   });
 
-  test('needsSomeone=true sends only the lines someone has to act on', async () => {
+  test('level selects the lines sent, and every line says what it needs', async () => {
     const app = new OpenAPIHono();
     const cursor = workflowEventCursor('c');
     registerAttentionStreamRoute(app, async listener => {
       await listener({ type: 'ready', cursor });
       await listener({ type: 'bookmark', cursor });
+      await listener({
+        type: 'terminal',
+        cursor,
+        project: null,
+        runId: 'r',
+        workflow: 'ci',
+        parentRunId: null,
+        status: 'completed',
+        outcome: null,
+        cause: null,
+      });
       await listener({ type: 'error', error: 'cursor_invalid' });
       return { close: async () => undefined };
     });
@@ -226,11 +237,20 @@ describe('GET /api/runs/attention/stream', () => {
       await client.done;
       return client.events.map(event => event.line.type);
     };
-    expect(await linesOf('?needsSomeone=true')).toEqual(['error']);
-    expect(await linesOf('')).toEqual(['ready', 'bookmark', 'error']);
+    expect(await linesOf('?level=quiet')).toEqual(['error']);
+    expect(await linesOf('?level=notices')).toEqual(['terminal', 'error']);
+    expect(await linesOf('')).toEqual(['ready', 'bookmark', 'terminal', 'error']);
+    const sent = await (await app.request('/api/runs/attention/stream')).text();
+    expect(sent.match(/"needs":"[a-z]+"/g)).toEqual([
+      '"needs":"nothing"',
+      '"needs":"nothing"',
+      '"needs":"nothing"',
+      '"needs":"look"',
+    ]);
+    expect((await app.request('/api/runs/attention/stream?level=loud')).status).toBe(400);
   });
 
-  test('a resumed needsSomeone stream sends the close of an item this connection never sent', async () => {
+  test('a resumed quiet stream sends the close of an item this connection never sent', async () => {
     const app = new OpenAPIHono();
     const cursor = workflowEventCursor('c');
     const closed = {
@@ -251,7 +271,7 @@ describe('GET /api/runs/attention/stream', () => {
     });
     const linesOf = async (headers: Record<string, string>): Promise<string[]> => {
       const client = sseClient(
-        await app.request('/api/runs/attention/stream?needsSomeone=true', { headers })
+        await app.request('/api/runs/attention/stream?level=quiet', { headers })
       );
       await client.done;
       return client.events.map(event => event.line.type);

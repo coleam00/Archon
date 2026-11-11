@@ -305,7 +305,7 @@ test('a cursor this install did not issue exits 4 with a cursor_invalid line', a
     'file:1.0',
   ]);
   expect(exitCode).toBe(4);
-  expect(stdout.trim()).toBe('{"type":"error","error":"cursor_invalid"}');
+  expect(stdout.trim()).toBe('{"type":"error","error":"cursor_invalid","needs":"look"}');
 }, 60_000);
 
 test('an owner killed mid-run is reported once as owner_lost and the row stays running', async () => {

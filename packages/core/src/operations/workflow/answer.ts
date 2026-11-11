@@ -1,5 +1,7 @@
+import { OTHER_ATTENTION_OPTION } from '@archon/workflows/schemas/dag-node';
 import {
   attentionAnswerProblem,
+  attentionAnswererSchema,
   attentionForm,
   pausedAttentionWait,
   runAttention,
@@ -10,7 +12,7 @@ import type {
   WorkflowAttentionWaitContext,
   WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
-import type { RunActor, RunAction } from '../run-authorization';
+import { answererOf, type RunActor, type RunAction } from '../run-authorization';
 import type { OperationContext } from './context';
 import {
   assertAnswerAdmissible,
@@ -20,10 +22,46 @@ import {
 } from './answer-admission';
 import type { ApprovalOperationResult } from './approve';
 
-/** An answer to an attention wait: the declared option ids it chooses, and free text. */
-export interface AttentionAnswerRequest {
-  choose: readonly string[];
-  text?: string;
+/**
+ * An answer to an attention wait: the declared option ids it chooses, or the option the
+ * wait recommends, and free text.
+ */
+export type AttentionAnswerRequest =
+  | { choose: readonly string[]; text?: string }
+  | { recommended: true; text?: string };
+
+/** Why an answer that accepts the recommendation cannot: the wait has none to accept. */
+export class RecommendationRefusedError extends Error {
+  constructor(
+    readonly reason: 'form_takes_none' | 'none_recorded' | 'recommends_other',
+    message: string
+  ) {
+    super(message);
+    this.name = 'RecommendationRefusedError';
+  }
+}
+
+/** The option `wait` recommends, as an answer accepting the recommendation chooses it. */
+function recommendedOption(run: WorkflowRun, wait: WorkflowAttentionWaitContext): string {
+  const form = attentionForm(wait);
+  const subject = `Run ${run.id}'s attention wait`;
+  if (form !== 'select' && form !== 'approval')
+    throw new RecommendationRefusedError(
+      'form_takes_none',
+      `${subject} (form '${form}') takes no recommendation: only forms 'select' and 'approval' have one. Answer it in its form.`
+    );
+  const option = wait.recommendation?.option;
+  if (option === undefined)
+    throw new RecommendationRefusedError(
+      'none_recorded',
+      `${subject} has no recommendation to accept. Choose one of its options.`
+    );
+  if (wait.other === true && option === OTHER_ATTENTION_OPTION.id)
+    throw new RecommendationRefusedError(
+      'recommends_other',
+      `${subject} recommends the reserved option '${option}', which needs text of its own. Choose '${option}' and say what to do instead.`
+    );
+  return option;
 }
 
 export interface AttentionAnswerOperationResult extends ApprovalOperationResult {
@@ -68,7 +106,8 @@ export function assertAnswerable(run: WorkflowRun): OpenAttentionWait {
 /**
  * The answer `request` gives `wait`, validated against its form by
  * `attentionAnswerProblem`. An undeclared option is refused on every surface, and so is
- * the reserved `other` option without text.
+ * the reserved `other` option without text. An answer accepting the recommendation is the
+ * answer choosing the recommended option, so it passes the same validation.
  */
 export function attentionAnswerFor(
   run: WorkflowRun,
@@ -77,12 +116,13 @@ export function attentionAnswerFor(
 ): AttentionAnswer {
   const form = attentionForm(wait);
   const text = request.text ?? '';
-  const problem = attentionAnswerProblem(wait, { choose: request.choose, text });
+  const choose = 'recommended' in request ? [recommendedOption(run, wait)] : request.choose;
+  const problem = attentionAnswerProblem(wait, { choose, text });
   if (problem !== undefined)
     throw new Error(`Run ${run.id}'s attention wait (form '${form}') ${problem}`);
   if (form === 'message') return { text };
-  if (form === 'multi_select') return { decisions: [...request.choose], text };
-  const [decision] = request.choose;
+  if (form === 'multi_select') return { decisions: [...choose], text };
+  const [decision] = choose;
   return { decision, text };
 }
 
@@ -119,10 +159,14 @@ export async function answerRun(
   assertAnswerAdmissible(run, origin);
   const wait = assertAnswerable(run);
   const answer = attentionAnswerFor(run, wait, request);
+  const answeredBy = answererOf(actor);
+  if (answeredBy !== undefined && !attentionAnswererSchema.safeParse(answeredBy).success)
+    throw new Error('The declared answerer name must be 1 to 64 characters on one line.');
   const { answered } = await ctx.store.answerAttentionWait(run.id, {
     pauseId: wait.pauseId,
     answer,
     answeredVia: origin.via,
+    ...(answeredBy === undefined ? {} : { answeredBy }),
     answeredAt: new Date().toISOString(),
   });
   if (!answered) {

@@ -62,11 +62,28 @@ export const attentionAnswerSchema = z.union([
 ]);
 export type AttentionAnswer = z.infer<typeof attentionAnswerSchema>;
 
+/** A name an answerer declares for itself. */
+export const declaredAnswererNameSchema = z
+  .string()
+  .regex(/^\S(?:[^\r\n]{0,62}\S)?$/u, 'must be 1 to 64 characters on one line');
+
+/**
+ * Who answered an attention wait, as far as the engine knows. `declared` is a name the
+ * answerer gave for itself: a claim nothing checks and nothing authorizes on. `userId` is
+ * the Archon user a chat platform resolved its sender to.
+ */
+export const attentionAnswererSchema = z.union([
+  z.strictObject({ declared: declaredAnswererNameSchema }),
+  z.strictObject({ userId: z.string().min(1) }),
+]);
+export type AttentionAnswerer = z.infer<typeof attentionAnswererSchema>;
+
 /**
  * An attention wait paused before answers existed has only `waitingSince` and `message`:
  * no `pauseId`, it reads as the `message` form, and only `resume` continues it. A newer
  * wait carries its occurrence, its form, resolved options and recommendation, and once
- * answered, the answer with the surface it came through and when. `labels` holds the
+ * answered, the answer with the surface it came through, when, and who answered when
+ * that is known (`attentionAnswererSchema`). `labels` holds the
  * node's resolved labels merged with every label write since, and `revision` counts those
  * writes from 1; a wait without them has no labels and is at revision 1. `other` marks a
  * wait whose last option is the reserved `OTHER_ATTENTION_OPTION`.
@@ -82,6 +99,7 @@ const workflowWaitAttentionFields = {
   recommendation: attentionRecommendationSchema.optional(),
   answer: attentionAnswerSchema.optional(),
   answeredVia: recordSurfaceSchema.optional(),
+  answeredBy: attentionAnswererSchema.optional(),
   answeredAt: z.string().datetime().optional(),
   labels: attentionLabelsSchema.optional(),
   revision: z.number().int().positive().optional(),

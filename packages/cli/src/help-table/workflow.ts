@@ -89,14 +89,15 @@ export const workflowHelp: HelpGroup = {
           description: 'Oldest pause first (default), or by a label',
         },
         {
-          spec: '--count-by project|label:<key>',
-          description: 'Count items per project or per label value',
+          spec: '--count-by project|label:<key>|answerer',
+          description: 'Count items per project or per label value; with --since also per answerer',
         },
         {
           spec: '--since <7d|24h|2w|ISO>',
           description:
             'With --count-by: count the attention waits opened since then, answered or\n' +
-            'still open, by the labels each opened with',
+            'still open, by the labels each opened with, and how many carried a\n' +
+            'recommendation and were answered as recommended',
         },
         {
           spec: '--watch',
@@ -105,6 +106,12 @@ export const workflowHelp: HelpGroup = {
             'open, change or close, and runs that fail or lose their owner\n' +
             'A degraded warning means coverage may have gaps:\n' +
             'https://archon.diy/getting-started/operate/#stream-the-queue',
+        },
+        {
+          spec: '--notices',
+          description:
+            'With --watch: also what happened to work nobody has to act on (a run\n' +
+            'completed, was cancelled or resumed)',
         },
         {
           spec: '--protocol',
@@ -194,6 +201,14 @@ export const workflowHelp: HelpGroup = {
       spec: 'workflow respond <run-id> <decision> [text]',
       description:
         "Resolve a paused gate with any of its declared decisions\n('approve'/'reject' are sugar for the dedicated commands)",
+      scopedFlags: [
+        {
+          spec: '--recommended',
+          description:
+            'In place of <decision>: answer an attention wait with the option it\n' +
+            'recommends; refused when it recommends none',
+        },
+      ],
     },
     {
       command: 'workflow',
@@ -205,6 +220,10 @@ export const workflowHelp: HelpGroup = {
           spec: '--choose <id>',
           description:
             'A declared option to choose; repeat for a multi_select (omit for a message form)',
+        },
+        {
+          spec: '--recommended',
+          description: 'In place of --choose: the option the wait recommends',
         },
         { spec: '--text <text>', description: 'Free text recorded with the answer' },
       ],
