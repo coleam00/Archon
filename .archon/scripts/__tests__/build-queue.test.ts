@@ -526,11 +526,13 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.claim).toBeNull();
   }, 60_000);
 
-  test("a blocked item judged unblocked gets the run's re-triage request and one intake pickup, and is not listed again until its revisit is due", () => {
+  test("a blocked item is listed for one run at a time, and one judged unblocked gets the run's re-triage request and one intake pickup", () => {
     const at = install();
     seed(at, triaged({ stage: 'blocked' }));
     const blocked = ok(run(at, 'blocked', { INPUTS_REVISIT_BLOCKED: 'true' })).blocked;
     expect(blocked).toEqual([{ number: 7, summary: '' }]);
+    // A second run that lists while the first run's agent is still judging gets none of its items.
+    expect(ok(run(at, 'blocked', { WORKFLOW_ID: 'run-2', INPUTS_REVISIT_BLOCKED: 'true' })).blocked).toEqual([]);
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const retriage = (judged: unknown[]) =>
       run(at, 'retriage', {
