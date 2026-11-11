@@ -43,6 +43,7 @@ function triageResult(): TriageResult | null {
     importance: triage.importance,
     urgency: triage.urgency,
     related: triage.related,
+    ...(decision.contract === 'BLOCKED' ? { blocked: { reason: decision.blocked_reason, by: decision.blocked_by } } : {}),
     closure: decision.contract === 'NO_ACTION' ? decision.closure : null,
     questions: decision.contract === 'NEEDS_CONTRACT_WORK' ? decision.questions : [],
     labels: triageLabels({ ...triage, decision }),
