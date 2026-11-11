@@ -6,6 +6,7 @@ import {
   StateLeaseNotHeldError,
   StatePatchError,
   claimFirstStateDocument,
+  StateDocumentMissingError,
   stateValueSchema,
   statePutSchema,
   stateWriterSchema,
@@ -612,13 +613,34 @@ export function describeStateDocumentConformance(
       await runs.setStatus(ended, 'running');
       await runs.setStatus(ended, 'cancelled');
       await put('free');
-      const candidates = ['absent', 'leased', 'moved', 'dead', 'free'].map(name => ({
-        name,
-        ifRevision: 1,
-      }));
+      await put('gone');
+      const tombstone = await store.deleteStateDocument({ scope, name: 'gone', writer });
+      const candidates = [
+        // Named at the revision of its delete, so only the missing value can refuse it.
+        { name: 'gone', ifRevision: tombstone.revision },
+        ...['absent', 'leased', 'moved', 'dead', 'free'].map(name => ({ name, ifRevision: 1 })),
+      ];
       const input = { scope, writer: { kind: 'run' as const, runId: claimer, nodePath: 'claim' } };
+      expect(
+        await rejection(store.claimStateDocument({ ...input, ...candidates[0] }))
+      ).toBeInstanceOf(StateDocumentMissingError);
+      // A candidate deleted between the claim's read and its write is passed over too.
+      const deletedMeanwhile: typeof store = Object.create(store);
+      deletedMeanwhile.getStateDocument = async (target, name) => {
+        const read = await store.getStateDocument(target, name);
+        if (name === 'vanishing') await store.deleteStateDocument({ scope, name, writer });
+        return read;
+      };
+      await put('vanishing');
+      expect(
+        await claimFirstStateDocument(deletedMeanwhile, {
+          ...input,
+          candidates: [{ name: 'vanishing', ifRevision: 2 }],
+        })
+      ).toEqual({ claimed: null, skipped: [{ name: 'vanishing', reason: 'missing' }] });
       const result = await claimFirstStateDocument(store, { ...input, candidates });
       expect(result.skipped).toEqual([
+        { name: 'gone', reason: 'missing' },
         { name: 'absent', reason: 'missing' },
         {
           name: 'leased',
@@ -643,7 +665,7 @@ export function describeStateDocumentConformance(
       expect((await store.getStateDocument(scope, 'free'))?.revision).toBe(1);
       const none = await claimFirstStateDocument(store, {
         ...input,
-        candidates: candidates.slice(0, 3),
+        candidates: candidates.slice(0, 4),
       });
       expect(none.claimed).toBeNull();
       expect(none.skipped).toEqual(result.skipped);

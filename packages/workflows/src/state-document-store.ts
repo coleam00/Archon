@@ -185,6 +185,12 @@ export class StateLeaseHeldError extends Error {
     super(`State document '${name}' is leased by live run ${holder.runId}`);
   }
 }
+/** A claim of a deleted document, named at the revision of its delete; nothing was written. */
+export class StateDocumentMissingError extends Error {
+  constructor(public readonly name: string) {
+    super(`State document '${name}' is deleted`);
+  }
+}
 /** A `held` write by a writer that does not hold the document's live lease; nothing was written. */
 export class StateLeaseNotHeldError extends Error {
   constructor(
@@ -416,7 +422,7 @@ export function stateClaimValue(
   const actual = prior?.revision ?? 0;
   if (actual !== input.ifRevision)
     throw new StateRevisionConflictError(input.name, input.ifRevision, actual);
-  if (prior?.value == null) throw new Error(`State document '${input.name}' is deleted`);
+  if (prior?.value == null) throw new StateDocumentMissingError(input.name);
   return prior.value;
 }
 /** Documents a run offers to claim, in its own order of preference. */
@@ -448,7 +454,8 @@ export type StateClaimResult = z.infer<typeof stateClaimResultSchema>;
 /**
  * Takes the lease of the first candidate whose revision still matches and whose lease is
  * free, ended or the run's own, and reports why each earlier candidate was passed over.
- * Each attempt is one store claim, so a candidate is taken atomically or not at all.
+ * Each attempt is one store claim, so a candidate is taken atomically or not at all, and
+ * one deleted meanwhile is passed over as missing.
  */
 export async function claimFirstStateDocument(
   store: Pick<IStateDocumentStore, 'getStateDocument' | 'claimStateDocument'>,
@@ -461,8 +468,7 @@ export async function claimFirstStateDocument(
   const { scope, writer } = input;
   const skipped: StateClaimResult['skipped'] = [];
   for (const { name, ifRevision } of stateClaimCandidatesSchema.parse(input.candidates)) {
-    const current = await store.getStateDocument(scope, name);
-    if (current === null) {
+    if ((await store.getStateDocument(scope, name)) === null) {
       skipped.push({ name, reason: 'missing' });
       continue;
     }
@@ -472,7 +478,9 @@ export async function claimFirstStateDocument(
         skipped,
       };
     } catch (error) {
-      if (error instanceof StateRevisionConflictError)
+      // Deleted between the read above and the claim.
+      if (error instanceof StateDocumentMissingError) skipped.push({ name, reason: 'missing' });
+      else if (error instanceof StateRevisionConflictError)
         skipped.push({ name, reason: 'revision_moved', revision: error.actual });
       else if (error instanceof StateLeaseHeldError)
         skipped.push({ name, reason: 'lease_held', holder: error.holder });
