@@ -18,7 +18,7 @@ import {
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
-import type { getTerminalRecord } from '@archon/workflows/terminal-record';
+import { terminalReason, type getTerminalRecord } from '@archon/workflows/terminal-record';
 import type {
   WorkflowRun,
   WorkflowRunStatus,
@@ -460,6 +460,7 @@ export function printRunDetail(
   console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
   console.log(`  Status: ${run.status}`);
   if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
+  printReason(terminalRecord);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
   for (const line of formatRunUsage(run.metadata)) console.log(line);
   printRunThroughput(detail.throughput);
@@ -485,6 +486,11 @@ export function printRunDetail(
     }
     printVerboseNodes(events);
   }
+}
+
+/** Why a run that failed, or completed with a failed outcome, ended that way. */
+function printReason(terminalRecord: TerminalRecord | null): void {
+  for (const reason of terminalReason(terminalRecord)) console.log(`  Reason: ${reason}`);
 }
 
 /** The gate, choices, wait and scheduled-resume lines of a paused or failed run. */

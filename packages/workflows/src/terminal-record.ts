@@ -388,3 +388,56 @@ export function recordedFailureKind(event: TerminalRecordEvent): NodeFailureKind
   const kind = nodeFailureKindSchema.safeParse(readNodeRecordData(event.data).failure_kind);
   return kind.success ? kind.data : undefined;
 }
+
+const REASON_LINES = 2;
+const REASON_LINE_LENGTH = 200;
+
+/** The first line of `text` that says anything. */
+function firstLine(text: string): string | undefined {
+  return text
+    .split('\n')
+    .map(candidate => candidate.trim())
+    .find(candidate => candidate !== '');
+}
+
+/** What a returned value says in text: its lines, or each text field of an object as `key: text`. */
+function returnedText(value: unknown): string[] {
+  if (typeof value === 'string') return value.split('\n').map(line => line.trim());
+  if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
+  return Object.entries(value).flatMap(([key, field]) => {
+    const line = typeof field === 'string' ? firstLine(field) : undefined;
+    return line === undefined ? [] : [`${key}: ${line}`];
+  });
+}
+
+const boundedReason = (lines: readonly string[]): string[] =>
+  lines
+    .filter(line => line !== '')
+    .slice(0, REASON_LINES)
+    .map(line =>
+      line.length > REASON_LINE_LENGTH ? `${line.slice(0, REASON_LINE_LENGTH - 1)}…` : line
+    );
+
+/**
+ * Why a run completed with a failed outcome, in at most two short lines: what its
+ * `returns:` node said, since that node authored the verdict. Empty for any other run and
+ * when the record holds no returned text. The attention stream carries this, because the
+ * workflow wrote it to be read as the run's result.
+ */
+export function failedOutcomeReason(record: TerminalRecord | null): string[] {
+  if (record?.status !== 'completed' || record.outcome !== 'failed') return [];
+  if (record.returns.availability !== 'available') return [];
+  return boundedReason(returnedText(record.returns.value));
+}
+
+/**
+ * Why a run that ended needs a look, for a reader of that one run: the failed-outcome
+ * reason, or for a failed run the first line of its first failed node's error, or else of
+ * the run's own. Error text is whatever a command or provider printed, so it stays out of
+ * the attention stream, which names only the failed node and its error class.
+ */
+export function terminalReason(record: TerminalRecord | null): string[] {
+  if (record?.status !== 'failed') return failedOutcomeReason(record);
+  const failed = record.nodes.find(node => node.node_id === record.first_failed_node);
+  return boundedReason([firstLine(failed?.error ?? record.error ?? '') ?? '']);
+}
