@@ -395,8 +395,8 @@ async function* translateNodeOptions(
   }
 
   // tools: covers allowed_tools / denied_tools. `undefined` leaves Pi
-  // defaults; an explicit empty array means "no tools" (valid idiom
-  // matching e2e-claude-smoke's `allowed_tools: []`).
+  // defaults; an explicit empty array selects no built-in tools.
+  // Separately supplied tools and user extension tools are outside this filter.
   // requestOptions.env (codebase-scoped env vars from .archon/config.yaml)
   // is injected into bash subprocesses via a BashSpawnHook, mirroring
   // Claude's options.env and Codex's constructor env.

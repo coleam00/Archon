@@ -243,6 +243,10 @@ Pi keeps its native context-file discovery: `~/.pi/agent/AGENTS.md`, plus `AGENT
 
 Pi extensions are packages installed with `pi install npm:<package>`, or your own local files, that hook into the agent's lifecycle. They can add tools, intercept tool calls or block for human review. Archon loads them by default.
 
+`allowed_tools: []` does not restrict user Pi extension tools, and `denied_tools` cannot block them. These fields filter only Pi's `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls` coding tools, before Archon adds separately supplied tools. Native tools such as `manage_run` when supplied, and `structured_output` when requested, also remain outside the filter. See [workflow tool restrictions](/reference/workflow-language/#allowed_tools-and-denied_tools-for-tool-restrictions) for selection and precedence.
+
+Extensions remain user-owned. To disable an unwanted extension, remove or exclude it through Pi's [settings resources](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md#resources) or [package management](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/packages.md#install-and-manage-packages), normally in `~/.pi/agent/settings.json` or the project's `.pi/settings.json`. For auto-discovered local files, move or remove them from Pi's [extension locations](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md#extension-locations). Resource lists combine across user and project settings: `extensions: []` is not a universal off switch, and `defaultTools: []` does not control extension discovery.
+
 :::warning[Repo-controlled `.pi/` directories]
 Extension discovery includes `<cwd>/.pi/extensions/*.ts` and `<cwd>/.pi/settings.json` in the run's working directory. When you run a workflow against a repository you did not write, anything in its `.pi/` runs with the Archon server's OS permissions. Audit that directory first, or set `enableExtensions: false` globally or on the node.
 :::
