@@ -90,9 +90,11 @@ nodes:
         items: { type: array, items: { type: object } }
         # Claimed items settled without the sweep: merged or closed already, or no pull request.
         settled: { type: array, items: { type: object } }
+        # The pack's merge_lane setting: under manual, nothing merges without an approval at its head.
+        lane: { type: string }
         # The pack's ci setting: what the gate trusts at a head besides the verdict.
         ci: { type: string }
-      required: [path, base, base_error, items, settled, ci]
+      required: [path, base, base_error, items, settled, lane, ci]
 
   - id: sweep
     command: sweep
@@ -102,7 +104,7 @@ nodes:
     with:
       base: { from: "$facts.output.base" }
       items: { from: "$facts.output.items" }
-      auto: "$INPUTS.auto_merge_queue"
+      lane: "$facts.output.lane"
       ci: "$facts.output.ci"
     output_format:
       type: object

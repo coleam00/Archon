@@ -18,7 +18,7 @@
  * INPUTS_CANDIDATE, the number facts found continuable, else empty or `null`;
  * INPUTS_CONTINUES, the number route declared the round continues, else empty or `null`;
  * INPUTS_ROUTE, the route route declared for the round.
- * Route may decline the candidate, never name another pull request. INPUTS_AUTO_BUILD_QUEUE
+ * Route may decline the candidate, never name another pull request. INPUTS_BUILD_LANE
  * is the pack's setting.
  *
  * It emits the commit the continued pull request's review last named, or null, so the
@@ -31,21 +31,21 @@ import { type PrRecord, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { boolSetting, reviewedHead } from '../../.shared/merge.ts';
+import { parseLane, reviewedHead } from '../../.shared/merge.ts';
 import { announce } from '../../.shared/queue.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 import { read, workItemName } from '../../.shared/workitem.ts';
 
 /**
- * With the `auto_build_queue` setting off no round launches by the queue's own decision: the
+ * Under the `manual` build lane no round launches by the queue's own decision: the
  * item's newest build decision must be a maintainer's answer.
  */
 function requireAnswerUnderManual(item: QualifiedPr): void {
-  if (boolSetting('auto_build_queue')) return;
+  if (parseLane('build_lane', input('build_lane').trim()) !== 'manual') return;
   const newest = read(workItemName(item.number))?.doc.facts.build?.decisions.at(-1);
   if (newest?.answer === undefined)
-    throw new Error(`auto_build_queue is off and no maintainer answered for issue ${String(item.number)} since the queue's last decision; route asks instead of launching`);
+    throw new Error(`the build lane is manual and no maintainer answered for issue ${String(item.number)} since the queue's last decision; route asks instead of launching`);
 }
 
 /** The round is about to start: this script runs only before one. */

@@ -147,25 +147,22 @@ besides a Ready review verdict.
   requires a passing validation at exactly the head it merges. This trusts the agent's
   report of the run, which is weaker than CI.
 
-**Ask the user** how much the factory does by itself. A setting never changes the
-policy: with a queue's setting off, its agent judges as before and asks instead of acting.
+**Ask the user** how much the factory does by itself. Two settings turn it down, and
+they are the off switch:
 
-- `auto_build_queue`: `true` (the default) launches a clear item's build round by
-  itself. With `false` the queue's agent still judges every item, but a launch becomes a
-  question with that launch as the recommendation, and no round starts until a
-  maintainer answered.
-- `auto_merge_queue`: `true` (the default) merges a clear pull request by itself. With
-  `false` the agent still judges every pull request, but a merge becomes a question with
-  `merge` as the recommendation, and nothing merges that a maintainer did not approve at
-  its head.
+- `build_lane`: `auto` (the default) launches a clear item's build round by itself.
+  `manual` launches none until a maintainer answered the build queue's question about
+  the item, so every launch arrives on the attention queue with a recommendation.
+- `merge_lane`: `auto` (the default) merges a clear pull request by itself. `manual`
+  merges nothing until a maintainer approved the pull request at its head.
 - `protected_paths`: comma-separated globs, empty by default. A pull request that
-  changes a matching path never merges on the queue's own judgment, whatever
-  `auto_merge_queue` says: it is asked about, and merges once approved at its head. Use
-  it for what a person must read first, such as `.archon/workflows/**,infra/**`.
+  changes a matching path never merges on the auto lane, whatever `merge_lane` says: it
+  is asked about, and merges once approved at its head. Use it for what a person must
+  read first, such as `.archon/workflows/**,infra/**`.
 
 ```yaml
 settings:
-  auto_merge_queue: false
+  merge_lane: manual
   protected_paths: ".archon/workflows/**,.archon/packs/**"
 ```
 

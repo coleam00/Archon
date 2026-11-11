@@ -1,4 +1,4 @@
 # This repository's values for the SDLC pack's settings (`.archon/workflows/sdlc/.pack/pack.yaml`).
 settings:
-  # A change to the pack itself never merges on the queue's own judgment: a maintainer reads it first.
+  # A change to the pack itself never merges on the auto lane: a maintainer reads it first.
   protected_paths: ".archon/workflows/**,.archon/commands/**,.archon/scripts/**,.archon/packs/**"

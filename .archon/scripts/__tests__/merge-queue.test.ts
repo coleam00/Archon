@@ -114,9 +114,9 @@ describe('the merge record and the gate', () => {
     ]);
   });
 
-  test('with auto_merge_queue off, or with a protected path changed, the gate passes only with an approval at exactly the head', () => {
+  test('under the manual lane, or with a protected path changed, the gate passes only with an approval at exactly the head', () => {
     const lane = (overrides: Partial<Parameters<typeof gateRefusals>[4]>) => gateRefusals(FACTS, HEAD, BASE, FORGE, { ...AUTO, ...overrides });
-    expect(lane({ manual: true })).toEqual(['auto_merge_queue is off and no maintainer approved it at this head']);
+    expect(lane({ manual: true })).toEqual(['the merge lane is manual and no maintainer approved it at this head']);
     expect(lane({ manual: true, approved: OLD })).toHaveLength(1);
     expect(lane({ manual: true, approved: HEAD })).toEqual([]);
     expect(lane({ protected: ['.pack/a.yaml'] })).toEqual(['it changes protected paths (.pack/a.yaml) and no maintainer approved it at this head']);
@@ -311,7 +311,7 @@ function run(
       INPUTS_REPO_HOST: PR.repo.host,
       INPUTS_REPO_PATH: PR.repo.path,
       INPUTS_LIMIT: '10',
-      INPUTS_AUTO_MERGE_QUEUE: 'true',
+      INPUTS_MERGE_LANE: 'auto',
       INPUTS_PROTECTED_PATHS: '',
       INPUTS_MERGE_METHOD: 'squash',
       INPUTS_CI: 'forge',
@@ -622,7 +622,7 @@ describe('the merge queue scripts', () => {
     ok(run(at, 'record', { ...recordInputs([decision({})]), ARCHON_CALL_LOG: calls }, { pr: { state: 'MERGED' } }));
     expect(said()).toEqual([{ text: `PR 42 merged at ${HEAD} (auto)`, labels: ['stage=merge', 'kind=merged', 'item=7', 'pr=42', 'lane=auto'] }]);
 
-    // Merged at the head a maintainer approved.
+    // Merged at the head a maintainer approved: the manual lane.
     writeFileSync(calls, '');
     seed(at, item(BUILT, undefined, CLAIMED));
     const approved = JSON.stringify([{ ...(JSON.parse(ITEMS) as object[])[0], record: { ...merge('waiting'), approval: { head: HEAD, at: AT } } }]);
@@ -750,7 +750,7 @@ describe('the merge queue facts and gate', () => {
     expect(merges(stale)).toEqual([]);
   }, 60_000);
 
-  test('a pull request that changes a protected path, or any with auto_merge_queue off, merges only with an approval at its head', () => {
+  test('a pull request that changes a protected path, or any under the manual lane, merges only with an approval at its head', () => {
     const at = install();
     seed(at, item());
     const pack = { pr: { files: ['.archon/workflows/sdlc/.pack/pack.yaml', 'src/a.ts'] } };
@@ -758,12 +758,12 @@ describe('the merge queue facts and gate', () => {
     const refused = gate(at, pack, protectedPaths);
     expect(gated(refused).refusals).toEqual(['it changes protected paths (.archon/workflows/sdlc/.pack/pack.yaml) and no maintainer approved it at this head']);
     expect(merges(refused)).toEqual([]);
-    // A change outside them merges on the queue's own judgment, and not with auto_merge_queue off.
-    expect(gated(gate(at, { pr: { files: ['src/a.ts'] } }, { ...protectedPaths, INPUTS_AUTO_MERGE_QUEUE: 'false' })).refusals).toEqual([
-      'auto_merge_queue is off and no maintainer approved it at this head',
+    // A change outside them merges on the auto lane, and not under the manual one.
+    expect(gated(gate(at, { pr: { files: ['src/a.ts'] } }, { ...protectedPaths, INPUTS_MERGE_LANE: 'manual' })).refusals).toEqual([
+      'the merge lane is manual and no maintainer approved it at this head',
     ]);
     seed(at, item(BUILT, { ...merge('waiting'), approval: { head: HEAD, at: AT } }));
-    const approved = gate(at, pack, { ...protectedPaths, INPUTS_AUTO_MERGE_QUEUE: 'false' });
+    const approved = gate(at, pack, { ...protectedPaths, INPUTS_MERGE_LANE: 'manual' });
     expect(gated(approved).refusals).toEqual([]);
     expect(merges(approved)).toEqual([`forge pr.merge squash ${HEAD}`]);
   }, 60_000);

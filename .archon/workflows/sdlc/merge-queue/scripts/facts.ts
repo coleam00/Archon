@@ -22,6 +22,7 @@ import {
   MERGE_PICKUP,
   listSetting,
   parseCiMode,
+  parseLane,
   protectedChanges,
   type MergeRecord,
   type MergeSettled,
@@ -111,6 +112,7 @@ function emitFacts(
   repo: QualifiedPr['repo'],
   items: readonly Item[],
   settled: readonly MergeSettled[],
+  lane: string,
   ci: CiMode
 ): void {
   // The default branch is read on every run: a red one after the last merge needs the
@@ -133,6 +135,7 @@ function emitFacts(
     base_error: inspection.error,
     items,
     settled,
+    lane,
     ci,
   });
 }
@@ -140,6 +143,7 @@ function emitFacts(
 function main(): void {
   const limit = positive('limit', input('limit').trim());
   const ci = parseCiMode(input('ci').trim());
+  const lane = parseLane('merge_lane', input('merge_lane').trim());
   const protectedPaths = listSetting(input('protected_paths'));
   const repo = workflowRepo();
   const runId = workflowRunId();
@@ -178,7 +182,7 @@ function main(): void {
       protected: protectedChanges(pr, protectedPaths),
     });
   }
-  emitFacts(repo, items, settled, ci);
+  emitFacts(repo, items, settled, lane, ci);
 }
 
 try {

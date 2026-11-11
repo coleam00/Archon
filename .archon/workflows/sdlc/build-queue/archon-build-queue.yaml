@@ -237,7 +237,7 @@ nodes:
       brief: "$facts.output.brief"
       pull_request: { from: "$facts.output.pull_request" }
       continues: "$facts.output.continues"
-      auto: "$INPUTS.auto_build_queue"
+      lane: "$INPUTS.build_lane"
     output_format:
       type: object
       properties:
