@@ -12,10 +12,12 @@
  * per name and subject, so a re-run replaces rather than adds.
  */
 
+import { createHash } from 'node:crypto';
 import { BUILD_BRANCH_PREFIX } from './build.ts';
 import { invokeForge, parsePrRecord, record, sameRepo } from './forge.ts';
 import { resolvePrUrl } from './pr.ts';
 import { note } from './io.ts';
+import { stateDocuments, statePut } from './state.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */
@@ -93,19 +95,79 @@ export function prFacts(url: string, view: Record<string, unknown> | null): PrFa
 }
 
 /**
- * Read each pull request by number, so no list limit can drop an old one. A recorded
- * URL the forge says is not a pull request URL is noted and left out; a forge that
- * cannot resolve one fails the read, so the cohort is never silently short.
+ * A merged pull request's facts never change, so a run keeps them: one state document
+ * per recorded URL, holding the facts. The next run reads every kept document in one
+ * call and asks the forge only about the pull requests that can still change: open
+ * ones, closed ones (which can reopen), and merged ones no run has kept yet. The cost
+ * of a run then grows with those, not with every pull request ever recorded.
+ */
+const SETTLED_PREFIX = 'pr-facts/';
+
+const settledName = (url: string): string => `${SETTLED_PREFIX}${createHash('sha256').update(url).digest('hex')}`;
+
+/** The facts a run kept, or undefined for a document that is not a merged pull request's facts. */
+function keptFacts(value: unknown): PrFacts | undefined {
+  const facts = record(value);
+  if (
+    facts?.state !== 'MERGED' ||
+    typeof facts.url !== 'string' ||
+    typeof facts.createdAt !== 'string' ||
+    typeof facts.mergedAt !== 'string' ||
+    (facts.closedAt !== null && typeof facts.closedAt !== 'string') ||
+    typeof facts.headRefName !== 'string' ||
+    typeof facts.isCrossRepository !== 'boolean'
+  ) {
+    return undefined;
+  }
+  return {
+    url: facts.url,
+    state: 'MERGED',
+    createdAt: facts.createdAt,
+    mergedAt: facts.mergedAt,
+    closedAt: facts.closedAt,
+    headRefName: facts.headRefName,
+    isCrossRepository: facts.isCrossRepository,
+  };
+}
+
+/**
+ * Keep a merged pull request's facts. The metrics are already right without the
+ * document, so a failed write is noted and the run goes on, and the next run reads the
+ * pull request again. A conflict means another run kept the same facts first.
+ */
+function keepFacts(name: string, facts: PrFacts, revision: number): void {
+  try {
+    statePut(name, facts, revision);
+  } catch (error) {
+    note(`PR metrics could not keep the facts of ${facts.url}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Read each pull request by number, so no list limit can drop an old one, except a
+ * merged one an earlier run kept. A recorded URL the forge says is not a pull request
+ * URL is noted and left out; a forge that cannot resolve one fails the read, so the
+ * cohort is never silently short.
  */
 export function readPrFacts(urls: Iterable<string>): PrFacts[] {
+  const stored = new Map(stateDocuments(SETTLED_PREFIX).map(document => [document.name, document]));
   const facts: PrFacts[] = [];
   for (const url of urls) {
+    const name = settledName(url);
+    const kept = keptFacts(stored.get(name)?.value);
+    if (kept?.url === url) {
+      facts.push(kept);
+      continue;
+    }
     const ref = resolvePrUrl(url);
     if (ref === undefined) {
       note(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
       continue;
     }
-    facts.push(prFacts(url, invokeForge('pr.view', { selector: { kind: 'number', ref } })));
+    const read = prFacts(url, invokeForge('pr.view', { selector: { kind: 'number', ref } }));
+    facts.push(read);
+    // A document that is not valid facts is replaced, at its revision, rather than read past every run.
+    if (read.state === 'MERGED' && read.mergedAt !== null) keepFacts(name, read, stored.get(name)?.revision ?? 0);
   }
   return facts;
 }
