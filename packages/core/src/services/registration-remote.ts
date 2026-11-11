@@ -206,14 +206,15 @@ async function readableRemoteIdentity(project: ProjectIdentity): Promise<string 
     return url ? await remoteIdentity(url, project.default_cwd) : null;
   } catch (error) {
     // An unreadable checkout has unknown ownership; it must not veto other projects.
-    const unavailable = new ProjectRegistrationError(
-      `Cannot verify the remote owned by project "${project.name}" at ${project.default_cwd}. ` +
-        'Restore access to that checkout or repair it with /update-project. ' +
-        `Remote error: ${error instanceof Error ? error.message : String(error)}`,
-      { cause: error }
-    );
+    // The operator repairs or removes the registration, so it stays a warning, as one
+    // short line: the full error and its stack repeated for every stale project.
     createLogger('registration.remote').warn(
-      { err: unavailable },
+      {
+        project: project.name,
+        path: project.default_cwd,
+        reason: (error instanceof Error ? error.message : String(error)).split('\n', 1)[0],
+        fix: 'Restore the checkout or repair it with /update-project.',
+      },
       'registration.lookup_legacy_unavailable'
     );
     return null;

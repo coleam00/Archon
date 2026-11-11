@@ -40,7 +40,8 @@ function shouldLoadMaintainedReceipt(
   const descriptor = receipt.descriptor;
   if (!isMaintainedProvider(descriptor.id)) return true;
   if (options.maintained === 'source') {
-    createLogger('core.provider-plugins').warn(
+    // A source checkout runs maintained providers from source; the receipt is not a fault.
+    createLogger('core.provider-plugins').debug(
       { receipt: receiptPath(pluginsDir, receipt.id) },
       'provider.receipt_skipped_source'
     );
