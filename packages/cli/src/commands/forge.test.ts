@@ -402,7 +402,8 @@ test('new work-item mutations use file requests and record content-free verified
             },
           ],
         }),
-        env: { WORKFLOW_ID: 'workitems-run' },
+        // Real discovery runs here, so it scans this home and never the developer's.
+        env: { HOME: directory, ARCHON_HOME: directory, WORKFLOW_ID: 'workitems-run' },
         write: async value => {
           output.push(value);
         },
