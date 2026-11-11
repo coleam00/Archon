@@ -59,7 +59,7 @@ Reconciles an issue, plan, or request with the current code, tracker history, an
 archon workflow run archon-triage "#142"
 ```
 
-**What it produces**: A verdict with the recommended next step. It leaves the checkout unchanged. Pass `--input publish=true` to write the derived labels to the issue. An item that is blocked or needs contract work ends the run not ready, with the question in the verdict; [continue it with a note](#continuing-a-stage-that-ended-not-ready) that answers it.
+**What it produces**: A verdict with the recommended next step. It leaves the checkout unchanged. Pass `--input publish=true` to write the derived labels to the issue. An item that is blocked, or that no route can start from, ends the run not ready, with what it waits on or the questions for its author in the verdict; [continue it with a note](#continuing-a-stage-that-ended-not-ready) that answers it.
 
 #### `archon-intake`
 

@@ -106,8 +106,8 @@ promotes an outside author's issue.
 Read the result from the issue's labels:
 
 - `archon-ready`, `archon-plan` or `archon-investigate`: routed to the build queue.
-- `archon-needs-contract`: the body misses one of the six brief elements. Fix the
-  body, then re-triage.
+- `archon-needs-contract`: no route can start from the body. Triage's questions are in
+  a comment on the issue; answer them in the body, then re-triage.
 - `archon-blocked`: a prerequisite or a decision must land first. Re-triage once it
   has.
 - `archon-close`: a duplicate or already delivered. Intake closes it when the triage

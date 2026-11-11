@@ -32,7 +32,7 @@ export const PACK_LABELS = {
   },
   'archon-needs-contract': {
     color: 'D93F0B',
-    description: "Triage: one of the contract's six elements is missing",
+    description: 'Triage: no route can start until the author answers its questions',
   },
   'archon-blocked': {
     color: 'B60205',
@@ -140,6 +140,23 @@ export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size):
   ];
   if (verdict.contract !== 'NO_ACTION') wanted.push(SIZE_LABEL[size]);
   return wanted;
+}
+
+/** A decision triage could not make because a forge read failed; never a verdict about the item. */
+export interface NotTriaged {
+  readonly contract: 'NOT_TRIAGED';
+  readonly failed: readonly { readonly op: string; readonly kind: string }[];
+}
+
+/** Refuse a decision triage could not make, so nothing is recorded and the run fails. */
+export function requireTriaged<Decision extends { readonly contract: string }>(
+  decision: Decision | NotTriaged
+): Exclude<Decision, NotTriaged> {
+  if (decision.contract === 'NOT_TRIAGED') {
+    const failed = (decision as NotTriaged).failed.map(read => `${read.op} (${read.kind})`).join(', ');
+    throw new Error(`triage could not read the forge: ${failed}; no verdict is recorded, and the item stays untriaged`);
+  }
+  return decision as Exclude<Decision, NotTriaged>;
 }
 
 /**

@@ -2,7 +2,8 @@
  * Apply the facts node's decision: write the work item first, then the labels that
  * mirror it, then close an item triage found resolved, then release the claim. A
  * close is checked before the first write; one the forge refuses leaves the item
- * BLOCKED for a maintainer instead. A closed issue gets the document write only.
+ * BLOCKED for a maintainer instead. An item no route can start from gets triage's
+ * questions as one marked comment. A closed issue gets the document write only.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; INPUTS_TRIAGE,
  * the triage node's typed output, "null" when triage did not run.
@@ -12,8 +13,9 @@ import { type ClosePlan, planClose } from '../../.shared/close.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
 import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
+import { upsertComment } from '../../.shared/pr.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
-import { type LabelVerdict, isPackLabel, type PackLabel, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
+import { type LabelVerdict, isPackLabel, type PackLabel, requireTriaged, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
   applyDecision,
@@ -30,7 +32,7 @@ import {
 function triageResult(): TriageResult | null {
   const triage = nullableJson(process.env.INPUTS_TRIAGE) as NodeOutput<'archon-triage-block', 'triage'> | null;
   if (triage === null) return null;
-  const { decision } = triage;
+  const decision = requireTriaged(triage.decision);
   return {
     verdict: decision.contract === 'READY' ? { contract: 'READY', route: decision.route } : { contract: decision.contract },
     pull_request: 'pull_request' in decision ? decision.pull_request : null,
@@ -41,10 +43,28 @@ function triageResult(): TriageResult | null {
     urgency: triage.urgency,
     related: triage.related,
     closure: decision.contract === 'NO_ACTION' ? decision.closure : null,
-    labels: triageLabels(triage),
+    questions: decision.contract === 'NEEDS_CONTRACT_WORK' ? decision.questions : [],
+    labels: triageLabels({ ...triage, decision }),
     summary: triage.summary,
     report: triage.report,
   };
+}
+
+const QUESTIONS_MARKER = '<!-- archon-questions -->';
+
+/**
+ * Put triage's questions on the issue as one marked comment, so a repeated run edits it
+ * rather than adding another. The questions are the agent's; the last line is how an
+ * answer reaches the pack.
+ */
+function askAuthor(item: QualifiedPr, questions: readonly string[]): void {
+  const body = [
+    QUESTIONS_MARKER,
+    'No run can start from this issue yet. It needs an answer to:',
+    questions.map(question => `- ${question}`).join('\n'),
+    'Answer in the issue body, then add the `archon-triage` label to triage it again.',
+  ].join('\n\n');
+  upsertComment({ kind: 'issue', ref: item }, QUESTIONS_MARKER, body);
 }
 
 /** Triage's closable verdict as a BLOCKED one, when the close it declared was refused. */
@@ -135,6 +155,7 @@ function main(): void {
   const delta = labelDelta(next, decision, judged, bodyMoved);
   const labels = delta === null ? [] : writeLabels(item, delta.add, delta.remove);
   if (close !== null && close.refused === null) close.close();
+  if (!bodyMoved && triage !== null && triage.questions.length > 0) askAuthor(item, triage.questions);
   // Clearing the claim is what marks this run's requests honored; a run that stops
   // before it leaves them for the next pickup to queue again.
   updateClaimed(item, runId, doc => ({ ...doc, claim: null }));

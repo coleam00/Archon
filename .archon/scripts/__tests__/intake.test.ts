@@ -708,6 +708,27 @@ describe('the intake scripts', () => {
     expectLeftToMaintainer(at, applied, 'not https://ghe.example.com/example/repo/issues/4');
   }, 60_000);
 
+  test('an item no route can start from gets its questions as one marked comment', () => {
+    const at = install();
+    const decided = facts(at, { runId: 'run-1' }).output;
+    const asked = outcome(at, { runId: 'run-1' }, decided, verdict({ contract: 'NEEDS_CONTRACT_WORK', questions: ['Which export format is wanted?'] }));
+    expect({ code: asked.code, stderr: asked.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(asked.comments).toEqual([{ issue: 7, body: expect.stringContaining('- Which export format is wanted?') }]);
+    expect(asked.closes).toEqual([]);
+    expect(stored(at).value).toMatchObject({ stage: 'needs_contract', claim: null });
+  }, 60_000);
+
+  test('a triage that could not read the forge records nothing', () => {
+    const at = install();
+    const decided = facts(at, { runId: 'run-1' }).output;
+    const before = stored(at).revision;
+    const failed = outcome(at, { runId: 'run-1' }, decided, verdict({ contract: 'NOT_TRIAGED', failed: [{ op: 'workitem.search', kind: 'forge_error' }] }));
+    expect(failed.code).not.toBe(0);
+    expect(failed.stderr).toContain('workitem.search (forge_error)');
+    expect([...failed.comments, ...failed.closes]).toEqual([]);
+    expect(stored(at).revision).toBe(before);
+  }, 60_000);
+
   test('a blocked item closes nothing', () => {
     const at = install();
     const applied = outcome(

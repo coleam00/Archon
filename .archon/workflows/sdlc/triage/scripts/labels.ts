@@ -1,5 +1,6 @@
 /**
  * Derive the labels a triage decision puts on its item, and write them when asked.
+ * A decision triage could not make, because a forge read failed, refuses here.
  *
  * The pack's own labels derive from the decision here rather than being chosen by the
  * model. Only when the run was launched with publish=true and the target is a tracker
@@ -12,11 +13,12 @@
  */
 
 import { emit, refuse, text } from '../../.shared/io.ts';
-import { PACK_LABEL_NAMES, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
+import { PACK_LABEL_NAMES, requireTriaged, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
 try {
-  const triage = JSON.parse(text(process.env.INPUTS_TRIAGE)) as NodeOutput<'archon-triage-block', 'triage'>;
+  const output = JSON.parse(text(process.env.INPUTS_TRIAGE)) as NodeOutput<'archon-triage-block', 'triage'>;
+  const triage = { ...output, decision: requireTriaged(output.decision) };
   const wanted = wantedLabels(triage.decision, triage.type.value, triage.size.value);
   const labels = triageLabels(triage);
   const published = text(process.env.INPUTS_PUBLISH) === 'true' && triage.item.number !== 0;

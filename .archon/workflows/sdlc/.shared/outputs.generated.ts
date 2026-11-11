@@ -766,10 +766,7 @@ export interface WorkflowOutputs {
         readonly pull_request: number;
       } | {
         readonly contract: 'NEEDS_CONTRACT_WORK';
-        readonly proposed_edits: {
-          readonly title: string;
-          readonly body: string;
-        };
+        readonly questions: ReadonlyArray<string>;
       } | {
         readonly contract: 'BLOCKED';
         readonly blocked_reason: string;
@@ -790,6 +787,12 @@ export interface WorkflowOutputs {
           readonly kind: 'delivered';
           readonly url: string;
         };
+      } | {
+        readonly contract: 'NOT_TRIAGED';
+        readonly failed: ReadonlyArray<{
+          readonly op: string;
+          readonly kind: string;
+        }>;
       };
       readonly type: {
         readonly value: 'bug' | 'feature' | 'refactor' | 'maintenance' | 'docs' | 'question';
@@ -1022,6 +1025,7 @@ export const OUTPUT_ENUMS = {
       'decision.anyOf[4].contract': ['NO_ACTION'],
       'decision.anyOf[4].closure.anyOf[0].kind': ['duplicate'],
       'decision.anyOf[4].closure.anyOf[1].kind': ['delivered'],
+      'decision.anyOf[5].contract': ['NOT_TRIAGED'],
       'type.value': ['bug', 'feature', 'refactor', 'maintenance', 'docs', 'question'],
       'size.value': ['s', 'm', 'l'],
       'complexity.value': ['low', 'medium', 'high'],

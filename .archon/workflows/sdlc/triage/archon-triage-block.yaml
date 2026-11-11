@@ -68,13 +68,14 @@ nodes:
               additionalProperties: false
               properties:
                 contract: { type: string, enum: [NEEDS_CONTRACT_WORK] }
-                proposed_edits:
-                  type: object
-                  properties:
-                    title: { type: string, pattern: '\S' }
-                    body: { type: string, pattern: '\S' }
-                  required: [title, body]
-              required: [contract, proposed_edits]
+                # What the author must answer before any route can start; the
+                # author's text is never rewritten.
+                questions:
+                  type: array
+                  minItems: 1
+                  maxItems: 5
+                  items: { type: string, pattern: '\S' }
+              required: [contract, questions]
             - type: object
               additionalProperties: false
               properties:
@@ -119,6 +120,24 @@ nodes:
                         url: { type: string, pattern: '\S' }
                       required: [kind, url]
               required: [contract, closure]
+            # Triage could not do its work: a forge read it needed answered with an
+            # error other than `not_found`. This is not a verdict about the item; the
+            # labels node refuses it, so the run fails and the item stays untriaged.
+            - type: object
+              additionalProperties: false
+              properties:
+                contract: { type: string, enum: [NOT_TRIAGED] }
+                failed:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      op: { type: string, pattern: '\S' }
+                      kind: { type: string, pattern: '\S' }
+                    required: [op, kind]
+              required: [contract, failed]
         # Five judged fields, each a value and a one-line reason. Only type and
         # size become labels; a composing caller reads all five.
         type:
@@ -202,7 +221,8 @@ nodes:
           required: [type, run_id, path]
       required: [decision, type, size, complexity, importance, urgency, item, area_labels, related, summary, report]
 
-  # The pack's labels derive from the decision here rather than being chosen by the
+  # A NOT_TRIAGED decision is refused here, before anything is recorded. Otherwise the
+  # pack's labels derive from the decision here rather than being chosen by the
   # model: one state label and one type label, plus a size label while the item can
   # still be worked. They are written only under publish, after the item's identity
   # is verified on the tracker, and read back before the node reports them.

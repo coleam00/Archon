@@ -162,10 +162,10 @@ export interface IntakeDecision {
   readonly notes: readonly HistoryEntry[];
 }
 
-/** Triage's verdict as the outcome node receives it. */
+/** Triage's verdict as the outcome node receives it; its closure and its questions for the author are not stored. */
 export interface TriageResult extends Omit<TriageFacts, 'at' | 'run_id'> {
-  /** What made a NO_ACTION item closable; null on every other verdict. Not stored. */
   readonly closure: Closure | null;
+  readonly questions: readonly string[];
   readonly labels: readonly string[];
   readonly summary: string;
   readonly report: { readonly run_id: string; readonly path: string };
@@ -552,7 +552,7 @@ export function applyDecision(
   if (decision.path === 'triage') {
     if (triage === null) throw new Error('the triage path has no triage verdict');
     // The stored facts are the verdict minus what only this run's outcome reads.
-    const { closure: _closure, labels: _labels, summary, report, ...kept } = triage;
+    const { closure: _closure, questions: _questions, labels: _labels, summary, report, ...kept } = triage;
     facts = { ...facts, triage: { ...kept, at, run_id: runId } };
     if (bodyMoved) {
       stage = 'needs_maintainer';
