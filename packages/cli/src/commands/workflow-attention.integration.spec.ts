@@ -555,7 +555,7 @@ test('--recommended answers as the declared answerer, and the notices watch says
     { type: 'attention', needs: 'answer', item: { runId: asked } },
     {
       type: 'resolved',
-      needs: 'look',
+      needs: 'nothing',
       runId: asked,
       reason: 'answered',
       answeredVia: 'cli',
@@ -840,10 +840,10 @@ test("watch text names a child run's parent and a failure with no recorded error
       '  child  w  (no project)  pause time not recorded\n    child of run p1\n'
     );
     expect(result.text).toContain(
-      'Run child failed: node build (error class not recorded). Workflow w, child of run p1.\n'
+      'Run child failed: node build (error class not recorded). Workflow w, child of run p1. Show more with archon workflow get child.\n'
     );
     expect(result.text).toContain(
-      'Run top failed: node build (error class not recorded). Workflow w.\n'
+      'Run top failed: node build (error class not recorded). Workflow w. Show more with archon workflow get top.\n'
     );
   } finally {
     watch.mockRestore();

@@ -16,9 +16,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - `archon workflow respond <run> --recommended --occurrence <id>` and `archon workflow answer --recommended` answer an attention wait with the option it recommends, at the occurrence the answerer read. The answer is refused when the wait has no recommendation or takes none in its form.
-- Every line of `archon workflow attention --watch --json` and of the HTTP stream carries `needs`: `answer`, `look` or `nothing`. `--watch --notices` (`level=notices`) also writes the `nothing` lines that say what happened to work, such as a run that completed or resumed.
+- Every line of `archon workflow attention --watch --json` and of the HTTP stream carries `needs`: `answer`, `look` or `nothing`. The close of an ask needs `nothing` and the watch still shows it. `--watch --notices` (`level=notices`) also writes the `nothing` lines that say what happened to work, such as a run that completed or resumed.
 - An attention wait's `wait_started` event records its form, the option ids it offered and the recommended option with its confidence, and `archon workflow attention --count-by ... --since` reports per group how many waits carried a recommendation and how many answers followed it.
 - `--as <name>` on `answer`, `respond`, `approve` and `reject` records a self-declared answerer on an attention wait's answer. `resolved` stream lines carry it as `answeredBy`, and `--count-by answerer --since` groups by it. The name is a claim that nothing checks; a gate records no answerer and refuses `--as`.
+- The text form of `archon workflow attention`, with or without `--watch`, prints each ask as a block that can be answered by itself: the question's first line, the recommendation and its reason, what each option does, and the answer commands with `--occurrence`. `archon workflow attention <run-id>` prints the whole message. `--json` is unchanged.
 - A source checkout and Docker run the GitHub forge plugin from source, as they run the maintained providers, and skip an installed `archon-forge-github`. Release binaries still load the installed plugin.
 - A Bun `script:` node imports the host's API by name: `import { input, emit, refuse, forge, state, outcomes, trigger } from 'archon:script'`. Archon provides the module to named scripts, inline bodies and executed dry runs, so a pack carries no client code and needs no `node_modules`. `forge(op, request)` is typed per operation and throws a `ForgeError` with the failure's kind and what is known of a failed write; `state` wraps `archon state` with typed conflicts. The CLI stays the wire underneath for other runtimes. The load-time input check reads `input('<name>')` like `process.env.INPUTS_<NAME>`.
 - `archon script types [--out <file>] [--check]` writes the TypeScript declaration of `archon:script`, including every forge operation's request and result type, for an editor or `tsc` over a pack's scripts.
@@ -33,6 +34,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A named `script:` of a packaged workflow that is not in the workflow's own `scripts/` resolves from the pack's `.shared/scripts/`, so a pack keeps one copy of a script its workflows share.
 - The forge contract can search a repository's issues and pull requests by text (`workitem.search`) and read the end of a check's log (`checks.logs`). The GitHub plugin implements both, and the SDLC pack's agents use them instead of `gh`.
 - A script node can bind every output of an `output_type` its run produced: `with: { reviews: { outputs: review-report } }` delivers them as one JSON array, across loop iterations and included blocks. The loader refuses a producer the node could race and a type no node declares. A record that cannot be read fails the node, or delivers the binding's `if_unreadable` value (null or an array) when it declares one.
+
+### Changed
+
+- The SDLC pack's forge preflights (delivery, the merge queue and the test-value metric) ask `archon forge check` for the plugin, its operations and its credential instead of comparing plugin metadata themselves. Delivery still makes one authenticated read. A missing operation is refused in the host's words (`plugin <name> does not support <operations>`).
+- The SDLC pack's queue questions use the wait's own `other` option. On build and pull-request items it does what the pack's own `other` choice did, and the answer must now carry text; a `merge: base` item now shows it too, and an `other` answer there holds like `hold`.
 
 ## [0.14.0] - 2026-11-07
 

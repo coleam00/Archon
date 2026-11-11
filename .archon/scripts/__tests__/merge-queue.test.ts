@@ -242,7 +242,10 @@ const forgeOp = (op, request) => {
   const unreadable = () => forgePr.unreadable === true || Array.isArray(forgePr.unreadable) && forgePr.unreadable.includes(ref.number);
   // The harness's forge resolves a pull request URL.
   if (op === 'resolve') return null;
-  if (op === 'metadata') return out(true, { capabilities: ${JSON.stringify(MERGE_QUEUE_FORGE_OPERATIONS)}.filter(name => !(forgePr.missingOps ?? []).includes(name)) });
+  if (op === 'check') {
+    const unsupported = request.operations.filter(name => (forgePr.missingOps ?? []).includes(name));
+    return unsupported.length === 0 ? out(true, request) : out(false, { error: { kind: 'unsupported_op', message: 'plugin fake does not support ' + unsupported.join(', ') }, unsupported });
+  }
   if (op === 'checks.commit') return forgePr.baseUnreadable ? failed('HTTP 502 reading base') : out(true, { repo: request.repo, branch: 'dev', revision: ${JSON.stringify(OLD)}, units: units(forgePr.baseChecks ?? 'green') });
   if (op === 'pr.merge') {
     if (request.conditions.head !== forgePr.headRefOid) return failed('Head branch was modified', { op, target: ref, outcome: 'refused' });
@@ -614,6 +617,16 @@ describe('the merge queue scripts', () => {
     expect(doc.facts.build?.brief).toContain('rework PR 42');
     expect(doc.facts.build?.brief).toContain(heading);
   }, 60_000);
+
+  test('an `other` answer, which returns no choice, parks a pull request the sweep wrote no brief for', () => {
+    const at = install();
+    seed(at, item(BUILT, merge('asking'), CLAIMED));
+    const asked = JSON.stringify({ ...(JSON.parse(ASKED) as object), brief: '' });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: '', INPUTS_TEXT: 'Wait for the release.', ...SELECTED });
+    expect(ok(ruled)).toMatchObject({ decision: 'park' });
+    expect(ruled.bodies[0]).toContain("The maintainer's words: Wait for the release.");
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
+  }, 60_000);
 });
 
 describe('the merge queue facts and gate', () => {
@@ -721,8 +734,8 @@ describe('the merge queue on the forge', () => {
     seed(at, item());
     const refused = run(at, 'facts', {}, { pr: { missingOps: ['pr.merge-state'] } });
     expect(refused.code).not.toBe(0);
-    expect(refused.stderr).toContain("lacks the merge queue's pr.merge-state");
-    expect(forgeCalls(refused)).toEqual(['forge metadata']);
+    expect(refused.stderr).toContain('does not support pr.merge-state');
+    expect(forgeCalls(refused)).toEqual(['forge check']);
     expect(stored(at).value?.claim ?? null).toBeNull();
     expect(stored(at).value?.facts.merge).toBeUndefined();
   }, 60_000);
@@ -736,7 +749,7 @@ describe('the merge queue on the forge', () => {
     expect([facts.code, gate.code]).toEqual([0, 0]);
     const used = [...forgeCalls(facts), ...forgeCalls(gate)];
     // `resolve` runs no preflight: the host refuses it on a plugin that cannot resolve a URL.
-    const preflighted = used.filter(call => call.startsWith('forge ') && !['forge metadata', 'forge resolve'].includes(call));
+    const preflighted = used.filter(call => call.startsWith('forge ') && !['forge check', 'forge resolve'].includes(call));
     expect(new Set(preflighted.map(call => call.split(' ')[1]))).toEqual(
       // The sweep agent, not a script, reruns a pull request's failed checks.
       new Set(MERGE_QUEUE_FORGE_OPERATIONS.filter(op => op !== 'checks.rerun'))

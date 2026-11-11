@@ -6,9 +6,7 @@
  */
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
 import {
   cliForgeMetadataRequestSchema,
   cliForgeResponseSchema,
@@ -26,12 +24,6 @@ import {
   forgeRequestSchema,
 } from '../packages/forge/src/operations';
 import {
-  forgeOperation,
-  gitCheckout,
-  PR,
-  packScriptRunner,
-} from '../.archon/scripts/__tests__/deliver-checks-harness';
-import {
   forgeResult,
   type PrRecord,
   type QualifiedPr,
@@ -41,9 +33,6 @@ import { REQUIRED_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/for
 import { MERGE_QUEUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/merge';
 import { TEST_VALUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/test-value';
 import { CLOSE_REASONS } from '../.archon/workflows/sdlc/.shared/issue';
-
-const { runPackScript } = packScriptRunner();
-const trackTempRoot = trackTempRoots();
 
 // These assignments check that the pack's projection stays compatible with the owning
 // wire type in both directions.
@@ -169,35 +158,8 @@ test('the pack reads host responses with credential attribution and metadata int
         ? { result: { op: 'pr.view', value: null } }
         : { error: { kind: 'authorization', message: 'Rejected' } }),
     });
-    let source: string | undefined;
-    const read = () =>
-      forgeResult('pr.view', response, ok ? 0 : 1, value => {
-        source = value;
-      });
+    const read = () => forgeResult('pr.view', response, ok ? 0 : 1);
     if (ok) expect(read()).toBeNull();
     else expect(read).toThrow('source: GH_TOKEN');
-    expect(source).toBe('GH_TOKEN');
   }
-});
-
-test("forge-check's metadata request conforms to the CLI host input", () => {
-  const run = runPackScript('.shared/scripts/forge-check', {
-    cwd: gitCheckout({}, trackTempRoot),
-    forge: {
-      kind: 'fake',
-      response: [
-        forgeOperation('metadata', { capabilities: REQUIRED_FORGE_OPERATIONS }),
-        forgeOperation('pr.view', null),
-      ],
-    },
-    inputs: { ARCHON_HOME: join(tmpdir(), 'archon-home-elsewhere') },
-  });
-  expect({ code: run.code, stderr: run.stderr }).toMatchObject({ code: 0 });
-  expect(run.forge[0]).toContain('forge metadata');
-  const request = cliForgeMetadataRequestSchema.parse({
-    ...JSON.parse(run.forgeRequests[0] ?? ''),
-    op: 'metadata',
-    operationId: 'cli-operation',
-  });
-  expect(request.host).toBe(PR.repo.host);
 });

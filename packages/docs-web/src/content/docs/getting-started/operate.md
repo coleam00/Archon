@@ -292,17 +292,36 @@ archon workflow attention --watch --json --label merge=pr # one class of questio
 | `degraded` | A run could not be read, so the stream may have missed something. The operator log names the run |
 | `error` | The store can no longer read the stream's position. The last line; exit 4. Start the watch again |
 
-The lines have the shape the [full protocol](#the-full-protocol-for-programs) gives them, and its table lists their fields. Without `--json` each line prints as a sentence, and a line on stderr says what is being watched.
+The lines have the shape the [full protocol](#the-full-protocol-for-programs) gives them, and its table lists their fields. Without `--json` each line prints as text, and a line on stderr says what is being watched.
+
+The text form is the one to sit on, for a person or an agent: an ask prints as a block you can answer without a second read.
+
+```text
+Needs attention now:
+  7c1e4f0a  archon-merge  acme/web  paused 2m ago
+    labels: merge=pr, pr=5496
+    ask: Merge pull request 5496?
+    recommended: merge (high confidence). Review is ready and checks are green.
+    option merge: Squash-merge it into dev.
+    option hold: Leave it open and stop.
+    accept the recommendation: archon workflow respond 7c1e4f0a --recommended --occurrence e0f4a2 [--text <why>]
+    answer: archon workflow respond 7c1e4f0a <option> --occurrence e0f4a2 [text]
+    full question: archon workflow attention 7c1e4f0a
+```
+
+The block carries the workflow, the labels, the first line of the question under the node's id, the recommendation with its reason, each option with what it does, and the commands that answer this occurrence. The rest of the message is one command away: `archon workflow attention <run-id>` prints it in full. A gate prints its approve command with its occurrence. A failed run, a lost owner and an unreadable item name the run and the command that shows more (`archon workflow get <run-id>`). The close of an ask is one line, and says who answered when that was recorded. `archon workflow attention` without `--watch` prints the same blocks. `--json` is the complete machine form and carries every field.
+
+Read the watch unfiltered. A filter between the watch and its reader can hold lines back: some shells replace `grep` with a tool that writes nothing to a pipe until its input closes, so an ask would arrive only when the watch ends.
 
 Every JSON line carries `needs`, which says what the line asks of you:
 
 | `needs` | Meaning | Lines |
 |---|---|---|
 | `answer` | Someone has to answer | `attention` for an attention wait or a gate |
-| `look` | Someone has to look, and the action is run control or stopping work | `attention` for an unreadable item; `resolved` and `unmatched` for an item that needed someone; a `usage_limit` wait that replaces such an item; a failed `terminal`; `owner_lost`; `degraded`; `error` |
-| `nothing` | Nobody has to act | every other line |
+| `look` | Someone has to look, and the action is run control | `attention` for an unreadable item; a `usage_limit` wait that replaces an item that needed someone; a failed `terminal`; `owner_lost`; `degraded`; `error` |
+| `nothing` | Nobody has to act | every other line, including `resolved` and `unmatched`: a closed ask leaves nothing to do |
 
-The watch writes the `answer` and `look` lines and nothing else. A run that completed with any other outcome or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. `--watch --notices` adds those `nothing` lines, for a reader that also wants to know what happened to the work: every run that ended or resumed, usage-limit waits opening and closing, and the [notices](#notices-what-the-work-did) runs emit. It still leaves out `ready` and `bookmark`, which only a program on `--protocol` reads. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
+`needs` says what someone must do; the level decides what is shown. The watch writes the `answer` and `look` lines, and the `resolved` or `unmatched` line of an item it wrote, so you stop working on an ask that closed. It writes nothing else. A run that completed with any other outcome or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. `--watch --notices` adds those `nothing` lines, for a reader that also wants to know what happened to the work: every run that ended or resumed, usage-limit waits opening and closing, and the [notices](#notices-what-the-work-did) runs emit. It still leaves out `ready` and `bookmark`, which only a program on `--protocol` reads. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
 
 - **`--label` turns a queue or a class on or off.** Labels are the only routing: `--label merge=pr` writes only the items a wait labelled `merge=pr`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
 - **A silent stream proves nothing.** The watch has no heartbeat, so no line can mean that nothing needs you or that the stream stopped reading. A program that must tell the two apart uses `--protocol` and its `bookmark` lines.
@@ -363,7 +382,7 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 | `degraded` | A snapshot item cannot be read or projected, or repeated failure to project a run; coverage may be incomplete. The stream keeps running | `cursor`, `reason: "run_unreadable"` |
 | `error` | `--after` named a cursor this install did not issue, or the store no longer reads the stream's position. The last line; exit 4 | `error: "cursor_invalid"` |
 
-- **Every line carries `needs`**, as the [plain watch](#stream-the-queue) describes it. A stream started with `--after` cannot know which items the earlier stream held, so it marks every `resolved` and `unmatched` line `look`.
+- **Every line carries `needs`**, as the [plain watch](#stream-the-queue) describes it. A stream started with `--after` cannot know which items the earlier stream held, so at `level=quiet` it sends every `resolved` and `unmatched` line.
 - **`answeredBy` is who answered an attention wait**, when the answer recorded it: `{ "declared": "<name>" }` for a name given with `--as`, which is a claim Archon does not check, or `{ "userId": "<id>" }` for an answer through a chat platform. It is null for a gate and for an answer that named nobody.
 - **Keep an open set keyed by `runId`.** Each `attention` line replaces that run's item, including when its kind or `resetAt` changes while `revision` stays 1. `resolved` removes it. Its `reason` is `answered`, or `withdrawn` when the run resumed, ended, was deleted or moved to a different pause. For a fan-out child, remove only that child.
 - **Deliveries are at least once.** Replacing by `runId` is idempotent. Dedupe answerable pauses on `(runId, occurrence, revision)`, and `terminal` and `resumed` on `(runId, cursor)`. Don't dedupe every kind by occurrence: usage-limit waits have none. `owner_lost` is a live observation and is not replayed. Only a run whose recorded owner is on this host and user can be reported lost.

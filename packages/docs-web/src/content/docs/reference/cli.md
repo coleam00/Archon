@@ -1172,10 +1172,17 @@ run that failed or that completed with `outcome: "failed"`, `owner_lost`, `degra
 a run could not be read, and `error`. It writes nothing for a run that completed with any
 other outcome, was cancelled or resumed, and it has no
 heartbeat, so a silent stream does not prove it is reading. Every JSON line carries
-`needs`: `answer`, `look` or `nothing`, and the watch writes the first two
+`needs`: `answer`, `look` or `nothing`. The watch writes the first two, and the close of an
+item it wrote, which needs `nothing`
 ([what each means](/getting-started/operate/#stream-the-queue)). Combine it with `--label k=v`
 to watch one queue or class of question. With `--json` each line is one compact JSON
-object; without it, a short sentence per line. Scope and `--label` work as for the list;
+object. Without it each line is text a reader can act on: an ask is a short block with its
+labels, the question's first line, the recommendation and its reason, each option with what
+it does, and the commands that answer that occurrence, including the `--recommended` form
+when a recommendation exists; a failed run, a lost owner and an unreadable item name the
+command that shows more; the close of an ask is one line. The list prints the same blocks,
+and `workflow attention <run-id>` prints the whole message. Read the watch unfiltered: a
+filter in the pipe can hold lines until the watch ends. Scope and `--label` work as for the list;
 `--sort`, `--count-by` and a run id are refused. See
 [Stream the queue](/getting-started/operate/#stream-the-queue).
 
