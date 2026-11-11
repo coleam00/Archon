@@ -18,7 +18,7 @@ import { requireForge } from './forge-check.ts';
 import { forge } from 'archon:script';
 import { viewPr } from './pr.ts';
 import { type Ask, type DecisionEntry, withDecision } from './queue.ts';
-import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
+import { type ContractCoverage, type ReviewStamp, readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
 /** What a merge option does when a person picks it; archon-merge-queue.yaml declares the same enum. */
@@ -255,28 +255,31 @@ interface Comment {
 }
 
 /**
- * The trusted review comment: the one marked comment a listed maintainer wrote. A
+ * The trusted review comments: each marked comment a listed maintainer wrote. A
  * marked comment anyone else wrote is ignored, so an outside commenter cannot forge a
- * verdict on a public repository.
+ * verdict on a public repository. More than one means none is canonical.
  */
-function trustedReview(comments: readonly Comment[], maintainers: ReadonlySet<string>): Verdict {
-  const reviews = comments.flatMap(comment => {
+function trustedReviews(comments: readonly Comment[], maintainers: ReadonlySet<string>) {
+  return comments.flatMap(comment => {
     const stamp = readReviewStamp(comment.body);
     const trusted = comment.author !== null && maintainers.has(comment.author.toLowerCase());
     return stamp !== null && trusted ? [{ stamp, url: comment.url }] : [];
   });
-  const [review, ...others] = reviews;
+}
+
+function trustedReview(comments: readonly Comment[], maintainers: ReadonlySet<string>): Verdict {
+  const [review, ...others] = trustedReviews(comments, maintainers);
   if (review === undefined) return { state: 'none', reviewed: null, url: null, contract: null };
   if (others.length > 0) return { state: 'duplicate', reviewed: null, url: null, contract: null };
   const state = review.stamp.ready === null ? 'unstamped' : review.stamp.ready ? 'ready' : 'not_ready';
   return { state, reviewed: review.stamp.reviewed, url: review.url, contract: review.stamp.contract };
 }
 
-/** The commit the pull request's trusted review comment names, or null when it has none. */
-export function reviewedHead(pr: QualifiedPr, maintainers: ReadonlySet<string>): string | null {
-  const verdict = trustedReview(readComments(pr), maintainers);
-  if (verdict.state === 'duplicate') throw new Error(`pull request ${String(pr.number)} has more than one trusted review comment`);
-  return verdict.reviewed;
+/** The pull request's trusted review comment as stamped, with its report, or null when it has none. */
+export function publishedReview(pr: QualifiedPr, maintainers: ReadonlySet<string>): ReviewStamp | null {
+  const [review, ...others] = trustedReviews(readComments(pr), maintainers);
+  if (others.length > 0) throw new Error(`pull request ${String(pr.number)} has more than one trusted review comment`);
+  return review?.stamp ?? null;
 }
 
 /**
