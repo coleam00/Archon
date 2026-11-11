@@ -98,7 +98,8 @@ every author is outside and nothing is triaged or merged.
 **Ask the user** who is a maintainer. The list decides two things:
 
 - Whose issues get triaged. Anyone else's issue gets `archon-needs-maintainer` and
-  starts no agent until a listed maintainer adds `archon-triage` or a route label.
+  starts no agent until a listed maintainer adds `archon-triage`. That label is how a person
+  asks for a triage; route labels are written by the pack and request nothing.
 - Whose review verdicts the merge queue trusts. The account from step 2 authors the
   pack's review comments, so it must be on the list, or its verdicts are ignored and
   nothing merges. Intake also treats the issues that account files as outside items

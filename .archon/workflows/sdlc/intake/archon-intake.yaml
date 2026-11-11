@@ -8,7 +8,7 @@ description: |
   already delivered item the triage policy lets close is closed with a link to
   what resolved it. An outside issue gets
   archon-needs-maintainer and starts no agent until a listed maintainer
-  promotes it by adding archon-triage or a route label.
+  promotes it by adding archon-triage.
 
   Use when: trigger bindings start it on issue lifecycle and label events (see
   https://archon.diy/guides/sdlc-operations/#intake).

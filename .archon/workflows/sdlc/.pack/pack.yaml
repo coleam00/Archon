@@ -37,11 +37,11 @@ bindings:
     event:
       kind: label.changed
       actions: [added]
-      # The request labels, REQUEST_LABELS in .shared/labels.ts; a pack test keeps the
-      # two equal. The predicate only saves runs: intake ignores any other label.
+      # The one request label, TRIAGE_REQUEST in .shared/labels.ts. The predicate only
+      # saves runs: intake ignores any other label.
       predicates:
         - field: label.name
-          in: [archon-triage, archon-ready, archon-plan, archon-investigate, archon-split]
+          in: [archon-triage]
     inputs:
       repo_host: { event: repository.host }
       repo_path: { event: repository.path }
