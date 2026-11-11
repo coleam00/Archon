@@ -119,6 +119,8 @@ describe('codebases', () => {
     test('absolute spelling is preserved on write and read', async () => {
       const path = resolve('project') + sep + '..' + sep + 'project' + sep;
       mockQuery
+        // Registered projects, read before the transaction for their remote identities.
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, default_cwd: path }]));
@@ -147,6 +149,7 @@ describe('codebases', () => {
   describe('createCodebase', () => {
     test('creates codebase with all fields', async () => {
       mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([mockCodebase]));
@@ -182,6 +185,7 @@ describe('codebases', () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([codebaseWithoutOptional]));
 
       const result = await createCodebase({
@@ -199,6 +203,7 @@ describe('codebases', () => {
     test('explicit ai_assistant_type takes priority over env var', async () => {
       process.env.DEFAULT_AI_ASSISTANT = 'codex';
       mockQuery
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([{ ...mockCodebase, ai_assistant_type: 'pi' }]));
@@ -224,9 +229,10 @@ describe('codebases', () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([]))
+        .mockResolvedValueOnce(createQueryResult([]))
         .mockResolvedValueOnce(createQueryResult([mockCodebase]));
       await createCodebase({ name: mockCodebase.name, default_cwd: mockCodebase.default_cwd });
-      const registrationLock = mockQuery.mock.calls[0];
+      const registrationLock = mockQuery.mock.calls[1];
       mockQuery.mockClear();
       mockQuery
         .mockResolvedValueOnce(createQueryResult([]))
