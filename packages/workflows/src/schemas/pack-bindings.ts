@@ -83,10 +83,19 @@ export type PackEventBinding = z.infer<typeof packEventBindingSchema>;
 export type PackFireBinding = z.infer<typeof packFireBindingSchema>;
 export type PackBinding = PackTimerBinding | PackEventBinding | PackFireBinding;
 
-/** What starts a binding: a `timer`, an `event`, or only a `fire`. */
-export type PackBindingKind = 'timer' | 'event' | 'fire';
+/** A binding with what starts it: a `timer`, an `event`, or only a `fire`. */
+export type KindedPackBinding =
+  | { kind: 'timer'; binding: PackTimerBinding }
+  | { kind: 'event'; binding: PackEventBinding }
+  | { kind: 'fire'; binding: PackFireBinding };
+export type PackBindingKind = KindedPackBinding['kind'];
+
+/** The one place a binding's kind is read off its shape. */
+export function kindedPackBinding(binding: PackBinding): KindedPackBinding {
+  if ('schedule' in binding) return { kind: 'timer', binding };
+  return 'event' in binding ? { kind: 'event', binding } : { kind: 'fire', binding };
+}
 
 export function packBindingKind(binding: PackBinding): PackBindingKind {
-  if ('schedule' in binding) return 'timer';
-  return 'event' in binding ? 'event' : 'fire';
+  return kindedPackBinding(binding).kind;
 }
