@@ -14,7 +14,12 @@ import { scriptApiModuleSource } from '@archon/script-api/text';
 
 export { scriptApiDeclaration } from '@archon/script-api/text';
 
-const PRELOAD = `import { plugin } from 'bun';
+/**
+ * The preload file's text, complete in itself: the module's source is a string inside it and
+ * imports only Node and Bun built-ins, so a copy written anywhere works under any Bun.
+ * `archon script preload` writes this same text for a script run outside the engine.
+ */
+export const scriptApiPreloadSource = `import { plugin } from 'bun';
 plugin({
   name: 'archon-script',
   setup(build) {
@@ -22,7 +27,7 @@ plugin({
   },
 });
 `;
-const PRELOAD_FILE = `preload-${createHash('sha256').update(PRELOAD).digest('hex').slice(0, 16)}.ts`;
+const PRELOAD_FILE = `preload-${createHash('sha256').update(scriptApiPreloadSource).digest('hex').slice(0, 16)}.ts`;
 
 /**
  * The preload file for a script of `runtime` in this run, written on first use; undefined
@@ -41,7 +46,7 @@ export function scriptApiPreload(runtime: ScriptRuntime, artifactsDir: string): 
   mkdirSync(dir, { recursive: true });
   const temp = join(dir, `${PRELOAD_FILE}.${randomUUID()}.tmp`);
   try {
-    writeFileSync(temp, PRELOAD, { flag: 'wx' });
+    writeFileSync(temp, scriptApiPreloadSource, { flag: 'wx' });
     renameSync(temp, path);
   } finally {
     rmSync(temp, { force: true });

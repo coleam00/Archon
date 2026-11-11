@@ -9,12 +9,15 @@ import moduleSource from './module.ts' with { type: 'text' };
 // @ts-expect-error TS2846: the text of the declaration file, not its types.
 import declaration from './archon-script.d.ts' with { type: 'text' };
 
-/** The source of the `archon:script` module: TypeScript that imports only Node and Bun built-ins. */
-export const scriptApiModuleSource: string = moduleSource;
-
 /**
- * The declaration of `archon:script`: the module's public surface and its contract types.
- * Always LF: a checkout that converts line endings would otherwise embed CRLF, and the
- * file `archon script types` writes would differ by platform.
+ * Both texts are always LF: a checkout that converts line endings would otherwise embed
+ * CRLF, and the files `archon script types` and `archon script preload` write would
+ * differ by platform.
  */
-export const scriptApiDeclaration: string = (declaration as string).replaceAll('\r\n', '\n');
+const lf = (text: string): string => text.replaceAll('\r\n', '\n');
+
+/** The source of the `archon:script` module: TypeScript that imports only Node and Bun built-ins. */
+export const scriptApiModuleSource: string = lf(moduleSource as string);
+
+/** The declaration of `archon:script`: the module's public surface and its contract types. */
+export const scriptApiDeclaration: string = lf(declaration as string);
