@@ -50,6 +50,8 @@ export const cliArgOptions: CliArgOptions = {
   unset: { type: 'string', multiple: true },
   sort: { type: 'string' },
   'count-by': { type: 'string' },
+  // `workflow attention --watch --protocol`: the full sync protocol, for programs.
+  protocol: { type: 'boolean' },
   // `workflow attention --watch --after <cursor>`: replay the stream after an earlier line.
   after: { type: 'string' },
   port: { type: 'string' },

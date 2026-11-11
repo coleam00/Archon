@@ -10,9 +10,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Breaking
 
 - A state document claim is recorded as its own operation (`claim`) in the state log. Archon binaries older than this release cannot read a document revision written by `archon state claim` and exit 1; once a store holds a claim, use only this release or later on it.
+- `archon workflow attention --watch` writes only what needs someone: an item that opens or changes, the close of an item it wrote, a run that failed or lost its owner, and a coverage warning. It no longer writes `ready`, `bookmark`, `resumed`, or a line for a run that completed or was cancelled. A program that reads those lines or resumes with `--after` must add `--protocol`, which is the previous stream unchanged; `--after` without `--protocol` is refused.
 
 ### Added
 
+- A source checkout and Docker run the GitHub forge plugin from source, as they run the maintained providers, and skip an installed `archon-forge-github`. Release binaries still load the installed plugin.
+- `archon forge types --out <file>` writes the request and result types of every forge operation and a typed `invokeForge` client into one TypeScript file; `--check` exits 1 when the file is missing or stale.
+- `archon forge check` answers whether a plugin serves a host, supports the named operations and has a credential, without running a forge operation. It exits 1 with a typed reason, so a workflow can refuse before it spends on agents.
+- `archon state put|patch|delete --held` writes only if the calling run holds the document's live lease, and otherwise exits 3 with `lease_not_held`.
+- `archon state claim` takes the lease on the first claimable document of a candidate list and reports why it skipped each of the others.
+- A `select` wait can declare `other: true`, which adds a free-text option. An answer that chooses it must carry text, and the next node reads `{ decision: "other", text }`.
+- `archon workflow attention --count-by` with `--since` counts the attention waits opened in a window, answered or still open.
+- A trigger binding without `schedule` is fire-only: only `archon trigger fire --config <file>` starts it, through the same admission and deduplication as a scheduled start.
+- Removing a run's scratch directory at run end first removes the git worktrees a node added under it from the run's repository, so no registration outlives its files.
+- A named `script:` of a packaged workflow that is not in the workflow's own `scripts/` resolves from the pack's `.shared/scripts/`, so a pack keeps one copy of a script its workflows share.
 - The forge contract can search a repository's issues and pull requests by text (`workitem.search`) and read the end of a check's log (`checks.logs`). The GitHub plugin implements both, and the SDLC pack's agents use them instead of `gh`.
 - A script node can bind every output of an `output_type` its run produced: `with: { reviews: { outputs: review-report } }` delivers them as one JSON array, across loop iterations and included blocks. The loader refuses a producer the node could race and a type no node declares. A record that cannot be read fails the node, or delivers the binding's `if_unreadable` value (null or an array) when it declares one.
 

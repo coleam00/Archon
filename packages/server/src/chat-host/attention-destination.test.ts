@@ -133,6 +133,26 @@ test('attention waits carry their form, options and pause identity when they hav
   });
 });
 
+test("the reserved 'other' option is an instruction in the message, never a control", () => {
+  const projected = chatAttentionNotice(
+    notice('attention', 'paused', {
+      wait: {
+        ...wait,
+        pauseId: 'p2',
+        form: 'select',
+        options: [{ id: 'use-main' }, { id: 'other', label: 'Other' }],
+        other: true,
+      },
+    }),
+    '/fixture-workflow '
+  );
+  expect(projected).toMatchObject({
+    options: [{ id: 'use-main' }],
+    message:
+      'Pick a base\n\nNone of these? Answer in your own words: `/fixture-workflow respond run other <your answer>`',
+  });
+});
+
 test('an attention notice carries the recommendation and what options do, never their value', () => {
   const recommendation = { option: 'use-main', why: 'Main has the fix.' };
   const projected = chatAttentionNotice(

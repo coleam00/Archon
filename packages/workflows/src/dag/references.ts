@@ -36,6 +36,7 @@ import { substituteWorkflowVariables, type TemplateReferences } from '../workflo
 import {
   type AttentionOption,
   type AttentionRecommendation,
+  OTHER_ATTENTION_OPTION,
   attentionDeclarationProblem,
   attentionOptionsSchema,
   attentionRecommendationSchema,
@@ -701,7 +702,7 @@ export function resolveAttentionDeclaration(
   condition: Extract<WaitCondition, { kind: 'attention' }>,
   nodeOutputs: ReadonlyMap<string, NodeOutput>
 ): { options?: AttentionOption[]; recommendation?: AttentionRecommendation } {
-  const options = resolveAttentionOptions(nodeId, condition.options, nodeOutputs);
+  const declared = resolveAttentionOptions(nodeId, condition.options, nodeOutputs);
   const recommendation =
     typeof condition.recommendation === 'string'
       ? resolveAttentionField(
@@ -715,10 +716,13 @@ export function resolveAttentionDeclaration(
       : condition.recommendation;
   const problem = attentionDeclarationProblem({
     form: condition.form,
-    ...(options !== undefined ? { options } : {}),
+    ...(declared !== undefined ? { options: declared } : {}),
     ...(recommendation !== undefined ? { recommendation } : {}),
+    ...(condition.other === true ? { other: true } : {}),
   });
   if (problem !== undefined) throw new Error(`Wait node '${nodeId}': ${problem}`);
+  const options =
+    condition.other === true ? [...(declared ?? []), OTHER_ATTENTION_OPTION] : declared;
   return {
     ...(options !== undefined ? { options } : {}),
     ...(recommendation !== undefined ? { recommendation } : {}),

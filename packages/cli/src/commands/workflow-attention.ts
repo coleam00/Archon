@@ -6,7 +6,10 @@ import {
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { AttentionWatch } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
-import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
+import {
+  attentionNeedsSomeoneFilter,
+  type AttentionStreamLine,
+} from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   attentionProjectForCwd,
@@ -16,6 +19,7 @@ import {
 } from '@archon/core/operations/attention-queue';
 import {
   countAttentionQueue,
+  countAttentionWaitStarts,
   listAttentionQueue,
   parseAttentionLabelPairs,
   parseAttentionQueueRequest,
@@ -27,6 +31,7 @@ import {
   type AttentionQueueSource,
 } from '@archon/workflows/attention-queue';
 import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
+import { resolveMetricsWindow } from '@archon/workflows/metrics';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import {
@@ -45,9 +50,19 @@ export interface WorkflowAttentionOptions {
   labels: readonly string[];
   sort?: string;
   countBy?: string;
+  /**
+   * With `countBy`: count the attention waits opened since this duration ago or ISO time,
+   * answered or still open, from events, in place of the items open now.
+   */
+  since?: string;
   /** Stream every change in scope instead of reading the queue once. */
   watch?: boolean;
-  /** With `watch`: replay readable feed events strictly after this cursor. */
+  /**
+   * With `watch`: write every line of the sync protocol, for a program that keeps an open
+   * set. Without it the watch writes only the lines someone has to act on.
+   */
+  protocol?: boolean;
+  /** With `watch` and `protocol`: replay readable feed events strictly after this cursor. */
   after?: string;
 }
 
@@ -197,10 +212,13 @@ function attentionStreamText(
 }
 
 /**
- * `workflow attention --watch`: stream the queue until a signal or a closed stdout. Exit
- * 0 then, 1 on other output failures, and 4 on an `error` line: the stream's cursor
- * (from `--after`, or the tail's own position) is not one this install's store can read,
- * so the fix is to rerun without it. Read-only: stopping the stream affects no run.
+ * `workflow attention --watch`: stream the queue until a signal or a closed stdout. By
+ * default it writes only the lines someone has to act on (`attentionNeedsSomeoneFilter`);
+ * `--protocol` writes every line, for a program that keeps an open set. Exit 0 on a
+ * signal or closed stdout, 1 on other output failures, and 4 on an `error` line: the
+ * stream's cursor (from `--after`, or the tail's own position) is not one this install's
+ * store can read, so the fix is to rerun without it. Read-only: stopping the stream
+ * affects no run.
  */
 export async function workflowAttentionWatch(
   host: WorkflowHost,
@@ -214,11 +232,16 @@ export async function workflowAttentionWatch(
   const stopped = new Promise<void>(resolve => {
     stop = resolve;
   });
+  const needsSomeone = attentionNeedsSomeoneFilter();
   const write = (line: AttentionStreamLine): Promise<void> => {
+    // A person starting the quiet watch is told it runs, off the stream itself.
+    if (!opts.protocol && !opts.json && line.type === 'ready')
+      return writeStderr(`${attentionStreamText(line, scope).join('\n')}\n`);
+    if (!opts.protocol && !needsSomeone(line)) return Promise.resolve();
     if (opts.json) return writeStdout(`${JSON.stringify(line)}\n`);
     if (line.type === 'error')
       return writeStderr(
-        'The stream cursor is not one this install can read. Rerun without --after: the lines before "ready" are the open set.\n'
+        'The stream cursor is not one this install can read. Rerun without --after: the stream starts from the open set.\n'
       );
     const text = attentionStreamText(line, scope);
     return text.length === 0 ? Promise.resolve() : writeStdout(`${text.join('\n')}\n`);
@@ -285,6 +308,19 @@ export async function workflowAttentionCommand(
 
     const { labels, order, countBy } = parseAttentionQueueRequest(opts);
     const scope = await attentionScope(host, cwd, opts);
+    if (opts.since !== undefined && countBy !== undefined) {
+      const { since } = resolveMetricsWindow({ since: opts.since });
+      return await renderAttentionCounts(
+        await countAttentionWaitStarts(
+          { store: host.deps.store },
+          { scope, labels, countBy, since }
+        ),
+        scope,
+        opts.json,
+        [],
+        'No attention waits opened in that window.'
+      );
+    }
     const { values: items, degraded } = splitAttentionRead(await listAttentionQueue(source));
     const reports = scopeAttentionDegraded(degraded, scope).degraded ?? [];
     if (countBy !== undefined)
@@ -305,12 +341,21 @@ export async function workflowAttentionCommand(
   }
 }
 
+/** A flag that only shapes another flag's mode is refused without it. */
+function rejectFlagsWithoutTheirMode(opts: WorkflowAttentionOptions): void {
+  const needs = (flag: string, mode: string): never => {
+    throw new Error(`workflow attention ${flag} needs ${mode}`);
+  };
+  if (opts.protocol && !opts.watch) needs('--protocol', '--watch');
+  if (opts.after !== undefined && !opts.protocol) needs('--after', '--watch --protocol');
+  if (opts.since !== undefined && opts.countBy === undefined) needs('--since', '--count-by');
+}
+
 function rejectConflictingAttentionOptions(
   runId: string | undefined,
   opts: WorkflowAttentionOptions
 ): void {
-  if (opts.after !== undefined && !opts.watch)
-    throw new Error('workflow attention --after needs --watch');
+  rejectFlagsWithoutTheirMode(opts);
   const shaped = opts.sort !== undefined || opts.countBy !== undefined;
   if (opts.watch && (runId !== undefined || shaped))
     throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
@@ -354,7 +399,8 @@ async function renderAttentionCounts(
   counts: AttentionQueueCounts,
   scope: AttentionQueueScope,
   json: boolean | undefined,
-  degraded: AttentionDegraded[]
+  degraded: AttentionDegraded[],
+  none = 'No runs need attention.'
 ): Promise<number> {
   if (json) {
     await writeJsonLine({
@@ -377,7 +423,7 @@ async function renderAttentionCounts(
   if (rows.length === 0)
     console.log(
       degraded.length === 0
-        ? 'No runs need attention.'
+        ? none
         : 'No readable matching runs need attention; counts are incomplete.'
     );
   return 0;

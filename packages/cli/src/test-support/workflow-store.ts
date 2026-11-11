@@ -367,6 +367,7 @@ export function createInMemoryWorkflowStore(
     listEventsForRuns: (ids, types, options) =>
       write(view => view.listEventsForRuns(ids, types, options)),
     listMetricRecords: () => write(view => view.listMetricRecords()),
+    listAttentionWaitStarts: () => write(view => view.listAttentionWaitStarts()),
     getDagResumeSnapshot: id => write(view => view.getDagResumeSnapshot(id)),
     listProviderEvents: (id, query) => write(view => view.listProviderEvents(id, query)),
     findChildRuns: id => write(view => view.findChildRuns(id)),

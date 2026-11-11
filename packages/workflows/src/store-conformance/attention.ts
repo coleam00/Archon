@@ -6,6 +6,7 @@ import {
   attentionRevision,
   pausedAttentionWait,
   queuedRunAttention,
+  readWorkflowWaitContext,
   type WorkflowWaitContext,
   type WorkflowRun,
 } from '../schemas/workflow-run';
@@ -13,6 +14,7 @@ import { join } from 'node:path';
 import { getArchonWorkspacesPath, projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
   countAttentionQueue,
+  countAttentionWaitStarts,
   listAttentionQueue,
   readAttentionQueueItem,
   selectAttentionQueue,
@@ -498,6 +500,77 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         labels: { ci: 'other', team: 'web', class: 'ci-other' },
       });
     });
+    test('started attention waits are counted by the labels they opened with, answered or open', async () => {
+      const pause = async (
+        labels: Record<string, string>,
+        input: Partial<Parameters<IWorkflowStore['createWorkflowRun']>[0]> = {}
+      ): Promise<Extract<WorkflowWaitContext, { kind: 'attention' }> & { runId: string }> => {
+        const run = await running(store, input);
+        const context = { ...attentionWait, pauseId: `ask-${run.id}`, labels };
+        await store.pauseWorkflowRunForWait(run.id, context, { kind: 'started', stepName: 'ask' });
+        return { ...context, runId: run.id };
+      };
+      const answered = await pause({ class: 'ci' }, { codebase_id: CONFORMANCE_CODEBASE_ID });
+      await store.answerAttentionWait(
+        answered.runId,
+        attentionAnswer('use-main', answered.pauseId)
+      );
+      await store.resumeWorkflowRun(answered.runId);
+      const stored = readWorkflowWaitContext(
+        (await store.getWorkflowRun(answered.runId))?.metadata.wait
+      );
+      if (stored === undefined) throw new Error('Expected the answered wait');
+      expect(
+        await store.clearWorkflowWaitContext(answered.runId, stored, {
+          stepName: 'ask',
+          result: { status: 'satisfied', waited_ms: 1 },
+        })
+      ).toMatchObject({ cleared: true });
+      expect((await store.getWorkflowRun(answered.runId))?.metadata.wait).toBeUndefined();
+      await pause({ class: 'ci' });
+      await pause({ class: 'review' });
+      // A wait started before labels were recorded, and a wait that is not an attention wait.
+      const old = await running(store);
+      await store.persistWorkflowEvent({
+        workflow_run_id: old.id,
+        event_type: 'wait_started',
+        step_name: 'ask',
+        data: { kind: 'attention' },
+      });
+      const timed = await running(store);
+      await store.pauseWorkflowRunForWait(timed.id, wait, { kind: 'started', stepName: 'wait' });
+
+      const started = (await store.listWorkflowEvents(answered.runId)).find(
+        event => event.event_type === 'wait_started'
+      );
+      expect(started?.data).toEqual({ kind: 'attention', labels: { class: 'ci' } });
+
+      const count = (query: Partial<Parameters<typeof countAttentionWaitStarts>[1]>) =>
+        countAttentionWaitStarts(
+          { store },
+          { scope: { kind: 'all' }, labels: {}, countBy: { by: 'label', key: 'class' }, ...query }
+        );
+      expect((await count({})).counts).toEqual([
+        { value: 'ci', count: 2 },
+        { value: null, count: 1 },
+        { value: 'review', count: 1 },
+      ]);
+      expect((await count({ since: new Date(Date.now() - 3_600_000) })).counts).toHaveLength(3);
+      expect((await count({ since: new Date(Date.now() + 3_600_000) })).counts).toEqual([]);
+      expect((await count({ labels: { class: 'review' } })).counts).toEqual([
+        { value: 'review', count: 1 },
+      ]);
+      const codebase = await store.getCodebase(CONFORMANCE_CODEBASE_ID);
+      const project: ProjectRef = {
+        key: projectKeyForCodebase(codebase, codebase?.default_cwd ?? ''),
+        codebaseId: CONFORMANCE_CODEBASE_ID,
+        name: 'conformance',
+      };
+      expect((await count({ scope: { kind: 'project', project } })).counts).toEqual([
+        { value: 'ci', count: 1 },
+      ]);
+    });
+
     test('a parent blocked on a sub-run with no row is the same unreadable item listed and read', async () => {
       const parent = await running(store);
       const missing = crypto.randomUUID();

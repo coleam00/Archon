@@ -62,8 +62,10 @@ Route by intent:
    archon workflow attention --watch --json        # this project; add --all for the install
    ```
 
-   Each line is JSON. `attention` means a run needs a decision, `resolved` means it no
-   longer does, and `terminal` means a run ended. Act on the line, then keep reading.
+   Every line is something to act on. `attention` means a run needs a decision,
+   `resolved` means it no longer does, and `terminal` means a run failed. A run that
+   completes writes no line: check `archon workflow runs --json`, or block on one run
+   with `archon workflow wait <run-id> --json`. Act on the line, then keep reading.
 5. **Answer deliberately.** Read the item's question, its recommendation and the
    evidence it links. Answer with a reason, detached:
    `archon workflow respond <run-id> <decision> "<reason>" --detach`.

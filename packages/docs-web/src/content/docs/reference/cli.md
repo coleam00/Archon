@@ -1081,14 +1081,19 @@ archon workflow attention --json --all                             # the whole i
 archon workflow attention --json --project acme/web --label ci=other
 archon workflow attention --json --sort label:urgency
 archon workflow attention --json --all --count-by label:class
+archon workflow attention --json --count-by label:class --since 30d
 archon workflow attention <run-id> --json                          # one item
-archon workflow attention --watch --json --all                     # stream readable changes
-archon workflow attention --watch --json --after <cursor>          # resume a stream
+archon workflow attention --watch --json --all                     # what needs someone, as it happens
+archon workflow attention --watch --json --label merge=pr          # one class of question
+archon workflow attention --watch --protocol --json                # the full sync protocol, for programs
+archon workflow attention --watch --protocol --json --after <cursor>  # resume it
 ```
 
 The default scope is the current project, resolved from the working directory as [`state`](#state) resolves it. `--all` covers the install. `--project` takes a codebase id, a codebase name, or a project key such as `@cwd/scratch-<digest>`; copy the exact key from `items[].project.key` in `archon workflow attention --all --json`. A run is in scope when its codebase id matches, when both sides have one, and otherwise when its project key matches, so a run paused before its codebase was renamed is still listed under the new name. Under [`--chat-project-id`](#global-options), list, count and watch use the selected project whatever the working directory; `--all` and a `--project` naming another project are rejected.
 
 `--label k=v` filters must all match. `--sort label:<key>` compares the label's value as a plain string and puts items without it last. `--count-by` replaces the list with counts.
+
+`--count-by` counts the items open now. Add `--since` to count the attention waits opened in a window instead, whether each has been answered or is still open, so a class of question that recurs stays visible after its runs continue. `--since` takes a duration back from now (`24h`, `7d`, `2w`) or an ISO date or time. Scope and `--label` filters apply as they do to the open count. This count reads each wait's `wait_started` event, so it uses the labels the wait opened with and ignores later [`attention label`](#workflow-attention-label) writes. A wait opened by an Archon version that did not record labels on that event counts under no label (`value: null`, shown as `(no '<key>' label)`). Gates, usage-limit waits and waits of deleted runs are not counted. `--since` needs `--count-by`.
 
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
@@ -1113,14 +1118,27 @@ Healthy JSON omits `degraded`. Operator logs retain safe run IDs without stored 
 use the logged unreadable run ID to locate the data to repair, since a warning may name its
 readable parent instead. Read again after repair.
 
-**`--watch`** streams the queue instead of reading it once: one `attention` line per open
+**`--watch`** streams the queue instead of reading it once, and writes a line only when
+someone has to act: `attention` for an item that takes an answer or a look (the open
+items first, each with its message, options and recommendation), `resolved` or
+`unmatched` when an item it wrote closes or leaves the `--label` filter, `terminal` for a
+run that failed, `owner_lost`, `degraded` when a run could not be read, and `error`. It
+writes nothing for a run that completed, was cancelled or resumed, and it has no
+heartbeat, so a silent stream does not prove it is reading. Combine it with `--label k=v`
+to watch one queue or class of question. With `--json` each line is one compact JSON
+object; without it, a short sentence per line. Scope and `--label` work as for the list;
+`--sort`, `--count-by` and a run id are refused. See
+[Stream the queue](/getting-started/operate/#stream-the-queue).
+
+**`--protocol`**, with `--watch`, writes the full sync protocol, for a program that keeps its
+own copy of the open set: one `attention` line per open
 item in scope and an identifier-free `degraded` warning for each batch report of an affected
 paused run (an unreadable row or a readable parent whose descendant cannot be read),
 then `ready`, then follows changes any process commits, as
 `attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
 Every run line carries the run's `workflow` and `parentRunId`, so a consumer can keep
 top-level runs or one parent's children, and a failed `terminal` line carries `cause`, the
-failed node and its recorded error class ([fields](/getting-started/operate/#stream-the-queue)).
+failed node and its recorded error class ([fields](/getting-started/operate/#the-full-protocol-for-programs)).
 Repeated run-projection failures send an identifier-free `degraded` line with
 `reason: "run_unreadable"` and the last handled `cursor`, without exiting. Independent
 readable deliveries can continue while unreadable deliveries are omitted. Store-wide
@@ -1129,12 +1147,12 @@ after repair to refresh the open set; replay from before the gap for historical 
 Later bookmarks do not establish repaired coverage.
 With `--json` each line is one compact JSON object; without it, a short sentence per
 change. Scope and `--label` work as for the list; `--sort`, `--count-by` and a run id are
-refused. **`--after <cursor>`** takes the `cursor` of an earlier line and, after the
+refused. **`--after <cursor>`**, valid only with `--protocol`, takes the `cursor` of an earlier line and, after the
 snapshot, replays readable feed events strictly after it. Multiple lines can share an
 event cursor; resuming after it excludes all of them. For a partially handled event,
 replay from an earlier checkpoint as described in the guide. A `degraded` warning means replay may have
 gaps; use the repair and replay steps above. The line shapes and the consumer contract are in
-the [Operate page](/getting-started/operate/#stream-the-queue). Exit codes: `0` when a signal or a
+the [Operate page](/getting-started/operate/#the-full-protocol-for-programs). Exit codes: `0` when a signal or a
 closed stdout stops the stream (a closed stdout is noticed at the next line), `1` when it
 cannot start or an output write fails for another reason, `4` when the store cannot read the stream's cursor, an `--after` cursor this
 install did not issue or the stream's own position (with `--json`, the last line is

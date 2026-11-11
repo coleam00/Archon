@@ -4,6 +4,7 @@ import {
   attentionAnswerSchema,
   attentionChoiceProblem,
   attentionOptions,
+  otherTextProblem,
 } from '../../schemas/workflow-run';
 import {
   waitCondition,
@@ -83,7 +84,10 @@ function stubAnswerOutput(
   const raw: unknown = typeof answer === 'string' ? JSON.parse(answer) : answer;
   const { value: stubbed, ...fields } = isPlainRecord(raw) ? raw : {};
   const parsed = attentionAnswerSchema.safeParse(fields);
-  const problem = attentionChoiceProblem(condition.form, declared, chosenIds(parsed.data));
+  const chosen = chosenIds(parsed.data);
+  const problem =
+    attentionChoiceProblem(condition.form, declared, chosen) ??
+    otherTextProblem(condition.other, chosen, parsed.data?.text ?? '');
   if (problem !== undefined)
     throw new Error(`Stub for node '${node.id}' (form '${condition.form}') ${problem}`);
   if (parsed.data === undefined) return answer;

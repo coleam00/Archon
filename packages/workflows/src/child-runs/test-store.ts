@@ -150,6 +150,7 @@ export class InMemoryStore implements IWorkflowStore {
   listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (ids, types) =>
     readEventsForRuns(this.events, ids, types);
   listMetricRecords: IWorkflowStore['listMetricRecords'] = async () => [];
+  listAttentionWaitStarts: IWorkflowStore['listAttentionWaitStarts'] = async () => [];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
     throw new Error('Unexpected listWorkflowRuns');

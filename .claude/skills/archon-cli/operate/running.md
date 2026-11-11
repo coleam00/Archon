@@ -143,7 +143,7 @@ build queue also reads a message that says what to build; `queues.md` lists them
 ## Monitoring
 
 ```bash
-archon workflow attention --watch --json    # one stream: decisions and run ends, this project
+archon workflow attention --watch --json    # one stream: decisions and failed runs, this project
 archon workflow attention --watch --json --all   # the same across the install
 archon workflow wait <run-id> --json        # block on one run until it ends or needs attention
 archon workflow runs --json                 # recent runs for this project
@@ -157,16 +157,20 @@ Terminal statuses: `completed`, `failed`, `cancelled`.
 **Watch with one stream.** Right after your first launch, run `archon workflow
 attention --watch --json` as a background task of your harness. It follows every run
 in scope, including runs started later by triggers, schedules or other sessions, and
-prints one JSON line per change:
+prints a JSON line only when someone has to act:
 
-- `attention`: a run needs a decision. The line carries the whole item; answer it by
-  its `runId` and `occurrence` (see `managing-runs.md`).
-- `resolved`: the item no longer needs attention.
-- `terminal`: a run ended, with its `status` and `outcome`. Read its result.
+- `attention`: a run needs a decision. The line carries the whole item, with its
+  options and recommendation; answer it by its `runId` and `occurrence` (see
+  `managing-runs.md`). The items already open come first.
+- `resolved`: an item you were sent no longer needs attention. Stop working on it.
+- `terminal`: a run failed. `cause` names the node; read the run.
 - `owner_lost`: a run says it is running but its process is gone.
+- `degraded`: the stream could not read a run and may have missed something.
 
-The lines before `ready` are the current open set. Keep the `cursor` of the last line
-you handled; after a restart, `--after <cursor>` replays what you missed.
+Narrow it to one class of question with `--label k=v`. The stream has no heartbeat, so
+silence means nothing needs you or the stream stopped; if it exits, start it again and
+it resends the open items. A run that completes writes no line: `archon workflow runs
+--json` lists what finished, and `workflow wait <run-id>` blocks on one run.
 
 `workflow wait <run-id>` blocks on one run and suits one or two runs. Do not arm one
 wait per run for a batch: dozens of waiting processes contend for the database, and a

@@ -194,6 +194,7 @@ function createMockStore(): IWorkflowStore {
       async runIds => new Map(runIds.map(runId => [runId, []]))
     ),
     listMetricRecords: mock<IWorkflowStore['listMetricRecords']>(async () => []),
+    listAttentionWaitStarts: mock<IWorkflowStore['listAttentionWaitStarts']>(async () => []),
     findWorkflowRunsByIdPrefix: mock<IWorkflowStore['findWorkflowRunsByIdPrefix']>(async () => []),
     listWorkflowRuns: mock<IWorkflowStore['listWorkflowRuns']>(() => {
       throw new Error('Unexpected listWorkflowRuns');

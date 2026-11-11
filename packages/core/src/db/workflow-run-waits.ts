@@ -23,6 +23,7 @@ import {
   waitAnsweredEvent,
   waitCompletionEvents,
   waitContinuedEvent,
+  waitStartedEvent,
   type AttentionAnswerWrite,
   type AttentionLabelWrite,
   type NodeStateEventInput,
@@ -70,18 +71,7 @@ export async function pauseWorkflowRunForWait(
         throw new Error(`Workflow run not found or not in running state (id: ${id})`);
       }
       if (pause.kind === 'started') {
-        await insertWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'wait_started',
-          step_name: pause.stepName,
-          data: {
-            kind: parsedWaitContext.kind,
-            ...(parsedWaitContext.kind !== 'attention'
-              ? { resume_at: parsedWaitContext.resumeAt }
-              : {}),
-            ...(parsedWaitContext.kind === 'event' ? { event: parsedWaitContext.event } : {}),
-          },
-        });
+        await insertWorkflowEvent(query, waitStartedEvent(id, parsedWaitContext, pause.stepName));
       } else {
         await insertWorkflowEvent(query, waitContinuedEvent(id, parsedWaitContext));
       }

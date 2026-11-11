@@ -372,13 +372,14 @@ export const attentionQueueQuerySchema = z.object({
 });
 
 /** GET /api/runs/attention/stream query: the list query without its ordering and counting. */
-export const attentionStreamQuerySchema = attentionQueueQuerySchema.pick({
-  project: true,
-  all: true,
-  label: true,
-});
+export const attentionStreamQuerySchema = attentionQueueQuerySchema
+  .pick({ project: true, all: true, label: true })
+  .extend({
+    /** `true` sends only the lines someone has to act on, as `--watch` without `--protocol` does. */
+    needsSomeone: z.enum(['true', 'false']).optional(),
+  });
 
-/** One GET /api/runs/attention/stream event's data: the `--watch --json` line. */
+/** One GET /api/runs/attention/stream event's data: the `--watch --protocol --json` line. */
 export const attentionStreamLineResponseSchema =
   attentionStreamLineSchema.openapi('AttentionStreamLine');
 

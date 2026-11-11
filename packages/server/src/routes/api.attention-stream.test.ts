@@ -212,6 +212,24 @@ describe('GET /api/runs/attention/stream', () => {
     ]);
   });
 
+  test('needsSomeone=true sends only the lines someone has to act on', async () => {
+    const app = new OpenAPIHono();
+    const cursor = workflowEventCursor('c');
+    registerAttentionStreamRoute(app, async listener => {
+      await listener({ type: 'ready', cursor });
+      await listener({ type: 'bookmark', cursor });
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return { close: async () => undefined };
+    });
+    const linesOf = async (query: string): Promise<string[]> => {
+      const client = sseClient(await app.request(`/api/runs/attention/stream${query}`));
+      await client.done;
+      return client.events.map(event => event.line.type);
+    };
+    expect(await linesOf('?needsSomeone=true')).toEqual(['error']);
+    expect(await linesOf('')).toEqual(['ready', 'bookmark', 'error']);
+  });
+
   test('scopes the watch by project and label as the list route does', async () => {
     const seen: AttentionWatchOptions[] = [];
     const app = new OpenAPIHono();

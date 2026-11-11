@@ -27,6 +27,7 @@ type TransactionReads = Pick<
   | 'listWorkflowEvents'
   | 'listEventsForRuns'
   | 'listMetricRecords'
+  | 'listAttentionWaitStarts'
   | 'getDagResumeSnapshot'
   | 'findChildRuns'
   | 'getRunAncestry'
@@ -132,6 +133,20 @@ export function createTransactionReads(
           listEvents(id).filter(event => types.some(type => type === event.event_type)),
         ])
       ),
+    listAttentionWaitStarts: async () =>
+      events
+        .filter(
+          event =>
+            event.event_type === 'wait_started' &&
+            event.data.kind === 'attention' &&
+            runs.has(event.workflow_run_id)
+        )
+        .sort((a, b) => a.created_at.localeCompare(b.created_at) || a.id.localeCompare(b.id))
+        .map(event => ({
+          runId: event.workflow_run_id,
+          startedAt: event.created_at,
+          labels: structuredClone(event.data.labels),
+        })),
     listMetricRecords: async () =>
       // event_order counts within one run's log here, so only time orders across runs.
       [...events]

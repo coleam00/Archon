@@ -72,6 +72,7 @@ export {
   type AttentionLabels,
   attentionLabelKeySchema,
   attentionLabelsSchema,
+  OTHER_ATTENTION_OPTION,
 } from './wait-node';
 export { getApprovalDecisions } from './gate-node';
 
