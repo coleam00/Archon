@@ -27,6 +27,6 @@ A contract another run starts from cold, in the repository's issue template shap
 - `issues` — `{ "key", "title", "body" }` for each issue filed now; empty when built whole. `key` is a short lowercase slug joined by hyphens. Issues already filed from this item, by key: `$INPUTS.filed`. Give a piece you list again its earlier key, so it is not filed twice.
 - `later` — `{ "title", "signal" }` for each later phase; empty for a bundle or when built whole.
 - `existing` — `{ "number", "why" }` for open issues that own part of the outcome; empty when built whole.
-- `summary` — two or three sentences, posted on the item as the reason: what the item is and why it splits, or why one work item works.
+- `summary` — two or three sentences, posted on the item as its split comment, above the lists of issues the next node adds: what the item is, why it splits and what happens to it next, or why one work item works and that no issues are filed for it.
 
 You write nothing to the tracker, the repository or the state store; the next node files and comments.

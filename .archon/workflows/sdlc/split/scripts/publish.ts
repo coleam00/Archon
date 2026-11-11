@@ -8,8 +8,8 @@
  * files none twice. The existing issues the agent listed instead of filing are read to
  * prove each is an open issue of the repository, and recorded beside the filed ones.
  *
- * Then the item gets one marked comment listing its issues and the later phases the
- * agent planned, which are not filed yet. A PRD is labelled `archon-prd` and stays open
+ * Then the item gets one marked comment: the agent's summary, its issues and the later
+ * phases the agent planned, which are not filed yet. A PRD is labelled `archon-prd` and stays open
  * until its hypothesis has a verdict; an epic stays open until its increments merge; a
  * bundle is closed as completed. The last write records the split done and releases
  * the claim, so a run that stops before it is retried, and every write before it
@@ -65,13 +65,6 @@ type Answer = { readonly kind: SplitKind } | { readonly kind: 'whole'; readonly 
 
 const COMMENT_MARKER = '<!-- archon-split -->';
 
-/** What the comment says about the item's current piece, and what happens to the item. */
-const KIND: Record<SplitKind, { readonly piece: string; readonly is: string; readonly then: string }> = {
-  prd: { piece: "This PRD's current phase", is: 'is', then: 'It stays open until its hypothesis has a verdict.' },
-  epic: { piece: "This epic's current increment", is: 'is', then: 'It stays open until its increments merge.' },
-  bundle: { piece: "This bundle's tasks", is: 'are', then: 'It is closed.' },
-};
-
 function filedOn(doc: WorkItem | null): readonly SplitIssue[] {
   return filedIssues(doc?.facts.split);
 }
@@ -87,42 +80,27 @@ function finish(doc: WorkItem, record: SplitRecord, runId: string, outcome: stri
 }
 
 /**
- * `issues` holds every issue filed from the item; only those under a key the agent
- * listed for this phase are the current piece, the rest came from earlier phases.
- * `listed` holds the adoptions this run read as open; earlier adoptions are not
- * re-read, so they never claim the current piece.
+ * The item's split comment: the agent's reason, then what stands on the tracker. The
+ * script adds only the lists, because the issue numbers exist only once they are filed.
+ * `issues` holds every issue filed from the item; those under a key the agent listed
+ * for this phase are the current piece, the rest came from earlier phases.
  */
 function comment(
-  kind: SplitKind,
+  summary: string,
   issues: readonly SplitIssue[],
   keys: readonly string[],
   adopted: readonly AdoptedIssue[],
-  listed: readonly AdoptedIssue[],
   later: readonly Later[]
 ): string {
-  const { piece, is, then } = KIND[kind];
   const line = (entry: SplitIssue): string => `- #${String(entry.number)}${entry.title === undefined ? '' : ` ${entry.title}`}`;
-  const current = issues.filter(entry => keys.includes(entry.key)).map(line);
-  const earlier = issues.filter(entry => !keys.includes(entry.key)).map(line);
-  const tracked = adopted.map(entry => `- #${String(entry.number)} ${entry.why}`);
-  const planned = later.map(entry => `- ${entry.title}. Filed once the earlier work shows: ${entry.signal}`);
-  const owned = adopted.some(entry => listed.some(next => next.number === entry.number));
-  // Say only what is true: issues filed for this piece, open issues that own it, or neither.
-  const lead =
-    current.length > 0
-      ? `${piece} ${is} filed as these issues. ${then}`
-      : owned
-        ? `${piece} ${is} owned by existing open issues, so nothing new is filed. ${then}`
-        : `Nothing is filed for it now. ${then}`;
+  const list = (heading: string, lines: readonly string[]): string => (lines.length === 0 ? '' : `${heading}:\n${lines.join('\n')}`);
   return [
     COMMENT_MARKER,
-    lead,
-    current.join('\n'),
-    earlier.length > 0 ? `Filed by earlier phases:\n${earlier.join('\n')}` : '',
-    tracked.length > 0
-      ? `${current.length > 0 ? 'It also depends on these issues, which already own part of it' : 'The existing issues'}:\n${tracked.join('\n')}`
-      : '',
-    planned.length > 0 ? `Later phases, not filed yet:\n${planned.join('\n')}` : '',
+    summary.trim(),
+    list('Filed now', issues.filter(entry => keys.includes(entry.key)).map(line)),
+    list('Filed by earlier phases', issues.filter(entry => !keys.includes(entry.key)).map(line)),
+    list('Existing issues that own part of it', adopted.map(entry => `- #${String(entry.number)} ${entry.why}`)),
+    list('Later phases, not filed yet', later.map(entry => `- ${entry.title}. Filed once the earlier work shows: ${entry.signal}`)),
   ]
     .filter(part => part !== '')
     .join('\n\n');
@@ -177,7 +155,7 @@ function publish(
   }
 
   const adopted = adoptedBeside(issues);
-  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(kind, issues, keys, adopted, listed, later));
+  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, comment(summary, issues, keys, adopted, later));
   if (kind === 'prd') writeLabels(item, ['archon-prd'], []);
   if (kind === 'bundle') closeIssue(item, 'completed');
 
@@ -195,8 +173,7 @@ function publish(
 /** Hand the item to the build queue as one work item, with the agent's reason. */
 function buildWhole(item: QualifiedPr, runId: string, route: WholeRoute, reason: string): void {
   const at = new Date().toISOString();
-  const lead = 'The split queue found this item can be built as one work item, so it files no issues for it.';
-  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, [COMMENT_MARKER, lead, reason].join('\n\n'));
+  upsertComment({ kind: 'issue', ref: item }, COMMENT_MARKER, [COMMENT_MARKER, reason].join('\n\n'));
   writeLabels(item, [ROUTE_LABEL[route]], ['archon-split']);
   updateClaimed(item, runId, current => ({
     ...finish(current, { status: 'whole', route, at, run_id: runId }, runId, 'whole', reason),
