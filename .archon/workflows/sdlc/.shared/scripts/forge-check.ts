@@ -4,7 +4,7 @@ import { checkForgeAccess } from '../forge-check.ts';
 import { refuse } from 'archon:script';
 
 try {
-  console.log(await checkForgeAccess());
+  console.log(checkForgeAccess());
 } catch (error) {
   refuse(`forge-check: ${error instanceof Error ? error.message : String(error)}`);
 }

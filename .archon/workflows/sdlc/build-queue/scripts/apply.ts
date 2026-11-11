@@ -38,7 +38,7 @@ import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
-import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
+import { askFields, attentionWait, checkAttention, type DecisionEntry } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
@@ -63,7 +63,7 @@ type Decision =
 function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string): Decision {
   if (attention === null) throw new Error(`the ${by} decision asks without an attention item`);
   checkAttention(attention);
-  return { kind: 'asked', by, attention: withOther(attention, 'continue'), brief, reason };
+  return { kind: 'asked', by, attention, brief, reason };
 }
 
 function decide(
@@ -170,7 +170,7 @@ function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; 
     case 'idle':
       return {
         decision: path,
-        summary: idleSummary('No item waits for the build queue.', stuckItems((process.env.WORKFLOW_ID ?? ''))),
+        summary: idleSummary('No item waits for the build queue.', stuckItems(workflowRunId())),
       };
     case 'order':
       return { decision: path, summary: input('order') };
@@ -256,7 +256,11 @@ function main(): void {
   const wait =
     asking === null
       ? null
-      : attentionWait(`Build queue, issue ${String(item.number)}: ${asking.by} decision`, asking.attention);
+      : attentionWait(
+          `Build queue, issue ${String(item.number)}: ${asking.by} decision`,
+          asking.attention,
+          'Your text is written into the issue body as the ruling, and the next round works from it.'
+        );
   const links = [
     ...(round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '')),
     ...(asking?.attention.links ?? []),

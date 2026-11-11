@@ -449,6 +449,7 @@ nodes:
       attention: "$apply.output.attention"
       form: select
       options: "$apply.output.options"
+      other: true
       recommendation: "$apply.output.recommendation"
       labels:
         build: "$apply.output.class"

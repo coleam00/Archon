@@ -124,7 +124,7 @@ function main(): void {
       trust: null,
       promoted: false,
       labels: [],
-      summary: idleSummary('No item waits for intake.', stuckItems((process.env.WORKFLOW_ID ?? ''))),
+      summary: idleSummary('No item waits for intake.', stuckItems(workflowRunId())),
     });
     return;
   }

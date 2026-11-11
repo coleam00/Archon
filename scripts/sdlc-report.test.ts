@@ -6,6 +6,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import type { JsonValue } from '../packages/workflows/src/output-ref';
 import type { TypedOutputRecord } from '../packages/workflows/src/schemas/node-bindings';
 import type { TypedOutput } from '../.archon/workflows/sdlc/.shared/inputs';
+import { scriptApiPreload } from '../.archon/scripts/__tests__/deliver-checks-harness';
 import { failed } from '../.archon/workflows/sdlc/.shared/report';
 
 /**
@@ -76,7 +77,7 @@ describe.each([
       join(dir, 'discoveries', 'implement.json'),
       JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
     );
-    const child = Bun.spawnSync([process.execPath, script], {
+    const child = Bun.spawnSync([process.execPath, '--preload', scriptApiPreload(), script], {
       env: {
         ...process.env,
         ARTIFACTS_DIR: dir,

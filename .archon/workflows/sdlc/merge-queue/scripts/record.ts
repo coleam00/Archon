@@ -40,28 +40,18 @@ import {
   type MergeRecord,
   type MergeSettled,
   type MergeStatus,
+  otherEffect,
   type PrFacts,
   readBase,
   readPr,
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { askFields, attentionWait, withOther } from '../../.shared/queue.ts';
+import { askFields, attentionWait } from '../../.shared/queue.ts';
 
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
-
-/**
- * The asked item with the queue's `other`, whose effect is what the item can take: a
- * return when the sweep wrote a brief, a park otherwise.
- */
-function withQueueOther(attention: MergeAttention, brief: string): MergeAttention {
-  if (brief.trim() === '') {
-    return withOther(attention, 'park', 'Records the answer text as the ruling. Stops queue work until the build queue readies the item again; no build round starts.');
-  }
-  return withOther(attention, 'return');
-}
 
 interface Item {
   readonly item: QualifiedPr | null;
@@ -250,7 +240,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       merged: [],
-      summary: idleSummary('No pull request waits for the merge queue.', stuckItems((process.env.WORKFLOW_ID ?? ''))),
+      summary: idleSummary('No pull request waits for the merge queue.', stuckItems(workflowRunId())),
       attention: '',
       options: [],
       recommendation: null,
@@ -278,14 +268,18 @@ function main(): void {
             pr: itemOf(firstAsk.number).pr,
             head: firstAsk.head,
             brief: firstAsk.brief,
-            attention: withQueueOther(firstAsk.attention as MergeAttention, firstAsk.brief),
+            attention: firstAsk.attention as MergeAttention,
           };
   const waitOf = (raised: MergeAsked | null) =>
     raised === null
       ? null
       : raised.by === 'base'
         ? attentionWait<string>('Merge queue: the default branch is red', raised.attention)
-        : attentionWait<string>(`Merge queue, PR ${String(raised.pr.number)}: merge decision`, raised.attention);
+        : attentionWait<string>(
+            `Merge queue, PR ${String(raised.pr.number)}: merge decision`,
+            raised.attention,
+            `Your text is written into the issue body as the ruling. ${otherEffect(raised.brief) === 'return' ? 'The item returns to the build queue, and the next round works from it.' : 'Queue work stops until the build queue readies the item again; no build round starts.'}`
+          );
 
   // Settlements are independent of the policy refresh and the sweep's decisions.
   recordSettled(writes, settled);

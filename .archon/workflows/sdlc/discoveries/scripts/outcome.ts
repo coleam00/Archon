@@ -27,7 +27,7 @@ import {
   refRun,
   runName,
 } from '../../.shared/discoveries.ts';
-import { artifactsDir, emit, input, refuse, state } from 'archon:script';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId, state } from 'archon:script';
 import { sameRepo } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { createIssue, viewIssue } from '../../.shared/issue.ts';
@@ -116,7 +116,7 @@ function main(): void {
   // Then each run's memory: the refs decided this pass, and the questions asked. A run
   // with an asked record keeps this run's claim, so no other pass asks again while the
   // question waits.
-  const self = (process.env.WORKFLOW_ID ?? '').trim();
+  const self = workflowRunId();
   for (const run of queue.runs) {
     const name = runName(run.id);
     const read = state.get(name);

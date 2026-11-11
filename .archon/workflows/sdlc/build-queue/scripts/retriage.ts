@@ -9,7 +9,7 @@
  */
 
 import type { BlockedItem } from '../../.shared/build.ts';
-import { emit, input, refuse } from 'archon:script';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { requestRetriage } from '../../.shared/launch.ts';
 
@@ -17,7 +17,7 @@ function main(): void {
   const blocked = nullableJson(input('blocked')) as BlockedItem[];
   const judged = nullableJson(input('retriage')) as { number: number; reason: string }[];
   const repo = nullableJson(input('repo')) as { host: string; path: string };
-  const runId = (process.env.WORKFLOW_ID ?? '');
+  const runId = workflowRunId();
   const listed = new Set(blocked.map(item => item.number));
   const stray = judged.find(entry => !listed.has(entry.number));
   if (stray !== undefined) throw new Error(`the revisit named issue ${String(stray.number)}, which it was not given`);

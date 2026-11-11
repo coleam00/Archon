@@ -2,7 +2,9 @@
  * Act on a person's answer to the merge queue's attention item.
  *
  * The answer is one of the declared choices, and the wait returns that choice as the
- * answer's value, so its effect is read from the choice, never from the answer's text. On a pull request: `merge` records the approval pinned
+ * answer's value, so its effect is read from the choice, never from the answer's text.
+ * An `other` answer returns no choice: its text is the ruling, and the item returns to
+ * the build queue when the sweep wrote a brief and parks otherwise. On a pull request: `merge` records the approval pinned
  * to the head that was asked about, and the next sweep merges it once the gate passes
  * at that head; `return` hands the item back to the build queue with the brief the
  * sweep wrote; `park` stops working it until renewed build readiness. A
@@ -15,7 +17,7 @@
  * binding; if it does not start, the next queue run picks the item up as before.
  *
  * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE, the chosen choice (the
- * answer's value), and INPUTS_TEXT, the answer's text; INPUTS_MERGE_QUEUE_BINDING and
+ * answer's value, empty for `other`), and INPUTS_TEXT, the answer's text; INPUTS_MERGE_QUEUE_BINDING and
  * INPUTS_BUILD_QUEUE_BINDING, the workflow's inputs.
  */
 
@@ -25,8 +27,8 @@ import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, withMerge } from '../../.shared/merge.ts';
-import { type Choice, rulingHeading } from '../../.shared/queue.ts';
+import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, otherEffect, withMerge } from '../../.shared/merge.ts';
+import { answeredChoice, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
 const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<
@@ -55,8 +57,7 @@ function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, a
 function main(): void {
   const asked = nullableJson(input('asked')) as MergeAsked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const answered = nullableJson(input('choice')) as Choice<string> | null;
-  if (answered === null) throw new Error('the answer carries no chosen choice');
+  const answered = nullableJson(input('choice')) as MergeAttention['choices'][number] | null;
   const words = input('text').trim();
   if (asked.by === 'base') {
     emit({
@@ -68,7 +69,7 @@ function main(): void {
   }
 
   const runId = workflowRunId();
-  const choice = answered as MergeAttention['choices'][number];
+  const choice = answeredChoice(answered, otherEffect(asked.brief));
   const at = new Date().toISOString();
   const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')

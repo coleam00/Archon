@@ -1,6 +1,6 @@
 /**
  * The pack's one issue read, its close, and its create-or-recover by marker, through
- * the forge contract (./forge.ts).
+ * the forge contract (`forge` of `archon:script`).
  *
  * The forge proves the number names an issue on the tracker before anything is
  * returned or written, so a pull request with the same number is never read or

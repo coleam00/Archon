@@ -572,7 +572,8 @@ export function enqueue(subject: QualifiedPr, request: IntakeRequest): void {
   }
   const waiting = record(stored.value)?.requests;
   if (!decides(request) && Array.isArray(waiting) && waiting.some(entry => !decides(record(entry) ?? {}))) return;
-  state.patch(name, [{ op: 'append', path: '/requests', value: request }]);
+  const appended = state.patch(name, [{ op: 'append', path: '/requests', value: request }]);
+  if (!appended.ok) throw new Error(`archon state patch ${name} was refused: ${appended.conflict}`);
 }
 
 /**

@@ -49,7 +49,14 @@ export function decodePrPublicationRecord(value: unknown):
   | { readonly state: 'started' }
   | { readonly state: 'verified'; readonly pr: PrRecord } {
   const row = record(value);
-  if (row && 'pr' in row) return { state: 'verified', pr: row.pr as PrRecord };
+  if (row && 'pr' in row) {
+    // The file is this pack's own, written from a record the host validated; a partial one is not a verified pull request.
+    const pr = record(row.pr);
+    if (!record(pr?.repo) || typeof pr?.number !== 'number' || typeof pr.url !== 'string' || typeof pr.head !== 'string') {
+      throw new Error('invalid pull-request record in the PR publication record');
+    }
+    return { state: 'verified', pr: pr as unknown as PrRecord };
+  }
   if (!record(row?.repo) || !record(row?.headRepo) || typeof row?.head !== 'string' || row.head === '') {
     throw new Error('invalid PR publication record');
   }

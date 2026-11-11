@@ -6,7 +6,7 @@ import { trackTempRoots } from './temp-roots';
 import type { BuildRecord } from '../../workflows/sdlc/.shared/build';
 import type { MergeRecord } from '../../workflows/sdlc/.shared/merge';
 import type { WorkOrder } from '../../workflows/sdlc/.shared/order';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import { newWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { gitCheckout, hostCli, PR, packScriptRunner, type ScriptRun } from './deliver-checks-harness';
 
@@ -60,7 +60,7 @@ function store(documents: Record<string, unknown>): Record<string, string> {
     INTAKE_HOST_CLI: JSON.stringify(hostCli()),
   };
   inStore(env, () => {
-    for (const [name, value] of Object.entries(documents)) expect(statePut(name, value, 0)).toBe('ok');
+    for (const [name, value] of Object.entries(documents)) expect(state.put(name, value, { ifRevision: 0 }).ok).toBe(true);
   });
   return env;
 }
@@ -117,24 +117,24 @@ describe('build-queue pickup with work orders', () => {
     for (const orders of [{}, { 'work-order/old': order([7], 'done') }]) {
       const env = store({ 'work/7': waiting(7), ...orders });
       expect(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-on')).toMatchObject({ path: 'idle', item: null });
-      expect(inStore(env, () => stateGet('work/7').value)).toMatchObject({ claim: null });
+      expect(inStore(env, () => state.get('work/7').value)).toMatchObject({ claim: null });
     }
   }, 60_000);
 
   test('an open order whose members all merged is marked done once, and builds nothing more', () => {
     const env = store({ 'work/7': merged(7), 'work/8': merged(8), 'work/9': waiting(9), 'work-order/next': order([7, 8]) });
     expect(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1')).toMatchObject({ path: 'idle' });
-    const done = inStore(env, () => stateGet('work-order/next'));
+    const done = inStore(env, () => state.get('work-order/next'));
     expect(done.value).toMatchObject({ members: [7, 8], status: 'done' });
     expect(typeof (done.value as WorkOrder).done_at).toBe('string');
     facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-2');
-    expect(inStore(env, () => stateGet('work-order/next').revision)).toBe(done.revision);
+    expect(inStore(env, () => state.get('work-order/next').revision)).toBe(done.revision);
   }, 60_000);
 
   test('an order with an unmerged member stays open and keeps its members building', () => {
     const env = store({ 'work/7': merged(7), 'work/9': waiting(9), 'work-order/next': order([7, 9]) });
     expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1', 9))).toBe(9);
-    expect(inStore(env, () => stateGet('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
+    expect(inStore(env, () => state.get('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
   }, 60_000);
 
   test('a member re-triaged after its merge is not finished: the order stays open and the member builds again', () => {
@@ -142,7 +142,7 @@ describe('build-queue pickup with work orders', () => {
     const retriaged = { ...rebuilt, facts: { ...rebuilt.facts, triage: { ...TRIAGE, at: '2026-11-06T01:00:00.000Z' } } };
     const env = store({ 'work/7': retriaged, 'work/8': merged(8), 'work-order/next': order([7, 8]) });
     expect(claimedNumber(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1', 7))).toBe(7);
-    expect(inStore(env, () => stateGet('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
+    expect(inStore(env, () => state.get('work-order/next').value)).toMatchObject({ status: 'open', done_at: null });
   }, 60_000);
 
   test('on, a named item is claimed though no open order holds it, so its follow-up rounds still start', () => {
@@ -173,14 +173,14 @@ describe('a work order from the run\'s message', () => {
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const result = writeOrder(env, { id: 'next', members: [7, 8], unresolved: [] }, calls);
     expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
-    expect(inStore(env, () => stateGet('work-order/next').value)).toMatchObject({
+    expect(inStore(env, () => state.get('work-order/next').value)).toMatchObject({
       version: 1,
       members: [7, 8],
       approved: { by: 'user-1' },
       status: 'open',
       done_at: null,
     });
-    expect(inStore(env, () => stateGet('work/7').value)).toMatchObject({ claim: null });
+    expect(inStore(env, () => state.get('work/7').value)).toMatchObject({ claim: null });
     const launches = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).filter(argv => argv[1] === 'run');
     expect(launches).toHaveLength(1);
     expect(launches[0]).toEqual(expect.arrayContaining(['archon-intake', 'number=8']));
@@ -188,9 +188,9 @@ describe('a work order from the run\'s message', () => {
 
   test('an id that exists is refused and the approved order is left as it was', () => {
     const env = store({ 'work-order/next': order([7]) });
-    const before = inStore(env, () => stateGet('work-order/next'));
+    const before = inStore(env, () => state.get('work-order/next'));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     expect(writeOrder(env, { id: 'next', members: [8, 9], unresolved: [] }, calls).code).not.toBe(0);
-    expect(inStore(env, () => stateGet('work-order/next'))).toEqual(before);
+    expect(inStore(env, () => state.get('work-order/next'))).toEqual(before);
   }, 60_000);
 });

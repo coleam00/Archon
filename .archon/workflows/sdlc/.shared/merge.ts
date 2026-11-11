@@ -7,15 +7,15 @@
  * or, when none did, the one triage routed the item to continue. The queue claims them
  * with intake's claim, so an item has one owner at a time across the three queues.
  *
- * Every read and the merge go through the forge contract (./forge.ts), using the
+ * Every read and the merge go through the forge contract (`forge` of `archon:script`), using the
  * operations in `MERGE_QUEUE_FORGE_OPERATIONS`.
  */
 
 import { itemPullRequest, type Validation } from './build.ts';
-import { forge } from 'archon:script';
 import { type QualifiedPr } from './identity.ts';
 import { record } from './inputs.ts';
-import { REMEDY } from './forge.ts';
+import { requireForge } from './forge-check.ts';
+import { forge } from 'archon:script';
 import { viewPr } from './pr.ts';
 import { type Attention, type DecisionEntry, withDecision } from './queue.ts';
 import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
@@ -25,6 +25,11 @@ import type { Pickup, WorkItem } from './workitem.ts';
 export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
 export type MergeEffect = (typeof MERGE_EFFECTS)[number];
 export type MergeAttention = Attention<MergeEffect>;
+
+/** What an `other` answer does with an asked pull request: a return when the sweep wrote a brief, a park otherwise. */
+export function otherEffect(brief: string): MergeEffect {
+  return brief.trim() === '' ? 'park' : 'return';
+}
 
 /** The one answer to a red default branch: the queue holds merges until it is green again. */
 export const BASE_EFFECTS = ['hold'] as const;
@@ -228,16 +233,12 @@ export const MERGE_QUEUE_FORGE_OPERATIONS = [
 ] as const;
 
 /**
- * Refuse a plugin that lacks a merge-queue operation before anything is
- * claimed: every pull request it could not read would otherwise wait, then park.
+ * Refuse a plugin that lacks a merge-queue operation or has no credential
+ * (`archon forge check`) before anything is claimed: every pull request it could not
+ * read would otherwise wait, then park.
  */
 export function requireMergeSource(repo: QualifiedPr['repo']): void {
-  const capabilities = forge('metadata', { host: repo.host })?.capabilities;
-  if (!Array.isArray(capabilities)) throw new Error('forge metadata returned no operation capabilities');
-  const missing = MERGE_QUEUE_FORGE_OPERATIONS.filter(op => !capabilities.includes(op));
-  if (missing.length > 0) {
-    throw new Error(`the forge plugin for ${repo.host} lacks the merge queue's ${missing.join(', ')}. ${REMEDY.unsupported_op}`);
-  }
+  requireForge(repo.host, MERGE_QUEUE_FORGE_OPERATIONS);
 }
 
 export interface BaseFacts {
