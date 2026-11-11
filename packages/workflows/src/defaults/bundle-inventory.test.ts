@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { discoverScripts } from '../script-discovery';
 import { yamlCountError } from '../workflow-discovery/pack-layout';
 import {
   collectBundleSources,
@@ -133,4 +134,32 @@ test('a workflow folder with two YAML files fails with the discovery error', asy
   await expect(collectBundleSources(join(root, 'workflows'), ['selected'])).rejects.toThrow(
     yamlCountError('selected/crowded', 2).error
   );
+});
+
+test('discovery and bundle entry points infer the same runtimes', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-script-runtimes-')));
+  await writeTree(root, {
+    'kit/flow/main.yaml': 'name: main\n',
+    'kit/flow/scripts/typescript.ts': 'export {};\n',
+    'kit/flow/scripts/javascript.js': 'export {};\n',
+    'kit/flow/scripts/python.py': 'print(1)\n',
+    'kit/flow/scripts/ignored.txt': 'not a script\n',
+  });
+  const discovered = await discoverScripts(join(root, 'kit/flow/scripts'));
+  const { scriptPacks } = await readBundleRecords(await collectBundleSources(root, ['kit']));
+  const expected = { typescript: 'bun', javascript: 'bun', python: 'uv' } as const;
+  expect(
+    Object.fromEntries([...discovered].map(([name, script]) => [name, script.runtime]))
+  ).toEqual(expected);
+  expect(scriptPacks.kit?.scripts).toEqual({
+    '__archon_pack__bundled:kit:flow::typescript': {
+      path: 'flow/scripts/typescript.ts',
+      runtime: 'bun',
+    },
+    '__archon_pack__bundled:kit:flow::javascript': {
+      path: 'flow/scripts/javascript.js',
+      runtime: 'bun',
+    },
+    '__archon_pack__bundled:kit:flow::python': { path: 'flow/scripts/python.py', runtime: 'uv' },
+  });
 });
