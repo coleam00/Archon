@@ -110,11 +110,11 @@ export function readPrFacts(urls: Iterable<string>): PrFacts[] {
   return facts;
 }
 
-/** The time `since` names: an ISO date or time, or `<n>d` back from now. */
+/** The time a window bound such as `since` names: an ISO date or time, or `<n>d` back from now. */
 export function sinceTime(since: string): number {
   const days = /^(\d+)d$/.exec(since)?.[1];
   const from = days === undefined ? Date.parse(since) : Date.now() - Number(days) * 86_400_000;
-  if (Number.isNaN(from)) throw new Error(`since must be an ISO date or time, or a number of days such as 7d; received ${JSON.stringify(since)}`);
+  if (Number.isNaN(from)) throw new Error(`a window bound must be an ISO date or time, or a number of days such as 7d; received ${JSON.stringify(since)}`);
   return from;
 }
 

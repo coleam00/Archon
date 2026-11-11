@@ -14,7 +14,7 @@ archon plugin add owner/repo     # install a workflow pack published on GitHub
 
 The live list is authoritative. Bundled workflows ship under the `archon-` prefix
 (e.g. `archon-ship`, `archon-review`, `archon-deliver`, `archon-investigate`,
-`archon-triage`, `archon-upkeep`); user-authored workflows may
+`archon-triage`); user-authored workflows may
 claim any name and override a bundled one in that repo.
 
 In JSON output, `descriptionTruncated: true` means `description` is a discovery preview,
@@ -104,7 +104,7 @@ Rules:
 2. **For git projects, pass `--branch`** unless the user chose otherwise. Derive the name
    from the domain of work — code: `fix/<topic-or-issue-N>`, `feat/<name>`,
    `review/pr-N`; ops/process runs: e.g. `ops/<queue>-<item>`,
-   `upkeep/<dependency>`, `triage/<source>`. To run on
+   `triage/<source>`. To run on
    different models for one run, see `managing-runs.md` ("Overriding models for one
    run").
    A worktree created for `--branch` stays when the run ends; `archon isolation

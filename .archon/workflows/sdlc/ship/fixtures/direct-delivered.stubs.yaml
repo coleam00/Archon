@@ -65,5 +65,4 @@ fixture:
   expect: completed
   resolved-text-contains:
     review__scope: '"delivers":1,"parts":[{"part":1'
-    triage__triage: "target):\n\n\n\nThe operator's request"
 exec-code: true

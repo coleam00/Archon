@@ -17,8 +17,9 @@ description: |
   order for several issues, which the run writes and the scheduled queue builds, or new
   work it files and hands to intake. Neither is built in the run that wrote it.
 
-  Use when: a trigger binding the operator installed starts it (see the SDLC pack
-  README, "Build queue"), or a person names the item, by number or in words.
+  Use when: a trigger binding the operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#build-queue), or a person names the
+  item, by number or in words.
   NOT for: triaging an item (archon-intake), delivering one item by hand
   (archon-ship), or merging (archon-merge-queue).
 
@@ -44,7 +45,8 @@ inputs:
     default: "false"
     description: >-
       "true" claims only items that are members of an open work order (a
-      `work-order/<id>` state document; see the SDLC pack README, "Work orders"), and
+      `work-order/<id>` state document; see
+      https://archon.diy/guides/sdlc-operations/#work-orders), and
       nothing when no order is open. It first marks done each open order whose members
       have all merged. A named item is claimed either way. Anything else picks from
       every waiting item.
@@ -91,7 +93,7 @@ nodes:
     command: interpret
     depends_on: [start]
     when: "$start.output.message == true"
-    model: large
+    model: ['@build-interpret', large]
     mutates_checkout: false
     with:
       repo: "$start.output.repo.host/$start.output.repo.path"
@@ -212,7 +214,7 @@ nodes:
     command: route
     depends_on: [facts]
     when: "$facts.output.path == 'route'"
-    model: large
+    model: ['@build-route', large]
     mutates_checkout: false
     with:
       url: "$facts.output.url"
@@ -323,7 +325,7 @@ nodes:
     depends_on: [facts, checkout, ship]
     trigger_rule: none_failed_min_one_success
     when: "$facts.output.path == 'route' && $route.output.decision == 'launch'"
-    model: large
+    model: ['@build-answer', large]
     mutates_checkout: false
     with:
       url: "$facts.output.url"
@@ -491,7 +493,7 @@ nodes:
     command: revisit
     depends_on: [start, blocked]
     when: "$blocked.output.blocked_count > 0"
-    model: medium
+    model: ['@build-revisit', medium]
     mutates_checkout: false
     with:
       blocked: { from: "$blocked.output.blocked" }

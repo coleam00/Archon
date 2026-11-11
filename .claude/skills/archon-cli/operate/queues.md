@@ -15,7 +15,7 @@ workflows. Each run does one step and stops only for a decision it cannot make:
 | `archon-merge-queue` | Claims the items the build queue finished and merges what policy allows, one at a time, through a gate. |
 | `archon-discoveries` | Decides the out-of-scope findings finished runs recorded: file, track, drop or ask. |
 
-The pack's README (`.archon/workflows/sdlc/README.md`) is the full contract. This
+https://archon.diy/guides/sdlc-operations/ is the full operator manual. This
 reference covers launching and tending the queues by hand.
 
 ## Before the first run
@@ -32,14 +32,15 @@ reference covers launching and tending the queues by hand.
   maintainer wrote; with no trusted review, no verdict is Ready and nothing merges.
 - The merge gate requires green CI at the pull request's head. A repository with no
   CI checks reads as `none`, not green, so nothing merges there until the project sets
-  `ci: none` in `.archon/packs/sdlc.yaml` (the pack README, "Pack settings"): delivery
+  `ci: none` in `.archon/packs/sdlc.yaml` (the pack README's setup guide, "Choose the pack settings"): delivery
   then runs the full validation itself, and the gate requires it to have passed at the
   head instead.
 - Policy documents at `.archon/sdlc/policy/<topic>.md` add to the pack's defaults
   rather than replacing them. Where a line in the project's file conflicts with the
   default, the project's line wins.
 - The pack installs no trigger bindings. Nothing runs on its own until the operator
-  adds one. The README shows a binding per queue; until then, launch by hand.
+  adds one. `archon pack bindings sdlc` writes the recommended binding per queue; until
+  then, launch by hand.
 
 ## Inputs
 
@@ -67,13 +68,15 @@ Optional inputs, with their defaults in each workflow's YAML:
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
   for a label), `label` and `label_actor` for a label event.
 - `archon-build-queue`: `number` (the issue to build; empty claims the item the
-  message names, or the first in order), `retriage_as` (a maintainer login; set, a run that names no item also
-  re-triages blocked items that no longer look blocked) and `round_limit` (default
+  message names, or the first in order), `orders_only` (`true` claims only members of
+  an open work order), `revisit_blocked` (`true`: a run that names no item also sends
+  blocked items that no longer look blocked back to intake), `round_limit` (default
   `3`), the rounds after which a run that wants another also judges whether the rounds
-  converge.
+  converge, and `build_queue_binding` (the binding file follow-up rounds fire).
 - `archon-merge-queue`: `limit` (default `10` items claimed), `merge_method`
-  (`squash` or `merge`) and `retriage_as` (a maintainer login; set, an issue still
-  open after its pull request merged goes back to intake).
+  (`squash` or `merge`), `retriage_merged` (`true`: an issue still open after its
+  pull request merged goes back to intake), and `merge_queue_binding`,
+  `build_queue_binding` and `discoveries_binding` (the binding files follow-ups fire).
 - `archon-discoveries`: `since` and `until` (ISO-8601) and `limit` (default `20` runs
   per pass).
 
@@ -103,8 +106,8 @@ promotes an outside author's issue.
 Read the result from the issue's labels:
 
 - `archon-ready`, `archon-plan` or `archon-investigate`: routed to the build queue.
-- `archon-needs-contract`: the body misses one of the six brief elements. Fix the
-  body, then re-triage.
+- `archon-needs-contract`: no route can start from the body. Triage's questions are in
+  a comment on the issue; answer them in the body, then re-triage.
 - `archon-blocked`: a prerequisite or a decision must land first. Re-triage once it
   has.
 - `archon-close`: a duplicate or already delivered. Intake closes it when the triage
@@ -135,9 +138,9 @@ A round ends one of three ways, recorded on the item:
   stays inside the issue's shape (one that adds machinery the issue does not name asks
   instead). A pull request that changed nothing material since its last
   review never continues; the round ends as done or ask. The run starts the
-  item's next round at once, as a detached `archon-build-queue --input number=<n>`
-  run on the same run config and the same `retriage_as` and `round_limit`.
-  If that launch fails, the item waits for the next queue run.
+  item's next round at once by firing the binding file `build_queue_binding` names,
+  with the item's `number`. With no binding set, or when the fire is skipped or
+  refused, the item waits for the next queue run and the run's summary says why.
 - `ask`: the run pauses as one attention item labelled `build: route`, `build: stop`
   or `build: scope`.
 
@@ -177,12 +180,11 @@ most one attention item: the red default branch first, otherwise the first pull
 request the sweep asked about. A later sweep decides the rest again.
 
 A `merge` answer approves the pull request at the head it asked about, and a sweep
-the answer starts, on the answered run's `limit`, `merge_method` and
-`retriage_as`, merges it once the gate passes. The approval carries to a later head only when the sweep
+the answer fires through `merge_queue_binding` merges it once the gate passes. The approval carries to a later head only when the sweep
 judges that everything since is merges of the default branch and their conflict
 resolutions, and the verdict is Ready at the later head. A `return` hands the item
-back to the build queue, whose next round starts at once on the build queue's own
-input defaults. A `park` stops work on the item until the build queue readies it again.
+back to the build queue, whose next round starts at once through
+`build_queue_binding`. A `park` stops work on the item until the build queue readies it again.
 
 ## Discoveries drain
 
@@ -208,8 +210,9 @@ The build queue and merge items owned by a build write the ruling into the issue
 body as a dated "Current scope" section, and later rounds work from it. Write the reason as a ruling a later round can act on: what is in scope,
 what is not, and why. An answer that
 continues an item (a build `continue`, a merge `merge` or `return`) starts the follow-up
-run at once, on the run config the answered run started with, so you don't relaunch. A
-follow-up in the same queue also keeps the answered run's input selections.
+run at once through the binding file the answered run was given, so you don't relaunch.
+A run launched by hand without those binding inputs starts no follow-up: launch the
+next run yourself.
 
 - When the recommendation fits the user's standing direction, answer it yourself.
 - When it is unclear, risky or not decided by anything the user has said, bring it to

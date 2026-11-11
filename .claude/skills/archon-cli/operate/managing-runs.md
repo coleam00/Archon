@@ -284,14 +284,14 @@ Report outcomes with their evidence: "completed, review verdict ready:false —
 ## Discoveries: the SDLC pack's out-of-scope findings
 
 A convention of the bundled SDLC workflows (`archon-ship`, `archon-deliver`,
-`archon-review`, `archon-upkeep`), not of workflows in general. Their review lenses
+`archon-review`), not of workflows in general. Their review lenses
 record proven findings that fall outside the run's accepted scope as discovery records
 instead of blocking findings: raw per-producer files at
 `<artifacts>/discoveries/*.json` (records of `title`, `claim`, `evidence`, `relation:
 unrelated | scope_conflict | note`, `source_node`), consolidated by the review into
 the verdict's `discoveries` records and a readable `discoveries.md`.
 
-The run that found them files nothing. Its terminal report lists them, and
+The run that found them files nothing. Its terminal report counts them and names their files, and
 `archon-discoveries` later decides every recorded discovery across finished runs:
 file an issue with a full brief, track it on the open issue that already covers it,
 drop it with a reason, or ask a maintainer. Run that drain rather than filing
@@ -299,7 +299,7 @@ discoveries by hand (see `queues.md`, "Discoveries drain").
 
 When the user asks about one run's discoveries before a drain has run:
 
-1. Read the report's Discoveries section and, when it names any, open
+1. When the report's Discoveries line counts any, open
    `discoveries.md` (find it through `leave_behind.artifactFiles`).
 2. On a failed run, also check the raw `discoveries/*.json` records: consolidation
    runs late, so a run that died mid-flight can hold records no report mentions.

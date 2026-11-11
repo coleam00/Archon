@@ -24,7 +24,6 @@ inputs:
       default; the run then records the labels it would apply.
 
 returns: triage
-outcome_field: ready
 
 # Read-only: runs in the launch checkout beside any other run, and creates no
 # worktree. These are run settings, which an included workflow cannot carry, so

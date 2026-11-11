@@ -1,5 +1,5 @@
-# Dry-run fixture: a merged change already delivered the outcome, so no action; the verdict
-# derives archon-close and the run completes with outcome false.
+# Dry-run fixture: a merged change already delivered the outcome, so no action; the labels
+# node derives archon-close and the run completes.
 triage:
   decision:
     contract: NO_ACTION
@@ -16,5 +16,5 @@ triage:
   summary: "stub: the requested outcome is already present on the current branch"
 fixture:
   expect: completed
-  reached: [verdict]
+  reached: [labels]
 exec-code: true

@@ -73,14 +73,30 @@ function outcomes(doc: WorkItem): Omit<IssueMetricRecord, 'subject' | 'runs'>[] 
   ];
 }
 
-/** Every built issue's outcome records, in total and under its route. */
-export function issueMetricRecords(items: readonly WorkItem[]): IssueMetricRecord[] {
+/** The times one run emits records for: from `from` up to, not including, `until`. */
+export interface Window {
+  readonly from: number;
+  readonly until: number;
+}
+
+export function inWindow(time: string, window: Window): boolean {
+  const at = Date.parse(time);
+  return at >= window.from && at < window.until;
+}
+
+/**
+ * The outcome records, in total and under its route, of every built issue with a record
+ * in the window: an issue built or merged in it.
+ */
+export function issueMetricRecords(items: readonly WorkItem[], window: Window): IssueMetricRecord[] {
   return items.flatMap(doc => {
+    const records = outcomes(doc);
+    if (!records.some(outcome => inWindow(outcome.at, window))) return [];
     const { repo, number } = doc.subject;
     const subject = `${repo.host}/${repo.path}#${String(number)}`;
     const runs = [...new Set((doc.facts.build?.rounds ?? []).map(round => round.run_id))].slice(0, MAX_RUNS);
     const route = routeOf(doc);
-    return outcomes(doc).flatMap(outcome => [
+    return records.flatMap(outcome => [
       { ...outcome, subject, runs },
       ...(route === null ? [] : [{ ...outcome, name: `${outcome.name}.${route}`, subject, runs }]),
     ]);

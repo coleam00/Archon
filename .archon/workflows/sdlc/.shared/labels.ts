@@ -32,7 +32,7 @@ export const PACK_LABELS = {
   },
   'archon-needs-contract': {
     color: 'D93F0B',
-    description: "Triage: one of the contract's six elements is missing",
+    description: 'Triage: no route can start until the author answers its questions',
   },
   'archon-blocked': {
     color: 'B60205',
@@ -140,6 +140,24 @@ export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size):
   ];
   if (verdict.contract !== 'NO_ACTION') wanted.push(SIZE_LABEL[size]);
   return wanted;
+}
+
+/**
+ * Every label a triage output puts on its item: the pack labels its decision derives
+ * and the area labels triage picked, sorted. A pack label among the area labels
+ * refuses: it would be added beside the derived ones, or read as a request.
+ */
+export function triageLabels(triage: {
+  readonly decision: LabelVerdict;
+  readonly type: { readonly value: WorkType };
+  readonly size: { readonly value: Size };
+  readonly area_labels: readonly string[];
+}): string[] {
+  if (triage.area_labels.some(isPackLabel)) {
+    throw new Error('area_labels may not name a pack label; those derive from the verdict');
+  }
+  const wanted = wantedLabels(triage.decision, triage.type.value, triage.size.value);
+  return [...new Set([...wanted, ...triage.area_labels])].sort();
 }
 
 /**
