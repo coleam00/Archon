@@ -32,8 +32,11 @@ on:
 env:
   BUN_VERSION: '1.4.2'
 
+# A pull request's newer push replaces its older run. A push to dev or main is the complete
+# verification of that merge (the pull request ran only the Linux jobs), so each pushed
+# commit gets its own group and its run is never cancelled by the next merge.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.ref }}
+  group: ${{ github.workflow }}-${{ github.event_name == 'push' && github.sha || github.ref }}
   cancel-in-progress: true
 
 jobs:
