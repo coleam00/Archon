@@ -1176,6 +1176,8 @@ test.each([
   'missing-gh',
   'commit-repository',
   'commit-pulls',
+  'commit-pulls-null-object',
+  'malformed-pulls-null-object',
   'commit-object',
   'unknown-commit',
 ] as const)('cleanup retains and reports PR inspection: %s', async failure => {
@@ -1195,15 +1197,23 @@ test.each([
     'missing-gh': 'pr',
     'commit-repository': 'repo',
     'commit-pulls': 'pulls',
+    'commit-pulls-null-object': 'pulls',
+    'malformed-pulls-null-object': undefined,
     'commit-object': 'graphql',
     'unknown-commit': undefined,
   }[failure];
   const ghOutput: Record<string, string> = {
     pr: failure === 'branch-response' ? '{}' : '[]',
     repo: '{"nameWithOwner":"test/repo"}',
-    api: '[]',
+    api: failure === 'malformed-pulls-null-object' ? '[{}]' : '[]',
   };
-  const commitObjectOutput = ghCommitObject(failure === 'unknown-commit' ? null : tip);
+  const commitObjectOutput = ghCommitObject(
+    failure === 'unknown-commit' ||
+      failure === 'commit-pulls-null-object' ||
+      failure === 'malformed-pulls-null-object'
+      ? null
+      : tip
+  );
   const originalExec = gitModule.execFileAsync;
   const exec = spyOn(gitModule, 'execFileAsync').mockImplementation(async (file, args, options) => {
     if (file === 'git' && args.includes('get-url')) {

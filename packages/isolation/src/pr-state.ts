@@ -286,13 +286,12 @@ export async function getPrsForCommit(
     }
     if (result.state === 'FOUND') return result;
     stage = 'commit';
-    if (!(await commitExistsOnGithub(sha, repository.nameWithOwner, repoPath)))
-      return { state: 'UNKNOWN_COMMIT' };
+    const commitExists = await commitExistsOnGithub(sha, repository.nameWithOwner, repoPath);
     if (result.state === 'UNAVAILABLE') {
       stage = 'pulls';
       throw result.error;
     }
-    return result;
+    return commitExists ? result : { state: 'UNKNOWN_COMMIT' };
   } catch (error) {
     const code = errorCode(error);
     // Exec errors can embed remote credentials and response bodies; log only the stage and code.

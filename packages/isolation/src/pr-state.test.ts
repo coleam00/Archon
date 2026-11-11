@@ -424,23 +424,36 @@ describe('getPrsForCommit', () => {
     ]);
   });
 
-  test.each(['empty', 'failed'] as const)(
-    'a null Git object identifies an unknown commit after a %s association',
+  test.each(['empty', 'failed', 'malformed-json', 'malformed-pr'] as const)(
+    'a null Git object preserves the result of a %s association',
     async association => {
       mockLogger.warn.mockClear();
       setupCommitResponse(
-        [[]],
+        association === 'malformed-json'
+          ? 'not JSON'
+          : association === 'malformed-pr'
+            ? [[{ ...mergedPr, head: {} }]]
+            : [[]],
         association === 'failed' ? 'pulls' : undefined,
-        undefined,
+        Object.assign(new Error('https://user:secret@github.com/owner/repo'), { code: 1 }),
         undefined,
         {
           data: { repository: { object: null } },
         }
       );
-      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNKNOWN_COMMIT' });
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+        state: association === 'empty' ? 'UNKNOWN_COMMIT' : 'UNAVAILABLE',
+      });
       expect(mockExecFileAsync.mock.calls[2][1]).toContain('--paginate');
       expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
-      expect(mockLogger.warn).not.toHaveBeenCalled();
+      if (association === 'empty') expect(mockLogger.warn).not.toHaveBeenCalled();
+      else {
+        expect(mockLogger.warn).toHaveBeenLastCalledWith(
+          { repoPath: REPO, stage: 'pulls', code: association === 'failed' ? 1 : undefined },
+          'isolation.commit_pr_lookup_failed'
+        );
+        expect(JSON.stringify(mockLogger.warn.mock.calls)).not.toContain('secret');
+      }
     }
   );
 
