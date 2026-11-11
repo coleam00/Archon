@@ -100,6 +100,12 @@ export interface SqlDialect {
   now(): string;
 
   /**
+   * Tie-breaker for message timestamps: SQLite insertion order (`rowid`),
+   * PostgreSQL's existing stable ID order. Used descending for newest-first reads.
+   */
+  readonly messageOrderTieBreaker: string;
+
+  /**
    * SQL expression for a top-level JSON merge (existing || new). A null value in the
    * patch removes that key on every dialect, so `{ key: null }` is how a caller clears it.
    * @param column - Column name
