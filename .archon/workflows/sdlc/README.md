@@ -451,7 +451,7 @@ Review's code and ux lenses name `ui-check.md`, how they start the project's app
 user-facing change in a browser through the playwright-cli skill, which their prompts
 names rather than a `skills:` entry for the reason the build queue's route does.
 Agents interpret
-them; anything that must be exact, such as label names, stays typed configuration.
+them; anything that must be exact, such as label names, stays in code or typed configuration.
 
 A node's prompt names the defaults as `$PACK_DIR/.shared/policy/`: the engine's
 `$PACK_DIR` is this pack's directory in the run's captured source, the same from a
