@@ -1444,3 +1444,31 @@ test('reset authorization rolls back the whole SQLite snapshot and preserves the
   );
   expect(events.rows[0].count).toBe(0);
 });
+
+for (const [kind, metadata] of Object.entries({
+  gate: {
+    approval: { resolved: 'approved', nodeId: 'gate', pauseId: 'pause', message: 'Continue?' },
+  },
+  attention: {
+    wait: {
+      owner: 'node',
+      kind: 'attention',
+      nodeId: 'attention',
+      pauseId: 'pause',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      message: 'Continue?',
+      answer: { text: 'yes' },
+    },
+  },
+  source: { source_release: { nodeId: 'source', releasedAt: '2026-08-24T10:00:00.000Z' } },
+})) {
+  test(`due ${kind} continuations exclude persisted container runs`, async () => {
+    const hostId = `marker-${kind}-host`;
+    const containerId = `marker-${kind}-container`;
+    await seed(hostId, 'paused', "datetime('now')", metadata);
+    await seed(containerId, 'paused', "datetime('now')", { ...metadata, isolation: 'container' });
+    const due = await listDueWorkflowContinuations(new Date('2026-08-24T10:02:00.000Z'), 10000);
+    expect(due.map(run => run.id)).toContain(hostId);
+    expect(due.map(run => run.id)).not.toContain(containerId);
+  });
+}

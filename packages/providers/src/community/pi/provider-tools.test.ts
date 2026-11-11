@@ -39,14 +39,14 @@ describe('PiProvider tools', () => {
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
     // Pi 0.68+: customTools holds the actual Tool objects; noTools: "builtin"
-    // suppresses Pi's default built-in set so the customTools list is authoritative.
+    // suppresses Pi's default built-in set so customTools is authoritative for the built-in payload.
     expect(Array.isArray(callArgs.customTools)).toBe(true);
     expect(callArgs.noTools).toBe('builtin');
     const tools = callArgs.customTools as Array<{ __piTool: string }>;
     expect(tools.map(t => t.__piTool).sort()).toEqual(['grep', 'read']);
   });
 
-  test('nodeConfig.allowed_tools: [] disables all Pi tools (LLM-only)', async () => {
+  test('nodeConfig.allowed_tools: [] suppresses Pi built-in tools', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
 
@@ -58,7 +58,7 @@ describe('PiProvider tools', () => {
     );
 
     const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
-    // Empty customTools + noTools: "builtin" == "no tools at all".
+    // Suppresses built-ins; the mocked session does not prove extension-tool isolation.
     expect(callArgs.customTools).toEqual([]);
     expect(callArgs.noTools).toBe('builtin');
   });
