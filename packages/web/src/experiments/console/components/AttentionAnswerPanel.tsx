@@ -11,9 +11,14 @@ export function isLegacyAttention(attention: Attention): boolean {
   return attention.occurrence.startsWith('legacy:');
 }
 
-/** The reserved `other` option of a wait declared with `other: true` is answered with text. */
+/**
+ * The reserved option of a wait declared with `other: true` is answered with text. The
+ * engine adds it after the declared options, so the flag names it without its id.
+ */
 function needsText(attention: Attention, optionId: string, text: string): boolean {
-  return attention.other === true && optionId === 'other' && text.trim() === '';
+  return (
+    attention.other === true && optionId === attention.options.at(-1)?.id && text.trim() === ''
+  );
 }
 
 function textPlaceholder(attention: Attention): string {

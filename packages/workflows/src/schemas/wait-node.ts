@@ -83,7 +83,7 @@ export type AttentionLabels = z.infer<typeof attentionLabelsSchema>;
 /**
  * The option `other: true` adds to a `select` wait: none of the declared options, with
  * the answer's text saying what to do instead. Its id is reserved on such a wait, and an
- * answer choosing it is refused without text (`otherTextProblem`).
+ * answer choosing it is refused without text (`attentionAnswerProblem`).
  */
 export const OTHER_ATTENTION_OPTION = {
   id: 'other',

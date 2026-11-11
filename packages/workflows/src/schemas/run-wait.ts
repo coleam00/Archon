@@ -204,9 +204,9 @@ export function attentionOptions(wait: AttentionDeclaration): readonly Attention
  * Why choosing `choose` does not answer a wait in `form` that declares the option ids
  * `declared`, or undefined when it does: a message takes only text; approval and select
  * take exactly one declared option; multi_select takes one or more distinct declared
- * options. Every answer surface, and a dry run's authored answer, holds this one rule.
+ * options.
  */
-export function attentionChoiceProblem(
+function attentionChoiceProblem(
   form: AttentionForm,
   declared: readonly string[],
   choose: readonly string[]
@@ -229,7 +229,7 @@ export function attentionChoiceProblem(
  * Why an answer choosing the reserved `other` option is refused, or undefined when it is
  * not: on a wait declared with `other: true`, that choice must carry text.
  */
-export function otherTextProblem(
+function otherTextProblem(
   other: boolean | undefined,
   choose: readonly string[],
   text: string
@@ -237,6 +237,21 @@ export function otherTextProblem(
   return other === true && choose.includes(OTHER_ATTENTION_OPTION.id) && text.trim() === ''
     ? `needs text with option '${OTHER_ATTENTION_OPTION.id}': say what to do instead.`
     : undefined;
+}
+
+/**
+ * Why `answer` does not answer `wait`, or undefined when it does. Every answer surface,
+ * and a dry run's authored answer, holds this one rule.
+ */
+export function attentionAnswerProblem(
+  wait: AttentionDeclaration & { other?: boolean },
+  answer: { choose: readonly string[]; text: string }
+): string | undefined {
+  const declared = attentionOptions(wait).map(option => option.id);
+  return (
+    attentionChoiceProblem(attentionForm(wait), declared, answer.choose) ??
+    otherTextProblem(wait.other, answer.choose, answer.text)
+  );
 }
 
 /** An attention wait's current labels. */

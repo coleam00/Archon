@@ -1,8 +1,6 @@
 import {
-  attentionChoiceProblem,
+  attentionAnswerProblem,
   attentionForm,
-  attentionOptions,
-  otherTextProblem,
   pausedAttentionWait,
   runAttention,
   workflowWaitStepName,
@@ -69,7 +67,7 @@ export function assertAnswerable(run: WorkflowRun): OpenAttentionWait {
 
 /**
  * The answer `request` gives `wait`, validated against its form by
- * `attentionChoiceProblem`. An undeclared option is refused on every surface, and so is
+ * `attentionAnswerProblem`. An undeclared option is refused on every surface, and so is
  * the reserved `other` option without text.
  */
 export function attentionAnswerFor(
@@ -79,10 +77,7 @@ export function attentionAnswerFor(
 ): AttentionAnswer {
   const form = attentionForm(wait);
   const text = request.text ?? '';
-  const declared = attentionOptions(wait).map(option => option.id);
-  const problem =
-    attentionChoiceProblem(form, declared, request.choose) ??
-    otherTextProblem(wait.other, request.choose, text);
+  const problem = attentionAnswerProblem(wait, { choose: request.choose, text });
   if (problem !== undefined)
     throw new Error(`Run ${run.id}'s attention wait (form '${form}') ${problem}`);
   if (form === 'message') return { text };
