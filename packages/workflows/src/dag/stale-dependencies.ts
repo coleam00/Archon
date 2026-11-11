@@ -7,14 +7,10 @@
 import type { DagNode, NodeOutput } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 
-/**
- * A copy of a JSON value with every object's keys in sorted order, so two values
- * that differ only in key order serialize identically.
- */
 function withSortedKeys(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(withSortedKeys);
   if (value !== null && typeof value === 'object') {
-    const sorted: Record<string, unknown> = {};
+    const sorted: Record<string, unknown> = Object.create(null);
     for (const key of Object.keys(value as Record<string, unknown>).sort()) {
       sorted[key] = withSortedKeys((value as Record<string, unknown>)[key]);
     }
@@ -24,17 +20,9 @@ function withSortedKeys(value: unknown): unknown {
 }
 
 /**
- * `true` when two structured-output payloads are semantically equal for the
- * purposes of cache invalidation. Structured outputs are persisted as JSONB, so
- * they are guaranteed JSON-shaped (objects/arrays/primitives, no cycles, no
- * functions) — but PostgreSQL JSONB does not keep object key order (it stores
- * keys sorted by length, then bytes). A prior output read back from the store
- * therefore has a different key order from the same value just produced in
- * memory, and a plain JSON.stringify comparison reported every resumed
- * `always_run` producer as changed, invalidating its consumers and re-rendering
- * answered attention waits. Compare with keys sorted instead. `undefined` is
- * treated as the absent payload; an explicit `null` is a real value and is
- * distinct from absent.
+ * PostgreSQL JSONB may reorder object keys on persistence. Ignore that order when
+ * comparing JSON payloads, while preserving array order and distinguishing an
+ * absent payload (`undefined`) from an explicit `null`.
  */
 export function structuredOutputsEqual(a: unknown, b: unknown): boolean {
   if (a === b) return true;
@@ -100,9 +88,8 @@ function cachedOutputIsStale(
  * 3. The dep's `prior.structuredOutput` differs from the current one — a
  *    subtler staleness that only matters for `$dep.output.field` consumers,
  *    covered here so a fresh structured value can't slip past a text-stable
- *    cache. JSON.stringify is sufficient: structured outputs are persisted to
- *    JSONB and therefore JSON-serializable; for `undefined` vs absent values,
- *    `JSON.stringify` normalises both to a missing key.
+ *    cache. Object key order is ignored, including within arrays; array element
+ *    order and values still count.
  *
  * Note: the value-equality comparison (cases 2/3) is conservative in one
  * direction — a dep that re-ran with text- and structured-identical output

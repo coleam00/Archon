@@ -16,7 +16,7 @@ import {
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { workflowWaitContextSchema, type WorkflowWaitContext } from '../../../schemas';
-import type { IWorkflowStore } from '../../../store';
+import type { IWorkflowStore, PersistedNodeOutput } from '../../../store';
 
 describe('executeDagWorkflow -- durable wait node', () => {
   let testDir: string;
@@ -414,6 +414,107 @@ describe('executeDagWorkflow -- durable wait node', () => {
       .map(([event]) => event)
       .find(event => event.step_name === 'after' && event.event_type === 'node_completed');
     expect(JSON.stringify(afterCompleted?.data)).toContain('use-dev');
+  });
+
+  it('replays a consumer and keeps its answered wait when always_run output only reorders keys', async () => {
+    const store = createMockStore();
+    const persisted: WorkflowWaitContext = {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: '2026-08-24T10:00:00.000Z',
+      pauseId: 'ask-1',
+      message: 'Question from prior consumer',
+      form: 'select',
+      options: [{ id: 'ready' }, { id: 'park' }],
+      answer: { decision: 'ready', text: '' },
+      answeredVia: 'cli',
+      answeredAt: '2026-08-24T10:05:00.000Z',
+    };
+    const priorCompletedNodes = new Map<string, PersistedNodeOutput>([
+      [
+        'report',
+        {
+          output: 'same report',
+          structuredOutput: { pr_url: 'u', reason: 'delivered', summary: 's', delivered: true },
+        },
+      ],
+      ['consumer', { output: persisted.message }],
+    ]);
+    mockSendQueryDag.mockClear();
+    mockSendQueryDag.mockImplementation(async function* (prompt: string) {
+      yield {
+        type: 'agent_message_chunk',
+        text: prompt === 'Produce report' ? 'same report' : 'A different question',
+      };
+      yield {
+        type: 'result',
+        sessionId: 'session-id',
+        ...(prompt === 'Produce report'
+          ? {
+              structuredOutput: { delivered: true, reason: 'delivered', pr_url: 'u', summary: 's' },
+            }
+          : {}),
+      };
+    });
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: createMockDeps(store),
+        platform: createMockPlatform(),
+        cwd: testDir,
+        workflowRun: makeWorkflowRun('attention-structured-resume', {
+          metadata: { wait: persisted },
+        }),
+        priorCompletedNodes,
+        workflow: {
+          name: 'attention-structured-resume',
+          nodes: [
+            {
+              id: 'report',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Produce report' },
+              always_run: true,
+            },
+            {
+              id: 'consumer',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'Render question from $report.output' },
+              depends_on: ['report'],
+            },
+            {
+              id: 'ask',
+              kind: 'wait',
+              depends_on: ['consumer'],
+              wait: {
+                attention: '$consumer.output',
+                form: 'select',
+                options: [{ id: 'ready' }, { id: 'park' }],
+              },
+            },
+          ],
+        },
+      })
+    );
+
+    expect(mockSendQueryDag).toHaveBeenCalledTimes(1);
+    expect(persistedEvents(store)).toContainEqual(
+      expect.objectContaining({
+        event_type: 'node_skipped_prior_success',
+        step_name: 'consumer',
+      })
+    );
+    expect(store.pauseWorkflowRunForWait).not.toHaveBeenCalled();
+    expect(store.clearWorkflowWaitContext).toHaveBeenCalledWith(
+      'attention-structured-resume',
+      persisted,
+      expect.objectContaining({
+        stepName: 'ask',
+        answer: persisted.answer,
+        result: expect.objectContaining({ status: 'satisfied' }),
+      })
+    );
+    expect(store.completeWorkflowRun).toHaveBeenCalled();
   });
 
   it("returns the chosen select option's value with the answer, leaving the recorded answer as it was", async () => {

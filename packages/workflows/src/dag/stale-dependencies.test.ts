@@ -18,6 +18,13 @@ describe('structuredOutputsEqual', () => {
   test('still sees a changed value', () => {
     expect(structuredOutputsEqual({ a: 1, b: 2 }, { b: 2, a: 3 })).toBe(false);
   });
+  test('preserves an own __proto__ JSON key', () => {
+    const prior = JSON.parse('{"__proto__":{"v":1},"ok":true}');
+    const reordered = JSON.parse('{"ok":true,"__proto__":{"v":1}}');
+    const changed = JSON.parse('{"ok":true,"__proto__":{"v":2}}');
+    expect(structuredOutputsEqual(prior, reordered)).toBe(true);
+    expect(structuredOutputsEqual(prior, changed)).toBe(false);
+  });
   test('array order still matters', () => {
     expect(structuredOutputsEqual({ a: [1, 2] }, { a: [2, 1] })).toBe(false);
   });
