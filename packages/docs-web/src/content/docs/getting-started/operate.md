@@ -278,7 +278,7 @@ Answer the children in any order. Each child applies its own answer at once. The
 ```bash
 archon workflow attention --watch --json                  # this project
 archon workflow attention --watch --json --all            # the whole install
-archon workflow attention --watch --json --label merge=pr # one class of question
+archon workflow attention --watch --json --label stage=merge # one queue's questions
 ```
 
 | `type` | Written when |
@@ -322,7 +322,7 @@ Every JSON line carries `needs`, which says what the line asks of you:
 
 The watch writes the `answer` and `look` lines and nothing else. A run that completed with any other outcome or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. `--watch --notices` adds those `nothing` lines, for a reader that also wants to know what happened to the work: every run that ended or resumed, and usage-limit waits opening and closing. It still leaves out `ready` and `bookmark`, which only a program on `--protocol` reads. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
 
-- **`--label` turns a queue or a class on or off.** Labels are the only routing: `--label merge=pr` writes only the items a wait labelled `merge=pr`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
+- **`--label` turns a queue or a class on or off.** Labels are the only routing: `--label stage=merge` writes only the items a wait labelled `stage=merge`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
 - **A silent stream proves nothing.** The watch has no heartbeat, so no line can mean that nothing needs you or that the stream stopped reading. A program that must tell the two apart uses `--protocol` and its `bookmark` lines.
 - **A restart starts from the open items.** The snapshot is the current open set. Runs that failed while nothing watched are not replayed; `archon workflow runs` lists them. Replay from a cursor is part of `--protocol`.
 - **Act on the item, then answer by its `runId` and `occurrence`.** An answer to an item someone else answered first is refused, so a `resolved` line you have not read yet cannot make you answer twice.

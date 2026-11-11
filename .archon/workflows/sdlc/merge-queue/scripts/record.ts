@@ -8,8 +8,8 @@
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
  * back to the build queue with its brief and starts its next round through the
- * build-queue binding. A run raises at most one attention item: the
- * sweep's item for a red default branch first, because it holds every merge, otherwise
+ * build-queue binding. A run raises at most one ask, as the sweep wrote it: the
+ * sweep's ask for a red default branch first, because it holds every merge, otherwise
  * the first pull request the sweep asked about, in its order. That item keeps its claim
  * while the run waits;
  * every other claim is released, and an ask that was not raised waits for the next sweep,
@@ -35,20 +35,17 @@ import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
   MERGE_PATHS,
   type MergeAsked,
-  type MergeAttention,
+  type MergeAsk,
   type MergeDecisionEntry,
   type MergeRecord,
   type MergeSettled,
   type MergeStatus,
-  otherEffect,
   type PrFacts,
   readBase,
   readPr,
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { askFields, attentionWait } from '../../.shared/queue.ts';
-
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
@@ -97,7 +94,7 @@ function decide(items: readonly Item[], sweep: Sweep | null): Decision[] {
       reran: false,
       reason: 'the sweep left it undecided; the next sweep decides it',
       brief: '',
-      attention: null,
+      ask: null,
     });
   }
   return [...decided.values()];
@@ -114,7 +111,7 @@ function gateFailure(sweep: Sweep | null): string[] {
 
 /** A red default branch the sweep did not raise would hold every merge in silence. */
 function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null {
-  if (sweep === null || base?.checks.state !== 'red' || sweep.base.attention !== null) return null;
+  if (sweep === null || base?.checks.state !== 'red' || sweep.base.ask !== null) return null;
   return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep did not raise it`;
 }
 
@@ -202,8 +199,7 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
   const { decision, status, reason, head } = outcome;
   const label = labelOf(decision, outcome, raised);
   const decided = `${label} (${decision.class})`;
-  const links = [item.url, ...(decision.attention?.links ?? [])];
-  const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links, head, reran: decision.reran };
+  const entry: MergeDecisionEntry = { at, run_id: runId, decision: decided, reason, links: [item.url], head, reran: decision.reran };
   if (item.item === null) {
     writes.lines.push(`PR ${String(decision.number)}: ${label}, with no work item to record it on`);
     return false;
@@ -234,6 +230,17 @@ function recordBaseFailure(writes: Writes, settled: readonly MergeSettled[], bas
   throw new Error([baseError, ...writes.failed, 'every other decision is recorded'].join('; '));
 }
 
+const NO_ASK = { question: '', options: [], recommendation: null, kind: '', item: '', pr: '', asked: null } as const;
+
+/** The wait's fields for the raised ask, as the sweep wrote them, with its subject labels. */
+function raisedAsk(asked: MergeAsked) {
+  const subject =
+    asked.by === 'pr'
+      ? { kind: 'approve', item: String(asked.item.number), pr: String(asked.pr.number) }
+      : { kind: 'base', item: '', pr: '' };
+  return { ...asked.ask, ...subject, asked };
+}
+
 function main(): void {
   const path = MERGE_PATHS.find(candidate => candidate === input('path').trim());
   if (path === undefined) throw new Error(`path must be one of ${MERGE_PATHS.join(', ')}`);
@@ -247,11 +254,7 @@ function main(): void {
     emit({
       merged: [],
       summary: idleSummary('No pull request waits for the merge queue.', stuckItems(workflowRunId())),
-      attention: '',
-      options: [],
-      recommendation: null,
-      class: '',
-      asked: null,
+      ...NO_ASK,
     });
     return;
   }
@@ -261,11 +264,11 @@ function main(): void {
   const base = nullableJson(input('base')) as Base | null;
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
-  const baseAttention = sweep?.base.attention ?? null;
-  const firstAsk = decisions.find(decision => decision.attention !== null);
+  const baseAsk = sweep?.base.ask ?? null;
+  const firstAsk = decisions.find(decision => decision.ask !== null);
   let asked: MergeAsked | null =
-    baseAttention !== null
-      ? { by: 'base', attention: baseAttention }
+    baseAsk !== null
+      ? { by: 'base', ask: baseAsk }
       : firstAsk === undefined
         ? null
         : {
@@ -274,18 +277,8 @@ function main(): void {
             pr: itemOf(firstAsk.number).pr,
             head: firstAsk.head,
             brief: firstAsk.brief,
-            attention: firstAsk.attention as MergeAttention,
+            ask: firstAsk.ask as MergeAsk,
           };
-  const waitOf = (raised: MergeAsked | null) =>
-    raised === null
-      ? null
-      : raised.by === 'base'
-        ? attentionWait<string>('Merge queue: the default branch is red', raised.attention)
-        : attentionWait<string>(
-            `Merge queue, PR ${String(raised.pr.number)}: merge decision`,
-            raised.attention,
-            `Your text is written into the issue body as the ruling. ${otherEffect(raised.brief) === 'return' ? 'The item returns to the build queue, and the next round works from it.' : 'Queue work stops until the build queue readies the item again; no build round starts.'}`
-          );
 
   // Settlements are independent of the policy refresh and the sweep's decisions.
   recordSettled(writes, settled);
@@ -320,9 +313,7 @@ function main(): void {
   emit({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
     summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
-    ...askFields(waitOf(asked)),
-    class: asked?.by ?? '',
-    asked,
+    ...(asked === null ? NO_ASK : raisedAsk(asked)),
   });
 }
 

@@ -1,9 +1,9 @@
 /**
  * Act on a person's answer to the build queue's attention item.
  *
- * The answer is one of the declared choices, and the wait returns that choice as the
- * answer's value, so its effect is read from the choice, never from the answer's text.
- * An `other` answer returns no choice: its text is the ruling and the item continues. The choice's ruling and the person's words are written
+ * The answer names one of the options the ask declared, so its effect is read from that
+ * option's value, never from the answer's text. An `other` answer names none: its text
+ * is the ruling and the item continues. The option's ruling and the person's words are written
  * into the issue body as one dated "Current scope" section and read back, so the next
  * run and its review read the ruling as the contract. Then the answer is recorded on the
  * work item as the item's next owner, and the claim is released: `continue` keeps it in
@@ -12,21 +12,21 @@
  * at once through the operator's build-queue binding; if it does not start, the item
  * waits for the next queue run as before.
  *
- * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE,
- * the chosen choice (the answer's value, empty for `other`), and INPUTS_TEXT, the answer's text;
+ * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_DECISION,
+ * the id of the chosen option (`other` for the wait's own), and INPUTS_TEXT, the answer's text;
  * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
-import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
+import { type AskedBy, type BuildAsk, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
 import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { answeredChoice, type Choice, rulingHeading } from '../../.shared/queue.ts';
+import { answeredChoice, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 
 interface Asked {
-  readonly attention: BuildAttention;
+  readonly ask: BuildAsk;
   readonly brief: string;
   readonly by: AskedBy;
 }
@@ -55,19 +55,20 @@ function main(): void {
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const asked = nullableJson(input('asked')) as Asked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const choice = answeredChoice(nullableJson(input('choice')) as Choice<BuildEffect> | null, 'continue');
+  const choice = answeredChoice(asked.ask, input('decision').trim(), 'continue');
+  const { effect } = choice.value;
   const words = input('text').trim();
   const at = new Date().toISOString();
 
-  if (choice.effect === 'ready') requireReadyPr(item, choice.id);
-  const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
+  if (effect === 'ready') requireReadyPr(item, choice.id);
+  const ruling = [choice.value.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')
     .join('\n\n');
   const heading = ruling === '' ? '' : rulingHeading(at, ABOUT[asked.by]);
   if (ruling !== '') appendSection(item, heading, ruling);
 
   const brief =
-    choice.effect === 'continue'
+    effect === 'continue'
       ? `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`
       : '';
   updateClaimed(item, runId, doc =>
@@ -78,12 +79,12 @@ function main(): void {
       entry: {
         at,
         run_id: runId,
-        decision: `answered: ${choice.effect}`,
+        decision: `answered: ${effect}`,
         reason: choice.label,
-        links: asked.attention.links,
+        links: [],
         answer: { choice: choice.id, text: words, at },
       },
-      status: STATUS[choice.effect],
+      status: STATUS[effect],
       brief,
       release: true,
     })
@@ -92,8 +93,8 @@ function main(): void {
     continue: () => nextRound(item, runId),
     ready: () => 'its pull request waits for the merge queue',
     park: () => 'the queue stops working it until a re-triage',
-  }[choice.effect]();
-  emit({ decision: choice.effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
+  }[effect]();
+  emit({ decision: effect, section: heading, summary: `Issue ${String(item.number)}: the maintainer chose ${choice.id}; ${next}.` });
 }
 
 try {

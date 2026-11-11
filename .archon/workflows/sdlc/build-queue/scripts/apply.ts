@@ -1,5 +1,6 @@
 /**
- * Check the run's decision, perform the writes it declared, and read each one back.
+ * Perform the writes the run's decision declared, read each one back, and hand an ask to
+ * the wait as the deciding agent wrote it.
  *
  * The decision is the last agent's that ran: answer's over route's. An answer that asks
  * declares its own class (`stop` or `scope`), recorded as declared. A route that launched is answered after its round, so its own decision is
@@ -22,7 +23,7 @@
 
 import {
   type AskedBy,
-  type BuildAttention,
+  type BuildAsk,
   type BuildRound,
   type BuildStatus,
   nextRound,
@@ -38,7 +39,7 @@ import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
-import { askFields, attentionWait, checkAttention, type DecisionEntry } from '../../.shared/queue.ts';
+import type { DecisionEntry } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
@@ -55,15 +56,14 @@ type Decision =
   | {
       readonly kind: 'asked';
       readonly by: AskedBy;
-      readonly attention: BuildAttention;
+      readonly ask: BuildAsk;
       readonly brief: string;
       readonly reason: string;
     };
 
-function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string): Decision {
-  if (attention === null) throw new Error(`the ${by} decision asks without an attention item`);
-  checkAttention(attention);
-  return { kind: 'asked', by, attention, brief, reason };
+function asked(by: AskedBy, ask: BuildAsk | null, brief: string, reason: string): Decision {
+  if (ask === null) throw new Error(`the ${by} decision asks without its ask`);
+  return { kind: 'asked', by, ask, brief, reason };
 }
 
 function decide(
@@ -74,12 +74,12 @@ function decide(
   if (path === 'closed') return { kind: 'parked', reason: 'the issue is closed' };
   if (answer !== null) {
     if (answer.decision === 'done') return { kind: 'ready', reason: answer.reason };
-    if (answer.decision === 'ask') return asked(answer.ask_class, answer.attention, answer.brief, answer.reason);
+    if (answer.decision === 'ask') return asked(answer.ask_class, answer.ask, answer.brief, answer.reason);
     if (answer.brief.trim() === '') throw new Error('a continue decision has no brief to launch from');
     return { kind: 'continue', brief: answer.brief, reason: answer.reason };
   }
   if (route === null) throw new Error(`the ${path} path reached apply with no decision`);
-  if (route.decision === 'ask') return asked('route', route.attention, route.brief, route.reason);
+  if (route.decision === 'ask') return asked('route', route.ask, route.brief, route.reason);
   if (route.decision === 'ready') return { kind: 'ready', reason: route.reason };
   // A launch is answered after its round, so a run never ends on one.
   return { kind: 'launch', brief: route.brief, reason: route.reason };
@@ -224,11 +224,24 @@ function prNumberOf(url: string, repo: QualifiedPr['repo']): Pick<BuildRound, 'p
   }
 }
 
+const NO_ASK = { question: '', options: [], recommendation: null, class: '', asked: null } as const;
+
+/** The wait's fields for the run's ask, as the deciding agent wrote them. */
+function raisedAsk({ ask, brief, by }: Extract<Decision, { kind: 'asked' }>) {
+  return { ...ask, class: by, asked: { ask, brief, by } };
+}
+
+/** The ask's `pr` label: the number of the round's pull request, or of the item's; empty with none. */
+function prLabel(round: BuildRound | null): string {
+  const pr = round?.pr_number ?? (nullableJson(input('pull_request')) as PrRecord | null)?.number;
+  return pr === undefined ? '' : String(pr);
+}
+
 function main(): void {
   const path = input('path').trim();
   const noItem = noItemSummary(path);
   if (noItem !== null) {
-    emit({ ...noItem, attention: '', options: [], recommendation: null, class: '', asked: null });
+    emit({ ...noItem, ...NO_ASK, item: '', pr: '' });
     return;
   }
   const runId = workflowRunId();
@@ -253,25 +266,13 @@ function main(): void {
   const decision = decide(path, route, answer);
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
-  const wait =
-    asking === null
-      ? null
-      : attentionWait(
-          `Build queue, issue ${String(item.number)}: ${asking.by} decision`,
-          asking.attention,
-          'Your text is written into the issue body as the ruling, and the next round works from it.'
-        );
-  const links = [
-    ...(round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '')),
-    ...(asking?.attention.links ?? []),
-  ];
+  const links = round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '');
   const result = {
     decision: decision.kind,
     summary: summaryOf(item, decision),
-    ...askFields(wait),
-    class: asking?.by ?? '',
-    asked:
-      asking === null ? null : { attention: asking.attention, brief: asking.brief, by: asking.by },
+    ...(asking === null ? NO_ASK : raisedAsk(asking)),
+    item: String(item.number),
+    pr: prLabel(round),
   };
 
   if (decision.kind === 'launch') throw new Error('a launch reached apply without its round');

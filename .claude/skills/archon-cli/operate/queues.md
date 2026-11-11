@@ -84,8 +84,8 @@ archon workflow run archon-discoveries --detach
 
 The build queue also takes a message saying what to build, when `number` is empty:
 `archon workflow run archon-build-queue "build the retry fix from #123" --detach`. An
-agent resolves it to one issue to claim, a choice between issues (a `build: message`
-attention item), new work it files and hands to intake (the run builds nothing), or a
+agent resolves it to one issue to claim, a choice between issues (an attention
+item labelled `kind: pick`), new work it files and hands to intake (the run builds nothing), or a
 refusal with its reason.
 
 Optional inputs, with their defaults in each workflow's YAML:
@@ -168,8 +168,8 @@ A round ends one of three ways, recorded on the item:
   item's next round at once by firing the binding file `build_queue_binding` names,
   with the item's `number`. With no binding set, or when the fire is skipped or
   refused, the item waits for the next queue run and the run's summary says why.
-- `ask`: the run pauses as one attention item labelled `build: route`, `build: stop`
-  or `build: scope`.
+- `ask`: the run pauses as one attention item labelled `stage: build` and `kind: route`,
+  `kind: stop` or `kind: scope`, with the issue number as `item`.
 
 An item the merge queue returns waits for a new build round, with the merge queue's
 brief. A re-triage after the queue's last decision starts the item over.
@@ -200,8 +200,8 @@ A pull request whose read fails twice in a row is parked with the read error unt
 the build queue readies the item again.
 
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
-change, pauses as an attention item labelled `merge: pr` with the choices `merge`,
-`return`, `park` and `other`. A red default branch pauses as `merge: base` with the
+change, pauses as an attention item labelled `stage: merge` and `kind: approve` with the choices `merge`,
+`return`, `park` and `other`. A red default branch pauses as `kind: base` with the
 one choice `hold` (an `other` answer there holds too), and the gate refuses every merge until it is green. A run raises at
 most one attention item: the red default branch first, otherwise the first pull
 request the sweep asked about. A later sweep decides the rest again.
@@ -218,7 +218,7 @@ back to the build queue, whose next round starts at once through
 Each pass decides the records of up to `limit` finished runs, oldest first. Repeat
 passes until one finds nothing queued: its `decide` node is skipped
 (`archon workflow get <run-id> --verbose --json`). Stop early when a pass pauses with a
-`discoveries: question` item, and answer it first.
+`stage: discoveries` item, and answer it first.
 
 Issues a pass files carry no labels. Run intake on each one to triage it.
 

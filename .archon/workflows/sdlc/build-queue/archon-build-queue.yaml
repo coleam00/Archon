@@ -8,7 +8,7 @@ description: |
   caused, ready without another round; one agent answers how that round ended; and after several rounds that each
   found new defects, one agent decides whether to ask the scope question instead of
   running another. A clear case acts on its own. Anything unclear pauses as one
-  attention item whose answer is a declared choice; the ruling is written into the
+  attention item whose answer is a declared option; the ruling is written into the
   issue body as a dated "Current scope" section. Every decision is recorded on the
   item's work item.
 
@@ -118,6 +118,15 @@ nodes:
                   number: { type: integer, minimum: 1 }
                 required: [number]
             required: [id, label, does, value]
+        # On choose, the candidate the message most likely means; null otherwise.
+        recommendation:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            option: { type: string, pattern: '^issue-[0-9]+$' }
+            why: { type: string, pattern: '\S' }
+            confidence: { type: string, enum: [low, medium, high] }
+          required: [option, why, confidence]
         order:
           type: [object, 'null']
           additionalProperties: false
@@ -142,7 +151,7 @@ nodes:
             body: { type: string, pattern: '\S' }
           required: [title, body]
         reason: { type: string, pattern: '\S' }
-      required: [decision, number, options, order, issue, reason]
+      required: [decision, number, options, recommendation, order, issue, reason]
 
   - id: pick
     depends_on: [interpret]
@@ -151,8 +160,12 @@ nodes:
       attention: "$interpret.output.reason"
       form: select
       options: "$interpret.output.options"
+      recommendation: "$interpret.output.recommendation"
       labels:
-        build: message
+        stage: build
+        kind: pick
+        item: ""
+        pr: ""
 
   # Claims the item and writes the issue's body to build/issue.md, so every agent
   # reads the same text. With a message it claims the item interpret or the pick
@@ -241,23 +254,14 @@ nodes:
         # choice launches.
         brief: { type: string, pattern: '\S' }
         reason: { type: string, pattern: '\S' }
-        attention: &attention
+        # On ask, the wait's own fields as the person reads them; null otherwise. Each
+        # option's value is what the queue does when it is chosen.
+        ask: &ask
           type: [object, 'null']
           additionalProperties: false
           properties:
-            what: { type: string, pattern: '\S' }
-            why: { type: string, pattern: '\S' }
-            recommendation:
-              type: object
-              additionalProperties: false
-              properties:
-                choice: { type: string }
-                why: { type: string, pattern: '\S' }
-                evidence: { type: string, pattern: '\S' }
-                confidence: { type: string, enum: [low, medium, high] }
-                would_change: { type: string, pattern: '\S' }
-              required: [choice, why, evidence, confidence, would_change]
-            choices:
+            question: { type: string, pattern: '\S' }
+            options:
               type: array
               minItems: 1
               items:
@@ -267,13 +271,24 @@ nodes:
                   id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
                   label: { type: string, pattern: '\S' }
                   does: { type: string, pattern: '\S' }
-                  effect: { type: string, enum: [continue, ready, park] }
-                  ruling: { type: string }
-                required: [id, label, does, effect, ruling]
-            if_unanswered: { type: string, pattern: '\S' }
-            links: { type: array, items: { type: string } }
-          required: [what, why, recommendation, choices, if_unanswered, links]
-      required: [decision, route, continues, ready_head, brief, reason, attention]
+                  value:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      effect: { type: string, enum: [continue, ready, park] }
+                      ruling: { type: string }
+                    required: [effect, ruling]
+                required: [id, label, does, value]
+            recommendation:
+              type: object
+              additionalProperties: false
+              properties:
+                option: { type: string }
+                why: { type: string, pattern: '\S' }
+                confidence: { type: string, enum: [low, medium, high] }
+              required: [option, why, confidence]
+          required: [question, options, recommendation]
+      required: [decision, route, continues, ready_head, brief, reason, ask]
 
   # A round that continues a pull request (route's declaration) starts from that pull
   # request's head, not from the branch the run's checkout was cut from, so its publish
@@ -360,8 +375,8 @@ nodes:
         # done and continue. Not nullable: Codex's constrained decoding could not emit
         # `null` from an enum and padded whitespace until max_output_tokens.
         ask_class: { type: string, enum: [stop, scope] }
-        attention: *attention
-      required: [decision, brief, push, reason, ask_class, attention]
+        ask: *ask
+      required: [decision, brief, push, reason, ask_class, ask]
 
   # Files the new work the message described and starts intake on it.
   - id: handoff
@@ -419,9 +434,9 @@ nodes:
       properties:
         decision: { type: string, enum: [idle, order, handoff, parked, ready, continue, asked, launch] }
         summary: { type: string }
-        # The attention message; empty when nothing is asked.
-        attention: { type: string }
-        # Each choice as a wait option; its value is the choice the answer returns.
+        # The ask's question, options and recommendation, as the deciding agent wrote
+        # them: empty, none and null when nothing is asked.
+        question: { type: string }
         options:
           type: array
           items:
@@ -432,27 +447,32 @@ nodes:
               does: { type: string }
               value: { type: object }
             required: [id, label, does, value]
-        # The wait's recommendation; null when nothing is asked.
         recommendation: { type: [object, 'null'] }
         class: { type: string, enum: ['', route, stop, scope] }
-        # What the answer node needs: the attention item, the brief a continue choice
-        # launches and which decision asked; null when nothing is asked.
+        # The ask's subject labels: the issue number, and its pull request's or empty.
+        item: { type: string }
+        pr: { type: string }
+        # What the ruling node needs: the ask, the brief a continue option launches and
+        # which decision asked; null when nothing is asked.
         asked: { type: [object, 'null'] }
-      required: [decision, summary, attention, options, recommendation, class, asked]
+      required: [decision, summary, question, options, recommendation, class, item, pr, asked]
 
   # A paused run gives its resource slot back, so the next scheduled run can work
   # another item while this one waits.
   - id: ask
     depends_on: [apply]
-    when: "$apply.output.attention != ''"
+    when: "$apply.output.question != ''"
     wait:
-      attention: "$apply.output.attention"
+      attention: "$apply.output.question"
       form: select
       options: "$apply.output.options"
       other: true
       recommendation: "$apply.output.recommendation"
       labels:
-        build: "$apply.output.class"
+        stage: build
+        kind: "$apply.output.class"
+        item: "$apply.output.item"
+        pr: "$apply.output.pr"
 
   - id: ruling
     script: ruling
@@ -461,7 +481,7 @@ nodes:
     with:
       item: { from: "$facts.output.item" }
       asked: { from: "$apply.output.asked" }
-      choice: { from: "$ask.output.value" }
+      decision: "$ask.output.decision"
       text: "$ask.output.text"
     output_format:
       type: object

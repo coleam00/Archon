@@ -206,7 +206,10 @@ nodes:
       attention: "$outcome.output.question"
       form: message
       labels:
-        discoveries: question
+        stage: discoveries
+        kind: question
+        item: ""
+        pr: ""
 
   - id: answer
     script: answer
