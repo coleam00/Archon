@@ -5,7 +5,7 @@ import {
   StateLeaseHeldError,
   StateLeaseNotHeldError,
   StatePatchError,
-  claimStateDocument,
+  claimFirstStateDocument,
   stateValueSchema,
   statePutSchema,
   stateWriterSchema,
@@ -555,12 +555,18 @@ export function describeStateDocumentConformance(
         lease: 'take',
       });
       for (const refused of [
-        store.patchStateDocument({ ...input, ops, writer: leaseWriter(other) }),
-        store.putStateDocument({ ...input, value: {}, ifRevision: 2, writer: leaseWriter(other) }),
-        store.deleteStateDocument({ ...input, writer: leaseWriter(other) }),
-        store.patchStateDocument({ ...input, ops, writer }),
+        () => store.patchStateDocument({ ...input, ops, writer: leaseWriter(other) }),
+        () =>
+          store.putStateDocument({
+            ...input,
+            value: {},
+            ifRevision: 2,
+            writer: leaseWriter(other),
+          }),
+        () => store.deleteStateDocument({ ...input, writer: leaseWriter(other) }),
+        () => store.patchStateDocument({ ...input, ops, writer }),
       ]) {
-        const error = await rejection(refused);
+        const error = await rejection(refused());
         expect(error).toBeInstanceOf(StateLeaseNotHeldError);
         expect(error).toMatchObject({ holder: { runId: holder } });
       }
@@ -611,7 +617,7 @@ export function describeStateDocumentConformance(
         ifRevision: 1,
       }));
       const input = { scope, writer: { kind: 'run' as const, runId: claimer, nodePath: 'claim' } };
-      const result = await claimStateDocument(store, { ...input, candidates });
+      const result = await claimFirstStateDocument(store, { ...input, candidates });
       expect(result.skipped).toEqual([
         { name: 'absent', reason: 'missing' },
         {
@@ -629,8 +635,13 @@ export function describeStateDocumentConformance(
         lease: { runId: claimer, live: true },
       });
       expect(await store.getStateDocument(scope, 'dead')).toEqual(result.claimed);
+      // The log tells a claim from a write.
+      expect((await store.listStateRevisions(scope, 'dead')).map(row => row.operation)).toEqual([
+        { op: 'claim' },
+        { op: 'put' },
+      ]);
       expect((await store.getStateDocument(scope, 'free'))?.revision).toBe(1);
-      const none = await claimStateDocument(store, {
+      const none = await claimFirstStateDocument(store, {
         ...input,
         candidates: candidates.slice(0, 3),
       });

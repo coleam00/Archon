@@ -21,7 +21,7 @@ import {
   StateLeaseHeldError,
   StateLeaseNotHeldError,
   StatePatchError,
-  claimStateDocument,
+  claimFirstStateDocument,
   stateClaimCandidatesSchema,
   type IStateDocumentStore,
   type StateLeaseChange,
@@ -274,7 +274,7 @@ async function claimStateDocuments(
     throw new Error('Invalid claim input; expected [{"name": "...", "ifRevision": <n>}, ...]');
   return {
     scope,
-    ...(await claimStateDocument(store, { scope, writer, candidates: candidates.data })),
+    ...(await claimFirstStateDocument(store, { scope, writer, candidates: candidates.data })),
   };
 }
 

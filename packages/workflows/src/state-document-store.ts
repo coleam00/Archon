@@ -58,6 +58,8 @@ export const stateRevisionNumberSchema = z
 export const stateOperationSchema = z.discriminatedUnion('op', [
   z.object({ op: z.literal('put') }).strict(),
   z.object({ op: z.literal('delete') }).strict(),
+  // A run took the lease and changed nothing else; the revision repeats the prior value.
+  z.object({ op: z.literal('claim') }).strict(),
   // `ifRevision` is present when the patch was computed from that revision, absent when
   // it applied to whatever revision was latest.
   z
@@ -158,6 +160,10 @@ export const statePatchSchema = stateWriteScopeSchema.extend({
 export const stateDeleteSchema = stateWriteScopeSchema.extend({
   ifRevision: stateRevisionNumberSchema.optional(),
 });
+
+export const stateClaimSchema = stateWriteScopeSchema
+  .omit({ held: true })
+  .extend({ ifRevision: z.number().int().positive() });
 
 export class StateRevisionConflictError extends Error {
   constructor(
@@ -402,11 +408,20 @@ export function statePatchOperation(
   };
 }
 
+/** The value a claim's revision repeats: that of the live document at the named revision. */
+export function stateClaimValue(
+  prior: Pick<StateRevision, 'revision' | 'value'> | null | undefined,
+  input: { name: string; ifRevision: number }
+): StateValue {
+  const actual = prior?.revision ?? 0;
+  if (actual !== input.ifRevision)
+    throw new StateRevisionConflictError(input.name, input.ifRevision, actual);
+  if (prior?.value == null) throw new Error(`State document '${input.name}' is deleted`);
+  return prior.value;
+}
 /** Documents a run offers to claim, in its own order of preference. */
 export const stateClaimCandidatesSchema = z
-  .array(
-    z.object({ name: stateDocumentNameSchema, ifRevision: z.number().int().positive() }).strict()
-  )
+  .array(stateClaimSchema.pick({ name: true, ifRevision: true }).strict())
   .min(1);
 export const stateClaimSkipSchema = z.discriminatedUnion('reason', [
   z.object({ name: stateDocumentNameSchema, reason: z.literal('missing') }).strict(),
@@ -433,11 +448,10 @@ export type StateClaimResult = z.infer<typeof stateClaimResultSchema>;
 /**
  * Takes the lease of the first candidate whose revision still matches and whose lease is
  * free, ended or the run's own, and reports why each earlier candidate was passed over.
- * Each attempt is the store's conditional put of the value just read, so a candidate is
- * taken atomically or not at all; the revision it writes records a `put`.
+ * Each attempt is one store claim, so a candidate is taken atomically or not at all.
  */
-export async function claimStateDocument(
-  store: Pick<IStateDocumentStore, 'getStateDocument' | 'putStateDocument'>,
+export async function claimFirstStateDocument(
+  store: Pick<IStateDocumentStore, 'getStateDocument' | 'claimStateDocument'>,
   input: {
     scope: StateScope;
     writer: Extract<StateWriter, { kind: 'run' }>;
@@ -448,22 +462,15 @@ export async function claimStateDocument(
   const skipped: StateClaimResult['skipped'] = [];
   for (const { name, ifRevision } of stateClaimCandidatesSchema.parse(input.candidates)) {
     const current = await store.getStateDocument(scope, name);
-    if (current === null || current.value === null) {
+    if (current === null) {
       skipped.push({ name, reason: 'missing' });
       continue;
     }
     try {
-      if (current.revision !== ifRevision)
-        throw new StateRevisionConflictError(name, ifRevision, current.revision);
-      const claimed = await store.putStateDocument({
-        scope,
-        name,
-        writer,
-        value: current.value,
-        ifRevision,
-        lease: 'take',
-      });
-      return { claimed, skipped };
+      return {
+        claimed: await store.claimStateDocument({ scope, name, writer, ifRevision }),
+        skipped,
+      };
     } catch (error) {
       if (error instanceof StateRevisionConflictError)
         skipped.push({ name, reason: 'revision_moved', revision: error.actual });
@@ -480,6 +487,11 @@ export interface IStateDocumentStore {
   putStateDocument(input: z.infer<typeof statePutSchema>): Promise<StateRevision>;
   patchStateDocument(input: z.infer<typeof statePatchSchema>): Promise<StateRevision>;
   deleteStateDocument(input: z.infer<typeof stateDeleteSchema>): Promise<StateRevision>;
+  /**
+   * The writing run takes the lease of a live document at exactly `ifRevision`. The new
+   * revision records `claim` and repeats the value; a live lease of another run refuses it.
+   */
+  claimStateDocument(input: z.infer<typeof stateClaimSchema>): Promise<StateRevision>;
   listStateRevisions(
     scope: StateScope,
     name: string,

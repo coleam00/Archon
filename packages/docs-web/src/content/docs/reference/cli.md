@@ -2083,8 +2083,10 @@ Every exit `3` carries a `reason` beside `error` and `code`: `revision_conflict`
 **Claiming one of several documents.** Inside a run, `archon state claim` reads a JSON
 array of `{"name", "ifRevision"}` candidates from stdin and tries them in the order given.
 It takes the lease of the first document that is still at the named revision and whose
-lease is free, ended or already the run's own, and stops there. The claim writes a new
-revision with the same value, recorded as a `put` by the calling run and node. The output
+lease is free, ended or already the run's own, and stops there. A claim adds a revision:
+the lease is part of a revision, and the next conditional write must name the new number.
+That revision repeats the value unchanged and `state log` shows its operation as
+`{"op": "claim"}`, so the log tells a claim from a `put`, `patch` or `delete`. The output
 is `{scope, claimed, skipped}`: `claimed` is that new revision, and `skipped` lists every
 earlier candidate with a `reason`:
 
@@ -2097,6 +2099,11 @@ earlier candidate with a `reason`:
 When no candidate can be claimed, `claimed` is `null` and the command exits `2`. Order the
 candidates yourself: the engine does not rank or filter them. `claim` is refused outside a
 run.
+
+An Archon binary from before `state claim` existed does not know the `claim` operation. It
+fails with exit `1` on `state get`, `log`, `list` and any write to a document whose
+revisions it reads include a claim. Once a store holds a claim, use only binaries that
+have `state claim` on it.
 
 `put` requires `--if-revision`: `0` creates a new document; otherwise it replaces exactly
 that revision. `delete` accepts the same optional check. `patch` applies `{ops:[...]}` from

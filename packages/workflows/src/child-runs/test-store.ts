@@ -41,6 +41,9 @@ export class InMemoryStore implements IWorkflowStore {
   deleteStateDocument: IWorkflowStore['deleteStateDocument'] = async () => {
     throw new Error('Unexpected deleteStateDocument');
   };
+  claimStateDocument: IWorkflowStore['claimStateDocument'] = async () => {
+    throw new Error('Unexpected claimStateDocument');
+  };
   listStateRevisions: IWorkflowStore['listStateRevisions'] = async () => {
     throw new Error('Unexpected listStateRevisions');
   };

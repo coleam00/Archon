@@ -194,6 +194,7 @@ test('--held fences a write to the lease holder, and claim takes the first claim
       name: 'review/free',
       revision: 2,
       value: { n: 1 },
+      operation: { op: 'claim' },
       lease: expect.objectContaining({ runId: other.id, nodePath: 'claim', live: true }),
     }),
     skipped: [
