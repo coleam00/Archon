@@ -20,7 +20,7 @@
 import { appendFileSync, existsSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { fakeLeaseLive } from './fake-lease.ts';
+import { fakeLeaseFree, fakeLeaseHeld, fakeLeaseLive } from './fake-lease.ts';
 
 const argv = process.argv.slice(2);
 if (process.env.ARCHON_CALL_LOG) appendFileSync(process.env.ARCHON_CALL_LOG, `${JSON.stringify(argv)}\n`);
@@ -94,9 +94,9 @@ function withLeases(op: string | undefined, output: Record<string, unknown>, lea
 
 /** Why the store refuses this write for the calling run, or null when it makes it. */
 function refusal(holder: string | undefined, change: string | undefined): [error: string, reason: string] | null {
-  const self = process.env.WORKFLOW_ID;
-  if (argv.includes('--held') && holder !== self) return ['the run does not hold the lease', 'lease_not_held'];
-  if (change !== undefined && holder !== undefined && holder !== self && live(holder)) {
+  const self = process.env.WORKFLOW_ID ?? '';
+  if (argv.includes('--held') && !fakeLeaseHeld(holder, self)) return ['the run does not hold the lease', 'lease_not_held'];
+  if (change !== undefined && !fakeLeaseFree(holder, self, holder !== undefined && live(holder))) {
     return [`leased by live run ${holder}`, 'lease_held'];
   }
   return null;
@@ -146,7 +146,7 @@ function claim(leases: Record<string, string>, save: () => void): void {
     const holder = leases[name];
     if (read.value === null) skipped.push({ name, reason: 'missing' });
     else if (read.revision !== ifRevision) skipped.push({ name, reason: 'revision_moved', revision: read.revision });
-    else if (holder !== undefined && holder !== self && live(holder)) skipped.push({ name, reason: 'lease_held', holder: { runId: holder } });
+    else if (!fakeLeaseFree(holder, self, holder !== undefined && live(holder))) skipped.push({ name, reason: 'lease_held', holder: { runId: holder } });
     else {
       // A claim adds a revision that repeats the value.
       const put = host(['state', 'put', name, '--if-revision', String(ifRevision)], JSON.stringify(read.value));

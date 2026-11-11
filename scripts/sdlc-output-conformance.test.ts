@@ -6,9 +6,11 @@
  * workflows, then judge the result with the engine's own validator, schemas and naming.
  */
 import { describe, expect, test } from 'bun:test';
-import { readFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { nodeCostScope } from '../packages/workflows/src/node-record-serialization';
 import { EFFORT_LEVELS } from '../packages/workflows/src/schemas/effort';
@@ -25,12 +27,18 @@ import {
 } from '../packages/workflows/src/schemas/node-execution';
 import { workflowRunStatusSchema } from '../packages/workflows/src/schemas/run-status';
 import {
+  claimFirstStateDocument,
   isStateLeaseHolderLive,
   stateClaimResultSchema,
   stateLeaseViewSchema,
 } from '../packages/workflows/src/state-document-store';
+import { createFileWorkflowStore } from '../packages/workflows/src/file-store/store';
 import { validateStructuredOutput } from '../packages/workflows/src/structured-output';
-import { fakeLeaseLive } from '../.archon/scripts/__tests__/fixtures/fake-lease';
+import {
+  fakeLeaseFree,
+  fakeLeaseHeld,
+  fakeLeaseLive,
+} from '../.archon/scripts/__tests__/fixtures/fake-lease';
 import { PACK, PR } from '../.archon/scripts/__tests__/deliver-checks-harness';
 import {
   agentBinding,
@@ -205,6 +213,67 @@ describe('claims', () => {
       expect(fakeLeaseLive(status)).toBe(isStateLeaseHolderLive(status));
     // A run the store no longer has: deleted, so its lease has ended.
     expect(fakeLeaseLive(undefined)).toBe(isStateLeaseHolderLive(null));
+  });
+
+  test("the test CLI takes, refuses and writes under a lease exactly when the engine's store does", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'archon-lease-conformance-'));
+    try {
+      const store = await createFileWorkflowStore({ root });
+      const scope = { kind: 'project' as const, key: 'conformance/pack' };
+      const run = async (): Promise<string> =>
+        (await store.createWorkflowRun({ workflow_name: 'lease', user_message: '' })).id;
+      const self = await run();
+      const writer = { kind: 'run' as const, runId: self, nodePath: 'facts' };
+      // Who holds the document before the calling run acts: nobody, itself, a live run, an ended run.
+      const holders = [
+        { label: 'nobody', make: async () => undefined, live: false },
+        { label: 'itself', make: async () => self, live: true },
+        { label: 'a live run', make: run, live: true },
+        { label: 'an ended run', make: run, live: false },
+      ];
+      for (const [index, { label, make, live }] of holders.entries()) {
+        const holder = await make();
+        for (const op of ['claim', 'held'] as const) {
+          const name = `work/${String(index)}-${op}`;
+          const lease = holder === undefined ? {} : { lease: 'take' as const };
+          const made = { kind: 'run' as const, runId: holder ?? self, nodePath: 'seed' };
+          await store.putStateDocument({
+            scope,
+            name,
+            value: {},
+            ifRevision: 0,
+            writer: made,
+            ...lease,
+          });
+        }
+        if (holder !== undefined && !live) await store.cancelWorkflowRun(holder);
+        const claimed = await claimFirstStateDocument(store, {
+          scope,
+          writer,
+          candidates: [{ name: `work/${String(index)}-claim`, ifRevision: 1 }],
+        });
+        expect({ label, free: claimed.claimed !== null }).toEqual({
+          label,
+          free: fakeLeaseFree(holder, self, live),
+        });
+        const held = await store
+          .putStateDocument({
+            scope,
+            name: `work/${String(index)}-held`,
+            value: { v: 2 },
+            ifRevision: 1,
+            writer,
+            held: true,
+          })
+          .then(
+            () => true,
+            () => false
+          );
+        expect({ label, held }).toEqual({ label, held: fakeLeaseHeld(holder, self) });
+      }
+    } finally {
+      await removeTempTree(root);
+    }
   });
 
   test("the pack reads the engine's claim result: what it took, and why it passed each earlier candidate over", () => {
