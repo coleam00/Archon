@@ -1,3 +1,11 @@
+import { runThroughput, throughputAcrossRuns } from '@archon/workflows/throughput';
+import {
+  printListedRunThroughput,
+  printModelThroughput,
+  printRunThroughput,
+} from './workflow-throughput';
+
+import { throughputEvents } from '../test-support/throughput-fixtures';
 import {
   spyOnJsonStdout,
   firstJsonPayload,
@@ -30,6 +38,276 @@ describe('workflowRunsCommand', () => {
     consoleSpy.mockRestore();
     stdoutSpy.mockRestore();
   });
+
+  it.each([
+    [false, false, false],
+    [true, false, false],
+    [true, true, false],
+    [true, true, true],
+  ])(
+    'reports throughput across exactly the listed runs json=%s verbose=%s open=%s',
+    async (json, verbose, open) => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const eventsDb = await import('@archon/core/db/workflow-events');
+      const codebaseDb = await import('@archon/core/db/codebases');
+      (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+        id: 'cb-throughput',
+        name: 'project',
+        default_cwd: '/test/path',
+      });
+      const runs = ['one', 'two'].map(id => ({
+        id,
+        workflow_name: 'work',
+        status: 'failed',
+        metadata: {},
+        started_at: new Date(),
+        completed_at: new Date(),
+        active_nodes: [],
+      }));
+      const list = (
+        open ? workflowDb.findOpenWorkRuns : workflowDb.listDashboardRuns
+      ) as ReturnType<typeof mock>;
+      list.mockClear();
+      list.mockResolvedValueOnce(open ? runs : { runs, total: 50, counts: EMPTY_COUNTS });
+      const read = eventsDb.listEventsForRuns as ReturnType<typeof mock>;
+      read.mockClear();
+      read.mockResolvedValueOnce(
+        new Map([
+          ['one', throughputEvents('one')],
+          ['two', throughputEvents('two', 900, 3000)],
+        ])
+      );
+      expect(
+        await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+          json,
+          verbose,
+          open,
+          throughput: true,
+          limit: 2,
+        })
+      ).toBe(0);
+      expect(list).toHaveBeenCalledWith(
+        expect.objectContaining({ codebaseId: 'cb-throughput', limit: 2 })
+      );
+      expect(read).toHaveBeenCalledTimes(1);
+      expect(read).toHaveBeenCalledWith(
+        ['one', 'two'],
+        verbose ? NODE_SUMMARY_EVENT_TYPES : ['node_completed', 'node_failed', 'node_suspended'],
+        { strict: true }
+      );
+      if (json) {
+        const result = JSON.parse(firstJsonPayload(stdoutSpy));
+        expect(result.throughput.runIds).toEqual(['one', 'two']);
+        expect(result.throughput.runCount).toBe(2);
+        expect(result.throughput.models).toEqual([
+          {
+            provider: 'claude',
+            requestedModel: 'large',
+            outputTokens: 1000,
+            durationMs: 4000,
+            measuredExecutions: 2,
+            nodesWithoutTokenData: 2,
+            nodesWithoutDuration: 0,
+            loopNodesNotMeasured: 0,
+            effectiveTokensPerSecond: 250,
+          },
+          {
+            provider: 'codex',
+            requestedModel: 'small',
+            outputTokens: 1800,
+            durationMs: 18000,
+            measuredExecutions: 2,
+            nodesWithoutTokenData: 0,
+            nodesWithoutDuration: 0,
+            loopNodesNotMeasured: 0,
+            effectiveTokensPerSecond: 100,
+          },
+        ]);
+        expect(
+          result.runs.map(
+            (run: { throughput: { summary: { effectiveTokensPerSecond: number } } }) =>
+              run.throughput.summary.effectiveTokensPerSecond
+          )
+        ).toEqual([100, 150]);
+        if (verbose) expect(result.runs[0].nodes).toHaveLength(4);
+        expect(result.scopeFallback).toBe(false);
+      } else {
+        const text = consoleSpy.mock.calls.map(call => String(call[0])).join('\n');
+        expect(text).toContain(
+          'one effective throughput: 100.00 tok/s; 1 nodes without token data'
+        );
+        expect(text).toContain(
+          'two effective throughput: 150.00 tok/s; 1 nodes without token data'
+        );
+        expect(text).toContain(
+          'Effective output throughput across listed runs (2 runs; recorded agent executions; not decode speed)'
+        );
+        expect(text).toContain('claude/large: 250.00 tok/s; 2 nodes without token data');
+      }
+    }
+  );
+
+  it.each([false, true])('reports suspended loop exclusions in listings json=%s', async json => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      runs: [
+        {
+          id: 'one',
+          workflow_name: 'work',
+          status: 'paused',
+          metadata: {},
+          active_nodes: [],
+          started_at: new Date(),
+        },
+      ],
+      total: 1,
+      counts: EMPTY_COUNTS,
+    });
+    const event = throughputEvents('one')[0]!;
+    (eventsDb.listEventsForRuns as ReturnType<typeof mock>).mockResolvedValueOnce(
+      new Map([
+        [
+          'one',
+          [
+            {
+              ...event,
+              event_type: 'node_suspended',
+              data: {
+                ...event.data,
+                node: { id: 'work', kind: 'loop' },
+                type: 'loop',
+                suspend_point: 'interactive_loop',
+              },
+            },
+          ],
+        ],
+      ])
+    );
+    expect(
+      await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+        all: true,
+        throughput: true,
+        json,
+      })
+    ).toBe(0);
+    if (json) {
+      const result = JSON.parse(firstJsonPayload(stdoutSpy));
+      expect(result.runs[0].throughput.summary.loopNodesNotMeasured).toBe(1);
+      expect(result.throughput.models[0]).toMatchObject({
+        provider: 'claude',
+        requestedModel: 'large',
+        loopNodesNotMeasured: 1,
+      });
+    } else {
+      const text = consoleSpy.mock.calls.map(call => String(call[0])).join('\n');
+      expect(text).toContain('one effective throughput: unavailable; 1 loop nodes not measured');
+      expect(text).toContain('claude/large: unavailable; 1 loop nodes not measured');
+    }
+  });
+
+  it('reads a large requested page in bounded batches and reuses them for verbose detail', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    const runs = Array.from({ length: 21 }, (_, i) => ({
+      id: `run-${i}`,
+      status: 'completed',
+      metadata: {},
+      completed_at: new Date(),
+    }));
+    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      runs,
+      total: 21,
+      counts: EMPTY_COUNTS,
+    });
+    const read = eventsDb.listEventsForRuns as ReturnType<typeof mock>;
+    read.mockClear();
+    read.mockResolvedValueOnce(new Map()).mockResolvedValueOnce(new Map());
+    expect(
+      await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+        json: true,
+        all: true,
+        verbose: true,
+        throughput: true,
+        limit: 21,
+      })
+    ).toBe(0);
+    expect(read).toHaveBeenCalledTimes(2);
+    expect(read).toHaveBeenNthCalledWith(
+      1,
+      runs.slice(0, 20).map(run => run.id),
+      NODE_SUMMARY_EVENT_TYPES,
+      { strict: true }
+    );
+    expect(read).toHaveBeenNthCalledWith(2, ['run-20'], NODE_SUMMARY_EVENT_TYPES, { strict: true });
+    const result = JSON.parse(firstJsonPayload(stdoutSpy));
+    expect(result.throughput.runCount).toBe(21);
+    expect(result.runs[20].throughput.summary.effectiveTokensPerSecond).toBeNull();
+    expect(result.runs[20].nodes).toEqual([]);
+  });
+
+  it('reports an empty sample without reading events', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const eventsDb = await import('@archon/core/db/workflow-events');
+    (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+      runs: [],
+      total: 0,
+      counts: EMPTY_COUNTS,
+    });
+    const read = eventsDb.listEventsForRuns as ReturnType<typeof mock>;
+    read.mockClear();
+    await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+      json: true,
+      all: true,
+      throughput: true,
+    });
+    expect(read).not.toHaveBeenCalled();
+    expect(JSON.parse(firstJsonPayload(stdoutSpy)).throughput).toEqual({
+      runIds: [],
+      runCount: 0,
+      models: [],
+    });
+  });
+
+  it.each([
+    ['read', false],
+    ['metadata', false],
+    ['metadata', true],
+  ] as const)(
+    'fails the entire throughput listing on %s failure (verbose=%s)',
+    async (failure, verbose) => {
+      const workflowDb = await import('@archon/core/db/workflows');
+      const eventsDb = await import('@archon/core/db/workflow-events');
+      (workflowDb.listDashboardRuns as ReturnType<typeof mock>).mockResolvedValueOnce({
+        runs: [{ id: 'one', metadata: {} }],
+        total: 1,
+        counts: EMPTY_COUNTS,
+      });
+      const read = eventsDb.listEventsForRuns as ReturnType<typeof mock>;
+      if (failure === 'read') read.mockRejectedValueOnce(new Error('history unreadable'));
+      else {
+        const events = throughputEvents('one');
+        delete events[0]!.data.invocation;
+        read.mockResolvedValueOnce(new Map([['one', events]]));
+      }
+      expect(
+        await workflowRunsCommand(createTestWorkflowHost(), '/test/path', {
+          json: true,
+          all: true,
+          throughput: true,
+          verbose,
+        })
+      ).toBe(1);
+      expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({
+        ok: false,
+        error: expect.stringContaining(
+          failure === 'read'
+            ? 'history unreadable'
+            : 'run one: Node execution metadata is incomplete'
+        ),
+      });
+    }
+  );
 
   it('scopes to the cwd-resolved codebase id', async () => {
     const git = await import('@archon/git');
@@ -513,4 +791,36 @@ describe('workflowRunsCommand', () => {
     expect(parsed.ok).toBe(false);
     expect(parsed.error).toContain("Invalid --status 'bogus'");
   });
+});
+
+it('shows loop exclusions on attempts, runs and model summaries without inventing a rate', () => {
+  const report = runThroughput('one', [
+    {
+      workflow_run_id: 'one',
+      step_name: 'implement',
+      event_type: 'node_completed',
+      data: {
+        type: 'loop',
+        provider: 'codex',
+        model: 'large',
+        duration_ms: 300000,
+        tokens: { input: 1, output: 10000 },
+      },
+    },
+  ]);
+  const output = spyOn(console, 'log').mockImplementation(() => {});
+  try {
+    printRunThroughput(report);
+    printListedRunThroughput('one', [{ id: 'one', throughput: report }]);
+    printModelThroughput(throughputAcrossRuns([report]));
+    const text = output.mock.calls.map(call => String(call[0])).join('\n');
+    expect(text).toContain('Run: unavailable; 1 loop nodes not measured');
+    expect(text).toContain('one effective throughput: unavailable; 1 loop nodes not measured');
+    expect(text).toContain('codex/large: unavailable; 1 loop nodes not measured');
+    expect(text).toContain('unavailable (loop duration may include approval pauses)');
+    expect(text).not.toContain('0.00 tok/s');
+    expect(text).not.toContain('without token data');
+  } finally {
+    output.mockRestore();
+  }
 });

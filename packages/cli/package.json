@@ -1,6 +1,6 @@
 {
   "name": "@archon/cli",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "type": "module",
   "main": "./src/cli.ts",
   "bin": {
@@ -105,6 +105,9 @@
     ],
     [
       "src/commands/workflow-list.test.ts"
+    ],
+    [
+      "src/commands/workflow-types.test.ts"
     ],
     [
       "src/commands/workflow-run-output.test.ts"
@@ -260,6 +263,9 @@
     [
       "src/commands/plugin.test.ts",
       "src/commands/plugin-pack.test.ts"
+    ],
+    [
+      "src/commands/pack.test.ts"
     ],
     [
       "src/triggers/native-schedule.test.ts"

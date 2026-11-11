@@ -1,4 +1,6 @@
 import {
+  CHECKS_LOGS_DEFAULT_BYTES,
+  WORKITEM_SEARCH_DEFAULT_LIMIT,
   contentDigest,
   isMutationRequest,
   mergeConditionSchema,
@@ -246,9 +248,10 @@ function matchesPrView(request: OpRequest<'pr.view'>, value: OpValue<'pr.view'>)
   // Only a head selector may find nothing; an explicit number must resolve.
   if (!value) return selector.kind === 'head';
   if (selector.kind === 'number') return sameRef(value.pr, selector.ref);
-  // A head selector asks for the branch's open pull request, never a closed one.
+  // A head selector asks for the branch's open pull request, never a closed one,
+  // unless it asked for any state.
   return (
-    value.pr.state === 'open' &&
+    (selector.state === 'any' || value.pr.state === 'open') &&
     sameRepo(value.pr.repo, selector.repo) &&
     value.pr.head === selector.head &&
     value.pr.head_repo !== null &&
@@ -278,11 +281,40 @@ function matchesMerge(
   );
 }
 
+function matchesSearch(
+  request: OpRequest<'workitem.search'>,
+  value: OpValue<'workitem.search'>
+): boolean {
+  const state = request.state ?? 'open';
+  return (
+    sameRepo(value.repo, request.repo) &&
+    value.text === request.text &&
+    value.items.length <= (request.limit ?? WORKITEM_SEARCH_DEFAULT_LIMIT) &&
+    value.items.every(
+      item =>
+        sameRepo(item.ref.repo, request.repo) &&
+        (request.kind === undefined || item.kind === request.kind) &&
+        (state === 'any' || item.state === state)
+    )
+  );
+}
+
+function matchesLogs(request: OpRequest<'checks.logs'>, value: OpValue<'checks.logs'>): boolean {
+  return (
+    sameRepo(value.repo, request.repo) &&
+    sameCheck({ unit: value.unit, rerun: null }, { unit: request.unit, rerun: null }) &&
+    (value.log.kind === 'none' ||
+      Buffer.byteLength(value.log.text) <= (request.maxBytes ?? CHECKS_LOGS_DEFAULT_BYTES))
+  );
+}
+
 /** One matcher per operation: each checks a successful result against the request that asked for it. */
 const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
   resolve: (request, value, { metadata, host }) =>
     value.kind === 'none' ||
-    (matchesResolvedHost(request, value.repo.host, host) &&
+    // A resolved issue or pull request URL is only an answer when it names the subject.
+    ((request.web !== true || value.subject !== undefined) &&
+      matchesResolvedHost(request, value.repo.host, host) &&
       value.forge === metadata.forge &&
       value.plugin.name === metadata.name &&
       value.plugin.version === metadata.version),
@@ -294,7 +326,14 @@ const resultMatchers: { [Op in ForgeOp]: ResultMatcher<Op> } = {
     (request.at.kind === 'revision'
       ? value.revision === request.at.revision && value.branch === null
       : value.branch !== null),
+  'checks.logs': matchesLogs,
+  'workitem.search': matchesSearch,
   'pr.merge-state': byRef,
+  'pr.files': byRef,
+  'repo.file': (request, value) =>
+    sameRepo(value.repo, request.repo) &&
+    value.path === request.path &&
+    value.revision === request.revision,
   'workitem.comments': (request, value) => sameSubject(value.workitem, request.subject),
   'workitem.view': byRef,
   'pr.view': matchesPrView,

@@ -26,19 +26,13 @@ import {
 } from '../../../terminal-status-write';
 import { type JsonValue } from '../../../output-ref';
 import { mapWithHeldSlots } from '../../../utils/map-with-limit';
-import { substituteWorkflowVariables } from '../../../workflow-variables';
 import { safeSendMessage } from '../../../platform-messages';
 import { getLog } from '../../log';
 import { sumReportedCost, sumFanOutTokens } from '../../usage';
 import { type ChildWorkflowOutcome, type RunChildWorkflowFn } from '../../child-run';
 import { RunSourceUnreadableError, settledValuesOrThrow } from '../../node-source';
 import { type RunLayersContext } from '../../run-context';
-import {
-  resolveRunInputs,
-  nodeTemplateReferences,
-  type ShellInputContext,
-  resolveWorkflowValue,
-} from '../../references';
+import { resolveFanOutItems, resolveFanOutStaticInputs } from '../fan-out-shared';
 import {
   classifyExistingChildren,
   fanOutItemInput,
@@ -52,88 +46,6 @@ import {
 } from './fan-out-children';
 import { joinAllSuccess, joinFanOutOutcomes } from './fan-out-join';
 import { buildFanOutOutcome } from './fan-out-outcome';
-
-/**
- * Resolve `fan_out.items` → a JSON array. Workflow vars and $node.output refs, exactly as
- * the input surface resolves them. A `.field` ref that can't be honored throws an
- * OutputRefError → caught → fail closed. Never silently zero items: a resolution that
- * isn't a JSON array fails the node.
- */
-function resolveFanOutItems(
-  node: WorkflowNode,
-  ctx: RunLayersContext,
-  fanOut: FanOutConfig
-): { items: unknown[] } | { error: string } {
-  const parentRun = ctx.workflowRun;
-  let parsedItems: unknown;
-  try {
-    const { prompt: itemsResolved } = substituteWorkflowVariables(
-      fanOut.items,
-      parentRun.id,
-      parentRun.user_message ?? '',
-      ctx.artifactsDir,
-      ctx.baseBranch,
-      ctx.docsDir,
-      ctx.issueContext,
-      undefined,
-      undefined,
-      undefined,
-      { references: nodeTemplateReferences(fanOut.items, ctx) }
-    );
-    parsedItems = JSON.parse(itemsResolved);
-  } catch (err) {
-    return {
-      error: `fan_out.items on '${node.id}' could not be resolved to a JSON array: ${(err as Error).message}`,
-    };
-  }
-  if (!Array.isArray(parsedItems)) {
-    return {
-      error:
-        `fan_out.items on '${node.id}' resolved to ${typeof parsedItems}, not a JSON array. ` +
-        `'${fanOut.items}' must reference a node output that produces a JSON array.`,
-    };
-  }
-  return { items: parsedItems };
-}
-
-/**
- * Resolve the node's static `with:` map (#2470) once — the same $INPUTS applied to EVERY
- * fan-out child. Per-item, the `fan_out.as` channel adds `$INPUTS.<as> = <item>` on top
- * (load-time collision-checked so `as` never overwrites a `with:` key). Resolved once
- * rather than per-child because the values don't depend on the item. Same three-tier
- * value resolution as the 1:1 path (#2637): literals typed, whole refs logical,
- * templates text.
- */
-function resolveFanOutStaticInputs(
-  node: WorkflowNode,
-  ctx: RunLayersContext
-): { inputs: Record<string, JsonValue> } | { error: string } {
-  const parentRun = ctx.workflowRun;
-  const inputs: Record<string, JsonValue> = {};
-  const parentInputs = resolveRunInputs(parentRun);
-  try {
-    if (node.with !== undefined) {
-      const resolutionCtx: ShellInputContext = {
-        workflowRun: parentRun,
-        artifactsDir: ctx.artifactsDir,
-        stateDir: ctx.stateDir,
-        baseBranch: ctx.baseBranch,
-        docsDir: ctx.docsDir,
-        issueContext: ctx.issueContext,
-        nodeOutputs: ctx.nodeOutputs,
-        loopBodyScopes: ctx.loopBodyScopes,
-      };
-      for (const [name, rawValue] of Object.entries(node.with)) {
-        inputs[name] = resolveWorkflowValue(rawValue, resolutionCtx, parentInputs, false);
-      }
-    }
-  } catch (err) {
-    return {
-      error: `fan_out 'with:' on '${node.id}' could not be resolved: ${(err as Error).message}`,
-    };
-  }
-  return { inputs };
-}
 
 /**
  * Spawn or re-drive every unsettled index through a `max_parallel` window, recording each
@@ -469,7 +381,7 @@ export async function executeFanOutWorkflowNode(
     // `fanOutItemInput`'s text form remains the `$ARGUMENTS`/item-hash channel.
     const childInputs: Record<string, JsonValue> = {
       ...staticInputs.inputs,
-      ...(fanOut.as !== undefined ? { [fanOut.as]: item as JsonValue } : {}),
+      ...(fanOut.as !== undefined ? { [fanOut.as]: item } : {}),
     };
     const resumeChild =
       existing?.status === 'failed'

@@ -324,7 +324,8 @@ export async function createFileWorkflowStore(
       write([input.workflow_run_id], view => view.persistWorkflowEventIfRunning(input, options)),
     listWorkflowEvents: (id, options) =>
       query([id], view => view.listWorkflowEvents(id, options), true),
-    listEventsForRuns: (ids, types) => query(ids, view => view.listEventsForRuns(ids, types), true),
+    listEventsForRuns: (ids, types, options) =>
+      query(ids, view => view.listEventsForRuns(ids, types, options), true),
     listMetricRecords: () => query('all', view => view.listMetricRecords(), true),
     getDagResumeSnapshot: id => query([id], view => view.getDagResumeSnapshot(id), true),
     listProviderEvents: (id, queryOptions) =>

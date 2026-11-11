@@ -31,9 +31,11 @@ import {
 import {
   authoredForm,
   findBundledWorkflow,
+  findFlatWorkflowAt,
   findPackagedWorkflowAt,
   findWorkflowAt,
   isBundledWorkflowsRoot,
+  PackagedWorkflowFolderError,
 } from './workflow-files';
 import type { WorkflowFile } from './workflow-files';
 import { serializeWorkflowPreservingText, WorkflowReadBackError } from './workflow-yaml';
@@ -316,13 +318,11 @@ function workflowLookups(name: string, workingDir: string | undefined): Workflow
       source: 'project',
       invalidLabel: 'Workflow file is invalid',
       readFailure: { event: 'workflow.fetch_failed', message: 'Failed to read workflow' },
-      find: async () => {
-        const hit = await findWorkflowAt(projectWorkflowsRoot, name);
-        // A source checkout's own bundled packs are reported as bundled, below.
-        const isSourceBundledPackage =
-          hit?.packaged === true && isBundledWorkflowsRoot(projectWorkflowsRoot);
-        return isSourceBundledPackage ? null : hit;
-      },
+      // A source checkout's own bundled packs are found, and fail, as bundled, below.
+      find: () =>
+        isBundledWorkflowsRoot(projectWorkflowsRoot)
+          ? findFlatWorkflowAt(projectWorkflowsRoot, name)
+          : findWorkflowAt(projectWorkflowsRoot, name),
     });
   }
   lookups.push(
@@ -368,6 +368,9 @@ async function getWorkflowDefinition(
     try {
       hit = await lookup.find();
     } catch (err) {
+      if (err instanceof PackagedWorkflowFolderError) {
+        return apiError(c, 500, `${lookup.invalidLabel}: ${err.message}`);
+      }
       if (!lookup.readFailure) throw err;
       getLog().error({ err, name }, lookup.readFailure.event);
       return apiError(c, 500, lookup.readFailure.message);
@@ -455,12 +458,12 @@ async function deleteWorkflowFiles(
   name: string,
   target: WorkflowTarget
 ): Promise<Response> {
-  const packaged = await findPackagedWorkflowAt(target.dir, name);
-  if (packaged !== null) {
+  const existing = await findWorkflowAt(target.dir, name);
+  if (existing?.packaged === true) {
     if (isBundledWorkflowsRoot(target.dir)) {
       return apiError(c, 400, `Cannot delete bundled default workflow: ${name}`);
     }
-    await rm(dirname(packaged.absolutePath), { recursive: true });
+    await rm(dirname(existing.absolutePath), { recursive: true });
     return c.json({ deleted: true, name });
   }
   if (await unlinkWorkflowFiles(target.dir, name)) return c.json({ deleted: true, name });
@@ -588,6 +591,9 @@ export function registerWorkflowDefinitionRoutes(app: OpenAPIHono): void {
     try {
       return await saveWorkflowFile(c, name, target, definition);
     } catch (error) {
+      if (error instanceof PackagedWorkflowFolderError) {
+        return apiError(c, 500, 'Failed to save workflow', error.message);
+      }
       const err = error instanceof Error ? error : new Error(String(error));
       getLog().error({ err, name }, 'workflow.save_failed');
       return apiError(c, 500, 'Failed to save workflow');
@@ -607,6 +613,9 @@ export function registerWorkflowDefinitionRoutes(app: OpenAPIHono): void {
     try {
       return await deleteWorkflowFiles(c, name, target);
     } catch (err) {
+      if (err instanceof PackagedWorkflowFolderError) {
+        return apiError(c, 500, 'Failed to delete workflow', err.message);
+      }
       getLog().error({ err, name }, 'workflow.delete_failed');
       return apiError(c, 500, 'Failed to delete workflow');
     }

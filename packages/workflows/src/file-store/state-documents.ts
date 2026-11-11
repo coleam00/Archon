@@ -10,16 +10,28 @@ import {
   stateDocumentNameSchema,
   stateNamePrefixSchema,
   statePatchOperation,
+  stateLeaseSchema,
   stateRevisionSchema,
   stateScopeSchema,
   stateScopeKey,
   validateStateValue,
+  nextStateLease,
+  viewStateLease,
   StateRevisionConflictError,
   type IStateDocumentStore,
+  type StateLease,
+  type StateLeaseChange,
   type StateRevision,
   type StateScope,
 } from '../state-document-store';
-import { commit, readJson } from './commit';
+import { commit, readJson, readSnapshot } from './commit';
+
+// A revision file records the lease without its liveness, which is read from the holder's
+// run. Files written before leases existed have none.
+const storedRevisionSchema = stateRevisionSchema
+  .omit({ lease: true })
+  .extend({ lease: stateLeaseSchema.nullable().default(null) });
+type StoredRevision = z.infer<typeof storedRevisionSchema>;
 
 const nameRecordSchema = z.object({ scope: stateScopeSchema, name: stateDocumentNameSchema });
 type NameRecord = z.infer<typeof nameRecordSchema>;
@@ -54,13 +66,15 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
       throw new Error(`Invalid state revisions: ${dir}`);
     return numbers.sort((a, b) => b - a);
   }
+  // Every read runs under the store lock (`query` or `write`), as `readSnapshot` requires.
   async function read(scope: StateScope, name: string, revision: number): Promise<StateRevision> {
-    const row = stateRevisionSchema.parse(
+    const row: StoredRevision = storedRevisionSchema.parse(
       await readJson(join(root, directory(scope, name), `${revision}.json`))
     );
     if (row.name !== name || row.revision !== revision)
       throw new Error('State revision identity differs');
-    return row;
+    const holder = row.lease === null ? null : await readSnapshot(root, row.lease.runId);
+    return { ...row, lease: viewStateLease(row.lease, holder?.status ?? null) };
   }
   async function latest(scope: StateScope, name: string): Promise<StateRevision | null> {
     const revision = (await revisions(scope, name))[0];
@@ -98,7 +112,7 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
     return commit(root, [], async () => ({ result: await call(), changes: {} }));
   }
   function write(
-    input: Parameters<IStateDocumentStore['deleteStateDocument']>[0],
+    input: z.infer<typeof stateDeleteSchema> & { lease?: StateLeaseChange | undefined },
     operation: StateRevision['operation'],
     compute: (prior: StateRevision | null) => StateRevision['value']
   ): Promise<StateRevision> {
@@ -107,17 +121,21 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
       const actual = prior?.revision ?? 0;
       if (input.ifRevision !== undefined && input.ifRevision !== actual)
         throw new StateRevisionConflictError(input.name, input.ifRevision, actual);
-      const row: StateRevision = {
+      const createdAt = new Date().toISOString();
+      const lease: StateLease | null = nextStateLease(prior, input, operation, createdAt);
+      const row: StoredRevision = {
         name: input.name,
         revision: actual + 1,
         value: compute(prior),
         operation,
         writer: input.writer,
-        createdAt: new Date().toISOString(),
+        lease,
+        createdAt,
       };
+      const holder = lease === null ? null : await readSnapshot(root, lease.runId);
       const dir = directory(input.scope, input.name);
       return {
-        result: row,
+        result: { ...row, lease: viewStateLease(lease, holder?.status ?? null) },
         changes: {
           immutableDocuments: {
             [`${dir}/name.json`]: { scope: input.scope, name: input.name },
@@ -160,6 +178,7 @@ export function createFileStateDocumentStore(root: string): IStateDocumentStore 
         revision: row.revision,
         updatedAt: row.createdAt,
         writer: row.writer,
+        lease: row.lease,
         deleted: row.value === null,
       })),
     getStateDocuments: async (scope, options = {}) =>

@@ -2063,6 +2063,57 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/runs/attention/stream': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Stream the attention queue as server-sent events */
+    get: {
+      parameters: {
+        query?: {
+          project?: string;
+          all?: 'true' | 'false';
+          label?: string | string[];
+        };
+        header?: {
+          'last-event-id'?: string;
+        };
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description One event per attention stream line: data is the line as JSON, id is a cursor Last-Event-ID resumes from */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'text/event-stream': components['schemas']['AttentionStreamLine'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/dashboard/runs': {
     parameters: {
       query?: never;
@@ -3306,6 +3357,63 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/metric-views': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** The overview cards workflow packs declare */
+    get: {
+      parameters: {
+        query?: {
+          /** @description Include this codebase's project packs. Without it, only bundled, home and installed packs. */
+          codebaseId?: string;
+        };
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description OK */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['MetricViews'];
+          };
+        };
+        /** @description Codebase not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/workflows/validate': {
     parameters: {
       query?: never;
@@ -3627,6 +3735,74 @@ export interface paths {
           };
         };
         /** @description Not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/artifacts/{runId}/{filename}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read a workflow artifact file */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+          /** @description The complete relative filename encoded as one path value, including slash characters. */
+          filename: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Artifact file contents */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'text/plain': string;
+            'text/markdown': string;
+          };
+        };
+        /** @description Invalid artifact path or filename */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Run or artifact not found */
         404: {
           headers: {
             [name: string]: unknown;
@@ -4794,7 +4970,15 @@ export interface components {
           options: {
             id: string;
             label?: string;
+            does?: string;
+            value?: unknown;
           }[];
+          recommendation?: {
+            option: string;
+            why: string;
+            /** @enum {string} */
+            confidence?: 'low' | 'medium' | 'high';
+          };
         }
       | {
           /** @enum {string} */
@@ -4964,14 +5148,34 @@ export interface components {
     };
     UpdateUserTiersBody: {
       tiers: {
-        small?: components['schemas']['TierEntry'] & unknown;
-        medium?: components['schemas']['TierEntry'] & unknown;
-        large?: components['schemas']['TierEntry'] & unknown;
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateUserAliasesBody: {
       aliases: {
-        [key: string]: components['schemas']['TierEntry'] & unknown;
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateUserDefaultBody: {
@@ -5452,6 +5656,8 @@ export interface components {
       loop?: {
         until?: string;
         max_iterations: number;
+        /** @enum {string} */
+        on_exhausted?: 'fail' | 'complete';
         /** @default false */
         fresh_context: boolean;
         until_bash?: string;
@@ -5465,6 +5671,8 @@ export interface components {
       loop_group?: {
         until?: string;
         max_iterations: number;
+        /** @enum {string} */
+        on_exhausted?: 'fail' | 'complete';
         /** @default false */
         fresh_context: boolean;
         until_bash?: string;
@@ -5504,7 +5712,17 @@ export interface components {
               | {
                   id: string;
                   label?: string;
+                  does?: string;
+                  value?: unknown;
                 }[]
+              | string;
+            recommendation?:
+              | {
+                  option: string;
+                  why: string;
+                  /** @enum {string} */
+                  confidence?: 'low' | 'medium' | 'high';
+                }
               | string;
             labels?: {
               [key: string]: string;
@@ -6281,7 +6499,15 @@ export interface components {
           options?: {
             id: string;
             label?: string;
+            does?: string;
+            value?: unknown;
           }[];
+          recommendation?: {
+            option: string;
+            why: string;
+            /** @enum {string} */
+            confidence?: 'low' | 'medium' | 'high';
+          };
           answer?:
             | {
                 text: string;
@@ -6415,7 +6641,15 @@ export interface components {
           options?: {
             id: string;
             label?: string;
+            does?: string;
+            value?: unknown;
           }[];
+          recommendation?: {
+            option: string;
+            why: string;
+            /** @enum {string} */
+            confidence?: 'low' | 'medium' | 'high';
+          };
           answer?:
             | {
                 text: string;
@@ -6493,7 +6727,15 @@ export interface components {
           options: {
             id: string;
             label?: string;
+            does?: string;
+            value?: unknown;
           }[];
+          recommendation?: {
+            option: string;
+            why: string;
+            /** @enum {string} */
+            confidence?: 'low' | 'medium' | 'high';
+          };
         }
       | {
           /** @enum {string} */
@@ -6668,7 +6910,15 @@ export interface components {
             options: {
               id: string;
               label?: string;
+              does?: string;
+              value?: unknown;
             }[];
+            recommendation?: {
+              option: string;
+              why: string;
+              /** @enum {string} */
+              confidence?: 'low' | 'medium' | 'high';
+            };
           }
         | {
             /** @enum {string} */
@@ -6790,6 +7040,309 @@ export interface components {
       };
       unset?: string[];
     };
+    AttentionStreamLine:
+      | {
+          /** @enum {string} */
+          type: 'attention';
+          cursor: string;
+          snapshot: boolean;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          workflow: string;
+          parentRunId: string | null;
+          item:
+            | {
+                /** @enum {string} */
+                kind: 'attention';
+                runId: string;
+                workflow: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+                occurrence: string;
+                message: string;
+                /** @enum {string} */
+                form: 'message' | 'approval' | 'select' | 'multi_select';
+                options: {
+                  id: string;
+                  label?: string;
+                  does?: string;
+                  value?: unknown;
+                }[];
+                recommendation?: {
+                  option: string;
+                  why: string;
+                  /** @enum {string} */
+                  confidence?: 'low' | 'medium' | 'high';
+                };
+              }
+            | {
+                /** @enum {string} */
+                kind: 'awaiting_response';
+                runId: string;
+                workflow: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+                occurrence: string;
+                message: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'usage_limit';
+                runId: string;
+                workflow: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                node: string;
+                /** Format: date-time */
+                resetAt: string;
+              }
+            | {
+                /** @enum {string} */
+                kind: 'unreadable';
+                runId: string;
+                workflow: string;
+                project: {
+                  key: string;
+                  codebaseId: string | null;
+                  name: string;
+                } | null;
+                parentRunId: string | null;
+                fanOut: {
+                  parentRunId: string;
+                  nodeId: string;
+                  index: number;
+                } | null;
+                revision: number;
+                labels: {
+                  [key: string]: string;
+                };
+                /** Format: date-time */
+                pausedAt: string | null;
+                context: {
+                  artifactsDir: string | null;
+                  transcript: string | null;
+                  workingPath: string | null;
+                  branch: string | null;
+                };
+                /** @enum {string} */
+                reason:
+                  | 'malformed_tool_call_attention'
+                  | 'malformed_gate'
+                  | 'unrecognized_gate_type'
+                  | 'child_pointer_missing'
+                  | 'child_run_missing'
+                  | 'child_chain_too_deep'
+                  | 'source_release_not_continued';
+                detail: string;
+              };
+        }
+      | (
+          | {
+              /** @enum {string} */
+              type: 'resolved';
+              cursor: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              runId: string;
+              workflow: string | null;
+              parentRunId: string | null;
+              occurrence: string | null;
+              /** @enum {string} */
+              reason: 'answered';
+              answeredVia: string | null;
+              answeredAt: string | null;
+            }
+          | {
+              /** @enum {string} */
+              type: 'resolved';
+              cursor: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              runId: string;
+              workflow: string | null;
+              parentRunId: string | null;
+              occurrence: string | null;
+              /** @enum {string} */
+              reason: 'withdrawn';
+            }
+        )
+      | {
+          /** @enum {string} */
+          type: 'unmatched';
+          cursor: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          runId: string;
+          workflow: string | null;
+          parentRunId: string | null;
+          occurrence: string;
+          revision: number;
+        }
+      | {
+          /** @enum {string} */
+          type: 'terminal';
+          cursor: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          runId: string;
+          workflow: string | null;
+          parentRunId: string | null;
+          /** @enum {string} */
+          status: 'completed' | 'failed' | 'cancelled';
+          /** @enum {string|null} */
+          outcome: 'succeeded' | 'failed' | null;
+          cause: {
+            node: string;
+            /** @enum {string|null} */
+            errorClass:
+              | 'fatal'
+              | 'transient'
+              | 'unknown'
+              | 'rate_limited'
+              | 'overloaded'
+              | 'timeout'
+              | 'exec_failed'
+              | 'output_contract'
+              | 'max_iterations'
+              | 'child_failed'
+              | 'cancelled'
+              | 'config'
+              | null;
+          } | null;
+        }
+      | {
+          /** @enum {string} */
+          type: 'resumed';
+          cursor: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          runId: string;
+          workflow: string | null;
+          parentRunId: string | null;
+          /** @enum {string} */
+          status: 'running';
+        }
+      | {
+          /** @enum {string} */
+          type: 'owner_lost';
+          cursor: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          runId: string;
+          workflow: string | null;
+          parentRunId: string | null;
+          /** @enum {string} */
+          observedStatus: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
+        }
+      | {
+          /** @enum {string} */
+          type: 'ready';
+          cursor: string;
+        }
+      | {
+          /** @enum {string} */
+          type: 'bookmark';
+          cursor: string;
+        }
+      | {
+          /** @enum {string} */
+          type: 'degraded';
+          /** @enum {string} */
+          reason: 'run_unreadable';
+          cursor: string;
+        }
+      | {
+          /** @enum {string} */
+          type: 'error';
+          /** @enum {string} */
+          error: 'cursor_invalid';
+        };
     DashboardRunsResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
       total: number;
@@ -7552,6 +8105,54 @@ export interface components {
           }
       )[];
     };
+    MetricViews: {
+      packs: {
+        pack: string;
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        names: {
+          [key: string]: string;
+        };
+        cards: (
+          | {
+              /** @enum {string} */
+              shape: 'count';
+              title: string;
+              metric: string;
+              breakdown?: {
+                metric: string;
+                label: string;
+              }[];
+            }
+          | {
+              /** @enum {string} */
+              shape: 'ratio';
+              title: string;
+              numerator: string;
+              denominator: string;
+              denominator_label: string;
+              calibration?: {
+                metric: string;
+                label: string;
+                rough_below: number;
+              };
+            }
+          | {
+              /** @enum {string} */
+              shape: 'cost_per';
+              title: string;
+              metric: string;
+              cost_of?: string;
+            }
+        )[];
+      }[];
+      errors: {
+        pack: string;
+        /** @enum {string} */
+        source: 'project' | 'bundled' | 'global' | 'installed';
+        error: string;
+      }[];
+    };
     ValidateWorkflowResponse: {
       valid: boolean;
       errors?: string[];
@@ -7639,14 +8240,34 @@ export interface components {
     };
     UpdateTiersBody: {
       tiers: {
-        small?: components['schemas']['TierEntry'] & unknown;
-        medium?: components['schemas']['TierEntry'] & unknown;
-        large?: components['schemas']['TierEntry'] & unknown;
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateAliasesBody: {
       aliases: {
-        [key: string]: components['schemas']['TierEntry'] & unknown;
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     ProviderListResponse: {

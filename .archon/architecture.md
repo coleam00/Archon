@@ -80,7 +80,7 @@ Rules that hold now and during the move. Each names what enforces it, or says it
 | CLI startup doesn't load core, the engine or provider SDKs before a command needs them | `check:cli-import-boundary` ([`scripts/check-cli-import-boundary.ts`](../scripts/check-cli-import-boundary.ts)) |
 | Provider SDK dependencies live only in `providers`; copied SDK types conform to the SDK | `bun run lint` ([`scripts/check-sdk-type-drift.ts`](../scripts/check-sdk-type-drift.ts)) for the copies. **The location rule is not enforced.** |
 | No provider- or platform-specific branches in engine control flow | **Not enforced.** Review only. |
-| The console uses only generated API types | `check:api-types`, plus `web` declaring no `@archon` dependency |
+| The console uses only generated API types | Generated path/method transport, `scripts/check-web-api-types.ts` in lint, `check:api-types`, plus `web` declaring no `@archon` dependency |
 | Schema changes are additive, and SQLite and PostgreSQL agree | `check:schema-upgrades`, `check:sqlite-vintages`, the schema parity tests in [`core/src/db/adapters/sqlite.test.ts`](../packages/core/src/db/adapters/sqlite.test.ts) |
 | Each provider's capabilities are declared once, in its `capabilities.ts`, and the docs derive from them | `check:capability-matrix` |
 | Workflow packs don't hardcode a project's context paths, and the engine doesn't assume a pack's conventions | **Not enforced.** Review only. |

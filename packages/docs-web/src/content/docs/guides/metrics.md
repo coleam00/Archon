@@ -13,6 +13,8 @@ A metric is an ordinary node output. Any node that returns a top-level `metrics`
 of records stores them with its completion, and `archon metrics` and `GET /api/metrics`
 aggregate those records across runs by name, time window and subject. There is no
 metric node type and no metric config file: a script node counts, a prompt node judges.
+A pack can declare [overview cards](#overview-cards-a-pack-declares) for the console, but
+they only display records; they never define a metric.
 
 ## A count metric from a script node
 
@@ -320,8 +322,8 @@ archon metrics sdlc.pr_merge_rate --since 60d --compare 2026-10-15T09:30:00Z
   request being merged, to resolve. Read a comparison after the after cohort has settled.
 
 A comparison is observational. The cohorts differ in the change and in everything else
-that changed around the cut, and in the work each cohort happened to run: the SDLC pack,
-for example, routes larger work to Claude and small work to Codex. The text output of
+that changed around the cut, and in the work each cohort happened to run: an install
+that sends different kinds of work to different models, for example, changes both at once. The text output of
 `archon metrics --compare` ends with a line that says so. Showing that a change caused a difference needs runs
 assigned to each side independently of the work.
 
@@ -362,8 +364,8 @@ archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.r
 - `--by-model` and `--compare` cannot be combined in one query.
 
 A model split is observational, like a cohort comparison. Each model ran the work it was
-routed: the SDLC pack sends larger and riskier work to Claude and small work to Codex, so a
-difference mixes the model with the task. The text output ends with a line that says so.
+routed: an install that sends different kinds of work to different models mixes the model
+with the task in any difference it shows. The text output ends with a line that says so.
 Showing a model effect needs work assigned to each model independently of its size.
 
 Metric names are shared by every project on the install. Pass `--project` to read one
@@ -388,8 +390,86 @@ refused a record, and prints each refusal to stderr. See
 [`GET /api/metrics`](/reference/api/#metrics) for every option.
 
 The console shows the same report under **Metrics**: `/console/metrics` for every project,
-and a project's Metrics tab for its own records, over the last 7, 30 or 90 days. Each metric
-gets one row for its newest instrument, with a note naming any other instruments, and a
-daily sparkline. A score that `calibrates` a metric shows as a badge on that metric's row,
-only when it was measured by the same instrument on the same models; otherwise the row
-says "not calibrated". Refused records are listed above the table.
+and a project's Metrics tab for its own records, over the last 7, 30 or 90 days
+(`?window=7d`, the default, `30d` or `90d`). It has two screens:
+
+- **The overview** shows the cards workflow packs declare (see below), and an alert when a
+  record was refused or a pack's declaration could not be read.
+- **Details** (`/console/metrics/details`, or `.../metrics/details` under a project) has one
+  row per metric that calibrates nothing: its plain name and id, its value over the window
+  with a daily sparkline, the number of records it is based on, the known cost of its
+  producing runs and its latest record. A metric's newest instrument is shown; the row names
+  any older ones as hidden. Under the table, a box per calibrated metric names its headline
+  instrument and models and each calibrating score measured by exactly that identity, read
+  from the last 365 days of records, or says it is not calibrated for this version.
+  Refused records are listed above the table.
+
+## Overview cards a pack declares
+
+A workflow pack chooses its overview cards in `<pack>/.shared/metric-views.json`. The file
+is display only: it changes no workflow, script or run, and the console renders whatever is
+declared without knowing any pack's metric names.
+
+```json
+{
+  "names": {
+    "factory.prs_merged": "PRs merged",
+    "factory.tests_unprotective": "Useless tests"
+  },
+  "cards": [
+    {
+      "shape": "count",
+      "title": "PRs merged",
+      "metric": "factory.prs_merged",
+      "breakdown": [{ "metric": "factory.prs_opened", "label": "opened" }]
+    },
+    {
+      "shape": "ratio",
+      "title": "Useless tests",
+      "numerator": "factory.tests_unprotective",
+      "denominator": "factory.tests_added",
+      "denominator_label": "new tests",
+      "calibration": {
+        "metric": "factory.tests_unprotective_judge_catch_rate",
+        "label": "judge catches",
+        "rough_below": 0.8
+      }
+    },
+    {
+      "shape": "cost_per",
+      "title": "Cost per PR",
+      "metric": "factory.prs_merged",
+      "cost_of": "factory.prs_opened"
+    }
+  ]
+}
+```
+
+`names` gives the Details screen plain names for metric ids. `cards` holds one to six cards,
+each one of three shapes:
+
+| Shape | Shows |
+|-------|-------|
+| `count` | The metric's value, and up to four `breakdown` counts as "12 opened". |
+| `ratio` | `numerator` as a share of `denominator`, with a bar and "3 of 12 new tests". With a `calibration`, adds "judge catches 9 of 10", and a "rough" pill while the calibration's mean is below `rough_below`. |
+| `cost_per` | The known cost of the metric's producing runs per counted item. With `cost_of`, the cost is that metric's producing runs instead, so cost per merged PR can carry the cost of PRs that never merged. |
+
+Every figure on a card comes from one instrument identity: the card's metric's newest
+instrument and its `measured_by`. A breakdown count or a denominator recorded only by another
+instrument shows "not recorded", never 0, and so does a `cost_of` metric. Every metric a card
+counts (`metric`, `breakdown`, `numerator`, `denominator`, `cost_of`) must be a `count`; a
+`score` there shows "not recorded" too. A calibration is a score metric that `calibrates`
+the numerator with one record per labelled case, 1 when caught and 0 when missed; it counts
+only at exactly the numerator's identity and with a mean between 0 and 1, otherwise the card
+says "not calibrated". The calibration is read from the last 365 days of records, which load
+separately: until they do, the pill says "calibration loading", and if they fail it says
+"calibration unavailable" while the other cards still show. Cost per item is a floor, shown
+as `≥ $…`, and stays a dash until more than half of the producing runs record a cost.
+
+Declarations are read from every place a pack lives: bundled packs (unless
+`defaults.loadDefaultWorkflows` is `false`), `~/.archon/workflows/<pack>/`,
+`<project>/.archon/workflows/<pack>/` and installed packs. A same-named pack folder's
+declaration at a higher scope replaces a lower one's (bundled < global < project). A file
+that is not JSON or does not match the shapes, or a scope that cannot be read, is reported by
+[`GET /api/metric-views`](/reference/api/#metrics) and on the overview, and the other packs'
+cards still show.

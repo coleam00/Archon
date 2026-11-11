@@ -96,7 +96,7 @@ assistants:
     # Invalid explicit pins fail instead of falling back.
     # claudeBinaryPath: /absolute/path/to/claude
   codex:
-    model: gpt-5.6-terra
+    model: gpt-6.1-terra
     modelReasoningEffort: medium
     webSearchMode: disabled
     additionalDirectories:
@@ -140,7 +140,7 @@ workflows:
 # custom workflows, direct chat (`large`), and title generation (`small`).
 tiers:
   large: { provider: claude, model: opus }
-  medium: { provider: codex, model: gpt-5.6-terra, effort: high }
+  medium: { provider: codex, model: gpt-6.1-terra, effort: high }
   small: { provider: pi, model: minimax-m3 }
 
 # Model aliases — custom refs. Project workflows can name one directly; a bundled
@@ -227,7 +227,7 @@ assistants:
     settingSources:  # Override global settingSources for this repo
       - project
   codex:
-    model: gpt-5.6-terra
+    model: gpt-6.1-terra
     webSearchMode: live
 
 # Commands configuration
@@ -280,7 +280,7 @@ defaults:
 
 # Model tiers and aliases override global entries with the same name (repo > global).
 # tiers:
-#   small: { provider: codex, model: gpt-5.6-luna }
+#   small: { provider: codex, model: gpt-6-luna }
 # aliases:
 #   '@fast': { provider: claude, model: haiku }
 
@@ -672,6 +672,8 @@ Signup uses email + password (no email verification by default). **Signup postur
 ### Telemetry
 
 Archon sends a few anonymous events — `archon_started` (once per CLI invocation or server boot), `archon_active` (daily server heartbeat), `chat_turn_handled` (direct chat turn — platform, provider, model, duration, and usage totals, counted as failed when the provider errors mid-turn; never message content), `workflow_no_match` (agent-reported no-fit count and transport only), `workflow_invoked` (workflow start or resumed segment), `workflow_completed`/`workflow_failed`/`workflow_cancelled` (sent once when the run's final status is saved), `workflow_approval_resolved` (binary approve/reject), and `codebase_registered` (pure count — no name/path/URL). Categorical only: workflow name (real for bundled workflows, `"custom"` for your own), platform, provider id (model id on `workflow_invoked`), node shape (`nodes_<type>` counts, `graph_depth`, `max_fan_out`, `command_refs`, `prompt_chars_bucket`) and feature flags, `derived_from`/`derived_similarity` naming the bundled workflow a custom one was copied from (never the copy's own name), outcome/duration, aggregate provider-reported usage (gross input, output, optional cache-read/cache-write totals plus a flag when those totals are a floor, cost, and loop iterations), a fixed-enum failure class and exit/cancel reason (never error text), a `run_ref` hash that joins one run's events without sending its id, deployment shape (adapter/db/auth booleans and a chat plugin count), OS/arch/version, install channel (`binary`/`docker`/`source`) and build commit, a `schema_version`, and a random install UUID stored at `$ARCHON_HOME/telemetry-id`. No code, prompts, paths, IP, geo, or error text. Any one of the variables below disables it. See `archon telemetry status` to inspect the live state.
+
+Workflow runs and direct-chat turns both report optional `cache_read_tokens`, `cache_write_tokens`, and true-only `cache_partial`. An unreported axis is absent; a reported zero stays zero. When `cache_partial` is true, cache totals are floors because some contributing results did not report cache usage. When telemetry is enabled and stderr is a terminal, the updated first-run notice appears once again for existing installs to disclose direct-chat cache capture. Headless installs show no notice; use [`archon telemetry status`](/reference/cli/#telemetry) to check the live state and the settings below to opt out.
 
 | Variable | Description | Default |
 | --- | --- | --- |

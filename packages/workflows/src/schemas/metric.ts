@@ -7,7 +7,7 @@
  */
 import { z } from 'zod';
 
-const metricNameSchema = z
+export const metricNameSchema = z
   .string()
   .max(128)
   .regex(/^[a-z0-9_]+(\.[a-z0-9_]+)*$/, 'must be dot-separated lowercase segments of [a-z0-9_]');

@@ -47,7 +47,7 @@ Workflows live in `.archon/workflows/` relative to the working directory:
 
 The two directories form a fixed package boundary: `.archon/workflows/<pack>/<workflow>/`. A packaged workflow contains exactly one YAML definition; bare `command:` and named `script:` references resolve only from its own `commands/` and `scripts/` directories, with no shared or cross-scope fallback. Included workflows retain their own resource folder, so two workflows may reuse names such as `review.md` without collisions.
 
-Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules and `.md` documents, not workflow definitions or `script:` targets. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
+Scripts from different workflows in one pack can import modules from `<pack>/.shared/`. That directory is reserved for modules, `.md` documents and the pack's `metric-views.json`, not workflow definitions or `script:` targets. A node reads a document the pack ships through [`$PACK_DIR`](/reference/variables/#pack_dir-the-workflows-own-pack), for example `$PACK_DIR/.shared/policy/triage.md`. Bun and Python use the same pack-relative layout in source checkouts and binary builds. See [Share code within a pack](/guides/script-nodes/#share-code-within-a-pack) for import examples.
 
 The same tree works under `~/.archon/workflows/` for home-scoped workflows. Existing flat `.archon/workflows/foo.yaml`, one-level grouped YAML, shared `.archon/commands/`, and shared `.archon/scripts/` remain supported for compatibility.
 
@@ -92,8 +92,8 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `prompt` | string | Inline prompt string |
 | `bash` | string | Shell script (no AI). Stdout captured as `$nodeId.output`; successful stdout is also stored in `node_completed.data.node_output` as an audit preview capped at 32 KiB (UTF-8 bytes). Optional `timeout` (ms; without one the node runs until it exits); `on_timeout: skip` makes a timeout skipped instead of failed |
 | `script` | string | TypeScript/JavaScript (via `bun`) or Python (via `uv`): inline code or named reference. Packaged workflows resolve named scripts only from their own `scripts/`; legacy workflows use shared script directories. Stdout captured as `$nodeId.output`. Requires `runtime: bun` or `runtime: uv`. Optional `deps` (uv only) and `timeout` (ms; without one the node runs until it exits); `on_timeout: skip` makes a timeout skipped instead of failed; optional `with:` binds upstream values by name into `INPUTS_<UPPER_SNAKE>` env vars. See [Binding values into command and script nodes](#binding-values-into-command-and-script-nodes). See [Script Nodes](/guides/script-nodes/) |
-| `loop` | object | Iterative AI prompt until a declared completion condition is met. See [Loop Nodes](/guides/loop-nodes/) |
-| `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
+| `loop` | object | Iterative AI prompt until a declared completion condition is met. Reaching `max_iterations` unmet fails the node, or completes it with the last output under `on_exhausted: complete`. See [Loop Nodes](/guides/loop-nodes/) |
+| `loop_group` | object | Multi-node sub-DAG body repeated per iteration until a declared completion condition is met. Takes `on_exhausted` like `loop`. See [Cross-Node Loops](/guides/loop-nodes/#cross-node-loops-with-loop_group) |
 | `approval` | object | **Deprecated.** Use `wait: { attention: <message>, form: approval }` instead. See [Migrating from approval gates](/guides/approval-nodes/#migrating-from-approval-gates) |
 | `wait` | object | Durably pauses the run until a time, bounded external event, or an answer to an attention wait. See [Durable waits](#durable-waits) |
 | `cancel` | string | Terminates the workflow run with a reason string. Uses existing cancellation plumbing. In-flight parallel nodes are stopped |
@@ -619,6 +619,26 @@ nodes:
 
 `output_format` is not AI-only, and it is not only a branching aid: it is how *any* producing node declares the shape of the value it hands downstream, including a workflow's own result. [Result contracts](#result-contracts) is the one description of that ownership: who declares a schema, what an `include:` alias and a `workflow:` sub-run each guarantee, and how a small result points at a large file.
 
+#### TypeScript for `output_format`
+
+A script that reads a node's output should not restate the schema as a hand-written interface. [`archon workflow types`](/reference/cli/#workflow-types) generates the types from the YAML, which stays the one owner of the shape:
+
+```bash
+archon workflow types my-pack            # writes .archon/workflows/my-pack/.shared/outputs.generated.ts
+archon workflow types my-pack --check    # exits 1 while that file is stale
+```
+
+```ts
+import { OUTPUT_ENUMS, type NodeOutput } from '../../.shared/outputs.generated.ts';
+
+type Classified = NodeOutput<'triage', 'classify'>;        // { readonly type: 'BUG' | 'FEATURE'; readonly severity: ... }
+const SEVERITIES = OUTPUT_ENUMS.triage.classify.severity;  // readonly ['low', 'medium', 'high']
+```
+
+The file holds types and `as const` tuples only, with no imports. Each node is emitted once, under the workflow file that declares it, including a `loop_group:` body node; a workflow that includes another reads the included nodes' types under the included workflow's name. A wait node's output is the engine's own shape and is not emitted.
+
+The generator states a schema exactly or refuses it. It reads `type` (a name or a list, `'null'` included), `properties`, `required`, `additionalProperties`, `items`, `enum`, `const`, `anyOf` and `oneOf`. Keywords that narrow a value without changing its type, such as `pattern`, `minimum` or `minItems`, are accepted and left to runtime validation. Any other keyword (`$ref`, `allOf`, `not`, tuple `items`, and so on) fails the command with the workflow, the node and the keyword; so does a shape keyword without a `type` beside it. Commit the generated file and run `--check` in CI.
+
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
 
 Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced at the Claude SDK level.
@@ -729,8 +749,15 @@ An attention wait pauses until someone answers it, in the form it declares. For 
       attention: "$plan.output.question"
       form: select                       # message (default) | approval | select | multi_select
       options:                           # select and multi_select only
-        - { id: use-main, label: "Base on main" }
+        - id: use-main
+          label: "Base on main"
+          does: "Rebases the branch onto main."   # optional; shown with the option
+          value: { base: main }                   # optional, select only; returned with the answer
         - { id: use-dev }
+      recommendation:                    # optional; select and approval only
+        option: use-main
+        why: "Main already has the fix."
+        confidence: high                 # optional: low | medium | high
       labels:                            # optional; values may use runtime references
         about: "$plan.output.topic"
 ```
@@ -739,18 +766,20 @@ An attention wait pauses until someone answers it, in the form it declares. For 
 |---|---|---|
 | `message` | free text, which may be empty | `{ text }` |
 | `approval` | `approve` or `reject`, plus optional text | `{ decision, text }` |
-| `select` | exactly one declared option id, plus optional text | `{ decision, text }` |
+| `select` | exactly one declared option id, plus optional text | `{ decision, text, value? }` |
 | `multi_select` | one or more distinct declared option ids, plus optional text | `{ decisions, text }` |
 
 - `options` is required for `select` and `multi_select` and a load error on the other forms. Option ids are unique and kebab-case; `label` is display text only.
-- `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`. It is read when the wait pauses and must pass the same rules: an array of `{ id, label? }` with unique kebab-case ids and at least one entry. If it does not, the wait node fails with an error naming the producer; it never pauses with options nobody can answer. For plain-property declarations in the producer's `output_format`, the loader also checks that the field is an array of `{ id, label? }`. When the options declaration uses `allOf`, `anyOf`, or `oneOf` along its field path, in its items, or in an item property, its declared path is checked at load and its option shape is checked at runtime. Composition in unrelated fields does not bypass the plain-property check.
+- An option may say what choosing it does in `does`, which every surface shows with the option. A `select` option may also carry `value`, any JSON value. The engine never interprets it, and no console, CLI text or chat surface renders it, but it is part of the wait: the JSON attention output (`--json`), the API and the run record return it with the options, so do not put secrets in it. When the answer chooses that option, the wait's output includes its `value` unchanged, so the next node reads what the choice means as `$ask.output.value` instead of looking the id up again. An option without `value` leaves the output as `{ decision, text }`. Read `value` whole, for example as a script binding; its fields are not declared in the wait's output contract, so `$ask.output.value.<field>` is a load error. `value` on a `multi_select` option is a load error.
+- `recommendation` names the option the workflow recommends, `why`, and optionally a `confidence` of `low`, `medium` or `high`. It is valid on `select` and `approval` waits (where it names `approve` or `reject`). A recommendation of an option the wait does not offer is a load error. The console, the CLI and the conversation's pause notice show it ahead of the choices. It is display only: the answer may choose any declared option.
+- `options` may instead be one whole reference to an upstream output, `options: "$plan.output.options"`, and so may `recommendation`, `recommendation: "$plan.output.recommendation"`. A reference is read when the wait pauses and must pass the same rules as its literal form, and the resolved recommendation must name a resolved option. If it does not, the wait node fails with an error naming the producer; it never pauses with a question nobody can answer. For plain-property declarations in the producer's `output_format`, the loader also checks that an options field is an array of `{ id, label?, does?, value? }`, where `value` may have any type. When the options declaration uses `allOf`, `anyOf`, or `oneOf` along its field path, in its items, or in an item property, its declared path is checked at load and its option shape is checked at runtime. Composition in unrelated fields does not bypass the plain-property check.
 - `form` is always a literal, because it fixes the node's output contract, so a strict `$ask.output.decision` reference is checked at load time.
 - An undeclared option is refused on every surface. In the `approval` form `reject` is an answer like any other and never cancels the run; wire `cancel:` with `when: "$ask.output.decision == 'reject'"` if a rejection should end it.
 - `labels` is an optional flat map of strings, resolved when the wait pauses. The engine gives labels no meaning; your own handler workflows select items in the [attention queue](/getting-started/operate/) by them.
 
 Answer with [`archon workflow answer`](/reference/cli/#workflow-answer), `POST /api/workflows/runs/<run-id>/answer`, or the console. `approve`, `reject` and `respond <option>` work as shorthand on every surface: `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses the option of the same id. An answer that names its occurrence is refused if it targets an earlier pause of the same run. For HTTP `/approve`, `/reject` and `/respond`, include the optional `expectedGate` using the [gate identity instructions in the API reference](/reference/api/#approve--reject-a-paused-run); omitting it answers the current pause. The answer is recorded with the surface it came through and the time (`answeredVia`, `answeredAt` on the wait, and a `wait_answered` event). The run stays `paused` until a continuation host (`archon serve`, or `archon workflow wake`) continues it; answering through the CLI without `--json` continues it in that process.
 
-On the first answer, an attention wait compares its current message, form, and options with the question it paused on. If they changed, it discards the old answer and asks a fresh question. After this one re-ask, the next answer is accepted without comparing the question again, even if it changed. This bound prevents a question built from a value that changes on every resume from blocking the run forever. Loop-owned questions use the paused iteration's body outputs and saved loop reference values without repeating body work. Older loop waits without saved loop references can still resume when their question does not use those references; otherwise validation fails with a restart explanation. An older Archon binary can strip the saved references when writing the wait, so keep the newer binary for runs using this protection.
+On the first answer, an attention wait compares its current message, form, options, and recommendation with the question it paused on. If they changed, it discards the old answer and asks a fresh question. After this one re-ask, the next answer is accepted without comparing the question again, even if it changed. This bound prevents a question built from a value that changes on every resume from blocking the run forever. Loop-owned questions use the paused iteration's body outputs and saved loop reference values without repeating body work. Older loop waits without saved loop references can still resume when their question does not use those references; otherwise validation fails with a restart explanation. An older Archon binary can strip the saved references when writing the wait, so keep the newer binary for runs using this protection. An older binary also cannot read a wait whose options declare `does` or `value`: it reports the run as unreadable rather than answering it, and if it continues the run it asks the wait again, dropping an answer the newer binary recorded. Answer and continue such a wait with a binary that knows these fields.
 
 A wait paused before attention waits took answers has no pause id. It reads as a `message` wait, takes no answer, and continues with `archon workflow resume <run-id>`. A bare resume also completes any `message` wait, with empty text; the other forms refuse it until they are answered.
 
@@ -1204,7 +1233,9 @@ body can substitute for it: every one of them fails the same way against a faile
 whether the reference is fielded or whole-text.
 
 Two guarantees the loader enforces: every bound producer must be reachable through
-`depends_on` (a binding can never race its producer), and two binding names may not fold to
+`depends_on` (a binding can never race its producer; a
+[typed-outputs binding](#binding-every-output-of-a-type) holds every
+producer of its type to the same rule), and two binding names may not fold to
 the same `INPUTS_*` env key. At runtime, node-local bindings are the **nearest** input
 layer: they win over a composed block's inputs, which win over the run's `$INPUTS`.
 
@@ -1255,6 +1286,99 @@ receives its own execution identity, including this attempt's observation, as JS
 implement workflow compares these two observations to decide whether an invocation
 changed anything since it started.
 
+### Binding every output of a type
+
+A `$node.output` binding names one node by id. It cannot say "every review verdict this run
+produced": those outputs come from a node inside a `loop_group` body, once per iteration,
+and often from inside an included block whose node ids the includer
+[cannot read](#limits-of-include). `output_type` is the name the engine already keeps for
+that, so a `script:` node can bind by type:
+
+```yaml
+  - id: rounds
+    loop_group:
+      until_bash: ...
+      max_iterations: 4
+      nodes:
+        - id: review
+          command: review
+          output_type: review-report
+          output_format:
+            type: object
+            properties: { ready: { type: boolean } }
+            required: [ready]
+
+  - id: record
+    script: record-rounds          # reads process.env.INPUTS_REVIEWS
+    runtime: bun
+    depends_on: [rounds]
+    with:
+      reviews: { outputs: review-report }
+```
+
+When `record` starts, `INPUTS_REVIEWS` holds one JSON array: every output of that type the
+run has recorded, oldest first.
+
+```json
+[
+  { "node": "review", "loop": [{ "group": "rounds", "iteration": 1 }],
+    "at": "2026-11-06T10:00:00.000Z", "value": { "ready": false } },
+  { "node": "review", "loop": [{ "group": "rounds", "iteration": 2 }],
+    "at": "2026-11-06T10:06:00.000Z", "value": { "ready": true } }
+]
+```
+
+`node` is the producer's id in the flattened workflow (`review__publish` for the `publish`
+node of an include named `review`), `loop` its enclosing `loop_group` iterations, outermost
+first and empty at top level, `at` when the engine recorded the output, and `value` the
+output itself. The script selects, filters and reduces; the YAML only names the type.
+
+What the binding guarantees, and where it stops:
+
+- **It reads recorded outputs, the ones `$TYPED_ARTIFACTS_FILE` lists.** One record per
+  node per loop iteration; a node that failed or was skipped recorded none. When every
+  producer was skipped, the value is an empty array, not an error.
+- **The type must exist in the workflow.** A bound type that no node declares as its
+  `output_type` is a load error naming the binding, so a misspelt type never reads as "this
+  run produced none".
+- **Every producer is ordered before the reader, checked at load.** Each node in the
+  workflow that declares the type must be an upstream dependency of the reader, directly,
+  transitively, or through the `loop_group` that holds it. A producer the reader could race
+  is a load error naming the `depends_on` edge to add. Two producers are outside that check:
+  the instances of a [composed fan-out](#fanning-out-a-composed-block-inside-the-run-include--fan_out),
+  whose nodes exist only at run time, so order the reader after the fan-out node yourself
+  (a type that only those instances declare is refused as undeclared); and a `workflow:`
+  child, which is another run whose outputs this binding never reads.
+- **A value is a JSON document.** Declare `output_format` on every producer of a type you
+  bind. An output that is not JSON fails the binding, naming the producer.
+- **An unreadable record fails the node.** A record the engine cannot read has no
+  trustworthy type, so it might be one of the outputs asked for. The node fails before its
+  script starts, with the record named; it never receives a shorter list that looks complete.
+  A reader that must run anyway says so on the binding:
+  `reviews: { outputs: review-report, if_unreadable: null }` delivers the declared value
+  (here `null`, never a partial list) and the engine logs the record it could not read. Like
+  `if_skipped`, it is data: the script decides what a null means, and should say so in its
+  own output. The value is `null` or an array, the shape a read delivers. It covers unreadable records only; an output that is not JSON still fails.
+- **Resume reads the same records.** A resumed run keeps its artifact directory, so the
+  reader sees what was recorded before the pause or failure. A node replayed as already
+  complete has its output recorded again from its stored output, with a new `at`: sort by
+  `loop` when you need iteration order across a resume.
+- **`--dry-run` and `archon workflow test` deliver it.** The simulation records each stubbed
+  or executed producer's output as it goes, so a fixture's reader receives the array its
+  stubs imply.
+- **Script nodes only.** A `command:` node that binds `{ outputs }` is a load error; an
+  agent reads the same records through [`$TYPED_ARTIFACTS_FILE`](#reading-typed-artifacts-by-type),
+  which stays for that and for a script that wants paths rather than values.
+
+The array arrives in one environment variable, so keep typed outputs small: a verdict that
+points at a report file ([a small result that points at a large file](#a-small-result-that-points-at-a-large-file)),
+not the report.
+
+Node outcomes (which nodes failed, were skipped, completed) stay in
+[`$NODE_OUTCOMES_FILE`](#reading-what-other-nodes-did-node_outcomes_file). They are one
+listing of the whole run with nothing for a node to declare, so a binding form would add
+YAML that selects nothing.
+
 ## The Artifact Chain
 
 Nodes pass documents to each other as files. Each run gets its own `$ARTIFACTS_DIR` outside the repository; a node writes a file there and a later node reads it. A command that writes an artifact should say where it writes and in what format, and a command that reads one should say where to find it. Values small enough to branch on travel as node output instead; see [`$node_id.output` Substitution](#node_idoutput-substitution) and [Binding values](#binding-values-into-command-and-script-nodes).
@@ -1303,6 +1427,9 @@ for (const gate of listing.artifactsByType['green-gate'] ?? []) {
 }
 ```
 
+A script that wants the values of one type, not their paths, binds them instead:
+[`with: { reviews: { outputs: review-report } }`](#binding-every-output-of-a-type).
+
 In an agent prompt, point at the listing rather than the layout: "Read `$TYPED_ARTIFACTS_FILE`, select `artifactsByType["plan"]`, and open each entry's `path` under `$ARTIFACTS_DIR`."
 
 Properties worth knowing:
@@ -1312,6 +1439,81 @@ Properties worth knowing:
 - **Everywhere an invocation runs.** The path is delivered in `bash:` and `script:` nodes (as both `$TYPED_ARTIFACTS_FILE` and the `TYPED_ARTIFACTS_FILE` environment variable), agent prompts, loop attempts, and deprecated `approval.on_reject` rework prompts. A prompt that references it in a context with no listing fails rather than substituting an empty string. A `--dry-run` preview has no artifacts and substitutes an empty string instead, so it cannot detect a reference made from a context that never receives a listing.
 
 Successful bash stdout is retained by default on the completed run as a bounded audit preview in `node_completed.data.node_output`. Output over 32 KiB (32,768 UTF-8 bytes) ends with a truncation marker, and the event also includes `node_output_truncated: true` plus `node_output_original_bytes`. Because stdout is persisted, never print secrets or credentials from bash nodes. This preview is separate from `output_type`: declaring `output_type` opts into a best-effort file sidecar that may contain the full output and is not required for ordinary bash audit retention.
+
+### Reading what other nodes did: `$NODE_OUTCOMES_FILE`
+
+A node joined past a failure with `trigger_rule: all_done` can run, but a binding to the
+failed producer fails it, and the typed-artifact listing only names nodes that completed. To
+report what happened, read the node-outcome listing instead. Every executable invocation that
+receives `$TYPED_ARTIFACTS_FILE` also receives `$NODE_OUTCOMES_FILE` (and the
+`NODE_OUTCOMES_FILE` environment variable in `bash:` and `script:` nodes), written at the
+same moment from the run's recorded node events:
+
+```json
+{
+  "run_id": "…",
+  "first_failed_node": "rounds.pr__publish",
+  "nodes": [
+    { "node_id": "plan", "state": "completed", "output": { "steps": 3 } },
+    { "node_id": "rounds", "state": "failed", "error": "…" },
+    { "node_id": "outcome", "state": "skipped", "reason": "trigger_rule",
+      "cause": { "kind": "upstream_failed", "origin": "rounds" } },
+    { "node_id": "report", "state": "running" },
+    { "node_id": "rounds.pr__publish", "state": "completed",
+      "loop_group_path": [{ "groupId": "rounds", "iteration": 1 }], "output": { "url": "https://…/pull/43" } },
+    { "node_id": "rounds.pr__publish", "state": "failed",
+      "loop_group_path": [{ "groupId": "rounds", "iteration": 2 }], "error": "…" }
+  ]
+}
+```
+
+```yaml
+  - id: report
+    script: report
+    runtime: bun
+    depends_on: [outcome]
+    trigger_rule: all_done
+```
+
+```ts
+const outcomes = JSON.parse(readFileSync(process.env.NODE_OUTCOMES_FILE!, 'utf8'));
+if (outcomes.run_id !== process.env.WORKFLOW_ID) throw new Error('listing is for another run');
+const failed = outcomes.nodes.filter(node => node.state === 'failed');
+```
+
+Properties worth knowing:
+
+- **Same per-node shape as the terminal record.** Each entry carries the fields of the
+  terminal record's `nodes` (`node_id`, `state`, `error`, `reason`, `cause`, `fan_out_outcome`),
+  so a node can say during the run what `archon workflow get` says after it. `node_id` is the
+  step path: a `loop_group` body node is `<group>.<id>`, and a node expanded from an `include:`
+  keeps its load-time `<include>__<node>` id, so the publish node of an included `pr` block
+  inside `rounds` is `rounds.pr__publish`.
+- **Joining with the typed-artifact listing.** A typed artifact names its producer by the bare
+  node id (`nodeId: "pr__publish"`) plus `loopGroupPath`; the outcome entry for the same
+  invocation is `node_id: "rounds.pr__publish"` with an equal `loop_group_path`. Match an
+  artifact to its outcome by equal loop frames and a `node_id` that ends in `.` plus the
+  artifact's `nodeId` (or equals it, for a top-level node). Comparing `nodeId` with `node_id`
+  directly finds nothing for a loop body node.
+- **One entry per invocation.** A `loop_group` body node appears once per iteration, with
+  `loop_group_path` in the same shape as a typed artifact's `loopGroupPath`. Graph nodes that
+  have recorded nothing yet are `pending`. Top-level nodes keep the run graph's order, loop
+  iterations follow in the order they first recorded a state, and a retry or resume updates an
+  entry in place.
+- **Find yourself by `node_id`, not by state.** A node's own entry shows what was recorded
+  before its listing was written. A `bash:` node records its start first, so it sees itself
+  `running`. A `script:` node and an agent attempt write the listing first, so they see
+  themselves `pending`, or the state an earlier attempt left.
+- **`first_failed_node` is the earliest failure across all invocations.** It is the step path
+  of the first failure the run recorded, even when a later iteration of the same node
+  completed. To find the failing entry, filter `nodes` by `state === "failed"`.
+- **A failed node's output is never listed.** `output` appears only on a `completed` entry
+  whose node produced structured output (`output_format`); a failed entry carries only its
+  `error`, under the same rule that fails a binding to a failed producer.
+- **Observation, not a ledger.** Like the typed-artifact listing, each file freezes what was
+  recorded when it was written. A resumed run's listing includes nodes replayed from the
+  earlier attempt as `completed`. A `loop_group` body node is never replayed: a resumed group
+  runs its body again, and each run updates the entry for its iteration.
 
 ### Retained subprocess evidence
 
@@ -1448,6 +1650,17 @@ An absent document starts as `{}`; appending to `/seen` creates the array. Inval
 or oversized values exit `4` and write nothing. Exit `5` means the CLI opened a different
 store than the run's. Exit `1` means usage or storage failure.
 The [CLI reference](/reference/cli/#state) describes pointer and tombstone semantics.
+
+A run can claim a document with a lease: `put` or `patch` with `--lease` takes it in the
+same write that marks the document as claimed, and `--release-lease` gives it back in the
+write that records the outcome. Reads report the lease with `live`, so a workflow handing
+out work never reads another run's status to decide whether a claim still stands. The
+engine keeps a lease live while its run can still finish, including when the run is paused
+or failed and can resume, and ends it when the run completes, is cancelled or abandoned, or
+is deleted. A take while another run's lease is live exits `3`; taking over an ended lease is
+an ordinary conditional write. A lease does not block other writers: writes without a lease
+flag keep it. What a document means once its lease has ended stays with the workflow. See
+the [CLI reference](/reference/cli/#state) for the fields.
 
 Let the agent judge what to remember, then commit its structured output in a script node
 when the write must happen. For example, a review agent returns a completed PR identifier;
@@ -1996,7 +2209,8 @@ same input again. Every workflow of the pack reads them as `$INPUTS.<name>` and
 `INPUTS_<UPPER_SNAKE>`, exactly like its own inputs. A flat workflow has no pack and no settings.
 
 The pack declares them in `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the same
-shape as a workflow's, plus a `type`:
+shape as a workflow's, plus a `type`. The file holds only `inputs:` and
+[`bindings:`](#pack-bindings):
 
 ```yaml
 # .archon/workflows/review-kit/.pack/pack.yaml
@@ -2037,10 +2251,10 @@ that is after its worktree was created. A `required` setting must be set there, 
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
-reads it against its own declaration. A bundled pack declares no settings, so if a project pack
-folder takes a bundled pack's name and the file sets the project pack's settings, the bundled
-workflows of that name refuse to start ("declares no settings"); the same happens when the
-project and home declarations of one name differ. Give a pack with settings a name of its own.
+reads it against its own declaration. A bundled pack ships its `.pack/pack.yaml` with it, so its
+settings are set the same way. If a project or home pack folder takes another pack's name and
+declares different settings, a workflow whose declaration lacks a setting the file sets refuses
+to start ("unknown setting"). Give a pack with settings of its own a name of its own.
 
 **Layers**, lowest first: the pack's `default:`, then the workflow's own `inputs:` default of the
 same name, then the project's `.archon/packs/<pack>.yaml`, then the run's supplied inputs
@@ -2084,6 +2298,55 @@ result on its row; a resumed run keeps those values even if the project file cha
   checked against the setting's type.
 - A run refused at start by its project settings file is marked failed, including a run row
   created in advance by a background or detached launch.
+
+### Pack bindings
+
+A pack can also declare the [trigger bindings](/guides/workflow-triggers/) it recommends, in a
+top-level `bindings:` block of the same `<pack>/.pack/pack.yaml`. A declaration starts nothing
+and installs nothing. An operator turns it into binding files for one repository with
+[`archon pack bindings`](/reference/cli/#pack-bindings) and registers each file. The pack
+states what it knows; the command fills in the repository, the execution host, the run-as user
+and the checkout.
+
+```yaml
+# .archon/workflows/review-kit/.pack/pack.yaml
+bindings:
+  sweep:                              # the binding id: lowercase letters, digits, hyphens
+    workflow: review-sweep            # a workflow of this pack
+    resource: sweep                   # last segment of the resource name
+    capacity: 1                       # optional, default 1
+    overlap: skip                     # skip | queue
+    isolation: { kind: worktree }     # optional, default { kind: default }
+    schedule: { interval_seconds: 1800 }
+    inputs:
+      repo_host: { repo: host }       # the host of --repo
+      repo_path: { repo: path }       # the owner/name of --repo
+      sweep_binding: { binding: sweep }   # the path of the file written for that binding
+      mode: fast                      # literal text
+  opened:
+    workflow: review-pull-request
+    resource: review
+    overlap: queue
+    event:                            # the source plugin's selector, without `repository`
+      kind: pr.lifecycle
+      actions: [opened]
+    inputs:
+      number: { event: subject.number }   # an event field; event bindings only
+```
+
+Each binding sets exactly one of `schedule:` (a timer binding, written as a file
+`archon trigger fire --config` reads) or `event:` (an entry for the GitHub source plugin's
+`bindings` array). `capacity`, `overlap` and `isolation` mean what they mean in a
+[binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
+resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
+same `resource` share its slots. With `resource_scope: host` it is
+`<pack>:<host id>:<resource>`, for work that spans every repository on the host.
+
+The declaration is validated when the pack loads, and an invalid one fails every workflow of
+the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
+input must name a declared timer binding, an `{ event: <field> }` input belongs to an event
+binding, and bindings sharing a resource must declare the same capacity. An `event:` selector
+and its fields are checked against the source plugin when a binding is generated, not at load.
 
 ## Launching a Separate Governed Run with `workflow:`
 
@@ -2410,6 +2673,11 @@ Consequences worth planning for:
 | `all_success` | every child completed | same array; any failed or cancelled child fails the node instead |
 | `first_success` | never (load error) | Racing: **rejected**, not deferred. See below. Rejected at load rather than silently treated as another join |
 
+Failure markers have `archon_failed: true`, a string `error`, and `status: "failed" | "cancelled"`.
+Collectors check `archon_failed === true`; `error` and `status` alone may also appear in a
+successful payload. The discriminator is reserved, so child payloads must avoid it.
+Paused children stay held until they finish and do not become aggregate slots.
+
 **Every child runs to its own terminal state before the join reduces, under both joins.** A
 child that fails does not stop its siblings, does not stop later items from being spawned,
 and does not change any other child's outcome. `all_success` still fails the node if any
@@ -2722,6 +2990,9 @@ Two hard limits, both enforced at load time before any upstream node can spend:
 Cancellation stops the pool from claiming new items. An in-flight item may still reach its
 own terminal event; under `all_done`, a cancelled slot is represented by the same reserved
 `{ archon_failed: true, error, status: "cancelled" }` marker used by child-run fan-out.
+Failed slots use `status: "failed"`; both statuses follow the
+[reserved failure-marker contract](#join-semantics). An instance with ambiguous
+non-terminal work blocks the join rather than becoming a failure-marker slot.
 Instance and wrapper events are aggregate accounting rows, so their rolled-up usage is not
 counted again during resume. Engine-managed artifact names also carry the enclosing
 `loop_group` iteration path, preventing later iterations from overwriting earlier sidecars.
@@ -2923,8 +3194,9 @@ The value stays a run id plus a relative path everywhere: in events, in the API,
 resume. The engine never expands it into an absolute path and never loads the file, and there
 is no in-workflow resolver: a pointer is for **machine readers**, and
 `GET /api/artifacts/<run_id>/<path>` serves exactly that file. The read side owns
-reachability and real-path checks by design; that route does lexical containment today, and
-real-path resolution at read time is not yet implemented (#3160). A prompt inside the
+reachability and real-path checks by design. The route checks lexical containment,
+resolves symlinks in both the artifacts directory and requested file, and refuses a
+target outside the resolved artifacts directory before reading it. A prompt inside the
 producing run keeps using the `$ARTIFACTS_DIR/<path>` string, which is the same file on
 disk. See
 [Artifact pointers](/reference/variables/#artifact-pointers-in-a-result) for the full rule
@@ -3020,7 +3292,7 @@ nodes:
     model: ['@review-seams', '@reviewer', medium]
 ```
 
-A list is how a bundled workflow names the concern each node serves without requiring you to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-5.5`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-5.5`. A run binding of an alias that no config defines must name its provider.
+A list is how a bundled workflow names the concern each node serves without requiring you to configure it. Set the alias persistently with `archon ai alias set @reviewer codex gpt-6.1-sol`, or for one run with `archon workflow run ... --model @reviewer=codex/gpt-6.1-sol`. A run binding of an alias that no config defines must name its provider.
 
 Tier and alias refs resolve to a provider, model and optional `effort`. If a workflow or node sets `provider:` and a model ref that resolves to a different provider, Archon warns and uses the provider from the resolved preset. Literal model strings keep the normal provider chain (`node.provider ?? workflow.provider ?? config.assistant`).
 
@@ -3099,3 +3371,20 @@ Check a workflow before it spends anything:
 - `archon workflow test <name>` replays the fixtures in the workflow's `fixtures/` folder and checks each declared outcome.
 
 [Build your first workflow](/getting-started/first-workflow/) walks through all three. After a run, `archon workflow get <run-id>`, `archon workflow logs <run-id>` and `archon workflow artifacts <run-id>` show what each node did and wrote.
+
+## Deprecated node fields
+
+These fields remain accepted during their compatibility window. They keep their existing behavior; Archon does not rewrite them into attention waits. No removal release is promised here.
+
+<!-- node-deprecations:start -->
+| Field | Deprecated since | Replacement |
+| --- | --- | --- |
+| `loop.until` | 0.10.0 | `the prose 'loop.until' completion signal is deprecated. Declare 'loop.until_bash' (deterministic check) or 'loop.until_field' (a declared boolean in output_format) instead (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.` |
+| `loop.interactive` | 0.10.0 | `'loop.interactive' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'.` |
+| `loop_group.until` | 0.10.0 | `the prose 'loop_group.until' completion signal is deprecated. Declare 'loop_group.until_bash' instead — it can read a body node's structured output (e.g. 'value=$body-node.output.field; test "$value" = "true"') (#2707 step 3). While supported, emit legacy signals as '<promise>SIGNAL</promise>' or a final standalone signal line.` |
+| `loop_group.interactive` | 0.10.0 | `'loop_group.interactive' with 'gate_message' and '$LOOP_USER_INPUT' is deprecated. Write a 'loop_group' whose body ends in a 'wait: attention' node instead; the next iteration reads '$LOOP_PREV.<id>.output.text', and 'until_bash' checks the answer at '$<id>.output'.` |
+| `approval` | 0.12.0 | `'approval:' is deprecated. Write 'wait: { attention: <message>, form: approval }' instead; the next node reads '$<id>.output.decision' and '$<id>.output.text'. A legacy reject cancels the run, while an attention wait continues with decision 'reject', so add a 'cancel:' node with when: "$<id>.output.decision == 'reject'" where rejecting should end the run.` |
+| `approval.decisions` | 0.12.0 | `'approval.decisions' is deprecated. Write 'wait: { attention: <message>, form: select, options: <the same decisions> }' instead; the output is the same {decision, text}.` |
+| `approval.capture_response` | 0.10.0 | `'approval.capture_response' is deprecated. An attention wait always records the answer; the next node reads '$<id>.output.text'.` |
+| `approval.on_reject` | 0.10.0 | `'approval.on_reject' and '$REJECTION_REASON' are deprecated. Write 'wait: { attention: <message>, form: approval }' followed by a rework node with when: "$<id>.output.decision == 'reject'" that reads '$<id>.output.text'. To repeat the rework, write a 'loop_group' whose body ends in the wait; the rework node comes first and reads '$LOOP_PREV.<id>.output.text'.` |
+<!-- node-deprecations:end -->

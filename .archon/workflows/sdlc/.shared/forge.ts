@@ -1,15 +1,8 @@
 /**
- * Standalone client for `archon forge`, the pack's opt-in forge source.
- *
- * One switch selects the source for every forge read and write this pack makes:
- *
- *   gh     the default. The GitHub CLI.
- *   forge  opt-in with `ARCHON_SDLC_FORGE=forge`. An installed forge plugin,
- *          reached through the host command (`ARCHON_CLI_COMMAND`).
- *
- * The source is never inferred from what happens to be installed, and a selected
- * source that cannot answer fails the operation rather than falling back to the
- * other.
+ * Standalone client for `archon forge`, the one way this pack reads and writes the
+ * forge. Every operation goes through an installed forge plugin, reached through the
+ * host command (`ARCHON_CLI_COMMAND`). A plugin that cannot answer fails the
+ * operation; nothing falls back to another CLI.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -17,24 +10,9 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { note } from './io.ts';
 
-export const FORGE_SOURCES = ['gh', 'forge'] as const;
-export type ForgeSource = (typeof FORGE_SOURCES)[number];
-
-// Read here, not in each calling script: the unbound-env checker scans a node-bound
-// script's own text but never follows its imports, so a bare process.env read in a
-// shared module like this one never trips a false "unbound variable" warning.
-export function forgeSource(env: NodeJS.ProcessEnv = process.env): ForgeSource {
-  const selected = (env.ARCHON_SDLC_FORGE ?? '').trim();
-  if (selected === '') return 'gh';
-  const source = FORGE_SOURCES.find(source => source === selected);
-  if (source) return source;
-  throw new Error(`ARCHON_SDLC_FORGE must be "gh" (the default) or "forge", not "${selected}"`);
-}
-
 /** The GitHub forge plugin install id. */
 export const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';
 
-const USE_GH = 'To use the GitHub CLI instead, set `ARCHON_SDLC_FORGE=gh`.';
 // Per-user GitHub mode scrubs the shared token from a run started by a user who has
 // not connected their own identity, so a shared `GH_TOKEN` cannot fix that refusal.
 const SETUP =
@@ -43,8 +21,7 @@ const SETUP =
   "Archon's env file (`~/.archon/.env`, `ARCHON_HOME/.env` when configured, or `/.archon/.env` in Docker), " +
   'set `GITHUB_TOKEN`, use `gh auth login`, or configure GitHub App mode. When per-user GitHub ' +
   'is enabled, connect your own GitHub identity instead of setting `GH_TOKEN`: ' +
-  '`archon auth github` or the Web UI Settings page. ' +
-  USE_GH;
+  '`archon auth github` or the Web UI Settings page.';
 
 /**
  * The operator's next step for each refusal the forge contract types as their setup's,
@@ -55,8 +32,7 @@ export const REMEDY = {
   no_credential: SETUP,
   unsupported_op:
     `For github.com, \`archon plugin update ${GITHUB_FORGE_PLUGIN}\` installs the ` +
-    'latest released plugin, which may not support this operation either. ' +
-    USE_GH,
+    'latest released plugin, which may not support this operation either.',
 } as const;
 
 export interface QualifiedPr {
@@ -76,55 +52,6 @@ export interface PrRecord extends QualifiedPr {
   readonly head_revision: string | null;
   readonly base_revision: string | null;
   readonly maintainer_can_modify: boolean | null;
-}
-
-export interface MergeRequest {
-  readonly ref: QualifiedPr;
-  readonly method: 'merge' | 'squash';
-  readonly conditions: { readonly head?: string; readonly base?: string; readonly tree?: string };
-}
-export interface Landed {
-  readonly commit: string | null;
-  readonly tree: string | null;
-  readonly parents: readonly string[] | null;
-}
-export interface MergeResult extends Omit<MergeRequest, 'ref'> {
-  readonly target: QualifiedPr;
-  readonly outcome: 'applied';
-  readonly changed: true;
-  readonly pr: PrRecord;
-  readonly enforcedConditions: readonly (keyof MergeRequest['conditions'])[];
-  readonly landed: Landed;
-}
-export interface ReviewItem {
-  readonly kind: 'review' | 'review_comment';
-  readonly id: string;
-  readonly author: {
-    readonly host: string;
-    readonly id: string;
-    readonly login: string | null;
-  } | null;
-  readonly commit: string | null;
-  readonly state: string | null;
-  readonly createdAt: string | null;
-  readonly url: string;
-  readonly body: string;
-}
-export interface ReviewsResult {
-  readonly ref: QualifiedPr;
-  readonly items: readonly ReviewItem[];
-}
-export interface MutationFailure {
-  readonly op: string;
-  readonly target: QualifiedPr | QualifiedPr['repo'];
-  readonly outcome: 'refused' | 'verification_failed' | 'outcome_unknown';
-  readonly leaveBehind?: string;
-  readonly observed?: PrRecord;
-  readonly merge?: {
-    readonly method: MergeRequest['method'];
-    readonly conditions: MergeRequest['conditions'];
-    readonly landed?: Landed;
-  };
 }
 
 /**
@@ -162,112 +89,6 @@ export class ForgeOperationError extends Error {
     super(message);
     this.name = 'ForgeOperationError';
   }
-}
-
-/**
- * A `gh api` failure GitHub typed as passing: a 5xx, a rate limit, or no response.
- * Only {@link retryTransient} repeats the operation that raised it.
- */
-export class TransientForgeError extends Error {
-  constructor(
-    message: string,
-    /** The least time GitHub asked to be left alone, in ms; 0 when it named none. */
-    readonly waitMs: number
-  ) {
-    super(message);
-    this.name = 'TransientForgeError';
-  }
-}
-
-/** The waits before each repeat; their count is the number of repeats. */
-const RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
-
-/**
- * Run `operation`, repeating it while it fails with a {@link TransientForgeError}.
- * Every other failure, and the last transient one, is thrown as it is.
- *
- * Wrap only an operation that is safe to repeat from its start: a read, or a write
- * that first reads whether an earlier attempt already landed. A write that cannot
- * tell must not be wrapped: a gateway timeout can arrive after the forge has
- * applied the request.
- */
-export function retryTransient<T>(
-  operation: () => T,
-  sleep: (ms: number) => void = Bun.sleepSync
-): T {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return operation();
-    } catch (error) {
-      const delay = RETRY_DELAYS_MS[attempt];
-      if (!(error instanceof TransientForgeError) || delay === undefined) throw error;
-      const wait = Math.max(delay, error.waitMs);
-      note(`${error.message}; repeating in ${String(Math.ceil(wait / 1000))}s`);
-      sleep(wait);
-    }
-  }
-}
-
-/** One HTTP response as `gh api --include` prints it: status line, headers, body. */
-interface GhResponse {
-  readonly status: number;
-  /** Header names lowercased. */
-  readonly headers: ReadonlyMap<string, string>;
-  readonly body: string;
-}
-
-function ghResponse(stdout: string): GhResponse | undefined {
-  const status = /^HTTP\/[\d.]+ (\d{3})/.exec(stdout);
-  if (!status) return undefined;
-  const lines = stdout.split('\n');
-  const end = lines.findIndex(line => line.trim() === '');
-  const headers = new Map<string, string>();
-  for (const line of lines.slice(1, end === -1 ? undefined : end)) {
-    const colon = line.indexOf(':');
-    if (colon > 0) headers.set(line.slice(0, colon).trim().toLowerCase(), line.slice(colon + 1).trim());
-  }
-  return { status: Number(status[1]), headers, body: end === -1 ? '' : lines.slice(end + 1).join('\n') };
-}
-
-/**
- * How long GitHub asked to wait before a failed `gh api` request may be repeated, in
- * ms (0 when it named no time), or undefined when the failure is permanent.
- *
- * A 5xx is transient. A 429, or a 403 carrying `retry-after`, is a rate limit that
- * waits a minute when it names no time, as GitHub documents for a secondary limit.
- * A valid `retry-after` (delta seconds) is the least wait on any retryable status.
- * A failure with no HTTP status is ambiguous (a dropped connection, a timeout, or a
- * local gh error) and is deliberately retried, except gh's exit 4, which is missing
- * authentication; on exhaustion the error keeps gh's own message.
- * Everything else, a 404 or a 422, is permanent.
- */
-export function ghRetryWait(
-  exitCode: number,
-  response: Pick<GhResponse, 'status' | 'headers'> | undefined
-): number | undefined {
-  if (response === undefined) return exitCode === 4 ? undefined : 0;
-  const { status, headers } = response;
-  const retryAfter = headers.get('retry-after');
-  const seconds = retryAfter === undefined || retryAfter.trim() === '' ? Number.NaN : Number(retryAfter);
-  const named = Number.isFinite(seconds) && seconds >= 0 ? seconds * 1000 : undefined;
-  if (status === 429 || (status === 403 && retryAfter !== undefined)) return named ?? 60_000;
-  return status >= 500 ? (named ?? 0) : undefined;
-}
-
-/**
- * Run `gh api <args>` and return the response body. gh names a failed request's
- * status only in stderr prose, so `--include` asks for the status line and headers
- * on stdout, and {@link ghRetryWait} classifies the failure from those. `what`
- * names the request in the error, which carries gh's own message.
- */
-export function ghApi(what: string, args: readonly string[]): string {
-  const result = Bun.spawnSync(['gh', 'api', ...args, '--include'], { stdout: 'pipe', stderr: 'pipe' });
-  const response = ghResponse(result.stdout.toString());
-  if (result.exitCode === 0 && response) return response.body;
-  const message = `${what} failed: ${result.stderr.toString().trim()}`;
-  if (result.exitCode === 0) throw new Error(`${what} returned no HTTP response`);
-  const wait = ghRetryWait(result.exitCode, response);
-  throw wait === undefined ? new Error(message) : new TransientForgeError(message, wait);
 }
 
 /**

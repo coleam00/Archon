@@ -7,6 +7,8 @@ import {
   isMutationRequest,
   mutationTarget,
   mutationAttempt,
+  PR_VIEW_ANY_STATE,
+  RESOLVE_SUBJECT,
   type ForgeError,
   type ForgeRequest,
   type ForgeResponse,
@@ -258,6 +260,27 @@ function refuseBeforeRun(request: ForgeRequest, metadata: PluginMetadata): Forge
     return {
       kind: 'unsupported_op',
       message: `plugin ${metadata.name} does not support ${request.op}`,
+    };
+  }
+  if (
+    request.op === 'resolve' &&
+    request.web === true &&
+    !metadata.capabilities.includes(RESOLVE_SUBJECT)
+  ) {
+    return {
+      kind: 'unsupported_op',
+      message: `plugin ${metadata.name} does not resolve an issue or pull request URL`,
+    };
+  }
+  if (
+    request.op === 'pr.view' &&
+    request.selector.kind === 'head' &&
+    request.selector.state === 'any' &&
+    !metadata.capabilities.includes(PR_VIEW_ANY_STATE)
+  ) {
+    return {
+      kind: 'unsupported_op',
+      message: `plugin ${metadata.name} does not support pr.view of a head in any state`,
     };
   }
   if (request.op !== 'pr.merge') return undefined;

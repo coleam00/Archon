@@ -1,5 +1,6 @@
 import { z } from 'zod';
 import { recordSurfaceSchema } from './schemas/record-surface';
+import type { WorkflowRunStatus } from './schemas/run-status';
 
 export const STATE_DOCUMENT_LIMIT = 64 * 1024;
 export const stateDocumentNameSchema = z
@@ -67,12 +68,41 @@ export const stateOperationSchema = z.discriminatedUnion('op', [
     })
     .strict(),
 ]);
+/** A run's claim on a document, as a revision records it. */
+export const stateLeaseSchema = z
+  .object({
+    runId: z.string().min(1),
+    nodePath: z.string().min(1),
+    takenAt: z.iso.datetime({ offset: true }),
+  })
+  .strict();
+export type StateLease = z.infer<typeof stateLeaseSchema>;
+/** A lease as a read reports it: whether its holder still owns it is computed at read time. */
+export const stateLeaseViewSchema = stateLeaseSchema.extend({ live: z.boolean() }).strict();
+export type StateLeaseView = z.infer<typeof stateLeaseViewSchema>;
+/**
+ * Whether a run in this status still owns its leases. `completed` and `cancelled` are
+ * final (abandon records `cancelled`), and only a finished run can be deleted, so a
+ * missing run (`null`) has ended too. `failed` stays live because it can be resumed.
+ * Ending is monotone: no status a run can leave revives ownership, so a lease ends
+ * without any write when its holder's run ends.
+ */
+export function isStateLeaseHolderLive(status: WorkflowRunStatus | null): boolean {
+  return status !== null && status !== 'completed' && status !== 'cancelled';
+}
+export function viewStateLease(
+  lease: StateLease | null,
+  holderStatus: WorkflowRunStatus | null
+): StateLeaseView | null {
+  return lease === null ? null : { ...lease, live: isStateLeaseHolderLive(holderStatus) };
+}
 export const stateRevisionSchema = z.object({
   name: stateDocumentNameSchema,
   revision: z.number().int().positive(),
   value: stateValueSchema,
   operation: stateOperationSchema,
   writer: stateWriterSchema,
+  lease: stateLeaseViewSchema.nullable(),
   createdAt: z.iso.datetime({ offset: true }),
 });
 export type StateRevision = z.infer<typeof stateRevisionSchema>;
@@ -98,6 +128,7 @@ export const stateDocumentSummarySchema = z.object({
   revision: z.number().int().positive(),
   updatedAt: z.iso.datetime({ offset: true }),
   writer: stateWriterSchema,
+  lease: stateLeaseViewSchema.nullable(),
   deleted: z.boolean(),
 });
 export type StateDocumentSummary = z.infer<typeof stateDocumentSummarySchema>;
@@ -106,13 +137,21 @@ export const stateWriteScopeSchema = z.object({
   name: stateDocumentNameSchema,
   writer: stateWriterSchema,
 });
+/**
+ * What a put or patch does to the document's lease. Absent, the write keeps whatever
+ * lease the document had. Only a run can take or release one, and only for itself.
+ */
+export const stateLeaseChangeSchema = z.enum(['take', 'release']);
+export type StateLeaseChange = z.infer<typeof stateLeaseChangeSchema>;
 export const statePutSchema = stateWriteScopeSchema.extend({
   value: stateValueSchema.refine(value => value !== null, 'Use delete for a tombstone'),
   ifRevision: stateRevisionNumberSchema,
+  lease: stateLeaseChangeSchema.optional(),
 });
 export const statePatchSchema = stateWriteScopeSchema.extend({
   ops: statePatchOpsSchema,
   ifRevision: stateRevisionNumberSchema.optional(),
+  lease: stateLeaseChangeSchema.optional(),
 });
 export const stateDeleteSchema = stateWriteScopeSchema.extend({
   ifRevision: stateRevisionNumberSchema.optional(),
@@ -128,6 +167,39 @@ export class StateRevisionConflictError extends Error {
       `State document '${name}' revision conflict: expected ${String(expected)}, actual ${String(actual)}`
     );
   }
+}
+/** Another run's live lease refuses this run's take or release; the write was not made. */
+export class StateLeaseHeldError extends Error {
+  constructor(
+    public readonly name: string,
+    public readonly holder: StateLease
+  ) {
+    super(`State document '${name}' is leased by live run ${holder.runId}`);
+  }
+}
+/**
+ * The lease the next revision records. A delete clears it, a write that names no change
+ * keeps it, and a take or release by a run is refused while another run's lease is live.
+ * A run that already holds a live lease keeps it as taken.
+ */
+export function nextStateLease(
+  prior: StateRevision | null,
+  write: { name: string; writer: StateWriter; lease?: StateLeaseChange | undefined },
+  operation: StateRevision['operation'],
+  takenAt: string
+): StateLease | null {
+  if (operation.op === 'delete') return null;
+  const current = prior?.lease ?? null;
+  const kept: StateLease | null =
+    current === null
+      ? null
+      : { runId: current.runId, nodePath: current.nodePath, takenAt: current.takenAt };
+  if (write.lease === undefined) return kept;
+  if (write.writer.kind !== 'run') throw new Error('Only a run can take or release a state lease');
+  const live = current?.live === true ? kept : null;
+  if (live && live.runId !== write.writer.runId) throw new StateLeaseHeldError(write.name, live);
+  if (write.lease === 'release') return null;
+  return live ?? { runId: write.writer.runId, nodePath: write.writer.nodePath, takenAt };
 }
 export class StateDocumentTooLargeError extends Error {
   constructor(

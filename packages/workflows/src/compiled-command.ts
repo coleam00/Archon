@@ -1,6 +1,7 @@
 import type { BindingDirective, DagNode, IncludeDirective, TriggerRule } from './schemas';
 import { isIncludeDirective, isLoopGroupNode, isLoopNode } from './schemas';
 import { OUTPUT_REF_SOURCE, type JsonValue } from './output-ref';
+import type { WorkflowPack } from './schemas/pack-settings';
 
 /** Engine-private per-node metadata attached during load-time include expansion.
  * Symbols survive object spreads but stay out of YAML, JSON, API payloads, and
@@ -152,9 +153,13 @@ export type ComposedBlockBoundary = ComposedBlockBoundaryBase &
  *    standalone.
  *  - `boundaries` — caller-level activation predicates for enclosing include instances,
  *    outermost first. Non-entry descendants enforce them before their local trigger rule.
+ *  - `pack` — the pack the authoring workflow was loaded from, which `$PACK_DIR` names.
+ *    Write-once like `origin`, and absent when that workflow is not in a pack: the
+ *    includer's pack is never this node's.
  */
 export interface ComposedNodeMeta {
   origin: string;
+  pack?: Pick<WorkflowPack, 'source' | 'key'>;
   inputs?: Record<string, JsonValue>;
   blockEntry?: true;
   boundaries?: ComposedBlockBoundary[];

@@ -78,7 +78,10 @@ Notes:
   API keys remain available through `ai key set`.
 - On multi-user installs each human connects their own credentials; runs execute
   on the starter's keys. Solo installs just need one working provider.
-- `gh` must be authenticated (`gh auth status`) for any GitHub-touching workflow.
+- The SDLC pack needs the forge plugin (`archon plugin add coleam00/Archon/plugins/forge-github`)
+  and a GitHub credential: `gh auth login`, or `GH_TOKEN` or `GITHUB_TOKEN`. Other
+  GitHub-touching workflows may still call `gh` directly, so keep it authenticated
+  (`gh auth status`).
 
 ## Config: two scopes, one schema
 

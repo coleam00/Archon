@@ -42,16 +42,19 @@ The wrapper cannot distinguish successful zero-file execution from report loss a
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
+The isolation PR lookup conformance test requires `jq` on PATH to execute the production `gh --jq` projection.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
-`generated-files`, `merge-sweep-contract`, `type-check`, `lint`, `mock-modules`, `ratchet`,
+`generated-files`, `type-check`, `lint`, `ratchet`,
 `format`, `installer` (POSIX only), `package-tests`, `cli-tests`, `core-tests`, and
-`script-tests`. `mock-modules` fails when a `mock.module()` factory leaves out an export of
-the module it mocks; see "`mock.module()` merges over the real module" in the DX quirks guide.
+`script-tests`.
 The generated group checks the Pi vendor map, the capability matrix,
-provider and chat contract schemas, and API types. Tests default to 20 seconds on every
+provider and chat contract schemas, API types, and the SDLC pack's generated
+workflow output types. Tests default to 20 seconds on every
 platform. Lint runs Biome (`biome.jsonc`) after TypeScript-API checks for test-cleanup
-drift, the workflow persistence boundary, and SDK type restatements. Install the Biome
+drift, incomplete `mock.module()` factories (see "`mock.module()` merges over the real module"
+in the DX quirks guide), pack portability, the workflow persistence boundary, and SDK type
+restatements. Install the Biome
 extension for in-editor lint and formatting; disable Prettier for this repository.
 Formatting uses two spaces, single quotes, semicolons, a 100-column width, and LF line
 endings on every OS. On Windows, `bun run format` converts CRLF working files to LF;
@@ -107,13 +110,14 @@ said so. A push to `dev` or `main` skips those jobs only when
 a pull request run already passed every job on the same tree, and otherwise runs them, so a
 prose change's test-visible effects are checked on `dev`.
 
-CI runs the merge-sweep conformance test through `merge-sweep-contract`. The remaining
-tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
-do not run on pull requests or pushes. Run them with `bun run test --plan pack` and
-`bun run validate --only workflow-fixtures` when you change `.archon/workflows/` or
-`.archon/scripts/`; a single test file runs with
-`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI, dispatch the
-Test Suite workflow with `pack-tests` or `pack-fixtures` set:
+The tests under `.archon/scripts/` (the SDLC pack's script tests) and the workflow fixtures
+run in the `test-pack` job when a pull request or an unproven push changes the pack or a
+contract it is written against: `PACK_INPUTS` in `scripts/should-run-test-suite.ts` lists
+those paths. Run them locally with `bun run test --plan pack` and
+`bun run validate --only workflow-fixtures`; a single test file runs with
+`bun run test .archon/scripts/__tests__/<file>.test.ts`. To run them in CI on a branch
+without a pull request, dispatch the Test Suite workflow with `pack-tests` or
+`pack-fixtures` set:
 `gh workflow run test.yml --ref <branch> -f pack-tests=true -f pack-fixtures=true`.
 
 Local validation has no fixed duration: tests and typed analysis dominate, and machine

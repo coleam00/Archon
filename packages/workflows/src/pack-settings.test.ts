@@ -74,9 +74,11 @@ describe('parsePackDeclaration', () => {
         'p/.pack/pack.yaml'
       )
     ).toEqual({
-      strict: { type: 'bool', default: 'true' },
-      forge: { type: 'enum', values: ['gh', 'glab'], required: true },
-      note: { type: 'string', description: 'free text' },
+      settings: {
+        strict: { type: 'bool', default: 'true' },
+        forge: { type: 'enum', values: ['gh', 'glab'], required: true },
+        note: { type: 'string', description: 'free text' },
+      },
     });
   });
 
@@ -96,8 +98,74 @@ describe('parsePackDeclaration', () => {
   });
 });
 
+describe('parsePackDeclaration bindings', () => {
+  const timer = (extra = ''): string =>
+    `  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule: { interval_seconds: 60 }\n${extra}`;
+
+  it('reads a timer and an event binding, applying the defaults', () => {
+    const declared = parsePackDeclaration(
+      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n')}  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    inputs:\n      number: { event: subject.number }\n`,
+      'p/.pack/pack.yaml'
+    );
+    expect(declared).toEqual({
+      bindings: {
+        sweep: {
+          workflow: 'sweep',
+          resource: 'sweep',
+          resource_scope: 'repo',
+          capacity: 1,
+          overlap: 'skip',
+          isolation: { kind: 'default' },
+          schedule: { interval_seconds: 60 },
+          inputs: { self: { binding: 'sweep' }, host: { repo: 'host' }, mode: 'fast' },
+        },
+        opened: {
+          workflow: 'sweep',
+          resource: 'opened',
+          resource_scope: 'repo',
+          capacity: 2,
+          overlap: 'queue',
+          isolation: { kind: 'worktree' },
+          event: { kind: 'issue.lifecycle', actions: ['opened'] },
+          inputs: { number: { event: 'subject.number' } },
+        },
+      },
+    });
+  });
+
+  it.each([
+    [timer('    inputs:\n      other: { binding: missing }\n'), "names unknown binding 'missing'"],
+    [timer('    inputs:\n      n: { event: subject.number }\n'), 'a timer has no event'],
+    [timer('    event: { kind: issue.lifecycle }\n'), "exactly one of 'schedule'"],
+    [
+      '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n',
+      "exactly one of 'schedule'",
+    ],
+    [timer('    overlap_policy: skip\n'), "binding 'sweep' is invalid"],
+    ['  Bad_Id:\n    workflow: w\n', "binding 'Bad_Id' is not a valid id"],
+    [
+      '  ev:\n    workflow: w\n    resource: r\n    overlap: skip\n    event: { kind: k, repository: { host: h, path: o/r } }\n',
+      "must not name 'repository'",
+    ],
+    [
+      `${timer()}  ev:\n    workflow: w\n    resource: r\n    overlap: skip\n    event: { kind: k }\n  ref:\n    workflow: w\n    resource: x\n    overlap: skip\n    schedule: { interval_seconds: 5 }\n    inputs:\n      e: { binding: ev }\n`,
+      "names event binding 'ev'",
+    ],
+    [
+      `${timer()}  again:\n    workflow: w\n    resource: sweep\n    capacity: 2\n    overlap: skip\n    schedule: { interval_seconds: 5 }\n`,
+      "share resource 'sweep' but declare capacity 1 and 2",
+    ],
+  ])('refuses %p, naming the file and binding', (bindings, reason) => {
+    const parse = (): unknown =>
+      parsePackDeclaration(`bindings:\n${bindings}`, 'p/.pack/pack.yaml');
+    expect(parse).toThrow(PackSettingsError);
+    expect(parse).toThrow(reason);
+    expect(parse).toThrow('p/.pack/pack.yaml');
+  });
+});
+
 describe('readProjectPackSettings', () => {
-  const pack = { key: 'alpha', settings: SPECS };
+  const pack = { key: 'alpha', source: 'project' as const, settings: SPECS };
   const projectFile = (): string => join(cwd, '.archon', 'packs', 'alpha.yaml');
 
   async function writeProject(yaml: string): Promise<void> {
@@ -113,6 +181,7 @@ describe('readProjectPackSettings', () => {
     await writeProject('settings:\n  forge: glab\n  strict: false\n');
     const declared = {
       key: 'alpha',
+      source: 'project',
       settings: { ...SPECS, label: { type: 'string', default: 'd' } },
     } as const;
     expect(await readProjectPackSettings(cwd, declared)).toEqual({
@@ -135,7 +204,7 @@ describe('readProjectPackSettings', () => {
 
   it('refuses any setting for a pack that declares none', async () => {
     await writeProject('settings:\n  forge: gh\n');
-    await expect(readProjectPackSettings(cwd, { key: 'alpha' })).rejects.toThrow(
+    await expect(readProjectPackSettings(cwd, { key: 'alpha', source: 'project' })).rejects.toThrow(
       "pack 'alpha' declares no settings"
     );
   });
@@ -170,6 +239,7 @@ describe('discovery carries the pack', () => {
     const byName = new Map(workflows.map(w => [w.workflow.name, w.workflow]));
     expect(byName.get('packed')?.pack).toEqual({
       key: 'alpha',
+      source: 'project',
       settings: { tone: { type: 'string', default: 'calm' } },
     });
     // A `pack:` key in YAML cannot claim a pack: only discovery sets it.
@@ -226,7 +296,7 @@ describe('--input may set a pack setting for one run', () => {
   const workflow = {
     name: 'packed',
     inputs: { own: { default: 'x' } },
-    pack: { key: 'alpha', settings: SPECS },
+    pack: { key: 'alpha', source: 'project' as const, settings: SPECS },
   };
 
   it('accepts a pack setting of the right type', () => {

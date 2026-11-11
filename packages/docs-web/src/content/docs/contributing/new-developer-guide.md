@@ -249,7 +249,6 @@ When you send a message, an AI "router" decides what to do:
 │   "fix this issue"          ───────▶     archon-ship                   │
 │   "review this PR"          ───────▶     archon-review                 │
 │   "what does X do?"         ───────▶     answered directly, no workflow│
-│   "update sharp"            ───────▶     archon-upkeep                 │
 │                                                                         │
 ├─────────────────────────────────────────────────────────────────────────┤
 │                                                                         │
@@ -294,11 +293,6 @@ The table below lists the key workflows in the bundled `sdlc` pack. All bundled 
 │   │                           "take this to a PR"     PR + review    │  │
 │   └─────────────────────────────────────────────────────────────────┘  │
 │                                                                         │
-│   ┌─────────────────────────────────────────────────────────────────┐  │
-│   │ archon-upkeep             "update sharp"          One dependency │  │
-│   │                           "bump X to latest"      bump + PR      │  │
-│   └─────────────────────────────────────────────────────────────────┘  │
-│                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -322,12 +316,12 @@ A quick route agent picks which specialist lenses the change earns, and `archon-
 │   ┌─────────────────────────────────────────────────────────────────┐  │
 │   │ Step 2: PARALLEL LENSES (each in a fresh session)               │  │
 │   │                                                                 │  │
-│   │   ┌──────────────┐  ┌──────────────┐                           │  │
-│   │   │ code         │  │ seams        │                           │  │
-│   │   │              │  │              │                           │  │
-│   │   │ Bugs,        │  │ Contracts    │                           │  │
-│   │   │ correctness  │  │ that drift   │                           │  │
-│   │   └──────────────┘  └──────────────┘                           │  │
+│   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │  │
+│   │   │ code         │  │ seams        │  │ ux           │         │  │
+│   │   │              │  │              │  │ (when a UI   │         │  │
+│   │   │ Bugs,        │  │ Contracts    │  │  changes)    │         │  │
+│   │   │ correctness  │  │ that drift   │  │ Clear, honest│         │  │
+│   │   └──────────────┘  └──────────────┘  └──────────────┘         │  │
 │   │                                                                 │  │
 │   │   ┌──────────────┐  ┌──────────────┐  ┌──────────────┐         │  │
 │   │   │ tests        │  │ errors       │  │ docs         │         │  │

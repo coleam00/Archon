@@ -3,6 +3,7 @@ import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
+import { yamlCountError } from '../workflow-discovery/pack-layout';
 import { collectBundleSources, readBundleContent, readBundleIndex } from './bundle-inventory';
 
 const track = trackTempRoots();
@@ -24,7 +25,7 @@ test('dereferences a linked workflow directory instead of silently omitting its 
   ]);
 });
 
-test('the index selects exact runtime files and shared documents, preserving authored paths and excluding fixtures and unindexed packs', async () => {
+test('the index selects exact runtime files, shared documents and metric views, preserving authored paths and excluding fixtures and unindexed packs', async () => {
   const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-index-')));
   const authored: Record<string, string> = {
     'workflows/selected/flow/main.yml': 'name: main\r\n',
@@ -34,6 +35,7 @@ test('the index selects exact runtime files and shared documents, preserving aut
     'workflows/selected/.shared/nested/helper.js': 'export const value = 1;\n',
     'workflows/selected/.shared/__init__.py': '',
     'workflows/selected/.shared/policy/rule.md': 'Rule.\r\n',
+    'workflows/selected/.shared/metric-views.json': '{"cards":[]}\n',
     'workflows/selected/flow/fixtures/clean.stubs.yaml': 'fixture: true\n',
     'workflows/selected/flow/README.md': 'documentation',
     'workflows/selected/flow/scripts/helpers/deeper/ignored.ts': 'ignored',
@@ -54,6 +56,7 @@ test('the index selects exact runtime files and shared documents, preserving aut
   );
   expect(selected.map(file => file.relativePath).sort()).toEqual([
     'workflows/selected/.shared/__init__.py',
+    'workflows/selected/.shared/metric-views.json',
     'workflows/selected/.shared/nested/helper.js',
     'workflows/selected/.shared/policy/rule.md',
     'workflows/selected/flow/commands/check.md',
@@ -70,4 +73,33 @@ test('the index selects exact runtime files and shared documents, preserving aut
   await expect(readBundleIndex(indexPath)).rejects.toThrow('Duplicate bundle pack');
   await writeFile(indexPath, JSON.stringify({ packs: ['../outside'] }));
   await expect(readBundleIndex(indexPath)).rejects.toThrow('Invalid bundle pack name');
+});
+
+async function writeTree(root: string, files: Record<string, string>): Promise<void> {
+  for (const [path, content] of Object.entries(files)) {
+    await mkdir(dirname(join(root, path)), { recursive: true });
+    await writeFile(join(root, path), content);
+  }
+}
+
+test('a selected workflow folder without YAML fails generation', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-no-yaml-')));
+  await writeTree(root, {
+    'workflows/selected/flow/main.yaml': 'name: main\n',
+    'workflows/selected/flow-renamed/commands/step.md': 'step',
+  });
+  await expect(collectBundleSources(join(root, 'workflows'), ['selected'])).rejects.toThrow(
+    yamlCountError('selected/flow-renamed', 0).error
+  );
+});
+
+test('a workflow folder with two YAML files fails with the discovery error', async () => {
+  const root = track(await mkdtemp(join(tmpdir(), 'archon-bundle-crowded-')));
+  await writeTree(root, {
+    'workflows/selected/crowded/one.yaml': 'name: one\n',
+    'workflows/selected/crowded/two.yaml': 'name: two\n',
+  });
+  await expect(collectBundleSources(join(root, 'workflows'), ['selected'])).rejects.toThrow(
+    yamlCountError('selected/crowded', 2).error
+  );
 });

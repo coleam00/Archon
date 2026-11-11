@@ -8,27 +8,20 @@ import { requestJson } from '../lib/http';
  * value via `setEnvVar`; the existing value is overwritten server-side.
  */
 
-interface ListEnvVarsResponse {
-  keys: string[];
-}
-
 export async function listEnvVarKeys(projectId: string): Promise<string[]> {
-  const res = await requestJson<ListEnvVarsResponse>(
-    `/api/codebases/${encodeURIComponent(projectId)}/env`
-  );
+  const res = await requestJson('/api/codebases/{id}/env', 'get', { params: { id: projectId } });
   return res.keys;
 }
 
 export async function setEnvVar(projectId: string, key: string, value: string): Promise<void> {
-  await requestJson<{ success: boolean }>(`/api/codebases/${encodeURIComponent(projectId)}/env`, {
-    method: 'PUT',
-    body: JSON.stringify({ key, value }),
+  await requestJson('/api/codebases/{id}/env', 'put', {
+    params: { id: projectId },
+    body: { key, value },
   });
 }
 
 export async function deleteEnvVar(projectId: string, key: string): Promise<void> {
-  await requestJson<{ success: boolean }>(
-    `/api/codebases/${encodeURIComponent(projectId)}/env/${encodeURIComponent(key)}`,
-    { method: 'DELETE' }
-  );
+  await requestJson('/api/codebases/{id}/env/{key}', 'delete', {
+    params: { id: projectId, key },
+  });
 }

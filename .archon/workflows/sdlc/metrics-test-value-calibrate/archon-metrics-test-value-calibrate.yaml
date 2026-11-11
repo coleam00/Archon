@@ -6,10 +6,12 @@ description: |
   sdlc.tests_unprotective_judge_agreement (every labeled test) and
   sdlc.tests_unprotective_judge_catch_rate (the tests labeled unprotective). Both
   name the judge's identity, so they are read beside the sdlc.tests_unprotective
-  counts the same judge produced.
+  counts the same judge produced. The judge needs a forge plugin that provides
+  pr.files and repo.file.
 
   Use when: the judge's files, the criteria it inlines, or the model behind its
-  tier changed, or the labels grew (see the SDLC pack README, "Metrics").
+  tier changed, or the labels grew (see
+  https://archon.diy/guides/sdlc-metrics/#calibrate-the-judge).
   NOT for: judging new pull requests (archon-metrics-test-value).
 
 # It reads the labels from the checkout it starts in and changes nothing there, so it

@@ -8,7 +8,6 @@ import {
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { registerRepository } from '@archon/core/handlers/clone';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
-import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
 import {
   stateDocumentNameSchema,
   stateNamePrefixSchema,
@@ -19,11 +18,14 @@ import {
   type stateWriteScopeSchema,
   StateRevisionConflictError,
   StateDocumentTooLargeError,
+  StateLeaseHeldError,
   StatePatchError,
   type IStateDocumentStore,
+  type StateLeaseChange,
   type StateScope,
   type StateWriter,
 } from '@archon/workflows/state-document-store';
+import { readCallingNode } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
 
 export class StateProjectResolutionError extends Error {}
@@ -40,6 +42,10 @@ export interface StateCommandOptions {
   install?: boolean;
   raw?: boolean;
   values?: boolean;
+  /** Inside a run: take the document's lease in this put or patch. */
+  lease?: boolean;
+  /** Inside a run: give the document's lease back in this put or patch. */
+  releaseLease?: boolean;
 }
 
 // Scripts branch on these, never on message text.
@@ -58,6 +64,7 @@ async function readStdin(): Promise<string> {
 type StateHost = Pick<WorkflowHost, 'deps' | 'records'>;
 type StateCommand = (typeof commands)[number];
 type StateInput = z.infer<typeof stateWriteScopeSchema>;
+type StateWriteInput = StateInput & { lease: StateLeaseChange | undefined };
 
 function validateStateOptions(command: StateCommand, options: StateCommandOptions): void {
   if (options.ifRevision !== undefined && !['put', 'patch', 'delete'].includes(command))
@@ -71,6 +78,18 @@ function validateStateOptions(command: StateCommand, options: StateCommandOption
     throw new Error('--raw is only valid for get or put');
   if (options.install && options.project !== undefined)
     throw new Error('Use --install or --project, not both');
+}
+
+function parseLeaseChange(
+  command: StateCommand,
+  options: StateCommandOptions
+): StateLeaseChange | undefined {
+  if (!options.lease && !options.releaseLease) return undefined;
+  if (command !== 'put' && command !== 'patch')
+    throw new Error('--lease and --release-lease are only valid for put or patch');
+  if (options.lease && options.releaseLease)
+    throw new Error('Use --lease or --release-lease, not both');
+  return options.lease ? 'take' : 'release';
 }
 
 function parseRevision(text: string): number {
@@ -95,29 +114,17 @@ function parseStateArguments(
     options.prefix === undefined ? undefined : stateNamePrefixSchema.parse(options.prefix);
   const ifRevision =
     options.ifRevision === undefined ? undefined : parseRevision(options.ifRevision);
+  const lease = parseLeaseChange(command, options);
 
   const limit =
     options.limit === undefined
       ? undefined
       : z.number().int().positive().parse(parseRevision(options.limit));
-  return { command, name, prefix, ifRevision, limit };
+  return { command, name, prefix, ifRevision, limit, lease };
 }
 
 function resolveRunWriter(runId: string, env: NodeJS.ProcessEnv): StateWriter {
-  let supplied: unknown = null;
-  try {
-    supplied = JSON.parse(env.ARCHON_NODE_EXECUTION || 'null');
-  } catch {
-    // Reported below with the same message as a missing identity.
-  }
-  const parsedIdentity = nodeExecutionMetadataSchema
-    .pick({ runId: true, path: true })
-    .safeParse(supplied);
-  if (!parsedIdentity.success)
-    throw new Error('WORKFLOW_ID requires ARCHON_NODE_EXECUTION as JSON with runId and path');
-  const identity = parsedIdentity.data;
-  if (identity.runId !== runId) throw new Error('ARCHON_NODE_EXECUTION does not match WORKFLOW_ID');
-  return { kind: 'run', runId, nodePath: identity.path };
+  return { kind: 'run', ...readCallingNode(runId, env) };
 }
 
 async function resolveRunContext(
@@ -191,17 +198,17 @@ async function resolveStateContext(
 
 async function getStateDocument(store: IStateDocumentStore, scope: StateScope, name: string) {
   const row = await store.getStateDocument(scope, name);
-  if (row) return { scope, name, revision: row.revision, value: row.value };
+  if (row) return { scope, name, revision: row.revision, value: row.value, lease: row.lease };
   // A deleted document's tombstone is the revision a recreating put must name.
   const [tombstone] = await store.listStateRevisions(scope, name, { limit: 1 });
   return tombstone
-    ? { scope, name, revision: tombstone.revision, value: null, deleted: true }
-    : { scope, name, revision: 0, value: null };
+    ? { scope, name, revision: tombstone.revision, value: null, lease: null, deleted: true }
+    : { scope, name, revision: 0, value: null, lease: null };
 }
 
 async function putStateDocument(
   store: IStateDocumentStore,
-  input: StateInput,
+  input: StateWriteInput,
   ifRevision: number | undefined,
   raw: boolean | undefined,
   readInput: () => Promise<string>
@@ -216,7 +223,7 @@ async function putStateDocument(
 
 async function patchStateDocument(
   store: IStateDocumentStore,
-  input: StateInput,
+  input: StateWriteInput,
   ifRevision: number | undefined,
   readInput: () => Promise<string>
 ) {
@@ -254,14 +261,14 @@ async function executeStateCommand(
   readInput: () => Promise<string>
 ): Promise<object> {
   const { scope, name } = input;
-  const { command, ifRevision, limit, prefix } = parsed;
+  const { command, ifRevision, limit, prefix, lease } = parsed;
   switch (command) {
     case 'get':
       return getStateDocument(store, scope, name);
     case 'put':
-      return putStateDocument(store, input, ifRevision, options.raw, readInput);
+      return putStateDocument(store, { ...input, lease }, ifRevision, options.raw, readInput);
     case 'patch':
-      return patchStateDocument(store, input, ifRevision, readInput);
+      return patchStateDocument(store, { ...input, lease }, ifRevision, readInput);
     case 'delete':
       return {
         scope,
@@ -289,6 +296,7 @@ async function executeStateCommand(
               name: row.name,
               revision: row.revision,
               value: row.value,
+              lease: row.lease,
             }))
           : await store.listStateDocuments(scope, filter),
       };
@@ -298,7 +306,8 @@ async function executeStateCommand(
 }
 
 function stateErrorCode(error: unknown): number {
-  if (error instanceof StateRevisionConflictError) return EXIT.conflict;
+  if (error instanceof StateRevisionConflictError || error instanceof StateLeaseHeldError)
+    return EXIT.conflict;
   if (
     error instanceof StateDocumentTooLargeError ||
     error instanceof StatePatchError ||
@@ -343,6 +352,8 @@ export async function stateCommand(
     const parsed = parseStateArguments(subcommand, args, options);
     const context = await resolveStateContext(host, options, env, dependencies.storeKind);
     const input = { ...context, name: parsed.name };
+    if (parsed.lease !== undefined && context.writer.kind !== 'run')
+      throw new Error('--lease and --release-lease are only valid inside a run');
     if (parsed.command === 'get' && options.raw) {
       const row = await store.getStateDocument(input.scope, input.name);
       if (typeof row?.value !== 'string')

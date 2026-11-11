@@ -1,6 +1,6 @@
 {
   "name": "archon",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "private": true,
   "workspaces": [
     "packages/*"
@@ -28,13 +28,15 @@
     "check:provider-contract-schema": "bun run --cwd=packages/provider-contract check:schema",
     "generate:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts",
     "check:sqlite-vintages": "bun run scripts/generate-sqlite-vintages.ts --check",
+    "generate:workflow-output-types": "bun run cli workflow types .archon/workflows/sdlc",
+    "check:workflow-output-types": "bun run cli workflow types .archon/workflows/sdlc --check",
     "check:schema-upgrades": "bun run scripts/check-schema-upgrades.ts",
     "lens-yield": "bun run scripts/lens-yield.ts",
     "test:install": "bash scripts/test-install.sh",
     "test": "bun run scripts/repo-tests.ts",
     "test:watch": "bun --filter @archon/server test:watch",
     "type-check": "bun --filter '*' type-check && bun x tsc --noEmit -p scripts/tsconfig.json && bun x tsc --noEmit -p .archon/scripts/tsconfig.json && bun x tsc --noEmit -p .archon/workflows/tsconfig.json",
-    "lint": "bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-pack-portability.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && biome lint --error-on-warnings .",
+    "lint": "bun run scripts/check-test-cleanup-drift.ts && bun run scripts/check-mock-modules.ts && bun run scripts/check-pack-portability.ts && bun run scripts/check-workflow-persistence.ts && bun run scripts/check-sdk-type-drift.ts && bun run scripts/check-web-api-types.ts && biome lint --error-on-warnings .",
     "lint:fix": "biome lint --write .",
     "format": "biome format --write .",
     "format:check": "biome format .",
@@ -61,7 +63,6 @@
     "@types/bun": "latest",
     "bun-types": "^1.3.5",
     "husky": "^9.1.7",
-    "lint-staged": "^15.2.0",
     "pino-pretty": "^13",
     "saxes": "^6.0.0",
     "typescript": "^5.3.0"

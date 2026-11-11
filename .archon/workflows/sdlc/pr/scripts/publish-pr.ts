@@ -3,10 +3,11 @@
  *
  * The preceding nodes judged the target and the text and proved the merged tree; this
  * node owns publication, including the push and PR writes, and proves each landed,
- * through whichever source the run selected. When its caller allows it, it also
- * writes the description section the run prepared: between its own markers, keeping
- * every other byte of the description, and read back like every other write. The push comes first and refuses on any failure (./.shared/push.ts), so a
- * pull request is never created for a head the remote does not have.
+ * through the forge plugin. When its caller allows it, it also writes the description
+ * section the run prepared: between its own markers, keeping every other byte of the
+ * description, and read back like every other write. The push comes first and refuses
+ * on any failure (./.shared/push.ts), so a pull request is never created for a head
+ * the remote does not have.
  *
  * Whether this work already has a pull request is decided here, not in a prompt: an
  * open pull request for the recorded head IS the pull request, and a second one is
@@ -36,9 +37,7 @@ import { join } from 'node:path';
 import { encodePrPublicationRecord, PR_CREATE_RECORD, DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
 import {
   ForgeOperationError,
-  forgeSource,
   record,
-  type ForgeSource,
   type PrRecord,
   type QualifiedPr,
 } from '../../.shared/forge.ts';
@@ -136,36 +135,15 @@ async function preparedSection(artifacts: string): Promise<string | undefined> {
   return section;
 }
 
-async function applyDescription(pr: PrRecord, section: string, source: ForgeSource): Promise<void> {
+async function applyDescription(pr: PrRecord, section: string): Promise<void> {
   const ref = { repo: pr.repo, number: pr.number };
-  const live = viewPr(ref, source).body;
+  const live = viewPr(ref).body;
   const body = await withDescriptionSection(live, section);
   if (body === live) {
     note(`publish-pr: ${pr.url}'s description section is already current.`);
     return;
   }
-  editPrBody(ref, body, source);
-}
-
-/**
- * Read an existing pull request back until it reports the commit just pushed.
- * GitHub's pull request API can keep reporting the previous head for a while after
- * the remote branch has moved (pushHead already proved the branch with ls-remote).
- * Review compares that recorded head with its checkout, so recording a stale one
- * fails the round with a false head mismatch.
- */
-function awaitHead(read: () => PrRecord, pushed: string, first: PrRecord = read()): PrRecord {
-  let pr = first;
-  for (let attempt = 0; pr.head_revision !== pushed && attempt < 12; attempt++) {
-    Bun.sleepSync(5_000);
-    pr = read();
-  }
-  if (pr.head_revision !== pushed) {
-    throw new Error(
-      `pushed ${pushed}, but pull request ${String(pr.number)} still reports head ${pr.head_revision ?? 'none'} after 60s`
-    );
-  }
-  return pr;
+  editPrBody(ref, body);
 }
 
 function recordPublishedPr(claimPath: string, pr: PrRecord, required: boolean): void {
@@ -181,7 +159,6 @@ function recordPublishedPr(claimPath: string, pr: PrRecord, required: boolean): 
 }
 
 function publish(hasDescription: boolean): PrRecord {
-  const source = forgeSource();
   const repo = JSON.parse(text(process.env.INPUTS_REPO)) as Repo;
   const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Repo;
   const existing = nullableJson(process.env.INPUTS_EXISTING) as number | null;
@@ -201,7 +178,7 @@ function publish(hasDescription: boolean): PrRecord {
   if (existing !== null && named === null && branch) {
     note(`publish-pr: the caller selected ${branch}; pull request ${String(existing)} is reused only if it has that head.`);
   } else if (existing !== null) {
-    const view = viewPr({ repo, number: existing }, source);
+    const view = viewPr({ repo, number: existing });
     const prHeadRepo = view.pr.head_repo;
     if (view.pr.state !== 'open') {
       throw new Error(`pull request ${String(existing)} is ${view.pr.state}; nothing is pushed`);
@@ -209,23 +186,23 @@ function publish(hasDescription: boolean): PrRecord {
     if (prHeadRepo === null) {
       throw new Error(`pull request ${String(existing)}'s head repository is gone; nothing is pushed`);
     }
-    const pushed = pushHead({ repo, head_repo: prHeadRepo, head: view.pr.head });
+    pushHead({ repo, head_repo: prHeadRepo, head: view.pr.head });
     // The run continues a named pull request: its draft state belongs to its author,
     // and its description changes only by the section publish() applies when allowed.
-    const pr = awaitHead(() => viewPr({ repo, number: existing }, source).pr, pushed);
-    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr, hasDescription);
-    return pr;
+    // The record names the pull request; its `head_revision` is the read before the
+    // push, and no reader takes the pushed commit from it.
+    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), view.pr, hasDescription);
+    return view.pr;
   }
 
   const head = branch || text(process.env.INPUTS_HEAD);
   const headRevision = pushHead({ repo, head_repo: headRepo, head });
 
-  const open = findOpenPrByHead(repo, headRepo, head, source);
+  const open = findOpenPrByHead(repo, headRepo, head);
   if (open) {
     note(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
-    const pr = awaitHead(() => viewPr({ repo, number: open.pr.number }, source).pr, headRevision, open.pr);
-    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), pr, hasDescription);
-    return pr;
+    recordPublishedPr(join(artifacts, PR_CREATE_RECORD), open.pr, hasDescription);
+    return open.pr;
   }
 
   const body = record(nullableJson(process.env.INPUTS_BODY));
@@ -267,8 +244,7 @@ function publish(hasDescription: boolean): PrRecord {
         title: text(process.env.INPUTS_TITLE),
         bodyPath,
         draft: trimmed(process.env.INPUTS_DRAFT) === 'true',
-      },
-      source
+      }
     );
     recordPublishedPr(claimPath, pr, true);
     return pr;
@@ -287,7 +263,7 @@ async function publishWithDescription(): Promise<PrRecord> {
   const section = await preparedSection(artifactsDir());
   const pr = publish(section !== undefined);
   // The edit does not move the head, so the head-verified record stays the output.
-  if (section !== undefined) await applyDescription(pr, section, forgeSource());
+  if (section !== undefined) await applyDescription(pr, section);
   return pr;
 }
 

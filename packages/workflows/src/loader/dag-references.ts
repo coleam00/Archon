@@ -1,3 +1,4 @@
+import { INPUTS_SCOPE } from '../reference-scopes';
 import type { DagNode, IncludeDirective } from '../schemas';
 import {
   isAgentNode,
@@ -13,7 +14,6 @@ import {
   assertSupportedWhenOutputRefs,
   parseWhenExpression,
   splitOutsideQuotes,
-  WHEN_INPUTS_SCOPE,
   type WhenAtom,
 } from '../when-atom';
 import {
@@ -95,7 +95,8 @@ const ATTENTION_OPTION_JSON_SCHEMA = z.toJSONSchema(attentionOptionSchema);
  * Why a producer's `output_format` cannot yield attention options at `options`'s field,
  * or undefined when it can or declares no schema (the pause-time check then owns it).
  * The field must be an array whose items declare only `attentionOptionSchema`'s
- * properties, with the same types, and require what it requires.
+ * properties, with the same types (any type for the untyped `value`), and require what it
+ * requires.
  */
 function referencedOptionsShapeError(
   options: string,
@@ -119,7 +120,8 @@ function referencedOptionsShapeError(
     ATTENTION_OPTION_JSON_SCHEMA;
   const expected = Object.entries(optionProperties)
     .map(([key, property]) => {
-      const type = isRecord(property) ? String(property.type) : 'unknown';
+      const type =
+        isRecord(property) && property.type !== undefined ? String(property.type) : 'any';
       return optionRequired.includes(key) ? `${key}: ${type}` : `${key}?: ${type}`;
     })
     .join('; ');
@@ -138,8 +140,11 @@ function isAttentionOptionsSchema(schema: unknown): boolean {
     isRecord(itemProperties) &&
     Object.entries(itemProperties).every(([key, property]) => {
       const optionProperty = optionProperties[key];
+      // An option property with no declared type (`value`) takes any producer type.
       return (
-        isRecord(property) && isRecord(optionProperty) && property.type === optionProperty.type
+        isRecord(property) &&
+        isRecord(optionProperty) &&
+        (optionProperty.type === undefined || property.type === optionProperty.type)
       );
     }) &&
     optionRequired.every(
@@ -388,7 +393,7 @@ function declaredOutputPathRefError(
   ref: OutputPathRef,
   scope: DagScope
 ): string | null {
-  if (ref.nodeId === WHEN_INPUTS_SCOPE || ref.field === undefined) return null;
+  if (ref.nodeId === INPUTS_SCOPE || ref.field === undefined) return null;
   const producer = outputPathProducer(ref, source, scope);
   if (!producer || isIncludeDirective(producer)) return null;
   const paths = definedOutputPaths(producer);
@@ -420,7 +425,7 @@ function unknownTemplateNodeError(
     const refNodeId = m[1];
     // `$INPUTS.name` is an input macro. In particular, `$INPUTS.output` also
     // matches the canonical node-ref grammar, so the macro must take precedence.
-    if (refNodeId === WHEN_INPUTS_SCOPE) continue;
+    if (refNodeId === INPUTS_SCOPE) continue;
     if (refNodeId === 'LOOP_PREV' && enclosingNodes !== undefined) continue;
     // Output refs (unlike depends_on) may also reach ENCLOSING-scope nodes: the
     // executor seeds a loop_group iteration's scoped output map with the outer
@@ -449,6 +454,8 @@ function checkWaitReferences(node: DagNode | IncludeDirective, scope: DagScope):
   if (node.wait.attention !== undefined) waitSources.push(['wait.attention', node.wait.attention]);
   for (const [key, label] of Object.entries(node.wait.labels ?? {}))
     waitSources.push([`wait.labels.${key}`, label]);
+  if (typeof node.wait.recommendation === 'string')
+    waitSources.push(['wait.recommendation', node.wait.recommendation]);
   if (typeof node.wait.options === 'string') {
     waitSources.push(['wait.options', node.wait.options]);
     const shapeError = referencedOptionsShapeError(
@@ -476,7 +483,7 @@ function waitProducerError(
     const producerId = m[1];
     if (
       producerId === undefined ||
-      producerId === WHEN_INPUTS_SCOPE ||
+      producerId === INPUTS_SCOPE ||
       scope.enclosingNodes?.has(producerId)
     ) {
       continue;
@@ -509,7 +516,7 @@ function unknownWhenReferenceError(nodeId: string, when: string, scope: DagScope
     const field = m[2];
     // `$INPUTS.name` is an include-time macro at load and a run-time input scope in
     // a sub-run — either way it is not a node reference.
-    if (refNodeId === WHEN_INPUTS_SCOPE) continue;
+    if (refNodeId === INPUTS_SCOPE) continue;
     if (refNodeId === 'LOOP_PREV' && enclosingNodes !== undefined) continue;
     if (refNodeId !== undefined && !nodesById.has(refNodeId) && !enclosingNodes?.has(refNodeId)) {
       return `Node '${nodeId}' field 'when' references unknown node '$${refNodeId}.${field ?? ''}'. In a composed workflow, pass caller data through declared 'inputs:' and caller 'with:' instead of referencing a caller node directly`;

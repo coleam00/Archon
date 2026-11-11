@@ -2,26 +2,21 @@
  * Apply the facts node's decision: write the work item first, then the labels that
  * mirror it, then close an item triage found resolved, then release the claim. A
  * close is checked before the first write; one the forge refuses leaves the item
- * BLOCKED for a maintainer instead. A closed issue gets the document write only.
+ * BLOCKED for a maintainer instead. An item no route can start from gets triage's
+ * questions as one marked comment. A closed issue gets the document write only.
  *
- * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; triage's
- * verdict fields, each "null" when triage did not run.
+ * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; INPUTS_TRIAGE,
+ * the triage node's typed output, "null" when triage did not run.
  */
 
-import { type Closure, type ClosePlan, planClose } from '../../.shared/close.ts';
+import { type ClosePlan, planClose } from '../../.shared/close.ts';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
 import { viewIssue } from '../../.shared/issue.ts';
+import { upsertComment } from '../../.shared/pr.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
-import {
-  type Contract,
-  type LabelVerdict,
-  isOwnedLabel,
-  type OwnedLabel,
-  type Route,
-  wantedLabels,
-  writeLabels,
-} from '../../.shared/labels.ts';
+import { type LabelVerdict, isPackLabel, type PackLabel, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
   applyDecision,
   assertNoSelfPromotion,
@@ -33,42 +28,44 @@ import {
   type WorkItem,
 } from '../../.shared/workitem.ts';
 
-/**
- * A string field of triage's verdict, or null when triage did not run. The engine
- * binds a string raw, not as JSON, and a skipped producer's `if_skipped: null` as
- * the text `null`.
- */
-function verdictText(value: string | undefined): string | null {
-  const raw = text(value);
-  return raw === 'null' ? null : raw;
+/** Triage's verdict from its node's typed output, or null when triage did not run on this path. */
+function triageResult(): TriageResult | null {
+  const triage = nullableJson(process.env.INPUTS_TRIAGE) as NodeOutput<'archon-triage-block', 'triage'> | null;
+  if (triage === null) return null;
+  // The triage block's labels node refuses a NOT_TRIAGED decision, so none reaches intake.
+  const decision = triage.decision as Exclude<typeof triage.decision, { contract: 'NOT_TRIAGED' }>;
+  return {
+    verdict: decision.contract === 'READY' ? { contract: 'READY', route: decision.route } : { contract: decision.contract },
+    pull_request: 'pull_request' in decision ? decision.pull_request : null,
+    type: triage.type,
+    size: triage.size,
+    complexity: triage.complexity,
+    importance: triage.importance,
+    urgency: triage.urgency,
+    related: triage.related,
+    closure: decision.contract === 'NO_ACTION' ? decision.closure : null,
+    questions: decision.contract === 'NEEDS_CONTRACT_WORK' ? decision.questions : [],
+    labels: triageLabels({ ...triage, decision }),
+    summary: triage.summary,
+    report: triage.report,
+  };
 }
 
-/** Triage's verdict, or null when triage did not run on this path. */
-function triageResult(): TriageResult | null {
-  const contract = verdictText(process.env.INPUTS_CONTRACT) as Contract | null;
-  if (contract === null) return null;
-  const route = verdictText(process.env.INPUTS_ROUTE) as Route;
-  const closure = nullableJson(process.env.INPUTS_CLOSURE) as Closure | null;
-  // A missing binding reads as null; a NO_ACTION verdict without its closure would
-  // label the item for a close that never happens.
-  if ((contract === 'NO_ACTION') !== (closure !== null)) {
-    throw new Error('a NO_ACTION verdict, and only that one, carries a closure');
-  }
-  const verdict: LabelVerdict = contract === 'READY' ? { contract, route } : { contract };
-  return {
-    verdict,
-    pull_request: nullableJson(process.env.INPUTS_PULL_REQUEST) as number | null,
-    type: nullableJson(process.env.INPUTS_TYPE) as TriageResult['type'],
-    size: nullableJson(process.env.INPUTS_SIZE) as TriageResult['size'],
-    complexity: nullableJson(process.env.INPUTS_COMPLEXITY) as TriageResult['complexity'],
-    importance: nullableJson(process.env.INPUTS_IMPORTANCE) as TriageResult['importance'],
-    urgency: nullableJson(process.env.INPUTS_URGENCY) as TriageResult['urgency'],
-    related: (nullableJson(process.env.INPUTS_RELATED) as TriageResult['related']) ?? [],
-    closure,
-    labels: nullableJson(process.env.INPUTS_LABELS) as string[],
-    summary: text(process.env.INPUTS_SUMMARY),
-    report: nullableJson(process.env.INPUTS_REPORT) as TriageResult['report'],
-  };
+const QUESTIONS_MARKER = '<!-- archon-questions -->';
+
+/**
+ * Put triage's questions on the issue as one marked comment, so a repeated run edits it
+ * rather than adding another. The questions are the agent's; the last line is how an
+ * answer reaches the pack.
+ */
+function askAuthor(item: QualifiedPr, questions: readonly string[]): void {
+  const body = [
+    QUESTIONS_MARKER,
+    'No run can start from this issue yet. It needs an answer to:',
+    questions.map(question => `- ${question}`).join('\n'),
+    'Answer by editing the issue or in a comment. A maintainer then adds the `archon-triage` label to have it triaged again.',
+  ].join('\n\n');
+  upsertComment({ kind: 'issue', ref: item }, QUESTIONS_MARKER, body);
 }
 
 /** Triage's closable verdict as a BLOCKED one, when the close it declared was refused. */
@@ -80,7 +77,7 @@ function leftToMaintainer(triage: TriageResult, refused: string): TriageResult {
     closure: null,
     labels: [
       ...wantedLabels(verdict, triage.type.value, triage.size.value),
-      ...triage.labels.filter(name => !isOwnedLabel(name)),
+      ...triage.labels.filter(name => !isPackLabel(name)),
     ],
     summary: `${triage.summary} The close was refused: ${refused}; a maintainer decides.`,
   };
@@ -95,7 +92,7 @@ function labelDelta(
   decision: IntakeDecision,
   triage: TriageResult | null,
   bodyMoved: boolean
-): { add: readonly string[]; remove: OwnedLabel[] } | null {
+): { add: readonly string[]; remove: PackLabel[] } | null {
   if (decision.path === 'closed') return null;
   const add: readonly string[] =
     decision.path === 'triage' && !bodyMoved && triage !== null
@@ -108,7 +105,7 @@ function labelDelta(
   return {
     add,
     remove: decision.labels
-      .filter(isOwnedLabel)
+      .filter(isPackLabel)
       .filter(name => !add.includes(name) && !requested.has(name)),
   };
 }
@@ -132,11 +129,10 @@ function main(): void {
     });
     return;
   }
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '')
-    throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
-  const decision = nullableJson(process.env.INPUTS_DECISION) as IntakeDecision;
+  const decision = nullableJson(process.env.INPUTS_DECISION) as IntakeDecision | null;
+  if (decision === null) throw new Error('facts claimed an item and decided nothing for it');
   const triage = triageResult();
   const at = new Date().toISOString();
 
@@ -160,6 +156,7 @@ function main(): void {
   const delta = labelDelta(next, decision, judged, bodyMoved);
   const labels = delta === null ? [] : writeLabels(item, delta.add, delta.remove);
   if (close !== null && close.refused === null) close.close();
+  if (!bodyMoved && triage !== null && triage.questions.length > 0) askAuthor(item, triage.questions);
   // Clearing the claim is what marks this run's requests honored; a run that stops
   // before it leaves them for the next pickup to queue again.
   updateClaimed(item, runId, doc => ({ ...doc, claim: null }));

@@ -14,7 +14,7 @@ archon plugin add owner/repo     # install a workflow pack published on GitHub
 
 The live list is authoritative. Bundled workflows ship under the `archon-` prefix
 (e.g. `archon-ship`, `archon-review`, `archon-deliver`, `archon-investigate`,
-`archon-triage`, `archon-upkeep`); user-authored workflows may
+`archon-triage`); user-authored workflows may
 claim any name and override a bundled one in that repo.
 
 In JSON output, `descriptionTruncated: true` means `description` is a discovery preview,
@@ -104,7 +104,7 @@ Rules:
 2. **For git projects, pass `--branch`** unless the user chose otherwise. Derive the name
    from the domain of work — code: `fix/<topic-or-issue-N>`, `feat/<name>`,
    `review/pr-N`; ops/process runs: e.g. `ops/<queue>-<item>`,
-   `upkeep/<dependency>`, `triage/<source>`. To run on
+   `triage/<source>`. To run on
    different models for one run, see `managing-runs.md` ("Overriding models for one
    run").
    A worktree created for `--branch` stays when the run ends; `archon isolation
@@ -134,12 +134,11 @@ YAML lists each input with its default and meaning. An input without a default i
 required, and an undeclared name is refused.
 
 ```bash
-archon workflow run archon-intake \
-  --input repo_host=github.com --input repo_path=<owner>/<repo> --input number=42 --detach
+archon workflow run archon-intake --input number=42 --detach
 ```
 
-Inputs and a message can be combined. Queue workflows such as the SDLC pack's take
-inputs only; `queues.md` lists them.
+Inputs and a message can be combined. The SDLC pack's queues take inputs, and the
+build queue also reads a message that says what to build; `queues.md` lists them.
 
 ## Monitoring
 

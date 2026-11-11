@@ -83,7 +83,8 @@ export function captureWorkflowNoMatch(transport: 'native_tool' | 'cli'): void {
  * platforms (slack/telegram/discord/github/web/cli). Workflow runs are excluded
  * by construction (they emit `workflow_invoked` from the executor instead; the
  * orchestrator capture sites sit on the chat-only completion paths). Carries
- * platform + provider + outcome only — never message content or conversation ids.
+ * categorical context, duration, and provider-reported usage (including cache
+ * usage) — never message content or conversation ids.
  */
 export function captureChatTurn(props: ChatTurnProperties): void {
   if (isTelemetryDisabled()) return;

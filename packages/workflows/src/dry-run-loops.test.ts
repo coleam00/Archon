@@ -110,6 +110,48 @@ describe('dry-run loops', () => {
     expect(result.trace[0]?.reason).toContain("'done' is true");
   });
 
+  test('completes an exhausted loop and loop_group under on_exhausted: complete', async () => {
+    const loop = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'loop-exhausted',
+        nodes: [
+          {
+            id: 'review',
+            loop: { prompt: 'work', until: 'DONE', max_iterations: 2, on_exhausted: 'complete' },
+          },
+        ],
+      }),
+      stubs: { review: 'keep going' },
+    });
+    expect(loop.outcome).toBe('completed');
+    expect(loop.trace[0]).toMatchObject({ state: 'stubbed', output: 'keep going' });
+    expect(loop.trace[0]?.reason).toContain('reached max iterations (2)');
+
+    const group = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'group-exhausted',
+        nodes: [
+          {
+            id: 'group',
+            loop_group: {
+              until: 'DONE',
+              max_iterations: 2,
+              on_exhausted: 'complete',
+              nodes: [{ id: 'draft', prompt: 'draft' }],
+            },
+          },
+        ],
+      }),
+      stubs: { draft: 'not yet' },
+    });
+    expect(group.outcome).toBe('completed');
+    expect(group.trace.at(-1)).toMatchObject({
+      nodeId: 'group',
+      state: 'completed',
+      output: 'not yet',
+    });
+  });
+
   test('simulates loop-group body outputs without leaking iteration state', async () => {
     const workflow = makeTestWorkflow({
       name: 'loop-group',

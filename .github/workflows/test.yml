@@ -39,6 +39,8 @@ jobs:
     outputs:
       run-tests: ${{ steps.decision.outputs.run-tests }}
       run-workspace-tests: ${{ steps.decision.outputs.run-workspace-tests }}
+      run-pack-tests: ${{ steps.decision.outputs.run-pack-tests }}
+      run-pack-fixtures: ${{ steps.decision.outputs.run-pack-fixtures }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -52,7 +54,8 @@ jobs:
       # The script reads the event from GITHUB_EVENT_NAME and GITHUB_EVENT_PATH. A pull
       # request is judged on its whole diff. A push skips only when a pull request run
       # already passed every job on the same tree (proofFromPullRequestRun in the script),
-      # and otherwise runs the suite.
+      # and otherwise runs the suite. A dispatch runs the suite, and the pack checks only when
+      # its `pack-tests` or `pack-fixtures` input asks.
       # Assign before echoing. A failing command substituted into another command's arguments
       # does not trip `set -e`, so `echo "run-tests=$(...)"` would report success and write an
       # empty decision that every downstream `== 'true'` gate reads as "skip".
@@ -66,17 +69,20 @@ jobs:
           echo "run-tests=$run_tests" >> "$GITHUB_OUTPUT"
           run_workspace_tests=$(bun scripts/should-run-test-suite.ts --workspace-tests)
           echo "run-workspace-tests=$run_workspace_tests" >> "$GITHUB_OUTPUT"
+          run_pack_tests=$(bun scripts/should-run-test-suite.ts --pack-tests)
+          echo "run-pack-tests=$run_pack_tests" >> "$GITHUB_OUTPUT"
+          run_pack_fixtures=$(bun scripts/should-run-test-suite.ts --pack-fixtures)
+          echo "run-pack-fixtures=$run_pack_fixtures" >> "$GITHUB_OUTPUT"
 
   # CI splits `bun run validate` across jobs by check id so the slow checks run side by side
   # instead of one after another. A check whose result cannot depend on the OS (type-check,
   # lint, format) runs once, in `static` on Linux; Windows runs only what can differ there.
   #
   # The test shards are the `shard` names in `ROOT_TEST_PLAN` (scripts/repo-tests.ts). The
-  # workspace shards run here; the root scripts shard runs in `test-scripts`, and so does the
-  # pack shard, only on a dispatch that sets `pack-tests`. They are two jobs
-  # because each has its own gate, and a job-level `if` cannot read the matrix. A skipped job,
-  # unlike a skipped step, keeps a pull request run from proving its merge, so the dev push
-  # then runs every shard.
+  # workspace shards run here, the root scripts shard in `test-scripts`, and the pack shard in
+  # `test-pack`. They are separate jobs because each has its own gate, and a job-level `if`
+  # cannot read the matrix. A skipped job, unlike a skipped step, keeps a pull request run from
+  # proving its merge, so the dev push then runs every shard.
   test:
     needs: changes
     if: needs.changes.outputs.run-workspace-tests == 'true'
@@ -253,14 +259,54 @@ jobs:
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only cli-import-boundary,package-edges,generated-files,script-tests
 
-      # The pack shard runs only on a dispatch that sets `pack-tests`. These are steps, not a
-      # job: a job skipped on every pull request would keep that run from proving its merge.
+  # The pack shard and the workflow fixtures, which dry-run the bundled workflows (almost all of
+  # them the SDLC pack's). They run when the change touches the pack or a contract it is written
+  # against (`PACK_INPUTS` in scripts/should-run-test-suite.ts), or on a dispatch that asks.
+  # Every step is gated, not the job: the job runs with the suite and passes having run nothing,
+  # so a pull request that leaves the pack alone still proves its merge.
+  test-pack:
+    needs: changes
+    if: needs.changes.outputs.run-tests == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    env:
+      RUN_PACK: ${{ needs.changes.outputs.run-pack-tests == 'true' || needs.changes.outputs.run-pack-fixtures == 'true' }}
+    steps:
+      - uses: actions/checkout@v4
+        if: env.RUN_PACK == 'true'
+
+      - name: Setup Bun
+        if: env.RUN_PACK == 'true'
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Setup uv
+        if: env.RUN_PACK == 'true'
+        uses: astral-sh/setup-uv@v4
+
+      - name: Install dependencies
+        if: env.RUN_PACK == 'true'
+        run: bun install --frozen-lockfile
+        env:
+          # On D: beside the checkout; see the install step in `test`.
+          BUN_INSTALL_CACHE_DIR: ${{ runner.temp }}/bun-install-cache
+
+      - name: Warm uv
+        if: env.RUN_PACK == 'true' && runner.os == 'Windows'
+        run: uv run python -c "print('uv warm')"
+
+      # Temp and git settings: see the Windows steps in `test`.
       - name: Pack script tests (Linux)
-        if: inputs.pack-tests && runner.os == 'Linux'
+        if: needs.changes.outputs.run-pack-tests == 'true' && runner.os == 'Linux'
         run: bun run validate --only pack-tests
 
       - name: Pack script tests (Windows)
-        if: inputs.pack-tests && runner.os == 'Windows'
+        if: needs.changes.outputs.run-pack-tests == 'true' && runner.os == 'Windows'
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
@@ -268,14 +314,12 @@ jobs:
           $env:PATH = "C:\Program Files\Git\mingw64\bin;$env:PATH"
           bun run validate --only pack-tests
 
-      # Workflow fixtures dry-run the bundled workflows, almost all of them the SDLC pack's.
-      # Like the pack tests, they run only on a dispatch that sets `pack-fixtures`.
       - name: Workflow fixtures (Linux)
-        if: inputs.pack-fixtures && runner.os == 'Linux'
+        if: needs.changes.outputs.run-pack-fixtures == 'true' && runner.os == 'Linux'
         run: bun run validate --only workflow-fixtures
 
       - name: Workflow fixtures (Windows)
-        if: inputs.pack-fixtures && runner.os == 'Windows'
+        if: needs.changes.outputs.run-pack-fixtures == 'true' && runner.os == 'Windows'
         env:
           TEMP: ${{ runner.temp }}
           TMP: ${{ runner.temp }}
@@ -325,7 +369,7 @@ jobs:
         run: bun install --frozen-lockfile
 
       - name: Validate
-        run: bun run validate --only cli-import-boundary,package-edges,generated-files,merge-sweep-contract,type-check,lint,mock-modules,format
+        run: bun run validate --only cli-import-boundary,package-edges,generated-files,type-check,lint,format
 
       # The ratchet compares against the merge base with origin/$GITHUB_BASE_REF, which the
       # full fetch above provides. A push skips it: the change is already merged, and a squash
@@ -632,6 +676,12 @@ jobs:
       - name: Smoke-test Pi Bedrock in the compiled plugin
         shell: bash
         run: bun packages/core/src/test/provider-plugin-smoke.ts pi-bedrock dist/archon-provider-pi-*
+      - name: Smoke-test Pi OAuth credential check in the compiled plugin
+        shell: bash
+        run: bun packages/core/src/test/provider-plugin-smoke.ts pi-oauth dist/archon-provider-pi-*
+      - name: Smoke-test archon doctor on Pi OAuth logins
+        shell: bash
+        run: bun packages/core/src/test/provider-plugin-smoke.ts pi-oauth-doctor dist/${{ matrix.binary }} dist/archon-provider-pi-*
 
   test-suite:
     name: Test Suite
@@ -641,6 +691,7 @@ jobs:
         static,
         test,
         test-scripts,
+        test-pack,
         file-store-primitives-macos,
         schema-upgrade,
         postgres-parity,

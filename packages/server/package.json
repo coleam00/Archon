@@ -1,6 +1,6 @@
 {
   "name": "@archon/server",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "type": "module",
   "main": "./src/index.ts",
   "scripts": {
@@ -69,6 +69,9 @@
     ],
     [
       "src/routes/api.run-attention.test.ts"
+    ],
+    [
+      "src/routes/api.attention-stream.test.ts"
     ],
     [
       "src/routes/api.artifacts.test.ts"

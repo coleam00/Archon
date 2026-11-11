@@ -21,7 +21,12 @@ import {
   isWorkflowWaitContext,
   workflowWaitStepName,
 } from './run-wait';
-import { attentionFormSchema, attentionOptionSchema } from './wait-node';
+import {
+  attentionFormSchema,
+  attentionOptionSchema,
+  attentionRecommendationSchema,
+  type AttentionRecommendation,
+} from './wait-node';
 import type { WorkflowRun } from './workflow-run';
 
 // ---------------------------------------------------------------------------
@@ -105,6 +110,7 @@ const nonTerminalRunAttentionSchemas = [
     occurrence: z.string(),
     form: attentionFormSchema,
     options: z.array(attentionOptionSchema),
+    recommendation: attentionRecommendationSchema.optional(),
   }),
   z.object({
     kind: z.literal('usage_limit'),
@@ -183,6 +189,32 @@ function unreadableAttention(
   detail: string
 ): RunAttention {
   return { kind: 'unreadable', runId, reason, detail };
+}
+
+/** A recommendation in one line of text: `merge (high confidence). Review is ready.` */
+export function describeAttentionRecommendation(recommendation: AttentionRecommendation): string {
+  const confidence =
+    recommendation.confidence === undefined ? '' : ` (${recommendation.confidence} confidence)`;
+  return `${recommendation.option}${confidence}. ${recommendation.why}`;
+}
+
+/**
+ * What an attention wait offers, as text lines for a surface that lists runs: each option
+ * with what it does, then the recommendation.
+ */
+export function attentionChoiceSummary(
+  attention: Extract<RunAttention, { kind: 'attention' }>
+): string[] {
+  const { options, recommendation } = attention;
+  const listed = options.map(option =>
+    option.does === undefined ? option.id : `${option.id} (${option.does})`
+  );
+  return [
+    ...(listed.length > 0 ? [`options: ${listed.join(', ')}`] : []),
+    ...(recommendation === undefined
+      ? []
+      : [`recommended: ${describeAttentionRecommendation(recommendation)}`]),
+  ];
 }
 
 /**
@@ -265,6 +297,7 @@ function pausedAttention(run: RunAttentionInput): RunAttention | null {
       occurrence: attentionOccurrence(wait),
       form: attentionForm(wait),
       options: [...attentionOptions(wait)],
+      ...(wait.recommendation !== undefined ? { recommendation: wait.recommendation } : {}),
     };
   }
 

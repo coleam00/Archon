@@ -7,52 +7,43 @@
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
- * its claim until the ruling node records the answer. A continue then starts the item's
- * next round at once, on the run config and input selections this run started with; if
- * that launch fails, the item waits for the next queue run.
+ * its claim until the ruling node records the answer. The round carries the review
+ * verdicts its delivery published and the latest validation its CI agent ran. A
+ * continue then starts the item's next round at once through the operator's
+ * build-queue binding; if it does not start, the item waits for the next queue run.
  *
- * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
- * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
+ * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ORDER and INPUTS_HANDOFF,
+ * the order's and the handoff's summaries, empty when skipped; INPUTS_ROUTE,
+ * INPUTS_ENDING (archon-build's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
- * INPUTS_RETRIAGE_AS and INPUTS_ROUND_LIMIT, the workflow's inputs.
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's input; INPUTS_REVIEWS and INPUTS_CI, every
+ * `review-report` and `ci-report` output of this run.
  */
 
-import type { ApplyDecision, AskedBy, BuildAttention, BuildRound, BuildStatus } from '../../.shared/build.ts';
-import { withBuild } from '../../.shared/build.ts';
-import { forgeSource, parseQualifiedPr, type ForgeSource, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
+import {
+  type AskedBy,
+  type BuildAttention,
+  type BuildRound,
+  type BuildStatus,
+  nextRound,
+  roundPrNumber,
+  type Validation,
+  withBuild,
+} from '../../.shared/build.ts';
+import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { type BuildQueueSelections, launchNextRound } from '../../.shared/launch.ts';
-import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed, typedOutputs, UNREADABLE_OUTPUTS, workflowRunId } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
-import { attentionOptions, checkAttention, type DecisionEntry, renderAttention, withOther } from '../../.shared/queue.ts';
+import { runReviews } from '../../.shared/review-rounds.ts';
+import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
-interface RouteOutput {
-  readonly decision: 'launch' | 'ask' | 'ready';
-  readonly ready_head?: string | null;
-  readonly brief: string;
-  readonly reason: string;
-  readonly attention: BuildAttention | null;
-}
-
-interface AnswerOutput {
-  readonly decision: 'done' | 'continue' | 'ask';
-  readonly brief: string;
-  readonly push: QualifiedPr | null;
-  readonly reason: string;
-  /** The agent's own class for an ask; the round count does not decide it. Ignored otherwise. */
-  readonly ask_class: Exclude<AskedBy, 'route'>;
-  readonly attention: BuildAttention | null;
-}
-
-interface ShipReport {
-  readonly delivered: boolean;
-  readonly reason: string;
-  readonly pr_url: string;
-  readonly summary: string;
-}
+type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
+type AnswerOutput = NodeOutput<'archon-build-queue', 'answer'>;
+type ShipReport = NodeOutput<'archon-build', 'report'>;
 
 /** What the run decided, before anything is written. */
 type Decision =
@@ -95,7 +86,7 @@ function decide(
 
 /** Push the checkout's commits to the pull request's head; git refuses anything but a fast-forward. */
 function pushTo(pr: QualifiedPr): string {
-  const view = viewPr(pr, forgeSource());
+  const view = viewPr(pr);
   if (view.pr.state !== 'open') throw new Error(`${view.pr.url} is ${view.pr.state}; nothing is pushed to it`);
   if (view.pr.head_revision === gitOrThrow('rev-parse', 'HEAD')) return 'its head already holds the checkout';
   const pushed = pushHead({ repo: pr.repo, head_repo: view.pr.head_repo, head: view.pr.head });
@@ -106,18 +97,18 @@ function observedPr(pr: PrRecord): string {
   return `observed ${pr.state}, draft=${String(pr.is_draft)} at ${String(pr.head_revision)}`;
 }
 
-function rejectChangedHead(after: PrRecord, head: string, source: ForgeSource): never {
+function rejectChangedHead(after: PrRecord, head: string): never {
   const mismatch = `${after.url}: route judged ${head}; ready read-back ${observedPr(after)}`;
   if (after.is_draft) throw new Error(mismatch);
   const ref = { repo: after.repo, number: after.number };
   let corrected: PrRecord;
   try {
-    corrected = setPrDraft(ref, true, source);
+    corrected = setPrDraft(ref, true);
   } catch (error) {
     const correctionError = error instanceof Error ? error.message : String(error);
     let latest: string;
     try {
-      latest = observedPr(viewPr(ref, source).pr);
+      latest = observedPr(viewPr(ref).pr);
     } catch (readError) {
       latest = `final state unknown: ${readError instanceof Error ? readError.message : String(readError)}`;
     }
@@ -136,13 +127,12 @@ function rejectChangedHead(after: PrRecord, head: string, source: ForgeSource): 
 function markReady(pr: PrRecord | null, head: string | null | undefined): string {
   if (pr === null) throw new Error('route declared ready with no pull request');
   if (typeof head !== 'string' || head === '') throw new Error('route declared ready without the head it judged');
-  const source = forgeSource();
   const ref = { repo: pr.repo, number: pr.number };
-  const now = viewPr(ref, source).pr;
+  const now = viewPr(ref).pr;
   if (now.state !== 'open' || now.head_revision !== head)
     throw new Error(`${now.url} is ${now.state} at ${String(now.head_revision)}; route judged it at ${head}`);
-  const after = setPrDraft(ref, false, source);
-  if (after.head_revision !== head) rejectChangedHead(after, head, source);
+  const after = setPrDraft(ref, false);
+  if (after.head_revision !== head) rejectChangedHead(after, head);
   if (after.is_draft)
     throw new Error(`${after.url} reads back draft=${String(after.is_draft)} at ${String(after.head_revision)}`);
   return `${after.url} marked ready at ${head}`;
@@ -168,56 +158,112 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
 }
 
 /** The summary once the writes are done; a continue starts the next round now instead of waiting for the next queue run. */
-function afterWrite(
-  summary: string,
-  wrote: string | null,
-  decision: Decision,
-  item: QualifiedPr,
-  runId: string,
-  selections: BuildQueueSelections
-): string {
+function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
   const written = wrote === null ? summary : `${summary} (${wrote})`;
-  return decision.kind === 'continue' ? `${written}; ${launchNextRound(item, runId, selections)}` : written;
+  return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
+}
+
+/** The summary of a path with no item, so nothing is written or asked; null on an item's path. */
+function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string } | null {
+  switch (path) {
+    case 'idle':
+      return {
+        decision: path,
+        summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
+      };
+    case 'order':
+      return { decision: path, summary: text(process.env.INPUTS_ORDER) };
+    case 'handoff':
+      return { decision: path, summary: text(process.env.INPUTS_HANDOFF) };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The review verdicts this run's delivery published, for the round's record. Unreadable
+ * outputs leave them out, noted: the round is still recorded, and the review-round
+ * metric reads its run's artifacts instead or skips its pull request.
+ */
+function reviewsOf(): Pick<BuildRound, 'reviews'> {
+  const reviews = typedOutputs<{ ready: boolean }>(process.env.INPUTS_REVIEWS);
+  if (reviews !== null) return { reviews: runReviews(reviews) };
+  note(`the round records no review verdicts: ${UNREADABLE_OUTPUTS}`);
+  return {};
+}
+
+/**
+ * The latest full validation this run's CI agent ran, for the round's record. Unreadable
+ * outputs leave it out, noted: under `ci: none` the gate then refuses the pull request
+ * until a later round records one.
+ */
+function validationOf(): Pick<BuildRound, 'validation'> {
+  const reports = typedOutputs<{ validation: Validation | null }>(process.env.INPUTS_CI);
+  if (reports === null) {
+    note(`the round records no validation: ${UNREADABLE_OUTPUTS}`);
+    return {};
+  }
+  const validation = reports.map(report => report.value.validation).filter(ran => ran !== null).at(-1);
+  return validation == null ? {} : { validation };
+}
+
+/**
+ * The number of the round's pull request, resolved through the forge, for the round's
+ * record. A forge that cannot answer now leaves it out, noted: the round is still
+ * recorded, and the next read of the item's pull request resolves the URL, and refuses
+ * there if it is not one of the item's repository.
+ */
+function prNumberOf(url: string, repo: QualifiedPr['repo']): Pick<BuildRound, 'pr_number'> {
+  if (url === '') return {};
+  try {
+    return { pr_number: roundPrNumber(url, repo) };
+  } catch (error) {
+    note(`the round records no pull request number: ${error instanceof Error ? error.message : String(error)}`);
+    return {};
+  }
 }
 
 function main(): void {
   const path = trimmed(process.env.INPUTS_PATH);
-  if (path === 'idle') {
-    emit({
-      decision: 'idle',
-      summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
-      attention: '',
-      options: [],
-      class: '',
-      asked: null,
-    });
+  const noItem = noItemSummary(path);
+  if (noItem !== null) {
+    emit({ ...noItem, attention: '', options: [], recommendation: null, class: '', asked: null });
     return;
   }
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
   const ending = nullableJson(process.env.INPUTS_ENDING) as ShipReport | null;
   const at = new Date().toISOString();
-  const round: BuildRound | null =
-    ending === null ? null : { run_id: runId, at, ...ending, artifacts: artifactsDir() };
   const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
   const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
+  const round: BuildRound | null =
+    ending === null
+      ? null
+      : {
+          run_id: runId,
+          at,
+          ...ending,
+          ...prNumberOf(ending.pr_url, item.repo),
+          artifacts: artifactsDir(),
+          ...(route === null ? {} : { route: route.route }),
+          ...reviewsOf(),
+          ...validationOf(),
+        };
   const decision = decide(path, route, answer);
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
-  const attention =
+  const wait =
     asking === null
-      ? ''
-      : renderAttention(`Build queue, issue ${String(item.number)}: ${asking.by} decision`, asking.attention);
+      ? null
+      : attentionWait(`Build queue, issue ${String(item.number)}: ${asking.by} decision`, asking.attention);
   const links = [
     ...(round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '')),
     ...(asking?.attention.links ?? []),
   ];
   const result = {
-    decision: decision.kind satisfies ApplyDecision,
+    decision: decision.kind,
     summary: summaryOf(item, decision),
-    attention,
-    options: asking === null ? [] : attentionOptions(asking.attention),
+    ...askFields(wait),
     class: asking?.by ?? '',
     asked:
       asking === null ? null : { attention: asking.attention, brief: asking.brief, by: asking.by },
@@ -244,11 +290,7 @@ function main(): void {
       release: asking === null,
     })
   );
-  const selections: BuildQueueSelections = {
-    retriage_as: text(process.env.INPUTS_RETRIAGE_AS),
-    round_limit: text(process.env.INPUTS_ROUND_LIMIT),
-  };
-  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId, selections) });
+  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
 }
 
 try {

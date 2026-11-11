@@ -53,6 +53,46 @@ export function nullableJson(value: string | undefined): unknown {
   return raw === '' ? null : (JSON.parse(raw) as unknown);
 }
 
+export function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * One typed output of this run, as a `with: { <name>: { outputs: <output_type> } }`
+ * binding delivers it: the node that produced it, its loop iterations (outermost
+ * first, empty at top level), when the engine recorded it, and its certified value.
+ */
+export interface TypedOutput<T> {
+  readonly node: string;
+  readonly loop: readonly { readonly group: string; readonly iteration: number }[];
+  readonly at: string;
+  readonly value: T;
+}
+
+/** What a script says when a binding declared `if_unreadable: null` and took it. */
+export const UNREADABLE_OUTPUTS = "a typed-output record of this run could not be read; the run's log names it";
+
+/**
+ * A bound typed-outputs value: every output of the type, oldest first, and complete.
+ * Null when a record could not be read and the binding declared `if_unreadable: null`;
+ * without that declaration the engine fails the node instead.
+ */
+export function typedOutputs<T>(bound: string | undefined): readonly TypedOutput<T>[] | null {
+  return JSON.parse(text(bound)) as TypedOutput<T>[] | null;
+}
+
+/**
+ * This run's id. The engine supplies it to every exec node, so its absence is a bug in
+ * the engine rather than a state a script should report on.
+ */
+export function workflowRunId(): string {
+  const value = process.env.WORKFLOW_ID;
+  if (value === undefined || value === '') {
+    throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  }
+  return value;
+}
+
 /**
  * This run's artifact directory.
  *

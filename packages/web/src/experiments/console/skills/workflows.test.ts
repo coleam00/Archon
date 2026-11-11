@@ -1,41 +1,5 @@
 import { describe, test, expect, afterEach } from 'bun:test';
-import {
-  buildWorkflowPath,
-  buildSavePath,
-  getWorkflowGraph,
-  listWorkflows,
-  loadWorkflow,
-} from './workflows';
-
-describe('buildWorkflowPath', () => {
-  test('encodes both name and cwd', () => {
-    expect(buildWorkflowPath('my-flow', 'D:/Dynamous/Archon')).toBe(
-      '/api/workflows/my-flow?cwd=D%3A%2FDynamous%2FArchon'
-    );
-  });
-
-  test('encodes special characters in the name', () => {
-    expect(buildWorkflowPath('a b', '/repo')).toBe('/api/workflows/a%20b?cwd=%2Frepo');
-  });
-
-  test('uses encodeURIComponent (not encodeURI) — a literal % is escaped', () => {
-    expect(buildWorkflowPath('50%off', '/repo')).toBe('/api/workflows/50%25off?cwd=%2Frepo');
-  });
-});
-
-describe('buildSavePath', () => {
-  test('appends &source=project to the encoded cwd query', () => {
-    expect(buildSavePath('my-flow', '/repo', 'project')).toBe(
-      '/api/workflows/my-flow?cwd=%2Frepo&source=project'
-    );
-  });
-
-  test('appends &source=global', () => {
-    expect(buildSavePath('my-flow', '/repo', 'global')).toBe(
-      '/api/workflows/my-flow?cwd=%2Frepo&source=global'
-    );
-  });
-});
+import { getWorkflowGraph, listWorkflows, loadWorkflow } from './workflows';
 
 describe('listWorkflows — declared inputs survive the wire mapping (#2554)', () => {
   const originalFetch = globalThis.fetch;
@@ -45,10 +9,6 @@ describe('listWorkflows — declared inputs survive the wire mapping (#2554)', (
   });
 
   test("carries a workflow's declared inputs through to the console primitive", async () => {
-    // The console's run form depends on this field surviving `listWorkflows`, and the
-    // wire shape here is hand-rolled — it once omitted `inputs` entirely and still
-    // compiled, because a missing optional property satisfies the parameter type. This
-    // is the regression guard the compiler cannot be.
     globalThis.fetch = ((_input: RequestInfo | URL, _init?: RequestInit) =>
       Promise.resolve(
         new Response(

@@ -921,6 +921,7 @@ describe('CodexProvider', () => {
         config: {
           sandbox_workspace_write: { network_access: true, writable_roots: ['/extra'] },
           web_search: 'live',
+          model_reasoning_effort: 'high',
         },
       });
       expect(paramsOf(server, 'turn/start')).toEqual({
@@ -928,6 +929,44 @@ describe('CodexProvider', () => {
         input: [{ type: 'text', text: 'test prompt', text_elements: [] }],
         effort: 'high',
       });
+    });
+
+    test('fresh, resumed and forked threads share the turn’s resolved effort', async () => {
+      for (const [resumeId, forkSession, method] of [
+        [undefined, false, 'thread/start'],
+        ['existing-thread', false, 'thread/resume'],
+        ['existing-thread', true, 'thread/fork'],
+      ] as const) {
+        for (const [declared, configured, expected] of [
+          ['medium', 'high', 'medium'],
+          [undefined, 'low', 'low'],
+          ['minimal', 'high', 'minimal'],
+          [undefined, undefined, undefined],
+        ] as const) {
+          const { provider, server } = providerWith();
+          const result = resultOf(
+            await run(
+              provider,
+              {
+                nodeConfig: { nodeId: 'ask', effort: declared },
+                assistantConfig: { modelReasoningEffort: configured },
+                forkSession,
+              },
+              resumeId
+            )
+          );
+          expect(result.failure).toBeUndefined();
+          const config = paramsOf(server, method)?.config;
+          const turn = paramsOf(server, 'turn/start');
+          if (expected === undefined) {
+            expect(config).not.toHaveProperty('model_reasoning_effort');
+            expect(turn).not.toHaveProperty('effort');
+          } else {
+            expect(config).toMatchObject({ model_reasoning_effort: expected });
+            expect(turn).toHaveProperty('effort', expected);
+          }
+        }
+      }
     });
 
     test('a workflow node turns the automatic skill catalog off; direct chat does not', async () => {
@@ -1520,6 +1559,34 @@ describe('CodexProvider', () => {
         return () => turns[index++] ?? {};
       };
 
+      test('both split turns start at the resolved effort or leave the native default alone', async () => {
+        for (const effort of ['medium', undefined] as const) {
+          const { provider, server } = providerWith(scripted(toolTurn, finalTurn));
+          const base = options('glm-5.3');
+          const result = resultOf(
+            await run(provider, {
+              ...base,
+              nodeConfig: { ...base.nodeConfig, effort },
+            })
+          );
+          expect(result.failure).toBeUndefined();
+          expect(server.processes).toHaveLength(2);
+          for (const { requests } of server.processes) {
+            const config = requests.find(
+              r => r.method === 'thread/start' || r.method === 'thread/resume'
+            )?.params.config;
+            const turn = requests.find(r => r.method === 'turn/start')?.params;
+            if (effort === undefined) {
+              expect(config).not.toHaveProperty('model_reasoning_effort');
+              expect(turn).not.toHaveProperty('effort');
+            } else {
+              expect(config).toMatchObject({ model_reasoning_effort: effort });
+              expect(turn).toHaveProperty('effort', effort);
+            }
+          }
+        }
+      });
+
       test('runs the tools without the schema, then one tool-free turn on the same thread with it', async () => {
         const { provider, server } = providerWith(scripted(toolTurn, finalTurn));
         const chunks = await run(provider, options('glm-5.3'));
@@ -1959,7 +2026,7 @@ describe('CodexProvider', () => {
       expect(result.failure?.evidence).toContain(
         'Model "gpt-5.3-codex" is not available for your account'
       );
-      expect(result.failure?.evidence).toContain('model: gpt-5.6-sol');
+      expect(result.failure?.evidence).toContain('model: gpt-6.1-sol');
       expect(result.failure?.evidence).toContain('403 Forbidden: model not available');
     });
 
