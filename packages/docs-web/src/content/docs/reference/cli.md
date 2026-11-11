@@ -1122,7 +1122,9 @@ archon workflow attention --json --count-by answerer --since 30d
 archon workflow attention <run-id> --json                          # one item
 archon workflow attention --watch --json --all                     # what needs someone, as it happens
 archon workflow attention --watch --json --label merge=pr          # one class of question
-archon workflow attention --watch --notices --json                 # also runs that ended or resumed
+archon workflow attention --watch --notices --json                 # also runs that ended or resumed, and notices
+archon workflow attention --notices --since 24h --json             # the notices runs emitted in a window
+archon workflow attention --notices --since 24h --count-by label:kind
 archon workflow attention --watch --protocol --json                # the full sync protocol, for programs
 archon workflow attention --watch --protocol --json --after <cursor>  # resume it
 ```
@@ -1174,9 +1176,37 @@ object; without it, a short sentence per line. Scope and `--label` work as for t
 [Stream the queue](/getting-started/operate/#stream-the-queue).
 
 **`--notices`**, with `--watch`, also writes the `needs: "nothing"` lines that say what
-happened to work: a run that completed, was cancelled or resumed, and a usage-limit wait
-opening or closing. It leaves out `ready` and `bookmark`. It cannot be combined with
-`--protocol`.
+happened to work: a run that completed, was cancelled or resumed, a usage-limit wait
+opening or closing, and each [`workflow notice`](#workflow-notice) a run emits. It leaves
+out `ready` and `bookmark`. It cannot be combined with `--protocol`.
+
+**`--notices --since <7d|24h|2w|ISO>`**, without `--watch`, lists the notices runs emitted
+in the window, oldest first, one line each: time, workflow, labels, text. Scope and
+`--label` apply as for the list. `--count-by project|label:<key>` counts them instead.
+`--json` prints `{ ok, action: "attention", scope, since, notices }`. A run id, `--sort`
+and `--count-by answerer` are refused.
+
+### `workflow notice`
+
+Say what a run did, from inside one of its nodes, for whoever watches attention with
+`--notices`. The run does not pause and nobody can answer. See
+[Notices](/getting-started/operate/#notices-what-the-work-did).
+
+```bash
+archon workflow notice "Merged pull request 7 into dev" --label kind=merged --label pr=7
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--label <k=v>` | A label readers filter and count by; repeatable, at most 16, each value at most 200 characters |
+| `--json` | Print `{ ok, action: "notice", runId, count, limit }`, or `{ ok: false, error, reason }` |
+
+The text is one line of at most 300 characters, and a run may emit 50 notices. The command
+exits 1 without recording anything when the text or labels are outside those bounds
+(`reason: "invalid"`), when the run has reached its limit (`run_limit`), when the run is
+not running (`run_not_running`), and when it is not called from a workflow node: it reads
+`WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` from the node's environment, and the two must
+name the same run. Put the text after `--` when it may start with a dash.
 
 **`--protocol`**, with `--watch`, writes the full sync protocol, for a program that keeps its
 own copy of the open set: one `attention` line per open

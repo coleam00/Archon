@@ -24,6 +24,8 @@ import {
 } from '../test-support/workflow-store';
 import { stateCommand } from './state';
 import { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
+import { workflowNoticeCommand } from './workflow-notice';
+import { emitWorkflowNotice, WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import * as workflowCommands from './workflow';
 import { runWorkflowRespond } from '../routes/workflow';
 
@@ -1162,3 +1164,151 @@ test.each([true, false].flatMap(all => [undefined, 'project'].map(countBy => ({ 
     }
   }
 );
+
+test('a notice is recorded only from a node of a running run, reaches the notices watch and the window list, and is bounded', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-notice-cli-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  const host = createHost();
+  const { store } = host.deps;
+  mkdirSync(join(root, 'alpha'));
+  const dir = realpathSync(join(root, 'alpha'));
+  const running = async (): Promise<string> => {
+    const run = await store.createWorkflowRun({ workflow_name: 'merge-queue', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.updateWorkflowRun(run.id, {
+      output_root: getProjectStoragePaths(resolveProjectStorageKey(null, dir)).root,
+    });
+    return run.id;
+  };
+  const node = (runId: string, as = runId): NodeJS.ProcessEnv => ({
+    WORKFLOW_ID: runId,
+    ARCHON_NODE_EXECUTION: JSON.stringify({ runId: as, path: 'merge' }),
+  });
+  const notice = (
+    env: NodeJS.ProcessEnv,
+    text = 'Merged pull request 7',
+    labels = ['kind=merged']
+  ): Promise<{ code: number; json: unknown }> =>
+    captured(() => workflowNoticeCommand(host, text, labels, true, env));
+  const watch = (level: { notices?: boolean }, emit: () => Promise<unknown>, done: string) => {
+    let acted = false;
+    return streamed(
+      () =>
+        workflowAttentionCommand(host, dir, undefined, {
+          json: true,
+          labels: ['kind=merged'],
+          watch: true,
+          ...level,
+        }),
+      seen => {
+        // The open ask is the snapshot: once it is written the watch follows the feed.
+        if (!acted && seen.length > 0) {
+          acted = true;
+          void emit();
+        }
+        return seen.some(line => line.type === done);
+      }
+    );
+  };
+
+  const run = await running();
+  const other = await running();
+  const asking = await running();
+  await store.pauseWorkflowRunForWait(
+    asking,
+    {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: new Date().toISOString(),
+      message: 'Merge it?',
+      pauseId: `pause-${asking}`,
+      form: 'approval',
+      labels: { kind: 'merged' },
+    },
+    { kind: 'started', stepName: 'ask' }
+  );
+  // Outside a run, as another run's node, and for a run this store does not know.
+  for (const env of [{}, node(run, other), node('00000000-0000-4000-8000-000000000001')])
+    expect(await notice(env)).toMatchObject({ code: 1, json: { ok: false, action: 'notice' } });
+  expect(await notice(node(run), 'two\nlines')).toMatchObject({
+    code: 1,
+    json: { reason: 'invalid', error: 'A notice is one line' },
+  });
+  expect(await store.listWorkflowNoticeRows()).toEqual([]);
+
+  // The notices watch receives it as a line that asks nothing; a filtered-out label does not.
+  // The stream shares stdout with the command, so the emits under watch skip the CLI.
+  const say = (text: string, labels: Record<string, string>): Promise<unknown> =>
+    emitWorkflowNotice(store, { runId: run, node: 'merge', text, labels });
+  const failing = await running();
+  const noticed = await watch(
+    { notices: true },
+    async () => {
+      await say('Returned pull request 9', { kind: 'returned' });
+      await say('Merged pull request 7', { kind: 'merged', pr: '7' });
+      await store.failWorkflowRun(failing, 'boom');
+    },
+    'terminal'
+  );
+  expect(noticed.lines).toMatchObject([
+    { type: 'attention', needs: 'answer' },
+    {
+      type: 'notice',
+      needs: 'nothing',
+      runId: run,
+      workflow: 'merge-queue',
+      node: 'merge',
+      text: 'Merged pull request 7',
+      labels: { kind: 'merged', pr: '7' },
+    },
+    { type: 'terminal', needs: 'look', runId: failing },
+  ]);
+  // The quiet watch does not: only the failure reaches it.
+  const failingToo = await running();
+  const quiet = await watch(
+    {},
+    async () => {
+      await say('Merged pull request 8', { kind: 'merged' });
+      await store.failWorkflowRun(failingToo, 'boom');
+    },
+    'terminal'
+  );
+  expect(quiet.lines.map(line => line.type)).toEqual(['attention', 'terminal']);
+
+  // The window list and the count read the same rows, filtered and grouped by label.
+  const window = (opts: object): Promise<{ code: number; json: unknown }> =>
+    captured(() =>
+      workflowAttentionCommand(host, dir, undefined, {
+        json: true,
+        labels: [],
+        notices: true,
+        since: '1h',
+        ...opts,
+      })
+    );
+  expect((await window({ labels: ['kind=merged'] })).json).toMatchObject({
+    notices: [
+      { text: 'Merged pull request 7', workflow: 'merge-queue', runId: run },
+      { text: 'Merged pull request 8' },
+    ],
+  });
+  expect((await window({ countBy: 'label:kind' })).json).toMatchObject({
+    counts: {
+      by: 'label',
+      key: 'kind',
+      counts: [
+        { value: 'merged', count: 2 },
+        { value: 'returned', count: 1 },
+      ],
+    },
+  });
+
+  // A run past its ceiling is refused, and so is one that is no longer running.
+  for (let emitted = 3; emitted < WORKFLOW_NOTICE_LIMITS.perRun; emitted++)
+    expect((await notice(node(run))).code).toBe(0);
+  expect(await notice(node(run))).toMatchObject({ code: 1, json: { reason: 'run_limit' } });
+  expect(await store.listWorkflowNoticeRows()).toHaveLength(WORKFLOW_NOTICE_LIMITS.perRun);
+  await store.completeWorkflowRun(other, { duration_ms: 1 });
+  expect(await notice(node(other))).toMatchObject({ code: 1, json: { reason: 'run_not_running' } });
+});

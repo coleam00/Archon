@@ -248,6 +248,8 @@ Commands:
                              Answer a paused attention wait in its declared form
   workflow reset-sessions <workflow-name>
                              Delete persisted sessions for a workflow (omits --scope only with --yes; [--node <id>] [--json])
+  workflow notice <text>     Inside a workflow node: say what the run did, for whoever watches attention
+                             with --notices. Never pauses the run and cannot be answered
   workflow event emit        Emit a workflow event into a run
   workflow test [<name>|<folder>|<path>]
                              Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a

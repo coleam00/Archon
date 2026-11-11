@@ -443,7 +443,7 @@ export async function runWorkflowAttention(route: WorkflowRoute): Promise<number
   if (positionals[3] !== undefined) {
     return await fail(
       json,
-      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>|answerer [--since <7d|24h|2w|ISO>]] [--watch [--notices | --protocol [--after <cursor>]]] [--json]'
+      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>|answerer [--since <7d|24h|2w|ISO>]] [--notices --since <7d|24h|2w|ISO>] [--watch [--notices | --protocol [--after <cursor>]]] [--json]'
     );
   }
   return await route.commands.workflowAttentionCommand(route.host, effectiveCwd, positionals[2], {
@@ -526,6 +526,19 @@ export async function runWorkflowResetSessions(route: WorkflowRoute): Promise<nu
   return 0;
 }
 
+export async function runWorkflowNotice(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands } = route;
+  const text = positionals[2];
+  if (text === undefined || positionals[3] !== undefined)
+    return await fail(json, commands.WORKFLOW_NOTICE_USAGE);
+  return await commands.workflowNoticeCommand(
+    route.host,
+    text,
+    (values.label as string[] | undefined) ?? [],
+    json
+  );
+}
+
 const EVENT_EMIT_USAGE = 'Usage: archon workflow event emit --run-id <run-id> --type <event-type>';
 
 export async function runWorkflowEvent(route: WorkflowRoute): Promise<number> {
@@ -580,6 +593,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

@@ -25,7 +25,8 @@ export type ClassifiedAttentionStreamLine = AttentionStreamLine & { needs: Atten
  *   its owner; and a stream that lost coverage or ended.
  * - `nothing`: what happened to work that nobody has to act on (a run completed, was
  *   cancelled or resumed; a usage-limit wait, which continues by itself, opened or
- *   closed), and the lines only a program syncing the full protocol reads.
+ *   closed; a notice, which says what a run did), and the lines only a program syncing
+ *   the full protocol reads.
  *
  * `resumed` is for a stream that continues an earlier one from a cursor. The classifier
  * did not see which items that earlier stream held, so every close is a `look`: telling
@@ -62,6 +63,7 @@ export function attentionLineClassifier(
       case 'error':
         return 'look';
       case 'resumed':
+      case 'notice':
       case 'ready':
       case 'bookmark':
         return 'nothing';

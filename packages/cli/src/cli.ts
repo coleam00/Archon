@@ -414,10 +414,11 @@ const NO_GIT_COMMANDS = [
 
 function requiresGitRepo(command: string | undefined, subcommand: string | undefined): boolean {
   // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
-  // directory's project, which need not be registered or a git repository.
+  // directory's project, which need not be registered or a git repository. `workflow
+  // notice` acts on the run its environment names, wherever the node runs.
   return (
     !NO_GIT_COMMANDS.includes(command ?? '') &&
-    !(command === 'workflow' && subcommand === 'attention')
+    !(command === 'workflow' && (subcommand === 'attention' || subcommand === 'notice'))
   );
 }
 
@@ -540,6 +541,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowResetSessions(route);
         case 'event':
           return await workflowRoutes.runWorkflowEvent(route);
+        case 'notice':
+          return await workflowRoutes.runWorkflowNotice(route);
         default:
           return await workflowRoutes.runUnknownWorkflowSubcommand(route);
       }

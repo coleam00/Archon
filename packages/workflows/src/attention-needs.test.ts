@@ -63,6 +63,17 @@ test('every line type has a needs, and each watch level passes its lines', () =>
     [limited, 'look'],
     [{ type: 'unmatched', ...run, occurrence: 'o', revision: 2 }, 'nothing'],
     [{ type: 'resumed', ...run, status: 'running' }, 'nothing'],
+    [
+      {
+        type: 'notice',
+        ...run,
+        at: '2026-01-01T00:00:00.000Z',
+        node: 'merge',
+        text: 'Merged pull request 7',
+        labels: { kind: 'merged' },
+      },
+      'nothing',
+    ],
     [{ ...terminal, status: 'completed' }, 'nothing'],
     [{ ...terminal, status: 'cancelled' }, 'nothing'],
     [{ ...terminal, status: 'failed' }, 'look'],
