@@ -14,6 +14,7 @@ import { attachHomeMcpDirectory } from '../compiled-command';
 import { resolveIncludeBlockCommandContents } from './command-scan';
 import type { DiscoveryContext } from './context';
 import type { ScopeFile } from './load-dir';
+import { collectIgnoredSourceWarnings } from './ignored-files';
 import { validateNamedScripts } from './named-scripts';
 
 /**
@@ -26,7 +27,11 @@ import { validateNamedScripts } from './named-scripts';
 export async function expandScope(
   context: DiscoveryContext,
   files: Map<string, ScopeFile>
-): Promise<{ workflows: WorkflowWithSource[]; errors: WorkflowLoadError[] }> {
+): Promise<{
+  workflows: WorkflowWithSource[];
+  errors: WorkflowLoadError[];
+  sourceWarnings?: readonly string[];
+}> {
   const errors: ParsedWorkflowLoadError[] = [];
   const namedScripts = await validateNamedScripts(context, files, errors);
   const duplicateNames = reportDuplicateNames(files, errors);
@@ -71,7 +76,12 @@ export async function expandScope(
     if (!expanded) continue; // expansion failed for this workflow — drop it
     result.push(expandedWorkflow(file, expanded));
   }
-  return { workflows: result, errors };
+  const sourceWarnings = await collectIgnoredSourceWarnings(
+    context,
+    [...files.values()].filter(file => expandedByName.has(file.workflow.name)),
+    namedScripts
+  );
+  return { workflows: result, errors, ...(sourceWarnings.length ? { sourceWarnings } : {}) };
 }
 
 /**

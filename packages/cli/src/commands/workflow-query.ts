@@ -46,6 +46,10 @@ import {
 } from './workflow-transcript';
 import { printStatusRun, announceWaitAttached, writeWaitOutcome } from './workflow-inspect';
 
+async function reportSourceWarnings(warnings: readonly string[] | undefined): Promise<void> {
+  for (const warning of warnings ?? []) await writeStderr(`Warning: ${warning}\n`);
+}
+
 async function reportUnavailablePlugins(): Promise<void> {
   // Discovery reports scan failures alongside any independently loaded workflows.
   const scan = await scanReceipts(getPluginsPath()).catch(() => undefined);
@@ -88,7 +92,10 @@ export async function workflowTestCommand(
   const { resolveDiscoveryCwd } = await import('../utils/project-cwd');
   const cwd = await resolveDiscoveryCwd(invokingCwd);
   if (options.json) await reportUnavailablePlugins();
-  const { workflows, errors } = await loadWorkflows(cwd);
+  const { workflows, errors, sourceWarnings } = await loadWorkflows(cwd, {
+    reportIgnoredFiles: true,
+  });
+  await reportSourceWarnings(sourceWarnings);
   // The fixture runner freezes this repo's source before executing anything, exactly as
   // `workflow run` does, and this config decides which directories get frozen. A malformed
   // one would silently narrow that set, so it fails here instead; `loadConfig` returns
@@ -127,6 +134,7 @@ export async function workflowTestCommand(
       passed: report.passed,
       failed: report.failed,
       errors: workflowLoadErrorsJson(errors),
+      ...(sourceWarnings?.length ? { sourceWarnings } : {}),
     });
   } else {
     await writeStdout(`${formatFixtureReport(report)}\n${formatFixtureLoadErrors(errors)}`);
@@ -238,7 +246,12 @@ export async function workflowListCommand(
   options: WorkflowListOptions = {}
 ): Promise<void> {
   if (options.json) await reportUnavailablePlugins();
-  const { workflows: workflowEntries, errors } = await loadWorkflows(cwd);
+  const {
+    workflows: workflowEntries,
+    errors,
+    sourceWarnings,
+  } = await loadWorkflows(cwd, { reportIgnoredFiles: true });
+  await reportSourceWarnings(sourceWarnings);
   const listedEntries = selectWorkflowEntries(workflowEntries, errors, options.name);
 
   if (options.json) {
@@ -249,6 +262,7 @@ export async function workflowListCommand(
       // per-node form to collapse onto.
       workflows: listedEntries.map(entry => workflowJsonEntry(entry, options.full === true)),
       errors: workflowLoadErrorsJson(errors),
+      ...(sourceWarnings?.length ? { sourceWarnings } : {}),
     };
     await writeJsonLine(output);
     return;

@@ -191,6 +191,8 @@ The optional `name` resolves like a run does (see [Workflow name matching](#work
 
 `--full` returns exact authored descriptions; give it a `name` to see one workflow's full detail. With `--json`, the output is `{ "workflows": [...], "errors": [...] }`, and `--full` sets every `descriptionTruncated` to `false`. Optional fields (`provider`, `model`, `effort`, `webSearchMode`, `parseWarnings`) are omitted when a workflow does not set them. A workflow written with the deprecated `modelReasoningEffort:` reports that value as `effort`, unless it also declares `effort:`, which wins. Each `parseWarnings` entry names a key the engine dropped or deprecated, where it was found and what to write instead; see [Unknown keys](/reference/workflow-language/#unknown-keys-are-reported-not-rejected). Discovery errors remain in the top-level `errors` array when a name filters the workflow list. If the exact workflow name is missing, the failure envelope is `{ "ok": false, "error": "...", "errors": [...] }`, retaining errors found during the same discovery.
 
+In a Git checkout, `list` reports discovered project workflow files and the file-backed commands and named scripts they reference when Git ignores them. Warnings name repository-relative paths and their workflows on stderr, even when selecting one workflow. Normal JSON results also include a top-level `sourceWarnings` array when nonempty. These warnings do not change discovery or exit status; failures to perform the check are warnings too. Only live project sources are checked: registered folder projects, non-repositories, global, bundled, installed and captured sources are excluded. Tracked files are not reported, even under an ignore rule. Inline code, shell text and script imports are not scanned for dependencies.
+
 ### `workflow test`
 
 Replay the dry-run fixtures declared next to a workflow. A fixture is a `<name>.stubs.yaml` file in the `fixtures/` folder beside the workflow YAML. `workflow test` never creates a run or contacts a provider; [Build your first workflow](/getting-started/first-workflow/#keep-the-routes-as-fixtures) walks through writing them.
@@ -201,6 +203,8 @@ archon workflow test build-change        # one workflow, by name
 archon workflow test .archon/workflows/my-team   # a workflow folder or pack, by path
 archon workflow test build-change --json
 ```
+
+`test` emits the same [Git ignore source warnings as `list`](#workflow-list-name) on stderr before selecting or running fixtures, including when no fixtures exist or target lookup fails. Normal `--json` results add `sourceWarnings` only when nonempty. Warnings do not change fixture results or exit codes.
 
 A relative path resolves from the invoking directory before the repository root. Every key in a fixture other than the two reserved keys is a node stub, exactly what `workflow run --dry-run --stubs` accepts. The reserved keys are:
 
