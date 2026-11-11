@@ -17,7 +17,7 @@ import {
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
 import { registerFolder } from '@archon/core/handlers/clone';
-import { triggerCommand, type timerTriggerConfigSchema } from './trigger';
+import { triggerCommand, type triggerFireConfigSchema } from './trigger';
 import type { z } from '@hono/zod-openapi';
 
 // Poll-style `trigger fire` behavior, run in-process: an external poller re-runs `fire`, and
@@ -25,7 +25,7 @@ import type { z } from '@hono/zod-openapi';
 
 const tempRoots = trackTempRoots();
 
-type TimerConfig = z.infer<typeof timerTriggerConfigSchema>;
+type FireConfig = z.infer<typeof triggerFireConfigSchema>;
 
 function hostForTest(): WorkflowHost {
   const records = createInMemoryWorkflowHostStore();
@@ -68,7 +68,7 @@ const undeclaredWorkflow =
 async function orderFixture(inputs: Record<string, string>): Promise<{
   host: WorkflowHost;
   workflowPath: string;
-  config: TimerConfig;
+  config: FireConfig;
   configPath: string;
   inputsPath: string;
   restore: () => void;
@@ -87,7 +87,7 @@ async function orderFixture(inputs: Record<string, string>): Promise<{
   const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
   if (!user) throw new Error('Expected test identity');
   const configPath = join(root, 'timer.json');
-  const config: TimerConfig = {
+  const config: FireConfig = {
     version: 1,
     sourceInstanceId: 'timer',
     binding: {
@@ -285,7 +285,7 @@ test('a fire-only binding starts a run on fire and has no timer to install', asy
     // A schedule that is present but incomplete is a broken timer, not a fire-only binding.
     await writeFile(configPath, JSON.stringify({ ...fireOnly, schedule: {} }));
     await expect(fireAndExecute(host, { config: configPath })).rejects.toThrow(
-      'Invalid timer configuration fields: schedule.intervalSeconds'
+      'Invalid trigger configuration fields: schedule.intervalSeconds'
     );
   } finally {
     stdout.mockRestore();

@@ -14,14 +14,14 @@ import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import {
-  packBindingKind,
+  kindedPackBinding,
   type PackBinding,
   type PackBindingInput,
   type PackBindingKind,
 } from '@archon/workflows/schemas/pack-bindings';
 import type { WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { writeJsonLine } from '../utils/stdout';
-import { timerTriggerConfigSchema } from './trigger';
+import { triggerFireConfigSchema } from './trigger';
 import { loadWorkflows } from './workflow-list';
 
 export interface PackBindingsOptions {
@@ -113,40 +113,49 @@ function generate(
     },
   };
   const path = bindingPath(target, id);
-  if (!('event' in binding)) {
-    // A timer and a fire-only binding are the same `trigger fire --config` file; only the
-    // timer carries a schedule.
-    return {
-      id,
-      kind: packBindingKind(binding),
-      path,
-      document: {
-        version: 1,
-        sourceInstanceId: bindingName(target, id),
-        binding: { ...intent, bindingRevision: null },
-        ...('schedule' in binding
-          ? { schedule: { intervalSeconds: binding.schedule.interval_seconds, runAtLoad: false } }
-          : {}),
-      },
-    };
-  }
-  return {
-    id,
-    kind: 'event',
-    path,
-    document: {
-      ...intent,
-      selector: { ...binding.event, repository: target.repo },
-      inputMapping: fields,
-    },
+  // A timer and a fire-only binding are the same `trigger fire --config` file; only the
+  // timer carries a schedule.
+  const fireConfig = {
+    version: 1,
+    sourceInstanceId: bindingName(target, id),
+    binding: { ...intent, bindingRevision: null },
   };
+  const kinded = kindedPackBinding(binding);
+  switch (kinded.kind) {
+    case 'fire':
+      return { id, kind: kinded.kind, path, document: fireConfig };
+    case 'timer':
+      return {
+        id,
+        kind: kinded.kind,
+        path,
+        document: {
+          ...fireConfig,
+          schedule: {
+            intervalSeconds: kinded.binding.schedule.interval_seconds,
+            runAtLoad: false,
+          },
+        },
+      };
+    case 'event':
+      return {
+        id,
+        kind: kinded.kind,
+        path,
+        document: {
+          ...intent,
+          selector: { ...kinded.binding.event, repository: target.repo },
+          inputMapping: fields,
+        },
+      };
+  }
 }
 
 /** Check a generated document against the schema of the loader that will read it. */
 function assertLoadable({ id, kind, document }: Generated, target: Target): void {
   const result =
     kind !== 'event'
-      ? timerTriggerConfigSchema.safeParse(document)
+      ? triggerFireConfigSchema.safeParse(document)
       : // The plugin reads a binding only inside its configuration, so the binding is checked
         // there. The secret name is the operator's and is not part of what is written.
         githubWebhookSourceConfigSchema.safeParse({
