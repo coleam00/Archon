@@ -1,6 +1,6 @@
 # Triage One Work Item
 
-Confirm whether the work item still names real current work, judge whether it is a contract a run can start from, choose the kind of reasoning owed next, and stop. Write the decisive evidence and handoff to `$ARTIFACTS_DIR/triage.md`. You assess and route only: the repository must be exactly as you found it when you finish. No one watches the run; the report and your declared fields are the only things that persist.
+Confirm whether the work item still names real current work, judge whether it is a contract a run can start from, choose the kind of reasoning owed next, and stop. Write the decisive evidence and handoff to `$ARTIFACTS_DIR/triage.md`. You assess and route only. No one watches the run; the report and your declared fields are the only things that persist.
 
 The target — an issue, document, plan, report, or free-form request (may be empty — empty means the run's trigger message is the target):
 
@@ -38,7 +38,7 @@ A run cannot recover from a premise that was never stated, so before choosing a 
 
 Then check the delivery preconditions the outcome actually depends on: an existing primitive or owner, a data shape or typed seam, a persistence model, the observability needed to verify the result. A refactor of code the work must already touch is issue-owned enabling work, not a blocker. A missing foundation with its own outcome, broader owners, or a separate product decision is a prerequisite that must land first — report it with the same weight whether or not anyone has logged it. Treat alignment with current direction as part of readiness.
 
-When the item is large, such as a PRD, an epic or a bundle of tasks, judge whether it is built as one work item or split, by the triage policy's section on splitting. Building it whole is the default: route it `plan` or `deliver` like any other item, however large, and split only when building it whole would not work. A PRD passes only with its hypothesis, its signal and the command that measures it, and its threshold and window, judged from the whole item rather than from its headings, whether it is split or built whole; a PRD missing any of them is `NEEDS_CONTRACT_WORK` whose proposed edits name the gap. A bundle's six elements belong to each of its tasks, which triage judges when each comes back as its own issue. When the split queue already commented that the item is built as one work item, weigh its reason, and route `split` again only when the item or the evidence changed since. Name what you judged, and why, in the assessment.
+When the item is large, such as a PRD, an epic or a bundle of tasks, judge by the triage policy whether it is built as one work item or split, and whether a PRD is ready. Building it whole is the default: route it `plan` or `deliver` like any other item, however large. A PRD the policy finds incomplete is `NEEDS_CONTRACT_WORK` whose proposed edits name the gap. When the split queue already commented that the item is built as one work item, weigh its reason, and route `split` again only when the item or the evidence changed since. Name what you judged, and why, in the assessment.
 
 The verdict says whether a run should start from this item, not only whether the item is well written. A well-formed contract whose outcome already holds on the current base is never `READY`: it is `NO_ACTION`, or `BLOCKED` when the policy leaves its close to a maintainer.
 
@@ -95,17 +95,12 @@ Omit a section that does not apply; never write a placeholder to preserve one. C
 
 ## Not your job
 
-Do not investigate the full causal chain, choose the implementation design, implement, modify source files, commit, branch, push, or create or edit tracker items, labels, or pull requests. Scratch notes live under `$ARTIFACTS_DIR` only. The run fails on any working-tree change you leave behind.
+Do not investigate the full causal chain, choose the implementation design, implement, modify source files, commit, branch, push, or create or edit tracker items, labels, or pull requests. Scratch notes live under `$ARTIFACTS_DIR` only.
 
 ## Declare the disposition
 
-- `decision` — the contract verdict and only what it carries, using the definitions above:
-  - `READY` with `route` `investigate`, `plan`, `deliver`, or `split`;
-  - `READY` with `route` `continue` and `pull_request` — the number of the open pull request to finish, in the item's repository;
-  - `NEEDS_CONTRACT_WORK` with `proposed_edits` — `{ "title", "body" }`, both non-empty;
-  - `BLOCKED` with `blocked_reason` — what it waits on — and `blocked_by` — fully qualified URLs of the items it waits on, possibly empty;
-  - `NO_ACTION` with `closure` — `{ "kind": "duplicate", "url", "original" }`, where `url` is the open issue's fully qualified URL and `original` is the same issue as `{ "repo": { "host", "path" }, "number" }`; or `{ "kind": "delivered", "url" }`, where `url` is the merged change's fully qualified URL.
-- `type`, `size`, `complexity`, `importance`, `urgency` — each `{ "value", "reason" }`, the value from its list above and the reason one non-empty line.
+- `decision` — the contract verdict and only what it carries, using the definitions above. `READY` carries its `route`, and on `continue` the `pull_request`: the number of the open pull request to finish, in the item's repository. `NEEDS_CONTRACT_WORK` carries `proposed_edits`. `BLOCKED` carries `blocked_reason`, what it waits on, and `blocked_by`, the fully qualified URLs of the items it waits on, possibly empty. `NO_ACTION` carries its `closure`: for a `duplicate`, `url` is the open issue's fully qualified URL and `original` names the same issue; for `delivered`, `url` is the merged change's fully qualified URL.
+- `type`, `size`, `complexity`, `importance`, `urgency` — the value from its list above, and the reason in one line.
 - `item` — `{ "repo": { "host": "tracker.example", "path": "owner/repo" }, "number": N }` when the target is a tracker issue, otherwise `{ "repo": { "host": "", "path": "" }, "number": 0 }`: the empty repository is how you say the target is not a tracker item, and the fields are always present.
 - `area_labels` — the repository's existing area labels this item touches, possibly empty.
 - `related` — work the next node should know about, each `{ "url", "relation" }`: an open issue whose outcome overlaps this one, a closed earlier attempt or rejected design, or a recently merged pull request on the same surface. `url` is the fully qualified URL of an item you opened in this run, and `relation` is one line on how it bears on this item. List only what you opened; empty when there is none. Duplicates and blockers belong in `decision`, not here.
@@ -120,4 +115,4 @@ Do not investigate the full causal chain, choose the implementation design, impl
   before you declare. `run_id` is the value above verbatim, and `path` is relative to
   `$ARTIFACTS_DIR`.
 
-Before declaring, re-read the assessment. Confirm every decisive claim has evidence from this run, the requested outcome is separated from suggested implementation, you stopped at the routing boundary, and `git status` matches what you started with.
+Before declaring, re-read the assessment. Confirm every decisive claim has evidence from this run, the requested outcome is separated from suggested implementation, and you stopped at the routing boundary.

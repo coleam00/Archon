@@ -31,6 +31,7 @@ The queues decide clear cases on their own and ask about unclear ones. The pack'
 | `rulings.md` | Answers your maintainers already gave, read before plan or review stops to ask |
 | `discoveries.md` | When a discovery is filed, tracked or dropped |
 | `ui-check.md` | How review starts your app to use a user-facing change in a browser |
+| `attention.md` | What an attention item tells the person who decides it |
 
 To change one, put only the lines to add or override in `.archon/sdlc/policy/<file>`. The agent reads the default first, then your file, and your line wins where they conflict. A policy file can be a pointer to documents the project already has.
 

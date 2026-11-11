@@ -443,7 +443,9 @@ falling back to the pack's defaults"; triage names `triage.md`, and plan and rev
 synthesis name `rulings.md`, the answers a project's maintainers have already given,
 read before either stops to ask. The build queue's agents name `build.md`, what
 the queue may decide on its own, and its route and answer agents `rulings.md` too. The
-merge queue's sweep names `merge.md`, which pull requests merge on their own.
+merge queue's sweep names `merge.md`, which pull requests merge on their own. Every
+agent that can raise an attention item names `attention.md`, what a person needs to
+decide without opening the run.
 Review's code and ux lenses name `ui-check.md`, how they start the project's app to use a
 user-facing change in a browser through the playwright-cli skill, which their prompts
 names rather than a `skills:` entry for the reason the build queue's route does.
