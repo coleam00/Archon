@@ -40,7 +40,7 @@ export function typedOutputs<T>(bound: string): readonly TypedOutput<T>[] | null
   return JSON.parse(bound) as TypedOutput<T>[] | null;
 }
 
-/** The value as an object, or undefined for anything else. */
+/** The value as an object, or undefined for anything else, an array included. */
 export function record(value: unknown): Record<string, unknown> | undefined {
-  return typeof value === 'object' && value !== null ? (value as Record<string, unknown>) : undefined;
+  return isObject(value) ? value : undefined;
 }
