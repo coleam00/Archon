@@ -201,9 +201,10 @@ the build queue readies the item again.
 
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
 change, pauses as an attention item labelled `stage: merge` and `kind: approve` with the choices `merge`,
-`return`, `park` and `other`. A red default branch pauses as `kind: base` with the
-one choice `hold` (an `other` answer there holds too), and the gate refuses every merge until it is green. A run raises at
-most one attention item: the red default branch first, otherwise the first pull
+`return`, `park` and `other`. A red default branch asks nobody: the sweep merges nothing and its run completes
+with a failed outcome whose summary (the `record` node's, in `archon workflow get <run-id> --verbose`) names the failing checks, the
+pull requests merged since green and the suspect, on every sweep until the branch is green. A run raises at
+most one attention item: the first pull
 request the sweep asked about. A later sweep decides the rest again.
 
 A `merge` answer approves the pull request at the head it asked about, and a sweep

@@ -81,6 +81,7 @@ apply:
   item: "7"
   pr: "1"
   asked: null
+  healthy: true
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed

@@ -40,7 +40,7 @@ import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
 import type { DecisionEntry } from '../../.shared/queue.ts';
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
+import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
 type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
@@ -165,17 +165,17 @@ function afterWrite(summary: string, wrote: string | null, decision: Decision, i
 }
 
 /** The summary of a path with no item, so nothing is written or asked; null on an item's path. */
-function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string } | null {
+function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string; healthy: boolean } | null {
   switch (path) {
     case 'idle':
       return {
         decision: path,
-        summary: idleSummary('No item waits for the build queue.', stuckItems(workflowRunId())),
+        ...idleOutcome('No item waits for the build queue.', stuckItems(workflowRunId())),
       };
     case 'order':
-      return { decision: path, summary: input('order') };
+      return { decision: path, summary: input('order'), healthy: true };
     case 'handoff':
-      return { decision: path, summary: input('handoff') };
+      return { decision: path, summary: input('handoff'), healthy: true };
     default:
       return null;
   }
@@ -273,6 +273,7 @@ function main(): void {
     ...(asking === null ? NO_ASK : raisedAsk(asking)),
     item: String(item.number),
     pr: prLabel(round),
+    healthy: true,
   };
 
   if (decision.kind === 'launch') throw new Error('a launch reached apply without its round');

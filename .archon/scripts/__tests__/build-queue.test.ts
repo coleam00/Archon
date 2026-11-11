@@ -661,6 +661,7 @@ describe('the build queue scripts', () => {
       item: '7',
       pr: '42',
       asked: { ask: QUESTION, brief: 'continue PR 42 under the ruling', by: 'stop' },
+      healthy: true,
     });
     expect(stored(at).value).toMatchObject({
       claim: { run_id: 'run-1' },

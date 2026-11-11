@@ -152,6 +152,7 @@ export interface WorkflowOutputs {
       readonly item: string;
       readonly pr: string;
       readonly asked: Readonly<Record<string, unknown>> | null;
+      readonly healthy: boolean;
     };
     ruling: {
       readonly decision: 'continue' | 'ready' | 'park';
@@ -334,6 +335,7 @@ export interface WorkflowOutputs {
       readonly promoted: boolean;
       readonly labels: ReadonlyArray<string>;
       readonly summary: string;
+      readonly healthy: boolean;
     };
   };
   'archon-investigate': {
@@ -439,23 +441,6 @@ export interface WorkflowOutputs {
       }>;
       readonly base: {
         readonly summary: string;
-        readonly ask: {
-          readonly question: string;
-          readonly options: ReadonlyArray<{
-            readonly id: string;
-            readonly label: string;
-            readonly does: string;
-            readonly value: {
-              readonly effect: 'hold';
-              readonly ruling: string;
-            };
-          }>;
-          readonly recommendation: {
-            readonly option: string;
-            readonly why: string;
-            readonly confidence: 'low' | 'medium' | 'high';
-          };
-        } | null;
       };
       readonly summary: string;
       readonly gate_error: string;
@@ -471,10 +456,11 @@ export interface WorkflowOutputs {
         readonly value: Readonly<Record<string, unknown>>;
       }>;
       readonly recommendation: Readonly<Record<string, unknown>> | null;
-      readonly kind: '' | 'approve' | 'base';
+      readonly kind: '' | 'approve';
       readonly item: string;
       readonly pr: string;
       readonly asked: Readonly<Record<string, unknown>> | null;
+      readonly healthy: boolean;
     };
     retriage: {
       readonly retriaged: ReadonlyArray<number>;
@@ -484,7 +470,7 @@ export interface WorkflowOutputs {
       readonly summary: string;
     };
     ruling: {
-      readonly decision: 'merge' | 'return' | 'park' | 'hold';
+      readonly decision: 'merge' | 'return' | 'park';
       readonly section: string;
       readonly summary: string;
     };
@@ -745,6 +731,7 @@ export interface WorkflowOutputs {
         readonly why: string;
       }>;
       readonly summary: string;
+      readonly healthy: boolean;
     };
   };
   'archon-triage-block': {
@@ -942,14 +929,12 @@ export const OUTPUT_ENUMS = {
       'decisions[].anyOf[3].class': ['clear', 'unclear'],
       'decisions[].anyOf[3].ask.options[].value.effect': ['merge', 'park'],
       'decisions[].anyOf[3].ask.recommendation.confidence': ['low', 'medium', 'high'],
-      'base.ask.options[].value.effect': ['hold'],
-      'base.ask.recommendation.confidence': ['low', 'medium', 'high'],
     },
     record: {
-      kind: ['', 'approve', 'base'],
+      kind: ['', 'approve'],
     },
     ruling: {
-      decision: ['merge', 'return', 'park', 'hold'],
+      decision: ['merge', 'return', 'park'],
     },
   },
   'archon-plan': {

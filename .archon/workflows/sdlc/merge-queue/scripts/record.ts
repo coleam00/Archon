@@ -8,12 +8,14 @@
  * recorded as waiting for the next sweep, or parked if it was closed. A claimed pull
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
  * back to the build queue with its brief and starts its next round through the
- * build-queue binding. A run raises at most one ask, as the sweep wrote it: the
- * sweep's ask for a red default branch first, because it holds every merge, otherwise
- * the first pull request the sweep asked about, in its order. That item keeps its claim
- * while the run waits;
- * every other claim is released, and an ask that was not raised waits for the next sweep,
- * which decides it again.
+ * build-queue binding. A run raises at most one ask, as the sweep wrote it: the first
+ * pull request the sweep asked about, in its order. That item keeps its claim while the
+ * run waits; every other claim is released, and an ask that was not raised waits for the
+ * next sweep, which decides it again.
+ *
+ * A red default branch asks nobody: nothing merges, the summary carries the sweep's
+ * diagnosis, and `healthy` is false, which the workflow records as a failed outcome.
+ * It repeats on every sweep while the branch stays red.
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written is reported and left for the next sweep; neither stops the
@@ -46,7 +48,7 @@ import {
   type SweepAction,
   withMerge,
 } from '../../.shared/merge.ts';
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
+import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
@@ -109,10 +111,11 @@ function gateFailure(sweep: Sweep | null): string[] {
   return error === '' ? [] : [`the merge gate could not run, so nothing was gated or merged: ${error}`];
 }
 
-/** A red default branch the sweep did not raise would hold every merge in silence. */
-function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null {
-  if (sweep === null || base?.checks.state !== 'red' || sweep.base.ask !== null) return null;
-  return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep did not raise it`;
+/** The sweep's diagnosis of a red default branch, for the summary of a run that ends failed on it; none otherwise. */
+function redBase(sweep: Sweep | null, base: Base | null): string[] {
+  if (base?.checks.state !== 'red') return [];
+  const found = sweep?.base.summary.trim() ?? '';
+  return [`The default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}); nothing merges until it is green.${found === '' ? '' : ` ${found}`}`];
 }
 
 interface Outcome {
@@ -234,11 +237,7 @@ const NO_ASK = { question: '', options: [], recommendation: null, kind: '', item
 
 /** The wait's fields for the raised ask, as the sweep wrote them, with its subject labels. */
 function raisedAsk(asked: MergeAsked) {
-  const subject =
-    asked.by === 'pr'
-      ? { kind: 'approve', item: String(asked.item.number), pr: String(asked.pr.number) }
-      : { kind: 'base', item: '', pr: '' };
-  return { ...asked.ask, ...subject, asked };
+  return { ...asked.ask, kind: 'approve', item: String(asked.item.number), pr: String(asked.pr.number), asked };
 }
 
 function main(): void {
@@ -253,7 +252,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       merged: [],
-      summary: idleSummary('No pull request waits for the merge queue.', stuckItems(workflowRunId())),
+      ...idleOutcome('No pull request waits for the merge queue.', stuckItems(workflowRunId())),
       ...NO_ASK,
     });
     return;
@@ -264,21 +263,17 @@ function main(): void {
   const base = nullableJson(input('base')) as Base | null;
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
-  const baseAsk = sweep?.base.ask ?? null;
   const firstAsk = decisions.find(decision => decision.ask !== null);
   let asked: MergeAsked | null =
-    baseAsk !== null
-      ? { by: 'base', ask: baseAsk }
-      : firstAsk === undefined
-        ? null
-        : {
-            by: 'pr',
-            item: itemOf(firstAsk.number).item as QualifiedPr,
-            pr: itemOf(firstAsk.number).pr,
-            head: firstAsk.head,
-            brief: firstAsk.brief,
-            ask: firstAsk.ask as MergeAsk,
-          };
+    firstAsk === undefined
+      ? null
+      : {
+          item: itemOf(firstAsk.number).item as QualifiedPr,
+          pr: itemOf(firstAsk.number).pr,
+          head: firstAsk.head,
+          brief: firstAsk.brief,
+          ask: firstAsk.ask as MergeAsk,
+        };
 
   // Settlements are independent of the policy refresh and the sweep's decisions.
   recordSettled(writes, settled);
@@ -289,30 +284,26 @@ function main(): void {
     ...gateFailure(sweep),
     ...outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction])),
   ];
-  const silentRed = unraisedRedBase(sweep, base);
-  if (silentRed !== null) contradictions.push(silentRed);
-  // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for
-  // the next sweep, and a red default branch is named in the failure instead.
-  if (asked?.by === 'base' && contradictions.length > 0) {
-    contradictions.push(`the default branch is red and was not raised (${sweep?.base.summary ?? ''})`);
-  }
-  // The asked pull request was merged or closed under the question: there is nothing to ask.
-  const askedPr = asked?.by === 'pr' ? asked.pr.number : null;
+  // A failed record runs no ask node, so it raises nothing: the ask waits for the next
+  // sweep. And the asked pull request merged or closed under the question: nothing to ask.
+  const askedPr = asked?.pr.number;
   if (contradictions.length > 0 || outcomes.some(({ decision, status }) => decision.number === askedPr && status !== 'waiting')) {
     asked = null;
   }
 
   for (const outcome of outcomes) {
-    const raised = asked?.by === 'pr' && asked.pr.number === outcome.decision.number;
+    const raised = asked?.pr.number === outcome.decision.number;
     if (!recordPr(writes, itemOf(outcome.decision.number), outcome, raised) && raised) asked = null;
   }
+  const red = redBase(sweep, base);
   if (contradictions.length > 0) {
-    throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
+    throw new Error([...contradictions, ...red, ...writes.failed, 'every other decision is recorded'].join('; '));
   }
 
   emit({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
-    summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
+    summary: [...red, sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
+    healthy: red.length === 0,
     ...(asked === null ? NO_ASK : raisedAsk(asked)),
   });
 }

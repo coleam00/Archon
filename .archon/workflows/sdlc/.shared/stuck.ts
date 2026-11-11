@@ -5,7 +5,8 @@
  * engine lease on it (a claim written before claims took one), because it never releases
  * a claim it cannot prove ended.
  * Both leave the item stuck on every pass. A queue whose pickup claimed nothing names
- * them, so a person looks, instead of reporting an empty queue.
+ * them and ends its run as a failed outcome, so a person looks, instead of reporting an
+ * empty queue.
  */
 
 import { state } from 'archon:script';
@@ -39,9 +40,16 @@ export function stuckItems(runId: string): Stuck[] {
   return stuck;
 }
 
-/** `idle` itself when nothing is stuck; otherwise each stuck item by name and reason. */
-export function idleSummary(idle: string, stuck: readonly Stuck[]): string {
-  if (stuck.length === 0) return idle;
+/**
+ * The outcome of a run whose pickup claimed nothing: `idle` itself, healthy, when nothing
+ * is stuck; otherwise each stuck item by name and reason, not healthy, which the
+ * workflow's `outcome_field` records as a failed outcome.
+ */
+export function idleOutcome(idle: string, stuck: readonly Stuck[]): { summary: string; healthy: boolean } {
+  if (stuck.length === 0) return { summary: idle, healthy: true };
   const items = stuck.map(item => `${item.name} (${item.reason})`).join('; ');
-  return `Nothing was claimed, but pickup could not act on ${String(stuck.length)} stored item(s), which need a person: ${items}.`;
+  return {
+    summary: `Nothing was claimed, but pickup could not act on ${String(stuck.length)} stored item(s), which need a person: ${items}.`,
+    healthy: false,
+  };
 }

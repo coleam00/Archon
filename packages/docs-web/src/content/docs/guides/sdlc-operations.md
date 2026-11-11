@@ -82,7 +82,7 @@ Each issue has a work item: the state document `work/<number>` in the project's 
 
 Every queue claims an item with a conditional write, in one order: most urgent, then most important, then smallest, then oldest. An untriaged item sorts after triaged ones, oldest first.
 
-A claim takes the work item's engine lease. The next pickup releases a claim whose lease the engine reports ended: its run completed, was cancelled or abandoned, or was deleted. A claim whose run is pending, running, paused or failed is never released, because a failed run can resume. Abandon the run to free its claim. There is no age timeout.
+A claim takes the work item's engine lease. The next pickup releases a claim whose lease the engine reports ended: its run completed, was cancelled or abandoned, or was deleted. A claim whose run is pending, running, paused or failed is never released, because a failed run can resume. Abandon the run to free its claim. There is no age timeout. A queue run that claims nothing while a stored item is stuck, because its document does not parse or its claim's run holds no engine lease, names the item and completes with a failed outcome, so the attention watch shows it.
 
 A claim that carries no lease of its run is held, and an idle pass names it. Abandoning its run does not free it. Clear it by writing the document back with `claim` set to `null`, through a conditional `archon state put work/<number> --if-revision <n>`.
 
@@ -271,7 +271,7 @@ The queue reads every pull request back after the sweep: the forge, not the swee
 - A sweep that says it merged a pull request the forge does not show merged fails the run after every other decision is written. That pull request is recorded as waiting, or parked if it was closed.
 - A decision for a pull request this run did not claim is skipped and reported, because that item belongs to another run.
 - A claimed pull request the sweep left undecided waits for the next sweep.
-- A red default branch the sweep did not raise fails the run once every other decision is written.
+- A red default branch asks nobody. The sweep merges nothing and the run completes with a failed outcome, which the attention watch shows as a line that needs a look. Read the diagnosis in the `record` node's summary with `archon workflow get <run-id> --verbose`: the failing checks and what each points at, the pull requests merged since the branch was green, the one the sweep suspects, and whether to rerun, revert or fix forward. Every sweep repeats that line while the branch stays red. A sweep that also asked about a pull request ends only once that question is answered.
 - A pull request that cannot be read waits for the next sweep. A work item that cannot be written is reported, so one bad item never loses the rest of the batch's record.
 
 The work item's `facts.merge` holds the item's merge status, any approval pinned to the head it approved, and the last twenty decisions. A return sets the build record to waiting for its next round, with the brief. That round then starts at once through the build-queue binding (`build_queue_binding`), keyed by the item and the run, so a re-run of the same record starts it at most once. A round that does not start is named in the summary, and the next build-queue run picks the item up.
@@ -283,9 +283,8 @@ The work item's `facts.merge` holds the item's merge status, any approval pinned
 
 ### What it asks
 
-A run raises at most one attention item, labelled `stage: merge`: a red default branch, labelled `kind: base`, or else the first pull request the sweep asked about, labelled `kind: approve` with the issue number as `item` and the pull request's as `pr`. The sweep writes it as the build queue's agents write theirs, and it reaches you as written. Any other ask waits for a later sweep, which decides it again.
+A run raises at most one attention item, labelled `stage: merge`: the first pull request the sweep asked about, labelled `kind: approve` with the issue number as `item` and the pull request's as `pr`. The sweep writes it as the build queue's agents write theirs, and it reaches you as written. Any other ask waits for a later sweep, which decides it again.
 
-- **`kind: base`** offers `hold`: merges are held until the default branch is green. An `other` answer there holds too, and its text is not acted on.
 - **`merge`** approves the pull request at the head that was asked about. The answer starts a sweep at once through the merge-queue binding (`merge_queue_binding`), which merges it once the gate passes there.
 - **`return`** hands the item back to the build queue, whose next round starts at once through the build-queue binding.
 - **`park`** stops working the item until the build queue readies it again.

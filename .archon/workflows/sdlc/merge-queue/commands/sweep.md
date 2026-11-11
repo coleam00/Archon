@@ -14,7 +14,7 @@ Every forge read and write goes through the Archon CLI, whose argv is the JSON s
 
 ## The default branch first
 
-Judge `$INPUTS.base` before any pull request. Green, or pending: go on; the gate refuses only red. Red: the policy's rule for the default branch applies. Merge nothing this sweep, say so in each pull request's `reason`, find what each failing job points at, and raise it; never rerun it yourself (`checks.rerun` takes a pull request at its head). `base.ask` is the question: it names the failing checks and what each points at, every pull request merged since the branch was last green, and the one you suspect. When the red is in code none of those pull requests touches, such as a flake or an infrastructure failure, it says so and recommends a maintainer rerun the failed jobs, naming that `checks.rerun` cannot act on a commit with no pull request; otherwise it recommends a revert or a fix-forward. Its one option is `hold`. Otherwise `base.ask` is null. `base.summary` says what you found. A red default branch you did not raise fails the record.
+Judge `$INPUTS.base` before any pull request. Green, or pending: go on; the gate refuses only red. Red: the policy's rule for the default branch applies. Merge nothing this sweep, say so in each pull request's `reason`, and find what each failing job points at; never rerun it yourself (`checks.rerun` takes a pull request at its head). The run then ends as a failed outcome and nobody is asked, so `base.summary` is all a maintainer reads: it names the failing checks and what each points at, every pull request merged since the branch was last green, and the one you suspect. When the red is in code none of those pull requests touches, such as a flake or an infrastructure failure, it says so and recommends a maintainer rerun the failed jobs, naming that `checks.rerun` cannot act on a commit with no pull request; otherwise it recommends a revert or a fix-forward. On a branch that is not red, `base.summary` says what you found.
 
 ## Decide
 
@@ -39,7 +39,7 @@ Every pull request gets exactly one decision. A `return` always carries a `brief
 
 ## The questions
 
-Write each `ask` as `attention.md` says. On a pull request an option's `effect` is `merge` (approves it at the head you name, and a later sweep merges it once the gate passes there), `return` (sends it back to the build queue with the brief) or `park` (stops working the item until the build queue readies it again). On a red default branch the one option is `hold`, so that question has a single option. The queue's own `other` returns the pull request with the person's text as the ruling when the ask has a brief; without one it records the text and parks, starting no build round. Say which in the `question`.
+Write each `ask` as `attention.md` says. On a pull request an option's `effect` is `merge` (approves it at the head you name, and a later sweep merges it once the gate passes there), `return` (sends it back to the build queue with the brief) or `park` (stops working the item until the build queue readies it again). The queue's own `other` returns the pull request with the person's text as the ruling when the ask has a brief; without one it records the text and parks, starting no build round. Say which in the `question`.
 
 Declare `summary`: what this sweep merged, sent back and asked, in a few lines.
 

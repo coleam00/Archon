@@ -40,7 +40,7 @@ import {
   splitMarker,
   type WholeRoute,
 } from '../../.shared/split.ts';
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
+import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { newest, readWorkItem, updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
 /** One issue as the slice node's schema certified it. */
@@ -141,6 +141,7 @@ function publish(
     issues,
     adopted,
     summary,
+    healthy: true,
   });
 }
 
@@ -153,15 +154,14 @@ function buildWhole(item: QualifiedPr, runId: string, route: WholeRoute, comment
     ...finish(current, { status: 'whole', route, at, run_id: runId }, runId, 'whole', reason),
     stage: route,
   }));
-  emit({ path: 'slice', item: item.number, kind: 'whole', issues: [], adopted: [], summary: reason });
+  emit({ path: 'slice', item: item.number, kind: 'whole', issues: [], adopted: [], summary: reason, healthy: true });
 }
 
 function main(): void {
   const path = input('path').trim();
   const runId = workflowRunId();
   if (path === 'idle') {
-    const summary = idleSummary('No item waits for the split queue.', stuckItems(runId));
-    emit({ path, item: null, kind: null, issues: [], adopted: [], summary });
+    emit({ path, item: null, kind: null, issues: [], adopted: [], ...idleOutcome('No item waits for the split queue.', stuckItems(runId)) });
     return;
   }
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
@@ -171,7 +171,7 @@ function main(): void {
     const doc = updateClaimed(item, runId, current =>
       finish(current, { status: 'closed', issues: filedOn(current), at, run_id: runId }, runId, 'closed', reason)
     );
-    emit({ path, item: item.number, kind: null, issues: filedOn(doc), adopted: [], summary: `Issue ${String(item.number)}: ${reason}` });
+    emit({ path, item: item.number, kind: null, issues: filedOn(doc), adopted: [], summary: `Issue ${String(item.number)}: ${reason}`, healthy: true });
     return;
   }
   const answer = nullableJson(input('split')) as Answer | null;

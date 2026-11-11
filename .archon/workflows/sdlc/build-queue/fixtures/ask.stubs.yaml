@@ -45,6 +45,7 @@ apply:
   item: "7"
   pr: ""
   asked: { ask: *ask, brief: "stub-brief: build issue 7 under the ruling", by: route }
+  healthy: true
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: paused
