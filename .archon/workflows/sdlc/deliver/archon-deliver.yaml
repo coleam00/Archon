@@ -200,7 +200,7 @@ nodes:
         # disposition at the head and writes the reply each settled thread gets.
         - id: settle-threads
           command: settle-threads
-          model: medium
+          model: ['@settle-threads', medium]
           context: fresh
           mutates_checkout: false
           depends_on: [pr, review]
@@ -230,7 +230,7 @@ nodes:
         # of the change goes back to the implementer instead.
         - id: ci
           command: ci
-          model: medium
+          model: ['@ci', medium]
           context: fresh
           mutates_checkout: false
           # After settle-threads: a failed settle skips CI, so the pull request the
@@ -328,7 +328,7 @@ nodes:
   # content a round prepared for the description is that round's pr step's write.
   - id: update-pr-body
     command: update-pr-body
-    model: medium
+    model: ['@update-pr-body', medium]
     depends_on: [rounds]
     when: "$rounds.output.pr_url != ''"
     with:

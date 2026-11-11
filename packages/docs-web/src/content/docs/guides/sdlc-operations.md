@@ -46,13 +46,27 @@ Each stage picks its model from a concern alias, falling back to the tier it has
 | `@implementer` | implement | `large` |
 | `@reviewer` | every review agent and simplify | each node's tier |
 | `@review-<lens>` | one lens: `seams`, `code`, `tests`, `errors`, `docs`, `ux` or `simplify` | `@reviewer`, then the lens's tier |
+| `@review-route` | review's lens router | `small` |
+| `@pr-prepare` | the pull request's title and body | `medium` |
+| `@settle-threads` | delivery's answers to review threads | `medium` |
+| `@ci` | delivery's CI hand-off | `medium` |
+| `@update-pr-body` | delivery's final description update | `medium` |
+| `@build-interpret` | the build queue's reading of a message | `large` |
+| `@build-route` | the build queue's launch decision | `large` |
+| `@build-answer` | the build queue's decision after a round | `large` |
+| `@build-revisit` | the build queue's revisit of blocked items | `medium` |
+| `@sweep` | the merge queue's sweep | `large` |
+| `@discoveries` | the discoveries decision | `large` |
+| `@split` | the split queue's slicing | `large` |
+| `@test-value-judge` | the test-value metric's judge | `large` |
+| `@review-eval-judge` | the review bench's judge | `large` |
 
 ```bash
 archon ai alias set @reviewer codex gpt-6.1-sol                                   # every run
 archon workflow run archon-build-queue --model @reviewer=codex/gpt-6.1-sol ...    # one run
 ```
 
-The first alias your config defines wins; `aliases:` in `.archon/config.yaml` sets them too. A lens alias overrides only its lens: with `@reviewer` on Codex and `@review-seams` on Claude, seams runs on Claude and every other lens on Codex. Review's lens router and the queues' own judges keep their size tiers; to move those, rebind the tier.
+The first alias your config defines wins; `aliases:` in `.archon/config.yaml` sets them too. A lens alias overrides only its lens: with `@reviewer` on Codex and `@review-seams` on Claude, seams runs on Claude and every other lens on Codex. An alias you do not define changes nothing: its node runs on the tier it falls back to.
 
 ## The forge and the repository
 

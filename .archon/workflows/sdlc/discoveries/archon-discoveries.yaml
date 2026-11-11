@@ -73,7 +73,7 @@ nodes:
     command: decide
     depends_on: [facts]
     when: "$facts.output.path == 'decide'"
-    model: large
+    model: ['@discoveries', large]
     mutates_checkout: false
     with:
       base_sha: "$facts.output.base.sha"

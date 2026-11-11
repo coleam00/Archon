@@ -27,7 +27,7 @@ nodes:
 
   - id: judge
     depends_on: [read]
-    model: large
+    model: ['@test-value-judge', large]
     allowed_tools: []
     prompt: |
       You are judging the tests one pull request adds or changes. Judge each test on

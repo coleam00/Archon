@@ -77,7 +77,7 @@ nodes:
     command: slice
     depends_on: [facts]
     when: "$facts.output.path == 'slice'"
-    model: large
+    model: ['@split', large]
     with:
       url: "$facts.output.url"
       filed: { from: "$facts.output.filed" }

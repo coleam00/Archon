@@ -163,7 +163,7 @@ nodes:
   # that lens's area.
   - id: route
     command: route-review
-    model: small
+    model: ['@review-route', small]
     context: fresh
     mutates_checkout: false
     depends_on: [mode, scope]
