@@ -425,23 +425,45 @@ export function stateClaimValue(
   if (prior?.value == null) throw new StateDocumentMissingError(input.name);
   return prior.value;
 }
+/**
+ * Why the store refused a write or passed over a claim candidate. Every surface that
+ * reports a refusal names it with one of these, so one condition has one name.
+ */
+export const stateRefusalReasonSchema = z.enum([
+  'missing',
+  'revision_moved',
+  'lease_held',
+  'lease_not_held',
+]);
+export type StateRefusalReason = z.infer<typeof stateRefusalReasonSchema>;
+const refusal = stateRefusalReasonSchema.enum;
+
+/** The reason a store error stands for, or undefined when it is not a refusal. */
+export function stateRefusalReason(error: unknown): StateRefusalReason | undefined {
+  if (error instanceof StateDocumentMissingError) return refusal.missing;
+  if (error instanceof StateRevisionConflictError) return refusal.revision_moved;
+  if (error instanceof StateLeaseHeldError) return refusal.lease_held;
+  if (error instanceof StateLeaseNotHeldError) return refusal.lease_not_held;
+  return undefined;
+}
+
 /** Documents a run offers to claim, in its own order of preference. */
 export const stateClaimCandidatesSchema = z
   .array(stateClaimSchema.pick({ name: true, ifRevision: true }).strict())
   .min(1);
 export const stateClaimSkipSchema = z.discriminatedUnion('reason', [
-  z.object({ name: stateDocumentNameSchema, reason: z.literal('missing') }).strict(),
+  z.object({ name: stateDocumentNameSchema, reason: z.literal(refusal.missing) }).strict(),
   z
     .object({
       name: stateDocumentNameSchema,
-      reason: z.literal('revision_moved'),
+      reason: z.literal(refusal.revision_moved),
       revision: z.number().int().nonnegative(),
     })
     .strict(),
   z
     .object({
       name: stateDocumentNameSchema,
-      reason: z.literal('lease_held'),
+      reason: z.literal(refusal.lease_held),
       holder: stateLeaseSchema,
     })
     .strict(),
@@ -469,7 +491,7 @@ export async function claimFirstStateDocument(
   const skipped: StateClaimResult['skipped'] = [];
   for (const { name, ifRevision } of stateClaimCandidatesSchema.parse(input.candidates)) {
     if ((await store.getStateDocument(scope, name)) === null) {
-      skipped.push({ name, reason: 'missing' });
+      skipped.push({ name, reason: refusal.missing });
       continue;
     }
     try {
@@ -479,11 +501,12 @@ export async function claimFirstStateDocument(
       };
     } catch (error) {
       // Deleted between the read above and the claim.
-      if (error instanceof StateDocumentMissingError) skipped.push({ name, reason: 'missing' });
+      if (error instanceof StateDocumentMissingError)
+        skipped.push({ name, reason: refusal.missing });
       else if (error instanceof StateRevisionConflictError)
-        skipped.push({ name, reason: 'revision_moved', revision: error.actual });
+        skipped.push({ name, reason: refusal.revision_moved, revision: error.actual });
       else if (error instanceof StateLeaseHeldError)
-        skipped.push({ name, reason: 'lease_held', holder: error.holder });
+        skipped.push({ name, reason: refusal.lease_held, holder: error.holder });
       else throw error;
     }
   }

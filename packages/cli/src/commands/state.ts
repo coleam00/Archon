@@ -16,12 +16,11 @@ import {
   statePatchSchema,
   stateValueSchema,
   type stateWriteScopeSchema,
-  StateRevisionConflictError,
   StateDocumentTooLargeError,
-  StateLeaseHeldError,
-  StateLeaseNotHeldError,
   StatePatchError,
   claimFirstStateDocument,
+  stateRefusalReason,
+  type StateRefusalReason,
   stateClaimCandidatesSchema,
   type IStateDocumentStore,
   type StateLeaseChange,
@@ -339,17 +338,8 @@ async function executeStateCommand(
 }
 
 /** Why a write exited `3`; scripts read this, not the message. */
-function stateConflictReason(
-  error: unknown
-): 'revision_conflict' | 'lease_held' | 'lease_not_held' | undefined {
-  if (error instanceof StateRevisionConflictError) return 'revision_conflict';
-  if (error instanceof StateLeaseHeldError) return 'lease_held';
-  if (error instanceof StateLeaseNotHeldError) return 'lease_not_held';
-  return undefined;
-}
-
-function stateErrorReason(error: unknown): { reason?: string } {
-  const reason = stateConflictReason(error);
+function stateErrorReason(error: unknown): { reason?: StateRefusalReason } {
+  const reason = stateRefusalReason(error);
   return reason === undefined ? {} : { reason };
 }
 
@@ -368,7 +358,7 @@ function stateResultCode(result: object): number {
 }
 
 function stateErrorCode(error: unknown): number {
-  if (stateConflictReason(error) !== undefined) return EXIT.conflict;
+  if (stateRefusalReason(error) !== undefined) return EXIT.conflict;
   if (
     error instanceof StateDocumentTooLargeError ||
     error instanceof StatePatchError ||

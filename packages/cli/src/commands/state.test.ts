@@ -156,7 +156,7 @@ test('--held fences a write to the lease holder, and claim takes the first claim
   });
   expect(await invoke('delete', '', { held: true }, otherEnv)).toBe(3);
   expect(await invoke('patch', ops, { held: true, ifRevision: '9' })).toBe(3);
-  expect(output.at(-1)).toMatchObject({ reason: 'revision_conflict' });
+  expect(output.at(-1)).toMatchObject({ reason: 'revision_moved' });
   expect(await invoke('patch', ops, { held: true, project: 'owner/repo' }, {})).toBe(1);
   expect(output.at(-1)).toMatchObject({ error: '--held is only valid inside a run' });
   expect(await invoke('get', '', { held: true })).toBe(1);

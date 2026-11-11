@@ -2105,8 +2105,8 @@ and writes nothing. A document with no lease, or with an ended one, is held by n
 `put --held --release-lease` records an outcome and gives the lease back only if the run
 still owns it. `--held` is refused outside a run.
 
-Every exit `3` carries a `reason` beside `error` and `code`: `revision_conflict`,
-`lease_held` (a take or release against another run's live lease) or `lease_not_held`.
+Every exit `3` carries a `reason` beside `error` and `code`: `revision_moved` (the
+document is at another revision than `--if-revision` named), `lease_held` (a take or release against another run's live lease) or `lease_not_held`.
 
 **Claiming one of several documents.** Inside a run, `archon state claim` reads a JSON
 array of `{"name", "ifRevision"}` candidates from stdin and tries them in the order given.
@@ -2116,7 +2116,7 @@ the lease is part of a revision, and the next conditional write must name the ne
 That revision repeats the value unchanged and `state log` shows its operation as
 `{"op": "claim"}`, so the log tells a claim from a `put`, `patch` or `delete`. The output
 is `{scope, claimed, skipped}`: `claimed` is that new revision, and `skipped` lists every
-earlier candidate with a `reason`:
+earlier candidate with a `reason`, named as a refused write names it:
 
 | `reason` | Meaning | Extra field |
 | --- | --- | --- |
