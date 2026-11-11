@@ -21,7 +21,9 @@
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */
 
+import { join } from 'node:path';
 import { artifactsDir, emit, nullableJson, text } from '../../.shared/io.ts';
+import { PUBLISHED_REPORT_FILE } from '../../.shared/review-item.ts';
 
 /** Why a round ended. */
 type Ended =
@@ -85,7 +87,7 @@ emit({
   pr_url: prUrl === 'null' ? text(process.env.INPUTS_PREVIOUS_PR_URL) : prUrl,
   // The next round's review continues from the last published report, if any.
   prior_report:
-    reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
+    reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : join(artifactsDir(), PUBLISHED_REPORT_FILE),
   // The latest review's open contract items; null until a review has judged coverage.
   contract_left: contractLeft ?? nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT),
   summary: `Round ${round}: ${reason}. ${text(summary)}`,

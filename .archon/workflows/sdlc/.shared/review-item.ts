@@ -13,7 +13,14 @@ import { isObject } from './io.ts';
 export const ITEM_FILE = 'item.json';
 export const FINDINGS_FILE = 'review/findings.json';
 export const REPORT_FILE = 'review/report.md';
-/** Beside a published report: the commit it reviewed. publish-review writes it. */
+/**
+ * The review a run last published, as one set publish-review writes together: the
+ * report, its findings and the commit it reviewed. A later review continues from this
+ * set, never from the working `report.md`, which the next round's synthesis rewrites
+ * before that round publishes anything.
+ */
+export const PUBLISHED_DIR = 'published';
+export const PUBLISHED_REPORT_FILE = `review/${PUBLISHED_DIR}/report.md`;
 export const REVIEWED_HEAD_FILE = 'reviewed-head';
 
 export interface ItemDefect {

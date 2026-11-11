@@ -852,9 +852,9 @@ describe('the build queue checkout', () => {
     // Two earlier rounds kept their review: an older one at the base, the latest at `reviewed`.
     const published = (commit: string): string => {
       const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-build-round-')));
-      mkdirSync(join(artifacts, 'review'));
-      writeFileSync(join(artifacts, 'review/report.md'), '# Review report\n');
-      writeFileSync(join(artifacts, 'review/reviewed-head'), `${commit}\n`);
+      mkdirSync(join(artifacts, 'review/published'), { recursive: true });
+      writeFileSync(join(artifacts, 'review/published/report.md'), '# Review report\n');
+      writeFileSync(join(artifacts, 'review/published/reviewed-head'), `${commit}\n`);
       return artifacts;
     };
     const rounds = [published(git(at.checkout, 'rev-parse', 'dev')), published(reviewed), ''].map(artifacts => ({ artifacts }));
@@ -866,7 +866,7 @@ describe('the build queue checkout', () => {
     };
     const review = { id: 1, author: 'Maintainer', body: reviewCommentBody(reviewed, false, 'open', '# Review report') };
     // The first review continues from the report a round published at the commit the comment names.
-    const prior_report = join(rounds[1]?.artifacts ?? '', 'review/report.md');
+    const prior_report = join(rounds[1]?.artifacts ?? '', 'review/published/report.md');
     expect(ok(run(at, 'checkout', inputs, { pr: { headRefOid: head }, comments: [review] }))).toEqual({ head, reviewed, pull_request: 42, prior_report });
     // A review no kept round recorded, such as one another install published, is not continued.
     expect(ok(run(at, 'checkout', { ...inputs, INPUTS_ROUNDS: JSON.stringify(rounds.slice(0, 1)) }, { pr: { headRefOid: head }, comments: [review] }))).toMatchObject({ reviewed, prior_report: '' });

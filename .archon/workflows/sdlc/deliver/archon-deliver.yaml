@@ -33,7 +33,7 @@ inputs:
     default: ""
     description: >-
       Path to the published review report of the pull request this delivery
-      continues, from an earlier run's artifacts (`review/report.md`). The first
+      continues, from an earlier run's artifacts (`review/published/report.md`). The first
       round's review then continues from it: it checks that report's findings and
       reviews what changed since the commit it reviewed. Empty makes the first
       round's review a first review of the whole change.

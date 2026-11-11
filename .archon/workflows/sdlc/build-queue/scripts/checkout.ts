@@ -35,7 +35,7 @@ import { git, gitOrThrow } from '../../.shared/git.ts';
 import { emit, nullableJson, refuse } from '../../.shared/io.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { reviewedHead } from '../../.shared/merge.ts';
-import { REPORT_FILE, REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
+import { PUBLISHED_REPORT_FILE, REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 
@@ -43,16 +43,16 @@ import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
  * The report an earlier round of this item published at `reviewed`, the commit the pull
  * request's trusted review comment names: the round's first review continues from it.
  * Empty, so that review reads the whole change, when the pull request has no trusted
- * review, when no kept round's artifacts on this machine hold the review at that commit
- * (another install or a review outside the queue published it, or its artifacts are
- * gone), or when the head no longer descends from that commit.
+ * review, when no kept round's artifacts on this machine hold the review published at
+ * that commit (another install or a review outside the queue published it, or its
+ * artifacts are gone), or when the head no longer descends from that commit.
  */
 function priorReport(reviewed: string | null, head: string): string {
   if (reviewed === null || git('merge-base', '--is-ancestor', reviewed, head).code !== 0) return '';
   const rounds = nullableJson(process.env.INPUTS_ROUNDS) as readonly BuildRound[];
   for (const round of [...rounds].reverse()) {
     if (round.artifacts === '') continue;
-    const report = join(round.artifacts, REPORT_FILE);
+    const report = join(round.artifacts, PUBLISHED_REPORT_FILE);
     const recorded = join(dirname(report), REVIEWED_HEAD_FILE);
     if (existsSync(recorded) && readFileSync(recorded, 'utf8').trim() === reviewed) return report;
   }
