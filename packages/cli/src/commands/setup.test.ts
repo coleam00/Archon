@@ -435,6 +435,121 @@ describe('setup with a Pi login over a saved key', () => {
   });
 });
 
+describe('setup from the real Pi questions', () => {
+  const cancelled = Symbol('cancelled');
+
+  /**
+   * Runs setup with the real collectAIConfig and collectPiConfig for Pi, picking xAI and
+   * Pi's login. `modelAnswer` answers the saved-model question; every saved-key question
+   * is answered with remove. Returns the exit code and every select message shown.
+   */
+  async function runPiLoginSetup(
+    home: string,
+    repo: string,
+    modelAnswer?: 'keep' | 'switch' | typeof cancelled
+  ): Promise<{ code: number; messages: string[]; platforms: ReturnType<typeof spyOn> }> {
+    const messages: string[] = [];
+    const answers: [(message: string) => boolean, unknown][] = [
+      [m => m === 'What would you like to do?', 'add'],
+      [m => m === 'Which Pi backend will you use as the default?', 'xai'],
+      [m => m.includes('already sets the Pi model'), modelAnswer],
+      [m => m.startsWith('How do you want Pi to authenticate'), 'piLogin'],
+      [m => m.includes('is set in'), 'remove'],
+    ];
+    const select = spyOn(prompts, 'select').mockImplementation((async (options: {
+      message: string;
+    }) => {
+      messages.push(options.message);
+      const match = answers.find(([matches]) => matches(options.message));
+      if (!match || match[1] === undefined)
+        throw new Error(`Unexpected prompt: ${options.message}`);
+      return match[1];
+    }) as typeof prompts.select);
+    const isCancel = spyOn(prompts, 'isCancel').mockImplementation(value => value === cancelled);
+    const originalCollect = collectAIConfig;
+    const collect = spyOn(setupAi, 'collectAIConfig').mockImplementation(options =>
+      originalCollect(
+        options,
+        async () => undefined,
+        async () => []
+      )
+    );
+    const policies = spyOn(platformRegistry, 'getRegisteredPlatformPolicies').mockReturnValue([]);
+    const platforms = spyOn(prompts, 'multiselect').mockResolvedValue([]);
+    const confirm = spyOn(prompts, 'confirm').mockResolvedValue(false);
+    const note = spyOn(prompts, 'note').mockImplementation(() => undefined);
+    const cancel = spyOn(prompts, 'cancel').mockImplementation(() => undefined);
+    const savedHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = home;
+    try {
+      const code = await setupCommand({ repoPath: repo, providers: ['pi'], inheritedEnv: {} });
+      return { code, messages, platforms };
+    } finally {
+      for (const spy of [select, isCancel, collect, policies, platforms, confirm, note, cancel])
+        spy.mockRestore();
+      if (savedHome === undefined) delete process.env.ARCHON_HOME;
+      else process.env.ARCHON_HOME = savedHome;
+    }
+  }
+
+  let root: string;
+  let home: string;
+  beforeEach(() => {
+    root = mkdtempSync(join(tmpdir(), 'archon-setup-pi-flow-'));
+    home = join(root, 'home');
+    mkdirSync(home, { recursive: true });
+  });
+  afterEach(async () => {
+    await removeTempTree(root);
+  });
+
+  it("warns about a saved key after Pi's login is chosen and removes it on agreement", async () => {
+    writeFileSync(join(home, '.env'), 'XAI_API_KEY=old-key\nCUSTOM_SETTING=keep\n');
+
+    const { code, messages } = await runPiLoginSetup(home, root);
+
+    expect(code).toBe(0);
+    expect(messages).toContain(
+      `XAI_API_KEY is set in ${join(home, '.env')}, and Archon uses it instead of Pi's login. What should setup do?`
+    );
+    const env = parseDotenv(readFileSync(join(home, '.env'), 'utf8'));
+    expect(env.XAI_API_KEY).toBeUndefined();
+    expect(env.CUSTOM_SETTING).toBe('keep');
+  });
+
+  it('checks the key of a kept model for another backend', async () => {
+    writeFileSync(join(home, 'config.yaml'), 'assistants:\n  pi:\n    model: openai/gpt-4o\n');
+    writeFileSync(join(home, '.env'), 'OPENAI_API_KEY=old-key\nXAI_API_KEY=xai-key\n');
+
+    const { code, messages } = await runPiLoginSetup(home, root, 'keep');
+
+    expect(code).toBe(0);
+    expect(messages).toContain('How do you want Pi to authenticate with OpenAI?');
+    expect(messages.some(m => m.startsWith('OPENAI_API_KEY is set in'))).toBe(true);
+    expect(messages.some(m => m.startsWith('XAI_API_KEY is set in'))).toBe(false);
+    const env = parseDotenv(readFileSync(join(home, '.env'), 'utf8'));
+    expect(env.OPENAI_API_KEY).toBeUndefined();
+    expect(env.XAI_API_KEY).toBe('xai-key');
+    const config = Bun.YAML.parse(readFileSync(join(home, 'config.yaml'), 'utf8'));
+    expect(config).toMatchObject({ assistants: { pi: { model: 'openai/gpt-4o' } } });
+  });
+
+  it('stops before writing anything when the model question is cancelled', async () => {
+    const configYaml = 'assistants:\n  pi:\n    model: openai/gpt-4o\n';
+    const envFile = 'XAI_API_KEY=old-key\n';
+    writeFileSync(join(home, 'config.yaml'), configYaml);
+    writeFileSync(join(home, '.env'), envFile);
+
+    const { code, messages, platforms } = await runPiLoginSetup(home, root, cancelled);
+
+    expect(code).toBe(0);
+    expect(messages.some(m => m.startsWith('How do you want Pi to authenticate'))).toBe(false);
+    expect(platforms).not.toHaveBeenCalled();
+    expect(readFileSync(join(home, 'config.yaml'), 'utf8')).toBe(configYaml);
+    expect(readFileSync(join(home, '.env'), 'utf8')).toBe(envFile);
+  });
+});
+
 describe('setup with a Pi login over a key it cannot remove', () => {
   it('stops before the platform questions when the user backs out, writing nothing', async () => {
     const root = mkdtempSync(join(tmpdir(), 'archon-setup-pi-shell-key-'));

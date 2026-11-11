@@ -8,8 +8,10 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { execSync } from 'child_process';
 import { execFileAsync } from '@archon/git';
+import { loadGlobalConfig } from '@archon/core/config/config-loader';
 import { PI_PROVIDER_ENV_VARS } from '@archon/providers';
 import { CODEX_SETUP_ENV } from '@archon/providers/codex/setup-env';
+import { parsePiModelRef } from '@archon/providers/pi/model-ref';
 import { getArchonHome as pathsGetArchonHome } from '@archon/paths';
 import { type Document, isMap, parseDocument, type YAMLMap } from 'yaml';
 import { cancelSetup, exitSetup, type CodexTokens } from './setup-shared';
@@ -169,7 +171,13 @@ function tryReadCodexAuth(): CodexTokens | null {
 }
 
 /**
- * Collect Pi backend selection and how Pi authenticates to it.
+ * Collect the Pi model setup saves and how Pi authenticates to its backend.
+ *
+ * The model is settled first: when `~/.archon/config.yaml` already sets a
+ * different Pi model, the user keeps it or switches to the chosen backend's
+ * default. The credential question then names the backend of the model runs
+ * will use, so a kept model for another backend is not checked against the
+ * wrong key. Cancelling here stops setup before anything is written.
  *
  * Pi reads its own `auth.json` (written by `pi /login`), so a user who has
  * already logged in needs no key in Archon's `.env`. The key prompt is only
@@ -180,8 +188,11 @@ function tryReadCodexAuth(): CodexTokens | null {
  */
 export async function collectPiConfig(): Promise<{
   model: string;
-  /** The backend's key variable, set for both choices so setup can check it for conflicts. */
-  apiKeyEnvVar: string;
+  /**
+   * The key variable for the model's backend, set for both choices so setup can check it
+   * for conflicts. Absent when Pi has no key variable for that backend.
+   */
+  apiKeyEnvVar?: string;
   /** True when the user chose Pi's own login. */
   piLogin: boolean;
   apiKey?: string;
@@ -200,17 +211,28 @@ export async function collectPiConfig(): Promise<{
     cancel('Unknown Pi backend selected.');
     exitSetup(1);
   }
-  const model = PI_DEFAULT_MODELS[backendChoice] ?? `${backendChoice}/default`;
-  const envVar = piBackendEnvVar(backend.id);
+  const model = await resolvePiModel(
+    PI_DEFAULT_MODELS[backendChoice] ?? `${backendChoice}/default`,
+    backend.label
+  );
+  const provider = parsePiModelRef(model)?.provider;
+  const envVar = provider ? PI_PROVIDER_ENV_VARS[provider] : undefined;
+  if (!provider || !envVar) {
+    log.info(
+      `Pi has no API key variable for ${provider ?? model}, so setup does not ask for a key. Pi uses its own credentials for it.`
+    );
+    return { model, piLogin: false };
+  }
+  const label = PI_BACKENDS.find(b => b.id === provider)?.label ?? provider;
 
   const authType = await select({
-    message: `How do you want Pi to authenticate with ${backend.label}?`,
+    message: `How do you want Pi to authenticate with ${label}?`,
     options: [
       {
         value: 'piLogin',
         label: "Use Pi's own login from `pi /login`",
         hint:
-          backend.id === 'anthropic'
+          provider === 'anthropic'
             ? 'API key in auth.json only. A Claude Pro/Max login through Pi is not supported; use `provider: claude` for that'
             : 'Uses the credential Pi already keeps in its auth.json',
       },
@@ -239,6 +261,48 @@ export async function collectPiConfig(): Promise<{
     piLogin: false,
     ...(key.length > 0 ? { apiKey: key } : {}),
   };
+}
+
+/**
+ * The Pi model setup will save: `chosen`, or the different model already in
+ * `~/.archon/config.yaml` when the user keeps it. Read through the config loader
+ * runs use, so the saved value is the one a run would see.
+ */
+async function resolvePiModel(chosen: string, chosenLabel: string): Promise<string> {
+  const configPath = join(pathsGetArchonHome(), 'config.yaml');
+  let saved: string | undefined;
+  try {
+    const model = (await loadGlobalConfig(true, { readOnly: true })).assistants?.pi?.model;
+    saved = typeof model === 'string' ? model.trim() : undefined;
+  } catch (error) {
+    // Runs cannot load this file either; the model write reports it again if it cannot parse it.
+    log.warning(
+      `Could not read ${configPath} (${(error as Error).message}), so setup could not check its saved Pi model.`
+    );
+    return chosen;
+  }
+  if (!saved || saved === chosen) return chosen;
+
+  const savedProvider = parsePiModelRef(saved)?.provider;
+  const sameBackend = savedProvider === parsePiModelRef(chosen)?.provider;
+  const choice = await select({
+    message: `${configPath} already sets the Pi model to ${saved}. Which one should Archon use?`,
+    options: [
+      {
+        value: 'keep',
+        label: `Keep ${saved}`,
+        ...(sameBackend
+          ? {}
+          : { hint: `Pi then authenticates with ${savedProvider ?? saved}, not ${chosenLabel}` }),
+      },
+      { value: 'switch', label: `Switch to ${chosen}` },
+    ],
+    // A saved model for the same backend is likely a deliberate pick; one for another
+    // backend would leave the backend just chosen unused.
+    initialValue: sameBackend ? 'keep' : 'switch',
+  });
+  if (isCancel(choice)) cancelSetup();
+  return choice === 'keep' ? saved : chosen;
 }
 
 /**
@@ -473,8 +537,8 @@ export async function collectCodexAuth(): Promise<CodexTokens | null> {
 
 /**
  * Set `assistants.pi.model` in `~/.archon/config.yaml`, keeping every other
- * setting and comment. When a different Pi model is already set, ask before
- * replacing it, so a model the user picked by hand is never swapped silently.
+ * setting and comment. The model was already agreed in `collectPiConfig`, which
+ * asks before replacing a different saved model, so this writes without asking.
  * A file setup cannot parse, or an `assistants` value that is not a mapping,
  * is left alone with a note showing the YAML to add.
  */
@@ -498,22 +562,6 @@ export async function writeHomePiModelConfig(model: string): Promise<void> {
   if (current === model) {
     log.info(`Pi model already set to ${model} in ${configPath}`);
     return;
-  }
-  if (typeof current === 'string' && current.trim() !== '') {
-    const choice = await select({
-      message: `${configPath} already sets the Pi model to ${current}. Which one should Archon use?`,
-      options: [
-        { value: 'keep', label: `Keep ${current}` },
-        { value: 'switch', label: `Switch to ${model}` },
-      ],
-      // A saved model for the same backend is likely a deliberate pick; one for another
-      // backend would leave the backend just chosen unused.
-      initialValue: current.split('/')[0] === model.split('/')[0] ? 'keep' : 'switch',
-    });
-    if (isCancel(choice) || choice === 'keep') {
-      log.info(`Kept Pi model ${current} in ${configPath}`);
-      return;
-    }
   }
   if (!setPiModel(doc, model)) {
     manualNote();

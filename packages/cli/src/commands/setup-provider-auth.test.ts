@@ -15,6 +15,7 @@ import {
   writeHomePiModelConfig,
 } from './setup-provider-auth';
 import * as providerAuth from './setup-provider-auth';
+import { SetupExit } from './setup-shared';
 
 describe('detectClaudeExecutablePath probe order', () => {
   // Use spies on the exported probe wrappers so each tier can be controlled
@@ -158,38 +159,12 @@ describe('writeHomePiModelConfig', () => {
     });
   });
 
-  it('asks before replacing a different Pi model and keeps it when told to', async () => {
+  it('replaces a different Pi model without asking again, keeping its other settings', async () => {
+    // collectPiConfig already asked; the default answer() rejects any select here.
     writeFileSync(
       configPath(),
       'assistants:\n  pi:\n    model: old\n    enableExtensions: false\n'
     );
-    const select = answer('keep');
-    await writeHomePiModelConfig('xai/grok-4.7');
-    expect(select).toHaveBeenCalledTimes(1);
-    expect(piModel()).toBe('old');
-  });
-
-  it('defaults to keeping a saved model for the same backend', async () => {
-    writeFileSync(configPath(), 'assistants:\n  pi:\n    model: xai/grok-4.5\n');
-    const select = answer('keep');
-    await writeHomePiModelConfig('xai/grok-4.7');
-    expect(select.mock.calls[0]?.[0]).toMatchObject({ initialValue: 'keep' });
-  });
-
-  it('defaults to switching when the saved model is for another backend', async () => {
-    writeFileSync(configPath(), 'assistants:\n  pi:\n    model: anthropic/claude-haiku-4-5\n');
-    const select = answer('switch');
-    await writeHomePiModelConfig('xai/grok-4.7');
-    expect(select.mock.calls[0]?.[0]).toMatchObject({ initialValue: 'switch' });
-    expect(piModel()).toBe('xai/grok-4.7');
-  });
-
-  it('replaces a different Pi model when the user switches, keeping its other settings', async () => {
-    writeFileSync(
-      configPath(),
-      'assistants:\n  pi:\n    model: old\n    enableExtensions: false\n'
-    );
-    answer('switch');
     await writeHomePiModelConfig('xai/grok-4.7');
     expect(parse(readFileSync(configPath(), 'utf-8'))).toEqual({
       assistants: { pi: { model: 'xai/grok-4.7', enableExtensions: false } },
@@ -271,6 +246,87 @@ describe('Pi backend key variables', () => {
 
 describe('collectPiConfig', () => {
   const spies: { mockRestore(): void }[] = [];
+  let home: string;
+  let savedHome: string | undefined;
+
+  beforeEach(() => {
+    home = mkdtempSync(join(tmpdir(), 'archon-collect-pi-'));
+    savedHome = process.env.ARCHON_HOME;
+    process.env.ARCHON_HOME = home;
+  });
+
+  afterEach(async () => {
+    if (savedHome === undefined) delete process.env.ARCHON_HOME;
+    else process.env.ARCHON_HOME = savedHome;
+    await removeTempTree(home);
+  });
+
+  const saveModel = (model: string): void =>
+    writeFileSync(join(home, 'config.yaml'), `assistants:\n  pi:\n    model: ${model}\n`);
+
+  // Answers each select in order; any further select rejects.
+  function answerAll(...choices: unknown[]): ReturnType<typeof spyOn> {
+    const select = spyOn(prompts, 'select').mockRejectedValue(new Error('unexpected select'));
+    for (const choice of choices) select.mockResolvedValueOnce(choice);
+    spies.push(select);
+    return select;
+  }
+
+  it('checks the credential for the backend of a kept model, not the backend just picked', async () => {
+    saveModel('openai/gpt-4o');
+    const select = answerAll('xai', 'keep', 'piLogin');
+
+    expect(await collectPiConfig()).toEqual({
+      model: 'openai/gpt-4o',
+      apiKeyEnvVar: 'OPENAI_API_KEY',
+      piLogin: true,
+    });
+    const modelQuestion = select.mock.calls[1]?.[0] as {
+      initialValue: string;
+      options: { value: string; hint?: string }[];
+    };
+    expect(modelQuestion.initialValue).toBe('switch');
+    expect(modelQuestion.options.find(o => o.value === 'keep')?.hint).toContain('openai');
+    expect(select.mock.calls[2]?.[0]).toMatchObject({
+      message: 'How do you want Pi to authenticate with OpenAI?',
+    });
+  });
+
+  it('switches to the picked backend and checks its key when the user switches', async () => {
+    saveModel('openai/gpt-4o');
+    answerAll('xai', 'switch', 'piLogin');
+
+    expect(await collectPiConfig()).toEqual({
+      model: 'xai/grok-4.7',
+      apiKeyEnvVar: 'XAI_API_KEY',
+      piLogin: true,
+    });
+  });
+
+  it('defaults to keeping a saved model for the same backend', async () => {
+    saveModel('xai/grok-4.5');
+    const select = answerAll('xai', 'keep', 'piLogin');
+
+    expect(await collectPiConfig()).toMatchObject({ model: 'xai/grok-4.5' });
+    expect(select.mock.calls[1]?.[0]).toMatchObject({ initialValue: 'keep' });
+  });
+
+  it('does not ask about the model when the saved one matches', async () => {
+    saveModel('xai/grok-4.7');
+    answerAll('xai', 'piLogin');
+
+    expect(await collectPiConfig()).toMatchObject({ model: 'xai/grok-4.7', piLogin: true });
+  });
+
+  it('stops setup when the model question is cancelled', async () => {
+    saveModel('openai/gpt-4o');
+    const cancelled = Symbol('cancelled');
+    answerAll('xai', cancelled);
+    spies.push(spyOn(prompts, 'isCancel').mockImplementation(value => value === cancelled));
+    spies.push(spyOn(prompts, 'cancel').mockImplementation(() => undefined));
+
+    await expect(collectPiConfig()).rejects.toBeInstanceOf(SetupExit);
+  });
 
   // Answers the backend question with xAI, then the auth question with `auth`.
   // Any further select rejects, so a new question fails the test instead of
