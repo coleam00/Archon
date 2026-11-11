@@ -42,9 +42,12 @@ const until = trimmed(process.env.INPUTS_UNTIL);
 const linesSince = trimmed(process.env.INPUTS_LINES_SINCE);
 
 try {
+  const window = { from: sinceTime(since), until: until === '' ? Infinity : sinceTime(until) };
+  if (window.from >= window.until) {
+    throw new Error(`the window is empty: since (${since}) is not before until (${until}); pass both to record an older slice`);
+  }
   const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
   const runsByUrl = factoryPrRuns(items);
-  const window = { from: sinceTime(since), until: until === '' ? Infinity : sinceTime(until) };
   const changed = (...times: (string | null)[]): boolean => times.some(time => time !== null && inWindow(time, window));
   const prs = factoryPrs(readPrFacts(runsByUrl.keys()));
   const factory = prs.factory.filter(pr => changed(pr.createdAt, pr.mergedAt, pr.closedAt));
