@@ -170,6 +170,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Bun's module mocks pollute the process cache. Use the package test scripts that preserve isolation; do not run `bun test` from the repository root.
 - Run lint through `bun run lint`. Besides Biome, it runs the repository checks Biome cannot express, such as the workflow persistence boundary.
 - Check what you changed: run the tests that cover it, lint and type-check the packages you touched, and run `bun run check:ratchet` before you push. CI refuses a change the ratchet refuses, and it takes seconds locally against a fetched `origin/dev`.
+- Before each commit, run `bun x biome check --write` on the files you stage and stage them again. `bun run lint` does not check formatting, and the pre-commit hook refuses a staged file Biome would change.
 - CI is the full validation. Don't run `bun run validate` to finish a change. `scripts/validate.ts` owns the check list and CI selects from it; workflow fixtures run locally only through `--only`.
 - Schema changes also need the PostgreSQL upgrade check. [`CONTRIBUTING.md`](CONTRIBUTING.md) lists it with its command.
 - For visual or runtime behavior, add direct evidence when static tests cannot prove the outcome.

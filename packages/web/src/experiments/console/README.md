@@ -46,13 +46,14 @@ installations operate without an identity.
 | `archon.console.detailView`      | `log`   | Run-detail tab                         |
 | `archon.console.showToolCalls`   | `1`     | Show tool calls in the stream          |
 | `archon.console.showSystem`      | `0`     | Show system events                     |
-| `archon.console.runNodeFilter`   | `all`   | Filter the run stream by node          |
+| `archon.console.runNodeSelection` | empty   | Filter the run stream by node ID       |
 | `archon.console.railWidth`       | unset   | Project rail width                     |
 | `archon.console.lastWorkflow`    | unset   | Last selected workflow                 |
 | `archon.console.builderProject`  | unset   | Builder project selection              |
 | `archon.console.attentionAlerts` | `0`     | Alert when a run needs you or finishes |
 
-Local storage reads are guarded and fall back to these defaults.
+Local storage reads are guarded and fall back to these defaults. The node selection
+uses an empty value for all nodes.
 
 ### Closed-console notifications
 

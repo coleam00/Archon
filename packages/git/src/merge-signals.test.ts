@@ -32,6 +32,7 @@ import {
   isPatchEquivalent,
   localBranchExists,
 } from './branch';
+import { GitFailure } from './errors';
 import { toBranchName, toRepoPath, toWorktreePath } from './types';
 
 const trackTempRoot = trackTempRoots();
@@ -84,6 +85,40 @@ describe('merge signals against real git', () => {
     expect(await isBranchMerged(repo, feature, main)).toBe(false);
     expect(await isPatchEquivalent(repo, feature, main)).toBe(false);
   });
+
+  test.each(['merge-tip', 'past-merge', 'integrated'] as const)(
+    'patch equivalence checks unpublished merge commits: %s',
+    async mode => {
+      const repo = toRepoPath(repoOnMain());
+      git(repo, 'checkout', '-q', '-b', 'feature');
+      commit(repo, 'left.txt', 'left\n');
+      const left = git(repo, 'rev-parse', 'HEAD');
+      git(repo, 'checkout', '-q', 'main');
+      commit(repo, 'right.txt', 'right\n');
+      git(repo, 'checkout', '-q', 'feature');
+      git(repo, 'merge', '-q', '--no-ff', 'main', '-m', 'local merge');
+      writeFileSync(join(repo, 'resolution.txt'), 'unpublished resolution\n');
+      git(repo, 'add', 'resolution.txt');
+      git(repo, 'commit', '-q', '--amend', '--no-edit');
+      if (mode === 'past-merge') commit(repo, 'later.txt', 'later\n');
+      const tip = git(repo, 'rev-parse', 'feature');
+      git(repo, 'checkout', '-q', 'main');
+      git(repo, 'merge', '-q', '--no-ff', left, '-m', 'published merge');
+      if (mode === 'past-merge') git(repo, 'cherry-pick', tip);
+      expect(
+        git(repo, 'cherry', 'main', 'feature')
+          .split('\n')
+          .filter(Boolean)
+          .every(line => line.startsWith('-'))
+      ).toBe(true);
+      if (mode === 'integrated')
+        git(repo, 'merge', '-q', '--no-ff', 'feature', '-m', 'integrate resolution');
+
+      expect(await isPatchEquivalent(repo, toBranchName('feature'), 'main')).toBe(
+        mode === 'integrated'
+      );
+    }
+  );
 
   test('isPatchEquivalent fails outright once the local branch ref is gone', async () => {
     const repoPath = repoWithSquashMergedFeature();
@@ -170,9 +205,24 @@ describe('merge signals against real git', () => {
     const { local } = cloneWithRemoteFeature();
     const unknown = '0123456789abcdef0123456789abcdef01234567';
 
-    await expect(
-      isRevCoveredBy(toRepoPath(local), 'refs/heads/feature', unknown, 'origin')
-    ).rejects.toThrow(`Failed to fetch PR head ${unknown} from origin`);
+    const failure = await isRevCoveredBy(
+      toRepoPath(local),
+      'refs/heads/feature',
+      unknown,
+      'origin'
+    ).catch((error: unknown) => error);
+    expect(failure).toBeInstanceOf(GitFailure);
+    expect(failure).toMatchObject({ kind: 'coverage_fetch', code: 128 });
+  });
+
+  test('isRevCoveredBy identifies ancestry inspection failures', async () => {
+    const repo = toRepoPath(repoOnMain());
+    const head = git(repo, 'rev-parse', 'HEAD');
+    const failure = await isRevCoveredBy(repo, 'refs/heads/missing', head, 'origin').catch(
+      (error: unknown) => error
+    );
+    expect(failure).toBeInstanceOf(GitFailure);
+    expect(failure).toMatchObject({ kind: 'coverage_ancestry', code: 128 });
   });
 
   test('countCommitsMissingFromRemotes counts only commits no remote-tracking ref reaches', async () => {
