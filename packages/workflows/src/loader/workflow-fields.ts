@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { DagNode, IncludeDirective } from '../schemas';
 import { effortLevelSchema, betasSchema } from '../schemas/dag-node';
 import { INPUT_NAME_PATTERN, inputEnvKey } from '../schemas/node-bindings';
@@ -66,21 +66,20 @@ export function parseWorktreePolicy(
     getLog().warn({ filename, value: raw }, 'invalid_worktree_block_ignored');
     return undefined;
   }
-  const rawPolicy = raw as Record<string, unknown>;
-  type Policy = z.infer<typeof workflowWorktreePolicySchema>;
-  const policy: Policy = {};
-  const parseField = <K extends keyof Policy>(key: K, schema: z.ZodType<Policy[K]>): void => {
-    const value = parseOptionalField(
-      rawPolicy[key],
-      schema,
-      filename,
-      `invalid_worktree_${key}_value_ignored`
-    );
-    if (value !== undefined) policy[key] = value;
-  };
   const shape = workflowWorktreePolicySchema.shape;
-  for (const key of Object.keys(shape) as (keyof typeof shape)[]) {
-    parseField(key, shape[key]);
+  const catchInvalidField = <S extends z.ZodType>(key: string, field: S): z.ZodType<z.output<S>> =>
+    field.catch(ctx => {
+      if (ctx.input !== undefined) {
+        getLog().warn({ filename, value: ctx.input }, `invalid_worktree_${key}_value_ignored`);
+      }
+      return field.parse(undefined);
+    });
+  const fields = Object.fromEntries(
+    Object.entries(shape).map(([key, field]) => [key, catchInvalidField(key, field)])
+  ) as { [K in keyof typeof shape]: z.ZodType<z.output<(typeof shape)[K]>> };
+  const policy = z.object(fields).parse(raw);
+  for (const [key, value] of Object.entries(policy)) {
+    if (value === undefined) Reflect.deleteProperty(policy, key);
   }
   return Object.keys(policy).length > 0 ? policy : undefined;
 }

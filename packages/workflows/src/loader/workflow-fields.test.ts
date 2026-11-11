@@ -437,6 +437,7 @@ describe('worktree policy', () => {
         .string()
         .transform(value => value.length)
         .optional(),
+      defaulted: z.string().default('fallback'),
       suffix: z
         .string()
         .transform(value => `${value}!`)
@@ -460,9 +461,10 @@ nodes:
         'policy.yaml'
       );
       expect(error).toBeNull();
-      expect<Record<string, unknown> | undefined>(workflow?.worktree).toEqual({
+      expect<Record<string, unknown> | undefined>(workflow?.worktree).toStrictEqual({
         probe: 3,
         suffix: 'x!',
+        defaulted: 'fallback',
       });
       expect(mockLogger.warn.mock.calls).toEqual([
         [{ filename: 'policy.yaml', value: 'invalid' }, 'invalid_worktree_enabled_value_ignored'],
@@ -471,16 +473,26 @@ nodes:
       mockLogger.warn.mockClear();
       expect<Record<string, unknown> | undefined>(
         parseWorktreePolicy({ probe: 7, suffix: 'x' }, 'policy.yaml')
-      ).toEqual({ suffix: 'x!' });
+      ).toStrictEqual({ suffix: 'x!', defaulted: 'fallback' });
       expect(mockLogger.warn.mock.calls).toEqual([
         [{ filename: 'policy.yaml', value: 7 }, 'invalid_worktree_probe_value_ignored'],
+      ]);
+      expect<Record<string, unknown> | undefined>(
+        parseWorktreePolicy({ defaulted: 'provided' }, 'policy.yaml')
+      ).toStrictEqual({ defaulted: 'provided' });
+      mockLogger.warn.mockClear();
+      expect<Record<string, unknown> | undefined>(
+        parseWorktreePolicy({ defaulted: 7 }, 'policy.yaml')
+      ).toStrictEqual({ defaulted: 'fallback' });
+      expect(mockLogger.warn.mock.calls).toEqual([
+        [{ filename: 'policy.yaml', value: 7 }, 'invalid_worktree_defaulted_value_ignored'],
       ]);
     } finally {
       for (const key of Object.keys(extensions)) Reflect.deleteProperty(shape, key);
     }
   });
 
-  it.each<[unknown, ReturnType<typeof parseWorktreePolicy>, [unknown, string][]]>([
+  it.each<[unknown, Record<string, unknown> | undefined, [unknown, string][]]>([
     [undefined, undefined, []],
     [{}, undefined, []],
     [{ enabled: undefined }, undefined, []],
@@ -494,7 +506,9 @@ nodes:
     [{ enabled: null }, undefined, [[null, 'invalid_worktree_enabled_value_ignored']]],
   ])('parses %j with field-level warnings', (raw, expected, warnings) => {
     mockLogger.warn.mockClear();
-    expect(parseWorktreePolicy(raw, 'policy.yaml')).toEqual(expected);
+    expect<Record<string, unknown> | undefined>(parseWorktreePolicy(raw, 'policy.yaml')).toEqual(
+      expected
+    );
     expect(mockLogger.warn.mock.calls).toEqual(
       warnings.map(([value, event]) => [{ filename: 'policy.yaml', value }, event])
     );
