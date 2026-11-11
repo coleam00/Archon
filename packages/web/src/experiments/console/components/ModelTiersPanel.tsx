@@ -207,7 +207,7 @@ export function ModelTiersPanel(): ReactElement {
                 placeholder={
                   unset
                     ? `default: ${defaultHint(cfg, tier, scope)}`
-                    : 'model (e.g. opus, gpt-5.6-terra)'
+                    : 'model (e.g. opus, gpt-6.1-terra)'
                 }
                 ariaLabel={`${tier} model`}
                 className="min-w-[160px] flex-1"

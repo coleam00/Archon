@@ -1,6 +1,6 @@
 # Plan
 
-Turn the decided intent into a plan a competent implementer could execute without asking questions. You decide the approach — the plan records decisions, not options. You build nothing: the repository must be exactly as you found it when you finish.
+Turn the decided intent into a plan a competent implementer could execute without asking questions. You decide the approach — the plan records decisions, not options. You build nothing.
 
 What to plan (may be empty — empty means the run's trigger message is the work):
 
@@ -38,7 +38,7 @@ Name the design decisions the work actually contains, choose, and record why —
 
 ## Calls that belong to a person
 
-Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$INPUTS.policy_defaults`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
+Settle every call you can. Before declaring any call a person's, check whether something already decides it: the work order's invariants and steering, the tracked item's comments, a project document, or a ruling in the SDLC policy files this decision names, at `.archon/sdlc/policy/`, falling back to the pack's defaults. This decision names `rulings.md`; the pack's defaults are in `$PACK_DIR/.shared/policy/`. Read the default first, then the project's file when it exists: the project's file adds to the default, and where the two conflict, the project's line wins. When one of them picks an option, the call is settled: cite it and proceed. An option a project document forbids is not an option.
 
 A call is a person's only when one of these holds, and you name which:
 
@@ -81,7 +81,7 @@ A proved defect you meet that this work does not need is a discovery, never sile
 
 ## Not your job
 
-Do not implement, modify source files, commit, branch, push, or open or comment on pull requests or issues. Scratch notes live under `$ARTIFACTS_DIR` only — the run fails on any tree change you leave behind.
+Do not implement, modify source files, commit, branch, push, or open or comment on pull requests or issues. Scratch notes live under `$ARTIFACTS_DIR` only.
 
 ## Declare the verdict
 
@@ -98,4 +98,4 @@ Do not implement, modify source files, commit, branch, push, or open or comment 
   declare. `run_id` is the value above verbatim, and `path` is relative to
   `$ARTIFACTS_DIR`.
 
-Before declaring, re-read the plan: confirm every named anchor exists in the current code, every decision has its why and its source, and `git status` matches what you started with.
+Before declaring, re-read the plan: confirm every named anchor exists in the current code, and every decision has its why and its source.

@@ -84,6 +84,8 @@ archon trigger whoami
 
 It prints `runAsUserId`, the ID to put in the binding, and `cliIdentity`, the name it resolved from `ARCHON_USER_ID` or `$USER`. It creates the Archon user for that identity when none exists yet. Use the same store for this command and the host that executes the binding: the same `ARCHON_HOME` with `store: files`, or the same `DATABASE_URL` with database storage. User IDs belong to that installation store.
 
+A workflow pack can declare the bindings it recommends. [`archon pack bindings`](/reference/cli/#pack-bindings) writes them as the files described below for one repository, and you register each as this page describes.
+
 ## Configure a native macOS schedule
 
 Create `/Users/alice/.archon/triggers/repository-refresh.json`:
@@ -141,7 +143,7 @@ The command returns a durable receipt and disposition, then runs accepted work i
 archon trigger schedule install --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-Archon installs only jobs in the `com.archon.trigger.*` namespace. The plist contains the absolute executable and arguments, working directory, and `ARCHON_HOME`. It does not copy provider credentials or other environment variables. Scheduled runs use the same native provider configuration and credentials available to the configured user.
+Archon installs only jobs in the `com.archon.trigger.*` namespace. The plist contains the absolute executable and arguments, working directory, `ARCHON_HOME`, and the `PATH` of the shell that ran `install`, so scheduled runs find `bun`, `uv`, `gh`, git credential helpers, and provider CLIs where your terminal finds them. launchd's default `PATH` is only `/usr/bin:/bin:/usr/sbin:/sbin`. The plist does not copy provider credentials or other environment variables. Scheduled runs use the same native provider configuration and credentials available to the configured user, so a credential that exists only as a variable in your shell is not there: keep it where the provider stores its login, or in Archon's config.
 
 Use `archon trigger list` to find recent native or webhook receipts, then inspect a receipt or resource-start request by its UUID:
 
@@ -155,7 +157,7 @@ Remove future firings with the same configuration file:
 archon trigger schedule remove --config /Users/alice/.archon/triggers/repository-refresh.json
 ```
 
-Removing a schedule does not cancel work that Archon already accepted. To change its interval or startup behavior, remove the existing job before installing the updated configuration.
+Removing a schedule does not cancel work that Archon already accepted. To change its interval or startup behavior, or to record a changed `PATH`, remove the existing job before installing again. A schedule installed before Archon recorded `PATH` needs the same remove and install once; until then its runs cannot find tools outside launchd's default `PATH`.
 
 ### macOS scheduling limits
 
@@ -167,7 +169,7 @@ For plain schedules, use the trigger workflow to read the current source state w
 
 ## Drive the same commands from Linux or Windows
 
-Archon does not install or manage Linux or Windows scheduler definitions. Configure the host scheduler to run the same one-shot command with an absolute executable path, an absolute config path, the configured working directory, and `ARCHON_HOME`:
+Archon does not install or manage Linux or Windows scheduler definitions. Configure the host scheduler to run the same one-shot command with an absolute executable path, an absolute config path, the configured working directory, `ARCHON_HOME`, and a `PATH` that contains the tools your workflows run, such as `bun`, `uv`, `gh`, and provider CLIs:
 
 ```text
 /opt/archon/bin/archon trigger fire --config /home/alice/.archon/triggers/repository-refresh.json
@@ -443,7 +445,7 @@ Save `/srv/archon/polled-orders.json` using your own `runAsUserId` from `archon 
 }
 ```
 
-The configuration still requires `schedule`, but `fire` does not install or run that schedule. Schedule the poll script itself, rather than `trigger schedule install`, which fires without event values. Set `ARCHON_HOME` and `ORDERS_URL` for the scheduled user, and use absolute executable paths:
+The configuration still requires `schedule`, but `fire` does not install or run that schedule. Schedule the poll script itself, rather than `trigger schedule install`, which fires without event values. Set `ARCHON_HOME`, `ORDERS_URL`, and a `PATH` containing the tools your workflows run for the scheduled user, and use absolute executable paths:
 
 ```bash
 #!/bin/sh
@@ -504,4 +506,4 @@ An input mapped from the event, by CLI `--inputs`, a Standard Webhooks JSON Poin
 
 A process that stops during preparation leaves its recorded preparation owner visible. After verifying that exact process has stopped, use `archon trigger recover-preparation <receipt-id> <binding-id> --owner <recorded-owner-id> --yes`, then drain the configured host. A failed validation is recorded as rejected and requires a corrected new request.
 
-Untouched queued work can be removed with `archon trigger withdraw <request-id>`. Receipt and admission records are retained in the installation store (database or file store). This first version has no automatic trigger-record retention policy. Do not map credentials or unnecessary source content into workflow inputs. A run started by a trigger records its receipt and binding IDs in its `resource_start` metadata; its request ID is the run ID, so `archon trigger inspect <run-id>` shows the request. CLI-hosted execution writes the ordinary run output to `ARCHON_HOME/logs/trigger-run-<request-id>.log`. Fresh trigger runs have no chat conversation or message history. Inspect their output with `archon workflow get <run-id>` and `archon workflow logs <run-id>`. Previously queued launches that carry a real conversation retain that history destination.
+Untouched queued work can be removed with `archon trigger withdraw <request-id>`. Receipt and admission records are retained in the installation store (database or file store). This first version has no automatic trigger-record retention policy. Do not map credentials or unnecessary source content into workflow inputs. A run started by a trigger records its receipt and binding IDs in its `resource_start` metadata; its request ID is the run ID, so `archon trigger inspect <run-id>` shows the request. When a workflow node runs `archon trigger fire`, the receipt records that run and node as its source actor, and `archon trigger inspect <run-id>` and `archon workflow get <run-id>` show them as the requesting run. It grants the started run nothing: it still runs as the binding's `runAsUserId`. CLI-hosted execution writes the ordinary run output to `ARCHON_HOME/logs/trigger-run-<request-id>.log`. Fresh trigger runs have no chat conversation or message history. Inspect their output with `archon workflow get <run-id>` and `archon workflow logs <run-id>`. Previously queued launches that carry a real conversation retain that history destination.

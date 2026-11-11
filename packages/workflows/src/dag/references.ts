@@ -1,3 +1,5 @@
+import type { z } from 'zod';
+import type { InvocationListings } from '../invocation-listings';
 import {
   type WorkflowRun,
   type NodeOutput,
@@ -7,6 +9,7 @@ import {
   inputEnvKey,
   isExecNode,
   isBindingDirective,
+  isTypedOutputsDirective,
 } from '../schemas';
 import {
   type JsonValue,
@@ -30,7 +33,14 @@ import {
 import { readComposedMeta } from '../compiled-command';
 import { type ExecNodeEnvironmentContext, buildExecNodeEnvironment } from '../exec-environment';
 import { substituteWorkflowVariables, type TemplateReferences } from '../workflow-variables';
-import { type AttentionOption, attentionOptionsSchema } from '../schemas/wait-node';
+import {
+  type AttentionOption,
+  type AttentionRecommendation,
+  attentionDeclarationProblem,
+  attentionOptionsSchema,
+  attentionRecommendationSchema,
+  type WaitCondition,
+} from '../schemas/wait-node';
 import { getLog } from './log';
 import type { RunLayersContext } from './run-context';
 import { type LoopBodyScope, loopScopeTokens, substituteLoopBodyText } from './loop-scope';
@@ -266,6 +276,8 @@ export function resolveValueTemplate(
  * `from` reads one whole upstream ref; a producer that did not run (skipped or
  * pending — reachable under `trigger_rule: all_done` across a skipped branch)
  * takes `if_skipped` instead, and without one the node fails with the fix named.
+ * A typed-outputs directive `{ outputs }` never reaches here unresolved: `bindTypedOutputs`
+ * has already replaced it with its array, which passes through as a literal.
  * Everything else resolves through {@link resolveWorkflowValue} in strict mode.
  * The loader guarantees bound producers are upstream `depends_on`, so resolution
  * here is a per-node pre-step with no new scheduling.
@@ -286,6 +298,14 @@ export function resolveNodeBindings(
     if (isBindingDirective(rawValue)) {
       resolved[name] = resolveBindingDirective(consumerId, name, rawValue, ctx);
       continue;
+    }
+    if (isTypedOutputsDirective(rawValue)) {
+      // Reading the run's records is asynchronous, so `bindTypedOutputs` replaces the
+      // directive before a script node's bindings reach this resolver. Any other path
+      // here has no array to give, and must not deliver the directive as a literal.
+      throw new Error(
+        `Node '${consumerId}' binding '${name}': '{ outputs: ${String(rawValue.outputs)} }' is only resolved for a script node's own 'with:' map`
+      );
     }
     if (typeof rawValue === 'object' && rawValue !== null && !Array.isArray(rawValue)) {
       // The loader rejects this shape at load time; programmatic definitions can
@@ -617,9 +637,43 @@ export function substituteWaitMessage(
 }
 
 /**
+ * Read one whole `$node.output.<field>` reference of an attention wait when it pauses and
+ * hold it to `schema`, the same schema its literal form passes. The node fails, naming the
+ * producer, rather than pausing with a question nobody can answer.
+ */
+function resolveAttentionField<T>(
+  nodeId: string,
+  field: string,
+  reference: string,
+  schema: z.ZodType<T>,
+  /** What the value fails to be, with its verb: "are not a valid option list …". */
+  shape: string,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>
+): T {
+  const ref = parseWholeOutputRef(reference);
+  const producer = ref === undefined ? undefined : nodeOutputs.get(ref.nodeId);
+  if (ref === undefined || producer === undefined) {
+    throw new Error(
+      `Wait node '${nodeId}' ${field} '${reference}' reads no node that has produced output`
+    );
+  }
+  const parsed = schema.safeParse(
+    wholeRefLogicalValue(producer, ref.nodeId, ref.field, reference.trim())
+  );
+  if (!parsed.success) {
+    const problems = parsed.error.issues
+      .map(issue => (issue.path.length > 0 ? `${issue.path.join('.')}: ` : '') + issue.message)
+      .join('; ');
+    throw new Error(
+      `Wait node '${nodeId}' ${field} '${reference}' from '${ref.nodeId}' ${shape}: ${problems}`
+    );
+  }
+  return parsed.data;
+}
+
+/**
  * Resolve an attention wait's options when it pauses. A whole `$node.output.<field>`
- * reference is read here and must pass the same rules as literal options; the node fails,
- * naming the producer, rather than pausing with options nobody can answer.
+ * reference is read here and must pass the same rules as literal options.
  */
 export function resolveAttentionOptions(
   nodeId: string,
@@ -627,33 +681,55 @@ export function resolveAttentionOptions(
   nodeOutputs: ReadonlyMap<string, NodeOutput>
 ): AttentionOption[] | undefined {
   if (typeof options !== 'string') return options;
-  const ref = parseWholeOutputRef(options);
-  const producer = ref === undefined ? undefined : nodeOutputs.get(ref.nodeId);
-  if (ref === undefined || producer === undefined) {
-    throw new Error(
-      `Wait node '${nodeId}' options '${options}' name no node that has produced output`
-    );
-  }
-  const parsed = attentionOptionsSchema.safeParse(
-    wholeRefLogicalValue(producer, ref.nodeId, ref.field, options.trim())
+  return resolveAttentionField(
+    nodeId,
+    'options',
+    options,
+    attentionOptionsSchema,
+    'are not a valid option list (an array of { id, label?, does?, value? } with unique kebab-case ids and at least one entry)',
+    nodeOutputs
   );
-  if (!parsed.success) {
-    const problems = parsed.error.issues
-      .map(issue => (issue.path.length > 0 ? `${issue.path.join('.')}: ` : '') + issue.message)
-      .join('; ');
-    throw new Error(
-      `Wait node '${nodeId}' options '${options}' from '${ref.nodeId}' are not a valid option list ` +
-        `(an array of { id, label? } with unique kebab-case ids and at least one entry): ${problems}`
-    );
-  }
-  return parsed.data;
+}
+
+/**
+ * Resolve everything an attention wait asks with when it pauses: its options and its
+ * recommendation, references read and held to the literal rules, and the two checked
+ * against each other as the load check checks literal ones.
+ */
+export function resolveAttentionDeclaration(
+  nodeId: string,
+  condition: Extract<WaitCondition, { kind: 'attention' }>,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>
+): { options?: AttentionOption[]; recommendation?: AttentionRecommendation } {
+  const options = resolveAttentionOptions(nodeId, condition.options, nodeOutputs);
+  const recommendation =
+    typeof condition.recommendation === 'string'
+      ? resolveAttentionField(
+          nodeId,
+          'recommendation',
+          condition.recommendation,
+          attentionRecommendationSchema,
+          'is not a valid recommendation ({ option, why, confidence? })',
+          nodeOutputs
+        )
+      : condition.recommendation;
+  const problem = attentionDeclarationProblem({
+    form: condition.form,
+    ...(options !== undefined ? { options } : {}),
+    ...(recommendation !== undefined ? { recommendation } : {}),
+  });
+  if (problem !== undefined) throw new Error(`Wait node '${nodeId}': ${problem}`);
+  return {
+    ...(options !== undefined ? { options } : {}),
+    ...(recommendation !== undefined ? { recommendation } : {}),
+  };
 }
 
 /**
  * Resolve a node's AI-configuration text (`systemPrompt:`, `agents.*`), which goes
  * straight to the provider, exactly as a `prompt:` resolves (#2476). Inside a loop_group
  * body this reads the body's scoped `nodeOutputs` and loop scopes, matching every other
- * surface. `typedArtifactsFile` is the listing the node materialized before it resolves
+ * surface. `listings` are the observations the node materialized before it resolves
  * its provider.
  */
 export function aiConfigTextResolver(
@@ -668,7 +744,7 @@ export function aiConfigTextResolver(
     | 'nodeOutputs'
     | 'loopBodyScopes'
   >,
-  typedArtifactsFile: string
+  listings: InvocationListings
 ): (text: string) => string {
   return text =>
     substituteWorkflowVariables(
@@ -685,7 +761,7 @@ export function aiConfigTextResolver(
       {
         stateDir: ctx.stateDir,
         inputs: resolveRunInputs(ctx.workflowRun),
-        typedArtifactsFile,
+        ...listings,
         references: nodeTemplateReferences(text, ctx),
       }
     ).prompt;

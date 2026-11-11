@@ -11,9 +11,10 @@
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
  *
- * The build and merge queues claim the same documents through the same claim, so an
- * item has one owner at a time across the queues; their records are `facts.build`
- * (./build.ts) and `facts.merge` (./merge.ts).
+ * The build, merge and split queues claim the same documents through the same claim,
+ * so an item has one owner at a time across the queues; their records are
+ * `facts.build` (./build.ts), `facts.merge` (./merge.ts) and `facts.split`
+ * (./split.ts).
  */
 
 import { createHash } from 'node:crypto';
@@ -21,6 +22,7 @@ import { type BuildRecord, withReleasedRound } from './build.ts';
 import type { Closure } from './close.ts';
 import { record, type QualifiedPr } from './forge.ts';
 import type { MergeRecord } from './merge.ts';
+import type { SplitRecord } from './split.ts';
 import { note } from './io.ts';
 import {
   type LabelVerdict,
@@ -32,22 +34,29 @@ import {
   wantedLabels,
 } from './labels.ts';
 import {
-  claimDisposition,
-  runStatus,
+  claimEnded,
+  type Lease,
   stateAppend,
   stateDocuments,
   stateGet,
   statePut,
+  statePutClaimed,
 } from './state.ts';
+import { OUTPUT_ENUMS } from './outputs.generated.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
-/** The trust and path vocabularies; a test proves archon-intake.yaml's enums agree. */
-export const TRUSTS = ['maintainer', 'outside'] as const;
+/** The trust and path enums archon-intake.yaml's facts node declares; its trust also admits null. */
+const INTAKE_ENUMS = OUTPUT_ENUMS['archon-intake'].facts;
+export const TRUSTS = INTAKE_ENUMS['decision.trust'].filter(trust => trust !== null);
 export type Trust = (typeof TRUSTS)[number];
-export const INTAKE_PATHS = ['quiet', 'closed', 'outside', 'triage'] as const;
-export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added'] as const;
+export const INTAKE_PATHS = INTAKE_ENUMS['decision.path'];
+/**
+ * What a request records: a forge event, or `retriage`, a pack run's own request to
+ * re-triage the item, recorded by that run, whose `run_id` it carries.
+ */
+export const REQUEST_ACTIONS = ['opened', 'edited', 'reopened', 'added', 'retriage'] as const;
 export type RequestAction = (typeof REQUEST_ACTIONS)[number];
-/** One event intake has not yet processed. A label request carries who added the label. */
+/** One request intake has not yet processed. A label request carries who added the label. */
 export interface IntakeRequest {
   readonly at: string;
   readonly run_id: string;
@@ -99,7 +108,7 @@ export interface TriageFacts {
 export interface HistoryEntry {
   readonly at: string;
   /** The queue whose pickup or decision wrote the entry. */
-  readonly stage: 'intake' | 'build' | 'merge';
+  readonly stage: 'intake' | 'build' | 'merge' | 'split';
   readonly run_id: string;
   readonly outcome: string;
   readonly summary: string;
@@ -131,8 +140,7 @@ export interface WorkItem {
     readonly triage?: TriageFacts;
     readonly build?: BuildRecord;
     readonly merge?: MergeRecord;
-    /** A maintainer's own pull request the merge queue enrolled; no build round made it. */
-    readonly own_pr?: { readonly url: string; readonly at: string };
+    readonly split?: SplitRecord;
   };
   readonly history: readonly HistoryEntry[];
 }
@@ -154,10 +162,10 @@ export interface IntakeDecision {
   readonly notes: readonly HistoryEntry[];
 }
 
-/** Triage's verdict as the outcome node receives it. */
+/** Triage's verdict as the outcome node receives it; its closure and its questions for the author are not stored. */
 export interface TriageResult extends Omit<TriageFacts, 'at' | 'run_id'> {
-  /** What made a NO_ACTION item closable; null on every other verdict. Not stored. */
   readonly closure: Closure | null;
+  readonly questions: readonly string[];
   readonly labels: readonly string[];
   readonly summary: string;
   readonly report: { readonly run_id: string; readonly path: string };
@@ -175,6 +183,7 @@ const STAGES = {
   plan: true,
   deliver: true,
   continue: true,
+  split: true,
   needs_contract: true,
   blocked: true,
   close: true,
@@ -192,18 +201,19 @@ export function newest<T>(entries: readonly T[]): T[] {
   return entries.slice(-KEPT);
 }
 
-function isLabelRequest(request: IntakeRequest): boolean {
-  return request.action === 'added';
+/** A label request or a run's re-triage request: what a decision reads. */
+function decides(request: { readonly action?: unknown }): boolean {
+  return request.action === 'added' || request.action === 'retriage';
 }
 
 /**
- * Only label requests carry anything a decision reads; any other request just makes
- * the item a candidate, and the pickup reads the live issue. So one of those is kept,
- * however often an author edits.
+ * Only label and re-triage requests carry anything a decision reads; any other request
+ * just makes the item a candidate, and the pickup reads the live issue. So one of those
+ * is kept, however often an author edits.
  */
 function queued(requests: readonly IntakeRequest[]): IntakeRequest[] {
-  const other = requests.filter(request => !isLabelRequest(request)).at(-1);
-  return newest(requests.filter(request => isLabelRequest(request) || request === other));
+  const other = requests.filter(request => !decides(request)).at(-1);
+  return newest(requests.filter(request => decides(request) || request === other));
 }
 
 export function newWorkItem(subject: QualifiedPr, at: string): WorkItem {
@@ -253,14 +263,15 @@ export function parseWorkItem(value: unknown): WorkItem {
 // --- ordering -----------------------------------------------------------------
 
 /**
- * Rank orders for the ordering keys. Each list is the triage node's own enum for
- * that field, lowest first; a test proves the two agree.
+ * Rank orders for the ordering keys. Each list is the enum archon-triage-block.yaml's
+ * triage node declares for that field, which it lists lowest first.
  */
+const TRIAGE_ENUMS = OUTPUT_ENUMS['archon-triage-block'].triage;
 export const RANKS = {
-  urgency: ['none', 'soon', 'now'],
-  importance: ['low', 'medium', 'high'],
-  size: ['s', 'm', 'l'],
-  complexity: ['low', 'medium', 'high'],
+  urgency: TRIAGE_ENUMS['urgency.value'],
+  importance: TRIAGE_ENUMS['importance.value'],
+  size: TRIAGE_ENUMS['size.value'],
+  complexity: TRIAGE_ENUMS['complexity.value'],
 } as const;
 type RankedKey = keyof typeof RANKS;
 export interface OrderKey {
@@ -343,7 +354,15 @@ export function mirrorLabels(doc: WorkItem): PackLabel[] {
   if (doc.stage === 'needs_maintainer') return ['archon-needs-maintainer'];
   const triage = doc.facts.triage;
   if (doc.stage === 'new' || triage === undefined) return [];
-  return wantedLabels(triage.verdict, triage.type.value, triage.size.value);
+  // A re-triage after the split queue's record replaces what that record says here.
+  const split = doc.facts.split !== undefined && doc.facts.split.at >= triage.at ? doc.facts.split : undefined;
+  // An item the split queue handed back whole carries the route it now waits at.
+  const verdict: LabelVerdict =
+    split?.status === 'whole' ? { contract: 'READY', route: split.route } : triage.verdict;
+  const wanted = wantedLabels(verdict, triage.type.value, triage.size.value);
+  // A split PRD stays open, marked as one, until its hypothesis has a verdict.
+  if (doc.stage === 'split' && split?.status === 'done' && split.kind === 'prd') wanted.push('archon-prd');
+  return wanted;
 }
 
 function promotedAt(promoted: Promotion | null, digest: string): boolean {
@@ -370,7 +389,7 @@ export function assertNoSelfPromotion(doc: WorkItem, add: readonly string[]): vo
 // --- the decision ---------------------------------------------------------------
 
 export interface IssueFacts {
-  /** Undefined when the selected source does not report authors. */
+  /** Undefined when the forge plugin does not report authors. */
   readonly author: string | null | undefined;
   readonly labels: readonly string[];
   readonly state: 'open' | 'closed';
@@ -379,6 +398,13 @@ export interface IssueFacts {
 
 export function isMaintainer(login: string | null, maintainers: ReadonlySet<string>): boolean {
   return login !== null && login !== '' && maintainers.has(login.toLowerCase());
+}
+
+/** Whether a pack run asked to re-triage the item; each request is noted by its run. */
+function runAsked(requests: readonly IntakeRequest[], noted: (outcome: string, summary: string) => void): boolean {
+  const asked = requests.filter(request => request.action === 'retriage');
+  for (const request of asked) noted('retriage', `run ${request.run_id} asked for a re-triage`);
+  return asked.length > 0;
 }
 
 /**
@@ -429,7 +455,7 @@ export function decideIntake(
   if (trust === null) {
     if (issue.author === undefined) {
       throw new Error(
-        'the selected forge source does not report issue authors, so trust cannot be decided'
+        'the forge plugin does not report issue authors, so trust cannot be decided'
       );
     }
     trust = isMaintainer(issue.author, maintainers) ? 'maintainer' : 'outside';
@@ -443,9 +469,11 @@ export function decideIntake(
     promoted = null;
   }
 
-  let retriage = false;
-  let promotedNow = false;
-  for (const request of doc.claim?.requests ?? []) {
+  // A run's request re-triages a maintainer's item or a promoted one, and a maintainer's
+  // label re-triages or promotes; nothing else starts triage.
+  const requests = doc.claim?.requests ?? [];
+  let retriage = runAsked(requests, noted);
+  for (const request of requests) {
     const label = request.label;
     if (request.action !== 'added' || label === null || !isRequestLabel(label)) continue;
     // The pack writes the work item before any label, so a label already in the
@@ -485,7 +513,7 @@ export function decideIntake(
       label,
       pin: { body_digest: issue.digest },
     };
-    promotedNow = true;
+    retriage = true;
     noted('promoted', `${label} added by ${request.actor} promotes this outside item`);
   }
 
@@ -493,11 +521,12 @@ export function decideIntake(
   if (trust === 'maintainer') {
     return doc.facts.triage === undefined || retriage ? triage() : quiet();
   }
-  if (promotedNow) return triage();
+  // Promotion pins the current body, so an item promoted by this pickup passes here;
+  // a run's request on an item no maintainer promoted promotes nothing.
   if (!promotedAt(promoted, issue.digest)) {
     return { ...quiet('needs_maintainer'), path: 'outside' };
   }
-  return quiet();
+  return retriage ? triage() : quiet();
 }
 
 /**
@@ -523,7 +552,7 @@ export function applyDecision(
   if (decision.path === 'triage') {
     if (triage === null) throw new Error('the triage path has no triage verdict');
     // The stored facts are the verdict minus what only this run's outcome reads.
-    const { closure: _closure, labels: _labels, summary, report, ...kept } = triage;
+    const { closure: _closure, questions: _questions, labels: _labels, summary, report, ...kept } = triage;
     facts = { ...facts, triage: { ...kept, at, run_id: runId } };
     if (bodyMoved) {
       stage = 'needs_maintainer';
@@ -582,12 +611,7 @@ export function enqueue(subject: QualifiedPr, request: IntakeRequest): void {
     if (statePut(name, created, stored.revision) === 'ok') return;
   }
   const waiting = record(stored.value)?.requests;
-  if (
-    !isLabelRequest(request) &&
-    Array.isArray(waiting) &&
-    waiting.some(entry => record(entry)?.action !== 'added')
-  )
-    return;
+  if (!decides(request) && Array.isArray(waiting) && waiting.some(entry => !decides(record(entry) ?? {}))) return;
   stateAppend(name, '/requests', request);
 }
 
@@ -595,12 +619,13 @@ export interface Read {
   readonly name: string;
   readonly revision: number;
   readonly doc: WorkItem;
+  readonly lease: Lease | null;
 }
 
 export function read(name: string, stored = stateGet(name)): Read | undefined {
   if (stored.value === null) return undefined;
   try {
-    return { name, revision: stored.revision, doc: parseWorkItem(stored.value) };
+    return { name, revision: stored.revision, doc: parseWorkItem(stored.value), lease: stored.lease };
   } catch (error) {
     note(`pickup skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
@@ -628,26 +653,23 @@ export function readWorkItem(number: number): WorkItem | null {
 }
 
 /**
- * Release a claim whose run the engine reports terminal; any other answer holds it.
- * A run that finishes clears its own claim, so a terminal run still holding one
- * stopped before its labels were written, and its requests wait again. A build round
- * that opened a pull request before it stopped is recorded as a round.
+ * Release a claim whose run's lease the engine reports ended; any other claim holds. A
+ * run that finishes clears its own claim, so an ended run still holding one stopped
+ * before its labels were written, and its requests wait again. A build round that
+ * opened a pull request before it stopped is recorded as a round.
  */
 export function releaseIfTerminal(item: Read, at: string, runId: string, pickup: Pickup): Read {
   const claim = item.doc.claim;
   // A pickup that claims several items sees its own claims on its next pass.
   if (claim === null || claim.run_id === runId) return item;
-  const status = runStatus(claim.run_id);
-  if (claimDisposition(status) === 'hold') {
-    if (status === null) {
-      note(
-        `${pickup.stage} leaves ${item.name} claimed: the engine reports no status for run ${claim.run_id}`
-      );
+  if (!claimEnded(claim.run_id, item)) {
+    if (item.lease?.runId !== claim.run_id) {
+      note(`${pickup.stage} leaves ${item.name} claimed: run ${claim.run_id} holds no engine lease on it`);
     }
     return item;
   }
   const doc: WorkItem = {
-    ...withReleasedRound(item.doc, claim, String(status), at),
+    ...withReleasedRound(item.doc, claim, at),
     claim: null,
     requests: queued([...claim.requests, ...item.doc.requests]),
     history: newest([
@@ -657,12 +679,12 @@ export function releaseIfTerminal(item: Read, at: string, runId: string, pickup:
         stage: pickup.stage,
         run_id: runId,
         outcome: 'released',
-        summary: `released the claim of run ${claim.run_id}, which ended ${String(status)} without finishing its outcome; its requests wait again`,
+        summary: `released the claim of run ${claim.run_id}, which ended without finishing its outcome; its requests wait again`,
       },
     ]),
   };
-  return statePut(item.name, doc, item.revision) === 'ok'
-    ? { ...item, revision: item.revision + 1, doc }
+  return statePut(item.name, doc, item.revision, 'release') === 'ok'
+    ? { ...item, revision: item.revision + 1, doc, lease: null }
     : item;
 }
 
@@ -727,17 +749,37 @@ export function claimItem(
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
   const doc = claimed(candidate, at, runId, pickup);
-  if (statePut(candidate.name, doc, candidate.revision) === 'ok') return doc;
+  if (statePut(candidate.name, doc, candidate.revision, 'take') === 'ok') return doc;
   const fresh = read(candidate.name);
   if (!claimable(fresh, pickup)) return null;
   const retried = claimed(fresh, at, runId, pickup);
-  return statePut(fresh.name, retried, fresh.revision) === 'ok' ? retried : null;
+  return statePut(fresh.name, retried, fresh.revision, 'take') === 'ok' ? retried : null;
+}
+
+/**
+ * Claim the named item for a queue, releasing a terminal claim on it first as
+ * `claimNext` does. Refuses with the facts an operator acts on when it cannot.
+ */
+export function claimNamed(number: number, at: string, runId: string, pickup: Pickup): WorkItem {
+  const issue = `issue ${String(number)}`;
+  const found = read(workItemName(number));
+  if (found === undefined) throw new Error(`${issue} has no work item: intake has not recorded it`);
+  const item = releaseIfTerminal(found, at, runId, pickup);
+  const won = claimable(item, pickup) ? claimItem(item, at, runId, pickup) : null;
+  if (won !== null) return won;
+  const now = read(item.name) ?? item;
+  if (now.doc.claim !== null) throw new Error(`${issue} is claimed by run ${now.doc.claim.run_id}`);
+  // Both conditional writes can lose to concurrent writes that leave the item waiting.
+  if (pickup.waits(now.doc)) throw new Error(`${issue} kept changing while this run claimed it; launch it again`);
+  const record = now.doc.facts[pickup.stage];
+  const status = record !== undefined && 'status' in record ? `, ${pickup.stage} status ${record.status}` : '';
+  throw new Error(`${issue} does not wait for the ${pickup.stage} queue: stage ${now.doc.stage}${status}`);
 }
 
 /**
  * Replace the document of the item this run holds, re-reading on a conflict. Refuses
- * when the claim is no longer this run's, for example after a failed run's claim was
- * released and the run was then resumed.
+ * when the claim is no longer this run's. A change that clears the claim gives back the
+ * run's lease in the same write.
  */
 export function updateClaimed(
   subject: QualifiedPr,
@@ -752,7 +794,7 @@ export function updateClaimed(
     if (doc.claim?.run_id !== runId) throw new Error(`${name} is no longer claimed by this run`);
     const changed = change(doc);
     const next = { ...changed, requests: queued(changed.requests) };
-    if (statePut(name, next, stored.revision) === 'ok') return next;
+    if (statePutClaimed(name, next, stored.revision) === 'ok') return next;
   }
   throw new Error(`${name} kept changing: three conditional writes conflicted`);
 }

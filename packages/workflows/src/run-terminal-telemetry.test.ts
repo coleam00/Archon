@@ -2,7 +2,9 @@
 import { describe, expect, test } from 'bun:test';
 import { buildRunTerminalTelemetry, type RunTelemetryEvent } from './run-terminal-telemetry';
 import { buildTerminalRecord, observeRunArtifacts } from './terminal-record';
+import type { TokenUsage } from '@archon/provider-contract';
 import { WORKFLOW_TERMINAL_EVENT_TYPE } from '@archon/paths';
+import { workflowTerminalEventProperties } from '@archon/paths/telemetry-events';
 import { RUN_DISPATCH_METADATA_KEY, TERMINAL_RUN_EVENT_TYPE } from './schemas/workflow-run';
 import { RUN_GRAPH_METADATA_KEY } from './schemas/terminal-record';
 
@@ -205,4 +207,69 @@ describe('buildRunTerminalTelemetry', () => {
 
 test('analytics terminal event mapping conforms to the persisted event owner', () => {
   expect(WORKFLOW_TERMINAL_EVENT_TYPE).toEqual(TERMINAL_RUN_EVENT_TYPE);
+});
+
+describe('TokenUsage axis seam guard', () => {
+  const specimen: Required<TokenUsage> = {
+    input: 5000,
+    output: 1200,
+    cacheRead: 4000,
+    cacheWrite: 250,
+    cachePartial: true,
+    total: 6400,
+    cost: 0.25,
+  };
+  const wireKeys: Record<keyof TokenUsage, string | null> = {
+    input: 'tokens_in',
+    output: 'tokens_out',
+    cacheRead: 'cache_read_tokens',
+    cacheWrite: 'cache_write_tokens',
+    cachePartial: 'cache_partial',
+    total: null, // Telemetry carries gross axes, not the optional combined total.
+    cost: null, // cost_usd comes from the separate result/run scalar.
+  };
+  for (const status of ['completed', 'failed', 'cancelled'] as const) {
+    test(`${status}: carries every declared axis through the terminal wire serializer`, () => {
+      const props = buildRunTerminalTelemetry({
+        run: { ...run, status },
+        events: [],
+        usage: { costUsd: 0.75, tokens: specimen },
+      });
+      if (!props) throw new Error('Missing terminal telemetry');
+      const wire = workflowTerminalEventProperties(props);
+      for (const axis of Object.keys(wireKeys) as (keyof TokenUsage)[]) {
+        const key = wireKeys[axis];
+        if (key !== null) expect(wire[key], `${axis} -> ${key}`).toBe(specimen[axis]);
+        else {
+          expect(props).not.toHaveProperty(axis);
+          expect(wire).not.toHaveProperty(axis);
+        }
+      }
+      expect(wire.cost_usd).toBe(0.75);
+    });
+  }
+
+  test('preserves absent usage, reported zero, and true-only partial flags', () => {
+    for (const tokens of [
+      undefined,
+      { input: 10, output: 2 },
+      { input: 10, output: 2, cacheRead: 0, cacheWrite: 0 },
+      { input: 10, output: 2, cacheRead: 0, cachePartial: true as const },
+    ]) {
+      const props = buildRunTerminalTelemetry({ run, events: [], usage: { tokens } });
+      if (!props) throw new Error('Missing terminal telemetry');
+      const wire = workflowTerminalEventProperties(props);
+      for (const [key, value] of Object.entries({
+        tokens_in: tokens?.input,
+        tokens_out: tokens?.output,
+        cache_read_tokens: tokens?.cacheRead,
+        cache_write_tokens: tokens?.cacheWrite,
+        cache_partial: tokens?.cachePartial,
+      })) {
+        if (value === undefined) expect(wire).not.toHaveProperty(key);
+        else expect(wire[key]).toBe(value);
+      }
+      expect(wire).not.toHaveProperty('cost_usd');
+    }
+  });
 });

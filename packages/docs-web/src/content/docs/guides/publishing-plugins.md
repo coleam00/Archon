@@ -248,8 +248,8 @@ process. There is no webhook ingress for chat plugins.
 
 A plugin that declares the `attentionNotices` capability receives `chat/attention_notice`
 for each configured route on its platform. The request carries the route's `destination`
-unchanged and a typed notice: a `gate` with its decisions, an `attention` wait with its form
-and options, or a `terminal` follow-up for a run the route was told about. Return
+unchanged and a typed notice: a `gate` with its decisions, an `attention` wait with its form,
+its options (each with an optional `does`) and an optional recommendation, or a `terminal` follow-up for a run the route was told about. Return
 `{conversationId}` when the plugin can thread the follow-up there; the terminal request then
 carries it back. Answer an `attention` notice with the `answer` run action, naming the notice's
 `nodeId` and `pauseId` and the chosen option ids. A wait without a `pauseId` paused before

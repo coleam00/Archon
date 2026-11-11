@@ -1,6 +1,6 @@
 {
   "name": "@archon/adapters",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "type": "module",
   "main": "./src/index.ts",
   "types": "./src/index.ts",
@@ -103,7 +103,10 @@
       "src/forge/github/lifecycle.test.ts",
       "src/forge/github/merge-facts.test.ts",
       "src/forge/github/workitems.test.ts",
-      "src/forge/github/review-threads.test.ts"
+      "src/forge/github/review-threads.test.ts",
+      "src/forge/github/files.test.ts",
+      "src/forge/github/search-and-logs.test.ts",
+      "src/forge/github/plugin.test.ts"
     ],
     [
       "src/platform-policies.test.ts",

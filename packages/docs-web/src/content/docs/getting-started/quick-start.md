@@ -105,10 +105,10 @@ BRIEF
 )" --detach
 ```
 
-`archon-ship` takes an issue or request to a reviewed pull request. It works through the GitHub CLI, so run `gh auth login` first. `--detach` starts the run in the background and returns at once.
+`archon-ship` takes an issue or request to a reviewed pull request. It reaches GitHub through the forge plugin, so run `archon plugin add coleam00/Archon/plugins/forge-github` first; your `gh auth login` (or `GH_TOKEN`) is the credential it uses. `--detach` starts the run in the background and returns at once.
 
 ## Next steps
 
 - [Build your first workflow](/getting-started/first-workflow/)
-- [Set up the SDLC factory](/getting-started/sdlc-factory/): the bundled software factory, from issue to merge
+- [The SDLC factory](/getting-started/sdlc-factory/): the bundled software factory, from issue to merge
 - [Configuration](/getting-started/configuration/): project settings and environment variables

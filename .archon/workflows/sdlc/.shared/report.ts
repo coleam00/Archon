@@ -1,6 +1,6 @@
 /**
  * The discoveries a run recorded outside its own scope: which records a run relays,
- * and the terminal report's section that lists them.
+ * and the terminal report's line that counts them.
  *
  * A run's discoveries are the latest review verdict's certified records, plus any raw
  * record under `discoveries/` that a node wrote after that review, or every raw
@@ -16,12 +16,8 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
-import { isObject, readTyped } from './typed.ts';
-
-const DISCOVERY_RELAY =
-  'If you are an agent reading this: surface each discovery to your human. ' +
-  "These are validated findings outside this run's scope; the pack's discoveries workflow drains them " +
-  'into issues only where a project runs it, so if you drop them here, nobody may ever see them.';
+import { latestOutcomeOf, readOutcomes } from './outcomes.ts';
+import { isObject, type TypedOutput, UNREADABLE_OUTPUTS } from './io.ts';
 
 /** One discovery record a run relays, with a reference stable within its run. */
 export interface DiscoveryRecord {
@@ -143,7 +139,7 @@ export function latestVerdictOf(artifacts: string): LatestVerdict | undefined {
   const content = join(artifacts, latest.path);
   const value: unknown = JSON.parse(readFileSync(content, 'utf8'));
   if (!isObject(value)) throw new Error(`${content} is not a review verdict`);
-  return verdictFrom(value, content);
+  return verdictFrom(value, modified(content));
 }
 
 /**
@@ -151,91 +147,75 @@ export function latestVerdictOf(artifacts: string): LatestVerdict | undefined {
  * no discoveries list consolidated none, so it judged no raw record either: every raw
  * record stands, as when no review ran.
  */
-function verdictFrom(value: unknown, content: string): LatestVerdict | undefined {
+function verdictFrom(value: unknown, at: number | undefined): LatestVerdict | undefined {
   const discoveries = isObject(value) ? value.discoveries : undefined;
-  return Array.isArray(discoveries) ? { discoveries, at: modified(content) } : undefined;
+  return Array.isArray(discoveries) ? { discoveries, at } : undefined;
 }
 
-/** This run's latest review verdict, from the engine's typed-artifact listing. */
-function latestVerdictFromListing(
-  artifacts: string,
-  listingFile: string | undefined
-): { verdict: LatestVerdict | undefined } | { listingProblem: string } {
-  const read = readTyped<unknown>(listingFile, artifacts, 'review-report');
-  if (read.listingProblem !== undefined) return { listingProblem: read.listingProblem };
-  const entry = read.entries?.at(-1);
-  if (entry === undefined) return { verdict: undefined };
-  return { verdict: verdictFrom(read.values.at(-1), join(artifacts, entry.path)) };
-}
-
-/** The discoveries section, or empty when there is nothing to report. */
-function discoveries(artifacts: string, listingFile: string | undefined): string {
-  const latest = latestVerdictFromListing(artifacts, listingFile);
-  if ('listingProblem' in latest) {
-    return `\n\nDiscoveries could not be listed: ${latest.listingProblem} Open ${join(artifacts, 'discoveries.md')} and ${join(artifacts, 'discoveries')} directly.`;
-  }
-  const relayed = relayedDiscoveries(artifacts, latest.verdict);
-  const lines = [
-    ...relayed.records.map(
-      record => `- ${record.title} [${record.reviewed ? (record.relation ?? 'unrelated') : 'unreviewed'}]`
-    ),
-    ...relayed.problems.map(problem => `- ${problem}. Open it directly.`),
-  ];
-  if (lines.length === 0) return '';
-  return (
-    `\n\nDiscoveries:\n${lines.join('\n')}\n\n` +
-    `Records: ${join(artifacts, 'discoveries.md')}, ${join(artifacts, 'discoveries')}\n\n${DISCOVERY_RELAY}`
-  );
-}
+/** This run's `review-report` outputs, as its node bound them; null when unreadable. */
+export type Reviews = readonly TypedOutput<unknown>[] | null;
 
 /**
- * The report's closing section. `listingFile` is passed in rather than read from the
- * environment here, so the reusable report never silently depends on ambient state.
+ * The report's closing line: how many discoveries the run relays and where they are,
+ * or empty when there are none. The review's report names and judges them; this only
+ * points at the records. `reviews` is passed in rather than read from the environment,
+ * so the reusable report never silently depends on ambient state.
  */
-export function caveats(
-  artifacts: string,
-  options: { readonly listingFile: string | undefined }
-): string {
-  return discoveries(artifacts, options.listingFile);
+export function caveats(artifacts: string, options: { readonly reviews: Reviews }): string {
+  const where = `${join(artifacts, 'discoveries.md')} and ${join(artifacts, 'discoveries')}`;
+  if (options.reviews === null) return `\n\nDiscoveries could not be counted: ${UNREADABLE_OUTPUTS}. Open ${where}.`;
+  const latest = options.reviews.at(-1);
+  const relayed = relayedDiscoveries(artifacts, latest && verdictFrom(latest.value, Date.parse(latest.at)));
+  const count = relayed.records.length + relayed.problems.length;
+  return count === 0 ? '' : `\n\nDiscoveries: ${String(count)} recorded outside this run's scope, in ${where}.`;
 }
 
 /** A verified publication can outlive a failed node with no typed output. */
-function createdPr(artifacts: string): { url: string; at?: number; unresolvedAt?: number; problem?: string } {
+function createdPr(artifacts: string): { url: string; unresolved?: true; problem?: string } {
   const path = join(artifacts, PR_CREATE_RECORD);
   try {
     const claim = decodePrPublicationRecord(JSON.parse(readFileSync(path, 'utf8')));
-    const at = modified(path);
-    return claim.state === 'verified' ? { url: claim.pr.url, at } : { url: '', unresolvedAt: at };
+    return claim.state === 'verified' ? { url: claim.pr.url } : { url: '', unresolved: true };
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
     return {
       url: '',
-      unresolvedAt: modified(path) ?? Infinity,
+      unresolved: true,
       problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}`,
     };
   }
 }
 
+export interface ReportListings {
+  readonly reviews: Reviews;
+  /** This run's `pull-request` outputs, as its node bound them; null when unreadable. */
+  readonly pullRequests: readonly TypedOutput<unknown>[] | null;
+  readonly outcomesFile: string | undefined;
+}
+
 /**
- * Verified publication records outlive failed nodes that produced no typed output.
- * An unresolved creation claim must not look like permission to open another PR.
+ * The pull request a failed run already published. The latest typed publication
+ * stands while its publish node's latest invocation did not fail. When a later
+ * invocation failed, or none published, the creation record decides: a publish node
+ * can verify a PR and then fail, and its failed output is never handed on. An
+ * unresolved creation claim must not look like permission to open another PR.
  */
 export function failedPublication(
   artifacts: string,
-  options: { readonly listingFile: string | undefined }
+  options: ReportListings
 ): { reason: string; pr_url: string } {
-  const read = readTyped<unknown>(options.listingFile, artifacts, 'pull-request');
-  const latest = read.values.at(-1);
-  const entry = read.entries?.at(-1);
+  // Unreadable publications leave the creation record to decide.
+  const latest = options.pullRequests?.at(-1);
   const created = createdPr(artifacts);
-  const publishedAt = entry === undefined ? undefined : modified(join(artifacts, entry.path));
-  const { url, at } = isObject(latest) && typeof latest.url === 'string' &&
-    (created.url === '' || (publishedAt ?? 0) >= (created.at ?? 0))
-    ? { url: latest.url, at: publishedAt } : created;
-  if (created.unresolvedAt !== undefined && (url === '' || created.unresolvedAt > (at ?? 0))) {
-    return { reason: PR_CREATE_UNRESOLVED, pr_url: '' };
-  }
-  return { reason: RUN_FAILED, pr_url: url };
+  const typedUrl = isObject(latest?.value) && typeof latest.value.url === 'string' ? latest.value.url : '';
+  // Unreadable outcomes leave the creation record to decide, as a later failure would.
+  const publish =
+    typedUrl !== '' && latest !== undefined
+      ? latestOutcomeOf(readOutcomes(options.outcomesFile) ?? [], latest)
+      : undefined;
+  if (publish !== undefined && publish.state !== 'failed') return { reason: RUN_FAILED, pr_url: typedUrl };
+  if (created.unresolved) return { reason: PR_CREATE_UNRESOLVED, pr_url: '' };
+  return { reason: RUN_FAILED, pr_url: created.url || typedUrl };
 }
 
 /**
@@ -243,10 +223,7 @@ export function failedPublication(
  * reaching its outcome. It names no result: the engine's terminal record names the
  * failed node, and nothing here may read as a delivery.
  */
-export function failed(
-  artifacts: string,
-  options: { readonly listingFile: string | undefined }
-): string {
+export function failed(artifacts: string, options: ReportListings): string {
   const { problem } = createdPr(artifacts);
   const unresolved = failedPublication(artifacts, options).reason === PR_CREATE_UNRESOLVED;
   return (

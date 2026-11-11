@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 import { describe, expect, test } from 'bun:test';
 import { makeRun } from './engine-contract-fixtures';
+import { readTerminalEvents } from './metrics-steps';
 import {
   MetricsByModelNodeError,
   queryMetrics,
@@ -855,5 +856,25 @@ describe('queryMetrics step models', () => {
       window
     );
     expect(report.metrics[0]?.instruments[0]?.cost).toMatchObject({ runs_partial_cost: 1 });
+  });
+});
+
+describe('readTerminalEvents', () => {
+  // A SQLite store blocks the event loop for each call; a server must answer between them.
+  test('lets the event loop run between chunks of runs', async () => {
+    let turns = 0;
+    const turnsAtCall: number[] = [];
+    await readTerminalEvents(
+      {
+        listEventsForRuns: async () => {
+          turnsAtCall.push(turns);
+          setImmediate(() => (turns += 1));
+          return new Map();
+        },
+      },
+      Array.from({ length: 1000 }, (_, index) => `run-${String(index)}`)
+    );
+    expect(turnsAtCall.length).toBeGreaterThan(1);
+    expect(turnsAtCall).toEqual(turnsAtCall.map((_, index) => index));
   });
 });

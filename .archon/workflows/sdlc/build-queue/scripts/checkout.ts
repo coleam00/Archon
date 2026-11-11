@@ -21,16 +21,10 @@
  *
  * It emits the commit the continued pull request's review last named, or null, so the
  * answer can tell whether the round changed anything since that review, and the pull
- * request the round's `archon-ship` continues: the number, `none`
- * when the forge knows a pull request for the item that the round does not continue
- * (one route declined, or a closed, merged or fork one facts never offered), so ship's
- * triage cannot route the round back onto it, or null when the item has no pull
- * request, which leaves it to ship's triage. A declared null reaches ship as empty, so
- * `none` needs its own value.
+ * request the round continues: its number, or null for a fresh round.
  */
 
 import type { PrRecord, QualifiedPr } from '../../.shared/forge.ts';
-import { forgeSource } from '../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
 import { emit, nullableJson, refuse } from '../../.shared/io.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -38,13 +32,14 @@ import { reviewedHead } from '../../.shared/merge.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 
-/** A fresh round stays on the base and tells ship `none` for any pull request the item has. */
-function fresh(known: PrRecord | null): void {
-  const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'>;
+/** A fresh round stays on the base and continues no pull request. */
+function fresh(): void {
+  const item = nullableJson(process.env.INPUTS_ITEM) as Pick<QualifiedPr, 'repo'> | null;
+  if (item === null) throw new Error('facts reported no item for the round');
   const base = fetchDefaultBranch(item.repo);
   if (git('merge-base', '--is-ancestor', 'HEAD', base.sha).code !== 0)
     throw new Error(`a fresh round must start on ${base.branch}, but the checkout's HEAD is not on it`);
-  emit({ head: null, reviewed: null, pull_request: known === null ? null : 'none' });
+  emit({ head: null, reviewed: null, pull_request: null });
 }
 
 function main(): void {
@@ -52,14 +47,14 @@ function main(): void {
   const candidate = nullableJson(process.env.INPUTS_CANDIDATE) as number | null;
   const known = nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null;
   if (continues === null) {
-    fresh(known);
+    fresh();
     return;
   }
   if (continues !== candidate)
     throw new Error(`route continues pull request ${String(continues)}, but only ${String(candidate ?? 'none')} can be continued`);
   if (known === null || known.number !== continues)
     throw new Error(`route continues pull request ${String(continues)} but reports ${String(known?.number ?? 'none')}`);
-  const pr = viewPr({ repo: known.repo, number: continues }, forgeSource()).pr;
+  const pr = viewPr({ repo: known.repo, number: continues }).pr;
   if (pr.state !== 'open' || pr.head_revision === null)
     throw new Error(`${pr.url} is ${pr.state}; the round cannot continue it`);
 

@@ -1,3 +1,11 @@
+import type {
+  ApiPath,
+  ApiMethod,
+  JsonMethod,
+  JsonResponse,
+  RequestArgs,
+  UrlArgs,
+} from './api-types';
 /**
  * Tiny HTTP helpers owned by the console. Console skills use this boundary for
  * runtime API calls.
@@ -89,27 +97,42 @@ export function errorDetail(e: unknown): string {
   return String(e);
 }
 
-function mergeHeaders(
-  base: Record<string, string>,
-  extra: HeadersInit | undefined
-): Record<string, string> {
-  if (extra === undefined) return base;
-  const out: Record<string, string> = { ...base };
-  if (extra instanceof Headers) {
-    extra.forEach((value, key) => {
-      out[key] = value;
-    });
-  } else if (Array.isArray(extra)) {
-    for (const [k, v] of extra) out[k] = v;
-  } else {
-    for (const [k, v] of Object.entries(extra)) {
-      if (typeof v === 'string') out[k] = v;
-    }
-  }
-  return out;
+function mergeHeaders(base: Record<string, string>, extra: HeadersInit | undefined): Headers {
+  const headers = new Headers(base);
+  new Headers(extra).forEach((value, key) => headers.set(key, value));
+  return headers;
 }
 
-export async function requestJson<T>(url: string, options?: RequestInit): Promise<T> {
+function serializeUrl(
+  path: string,
+  options: { params?: object; query?: object } | undefined
+): string {
+  let url = path;
+  for (const [key, value] of Object.entries(options?.params ?? {})) {
+    url = url.replace(`{${key}}`, encodeURIComponent(String(value)));
+  }
+  const query = new URLSearchParams();
+  for (const [key, value] of Object.entries(options?.query ?? {})) {
+    if (value !== undefined) query.set(key, String(value));
+  }
+  return query.size > 0 ? `${url}?${query.toString()}` : url;
+}
+
+export function buildApiUrl<const P extends ApiPath, const M extends ApiMethod<NoInfer<P>>>(
+  path: P,
+  _method: M,
+  ...args: UrlArgs<NoInfer<P>, NoInfer<M>>
+): string {
+  return serializeUrl(path, args[0]);
+}
+
+export async function requestJson<const P extends ApiPath, const M extends JsonMethod<NoInfer<P>>>(
+  route: P,
+  method: M,
+  ...args: RequestArgs<NoInfer<P>, NoInfer<M>>
+): Promise<JsonResponse<P, M>> {
+  const options = args[0];
+  const url = serializeUrl(route, options);
   const needsJson = options?.body !== undefined && !(options.body instanceof FormData);
   const headers = mergeHeaders(
     needsJson ? { 'Content-Type': 'application/json' } : {},
@@ -117,7 +140,13 @@ export async function requestJson<T>(url: string, options?: RequestInit): Promis
   );
   const res = await fetch(url, {
     credentials: 'same-origin',
-    ...options,
+    method: method.toUpperCase(),
+    signal: options?.signal,
+    body: needsJson
+      ? JSON.stringify(options?.body)
+      : options?.body instanceof FormData
+        ? options.body
+        : undefined,
     headers,
   });
   if (!res.ok) {
@@ -127,5 +156,5 @@ export async function requestJson<T>(url: string, options?: RequestInit): Promis
     const fields = apiErrorFields(body);
     throw new HttpError(res.status, path, truncated, fields?.serverError, fields?.serverDetail);
   }
-  return res.json() as Promise<T>;
+  return res.json() as Promise<JsonResponse<P, M>>;
 }

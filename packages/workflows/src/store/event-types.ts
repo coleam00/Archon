@@ -1,5 +1,6 @@
 import {
   DEFERRED_NODE_USAGE_EVENT_TYPE,
+  NODE_EXECUTION_EVENT_TYPES,
   type SerializedDeferredNodeUsageEvent,
   type SerializedNodeEvent,
 } from '../node-record-serialization';
@@ -12,11 +13,7 @@ import { TERMINAL_RUN_EVENT_TYPES } from '../schemas/workflow-run';
 import { WORKTREE_SETUP_EVENT_TYPES } from '../schemas/worktree-setup';
 
 export const NODE_LIFECYCLE_EVENT_TYPES = [
-  'node_started',
-  'node_suspended',
-  'node_completed',
-  'node_failed',
-  'node_skipped',
+  ...Object.values(NODE_EXECUTION_EVENT_TYPES),
   'node_skipped_prior_success',
 ] as const;
 

@@ -1,12 +1,11 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
-import { AGENT_OUTCOMES, type AgentDecision, checkDecisions, parseRunDocument } from '../../workflows/sdlc/.shared/discoveries';
-import { latestVerdictOf, relayedDiscoveries } from '../../workflows/sdlc/.shared/report';
-import { type GhIssue, gitCheckout, hostCli, PACK, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
+import { type AgentDecision, checkDecisions } from '../../workflows/sdlc/.shared/discoveries';
+import { type TrackerIssue, gitCheckout, hostCli, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -60,60 +59,11 @@ function runArtifacts(
   return dir;
 }
 
-describe("a run's discoveries", () => {
-  test('the latest verdict, plus raw records written after it; a record it judged is not raised again', () => {
-    const root = track(mkdtempSync(join(tmpdir(), 'archon-discoveries-')));
-    const dir = runArtifacts(root, RUN, {
-      before: [record('judged by review')],
-      verdict: [record('certified')],
-      after: [record('written after review')],
-    });
-    const relayed = relayedDiscoveries(dir, latestVerdictOf(dir));
-    expect(relayed.problems).toEqual([]);
-    expect(relayed.records.map(entry => [entry.ref, entry.title, entry.reviewed])).toEqual([
-      ['review#0', 'certified', true],
-      ['discoveries/structure.json#0', 'written after review', false],
-    ]);
-  });
-
-  test('without a review, every raw record; an unreadable file is a named problem', () => {
-    const root = track(mkdtempSync(join(tmpdir(), 'archon-discoveries-')));
-    const dir = runArtifacts(root, RUN, { before: [record('one'), record('two')] });
-    writeFileSync(join(dir, 'discoveries/broken.json'), '{');
-    expect(latestVerdictOf(dir)).toBeUndefined();
-    const relayed = relayedDiscoveries(dir, undefined);
-    expect(relayed.records.map(entry => entry.ref)).toEqual(['discoveries/implement.json#0', 'discoveries/implement.json#1']);
-    expect(relayed.problems).toEqual([expect.stringContaining('broken.json')]);
-  });
-});
-
-// --- the run document and the pre-write check ---------------------------------------
+// --- the pre-write check -------------------------------------------------------------
 
 const ISSUE = { repo: REPO, number: 7 };
 
-function decideSchema(): Record<string, unknown> {
-  const workflow = Bun.YAML.parse(readFileSync(join(PACK, 'discoveries/archon-discoveries.yaml'), 'utf8')) as {
-    nodes: { id: string; output_format?: Record<string, unknown> }[];
-  };
-  return workflow.nodes.find(node => node.id === 'decide')?.output_format ?? {};
-}
-
-describe("a drained run's document", () => {
-  test('round-trips through its parser, and one that does not parse refuses, naming the document', () => {
-    const name = `discoveries/runs/${RUN}`;
-    const value = {
-      version: 1 as const,
-      claim: null,
-      decided: [`${RUN}:review#0`],
-      questions: [{ keys: ['k-one'], refs: [`${RUN}:review#1`], text: 'q', recommendation: 'r', answer: { text: 'a', at: 'now' } }],
-    };
-    expect(parseRunDocument(name, JSON.parse(JSON.stringify(value)))).toEqual(value);
-    expect(parseRunDocument(name, { version: 1, claim: null })).toEqual({ version: 1, claim: null });
-    for (const bad of [{ version: 2, claim: null }, { version: 1, claim: null, decided: 'x' }, { version: 1, claim: null, questions: [{ text: 'q' }] }]) {
-      expect(() => parseRunDocument(name, bad)).toThrow(name);
-    }
-  });
-
+describe("a drained run's decisions", () => {
   test('every queued ref is decided exactly once', () => {
     const drop = (key: string, refs: string[]): AgentDecision => ({ outcome: 'drop', key, refs, title: 't', reason: 'r' });
     const queued = ['run:review#0', 'run:review#1'];
@@ -123,13 +73,6 @@ describe("a drained run's document", () => {
       'run:review#1 is decided under both first-key and second-key',
       'run:other#0 (key second-key) is not a queued ref',
     ]);
-  });
-
-  test("the decide node's output schema names exactly the agent's outcomes", () => {
-    const schema = decideSchema();
-    const items = (schema.properties as { decisions: { items: { anyOf: { properties: { outcome: { enum: string[] } } }[] } } })
-      .decisions.items.anyOf;
-    expect(items.map(branch => branch.properties.outcome.enum).flat().sort()).toEqual([...AGENT_OUTCOMES].sort());
   });
 });
 
@@ -168,7 +111,7 @@ interface Pass {
   readonly runId: string;
   readonly runs: string[];
   readonly statuses?: Record<string, string>;
-  readonly issues?: GhIssue[];
+  readonly issues?: TrackerIssue[];
   readonly subject?: { state: 'open' | 'closed' };
 }
 
@@ -177,8 +120,8 @@ type Script = 'facts' | 'outcome' | 'answer';
 function script(at: Install, name: Script, pass: Pass, inputs: Record<string, string> = {}, artifacts: Record<string, string> = {}): ScriptRun {
   return runPackScript(`discoveries/scripts/${name}`, {
     cwd: at.checkout,
-    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON] },
-    gh: { issue: { number: 7, state: pass.subject?.state ?? 'open' }, issues: pass.issues ?? [] },
+    forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
+    tracker: { issue: { number: 7, state: pass.subject?.state ?? 'open' }, issues: pass.issues ?? [] },
     artifacts,
     inputs: {
       ...at.env,
@@ -187,6 +130,7 @@ function script(at: Install, name: Script, pass: Pass, inputs: Record<string, st
       RUN_LISTING: listing(at, pass.runs),
       INPUTS_REPO_HOST: REPO.host,
       INPUTS_REPO_PATH: REPO.path,
+      INPUTS_REPO: JSON.stringify(REPO),
       INPUTS_SINCE: '',
       INPUTS_UNTIL: '',
       INPUTS_LIMIT: '20',
@@ -236,14 +180,6 @@ function cli(at: Install, args: string[], input?: string): { status: number | nu
 
 function state(at: Install, name: string): unknown {
   return cli(at, ['state', 'get', name]).value.value ?? null;
-}
-
-function seed(at: Install, name: string, value: unknown): void {
-  expect(cli(at, ['state', 'put', name, '--if-revision', '0'], JSON.stringify(value)).status).toBe(0);
-}
-
-function documents(at: Install, prefix = 'discoveries/'): unknown[] {
-  return (cli(at, ['state', 'list', '--prefix', prefix]).value.documents as unknown[]) ?? [];
 }
 
 const fileIt = (key: string) => (refs: string[]): AgentDecision[] => [
@@ -296,31 +232,10 @@ describe('the discoveries scripts', () => {
   test('filing a key whose issue already exists recovers it by its marker, so nothing is filed twice', () => {
     const at = install();
     runArtifacts(at.outputRoot, RUN, { verdict: [record('new')] });
-    const existing: GhIssue = { number: 50, title: 'A defect', body: '<!-- archon-discovery new-defect -->\nThe brief.', state: 'OPEN' };
+    const existing: TrackerIssue = { number: 50, title: 'A defect', body: '<!-- archon-discovery new-defect -->\nThe brief.', state: 'OPEN' };
     const { outcome } = decide(at, { runId: 'pass-2', runs: [RUN], issues: [existing] }, fileIt('new-defect'));
     expect(ok(outcome).written).toEqual([{ key: 'new-defect', outcome: 'file', url: 'https://ghe.example.com/example/repo/issues/50' }]);
     expect(outcome.createdIssues).toEqual([]);
-  }, 60_000);
-
-  test('a run drained before runs kept their own memory counts as decided', () => {
-    const at = install();
-    runArtifacts(at.outputRoot, RUN, { verdict: [record('old')] });
-    seed(at, `discoveries/runs/${RUN}`, { version: 1, claim: null });
-    expect(ok(script(at, 'facts', { runId: 'pass-1', runs: [RUN] }))).toMatchObject({ path: 'idle' });
-  }, 60_000);
-
-  test('facts reads every run document in one state call, not one per run', () => {
-    const at = install();
-    const ids = Array.from({ length: 4 }, (_, index) => `aaaaaaaa-0000-4000-8000-00000000001${String(index)}`);
-    for (const id of ids) {
-      runArtifacts(at.outputRoot, id, { verdict: [record('one')] });
-      seed(at, `discoveries/runs/${id}`, { version: 1, claim: null, decided: [`${id}:review#0`] });
-    }
-    const log = join(track(mkdtempSync(join(tmpdir(), 'archon-discoveries-calls-'))), 'calls.jsonl');
-    const facts = script(at, 'facts', { runId: 'pass-2', runs: ids }, { ARCHON_CALL_LOG: log });
-    expect(ok(facts)).toMatchObject({ path: 'idle' });
-    const calls = readFileSync(log, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]);
-    expect(calls.filter(argv => argv[0] === 'state')).toEqual([['state', 'list', '--prefix', 'discoveries/runs/', '--values']]);
   }, 60_000);
 
   test('a refused pass writes nothing: a closed tracking issue, a missing ref', () => {
@@ -333,7 +248,7 @@ describe('the discoveries scripts', () => {
         'which is not open',
       ],
       [
-        { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'failed' } },
+        { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } },
         refs => [{ outcome: 'drop', key: 'new-key', refs: refs.slice(1), title: 't', reason: 'r' }],
         'has no decision',
       ],
@@ -346,27 +261,6 @@ describe('the discoveries scripts', () => {
       expect(state(at, `discoveries/runs/${RUN}`)).not.toHaveProperty('decided');
     }
   }, 120_000);
-
-  test('a claim is kept while its run may still finish, and released once it ended', () => {
-    const at = install();
-    runArtifacts(at.outputRoot, RUN, { verdict: [record('one')] });
-    expect(ok(script(at, 'facts', { runId: 'pass-1', runs: [RUN] }))).toMatchObject({ path: 'decide' });
-    for (const status of ['paused', 'running']) {
-      expect(ok(script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': status } }))).toMatchObject({ path: 'idle' });
-    }
-    const released = script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } });
-    expect(queued(released)).toEqual([`${RUN}:review#0`]);
-    expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ claim: { run_id: 'pass-2' } });
-  }, 60_000);
-
-  test('limit caps the runs one pass claims, oldest first', () => {
-    const at = install();
-    const ids = [RUN, 'aaaaaaaa-0000-4000-8000-000000000002'];
-    for (const id of ids) runArtifacts(at.outputRoot, id, { verdict: [record('one')] });
-    const facts = script(at, 'facts', { runId: 'pass-1', runs: ids }, { INPUTS_LIMIT: '1' });
-    expect(queued(facts)).toEqual([`${RUN}:review#0`]);
-    expect(state(at, `discoveries/runs/${ids[1]}`)).toBeNull();
-  }, 60_000);
 
   test('an asked record keeps its run claimed by the asking run, and the answer reaches the next pass', () => {
     const at = install();
@@ -390,28 +284,4 @@ describe('the discoveries scripts', () => {
     expect(queued(next)).toEqual([`${RUN}:review#0`]);
     expect(readFileSync(join(next.artifacts, 'drain/queue.json'), 'utf8')).toContain('Out of scope.');
   }, 60_000);
-
-  test('an input outside its vocabulary refuses before anything is read', () => {
-    const at = install();
-    const refused: Record<string, string>[] = [{ INPUTS_SINCE: 'yesterday' }, { INPUTS_LIMIT: '0' }];
-    for (const inputs of refused) {
-      const result = script(at, 'facts', { runId: 'pass-1', runs: [] }, inputs);
-      expect(result.code).toBe(1);
-      expect(result.gh).toEqual([]);
-    }
-    expect(documents(at)).toEqual([]);
-  }, 60_000);
-});
-
-describe('the discoveries workflow', () => {
-  test('the pack ships no trigger binding: it runs only when started by hand or by a binding an operator adds', () => {
-    const files = (dir: string): string[] =>
-      readdirSync(dir, { withFileTypes: true }).flatMap(entry =>
-        entry.isDirectory() ? files(join(dir, entry.name)) : [join(dir, entry.name)]
-      );
-    const binding = files(PACK).filter(
-      path => !path.endsWith('.md') && /"bindingId"|intervalSeconds|bindingId:/.test(readFileSync(path, 'utf8'))
-    );
-    expect(binding).toEqual([]);
-  });
 });

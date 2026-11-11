@@ -49,8 +49,9 @@ The host routes events only to the plugin owning the run's conversation.
 `ChatAttentionNotice` goes to an install-level route the operator configured, not to
 a run's own conversation. `destination` is the route's opaque value. A `gate` notice
 carries the gate type, message and decisions; an `attention` notice carries the
-attention wait's form (`message`, `approval`, `select` or `multi_select`) and its
-options; a `terminal` notice closes a run the route was told about, with the
+attention wait's form (`message`, `approval`, `select` or `multi_select`), its
+options (each with an optional `does`) and an optional recommendation; an option's
+`value` is never sent to a plugin; a `terminal` notice closes a run the route was told about, with the
 `conversationId` the plugin returned for that run's earlier notice. A plugin that can
 thread a follow-up returns `conversationId`; otherwise it returns `{}`.
 

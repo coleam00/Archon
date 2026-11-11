@@ -24,6 +24,10 @@ mock.module('@archon/paths', () => ({
 
 await mkdir(join(app, 'workflows'), { recursive: true });
 await pack(join(app, 'workflows'), 'shipped', 'shipped-flow');
+await write(
+  join(app, 'workflows', 'shipped', '.pack', 'pack.yaml'),
+  'inputs:\n  mode:\n    type: enum\n    values: [a, b]\n    default: a\n'
+);
 await pack(join(app, 'workflows'), 'excluded', 'excluded-flow');
 await pack(join(project, '.archon', 'workflows'), 'project-only', 'project-flow');
 await pack(join(home, 'workflows'), 'home-only', 'home-flow');
@@ -54,6 +58,7 @@ const { validateWorkflowResources } = await import('./validator');
 const { captureWorkflowSource, capturedSourceRoots } = await import('./workflow-source');
 const { formatPackagedResourceReference } = await import('./packaged-workflow');
 const { parseWorkflow } = await import('./loader');
+const { resolveRunStartInputs } = await import('./pack-settings');
 
 const deps: Pick<WorkflowDeps, 'loadConfig'> = {
   loadConfig: async () => ({
@@ -360,3 +365,30 @@ test('a pack-root fixtures directory is not a bundled workflow in live or captur
     await removeTempTree(fixtures);
   }
 });
+
+test.each([false, true])(
+  "a bundled pack's settings resolve from the project file, live and captured (binary %s)",
+  async binaryMode => {
+    binary = binaryMode;
+    await write(join(project, '.archon', 'packs', 'shipped.yaml'), 'settings:\n  mode: b\n');
+    const capture = await captureWorkflowSource({
+      sourceRoot: project,
+      captureRoot: join(root, `settings-capture-${String(binaryMode)}`),
+    });
+    try {
+      for (const sourceRoots of [undefined, capturedSourceRoots(capture.anchor)]) {
+        const result = await discoverWorkflows(project, {
+          providers: providerRegistry,
+          sourceRoots,
+        });
+        const shipped = result.workflows.find(entry => entry.workflow.name === 'shipped-flow');
+        if (!shipped) throw new Error('shipped-flow not discovered');
+        expect((await resolveRunStartInputs(project, shipped.workflow, undefined)).inputs).toEqual({
+          mode: 'b',
+        });
+      }
+    } finally {
+      await removeTempTree(join(project, '.archon', 'packs'));
+    }
+  }
+);

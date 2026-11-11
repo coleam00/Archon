@@ -314,6 +314,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | GET | `/api/workflows/runs/{runId}` | Get run details with events (provider events are served by the route below). `run.nodes[]` is the engine's per-node state; a `workflow:` fan-out node also carries `fan_out_outcome`, its [per-slot record and tally](/reference/workflow-language/#a-completed-fan-out-node-is-not-completed-child-work). See [node execution records](/reference/node-execution/) for event fields, reporting availability, and cost scope |
 | GET | `/api/workflows/runs/{runId}/provider-events` | The run's provider events as `{events: ProviderEventRecord[]}`: each is `{runId, stepName, attemptId, seq, observedAt, event}`, grouped by node and in emission order within one. `?step=` limits it to one node. `?attemptId=&afterSeq=` (both, and with `step`) returns only the events after that one: the attempt's later events and every later attempt's. Rows written before the engine recorded envelopes come back translated, with `attemptId: null`. Returns **400** for a partial cursor |
 | GET | `/api/runs/{runId}/artifacts` | List artifact files produced by a run |
+| GET | `/api/artifacts/{runId}/{filename}` | Read an artifact's text content; encode the complete relative filename, including slashes, as one path value |
 | GET | `/api/workflows/runs/by-worker/{platformId}` | Look up a run by worker conversation ID |
 | POST | `/api/workflows/runs/{runId}/cancel` | Cancel a running workflow: a run this server executes stops at its next status check; a run another process owns has that owner stopped first. Returns **409** with the reason, and leaves the run unchanged, when no owner answers (abandon it once its process is gone) or the owner cannot be stopped; **400** for a run that is not running |
 | POST | `/api/workflows/runs/{runId}/resume` | Resume a failed or paused workflow. A run started outside the web UI resumes on the server and returns **409** with the reason, leaving the run unchanged, when its resource is full: a paused run that is ready to continue keeps its place and a continuation host continues it, and a failed run stays failed until it is resumed again. A run started from a web conversation reports the same wait in that conversation |
@@ -398,7 +399,7 @@ curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
   -H "Content-Type: application/json" \
   -d '{"message":"fix #2481","conversationId":"conv-123",
        "tiers":{"large":"openai/gpt-5.6"},
-       "aliases":{"@reviewer":"codex/gpt-5.6-sol"}}'
+       "aliases":{"@reviewer":"codex/gpt-6.1-sol"}}'
 
 # multipart: each map is one JSON-encoded form field
 curl -X POST http://localhost:3090/api/workflows/issue-to-pr/run \
@@ -481,6 +482,7 @@ These routes record the decision and return. The server's continuation scheduler
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/runs/attention` | List attention queue items or count them with `countBy` |
+| GET | `/api/runs/attention/stream` | Stream the attention queue as server-sent events; `Last-Event-ID` resumes ([stream over HTTP](/getting-started/operate/#stream-over-http)) |
 | GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
 
@@ -561,6 +563,7 @@ a run whose owner is `unreachable` or `unknown` as not live and offers Abandon f
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/metrics` | Aggregate stored metric records as a `MetricsReport` |
+| GET | `/api/metric-views` | The overview cards workflow packs declare, as `MetricViews` |
 
 ```bash
 curl 'http://localhost:3090/api/metrics?name=factory.prs_merged&since=7d'
@@ -579,6 +582,11 @@ prints: per name, its definition and one entry per instrument and `measured_by` 
 did run in the error. The node is not checked when no producing run still exists: a window
 with no records returns an empty report, and records whose runs were all deleted are
 `unattributed`.
+
+`GET /api/metric-views` lists each pack's `.shared/metric-views.json` as `packs[]` (pack,
+source, `names` and `cards`) and the declarations that could not be read or did not
+validate as `errors[]`. With `codebaseId`, the codebase's project packs are included and its
+config decides whether bundled packs are; an unknown `codebaseId` returns **404**.
 See the [metrics guide](/guides/metrics/).
 
 ---

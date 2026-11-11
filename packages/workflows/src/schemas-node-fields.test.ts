@@ -125,6 +125,43 @@ describe('approval.decisions', () => {
     expect(result.decisions).toEqual([...decisions]);
   });
 
+  test.each([undefined, false, true])(
+    'preserves capture_response %s and legacy rework translation',
+    capture => {
+      for (const onReject of [
+        undefined,
+        { prompt: 'Revise: $REJECTION_REASON' },
+        { prompt: 'Revise', max_attempts: 3 },
+      ]) {
+        const node = parseGate({ message: 'ok?', capture_response: capture, on_reject: onReject });
+        expect(node.captureResponse).toBe(capture ?? false);
+        expect(node.decisionsAuthored).toBe(false);
+        expect(node.decisions).toEqual([
+          { id: 'approve' },
+          {
+            id: 'reject',
+            ...(onReject === undefined
+              ? {}
+              : {
+                  rework: {
+                    prompt: onReject.prompt,
+                    ...('max_attempts' in onReject ? { maxAttempts: onReject.max_attempts } : {}),
+                  },
+                }),
+          },
+        ]);
+      }
+      const node = parseGate({
+        message: 'ok?',
+        capture_response: capture,
+        decisions: [{ id: 'revise' }],
+      });
+      expect(node.captureResponse).toBe(capture ?? false);
+      expect(node.decisionsAuthored).toBe(true);
+      expect(node.decisions).toEqual([{ id: 'revise' }]);
+    }
+  );
+
   test('rejects duplicate ids', () => {
     const result = dagNodeSchema.safeParse({
       id: 'gate',
@@ -165,7 +202,14 @@ describe('approval.decisions', () => {
       },
     });
     expect(result.success).toBe(false);
-    expect(JSON.stringify(result.error?.issues)).toContain('mutually exclusive');
+    const issue = result.error?.issues[0];
+    expect(issue?.path).toEqual(['approval', 'decisions']);
+    expect(issue?.message).toContain('mutually exclusive');
+    expect(issue?.message).toContain(
+      "Write 'wait: { attention: <message>, form: approval }' followed by a rework node"
+    );
+    expect(issue?.message).toContain('$LOOP_PREV.<id>.output.text');
+    expect(issue?.message).not.toContain("declare 'decisions' instead");
   });
 });
 

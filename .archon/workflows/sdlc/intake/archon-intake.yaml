@@ -11,13 +11,17 @@ description: |
   promotes it by adding archon-triage or a route label.
 
   Use when: trigger bindings start it on issue lifecycle and label events (see
-  the SDLC pack README, "Intake").
+  https://archon.diy/guides/sdlc-operations/#intake).
   NOT for: triaging one item by hand (archon-triage), or delivering work.
 
 inputs:
   repo_host:
-    description: The forge host of the issue's repository (binding field repository.host).
+    default: ""
+    description: >-
+      The forge host of the issue's repository (binding field repository.host).
+      Empty, with repo_path empty too, resolves the repository from the checkout's git remotes.
   repo_path:
+    default: ""
     description: The owner/name path of the issue's repository (binding field repository.path).
   number:
     description: The issue number (binding field subject.number).
@@ -30,7 +34,8 @@ inputs:
     default: "opened"
     description: >-
       The event's action (binding field event.action): opened, edited,
-      reopened, or added for a label.
+      reopened, or added for a label. `retriage` is a pack run's pickup after it
+      recorded its own re-triage request on the work item.
   label:
     default: ""
     description: The label a label event added (binding field label.name).
@@ -106,22 +111,7 @@ nodes:
       path: "$facts.output.path"
       item: { from: "$facts.output.item" }
       decision: { from: "$facts.output.decision" }
-      contract: { from: "$triage.output.contract", if_skipped: null }
-      route: { from: "$triage.output.route", if_skipped: null }
-      pull_request: { from: "$triage.output.pull_request", if_skipped: null }
-      type: { from: "$triage.output.type", if_skipped: null }
-      size: { from: "$triage.output.size", if_skipped: null }
-      complexity: { from: "$triage.output.complexity", if_skipped: null }
-      importance: { from: "$triage.output.importance", if_skipped: null }
-      urgency: { from: "$triage.output.urgency", if_skipped: null }
-      labels: { from: "$triage.output.labels", if_skipped: null }
-      summary: { from: "$triage.output.summary", if_skipped: null }
-      report: { from: "$triage.output.report", if_skipped: null }
-      proposed_edits: { from: "$triage.output.proposed_edits", if_skipped: null }
-      blocked_reason: { from: "$triage.output.blocked_reason", if_skipped: null }
-      blocked_by: { from: "$triage.output.blocked_by", if_skipped: null }
-      closure: { from: "$triage.output.closure", if_skipped: null }
-      related: { from: "$triage.output.related", if_skipped: null }
+      triage: { from: "$triage.output", if_skipped: null }
     output_format:
       type: object
       properties:

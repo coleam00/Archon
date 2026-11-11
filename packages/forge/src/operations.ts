@@ -20,6 +20,9 @@ import {
   prViewSchema,
   workItemListRequestSchema,
   workItemListSchema,
+  workItemSearchItemSchema,
+  workItemSearchRequestSchema,
+  workItemSearchSchema,
   workItemViewRequestSchema,
   workItemViewSchema,
   workItemCommentsRequestSchema,
@@ -27,12 +30,22 @@ import {
   workItemCommentSchema,
   prMergeStateRequestSchema,
   prMergeStateSchema,
+  prFileSchema,
+  prFilesRequestSchema,
+  prFilesSchema,
+  repoFileRequestSchema,
+  repoFileSchema,
   type ForgeMutationRequest,
 } from './lifecycle';
 
 export * from './lifecycle';
 export * from './checks';
-import { rerunGroupSchema } from './checks';
+import {
+  checkLogSchema,
+  checksLogsRequestSchema,
+  checksLogsSchema,
+  rerunGroupSchema,
+} from './checks';
 
 export const checksStateSchema = z.enum(['none', 'pending', 'green', 'red', 'gated', 'unknown']);
 export type ChecksState = z.infer<typeof checksStateSchema>;
@@ -123,6 +136,13 @@ export const pluginMetadataSchema = pluginIdentitySchema.extend({
   token_env: z.array(z.string().min(1)).default([]),
 });
 export type PluginMetadata = z.infer<typeof pluginMetadataSchema>;
+/**
+ * The capability a plugin advertises when `resolve` with `web: true` reads the
+ * forge's web URL of an issue or a pull request. URL shapes belong to the forge, so a
+ * caller never parses one. An older plugin would answer for the repository alone, or
+ * not at all, so the host refuses the request without it.
+ */
+export const RESOLVE_SUBJECT = 'resolve:subject';
 export const resolveResultSchema = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('none'), forge: z.literal('none') }),
   z.object({
@@ -130,12 +150,19 @@ export const resolveResultSchema = z.discriminatedUnion('kind', [
     forge: z.string().min(1),
     repo: repoRefSchema,
     plugin: pluginIdentitySchema,
+    // The issue or pull request the URL names, in `repo`: only on a `web` request, and
+    // required there; the host refuses a resolved `web` answer without it.
+    subject: z
+      .object({ kind: z.enum(['issue', 'pr']), number: z.number().int().positive() })
+      .optional(),
   }),
 ]);
 export const resolveRequestSchema = z.object({
   operationId: z.string().min(1),
   op: z.literal('resolve'),
+  // A git remote URL, or with `web` the forge's web URL of an issue or a pull request.
   remote: z.string().nullable(),
+  web: z.literal(true).optional(),
 });
 export const checksRequestSchema = z.object({
   operationId: z.string().min(1),
@@ -155,6 +182,7 @@ export const forgeRequestSchema = z.discriminatedUnion('op', [
   resolveRequestSchema,
   checksRequestSchema,
   checksCommitRequestSchema,
+  checksLogsRequestSchema,
   ...lifecycleReadRequestSchemas,
   ...mutationRequestSchemas,
 ]);
@@ -187,6 +215,7 @@ export const forgeResponseSchema = z.discriminatedUnion('ok', [
       z.object({ op: z.literal('resolve'), value: resolveResultSchema }),
       z.object({ op: z.literal('checks.state'), value: checksObservationSchema }),
       z.object({ op: z.literal('checks.commit'), value: commitChecksObservationSchema }),
+      z.object({ op: checksLogsRequestSchema.shape.op, value: checksLogsSchema }),
       ...lifecycleReadResultSchemas,
       ...mutationResultSchemas,
     ]),
@@ -251,6 +280,36 @@ const auditResponseSchema = z.discriminatedUnion('ok', [
       z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
       z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
       z.object({
+        op: workItemSearchRequestSchema.shape.op,
+        value: workItemSearchSchema.omit({ text: true }).extend({
+          query: contentAuditSchema,
+          items: z.array(
+            workItemSearchItemSchema.omit({ title: true }).extend({ content: contentAuditSchema })
+          ),
+        }),
+      }),
+      z.object({
+        op: checksLogsRequestSchema.shape.op,
+        value: checksLogsSchema.extend({
+          log: z.discriminatedUnion('kind', [
+            checkLogSchema.options[0].omit({ text: true }).extend({ content: contentAuditSchema }),
+            checkLogSchema.options[1],
+          ]),
+        }),
+      }),
+      z.object({
+        op: prFilesRequestSchema.shape.op,
+        value: prFilesSchema.extend({
+          files: z.array(
+            prFileSchema.omit({ patch: true }).extend({ patch: contentAuditSchema.nullable() })
+          ),
+        }),
+      }),
+      z.object({
+        op: repoFileRequestSchema.shape.op,
+        value: repoFileSchema.omit({ text: true }).extend({ content: contentAuditSchema }),
+      }),
+      z.object({
         op: z.literal('pr.reviews'),
         value: prReviewsSchema.extend({
           items: z.array(
@@ -285,9 +344,36 @@ function bodyAudit(body: string): z.infer<typeof contentAuditSchema> {
   return { digest: contentDigest(body), bytes: Buffer.byteLength(body) };
 }
 
+type ForgeResult = Extract<ForgeResponse, { ok: true }>['result'];
+type ForgeAuditResult = Extract<ForgeAuditResponse, { ok: true }>['result'];
+
+/** A search's words and titles and a check's log are authored text: digests only. */
+function searchAudit(result: Extract<ForgeResult, { op: 'workitem.search' }>): ForgeAuditResult {
+  const { text, ...facts } = result.value;
+  return {
+    op: result.op,
+    value: {
+      ...facts,
+      query: bodyAudit(text),
+      items: facts.items.map(({ title, ...item }) => ({ ...item, content: bodyAudit(title) })),
+    },
+  };
+}
+function logAudit(result: Extract<ForgeResult, { op: 'checks.logs' }>): ForgeAuditResult {
+  const log = result.value.log;
+  if (log.kind === 'none') return { op: result.op, value: { ...result.value, log } };
+  const { text, ...facts } = log;
+  return {
+    op: result.op,
+    value: { ...result.value, log: { ...facts, content: bodyAudit(text) } },
+  };
+}
+
 export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse {
   if (!response.ok) return response;
   const result = response.result;
+  if (result.op === 'workitem.search') return { ...response, result: searchAudit(result) };
+  if (result.op === 'checks.logs') return { ...response, result: logAudit(result) };
   if (result.op === 'pr.reviews')
     return {
       ...response,
@@ -302,6 +388,27 @@ export function forgeAuditResponse(response: ForgeResponse): ForgeAuditResponse 
         },
       },
     };
+  if (result.op === 'pr.files')
+    return {
+      ...response,
+      result: {
+        op: result.op,
+        value: {
+          ...result.value,
+          files: result.value.files.map(({ patch, ...facts }) => ({
+            ...facts,
+            patch: patch === null ? null : bodyAudit(patch),
+          })),
+        },
+      },
+    };
+  if (result.op === 'repo.file') {
+    const { text, ...facts } = result.value;
+    return {
+      ...response,
+      result: { op: result.op, value: { ...facts, content: bodyAudit(text) } },
+    };
+  }
   if (result.op === 'workitem.comments')
     return {
       ...response,

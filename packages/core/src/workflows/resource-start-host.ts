@@ -41,6 +41,7 @@ import {
 } from '@archon/workflows/run-config';
 import {
   RESOURCE_START_METADATA_KEY,
+  readResourceStartReceiptId,
   ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
   type PreparedWorkflowLaunch,
   type ResourceStartBindingIntent,
@@ -384,9 +385,7 @@ export class ResourceStartDrainError extends AggregateError {
 }
 
 function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string | undefined {
-  const origin = launch?.run.metadata?.[RESOURCE_START_METADATA_KEY];
-  if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) return undefined;
-  return typeof origin.receiptId === 'string' ? origin.receiptId : undefined;
+  return readResourceStartReceiptId(launch?.run.metadata);
 }
 
 /**

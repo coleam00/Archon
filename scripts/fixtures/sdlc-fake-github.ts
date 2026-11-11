@@ -21,6 +21,9 @@ export interface FakePull {
   state: 'open' | 'closed';
   draft: boolean;
   merged: boolean;
+  created_at: string;
+  merged_at: string | null;
+  closed_at: string | null;
   maintainer_can_modify: boolean;
   head: { ref: string; sha: string; repo: { full_name: string } };
   base: { ref: string; sha: string };
@@ -206,6 +209,9 @@ function routePull(
       state: 'open',
       draft: body.draft === true,
       merged: false,
+      created_at: new Date().toISOString(),
+      merged_at: null,
+      closed_at: null,
       maintainer_can_modify: false,
       head: { ref: String(body.head), sha: state.headSha, repo: { full_name: 'example/repo' } },
       base: { ref: String(body.base), sha: 'basesha' },

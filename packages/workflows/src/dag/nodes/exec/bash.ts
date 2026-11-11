@@ -10,7 +10,7 @@ import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
 import { resolveBashPath } from '@archon/git';
 import type { ExecNode } from '../../../schemas';
-import { writeNodeArtifactsListing } from '../../../artifacts-index';
+import { writeInvocationListings } from '../../../invocation-listings';
 import { currentAdoptedRunDir, substituteWorkflowVariables } from '../../../workflow-variables';
 import { formatHostSpawnFailure, formatSubprocessFailure } from '../../../executor-shared';
 import { safeSendMessage, type SendMessageContext } from '../../../platform-messages';
@@ -64,9 +64,9 @@ export async function executeBashNode(
   await recordNodeState({ store: deps.store, logDir }, execution);
 
   // Fresh per call: executeBashNode runs once per retry attempt, so each attempt
-  // observes the artifacts published before IT. A materialization failure propagates
+  // observes the artifacts and node outcomes recorded before IT. A materialization failure propagates
   // to the retry/dispatch boundary as an explicit node provisioning error.
-  const typedArtifactsFile = await writeNodeArtifactsListing(artifactsDir, workflowRun.id);
+  const listings = await writeInvocationListings(ctx);
   const { prompt: finalScript } = substituteWorkflowVariables(
     node.script,
     workflowRun.id,
@@ -81,7 +81,7 @@ export async function executeBashNode(
     {
       shellSafe: true,
       stateDir,
-      typedArtifactsFile,
+      ...listings,
       references: nodeTemplateReferences(node.script, ctx, 'shell', { artifactsDir }),
     }
   );
@@ -100,7 +100,7 @@ export async function executeBashNode(
     rejectionReason: '',
     issueContext,
     adoptedRunDir: currentAdoptedRunDir(),
-    typedArtifactsFile,
+    ...listings,
     nodeExecution: execution,
   });
 

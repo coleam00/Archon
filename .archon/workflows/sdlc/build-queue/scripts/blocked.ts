@@ -2,7 +2,7 @@ import { dueBlocked } from '../../.shared/build.ts';
 import { emit, refuse, trimmed } from '../../.shared/io.ts';
 
 try {
-  const revisits = trimmed(process.env.INPUTS_NUMBER) === '' && trimmed(process.env.INPUTS_RETRIAGE_AS) !== '';
+  const revisits = trimmed(process.env.INPUTS_NUMBER) === '' && trimmed(process.env.INPUTS_REVISIT_BLOCKED) === 'true';
   const blocked = revisits ? dueBlocked(new Date().toISOString()) : [];
   emit({ blocked, blocked_count: blocked.length });
 } catch (error) {

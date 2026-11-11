@@ -178,6 +178,40 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
       )
     ).toEqual({ parsed: true, result: true });
   });
+
+  test("a loop_group body boundary gets the block's input substituted in its gate", () => {
+    // A block that gates an include on one of its own inputs: the caller binds the input
+    // to a node output. The loop body's copy of that gate kept `$INPUTS.route`, which
+    // cannot be evaluated, so every body node was skipped on the first iteration.
+    const leaf = wf('leaf', [
+      {
+        id: 'loop',
+        loop_group: {
+          until_bash: 'test 1 = 1',
+          max_iterations: 1,
+          nodes: [{ id: 'body', bash: 'echo body' }],
+        },
+      },
+    ]);
+    const middle = wf(
+      'middle',
+      [
+        { id: 'seed', bash: 'echo seed' },
+        { id: 'inner', include: 'leaf', depends_on: ['seed'], when: "$INPUTS.route == 'run'" },
+      ],
+      { inputs: { route: { required: true } } }
+    );
+    const top = wf('top', [
+      { id: 'pick', bash: 'echo run' },
+      { id: 'outer', include: 'middle', depends_on: ['pick'], with: { route: '$pick.output' } },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, top));
+    expect(errors).toHaveLength(0);
+    const loop = nodeById(workflows.get('top')!, 'outer__inner__loop');
+    const body = loopGroupNodes(loop)?.find(node => node.id === 'body');
+    expect(composedBoundaries(body)?.at(-1)?.when).toBe("$pick.output == 'run'");
+  });
 });
 
 describe('expandWorkflowIncludes — composed approval gates carry their origin (#1764)', () => {

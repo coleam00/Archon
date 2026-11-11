@@ -17,6 +17,9 @@ interface PullState {
   state: 'open' | 'closed';
   draft: boolean;
   merged?: boolean;
+  created_at: string;
+  merged_at: string | null;
+  closed_at: string | null;
   user?: { id: number; login: string } | null;
   head: { ref: string; sha: string; repo: { full_name: string } | null };
   base: { ref: string; sha: string };
@@ -31,6 +34,9 @@ export function pull(overrides: Partial<PullState> = {}): PullState {
     body: 'A body',
     state: 'open',
     draft: true,
+    created_at: '2026-11-01T09:00:00Z',
+    merged_at: null,
+    closed_at: null,
     head: { ref: 'feature', sha: 'headsha', repo: { full_name: 'archon/test' } },
     base: { ref: 'dev', sha: 'basesha' },
     ...overrides,

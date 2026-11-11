@@ -10,6 +10,8 @@ import {
 import { type LoopBodyScope } from '../dag/loop-scope';
 import { resolveIncludeOutputAliases } from '../compiled-command';
 import type { JsonValue } from '../output-ref';
+import type { NodeArtifactLoopFrame } from '../schemas/node-artifact';
+import type { RecordedTypedOutput } from '../typed-output-bindings';
 import { loadCommandPrompt } from '../load-command-prompt';
 import { substituteWorkflowVariables } from '../workflow-variables';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../node-model-resolution';
@@ -91,6 +93,14 @@ export interface DryRunContext
    * resolves against them, as in a real run (`RunLayersContext.loopBodyScopes`).
    */
   loopBodyScopes: readonly LoopBodyScope[];
+  /** The enclosing loop_group iterations, outermost first, as a real run records them. */
+  loopGroupPath: readonly NodeArtifactLoopFrame[];
+  /**
+   * Every typed output the simulation has produced, in order: what a real run records
+   * under `nodes/` and a typed-outputs binding reads. Held in memory because a dry run
+   * writes no artifacts.
+   */
+  typedOutputs: RecordedTypedOutput[];
   /**
    * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR` / `$LOG_DIR`, under a uniquely named root in
    * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
@@ -165,13 +175,14 @@ export function resolveText(
     undefined,
     undefined,
     loopPrevOutput,
-    // A dry run never writes typed artifacts, so it has no listing to point at. Pass
-    // an explicit empty value: the preview substitutes '' rather than throwing the way
-    // a real invocation that forgot to materialize a listing does.
+    // A dry run never writes typed artifacts or node state, so it has no listing to
+    // point at. Pass explicit empty values: the preview substitutes '' rather than
+    // throwing the way a real invocation that forgot to materialize a listing does.
     {
       shellSafe: surface !== 'prompt',
       stateDir: ctx.stateDir,
       typedArtifactsFile: '',
+      nodeOutcomesFile: '',
       ...(inputs ? { inputs } : {}),
       references: nodeTemplateReferences(
         text,

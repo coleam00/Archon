@@ -45,6 +45,7 @@ layout below. Existing projects keep their names and storage.
 │       │   ├── runs/<run-id>/      #   $ARTIFACTS_DIR for one run
 │       │   │   ├── .archon/        #     engine-owned bookkeeping, never listed as artifacts
 │       │   │   │   ├── node-output-spills/  # oversized shell handoffs (*.nodeoutput)
+│       │   │   │   ├── node-outcomes/       # node-outcome observation files
 │       │   │   │   ├── scratch/             # throwaway checkouts and installs; removed when the run ends
 │       │   │   │   └── typed-artifacts/     # typed-artifact observation files
 │       │   │   └── nodes/          #     typed output sidecars (<id>.md + <id>.meta.json)

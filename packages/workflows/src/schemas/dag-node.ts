@@ -15,7 +15,9 @@
  * nodes, and a module that imported `dagNodeSchema` back from here would make the
  * import order decide whether the mode table below can read it.
  */
+import { INPUTS_SCOPE } from '../reference-scopes';
 import { z } from 'zod';
+import { deprecatedFields } from './field-deprecation';
 import { agentDefinitionSchema } from '@archon/provider-contract';
 export { agentDefinitionSchema, type AgentDefinition } from '@archon/provider-contract';
 import { loopRetryConfigSchema, stepRetryConfigSchema } from './retry';
@@ -295,8 +297,12 @@ function validateDagNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
     addIssue(ctx, "missing required field 'id'", ['id']);
     return;
   }
-  if (id === 'INPUTS') {
-    addIssue(ctx, "node id 'INPUTS' is reserved for the $INPUTS.<name> parameter surface", ['id']);
+  if (id === INPUTS_SCOPE) {
+    addIssue(
+      ctx,
+      `node id '${INPUTS_SCOPE}' is reserved for the $${INPUTS_SCOPE}.<name> parameter surface`,
+      ['id']
+    );
   }
 
   const modes = selectedModes(data);
@@ -584,4 +590,9 @@ function rejectTopLevelLoopSettings(
       params: { nodeId: id },
     });
   }
+}
+
+/** Resolve after initialization: loop_group's body schema references dagNodeSchema. */
+export function nodeFieldDeprecations() {
+  return deprecatedFields(dagNodeFlatSchema);
 }

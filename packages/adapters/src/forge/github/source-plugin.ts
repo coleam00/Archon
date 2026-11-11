@@ -1,17 +1,9 @@
 import { createHash, randomUUID } from 'node:crypto';
-import { isAbsolute } from 'node:path';
-import { z } from '@hono/zod-openapi';
-import {
-  type ForgeEvent,
-  createForgeInputBindingSchema,
-  createForgeBindingSchema,
-  forgeEventSelectorSchema,
-  mapForgeInputs,
-  matchForgeEvent,
-} from '@archon/forge';
+import type { z } from '@hono/zod-openapi';
+import { type ForgeEvent, mapForgeInputs, matchForgeEvent } from '@archon/forge';
 import { normalizeGitHubWebhook } from './normalize-event';
 export { githubSourceCapabilities as capabilities } from './normalize-event';
-import { jsonValueSchema, type JsonValue } from '@archon/workflows/output-ref';
+import type { JsonValue } from '@archon/workflows/output-ref';
 import {
   resourceStartBindingIntentSchema,
   type ResourceStartBindingIntent,
@@ -21,54 +13,13 @@ import type {
   WebhookSourcePluginFactory,
   WebhookSourceResult,
 } from '@archon/workflows/webhook-source-plugin';
+import { githubSourceBindingSchema, githubWebhookSourceConfigSchema } from './source-config';
 import { verifyGitHubWebhookSignature } from './webhook-signature';
 
-const bindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true })
-  .extend({
-    selector: forgeEventSelectorSchema,
-    inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
-  });
-
-export const githubWebhookSourceConfigSchema = z
-  .object({
-    version: z.literal(1),
-    webhookSecretEnv: z.string().min(1),
-    host: z.literal('github.com'),
-    bindings: z.array(bindingSchema),
-  })
-  .strict()
-  .superRefine((config, context) => {
-    const seen = new Set<string>();
-    const mappingSchema = createForgeBindingSchema(jsonValueSchema);
-    for (const [index, binding] of config.bindings.entries()) {
-      if (seen.has(binding.bindingId))
-        context.addIssue({
-          code: 'custom',
-          path: ['bindings', index, 'bindingId'],
-          message: 'Duplicate binding ID',
-        });
-      seen.add(binding.bindingId);
-      const mapping = mappingSchema.safeParse({
-        selector: binding.selector,
-        inputs: binding.inputMapping,
-      });
-      if (!mapping.success)
-        for (const issue of mapping.error.issues)
-          context.addIssue({
-            code: 'custom',
-            path: ['bindings', index, ...issue.path],
-            message: issue.message,
-          });
-      if (!isAbsolute(binding.launch.cwd))
-        context.addIssue({
-          code: 'custom',
-          path: ['bindings', index, 'launch', 'cwd'],
-          message: 'Expected an absolute execution path',
-        });
-    }
-  });
-function evaluateBindings(configuredBindings: z.infer<typeof bindingSchema>[], event: ForgeEvent) {
+function evaluateBindings(
+  configuredBindings: z.infer<typeof githubSourceBindingSchema>[],
+  event: ForgeEvent
+) {
   const bindings: ResourceStartBindingIntent[] = [];
   const evaluatedBindings: NonNullable<
     Extract<WebhookSourceResult, { status: 'received' }>['acceptance']['evaluatedBindings']

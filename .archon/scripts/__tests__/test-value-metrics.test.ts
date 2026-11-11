@@ -7,10 +7,10 @@ import {
   type Case,
   type JudgeSlot,
   judgeSlots,
-  parseCases,
   scoreCalibration,
   testValueRecords,
 } from '../../workflows/sdlc/.shared/test-value';
+import { holdsTestCode } from '../../workflows/sdlc/metrics-test-value-judge/scripts/test-code';
 
 const PR_A = 'https://github.example.com/acme/widgets/pull/1';
 const PR_B = 'https://github.example.com/acme/widgets/pull/2';
@@ -95,36 +95,20 @@ describe('scoreCalibration', () => {
   });
 });
 
-describe('judge identity', () => {
-  it('is carried the same way by the metric and the agreement records', () => {
-    const identity = 'test-value-judge:abc';
-    const metric = testValueRecords(
-      [{ item: { url: PR_A, merged_at: '2026-10-05T12:00:00Z', runs: [RUN] }, slot: { ok: true, tests: [] } }],
-      identity
-    );
-    const scored = scoreCalibration(
-      [{ item: { pr: PR_A, tests: [{ file: FILE, name: 'a', protects: true }] }, slot: { ok: true, tests: [] } }],
-      identity
-    );
-    const instruments = [...metric.metrics, ...scored.metrics].flatMap(row => (row.instrument === undefined ? [] : [[row.instrument, row.instrument_node]]));
-    expect(instruments).toEqual([
-      [identity, 'judge'],
-      [identity, 'judge'],
-      [identity, 'judge'],
-    ]);
-  });
-});
-
-describe('parseCases', () => {
-  it('refuses a case that labels no tests', () => {
-    expect(() => parseCases([{ pr: PR_A, tests: [] }])).toThrow(PR_A);
+describe('holdsTestCode', () => {
+  it('reads a test suite defined outside test files, and not source or docs that only mention tests', () => {
+    const suite = "+      const listed = await listQueue(source);\n+      expect(listed).toEqual([]);";
+    expect(holdsTestCode('src/store-conformance/attention.ts', suite)).toBe(true);
+    expect(holdsTestCode('tools/check.py', '+def test_rejects_empty(tmp_path):')).toBe(true);
+    expect(holdsTestCode('pkg/store/conformance.go', '+func TestRoundTrip(t *testing.T) {')).toBe(true);
+    expect(holdsTestCode('src/widget.test.ts', '+const x = 1;')).toBe(true);
+    expect(holdsTestCode('src/keys.ts', '+  if (PLACEHOLDER.test(name)) return name;')).toBe(false);
+    expect(holdsTestCode('docs/testing.md', "+test('keeps order', () => {});")).toBe(false);
   });
 
-  it('refuses a case that labels two tests with one key', () => {
-    const tests = [
-      { file: FILE, name: 'widget > keeps %s', protects: true },
-      { file: FILE, name: 'widget > keeps ${kind}', protects: false },
-    ];
-    expect(() => parseCases([{ pr: PR_A, tests }])).toThrow(PR_A);
+  it('counts added and unchanged lines, not hunk headers or removed lines', () => {
+    expect(holdsTestCode('src/queue.ts', '@@ -1,3 +1,3 @@ export function test(x) {\n-  expect(x);\n+  return x;')).toBe(false);
+    expect(holdsTestCode('src/suite.ts', '       expect(\n-        listed(run)\n+        listed(run).values\n       ).toContain(run.id);')).toBe(true);
+    expect(holdsTestCode('src/queue.ts', null)).toBe(false);
   });
 });

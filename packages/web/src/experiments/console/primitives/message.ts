@@ -1,3 +1,8 @@
+import type { components } from '@/lib/api.generated';
+type RawMessage = Pick<
+  components['schemas']['Message'],
+  'id' | 'role' | 'content' | 'metadata' | 'created_at'
+>;
 /**
  * Conversation message primitive. Runs have both `workflow_events` (structured)
  * and chat `messages` (the AI's and user's text). The Run detail page merges
@@ -57,10 +62,10 @@ export interface WorkflowResultMeta {
 }
 
 export interface Message {
-  id: string;
+  id: RawMessage['id'];
   role: MessageRole;
-  content: string;
-  timestamp: string;
+  content: RawMessage['content'];
+  timestamp: RawMessage['created_at'];
   toolCalls: InlineToolCall[];
   error: InlineError | null;
   /** Framework category from metadata (e.g. workflow_dispatch_status, workflow_result). */
@@ -69,14 +74,6 @@ export interface Message {
   dispatch: WorkflowDispatchMeta | null;
   /** Parsed workflowResult payload — present on `workflow_result` messages. */
   workflowResult: WorkflowResultMeta | null;
-}
-
-interface RawMessage {
-  id: string;
-  role: string;
-  content: string;
-  metadata: string;
-  created_at: string;
 }
 
 interface ParsedMetadata {

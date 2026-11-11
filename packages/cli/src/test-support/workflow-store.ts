@@ -225,7 +225,7 @@ export function createInMemoryWorkflowStore(
     (...args) =>
       serialize(() => operation(...args));
   return {
-    ...createInMemoryStateDocumentStore(),
+    ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
     drainResourceStarts: admit(admission.drainResourceStarts.bind(admission)),
     hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),
@@ -364,7 +364,8 @@ export function createInMemoryWorkflowStore(
         };
       }),
     listWorkflowEvents: (id, options) => write(view => view.listWorkflowEvents(id, options)),
-    listEventsForRuns: (ids, types) => write(view => view.listEventsForRuns(ids, types)),
+    listEventsForRuns: (ids, types, options) =>
+      write(view => view.listEventsForRuns(ids, types, options)),
     listMetricRecords: () => write(view => view.listMetricRecords()),
     getDagResumeSnapshot: id => write(view => view.getDagResumeSnapshot(id)),
     listProviderEvents: (id, query) => write(view => view.listProviderEvents(id, query)),

@@ -1,4 +1,5 @@
 import { finishNodeExecution } from '../../../node-execution';
+import type { InvocationListings } from '../../../invocation-listings';
 import { type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeFailureKind } from '../../../schemas/node-execution';
 import { recordNodeState } from '../../../node-event-write';
@@ -45,7 +46,7 @@ export async function executeAgentNode(
   stepNamePrefix = '',
   iteration?: number,
   checkpointSession?: SessionCheckpoint,
-  typedArtifactsFile?: string,
+  listings?: InvocationListings,
   resumeIntent: SessionResumeIntent = 'ordinary',
   /** `$REJECTION_REASON` for an approval gate's rework prompt; undefined elsewhere. */
   rejectionReason?: string
@@ -125,7 +126,7 @@ export async function executeAgentNode(
   };
 
   const prompt = loadAgentPrompt(ctx, node, stepName, commandPrompt, {
-    typedArtifactsFile,
+    listings,
     rejectionReason,
   });
   if (!prompt.ok) {

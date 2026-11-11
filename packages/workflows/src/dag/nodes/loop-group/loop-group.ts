@@ -20,7 +20,7 @@ import {
   restoreLoopPrevOutputs,
   resumeTerminalWait,
 } from './resume';
-import { runLoopGroupIteration } from './iteration';
+import { completeLoopGroup, runLoopGroupIteration } from './iteration';
 
 /**
  * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
@@ -147,7 +147,10 @@ async function recordGroupResult(
       costPartial: result.costPartial,
       tokens: result.tokens,
       tokensUnknown: result.tokensUnknown,
-      diagnostics: { loopIterations: result.loopIterations },
+      diagnostics: {
+        loopIterations: result.loopIterations,
+        ...(result.maxIterations !== undefined ? { maxIterations: result.maxIterations } : {}),
+      },
     })
   );
 }
@@ -215,7 +218,16 @@ async function executeLoopGroupBody(
     if (result !== undefined) return result;
   }
 
-  // Max iterations exceeded.
+  // Max iterations exceeded. A bare approve past the cap resumes beyond iterationLimit
+  // and runs nothing.
+  const iterations = Math.max(iterationLimit, startIteration - 1);
+  if (group.on_exhausted === 'complete') {
+    getLog().info(
+      { nodeId: node.id, maxIterations: iterationLimit },
+      'loop_group_node.max_iterations_reached_completed'
+    );
+    return completeLoopGroup(run, state, iterations, iterationLimit);
+  }
   const errorMsg = `Loop-group node '${node.id}' exceeded max iterations (${String(iterationLimit)}) ${describeUnmetCompletion(group)}`;
   getLog().warn(
     { nodeId: node.id, maxIterations: iterationLimit, signal: group.until },
@@ -228,7 +240,7 @@ async function executeLoopGroupBody(
     error: errorMsg,
     failureKind: 'max_iterations',
     ...progress.usage,
-    // A bare approve past the cap resumes beyond iterationLimit and runs nothing.
-    loopIterations: Math.max(iterationLimit, startIteration - 1),
+    loopIterations: iterations,
+    maxIterations: iterationLimit,
   };
 }

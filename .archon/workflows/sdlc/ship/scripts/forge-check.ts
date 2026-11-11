@@ -1,12 +1,10 @@
-/** Refuses the run before any agent spends when its forge source cannot act; see `.shared/forge-check.ts`. */
+/** Refuses the run before any agent spends when the forge plugin cannot act; see `.shared/forge-check.ts`. */
 
 import { checkForgeAccess } from '../../.shared/forge-check.ts';
-import { emit, note, refuse } from '../../.shared/io.ts';
+import { refuse, report } from '../../.shared/io.ts';
 
 try {
-  const { source, detail } = await checkForgeAccess();
-  note(detail);
-  emit({ source });
+  report(await checkForgeAccess());
 } catch (error) {
   refuse(`forge-check: ${error instanceof Error ? error.message : String(error)}`);
 }

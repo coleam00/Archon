@@ -304,7 +304,7 @@ docker compose exec -u appuser -e HOME=/home/appuser app gh auth login
 - With `GH_TOKEN` set and GitHub App mode off, every start resets Git's `https://github.com` credential helper to one that uses `GH_TOKEN`. A helper written by `gh auth login` applies only without `GH_TOKEN`.
 - In [GitHub App mode](/adapters/github-app-setup/) (`GITHUB_APP_ID`, a private key and `WEBHOOK_SECRET` set, `GITHUB_TOKEN` unset), startup removes only the PAT helper that the entrypoint wrote earlier. An incomplete App configuration leaves it in place. Other helpers are yours and stay.
 - The entrypoint reads these variables from the container environment, not from `/.archon/.env`. Keep `GITHUB_APP_ID`, `GITHUB_APP_PRIVATE_KEY` or `GITHUB_APP_PRIVATE_KEY_PATH`, `WEBHOOK_SECRET`, `GITHUB_TOKEN` and `GH_TOKEN` in the compose `.env`. If they are only in `/.archon/.env`, the server runs in App mode while clones keep using the old PAT.
-- With `ARCHON_SDLC_FORGE=gh`, delete an empty `GH_TOKEN=` line. The SDLC workflows refuse an empty `GH_TOKEN` when `GITHUB_TOKEN` is unset, rather than let `gh` fall back to the stored login.
+- Delete an empty `GH_TOKEN=` line to use the container's `gh` login. The forge refuses an empty `GH_TOKEN` when `GITHUB_TOKEN` is unset, rather than fall back to the stored login.
 
 ## Plugins
 
@@ -317,7 +317,7 @@ docker compose exec -u appuser app bun run cli plugin add Wirasm/archon-video
 
 `plugin update`, `plugin remove` and `plugin list` work the same way. Plugins live in `/.archon/plugins` on the data volume, so they survive restarts and rebuilds. See [Forge operations](/reference/forge/#install-the-github-plugin) and [Installed workflow packs](/guides/global-workflows/#installed-workflow-packs).
 
-The bundled SDLC workflows use `gh` by default. To use the forge plugin instead, set `ARCHON_SDLC_FORGE=forge` and install forge-github v0.13.0 or later; some pack steps still need `gh`. The plugin looks for `GH_TOKEN`, then `GITHUB_TOKEN`, then the container's `gh` login. Your host's `gh` login is not visible inside the container. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
+The bundled SDLC workflows reach GitHub only through the forge plugin, so install the latest forge-github release. The merge queue needs its `resolve:subject` capability, which first ships in the release after v0.14.0. The plugin looks for `GH_TOKEN`, then `GITHUB_TOKEN`, then the container's `gh` login. Your host's `gh` login is not visible inside the container. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
 The image includes a verified Slack plugin outside the data volume. When `SLACK_BOT_TOKEN` is set, in the container environment or in `/.archon/.env`, the entrypoint installs it offline into `/.archon/plugins` before the server starts, and logs the release and commit. You don't run `plugin add` for Slack. Slack still needs both `SLACK_BOT_TOKEN` and `SLACK_APP_TOKEN` to connect; see [Slack](/adapters/slack/).
 

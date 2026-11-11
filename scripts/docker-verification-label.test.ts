@@ -8,20 +8,11 @@ test('Slack verification build uses the Docker cleanup ownership label', async (
   );
 });
 
-for (const path of [
-  '../.archon/workflows/sdlc/README.md',
-  '../packages/docs-web/src/content/docs/reference/variables.md',
-]) {
-  test(`${path} build command uses the Docker cleanup ownership label`, async () => {
-    const guide = await Bun.file(new URL(path, import.meta.url)).text();
-    expect(guide).toContain(`docker build --label "${VERIFICATION_IMAGE_RUN_LABEL}=$WORKFLOW_ID"`);
-  });
-}
-
-test('SDLC recovery command uses the Docker cleanup ownership label', async () => {
+test('the variables reference build and recovery commands use the Docker cleanup ownership label', async () => {
   const guide = await Bun.file(
-    new URL('../.archon/workflows/sdlc/README.md', import.meta.url)
+    new URL('../packages/docs-web/src/content/docs/reference/variables.md', import.meta.url)
   ).text();
+  expect(guide).toContain(`docker build --label "${VERIFICATION_IMAGE_RUN_LABEL}=$WORKFLOW_ID"`);
   expect(guide).toContain(
     `docker image ls --all --no-trunc --filter "label=${VERIFICATION_IMAGE_RUN_LABEL}=<run-id>"`
   );

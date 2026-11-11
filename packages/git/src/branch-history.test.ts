@@ -205,10 +205,18 @@ describe('git utilities', () => {
       ['returns false when any cherry line starts with +', '- abc123\n+ def456\n', false],
       ['returns true for empty cherry output', '', true],
     ] as const)('%s', async (_name, stdout, expected) => {
-      execSpy.mockResolvedValue(output(stdout));
+      execSpy.mockResolvedValueOnce(output(stdout)).mockResolvedValue(output(''));
       expect(
         await git.isPatchEquivalent(repo('/workspace/repo'), branch('feature'), branch('main'))
       ).toBe(expected);
+    });
+
+    test('propagates failure to inspect merge commits after cherry reports equivalence', async () => {
+      execSpy.mockResolvedValueOnce(output('- abc123\n'));
+      execSpy.mockRejectedValueOnce(new Error('merge history unavailable'));
+      await expect(
+        git.isPatchEquivalent(repo('/workspace/repo'), branch('feature'), branch('main'))
+      ).rejects.toThrow('merge history unavailable');
     });
 
     test('returns false on expected errors (not a git repo)', async () => {

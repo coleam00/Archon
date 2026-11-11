@@ -55,6 +55,38 @@ export async function runWorkflowTest({
   }
 }
 
+/** `workflow types`: generation reads workflow files only, so it runs before the gate. */
+export async function runWorkflowTypes({
+  positionals,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
+  const target = positionals[2];
+  if (target === undefined || positionals[3] !== undefined) {
+    return await fail(
+      json,
+      'Usage: archon workflow types <name|folder|path> [--out <file>] [--check] [--json]'
+    );
+  }
+  try {
+    const { workflowTypesCommand } = await loadRoute(() => import('../commands/workflow-types'));
+    return await workflowTypesCommand(cwd, target, {
+      json,
+      check: values.check as boolean | undefined,
+      out: values.out as string | undefined,
+    });
+  } catch (error) {
+    const err = error as Error;
+    if (json) {
+      await writeJsonLine({ ok: false, error: err.message });
+    } else {
+      console.error(`Error: ${err.message}`);
+    }
+    return 1;
+  }
+}
+
 /**
  * The checks and loading every gated workflow subcommand shares, unknown
  * subcommands included. Returns an exit code when a check refuses.
@@ -127,7 +159,10 @@ export async function runWorkflowGet(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   const getRunId = positionals[2];
   if (!getRunId || positionals[3] !== undefined) {
-    return await fail(json, 'Usage: archon workflow get <run-id> [--json] [--verbose] [--events]');
+    return await fail(
+      json,
+      'Usage: archon workflow get <run-id> [--json] [--verbose] [--events] [--throughput]'
+    );
   }
   // Propagate the command's exit code so `get <id> && ...` and CI
   // pipelines see a non-zero status when the run is missing.
@@ -137,7 +172,8 @@ export async function runWorkflowGet(route: WorkflowRoute): Promise<number> {
     json,
     values.verbose as boolean | undefined,
     effectiveCwd,
-    values.events as boolean | undefined
+    values.events as boolean | undefined,
+    values.throughput as boolean | undefined
   );
 }
 
@@ -224,6 +260,7 @@ export async function runWorkflowRuns(route: WorkflowRoute): Promise<number> {
     limit,
     open: values.open as boolean | undefined,
     verbose: values.verbose as boolean | undefined,
+    throughput: values.throughput as boolean | undefined,
   });
 }
 
@@ -505,6 +542,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, wake, signal`
   );
 }

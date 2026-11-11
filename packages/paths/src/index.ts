@@ -152,6 +152,7 @@ export type {
   WorkflowInvokedProperties,
   ArchonStartedProperties,
   ChatTurnProperties,
+  TelemetryUsageProperties,
   DeploymentShapeProperties,
   WorkflowTerminalProperties,
   WorkflowShapeProperties,

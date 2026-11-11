@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from 'bun:test';
 import type { components } from '@/lib/api.generated';
 import { detailFixture, terminalRecord } from '../primitives/run.test-fixtures';
 import { toRun } from '../primitives/run';
-import { getRun, listRuns, respondRun } from './runs';
+import { getRun, listRuns, respondRun, fetchArtifact, listRunsNeedingAttention } from './runs';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -131,5 +131,39 @@ describe('respondRun', () => {
       return Promise.resolve(Response.json({ success: true }));
     }) as typeof fetch;
     await respondRun('legacy-run', 'approve');
+  });
+});
+
+test('artifact bytes use a generated route with the complete encoded filename', async () => {
+  globalThis.fetch = ((input: RequestInfo | URL) => {
+    expect(input).toBe('/api/artifacts/run%2F1/nested%2Fa%20b%25.md');
+    return Promise.resolve(new Response('# artifact\n'));
+  }) as typeof fetch;
+  expect(await fetchArtifact('run/1', 'nested/a b%.md')).toBe('# artifact\n');
+});
+
+for (const [body, expected] of [
+  [JSON.stringify({ error: 'missing artifact' }), 'missing artifact'],
+  [JSON.stringify({ error: 42 }), 'Failed to fetch artifact: 404'],
+  ['<html>proxy</html>', 'Failed to fetch artifact: 404'],
+]) {
+  test(`artifact error handling: ${body}`, async () => {
+    globalThis.fetch = Object.assign(() => Promise.resolve(new Response(body, { status: 404 })), {
+      preconnect: originalFetch.preconnect,
+    });
+    await expect(fetchArtifact('run-1', 'a.md')).rejects.toThrow(expected);
+  });
+}
+
+test('attention list refuses a count response instead of claiming an empty queue', async () => {
+  respond({ counts: { by: 'project', counts: [] } });
+  await expect(listRunsNeedingAttention()).rejects.toThrow('counts instead of runs');
+});
+
+test('attention list normalizes run rows and an omitted degraded list', async () => {
+  respond({ runs: [detailFixture.run] });
+  expect(await listRunsNeedingAttention()).toEqual({
+    runs: [toRun(detailFixture.run)],
+    degraded: [],
   });
 });

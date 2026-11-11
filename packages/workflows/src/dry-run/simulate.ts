@@ -22,6 +22,8 @@ import { simulateLoop } from './nodes/loop';
 import { simulateLoopGroup } from './nodes/loop-group';
 import { simulateWait } from './nodes/wait';
 import { simulateChildRunNode } from './nodes/workflow';
+import { nodePackDir } from '../pack-dir';
+import { runWithPackDir } from '../workflow-variables';
 
 /** Whether the node runs at all; a node the trigger rule or its `when:` turns away is recorded here. */
 function isReached(
@@ -130,7 +132,9 @@ async function simulateNode(
     return;
   }
   try {
-    await simulateNodeKind(node, outputs, ctx, iteration, execution);
+    await runWithPackDir(await nodePackDir(ctx.sourceRoots, ctx.workflow.pack, node), async () =>
+      simulateNodeKind(node, outputs, ctx, iteration, execution)
+    );
   } catch (error) {
     recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
   }
@@ -190,6 +194,17 @@ async function simulateLayerNode(
   await simulateNode(node, outputs, ctx, iteration, execution);
   const result = outputs.get(node.id);
   if (result?.state === 'failed') ctx.interactionAdmission?.failed(node.id);
+  // The real run's rule (`writeTypedArtifacts`): a completed node that declares a type.
+  if (result?.state === 'completed' && node.output_type) {
+    ctx.typedOutputs.push({
+      nodeId: node.id,
+      outputType: node.output_type,
+      ...(ctx.loopGroupPath.length > 0 ? { loopGroupPath: [...ctx.loopGroupPath] } : {}),
+      producedAt: new Date().toISOString(),
+      source: `the simulated output of node '${node.id}'`,
+      text: result.output,
+    });
+  }
   if (execution !== undefined && result !== undefined && result.state !== 'skipped') {
     outputs.set(node.id, { ...result, execution });
   }

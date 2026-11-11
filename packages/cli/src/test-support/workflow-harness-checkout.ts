@@ -36,6 +36,9 @@ const {
 } = await import('@archon/isolation');
 export { realReleaseRunVerificationImages };
 mock.module('@archon/isolation', () => ({
+  getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
+    state: 'NONE',
+  })),
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
   dockerCli: mock(async () => ({ stdout: '', stderr: '' })),

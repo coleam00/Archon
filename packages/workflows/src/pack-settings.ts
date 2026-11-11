@@ -2,7 +2,8 @@
  * Pack settings: declared once by a pack, valued per project, resolved once per run.
  *
  *  - The DECLARATION is `<pack>/.pack/pack.yaml`, a top-level `inputs:` block in the
- *    workflow input-spec shape plus a `type`. It lives in a dot folder because neither
+ *    workflow input-spec shape plus a `type`. (The same file's `bindings:` block holds the
+ *    trigger bindings the pack recommends; see `schemas/pack-bindings.ts`.) It lives in a dot folder because neither
  *    workflow loader reads one at a pack root: the flat loader would parse a `.yaml` beside
  *    the workflow folders as a workflow of its own, and the packaged loader skips dot
  *    folders as it does `.shared/`. A source capture copies the pack tree whole, so a
@@ -22,18 +23,18 @@
 import { readFile } from 'fs/promises';
 import { join } from 'path';
 import { inputEnvKeyCollision } from './loader/workflow-fields';
+import { parsePackBindings } from './pack-bindings';
+import { PACK_DECLARATION_PATH } from './packaged-workflow';
 import type { JsonValue } from './output-ref';
 import { INPUT_NAME_PATTERN } from './schemas/node-bindings';
 import type { ResolvedWorkflow } from './schemas';
+import type { PackBinding } from './schemas/pack-bindings';
 import {
   packSettingSpecSchema,
   type PackSettingSpec,
   type WorkflowPack,
 } from './schemas/pack-settings';
 import { defaultRunInputs } from './workflow-inputs';
-
-/** The declaration's path inside a pack directory. */
-export const PACK_DECLARATION_PATH = join('.pack', 'pack.yaml');
 
 /** Every pack-settings failure a caller reports: it names the file and the key. */
 export class PackSettingsError extends Error {
@@ -83,7 +84,7 @@ export function packSettingValue(
 }
 
 /** Throws a {@link PackSettingsError} prefixed with the file it is about. */
-type Fail = (detail: string) => never;
+export type Fail = (detail: string) => never;
 
 function failIn(label: string): Fail {
   return detail => {
@@ -92,29 +93,34 @@ function failIn(label: string): Fail {
 }
 
 /**
- * The mapping under a file's one allowed top-level key, or undefined when the file or the
- * key is empty. Any other top-level key fails: an unknown key is a typo, not a no-op.
+ * The mapping under each of a file's allowed top-level keys; a key that is absent or empty
+ * is left out. Any other top-level key fails: an unknown key is a typo, not a no-op.
  */
-function singleKeyMapping(
+function topLevelMappings<K extends string>(
   text: string,
-  key: string,
+  keys: readonly K[],
   fail: Fail
-): Record<string, unknown> | undefined {
+): Partial<Record<K, Record<string, unknown>>> {
+  const allowed = keys.map(key => `'${key}:'`).join(' and ');
   let raw: unknown;
   try {
     raw = parseYamlText(text);
   } catch (error) {
     return fail(`not valid YAML: ${(error as Error).message}`);
   }
-  if (raw === null || raw === undefined) return undefined;
-  if (!isPlainObject(raw)) return fail(`must be a mapping with a '${key}:' key`);
-  const unknown = Object.keys(raw).find(k => k !== key);
+  if (raw === null || raw === undefined) return {};
+  if (!isPlainObject(raw)) return fail(`must be a mapping with ${allowed}`);
+  const unknown = Object.keys(raw).find(k => !keys.some(key => key === k));
   if (unknown !== undefined)
-    return fail(`unknown key '${unknown}'; this file holds only '${key}:'`);
-  const inner = raw[key];
-  if (inner === undefined || inner === null) return undefined;
-  if (!isPlainObject(inner)) return fail(`'${key}' must be a mapping`);
-  return inner;
+    return fail(`unknown key '${unknown}'; this file holds only ${allowed}`);
+  const mappings: Partial<Record<K, Record<string, unknown>>> = {};
+  for (const key of keys) {
+    const inner = raw[key];
+    if (inner === undefined || inner === null) continue;
+    if (!isPlainObject(inner)) return fail(`'${key}' must be a mapping`);
+    mappings[key] = inner;
+  }
+  return mappings;
 }
 
 /** One validated setting declaration; its default already checked against its type. */
@@ -142,27 +148,37 @@ function parseSettingSpec(name: string, rawSpec: unknown, fail: Fail): PackSetti
   return { ...spec, default: checked.value };
 }
 
+/** What a pack's `.pack/pack.yaml` declares; a key is absent when the pack declares none. */
+export interface PackDeclaration {
+  readonly settings?: Record<string, PackSettingSpec>;
+  readonly bindings?: Record<string, PackBinding>;
+}
+
 /**
- * Parse a pack declaration. Only a top-level `inputs:` map is accepted; each name follows
+ * Parse a pack declaration: a top-level `inputs:` map of settings and a top-level
+ * `bindings:` map of the trigger bindings the pack recommends. Each setting name follows
  * the input-name grammar, each spec the setting schema, and each default its own type.
  * Two names folding to one `INPUTS_*` key are refused here, where all are visible.
  *
  * @param label how errors name the file.
  * @throws PackSettingsError naming the file and the key.
  */
-export function parsePackDeclaration(
-  text: string,
-  label: string
-): Record<string, PackSettingSpec> | undefined {
+export function parsePackDeclaration(text: string, label: string): PackDeclaration {
   const fail = failIn(label);
-  const inputs = singleKeyMapping(text, 'inputs', fail);
-  if (inputs === undefined) return undefined;
+  const declared = topLevelMappings(text, ['inputs', 'bindings'], fail);
   const settings = Object.fromEntries(
-    Object.entries(inputs).map(([name, rawSpec]) => [name, parseSettingSpec(name, rawSpec, fail)])
+    Object.entries(declared.inputs ?? {}).map(([name, rawSpec]) => [
+      name,
+      parseSettingSpec(name, rawSpec, fail),
+    ])
   );
   const collision = inputEnvKeyCollision(Object.keys(settings));
   if (collision !== null) fail(collision);
-  return Object.keys(settings).length > 0 ? settings : undefined;
+  const bindings = parsePackBindings(declared.bindings ?? {}, fail);
+  return {
+    ...(Object.keys(settings).length > 0 ? { settings } : {}),
+    ...(Object.keys(bindings).length > 0 ? { bindings } : {}),
+  };
 }
 
 /**
@@ -174,10 +190,10 @@ export function parsePackDeclaration(
 export async function loadPackDeclaration(
   packPath: string,
   label: string
-): Promise<Record<string, PackSettingSpec> | undefined> {
-  const fileLabel = `${label}/${PACK_DECLARATION_PATH.replaceAll('\\', '/')}`;
+): Promise<PackDeclaration> {
+  const fileLabel = `${label}/${PACK_DECLARATION_PATH}`;
   const text = await readOptionalFile(join(packPath, PACK_DECLARATION_PATH), failIn(fileLabel));
-  return text === undefined ? undefined : parsePackDeclaration(text, fileLabel);
+  return text === undefined ? {} : parsePackDeclaration(text, fileLabel);
 }
 
 /** A file's text, or undefined when it does not exist. */
@@ -225,7 +241,8 @@ async function readProjectValues(
   const path = projectPackSettingsPath(cwd, packKey);
   const fail = failIn(path);
   const text = await readOptionalFile(path, fail);
-  const settings = text === undefined ? undefined : singleKeyMapping(text, 'settings', fail);
+  const settings =
+    text === undefined ? undefined : topLevelMappings(text, ['settings'], fail).settings;
   const known = Object.keys(declared).sort();
   const declaredList = known.length > 0 ? known.map(n => `'${n}'`).join(', ') : 'no settings';
   const values: Record<string, string> = {};

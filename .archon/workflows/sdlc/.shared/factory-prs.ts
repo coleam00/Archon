@@ -12,19 +12,16 @@
  * per name and subject, so a re-run replaces rather than adds.
  */
 
-import { type QualifiedPr, record } from './forge.ts';
+import { BUILD_BRANCH_PREFIX } from './build.ts';
+import { invokeForge, parsePrRecord, record, sameRepo } from './forge.ts';
+import { resolvePrUrl } from './pr.ts';
 import { note } from './io.ts';
-import { prFromUrl } from './merge.ts';
-import { isQueueBuilt } from './own-prs.ts';
-import { ghGraphql } from './pr.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */
-const MAX_RUNS = 20;
-/** Pull requests read per GraphQL request. */
-const BATCH = 50;
+export const MAX_RUNS = 20;
 
-/** One pull request's facts as GitHub reports them. */
+/** One pull request's facts as the forge's `pr.view` reports them. */
 export interface PrFacts {
   readonly url: string;
   readonly state: 'OPEN' | 'CLOSED' | 'MERGED';
@@ -67,65 +64,63 @@ export function factoryPrRuns(items: readonly WorkItem[]): Map<string, string[]>
   return runs;
 }
 
-const PR_SELECTION = 'url state createdAt mergedAt closedAt headRefName isCrossRepository';
-const STATES = ['OPEN', 'CLOSED', 'MERGED'] as const;
-
-function prFacts(url: string, value: unknown): PrFacts {
-  const row = record(value);
-  const state = STATES.find(known => known === row?.state);
-  const time = (field: string): string | null => (typeof row?.[field] === 'string' ? (row[field] as string) : null);
-  const createdAt = time('createdAt');
-  if (
-    state === undefined ||
-    createdAt === null ||
-    typeof row?.headRefName !== 'string' ||
-    typeof row.isCrossRepository !== 'boolean'
-  ) {
-    throw new Error(`GitHub reported no readable pull request for ${url}`);
+/**
+ * The facts of the pull request at `url` from its `pr.view` answer. `timestamps` is
+ * optional in the forge contract because a plugin that predates it omits it, so a
+ * view without it refuses rather than counting the pull request with no times.
+ */
+export function prFacts(url: string, view: Record<string, unknown> | null): PrFacts {
+  if (view === null) throw new Error(`forge pr.view reported no pull request for ${url}`);
+  const pr = parsePrRecord(view.pr);
+  const times = record(view.timestamps);
+  if (times === undefined) {
+    throw new Error(
+      `forge pr.view reported no timestamps for ${url}; PR metrics need a forge plugin whose pr.view reports them`
+    );
   }
+  const time = (field: string): string | null => (typeof times[field] === 'string' ? (times[field] as string) : null);
+  const createdAt = time('created_at');
+  if (createdAt === null) throw new Error(`forge pr.view reported no creation time for ${url}`);
   return {
     url,
-    state,
+    state: pr.state === 'open' ? 'OPEN' : pr.state === 'merged' ? 'MERGED' : 'CLOSED',
     createdAt,
-    mergedAt: time('mergedAt'),
-    closedAt: time('closedAt'),
-    headRefName: row.headRefName,
-    isCrossRepository: row.isCrossRepository,
+    mergedAt: time('merged_at'),
+    closedAt: time('closed_at'),
+    headRefName: pr.head,
+    isCrossRepository: pr.head_repo === null || !sameRepo(pr.head_repo, pr.repo),
   };
 }
 
 /**
- * Read each pull request by number, in batches per repository, so no list limit can drop
- * an old one. A recorded URL that is not a pull request URL is noted and left out.
+ * Read each pull request by number, so no list limit can drop an old one. A recorded
+ * URL the forge says is not a pull request URL is noted and left out; a forge that
+ * cannot resolve one fails the read, so the cohort is never silently short.
  */
 export function readPrFacts(urls: Iterable<string>): PrFacts[] {
-  const byRepo = new Map<string, { host: string; owner: string; name: string; prs: { url: string; number: number }[] }>();
+  const facts: PrFacts[] = [];
   for (const url of urls) {
-    let parsed: QualifiedPr;
-    try {
-      parsed = prFromUrl(url);
-    } catch (error) {
-      note(`PR metrics skip a round's URL: ${error instanceof Error ? error.message : String(error)}`);
+    const ref = resolvePrUrl(url);
+    if (ref === undefined) {
+      note(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
       continue;
     }
-    const [owner = '', name = ''] = parsed.repo.path.split('/');
-    const key = `${parsed.repo.host}/${parsed.repo.path}`.toLowerCase();
-    const repo = byRepo.get(key) ?? { host: parsed.repo.host, owner, name, prs: [] };
-    repo.prs.push({ url, number: parsed.number });
-    byRepo.set(key, repo);
-  }
-  const facts: PrFacts[] = [];
-  for (const repo of byRepo.values()) {
-    for (let start = 0; start < repo.prs.length; start += BATCH) {
-      const batch = repo.prs.slice(start, start + BATCH);
-      const aliases = batch.map((pr, index) => `p${String(index)}: pullRequest(number: ${String(pr.number)}) { ${PR_SELECTION} }`);
-      const query = `query($owner: String!, $name: String!) { repository(owner: $owner, name: $name) { ${aliases.join(' ')} } }`;
-      const repository = record(ghGraphql(repo.host, query, { owner: repo.owner, name: repo.name }).repository);
-      if (repository === undefined) throw new Error(`GitHub reported no repository ${repo.owner}/${repo.name}`);
-      batch.forEach((pr, index) => facts.push(prFacts(pr.url, repository[`p${String(index)}`])));
-    }
+    facts.push(prFacts(url, invokeForge('pr.view', { selector: { kind: 'number', ref } })));
   }
   return facts;
+}
+
+/** The time a window bound such as `since` names: an ISO date or time, or `<n>d` back from now. */
+export function sinceTime(since: string): number {
+  const days = /^(\d+)d$/.exec(since)?.[1];
+  const from = days === undefined ? Date.parse(since) : Date.now() - Number(days) * 86_400_000;
+  if (Number.isNaN(from)) throw new Error(`a window bound must be an ISO date or time, or a number of days such as 7d; received ${JSON.stringify(since)}`);
+  return from;
+}
+
+/** A pull request from a round's branch: a `build/` branch in the repository itself. */
+function isQueueBuilt(pr: PrFacts): boolean {
+  return !pr.isCrossRepository && pr.headRefName.startsWith(BUILD_BRANCH_PREFIX);
 }
 
 /** The pull requests the queue opened, and the URLs of the ones a round only continued. */
@@ -152,7 +147,7 @@ function outcomes(pr: PrFacts): Outcome[] {
   if (pr.state === 'OPEN') return [opened, count('sdlc.prs_abandoned', 0, pr.createdAt)];
   const merged = pr.state === 'MERGED';
   const resolved = merged ? pr.mergedAt : pr.closedAt;
-  if (resolved === null) throw new Error(`GitHub reported ${pr.url} ${pr.state.toLowerCase()} without a time`);
+  if (resolved === null) throw new Error(`the forge reported ${pr.url} ${pr.state.toLowerCase()} without a time`);
   const rate: Outcome = { name: 'sdlc.pr_merge_rate', kind: 'score', unit: 'ratio', value: merged ? 1 : 0, at: resolved };
   return merged
     ? [opened, count('sdlc.prs_merged', 1, resolved), count('sdlc.prs_abandoned', 0, resolved), rate]

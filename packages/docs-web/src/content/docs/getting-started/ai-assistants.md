@@ -156,7 +156,7 @@ In workflow nodes Archon turns Codex's automatic skill catalog off, so a prompt 
 ```yaml
 assistants:
   codex:
-    model: gpt-5.6-sol
+    model: gpt-6.1-sol
     modelReasoningEffort: medium  # minimal, low, medium, high, xhigh, max, ultra or persistent
     webSearchMode: live           # disabled, cached or live
     additionalDirectories:

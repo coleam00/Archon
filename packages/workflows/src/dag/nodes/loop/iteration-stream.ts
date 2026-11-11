@@ -19,7 +19,7 @@ import { createWatchdogResetRecorder, type WatchdogResetRecorder } from '../../.
 import { withIdleTimeout, STEP_IDLE_TIMEOUT_MS } from '../../../utils/idle-timeout';
 import { isEndTurnRequested } from '../../../end-turn-request';
 import { substituteWorkflowVariables } from '../../../workflow-variables';
-import { writeNodeArtifactsListing } from '../../../artifacts-index';
+import { writeInvocationListings, type InvocationListings } from '../../../invocation-listings';
 import { stripCompletionTags } from '../../../executor-shared';
 import { safeSendMessage } from '../../../platform-messages';
 import { withStaleResumeRetry } from '../../../stale-resume';
@@ -194,18 +194,13 @@ async function runReaskAttempts(
   });
 
   while (true) {
-    const typedArtifactsFile = await writeNodeArtifactsListing(
-      run.ctx.artifactsDir,
-      run.ctx.workflowRun.id
-    );
-    const attempt = await streamIterationAttempt(
-      run,
-      state,
-      i,
-      iterationStart,
-      typedArtifactsFile,
-      { reask, thread, retry, resumeSessionId: iteration.resumeSessionId }
-    );
+    const listings = await writeInvocationListings(run.ctx);
+    const attempt = await streamIterationAttempt(run, state, i, iterationStart, listings, {
+      reask,
+      thread,
+      retry,
+      resumeSessionId: iteration.resumeSessionId,
+    });
     if (attempt.kind !== 'streamed') return attempt;
     const streamFailure = await failedStream(run, state, i, attempt, {
       wantsStructured,
@@ -289,7 +284,7 @@ async function streamIterationAttempt(
   state: LoopState,
   i: number,
   iterationStart: number,
-  typedArtifactsFile: string,
+  listings: InvocationListings,
   position: AttemptPosition
 ): Promise<StreamedAttempt | AttemptVerdict> {
   const { ctx, node } = run;
@@ -309,7 +304,7 @@ async function streamIterationAttempt(
   );
 
   try {
-    await consumeIterationStream(run, state, i, typedArtifactsFile, {
+    await consumeIterationStream(run, state, i, listings, {
       attempt,
       usage,
       watchdogResets,
@@ -398,7 +393,7 @@ function attemptPrompt(
   run: LoopRun,
   state: LoopState,
   i: number,
-  typedArtifactsFile: string,
+  listings: InvocationListings,
   reask: Reask
 ): string {
   const { ctx } = run;
@@ -421,7 +416,7 @@ function attemptPrompt(
     {
       stateDir: ctx.stateDir,
       inputs: resolveRunInputs(ctx.workflowRun),
-      typedArtifactsFile,
+      ...listings,
       references: nodeTemplateReferences(run.promptTemplate, ctx),
     }
   );
@@ -436,13 +431,13 @@ async function consumeIterationStream(
   run: LoopRun,
   state: LoopState,
   i: number,
-  typedArtifactsFile: string,
+  listings: InvocationListings,
   scope: StreamScope
 ): Promise<void> {
   const { ctx, node, capabilities } = run;
   const { attempt, watchdogResets } = scope;
   const { providerEvents } = attempt;
-  const finalPrompt = attemptPrompt(run, state, i, typedArtifactsFile, scope.position.reask);
+  const finalPrompt = attemptPrompt(run, state, i, listings, scope.position.reask);
   const pass = structuredOutputPass(
     scope.position.reask.attempt,
     scope.position.resumeSessionId,

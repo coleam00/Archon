@@ -2,8 +2,8 @@ import { readdir, access } from 'fs/promises';
 import { basename, join } from 'path';
 import * as archonPaths from '@archon/paths';
 import type { WorkflowLoadError } from '../schemas';
-import type { WorkflowPack } from '../schemas/pack-settings';
 import {
+  BUNDLED_SCRIPT_PACKS,
   BUNDLED_WORKFLOWS,
   BUNDLED_WORKFLOW_OWNERS,
   BUNDLED_WORKFLOW_PATHS,
@@ -11,11 +11,11 @@ import {
   type BundledWorkflowOwner,
 } from '../defaults/bundled-defaults';
 import { collectInstalledBundleSources, readBundleContent } from '../defaults/bundle-inventory';
-import { parseWorkflow } from '../loader';
-import { qualifyWorkflowResources } from '../packaged-workflow';
+import { parseWorkflow, type ParseResult } from '../loader';
+import { PACK_DECLARATION_PATH, qualifyWorkflowResources } from '../packaged-workflow';
+import { PackSettingsError, parsePackDeclaration, type PackDeclaration } from '../pack-settings';
 import type { DiscoveryContext } from './context';
 import {
-  isYamlFile,
   loadPackagedWorkflowsFromDir,
   loadScopeDirectory,
   loadWorkflowsFromDir,
@@ -25,6 +25,7 @@ import {
   type ScopeFile,
   type WorkflowParseContext,
 } from './load-dir';
+import { isYamlFile } from './pack-layout';
 import { getLog } from './log';
 
 /** Workflows by filename; a higher scope's file replaces a lower scope's of the same name. */
@@ -93,11 +94,37 @@ export async function loadBundledScope(
 }
 
 /**
- * A bundled workflow's pack. The bundle ships no settings declarations yet, so a bundled
- * pack has a key and no settings: its project settings file may set nothing.
+ * Parse one bundled workflow. A packaged one gets its pack, with the settings that
+ * `declaration` (the pack's `.pack/pack.yaml` text, undefined when it ships none) declares.
+ * An invalid declaration fails every workflow of the pack, as it does for a pack folder.
  */
-function bundledPack(owner: BundledWorkflowOwner | undefined): WorkflowPack | undefined {
-  return owner === undefined ? undefined : { key: owner.pack };
+function parseBundledWorkflow(
+  context: WorkflowParseContext,
+  content: string,
+  filename: string,
+  owner: BundledWorkflowOwner | undefined,
+  declaration: string | undefined
+): ParseResult {
+  const { providers, configuredEnvNames } = context;
+  if (owner === undefined) return parseWorkflow(content, filename, providers, configuredEnvNames);
+  let declared: PackDeclaration;
+  try {
+    declared =
+      declaration === undefined
+        ? {}
+        : parsePackDeclaration(declaration, `${owner.pack}/${PACK_DECLARATION_PATH}`);
+  } catch (error) {
+    if (!(error instanceof PackSettingsError)) throw error;
+    return {
+      workflow: null,
+      error: { filename, error: error.message, errorType: 'validation_error' },
+    };
+  }
+  return parseWorkflow(content, filename, providers, configuredEnvNames, {
+    key: owner.pack,
+    source: 'bundled',
+    ...declared,
+  });
 }
 
 /**
@@ -115,13 +142,11 @@ function loadEmbeddedWorkflows(context: WorkflowParseContext): DirLoadResult {
     if (path === undefined) throw new Error(`Bundled workflow "${name}" has no source path.`);
     const filename = basename(path);
     const owner = BUNDLED_WORKFLOW_OWNERS[name];
-    const result = parseWorkflow(
-      content,
-      filename,
-      context.providers,
-      context.configuredEnvNames,
-      bundledPack(owner)
-    );
+    const declaration =
+      owner === undefined
+        ? undefined
+        : BUNDLED_SCRIPT_PACKS[owner.pack]?.files[PACK_DECLARATION_PATH];
+    const result = parseBundledWorkflow(context, content, filename, owner, declaration);
     if (!result.workflow) {
       // Bundled workflows should ALWAYS be valid - this indicates a build-time error
       getLog().error({ filename }, 'bundled_workflow_parse_failed');
@@ -145,15 +170,21 @@ async function loadLiveBundle(
 ): Promise<DirLoadResult> {
   const result: DirLoadResult = { workflows: new Map(), errors: [] };
   const sources = (await collectInstalledBundleSources(appWorkflowsPath)) ?? [];
+  const declarations = new Map<string, string>();
+  for (const file of sources) {
+    if (file.kind === 'pack-file' && file.packPath === PACK_DECLARATION_PATH) {
+      declarations.set(file.pack, await readBundleContent(file));
+    }
+  }
   for (const file of sources) {
     if (file.kind !== 'workflow') continue;
     const filename = basename(file.sourcePath);
-    const parsed = parseWorkflow(
+    const parsed = parseBundledWorkflow(
+      context,
       await readBundleContent(file),
       filename,
-      context.providers,
-      context.configuredEnvNames,
-      bundledPack(file.owner)
+      file.owner,
+      declarations.get(file.owner.pack)
     );
     if (!parsed.workflow) {
       result.errors.push(parsed.error);

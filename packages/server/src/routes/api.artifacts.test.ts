@@ -353,6 +353,56 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
     }
   });
 
+  test('publishes the encoded filename contract without replacing wildcard serving', async () => {
+    const { app } = makeApp();
+    const document = app.getOpenAPIDocument({
+      openapi: '3.0.0',
+      info: { title: 'Artifacts', version: '1' },
+    });
+    const operation = document.paths?.['/api/artifacts/{runId}/{filename}']?.get;
+    expect(operation).toBeDefined();
+    expect(operation?.parameters).toEqual([
+      expect.objectContaining({ in: 'path', name: 'runId', required: true }),
+      expect.objectContaining({ in: 'path', name: 'filename', required: true }),
+    ]);
+    expect(operation?.responses['200']).toEqual({
+      description: 'Artifact file contents',
+      content: {
+        'text/plain': { schema: { type: 'string' } },
+        'text/markdown': { schema: { type: 'string' } },
+      },
+    });
+    for (const status of ['400', '404', '500']) {
+      expect(operation?.responses[status]).toEqual(
+        expect.objectContaining({
+          content: expect.objectContaining({ 'application/json': expect.anything() }),
+        })
+      );
+    }
+  });
+
+  test.each(['review/a report 100%.md', 'review/nested/result.txt'])(
+    'serves a complete encoded relative filename: %s',
+    async filename => {
+      const runId = 'run-encoded-content';
+      const root = join(wsRoot(), '_local', 'workspace');
+      const dir = join(root, 'artifacts', 'runs', runId);
+      const target = join(dir, filename);
+      await mkdir(join(target, '..'), { recursive: true });
+      await writeFile(target, 'encoded content café');
+      mockGetWorkflowRun.mockResolvedValueOnce({
+        ...MOCK_RUNNING_RUN,
+        id: runId,
+        codebase_id: null,
+        output_root: root,
+      });
+      const { app } = makeApp();
+      const response = await app.request(`/api/artifacts/${runId}/${encodeURIComponent(filename)}`);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toBe('encoded content café');
+    }
+  );
+
   test('returns 404 when there is no codebase and no output_root to resolve from', async () => {
     mockGetWorkflowRun.mockImplementationOnce(async () => ({
       ...MOCK_RUNNING_RUN,

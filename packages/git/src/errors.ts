@@ -1,4 +1,6 @@
 export type GitFailureKind =
+  | 'coverage_fetch'
+  | 'coverage_ancestry'
   | 'timeout'
   | 'unclassified'
   | 'not_repository'

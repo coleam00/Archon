@@ -180,8 +180,10 @@ Completion channels — declare at least one, pick by tier:
 
 Also: `fresh_context: true` (each iteration starts clean) and `$LOOP_PREV_OUTPUT`
 for previous-iteration state.
-A failed iteration fails the loop at `max_iterations` — bound exhaustion fails
-truthfully rather than blessing a bad last attempt.
+Reaching `max_iterations` unmet fails the loop by default, rather than blessing a bad
+last attempt. Set `on_exhausted: complete` (on `loop:` or `loop_group:`) when running out is a normal ending: the
+node then completes with the last iteration's output, and downstream tells exhaustion
+apart by the loop's own completion field.
 
 ### loop_group — repeat a sub-DAG
 
@@ -312,14 +314,17 @@ and `payload`.
     attention: "$plan.output.question"
     form: select              # message (default) | approval | select | multi_select
     options:                  # select and multi_select only; or one whole "$plan.output.options"
-      - { id: use-main, label: "Base on main" }
+      - { id: use-main, label: "Base on main", does: "Rebases onto main.", value: { base: main } }
       - { id: use-dev }
+    recommendation: { option: use-main, why: "Main has the fix.", confidence: high }  # select and approval
     labels:                   # optional; plain strings, runtime refs resolved at pause
       about: "$plan.output.topic"
 ```
 
-The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`
-and `select`, `{decisions, text}` for `multi_select`. In the `approval` form `reject` is
+The next node reads the answer: `{text}` for `message`, `{decision, text}` for `approval`,
+`{decision, text, value?}` for `select` (the chosen option's `value`, read whole), and
+`{decisions, text}` for `multi_select`. `does` and the recommendation are shown to whoever
+answers; `value` is not shown but is returned in JSON output, so keep secrets out of it. In the `approval` form `reject` is
 an answer and never cancels the run; branch on `$ask.output.decision` with `when:`:
 
 ```yaml
@@ -359,7 +364,11 @@ concurrently.
 - `with:` bindings (#2637) — prompt/command files read bound values as
   `$INPUTS.<name>`; bash/script processes receive `INPUTS_<UPPER_SNAKE>` env vars.
   `{from, if_skipped}` discriminates skipped producers from ran ones; a failed
-  producer fails the binding
+  producer fails the binding. On a script node, `{outputs: <output_type>}` binds the
+  JSON array of every output of that type the run recorded (`{node, loop, at, value}`,
+  oldest first), across loop iterations and includes; every producer must be upstream,
+  the type must be declared by some node, and an unreadable record fails the node unless
+  the binding adds `if_unreadable: <value>`
 - `$INPUTS.<name>` — declared workflow inputs, also delivered as
   `INPUTS_<UPPER_SNAKE>` to bash/script
 - `$ARTIFACTS_DIR` — pre-created directory for reports/evidence humans read.

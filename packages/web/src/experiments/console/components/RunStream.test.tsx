@@ -151,7 +151,7 @@ describe('RunStream tool rendering', () => {
 
   const render = (
     providerEvents: RunProviderEvents,
-    selectedNodeId = 'all',
+    selectedNodeId: string | null = null,
     showToolCalls = true
   ): string =>
     renderToStaticMarkup(
@@ -402,7 +402,7 @@ describe('RunStream tool rendering', () => {
             providerEvents={lostUpdate}
             showToolCalls
             showSystem={false}
-            selectedNodeId="all"
+            selectedNodeId={null}
           />
         </StreamContextProvider>
       );
@@ -430,7 +430,7 @@ describe('RunStream tool rendering', () => {
           providerEvents={new Map()}
           showToolCalls={false}
           showSystem={false}
-          selectedNodeId="all"
+          selectedNodeId={null}
         />
       </StreamContextProvider>
     );
@@ -465,7 +465,7 @@ test('RunStream renders the diagnostic message of an error event', () => {
         providerEvents={new Map()}
         showToolCalls={false}
         showSystem
-        selectedNodeId="all"
+        selectedNodeId={null}
       />
     </StreamContextProvider>
   );
@@ -496,7 +496,7 @@ describe('RunStream cleanup warnings', () => {
           providerEvents={new Map()}
           showToolCalls={false}
           showSystem={showSystem}
-          selectedNodeId="all"
+          selectedNodeId={null}
         />
       </StreamContextProvider>
     );
@@ -540,7 +540,7 @@ test.each(
           providerEvents={new Map()}
           showToolCalls={false}
           showSystem={false}
-          selectedNodeId="all"
+          selectedNodeId={null}
         />
       </StreamContextProvider>
     );

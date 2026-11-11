@@ -374,12 +374,17 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
   if (command === 'continue') return await routes.runRemovedContinue(ctx);
   if (command === 'provider') return await routes.runProvider(ctx);
   if (command === 'plugin') return await routes.runPlugin(ctx);
+  // Reads the pack from --cwd as discovery finds it; the checkout need not be registered.
+  if (command === 'pack') return await routes.runPack(ctx);
   // Note: orphaned run cleanup moved to `workflow cleanup` command only.
   // Running it on every CLI startup killed parallel workflow runs (all
   // 'running' status rows were marked failed by each new process).
 
   if (command === 'workflow' && subcommand === 'test') {
     return await workflowRoutes.runWorkflowTest(ctx);
+  }
+  if (command === 'workflow' && subcommand === 'types') {
+    return await workflowRoutes.runWorkflowTypes(ctx);
   }
 
   const effectiveCwd = await resolveEffectiveCwd(ctx);

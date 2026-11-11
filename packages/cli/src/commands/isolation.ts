@@ -32,7 +32,7 @@ import { getCleanupRunLock, getLiveRunBlocker } from '@archon/core/services/clea
 import {
   listEnvironments,
   cleanupMergedEnvironments,
-  type MergedCleanupResult,
+  type CleanupOperationResult,
 } from '@archon/core/operations/isolation-operations';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -261,9 +261,7 @@ export async function isolationCleanupCommand(daysStale = 7): Promise<0 | 1> {
   return counts.failed > 0 || containerReport.errors.length > 0 ? 1 : 0;
 }
 
-function printMergedCleanupResult(result: MergedCleanupResult): void {
-  console.log(`  Base: ${result.baseRef}`);
-
+function printCleanupOperationResult(result: CleanupOperationResult): void {
   for (const branch of result.removed) {
     console.log(`  Cleaned: ${branch}`);
   }
@@ -283,13 +281,13 @@ function printMergedCleanupResult(result: MergedCleanupResult): void {
 }
 
 /**
- * Cleanup merged isolation environments (branches merged into each repo's base branch)
+ * Cleanup worktrees covered by Git integration or an eligible PR
  * Retains remote branches for operator inspection
  */
 export async function isolationCleanupMergedCommand(
   options: { includeClosed?: boolean } = {}
 ): Promise<0 | 1> {
-  console.log('Finding environments with branches merged into their base branch...');
+  console.log('Finding worktrees covered by Git integration or eligible pull requests...');
 
   const { codebases } = await listEnvironments();
 
@@ -312,7 +310,7 @@ export async function isolationCleanupMergedCommand(
         options
       );
 
-      printMergedCleanupResult(result);
+      printCleanupOperationResult(result);
       totalFailed += result.errors.length;
       totalCleaned += result.removed.length;
       totalSkipped += result.skipped.length;

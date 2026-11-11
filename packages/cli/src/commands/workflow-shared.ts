@@ -116,11 +116,11 @@ export interface WorkflowRunOptions {
   dryRun?: boolean;
   /** YAML mapping of node ids to scalar or structured simulated outputs. */
   stubsPath?: string;
-  /** Write a complete YAML stub scaffold for the discovered workflow and exit. */
+  /** Write a YAML stub scaffold, omitting child-workflow nodes, and exit. */
   stubsInitPath?: string;
-  /** Fill reached nodes missing from the supplied stub map with validated placeholders. */
+  /** Fill reached AI/bash/script nodes missing stubs with validated placeholders, except code under execCode. */
   defaultStubs?: boolean;
-  /** Execute reachable bash/script nodes locally instead of requiring stubs. */
+  /** Execute reached unstubbed bash/script nodes locally, even with defaultStubs; explicit stubs win. */
   execCode?: boolean;
   /** Stop at the first approval gate instead of auto-approving it. */
   pauseAtGates?: boolean;

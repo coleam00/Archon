@@ -1,8 +1,12 @@
 import { z } from '@hono/zod-openapi';
 import { metricsReportSchema as engineMetricsReportSchema } from '@archon/workflows/schemas/metric';
+import { metricViewsListingSchema } from '@archon/workflows/schemas/metric-view';
 
 /** The engine's report schema, served as is so the API cannot drift from `queryMetrics`. */
 export const metricsReportSchema = engineMetricsReportSchema.meta({ id: 'MetricsReport' });
+
+/** The engine's listing of pack-declared overview cards, served as is. */
+export const metricViewsSchema = metricViewsListingSchema.meta({ id: 'MetricViews' });
 
 /** GET /api/metrics query. Window values share the CLI's syntax (`resolveMetricsWindow`). */
 export const metricsQuerySchema = z.object({

@@ -9,7 +9,6 @@ import { readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { ghTokenKeysForHost } from '@archon/paths/github-token-env';
 import {
   cliForgeMetadataRequestSchema,
   cliForgeResponseSchema,
@@ -19,11 +18,10 @@ import {
   closeReasonSchema,
   type ForgePrRecord,
   forgePrRecordSchema,
+  mutationOperationSchema,
 } from '../packages/forge/src/lifecycle';
 import {
-  type ForgeMutationFailure,
   type ForgeRequest,
-  type ForgeResponse,
   forgeErrorSchema,
   forgeRequestSchema,
 } from '../packages/forge/src/operations';
@@ -35,19 +33,13 @@ import {
 } from '../.archon/scripts/__tests__/deliver-checks-harness';
 import {
   forgeResult,
-  type MergeRequest,
-  type MergeResult,
-  type MutationFailure,
   type PrRecord,
   type QualifiedPr,
   REMEDY,
-  type ReviewsResult,
 } from '../.archon/workflows/sdlc/.shared/forge';
-import {
-  ghTokenNames,
-  REQUIRED_FORGE_OPERATIONS,
-} from '../.archon/workflows/sdlc/.shared/forge-check';
+import { REQUIRED_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/forge-check';
 import { MERGE_QUEUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/merge';
+import { TEST_VALUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/test-value';
 import { CLOSE_REASONS } from '../.archon/workflows/sdlc/.shared/issue';
 
 const { runPackScript } = packScriptRunner();
@@ -93,84 +85,58 @@ test('every reason the pack closes an issue with is a forge close reason', () =>
   for (const reason of CLOSE_REASONS) expect(closeReasonSchema.parse(reason)).toBe(reason);
 });
 
-type ContractResult = Extract<ForgeResponse, { ok: true }>['result'];
-const consumesMerge = (value: Extract<ContractResult, { op: 'pr.merge' }>): MergeResult =>
-  value.value;
-const consumesReviews = (value: Extract<ContractResult, { op: 'pr.reviews' }>): ReviewsResult =>
-  value.value;
-const consumesFailure = (value: ForgeMutationFailure): MutationFailure => value;
-const producesMerge = (
-  value: MergeRequest
-): Omit<Extract<ForgeRequest, { op: 'pr.merge' }>, 'op' | 'operationId'> => value;
+/**
+ * Reads only an agent calls, from a prompt. No workflow preflights them: nothing a run
+ * writes depends on one, the host refuses the call by name (`unsupported_op`) on a
+ * plugin without it, and the prompt has the agent report that refusal. A preflight
+ * would instead refuse a whole delivery, on a plugin that can make every write, for a
+ * log read only a red check needs. A script that calls one owes it a preflight, so
+ * each must stay out of every pack script.
+ */
+const AGENT_READ_OPERATIONS: readonly ForgeRequest['op'][] = ['workitem.search', 'checks.logs'];
 
-test('the pack projections of the merge and review operations carry typed evidence', () => {
-  const ref = { repo: { host: 'forge.example', path: 'group/repo' }, number: 1 };
-  expect(
-    forgeRequestSchema.parse({
-      ...producesMerge({ ref, method: 'merge', conditions: { head: 'opaque-head' } }),
-      op: 'pr.merge',
-      operationId: 'merge',
-    }).op
-  ).toBe('pr.merge');
-  expect(consumesReviews({ op: 'pr.reviews', value: { ref, items: [] } })).toEqual({
-    ref,
-    items: [],
-  });
-  expect(
-    consumesFailure({
-      op: 'pr.merge',
-      target: ref,
-      outcome: 'outcome_unknown',
-      merge: { method: 'merge', conditions: { head: 'head' } },
-    }).outcome
-  ).toBe('outcome_unknown');
-  const pr = forgePrRecordSchema.parse({
-    ...ref,
-    schemaVersion: 1,
-    url: 'https://forge.example/pr/1',
-    head: 'feature',
-    base: 'dev',
-    is_draft: false,
-    state: 'merged',
-    head_repo: ref.repo,
-    head_revision: 'head',
-    base_revision: null,
-    maintainer_can_modify: null,
-  });
-  expect(
-    consumesMerge({
-      op: 'pr.merge',
-      value: {
-        target: ref,
-        outcome: 'applied',
-        changed: true,
-        pr,
-        method: 'squash',
-        conditions: { head: 'head' },
-        enforcedConditions: ['head'],
-        landed: { commit: 'landed', tree: null, parents: null },
-      },
-    }).landed.commit
-  ).toBe('landed');
-});
-
-// Delivery and the merge queue each preflight their own operations; merge-queue.test.ts
-// proves the merge queue's list against the operations it calls.
+// Delivery, the merge queue and the test-value metric each preflight their own
+// operations; merge-queue.test.ts proves the merge queue's list against the operations
+// it calls.
 test('preflight capabilities cover the forge operations the pack calls', () => {
   const root = join(import.meta.dir, '../.archon/workflows/sdlc');
   const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
     .filter(file => file !== '.shared/forge-check.ts' && file !== '.shared/merge.ts')
-    .map(file => readFileSync(join(root, file), 'utf8'));
-  const used = forgeRequestSchema.options
-    .map(schema => schema.shape.op.value)
-    .filter(op =>
-      sources.some(text =>
-        [`'${op}'`, `"${op}"`, `\`${op}\``, `forge ${op} `].some(token => text.includes(token))
+    .map(file => ({ file, text: readFileSync(join(root, file), 'utf8') }));
+  const named = (op: string, kind: '.ts' | '.md'): string[] =>
+    sources
+      .filter(
+        ({ file, text }) =>
+          file.endsWith(kind) &&
+          [`'${op}'`, `"${op}"`, `\`${op}\``, `forge ${op} `].some(token => text.includes(token))
       )
-    );
+      .map(({ file }) => file);
+  for (const op of AGENT_READ_OPERATIONS) {
+    expect(mutationOperationSchema.safeParse(op).success).toBe(false);
+    expect(named(op, '.md')).not.toEqual([]);
+    expect(named(op, '.ts')).toEqual([]);
+  }
+  const used: ForgeRequest['op'][] = forgeRequestSchema.options
+    .map(schema => schema.shape.op.value)
+    .filter(op => named(op, '.ts').length + named(op, '.md').length > 0)
+    .filter(op => !AGENT_READ_OPERATIONS.includes(op))
+    // `resolve` runs no preflight: a workflow calls it first, only when its repo inputs
+    // are empty, so the host's refusal already comes before any spend.
+    .filter(op => op !== 'resolve');
   expect(used).toContain('checks.state');
-  const preflighted = new Set([...REQUIRED_FORGE_OPERATIONS, ...MERGE_QUEUE_FORGE_OPERATIONS]);
-  expect(used.sort()).toEqual([...preflighted].sort());
+  // Typed as operation names, so a capability token such as `pr.view:any-state` cannot
+  // enter a preflight list. The build queue's any-state lookup runs no preflight: the
+  // host refuses it on a plugin without the capability, naming it.
+  const preflighted = new Set<ForgeRequest['op']>([
+    ...REQUIRED_FORGE_OPERATIONS,
+    ...MERGE_QUEUE_FORGE_OPERATIONS,
+    ...TEST_VALUE_FORGE_OPERATIONS,
+  ]);
+  // The merge queue's own calls sit in `.shared/merge.ts` beside its list, which this
+  // scan skips; merge-queue.test.ts holds that list to the operations it calls.
+  expect(used.filter(op => !preflighted.has(op))).toEqual([]);
+  const outsideMerge = [...REQUIRED_FORGE_OPERATIONS, ...TEST_VALUE_FORGE_OPERATIONS];
+  expect(outsideMerge.filter(op => !used.includes(op))).toEqual([]);
 });
 
 test('the pack reads host responses with credential attribution and metadata intact', () => {
@@ -214,15 +180,9 @@ test('the pack reads host responses with credential attribution and metadata int
   }
 });
 
-test('forge-check names the token env vars @archon/paths assigns to each gh host', () => {
-  for (const host of ['github.com', 'acme.ghe.com', 'git.example.com'])
-    expect(ghTokenNames(host)).toEqual(ghTokenKeysForHost(host));
-});
-
 test("forge-check's metadata request conforms to the CLI host input", () => {
   const run = runPackScript('deliver/scripts/forge-check', {
     cwd: gitCheckout({}, trackTempRoot),
-    source: 'forge',
     forge: {
       kind: 'fake',
       response: [

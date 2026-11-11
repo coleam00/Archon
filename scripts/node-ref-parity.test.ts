@@ -43,14 +43,24 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   WHEN_ATOM_PATTERN,
+  LOOP_PREV_WHEN_ATOM_PATTERN,
   parseWhenExpression,
   type WhenAtom,
 } from '../packages/workflows/src/when-atom';
 import { parseWorkflow } from '../packages/workflows/src/loader';
 import {
   ATOM_PATTERN,
+  LOOP_PREV_ATOM_PATTERN,
   parse,
 } from '../packages/web/src/experiments/console/builder/validation/when-grammar';
+import { INPUTS_SCOPE } from '../packages/workflows/src/reference-scopes';
+import { INPUT_NAME_SOURCE, parseWholeInputsRef } from '../packages/workflows/src/output-ref';
+import {
+  INPUTS_SCOPE as WEB_INPUTS_SCOPE,
+  INPUTS_REF_PREFIX,
+  INPUT_NAME_SOURCE as WEB_INPUT_NAME_SOURCE,
+  WHOLE_INPUTS_REF_PATTERN,
+} from '../packages/web/src/lib/input-ref';
 import { findOutputRefs } from '../packages/web/src/lib/node-ref';
 import {
   LOOP_COMPLETION_CHANNELS,
@@ -163,6 +173,19 @@ describe('node-ref parity: @archon/web mirrors the engine', () => {
     expect(nodeId.test('classify-testability')).toBe(true);
   });
 
+  test('INPUTS remains reserved with the established diagnostic', () => {
+    const result = dagNodeSchema.safeParse({ id: 'INPUTS', bash: 'echo ok' });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues).toEqual([
+        expect.objectContaining({
+          path: ['id'],
+          message: "node id 'INPUTS' is reserved for the $INPUTS.<name> parameter surface",
+        }),
+      ]);
+    }
+  });
+
   test('both effective scans reserve $INPUTS.output for workflow inputs', () => {
     const text = 'compare $INPUTS.output';
     expect(findOutputRefs(text)).toEqual(new Set());
@@ -227,6 +250,11 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     expect(ATOM_PATTERN.flags).toBe(WHEN_ATOM_PATTERN.flags);
   });
 
+  test("the builder's loop-previous pattern is byte-identical to the engine's", () => {
+    expect(LOOP_PREV_ATOM_PATTERN.source).toBe(LOOP_PREV_WHEN_ATOM_PATTERN.source);
+    expect(LOOP_PREV_ATOM_PATTERN.flags).toBe(LOOP_PREV_WHEN_ATOM_PATTERN.flags);
+  });
+
   /**
    * Every grammar feature, plus both historical regressions. Each entry is
    * compared for the same accept/reject verdict AND the same decomposition.
@@ -272,6 +300,26 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
     "$INPUTSX.output.x == 'y'",
     // The scope name is matched case-sensitively, so this is a node called `inputs`.
     "$inputs.mode == 'x'",
+    // Previous-iteration references, including malformed ordinary-node spellings.
+    "$LOOP_PREV.work.output == 'done'",
+    "$LOOP_PREV.INPUTS.output == 'done'",
+    "$LOOP_PREV.LOOP_PREV.output == 'done'",
+    '$LOOP_PREV.check-work.output.result.count >= -0.5',
+    '$LOOP_PREV.work.output == true',
+    "$LOOP_PREV.work.output > '80abc'",
+    "$LOOP_PREV.work.output > 'high'",
+    '$LOOP_PREV.work.output <= true',
+    "$LOOP_PREV.work.output > ''",
+    "$LOOP_PREV.output == 'x'",
+    "$LOOP_PREV.output.field == 'x'",
+    "$LOOP_PREV.work == 'x'",
+    "$LOOP_PREV.work.field == 'x'",
+    "$LOOP_PREV.work.output.a[0] == 'x'",
+    "$LOOP_PREV.work.output.* == 'x'",
+    "$LOOP_PREV.1bad.output == 'x'",
+    "$LOOP_PREVX.output == 'x'",
+    "$loop_prev.output == 'x'",
+    "$LOOP_PREV.work.output == 'x && y || z' && $INPUTS.mode == 'fast' || $n.output == 'ok'",
     // Every operator, in both RHS spellings.
     "$n.output == '5'",
     "$n.output != '5'",
@@ -338,34 +386,36 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
    */
   function engineRef(atom: WhenAtom): string {
     if (atom.ref.kind === 'input') return `$INPUTS.${atom.ref.name}`;
+    const prefix = atom.ref.kind === 'loop_prev' ? '$LOOP_PREV.' : '$';
     return atom.ref.field === undefined
-      ? `$${atom.ref.nodeId}.output`
-      : `$${atom.ref.nodeId}.output.${atom.ref.field}`;
+      ? `${prefix}${atom.ref.nodeId}.output`
+      : `${prefix}${atom.ref.nodeId}.output.${atom.ref.field}`;
   }
 
   /**
    * `null` means "rejected"; an array means "accepted, and here is what it means".
    * Uses `parseWhenExpression`, the same entry point the loader and the evaluator use.
    */
-  function engineParse(expr: string): string[] | null {
+  function engineParse(expr: string, allowLoopPrev: boolean): string[] | null {
     return (
-      parseWhenExpression(expr)
+      parseWhenExpression(expr, allowLoopPrev)
         ?.flat()
         .map(atom => `${engineRef(atom)} ${atom.operator} ${JSON.stringify(atom.expected)}`) ?? null
     );
   }
 
-  function webParse(expr: string): string[] | null {
-    const result = parse(expr);
+  function webParse(expr: string, allowLoopPrev: boolean): string[] | null {
+    const result = parse(expr, allowLoopPrev);
     if (!result.ok) return null;
     return result.ast.or.flatMap(group =>
       group.map(atom => {
+        const prefix = atom.kind === 'loop_prev' ? '$LOOP_PREV.' : '$';
         const ref =
           atom.kind === 'input'
             ? `$INPUTS.${atom.name}`
             : atom.field === undefined
-              ? `$${atom.nodeId}.output`
-              : `$${atom.nodeId}.output.${atom.field}`;
+              ? `${prefix}${atom.nodeId}.output`
+              : `${prefix}${atom.nodeId}.output.${atom.field}`;
         return `${ref} ${atom.op} ${JSON.stringify(atom.value)}`;
       })
     );
@@ -380,23 +430,52 @@ describe('when-atom parity: the builder parses what the engine parses', () => {
    * `null` for a rejected expression, so the two sides stay comparable on the
    * malformed entries as well.
    */
-  function engineGroupShape(expr: string): number[] | null {
-    return parseWhenExpression(expr)?.map(group => group.length) ?? null;
+  function engineGroupShape(expr: string, allowLoopPrev: boolean): number[] | null {
+    return parseWhenExpression(expr, allowLoopPrev)?.map(group => group.length) ?? null;
   }
 
-  function webGroupShape(expr: string): number[] | null {
-    const result = parse(expr);
+  function webGroupShape(expr: string, allowLoopPrev: boolean): number[] | null {
+    const result = parse(expr, allowLoopPrev);
     return result.ok ? result.ast.or.map(group => group.length) : null;
   }
 
-  for (const expr of CORPUS) {
-    test(`agrees on ${JSON.stringify(expr)}`, () => {
-      expect(webParse(expr)).toEqual(engineParse(expr));
-      // Not implied by the line above: both sides flatten, and `a && b || c` and
-      // `a || b && c` flatten to the SAME ordered atom list. Only the grouping
-      // separates them, and getting it wrong changes the boolean formula the
-      // builder writes back through `format()`.
-      expect(webGroupShape(expr)).toEqual(engineGroupShape(expr));
+  for (const allowLoopPrev of [false, true]) {
+    for (const expr of CORPUS) {
+      test(`agrees on ${JSON.stringify(expr)} (loop context: ${allowLoopPrev})`, () => {
+        expect(webParse(expr, allowLoopPrev)).toEqual(engineParse(expr, allowLoopPrev));
+        // Not implied by the line above: both sides flatten, and `a && b || c` and
+        // `a || b && c` flatten to the SAME ordered atom list. Only the grouping
+        // separates them, and getting it wrong changes the boolean formula the
+        // builder writes back through `format()`.
+        expect(webGroupShape(expr, allowLoopPrev)).toEqual(engineGroupShape(expr, allowLoopPrev));
+      });
+    }
+  }
+});
+
+describe('input reference parity: all web consumers share the engine spelling', () => {
+  test('the shared web scope, display prefix and input-name grammar match the engine', () => {
+    expect(WEB_INPUTS_SCOPE).toBe(INPUTS_SCOPE);
+    expect(INPUTS_REF_PREFIX).toBe(`$${INPUTS_SCOPE}.`);
+    expect(WEB_INPUT_NAME_SOURCE).toBe(INPUT_NAME_SOURCE);
+  });
+
+  for (const ref of [
+    '$INPUTS.resume_at',
+    ' $INPUTS.my-input ',
+    '$INPUTS.baseBranch',
+    '$INPUTS._name1',
+    '$INPUTS.output',
+    '$INPUTS.1bad',
+    '$INPUTS.',
+    '$INPUTS.name.field',
+    '$INPUTSX.name',
+    '$inputs.name',
+    'prefix $INPUTS.name',
+    '$INPUTS.name suffix',
+  ]) {
+    test(`whole-value input reference agrees on ${JSON.stringify(ref)}`, () => {
+      expect(WHOLE_INPUTS_REF_PATTERN.exec(ref.trim())?.[1]).toBe(parseWholeInputsRef(ref));
     });
   }
 });
