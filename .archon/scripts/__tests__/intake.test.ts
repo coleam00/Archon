@@ -9,6 +9,7 @@ import { state } from 'archon:script';
 import {
   bodyDigest,
   decideIntake,
+  enqueue,
   type IntakeRequest,
   type IssueFacts,
   mirrorLabels,
@@ -730,6 +731,17 @@ describe('the intake scripts', () => {
     }).output;
     expect(echo).toMatchObject({ path: 'idle' });
     expect(stored(at).revision).toBe(revision);
+  }, 60_000);
+
+  test("a run claims its own event's issue while another waits, and a run with no request of its own takes the other", () => {
+    const at = install();
+    const older = { repo: PR.repo, number: 3 };
+    inProcess(at, () =>
+      enqueue(older, { at: AT, run_id: 'event', action: 'opened', label: null, actor: null, body_digest: null })
+    );
+    expect(facts(at, { runId: 'run-1', others: [ORIGINAL] }).output).toMatchObject({ item: SUBJECT });
+    expect(inProcess(at, () => state.get('work/3')).value).toMatchObject({ claim: null, requests: [{ run_id: 'event' }] });
+    expect(facts(at, { runId: 'run-2', kind: 'pr', others: [ORIGINAL] }).output).toMatchObject({ item: older });
   }, 60_000);
 
   test("a re-triage pickup records nothing of its own: the asking run's request is the only one", () => {
