@@ -67,8 +67,9 @@ export function parseWorktreePolicy(
     return undefined;
   }
   const rawPolicy = raw as Record<string, unknown>;
-  const policy: Record<string, unknown> = {};
-  for (const [key, schema] of Object.entries(workflowWorktreePolicySchema.shape)) {
+  type Policy = z.infer<typeof workflowWorktreePolicySchema>;
+  const policy: Policy = {};
+  const parseField = <K extends keyof Policy>(key: K, schema: z.ZodType<Policy[K]>): void => {
     const value = parseOptionalField(
       rawPolicy[key],
       schema,
@@ -76,8 +77,12 @@ export function parseWorktreePolicy(
       `invalid_worktree_${key}_value_ignored`
     );
     if (value !== undefined) policy[key] = value;
+  };
+  const shape = workflowWorktreePolicySchema.shape;
+  for (const key of Object.keys(shape) as (keyof typeof shape)[]) {
+    parseField(key, shape[key]);
   }
-  return Object.keys(policy).length > 0 ? workflowWorktreePolicySchema.parse(policy) : undefined;
+  return Object.keys(policy).length > 0 ? policy : undefined;
 }
 
 /**

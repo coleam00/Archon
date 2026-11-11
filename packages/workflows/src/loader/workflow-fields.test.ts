@@ -1,7 +1,12 @@
 // @archon-test-isolated
 import { mockLogger, parseWorkflow, parseWorkflowYaml } from './test-utils';
 import { describe, it, expect } from 'bun:test';
-import { KNOWN_WORKFLOW_KEYS, workflowContainerPolicySchema } from '../schemas/workflow';
+import { z } from 'zod';
+import {
+  KNOWN_WORKFLOW_KEYS,
+  workflowContainerPolicySchema,
+  workflowWorktreePolicySchema,
+} from '../schemas/workflow';
 import type { WorkflowDefinition } from '../schemas/workflow';
 import { parseContainerPolicy, parseWorktreePolicy } from './workflow-fields';
 
@@ -425,6 +430,56 @@ nodes:
 });
 
 describe('worktree policy', () => {
+  it('retains single-parse outputs from optional schema extensions and drops invalid siblings', () => {
+    const shape = workflowWorktreePolicySchema.shape;
+    const extensions = {
+      probe: z
+        .string()
+        .transform(value => value.length)
+        .optional(),
+      suffix: z
+        .string()
+        .transform(value => `${value}!`)
+        .optional(),
+    };
+    Object.assign(shape, extensions);
+    try {
+      mockLogger.warn.mockClear();
+      const { workflow, error } = parseWorkflow(
+        `
+name: extended-policy
+description: optional schema extensions
+worktree:
+  enabled: invalid
+  probe: abc
+  suffix: x
+nodes:
+  - id: only
+    prompt: hi
+`,
+        'policy.yaml'
+      );
+      expect(error).toBeNull();
+      expect<Record<string, unknown> | undefined>(workflow?.worktree).toEqual({
+        probe: 3,
+        suffix: 'x!',
+      });
+      expect(mockLogger.warn.mock.calls).toEqual([
+        [{ filename: 'policy.yaml', value: 'invalid' }, 'invalid_worktree_enabled_value_ignored'],
+      ]);
+
+      mockLogger.warn.mockClear();
+      expect<Record<string, unknown> | undefined>(
+        parseWorktreePolicy({ probe: 7, suffix: 'x' }, 'policy.yaml')
+      ).toEqual({ suffix: 'x!' });
+      expect(mockLogger.warn.mock.calls).toEqual([
+        [{ filename: 'policy.yaml', value: 7 }, 'invalid_worktree_probe_value_ignored'],
+      ]);
+    } finally {
+      for (const key of Object.keys(extensions)) Reflect.deleteProperty(shape, key);
+    }
+  });
+
   it.each<[unknown, ReturnType<typeof parseWorktreePolicy>, [unknown, string][]]>([
     [undefined, undefined, []],
     [{}, undefined, []],
