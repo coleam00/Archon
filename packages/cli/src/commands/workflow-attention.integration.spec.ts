@@ -1304,6 +1304,19 @@ test('a notice is recorded only from a node of a running run, reaches the notice
     },
   });
 
+  // The list of live runs says what each is about: the latest notice it emitted, or none.
+  const status = await captured(async () => {
+    await workflowCommands.workflowStatusCommand(host, dir, { json: true, all: true });
+    return 0;
+  });
+  const live = (status.json as { runs: { id: string; notice: unknown }[] }).runs;
+  expect(live.find(entry => entry.id === run)?.notice).toMatchObject({
+    text: 'Merged pull request 8',
+    labels: { kind: 'merged' },
+    node: 'merge',
+  });
+  expect(live.find(entry => entry.id === other)?.notice).toBeNull();
+
   // A run past its ceiling is refused, and so is one that is no longer running.
   for (let emitted = 3; emitted < WORKFLOW_NOTICE_LIMITS.perRun; emitted++)
     expect((await notice(node(run))).code).toBe(0);

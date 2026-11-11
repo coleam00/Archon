@@ -120,6 +120,29 @@ export async function emitWorkflowNotice(
   return { runId, count: emitted.length + 1, limit };
 }
 
+/** What a run last said, as its row in a run list carries it. */
+export const latestWorkflowNoticeSchema = workflowNoticeDataSchema.extend({ at: z.string() });
+export type LatestWorkflowNotice = z.infer<typeof latestWorkflowNoticeSchema>;
+
+/**
+ * The latest notice of each of `runIds` that emitted one: what a live run is about, for
+ * a run list, read in one batch so the list does not read each run's history.
+ */
+export async function latestWorkflowNotices(
+  store: Pick<IWorkflowStore, 'listEventsForRuns'>,
+  runIds: readonly string[]
+): Promise<Map<string, LatestWorkflowNotice>> {
+  const latest = new Map<string, LatestWorkflowNotice>();
+  if (runIds.length === 0) return latest;
+  for (const [runId, rows] of await store.listEventsForRuns(runIds, ['workflow_notice'])) {
+    for (const row of rows) {
+      const data = workflowNoticeDataSchema.safeParse(row.data);
+      if (data.success) latest.set(runId, { ...data.data, at: row.created_at });
+    }
+  }
+  return latest;
+}
+
 type NoticeSource = {
   store: Pick<IWorkflowStore, 'listWorkflowNoticeRows' | 'getWorkflowRunsByIds' | 'getCodebase'>;
 };

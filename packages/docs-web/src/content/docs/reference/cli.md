@@ -604,6 +604,10 @@ archon workflow status --json --verbose
 
 If `cwd` is an unregistered Git checkout, the command falls back to install-wide active runs and says so. Every successful JSON result carries `scopeFallback`: `true` for that fallback and `false` for a resolved project or explicit `--all` request. A registry lookup failure fails the command instead of returning install-wide runs under the fallback label. A registered folder project scopes normally; an unregistered non-repository directory is rejected with `Not in a git repository` before status lookup.
 
+Each run carries the latest [notice](#workflow-notice) it emitted, which says what the run
+is about: a `Notice:` line in text, and `notice` (`{ at, node, text, labels }` or null) in
+JSON. `archon workflow status --all` therefore answers "what is running right now, and on what".
+
 The normal human and JSON views include every active node without fetching each run's event
 history. In JSON, `active_nodes` is the ordered list of unresolved node starts: `node_started` adds
 an identifier and `node_suspended` keeps it active, while `node_completed`, `node_failed`, `node_skipped`, and
@@ -1181,7 +1185,7 @@ opening or closing, and each [`workflow notice`](#workflow-notice) a run emits. 
 out `ready` and `bookmark`. It cannot be combined with `--protocol`.
 
 **`--notices --since <7d|24h|2w|ISO>`**, without `--watch`, lists the notices runs emitted
-in the window, oldest first, one line each: time, workflow, labels, text. Scope and
+in the window, oldest first, one line each: time, text, labels. Scope and
 `--label` apply as for the list. `--count-by project|label:<key>` counts them instead.
 `--json` prints `{ ok, action: "attention", scope, since, notices }`. A run id, `--sort`
 and `--count-by answerer` are refused.

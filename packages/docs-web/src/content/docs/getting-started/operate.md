@@ -320,14 +320,25 @@ archon workflow attention --notices --since 24h --all        # what was done sin
 archon workflow attention --notices --since 24h --all --count-by label:kind
 ```
 
-Each notice prints as one line: when, the workflow, its labels, the text.
+Each notice prints as one line: when, what, its labels.
 
 ```text
-2026-11-11T14:02Z  merge-queue  kind=merged pr=7  Merged pull request 7 into dev
+2026-11-11T14:02Z  Merged pull request 7 into dev  kind=merged pr=7
 ```
+
+With notices, one command answers each of the simple questions someone asks the seat:
+
+| Question | Command |
+|---|---|
+| What merged today? What did the factory do since 08:00? | `archon workflow attention --notices --since 8h --all`, with `--label kind=merged` for one kind, or an ISO time such as `--since 2026-11-11T08:00` |
+| What is building right now? | `archon workflow status --all`: every running or paused run, each with its `Notice:` line, the latest notice it emitted |
+| What is waiting for me? | `archon workflow attention --all` |
+
+The labels in these commands are examples: a workflow chooses its own. For the second question to have an answer, a run says what it is about when it starts the work, for example `archon workflow notice "Building issue 12" --label kind=build --label issue=12`.
 
 - **Only a reader who asks receives them.** A notice is a `notice` line with `needs: "nothing"`, so the plain `--watch` never writes one; `--watch --notices` and `--protocol` do. `--label` selects notices the way it selects items.
 - **Labels are the workflow's own.** Archon does not interpret them. What deserves a notice, and which labels it carries, is the workflow's decision, like what deserves an ask.
+- **A live run carries its latest notice.** `archon workflow status` prints it as `Notice:` under the run, and `--json` gives each run a `notice` of `{ at, node, text, labels }`, or null when it emitted none. That is what the run is about now, with no second read.
 - **The window list is the recap.** `--notices --since` reads the recorded notices of the window, oldest first, and `--count-by` counts them per project or per label value. `--json` prints `{ ok, action: "attention", scope, since, notices }`, each notice with `at`, `runId`, `workflow`, `parentRunId`, `project`, `node`, `text` and `labels`.
 - **A notice is not a log.** The text is one line of at most 300 characters, with at most 16 labels, and a run may emit 50. An emit past a bound exits 1 and says which. Details belong in an artifact; keep secrets out of the text, which every reader of the stream sees.
 - **Only a node of a running run can emit one.** The command reads the run and node from the environment Archon gives a node, as `archon state` does, and refuses anywhere else.

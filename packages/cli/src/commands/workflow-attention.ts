@@ -164,20 +164,12 @@ export function printAttentionItem(item: AttentionQueueItem): void {
   for (const line of attentionItemLines(item)) console.log(line);
 }
 
-/** A notice as one line: when, which workflow, its labels, what it said. */
-function noticeText(
-  notice: Pick<WorkflowNotice, 'at' | 'labels' | 'text'>,
-  workflow: string | null
-): string {
+/** A notice as one line short enough to read aloud: when, what it said, its labels. */
+function noticeText(notice: Pick<WorkflowNotice, 'at' | 'labels' | 'text'>): string {
   const time = new Date(notice.at);
   const at = Number.isNaN(time.getTime()) ? notice.at : `${time.toISOString().slice(0, 16)}Z`;
   const labels = Object.entries(notice.labels).map(([key, value]) => `${key}=${value}`);
-  return [
-    at,
-    workflow ?? '(workflow not read)',
-    ...(labels.length > 0 ? [labels.join(' ')] : []),
-    notice.text,
-  ].join('  ');
+  return [at, notice.text, ...(labels.length > 0 ? [labels.join(' ')] : [])].join('  ');
 }
 
 type RunLine = Extract<AttentionStreamLine, { runId: string }>;
@@ -231,7 +223,7 @@ function attentionStreamText(
     case 'resumed':
       return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
     case 'notice':
-      return [noticeText(line, line.workflow)];
+      return [noticeText(line)];
     case 'owner_lost':
       return [
         `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +
@@ -442,7 +434,7 @@ async function noticesCommand(
     });
     return 0;
   }
-  for (const notice of notices) console.log(noticeText(notice, notice.workflow));
+  for (const notice of notices) console.log(noticeText(notice));
   if (notices.length === 0) console.log('No notices in that window.');
   return 0;
 }

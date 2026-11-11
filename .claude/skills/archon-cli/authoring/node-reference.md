@@ -135,6 +135,14 @@ it, and `--notices --since 24h` lists it afterwards. Emit one when something rea
 happened, not on a pass that found nothing. One line of at most 300 characters, at most
 50 per run; an emit past a bound exits 1.
 
+Notices exist so whoever watches can answer three questions with one command each:
+
+- What merged today, or what did the factory do since 08:00?
+  `archon workflow attention --notices --since 8h --all` (add `--label kind=merged`).
+- What is building right now? `archon workflow status --all`: each live run shows the
+  latest notice it emitted, so a run should say what it is about when it starts the work.
+- What is waiting for me? `archon workflow attention --all`.
+
 ### Result contracts — the producer owns the schema
 
 Use the producing node's `output_format` for a JSON result. `returns:` selects
