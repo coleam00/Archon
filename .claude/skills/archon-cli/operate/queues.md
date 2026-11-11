@@ -18,6 +18,31 @@ workflows. Each run does one step and stops only for a decision it cannot make:
 https://archon.diy/guides/sdlc-operations/ is the full operator manual. This
 reference covers launching and tending the queues by hand.
 
+## Reading what a stage decided
+
+A stage's decision is on the issue's work item, not on the run:
+
+```bash
+archon state get work/<issue>
+```
+
+- `value.stage`: intake's result. A route (`deliver`, `plan`, `investigate`,
+  `continue`, `split`) or a stage that waits (`needs_maintainer`, `needs_contract`,
+  `blocked`, `close`).
+- `value.facts.build.status`: the build queue's. `next`, `asking`, `ready` or `parked`.
+- `value.facts.merge.status`: the merge queue's. `waiting`, `asking`, `merged`,
+  `returned` or `parked`.
+
+`archon workflow get <run-id>` shows the run's status and artifacts, not the decision.
+
+The stages do not start each other. After intake routes an item, start the build
+queue. After a build ends `ready`, start the merge queue. Bindings do this on a
+schedule once the operator installs them.
+
+Rough durations, so a slow run is not mistaken for a hang: intake about 2 minutes, a
+build round 15 to 40 minutes, a merge sweep about 2 minutes. These are typical, not
+limits.
+
 ## Before the first run
 
 - `archon workflow run archon-forge-check` must pass in the checkout. It proves the
@@ -101,7 +126,9 @@ archon workflow run archon-intake $R --input number=<issue> \
 ```
 
 `label_actor` must be on `maintainers.json`. The same event with a listed maintainer
-promotes an outside author's issue.
+promotes an outside author's issue. `archon-triage` is the only label that requests a
+triage: route labels such as `archon-ready` are written by the pack, and adding one by
+hand starts nothing.
 
 Read the result from the issue's labels:
 
