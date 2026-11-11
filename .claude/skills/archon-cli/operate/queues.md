@@ -91,7 +91,8 @@ refusal with its reason.
 Optional inputs, with their defaults in each workflow's YAML:
 
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
-  for a label), `label` and `label_actor` for a label event.
+  for a label), `label` and `label_actor` for a label event, and `build_queue_binding`
+  (the binding file a routed item's build-queue run is fired through).
 - `archon-build-queue`: `number` (the issue to build; empty claims the item the
   message names, or the first in order), `orders_only` (`true` claims only members of
   an open work order), `revisit_blocked` (`true`: a run that names no item also sends
@@ -206,7 +207,9 @@ change, pauses as an attention item labelled `stage: merge` and `kind: approve` 
 `return`, `park` and `other`. A red default branch pauses as `kind: base` with the
 one choice `hold` (an `other` answer there holds too), and the gate refuses every merge until it is green. A run raises at
 most one attention item: the red default branch first, otherwise the first pull
-request the sweep asked about. A later sweep decides the rest again.
+request the sweep asked about. The next sweep decides the rest again and raises the
+next. The merge queue's schedule is short (5 minutes by default), and a sweep where
+nothing changed since an item's last wait runs no agent.
 
 A `merge` answer approves the pull request at the head it asked about, and a sweep
 the answer fires through `merge_queue_binding` merges it once the gate passes. The approval carries to a later head only when the sweep
