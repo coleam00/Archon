@@ -32,29 +32,34 @@ import { dirname, join } from 'node:path';
 import type { BuildRound } from '../../.shared/build.ts';
 import type { PrRecord, QualifiedPr } from '../../.shared/forge.ts';
 import { git, gitOrThrow } from '../../.shared/git.ts';
-import { emit, nullableJson, refuse } from '../../.shared/io.ts';
+import { emit, note, nullableJson, refuse } from '../../.shared/io.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { reviewedHead } from '../../.shared/merge.ts';
+import { publishedReview } from '../../.shared/merge.ts';
+import type { ReviewStamp } from '../../.shared/review-comment.ts';
 import { PUBLISHED_REPORT_FILE, REVIEWED_HEAD_FILE } from '../../.shared/review-item.ts';
 import { viewPr } from '../../.shared/pr.ts';
 import { fetchDefaultBranch, remoteFor } from '../../.shared/remote.ts';
 
 /**
- * The report an earlier round of this item published at `reviewed`, the commit the pull
- * request's trusted review comment names: the round's first review continues from it.
- * Empty, so that review reads the whole change, when the pull request has no trusted
- * review, when no kept round's artifacts on this machine hold the review published at
- * that commit (another install or a review outside the queue published it, or its
+ * The report the round's first review continues from: the one an earlier round of this
+ * item kept when it published `review`, the pull request's trusted review comment, at
+ * the commit that comment names and with the report it shows. Empty, so that review
+ * reads the whole change, when no kept round's artifacts on this machine hold that
+ * review (another install published it, a review outside the queue replaced it, or the
  * artifacts are gone), or when the head no longer descends from that commit.
  */
-function priorReport(reviewed: string | null, head: string): string {
-  if (reviewed === null || git('merge-base', '--is-ancestor', reviewed, head).code !== 0) return '';
+function priorReport(review: ReviewStamp, head: string): string {
+  if (git('merge-base', '--is-ancestor', review.reviewed, head).code !== 0) return '';
   const rounds = nullableJson(process.env.INPUTS_ROUNDS) as readonly BuildRound[];
   for (const round of [...rounds].reverse()) {
     if (round.artifacts === '') continue;
     const report = join(round.artifacts, PUBLISHED_REPORT_FILE);
     const recorded = join(dirname(report), REVIEWED_HEAD_FILE);
-    if (existsSync(recorded) && readFileSync(recorded, 'utf8').trim() === reviewed) return report;
+    if (!existsSync(recorded) || readFileSync(recorded, 'utf8').trim() !== review.reviewed) continue;
+    if (readFileSync(report, 'utf8').trim() === review.report.trim()) return report;
+    note(
+      `build-queue checkout: run ${round.run_id} kept a review at ${review.reviewed}, but the pull request's review comment shows another report; it is not continued`
+    );
   }
   return '';
 }
@@ -95,8 +100,13 @@ function main(): void {
   const branch = gitOrThrow('branch', '--show-current');
   gitOrThrow('checkout', '-q', ...(branch === '' ? ['--detach'] : ['-B', branch]), head);
   const ref = { repo: pr.repo, number: continues };
-  const reviewed = reviewedHead(ref, readMaintainers(pr.repo));
-  emit({ head, reviewed, pull_request: continues, prior_report: priorReport(reviewed, head) });
+  const review = publishedReview(ref, readMaintainers(pr.repo));
+  emit({
+    head,
+    reviewed: review?.reviewed ?? null,
+    pull_request: continues,
+    prior_report: review === null ? '' : priorReport(review, head),
+  });
 }
 
 try {

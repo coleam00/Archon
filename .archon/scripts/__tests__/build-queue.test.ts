@@ -850,10 +850,10 @@ describe('the build queue checkout', () => {
     const branch = 'build/7-continued-round';
     git(at.checkout, 'checkout', '-q', '-b', branch, 'dev');
     // Two earlier rounds kept their review: an older one at the base, the latest at `reviewed`.
-    const published = (commit: string): string => {
+    const published = (commit: string, report = '# Review report\n'): string => {
       const artifacts = track(mkdtempSync(join(tmpdir(), 'archon-build-round-')));
       mkdirSync(join(artifacts, 'review/published'), { recursive: true });
-      writeFileSync(join(artifacts, 'review/published/report.md'), '# Review report\n');
+      writeFileSync(join(artifacts, 'review/published/report.md'), report);
       writeFileSync(join(artifacts, 'review/published/reviewed-head'), `${commit}\n`);
       return artifacts;
     };
@@ -870,6 +870,11 @@ describe('the build queue checkout', () => {
     expect(ok(run(at, 'checkout', inputs, { pr: { headRefOid: head }, comments: [review] }))).toEqual({ head, reviewed, pull_request: 42, prior_report });
     // A review no kept round recorded, such as one another install published, is not continued.
     expect(ok(run(at, 'checkout', { ...inputs, INPUTS_ROUNDS: JSON.stringify(rounds.slice(0, 1)) }, { pr: { headRefOid: head }, comments: [review] }))).toMatchObject({ reviewed, prior_report: '' });
+    // Nor is a kept review at that commit whose report the comment no longer shows, such as one a review run by hand replaced.
+    const replaced = { ...inputs, INPUTS_ROUNDS: JSON.stringify([{ artifacts: published(reviewed, '# An older report\n'), run_id: 'run-0' }]) };
+    const other = run(at, 'checkout', replaced, { pr: { headRefOid: head }, comments: [review] });
+    expect(other.stderr).toContain('run-0 kept a review');
+    expect(JSON.parse(other.stdout)).toMatchObject({ reviewed, prior_report: '' });
     // A pull request never reviewed has no baseline, and is not mistaken for one reviewed at its head.
     expect(ok(run(at, 'checkout', inputs, { pr: { headRefOid: head } }))).toEqual({ head, reviewed: null, pull_request: 42, prior_report: '' });
     const duplicate = run(at, 'checkout', inputs, { pr: { headRefOid: head }, comments: [review, { ...review, id: 2 }] });
