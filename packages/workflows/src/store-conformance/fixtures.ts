@@ -37,10 +37,15 @@ export const answeredAttention = (
   answeredVia: 'cli',
   answeredAt: '2026-01-01T00:05:00.000Z',
 });
-export const attentionAnswer = (decision: string, pauseId = 'ask-1'): AttentionAnswerWrite => ({
+export const attentionAnswer = (
+  decision: string,
+  pauseId = 'ask-1',
+  answeredBy?: AttentionAnswerWrite['answeredBy']
+): AttentionAnswerWrite => ({
   pauseId,
   answer: { decision, text: '' },
   answeredVia: 'cli',
+  ...(answeredBy === undefined ? {} : { answeredBy }),
   answeredAt: '2026-01-01T00:05:00.000Z',
 });
 export const schedule = {

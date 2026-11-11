@@ -64,7 +64,7 @@ export function registerLegacyAttentionTests() {
 
 export function registerAnswerTests() {
   describe('POST /api/workflows/runs/:runId/answer', () => {
-    const askRun = (answered = false): MockWorkflowRun => ({
+    const askRun = (answered = false, recommended?: string): MockWorkflowRun => ({
       ...MOCK_PAUSED_RUN,
       id: 'run-ask',
       metadata: {
@@ -77,6 +77,9 @@ export function registerAnswerTests() {
           pauseId: 'pause-1',
           form: 'select',
           options: [{ id: 'use-main' }, { id: 'use-dev' }],
+          ...(recommended === undefined
+            ? {}
+            : { recommendation: { option: recommended, why: 'dev is ahead' } }),
           ...(answered
             ? {
                 answer: { decision: 'use-main', text: '' },
@@ -117,6 +120,39 @@ export function registerAnswerTests() {
         answer: { decision: 'use-dev', text: 'dev is ahead' },
         answeredVia: 'api',
       });
+    });
+
+    test('recommended answers with the recommended option, as the declared answerer', async () => {
+      mockGetWorkflowRun.mockResolvedValue(askRun(false, 'use-dev'));
+      const accepted = await post('/api/workflows/runs/run-ask/answer', {
+        occurrence: 'pause-1',
+        recommended: true,
+        as: 'triage-agent',
+      });
+      expect(accepted.status).toBe(200);
+      expect(mockAnswerAttentionWait.mock.calls[0]?.[1]).toMatchObject({
+        answer: { decision: 'use-dev', text: '' },
+        answeredVia: 'api',
+        answeredBy: { declared: 'triage-agent' },
+      });
+
+      mockAnswerAttentionWait.mockClear();
+      mockGetWorkflowRun.mockResolvedValue(askRun());
+      const refused = await post('/api/workflows/runs/run-ask/answer', {
+        occurrence: 'pause-1',
+        recommended: true,
+      });
+      expect(refused.status).toBe(400);
+      expect(((await refused.json()) as { error: string }).error).toBe(
+        "Run run-ask's attention wait has no recommendation to accept. Choose one of its options."
+      );
+      const both = await post('/api/workflows/runs/run-ask/answer', {
+        occurrence: 'pause-1',
+        recommended: true,
+        choose: ['use-dev'],
+      });
+      expect(both.status).toBe(400);
+      expect(mockAnswerAttentionWait).not.toHaveBeenCalled();
     });
 
     test('answers only the named fan-out child and validates its own choices', async () => {

@@ -62,13 +62,17 @@ Route by intent:
    archon workflow attention --watch --json        # this project; add --all for the install
    ```
 
-   Every line is something to act on. `attention` means a run needs a decision,
-   `resolved` means it no longer does, and `terminal` means a run failed or completed
-   with `outcome: "failed"`. A run that completes otherwise writes no line: check `archon workflow runs --json`, or block on one run
+   Every line is something to act on, and its `needs` field says what: `answer` for an
+   `attention` line that wants a decision, `look` for a `resolved` line (the item no
+   longer needs you) and for a `terminal` line (a run failed or completed with
+   `outcome: "failed"`). A run that completes otherwise writes no line unless you add
+   `--notices`, which also writes the `needs: "nothing"` lines for runs that completed,
+   were cancelled or resumed. Or check `archon workflow runs --json`, or block on one run
    with `archon workflow wait <run-id> --json`. Act on the line, then keep reading.
 5. **Answer deliberately.** Read the item's question, its recommendation and the
    evidence it links. Answer with a reason, detached:
    `archon workflow respond <run-id> <decision> "<reason>" --detach`.
+   Add `--as <name>` on an attention wait so the record says which agent answered.
    `operate/managing-runs.md` covers every form.
 6. **Read the result.** A completed run is not a verdict. `archon workflow get
    <run-id> --json` gives the normalized `outcome` and `leave_behind.artifactFiles`.

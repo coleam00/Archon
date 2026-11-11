@@ -24,6 +24,8 @@ import {
 } from '../test-support/workflow-store';
 import { stateCommand } from './state';
 import { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
+import * as workflowCommands from './workflow';
+import { runWorkflowRespond } from '../routes/workflow';
 
 const track = trackTempRoots();
 const scopeSpy = spyOn(chatScope, 'readChatProjectScope');
@@ -423,6 +425,159 @@ test('watch writes only open items in the label filter and failed runs', async (
   }
 });
 
+test('--recommended answers as the declared answerer, and the notices watch says what each line needs', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-recommended-cli-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  const host = createHost();
+  const { store } = host.deps;
+  mkdirSync(join(root, 'alpha'));
+  const dir = realpathSync(join(root, 'alpha'));
+  const running = async (): Promise<string> => {
+    const run = await store.createWorkflowRun({ workflow_name: 'ci', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.updateWorkflowRun(run.id, {
+      output_root: getProjectStoragePaths(resolveProjectStorageKey(null, dir)).root,
+    });
+    return run.id;
+  };
+  const paused = async (recommended: boolean): Promise<string> => {
+    const id = await running();
+    await store.pauseWorkflowRunForWait(
+      id,
+      {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: new Date().toISOString(),
+        message: 'Merge it?',
+        pauseId: `pause-${id}`,
+        form: 'select',
+        options: [{ id: 'merge' }, { id: 'hold' }],
+        ...(recommended ? { recommendation: { option: 'merge', why: 'Review is ready.' } } : {}),
+        labels: { merge: 'pr' },
+      },
+      { kind: 'started', stepName: 'ask' }
+    );
+    return id;
+  };
+  // `respond <id> [decision] --recommended --text Agreed. --as triage-agent --json`.
+  const answer = (
+    id: string,
+    occurrence: string | null = `pause-${id}`,
+    decision: string[] = []
+  ): Promise<number> =>
+    runWorkflowRespond({
+      commands: workflowCommands,
+      host,
+      positionals: ['workflow', 'respond', id, ...decision],
+      values: {
+        recommended: true,
+        ...(occurrence === null ? {} : { occurrence }),
+        text: 'Agreed.',
+        as: 'triage-agent',
+        json: true,
+      },
+      command: 'workflow',
+      subcommand: 'respond',
+      cwd: dir,
+      effectiveCwd: dir,
+      json: true,
+      detachedRunConfig: undefined,
+      inheritedEnv: process.env,
+      forgeTrustedEnv: process.env,
+    });
+
+  const unadvised = await paused(false);
+  const refused = await captured(() => answer(unadvised));
+  expect(refused).toMatchObject({
+    code: 1,
+    json: {
+      ok: false,
+      error: `Run ${unadvised}'s attention wait has no recommendation to accept. Choose one of its options.`,
+    },
+  });
+  await store.cancelWorkflowRun(unadvised);
+
+  // Accepting a recommendation names the occurrence it was read on, and takes no decision.
+  const accepted = await paused(true);
+  for (const refused of [
+    () => answer(accepted, null),
+    () => answer(accepted, 'an-earlier-pause'),
+    () => answer(accepted, `pause-${accepted}`, ['hold']),
+  ])
+    expect(await captured(refused)).toMatchObject({ code: 1, json: { ok: false } });
+  expect((await captured(() => answer(accepted, 'an-earlier-pause'))).json).toMatchObject({
+    error: expect.stringContaining(`It is now awaiting occurrence 'pause-${accepted}'`),
+  });
+  expect(
+    (await store.listWorkflowEvents(accepted)).some(event => event.event_type === 'wait_answered')
+  ).toBe(false);
+  expect(await captured(() => answer(accepted))).toMatchObject({
+    code: 0,
+    json: { ok: true, answer: { decision: 'merge', text: 'Agreed.' } },
+  });
+  expect(
+    (await store.listWorkflowEvents(accepted)).find(event => event.event_type === 'wait_answered')
+      ?.data
+  ).toMatchObject({ by: { declared: 'triage-agent' } });
+
+  // The stream shares stdout with the command, so the answer under watch skips the CLI.
+  const asked = await paused(true);
+  const completing = await running();
+  let acted = false;
+  const { code, lines } = await streamed(
+    () =>
+      workflowAttentionCommand(host, dir, undefined, {
+        json: true,
+        labels: [],
+        watch: true,
+        notices: true,
+      }),
+    seen => {
+      if (!acted && seen.length > 0) {
+        acted = true;
+        void host.operations
+          .answerWorkflow(
+            asked,
+            { choose: ['hold'] },
+            { kind: 'operator', declared: 'triage-agent' },
+            { via: 'cli' }
+          )
+          .then(() => store.completeWorkflowRun(completing, { duration_ms: 1 }));
+      }
+      return seen.some(line => line.type === 'terminal');
+    }
+  );
+  expect(code).toBe(0);
+  expect(lines).toMatchObject([
+    { type: 'attention', needs: 'answer', item: { runId: asked } },
+    {
+      type: 'resolved',
+      needs: 'look',
+      runId: asked,
+      reason: 'answered',
+      answeredVia: 'cli',
+      answeredBy: { declared: 'triage-agent' },
+    },
+    { type: 'terminal', needs: 'nothing', runId: completing, status: 'completed' },
+  ]);
+  expect(lines).toHaveLength(3);
+
+  const counted = await captured(() =>
+    workflowAttentionCommand(host, dir, undefined, {
+      json: true,
+      labels: [],
+      countBy: 'label:merge',
+      since: '1h',
+    })
+  );
+  expect(counted.json).toMatchObject({
+    counts: {
+      counts: [{ value: 'pr', count: 3, recommendations: { asked: 2, answered: 2, followed: 1 } }],
+    },
+  });
+});
+
 test('watch streams the queue by project, refuses list-only flags, and exits 4 on a foreign cursor', async () => {
   const root = track(mkdtempSync(join(tmpdir(), 'attention-watch-cli-')));
   process.env.ARCHON_HOME = join(root, 'home');
@@ -526,7 +681,7 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
         after: 'sql:1',
       })
     )
-  ).toEqual({ code: 4, json: { type: 'error', error: 'cursor_invalid' } });
+  ).toEqual({ code: 4, json: { type: 'error', error: 'cursor_invalid', needs: 'look' } });
 });
 
 async function streamedText(
@@ -599,7 +754,14 @@ test.each([true, false])(
         const result = await streamed(command, output =>
           output.some(line => line.type === 'resumed')
         );
-        expect(result).toEqual({ code: 0, lines });
+        expect(result).toEqual({
+          code: 0,
+          lines: [
+            { ...lines[0], needs: 'nothing' },
+            { ...lines[1], needs: 'look' },
+            { ...lines[2], needs: 'nothing' },
+          ],
+        });
       } else {
         const result = await streamedText(command, text =>
           text.includes('Run healthy resumed (running).')

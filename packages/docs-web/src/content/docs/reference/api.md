@@ -322,7 +322,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 | POST | `/api/workflows/runs/{runId}/approve` | Approve a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — approve the child) |
 | POST | `/api/workflows/runs/{runId}/reject` | Reject a paused workflow; optional `expectedGate` refuses stale answers with 409 (400 if paused blocked on a `workflow:` child — reject the child) |
 | POST | `/api/workflows/runs/{runId}/respond` | Resolve a paused gate with one of its declared decisions |
-| POST | `/api/workflows/runs/{runId}/answer` | Answer a paused attention wait in its declared form, naming the exact occurrence |
+| POST | `/api/workflows/runs/{runId}/answer` | Answer a paused attention wait in its declared form, naming the exact occurrence; `recommended: true` chooses the option it recommends, and `as` records a self-declared answerer |
 | POST | `/api/workflows/runs/{runId}/signal` | Signal an external event wait; use `occurrence` for an exact match |
 | DELETE | `/api/workflows/runs/{runId}` | Delete a terminal run and its events |
 
@@ -482,7 +482,7 @@ These routes record the decision and return. The server's continuation scheduler
 | Method | Path | Description |
 |--------|------|-------------|
 | GET | `/api/runs/attention` | List attention queue items or count them with `countBy` |
-| GET | `/api/runs/attention/stream` | Stream the attention queue as server-sent events; `Last-Event-ID` resumes ([stream over HTTP](/getting-started/operate/#stream-over-http)) |
+| GET | `/api/runs/attention/stream` | Stream the attention queue as server-sent events; `level=quiet\|notices\|protocol` selects how much, and `Last-Event-ID` resumes ([stream over HTTP](/getting-started/operate/#stream-over-http)) |
 | GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
 

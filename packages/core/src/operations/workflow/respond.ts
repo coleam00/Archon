@@ -6,6 +6,7 @@ import type { OperationContext } from './context';
 import {
   answerText,
   assertAnswerAdmissible,
+  assertGateTakesNoAnswerer,
   lostGateError,
   type GateAnswerOrigin,
 } from './answer-admission';
@@ -50,10 +51,19 @@ export function assertRespondable(run: WorkflowRun, decision: string): ApprovalC
  * an attention wait the verb is sugar for an answer in the wait's form; at a gate it must
  * be a decision the gate accepts. The operations enforce the same rules.
  */
-export function assertResponseAccepted(run: WorkflowRun, decision: string, text?: string): void {
+export function assertResponseAccepted(
+  run: WorkflowRun,
+  decision: string,
+  text?: string,
+  actor: RunActor = { kind: 'operator' }
+): void {
   const sugar = attentionSugarRequest(run, decision, text);
-  if (sugar !== undefined) attentionAnswerFor(run, assertAnswerable(run), sugar);
-  else assertRespondable(run, decision);
+  if (sugar !== undefined) {
+    attentionAnswerFor(run, assertAnswerable(run), sugar);
+    return;
+  }
+  assertRespondable(run, decision);
+  assertGateTakesNoAnswerer(run, actor);
 }
 
 /**
@@ -84,6 +94,7 @@ async function respondToWorkflowWithDeclaredDecision(
   assertAnswerAdmissible(run, origin);
   const approval = assertRespondable(run, decision);
   if (!approval) throw new Error('Workflow run is paused but missing approval context.');
+  assertGateTakesNoAnswerer(run, actor);
 
   const structuredOutput = { decision, text: text ?? '' };
   const events: GateResolutionEvent[] = [

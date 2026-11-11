@@ -13,10 +13,13 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
  */
 import { z } from '@hono/zod-openapi';
 import {
-  attentionQueueCountsSchema,
+  openAttentionQueueCountsSchema,
   attentionQueueItemSchema,
 } from '@archon/workflows/attention-queue';
-import { attentionStreamLineSchema } from '@archon/workflows/attention-watch';
+import {
+  attentionWatchLevelSchema,
+  classifiedAttentionStreamLineSchema,
+} from '@archon/workflows/attention-needs';
 import { attentionLabelKeySchema, attentionLabelsSchema } from '@archon/workflows/schemas/dag-node';
 import {
   workflowDefinitionSchema as engineWorkflowDefinitionSchema,
@@ -25,6 +28,7 @@ import {
 } from '@archon/workflows/schemas/workflow';
 import {
   createRunAttentionSchema,
+  declaredAnswererNameSchema,
   approvalContextSchema,
   expectedApprovalGateSchema,
   workflowRunSchema as engineWorkflowRunSchema,
@@ -309,13 +313,20 @@ export const respondWorkflowRunBodySchema = z
 /**
  * POST /api/workflows/runs/:runId/answer request body: an answer to a paused attention
  * wait. `occurrence` is the one run-attention reports; an answer for any other occurrence
- * is refused. `choose` holds declared option ids (none for a message form).
+ * is refused. `choose` holds declared option ids (none for a message form);
+ * `recommended: true` chooses the option the wait recommends instead. `as` is the name
+ * the answerer declares for itself: recorded with the answer as a claim, never checked.
  */
 export const answerWorkflowRunBodySchema = z
   .object({
     occurrence: z.string(),
     choose: z.array(z.string().min(1)).optional(),
+    recommended: z.literal(true).optional(),
     text: z.string().optional(),
+    as: declaredAnswererNameSchema.optional(),
+  })
+  .refine(body => body.recommended !== true || (body.choose ?? []).length === 0, {
+    message: 'Use choose or recommended, not both',
   })
   .openapi('AnswerWorkflowRunBody');
 
@@ -375,13 +386,19 @@ export const attentionQueueQuerySchema = z.object({
 export const attentionStreamQuerySchema = attentionQueueQuerySchema
   .pick({ project: true, all: true, label: true })
   .extend({
-    /** `true` sends only the lines someone has to act on, as `--watch` without `--protocol` does. */
-    needsSomeone: z.enum(['true', 'false']).optional(),
+    /**
+     * How much of the stream to send; `protocol`, every line, when absent. `quiet` is what
+     * `--watch` writes and `notices` what `--watch --notices` writes.
+     */
+    level: attentionWatchLevelSchema.optional(),
   });
 
-/** One GET /api/runs/attention/stream event's data: the `--watch --protocol --json` line. */
+/**
+ * One GET /api/runs/attention/stream event's data: the `--watch --json` line, with what
+ * it asks of its reader in `needs`.
+ */
 export const attentionStreamLineResponseSchema =
-  attentionStreamLineSchema.openapi('AttentionStreamLine');
+  classifiedAttentionStreamLineSchema.openapi('AttentionStreamLine');
 
 /**
  * GET /api/runs/attention list response. `items` is the queue; `runs` holds the same runs
@@ -398,7 +415,7 @@ export const runsNeedingAttentionResponseSchema = z
 /** GET /api/runs/attention response when `countBy` is given. */
 export const attentionQueueCountsResponseSchema = z
   .object({
-    counts: attentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }),
+    counts: openAttentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }),
     degraded: z.array(attentionDegradedSchema).optional(),
   })
   .openapi('AttentionQueueCountsResponse');

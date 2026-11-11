@@ -145,7 +145,7 @@ export function createTransactionReads(
         .map(event => ({
           runId: event.workflow_run_id,
           startedAt: event.created_at,
-          labels: structuredClone(event.data.labels),
+          data: structuredClone(event.data),
         })),
     listMetricRecords: async () =>
       // event_order counts within one run's log here, so only time orders across runs.

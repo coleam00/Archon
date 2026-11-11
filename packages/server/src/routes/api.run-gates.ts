@@ -450,15 +450,22 @@ export function registerRunGateRoutes(
     try {
       const run = await workflowDb.getWorkflowRun(runId);
       if (!run) return apiError(c, 404, 'Workflow run not found');
-      const actor = await resolveRunActor(c);
-      await assertRunActionAllowed(run, actor, 'respond');
+      const requester = await resolveRunActor(c);
+      await assertRunActionAllowed(run, requester, 'respond');
       const body = getValidatedBody(c, answerWorkflowRunBodySchema);
+      // A request that already carries a user keeps it; only the operator declares a name.
+      const actor =
+        requester.kind === 'operator' && body.as !== undefined
+          ? { ...requester, declared: body.as }
+          : requester;
       const origin: GateAnswerOrigin = {
         via: 'api',
         expectedGate: expectedGateForOccurrence(run, body.occurrence),
       };
       const request = {
-        choose: body.choose ?? [],
+        ...(body.recommended === true
+          ? { recommended: true as const }
+          : { choose: body.choose ?? [] }),
         ...(body.text !== undefined ? { text: body.text } : {}),
       };
       try {

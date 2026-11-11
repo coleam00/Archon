@@ -336,7 +336,8 @@ export async function runWorkflowApprove(route: WorkflowRoute): Promise<number> 
     json,
     effectiveCwd,
     values.detach as boolean | undefined,
-    values.occurrence as string | undefined
+    values.occurrence as string | undefined,
+    values.as as string | undefined
   );
 }
 
@@ -353,13 +354,38 @@ export async function runWorkflowReject(route: WorkflowRoute): Promise<number> {
     json,
     effectiveCwd,
     values.detach as boolean | undefined,
-    values.occurrence as string | undefined
+    values.occurrence as string | undefined,
+    values.as as string | undefined
   );
 }
 
 export async function runWorkflowRespond(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   const respondRunId = positionals[2];
+  // `--recommended` stands in for the decision. It accepts a recommendation the answerer
+  // read, so it must name the occurrence it read it on: without one it would accept the
+  // recommendation of whichever wait the run has moved to since.
+  if (values.recommended === true) {
+    const occurrence = values.occurrence as string | undefined;
+    if (!respondRunId || occurrence === undefined || positionals[3] !== undefined)
+      return await fail(
+        json,
+        'Usage: archon workflow respond <run-id> --recommended --occurrence <id> [--text <text>] [--as <name>] [--json]\n' +
+          '  --recommended takes the place of <decision>, so it takes no positional decision or text.'
+      );
+    if (values.detach === true)
+      return await fail(json, 'workflow respond --recommended takes no --detach');
+    return await route.commands.workflowAnswerCommand(
+      route.host,
+      respondRunId,
+      occurrence,
+      { recommended: true },
+      values.text as string | undefined,
+      json,
+      effectiveCwd,
+      values.as as string | undefined
+    );
+  }
   const decision = positionals[3];
   if (!respondRunId || !decision) {
     return await fail(
@@ -377,7 +403,8 @@ export async function runWorkflowRespond(route: WorkflowRoute): Promise<number> 
     json,
     effectiveCwd,
     values.detach as boolean | undefined,
-    values.occurrence as string | undefined
+    values.occurrence as string | undefined,
+    values.as as string | undefined
   );
 }
 
@@ -385,20 +412,28 @@ export async function runWorkflowAnswer(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   const answerRunId = positionals[2];
   const answerOccurrence = values.occurrence as string | undefined;
-  if (!answerRunId || answerOccurrence === undefined || positionals[3] !== undefined) {
+  const choose = (values.choose as string[] | undefined) ?? [];
+  const recommended = values.recommended === true;
+  if (
+    !answerRunId ||
+    answerOccurrence === undefined ||
+    positionals[3] !== undefined ||
+    (recommended && choose.length > 0)
+  ) {
     return await fail(
       json,
-      'Usage: archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <text>] [--json]'
+      'Usage: archon workflow answer <run-id> --occurrence <id> [--choose <id>... | --recommended] [--text <text>] [--as <name>] [--json]'
     );
   }
   return await route.commands.workflowAnswerCommand(
     route.host,
     answerRunId,
     answerOccurrence,
-    (values.choose as string[] | undefined) ?? [],
+    recommended ? { recommended: true } : { choose },
     values.text as string | undefined,
     json,
-    effectiveCwd
+    effectiveCwd,
+    values.as as string | undefined
   );
 }
 
@@ -408,7 +443,7 @@ export async function runWorkflowAttention(route: WorkflowRoute): Promise<number
   if (positionals[3] !== undefined) {
     return await fail(
       json,
-      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key> [--since <7d|24h|2w|ISO>]] [--watch [--protocol [--after <cursor>]]] [--json]'
+      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>|answerer [--since <7d|24h|2w|ISO>]] [--watch [--notices | --protocol [--after <cursor>]]] [--json]'
     );
   }
   return await route.commands.workflowAttentionCommand(route.host, effectiveCwd, positionals[2], {
@@ -421,6 +456,7 @@ export async function runWorkflowAttention(route: WorkflowRoute): Promise<number
     since: values.since as string | undefined,
     watch: values.watch as boolean | undefined,
     protocol: values.protocol as boolean | undefined,
+    notices: values.notices as boolean | undefined,
     after: values.after as string | undefined,
   });
 }

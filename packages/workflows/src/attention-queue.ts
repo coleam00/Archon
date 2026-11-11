@@ -30,18 +30,22 @@ import {
 } from './schemas/wait-node';
 import {
   attentionLabels,
+  attentionAnswererSchema,
   attentionRevision,
   pausedAttentionWait,
   pausedUsageLimitWait,
   queuedRunAttention,
   runAttentionUnreadableReasonSchema,
   SUBRUN_METADATA_KEYS,
+  type AttentionAnswerer,
   type QueuedRunAttention,
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
+import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { IWorkflowStore } from './store';
+import { attentionAnswerRecordSchema, attentionAskRecordSchema } from './store/attention-writes';
 
 /**
  * A project as the engine identifies it. `key` is the identity: the project storage key
@@ -421,7 +425,7 @@ export function isInAttentionScope(
 /** Ordering for a list: oldest pause first, or by one label's value as a plain string. */
 export type AttentionQueueOrder = { by: 'age' } | { by: 'label'; key: string };
 
-/** What a count groups by: project, or one label's value. */
+/** What a count groups by: project, one label's value, or who answered. */
 export type AttentionQueueCountBy = {
   [Counts in AttentionQueueCounts as Counts['by']]: Omit<Counts, 'counts'>;
 }[AttentionQueueCounts['by']];
@@ -447,12 +451,13 @@ export function parseAttentionQueueOrder(text: string): AttentionQueueOrder {
   throw new Error(`sort must be 'age' or 'label:<key>', got '${text}'`);
 }
 
-/** Parse `--count-by`: `project` or `label:<key>`. */
+/** Parse `--count-by`: `project`, `label:<key>` or `answerer`. */
 export function parseAttentionQueueCountBy(text: string): AttentionQueueCountBy {
   if (text === 'project') return { by: 'project' };
+  if (text === 'answerer') return { by: 'answerer' };
   if (text.startsWith(LABEL_PREFIX))
     return { by: 'label', key: parseLabelSelector(text, 'count-by') };
-  throw new Error(`count-by must be 'project' or 'label:<key>', got '${text}'`);
+  throw new Error(`count-by must be 'project', 'label:<key>' or 'answerer', got '${text}'`);
 }
 
 /**
@@ -481,6 +486,8 @@ export interface AttentionQueueRequestText {
   labels: readonly string[];
   sort?: string;
   countBy?: string;
+  /** Set when the count reads started waits from events, not the items open now. */
+  since?: string;
 }
 
 /**
@@ -496,6 +503,9 @@ export function parseAttentionQueueRequest(request: AttentionQueueRequestText): 
     throw new Error('Use project or all, not both');
   if (request.sort !== undefined && request.countBy !== undefined)
     throw new Error('Use sort or count-by, not both');
+  // An open item has no answer yet, so only a count of started waits can group by it.
+  if (request.countBy === 'answerer' && request.since === undefined)
+    throw new Error("count-by 'answerer' counts answered waits from events and needs since");
   return {
     labels: parseAttentionLabelPairs(request.labels),
     order: parseAttentionQueueOrder(request.sort ?? 'age'),
@@ -514,8 +524,19 @@ export function matchesAttentionLabels(
   );
 }
 
-/** What scope, label filters and counts read of an item. */
-type AttentionCounted = Pick<AttentionQueueItem, 'project' | 'labels'>;
+/** What events say became of one started attention wait. */
+interface AskOutcome {
+  /** Null while the wait is unanswered, and for an answer that recorded nobody. */
+  answeredBy: AttentionAnswerer | null;
+  /** Absent when the wait recorded no recommendation. */
+  recommendation?: { answered: boolean; followed: boolean };
+}
+
+/**
+ * What scope, label filters and counts read of an item. `outcome` is set only on a
+ * started wait read from events (`countAttentionWaitStarts`); an open item has none.
+ */
+type AttentionCounted = Pick<AttentionQueueItem, 'project' | 'labels'> & { outcome?: AskOutcome };
 
 function inQuery(item: AttentionCounted, query: AttentionQueueQuery): boolean {
   return (
@@ -558,24 +579,57 @@ export function selectAttentionQueue(
   });
 }
 
+/**
+ * How a group's asks fared against their recommendations: `asked` carried one, `answered`
+ * of those were answered, and `followed` of those chose the recommended option. Only a
+ * count of started waits reports it; a wait started before recommendations were recorded
+ * on its event counts as carrying none.
+ */
+const recommendationCountsSchema = z.object({
+  asked: z.number().int(),
+  answered: z.number().int(),
+  followed: z.number().int(),
+});
+type RecommendationCounts = z.infer<typeof recommendationCountsSchema>;
+const groupCountFields = {
+  count: z.number().int(),
+  recommendations: recommendationCountsSchema.optional(),
+};
+
+const countsByProjectSchema = z.object({
+  by: z.literal('project'),
+  counts: z.array(z.object({ project: projectRefSchema.nullable(), ...groupCountFields })),
+});
+const countsByLabelSchema = z.object({
+  by: z.literal('label'),
+  key: z.string(),
+  /** `value` is null for the items that have no such label. */
+  counts: z.array(z.object({ value: z.string().nullable(), ...groupCountFields })),
+});
+
+/** The counts of the items open now. They have no answer yet, so none groups by answerer. */
+export const openAttentionQueueCountsSchema = z.discriminatedUnion('by', [
+  countsByProjectSchema,
+  countsByLabelSchema,
+]);
+
 export const attentionQueueCountsSchema = z.discriminatedUnion('by', [
+  countsByProjectSchema,
+  countsByLabelSchema,
   z.object({
-    by: z.literal('project'),
-    counts: z.array(z.object({ project: projectRefSchema.nullable(), count: z.number().int() })),
-  }),
-  z.object({
-    by: z.literal('label'),
-    key: z.string(),
-    /** `value` is null for the items that have no such label. */
-    counts: z.array(z.object({ value: z.string().nullable(), count: z.number().int() })),
+    by: z.literal('answerer'),
+    /** `answeredBy` is null for waits still open and for answers that recorded nobody. */
+    counts: z.array(
+      z.object({ answeredBy: attentionAnswererSchema.nullable(), ...groupCountFields })
+    ),
   }),
 ]);
 export type AttentionQueueCounts = z.infer<typeof attentionQueueCountsSchema>;
 
 /**
- * How many items `query` selects under each project, or each value of one label, most
- * first. Projects group by the scope rule: a codebase id when the item has one, else
- * its key. A group shows the project of its first item in `items`' order.
+ * How many items `query` selects under each project, each value of one label, or each
+ * answerer, most first. Projects group by the scope rule: a codebase id when the item has
+ * one, else its key. A group shows the project of its first item in `items`' order.
  */
 export function countAttentionQueue(
   items: readonly AttentionCounted[],
@@ -585,62 +639,90 @@ export function countAttentionQueue(
   const { countBy } = query;
   switch (countBy.by) {
     case 'project':
-      return countQueueByProject(selected);
-    case 'label':
-      return countQueueByLabel(selected, countBy.key);
+      return {
+        by: 'project',
+        counts: tally(
+          selected,
+          item => item.project,
+          project =>
+            project === null
+              ? 'none'
+              : project.codebaseId !== null
+                ? `codebase:${project.codebaseId}`
+                : `key:${project.key}`,
+          project => project?.key ?? ''
+        ).map(({ group, ...counts }) => ({ project: group, ...counts })),
+      };
+    case 'label': {
+      const { key } = countBy;
+      return {
+        by: 'label',
+        key,
+        counts: tally(
+          selected,
+          item => (Object.hasOwn(item.labels, key) ? (item.labels[key] ?? '') : null),
+          value => JSON.stringify(value),
+          value => value ?? ''
+        ).map(({ group, ...counts }) => ({ value: group, ...counts })),
+      };
+    }
+    case 'answerer':
+      return {
+        by: 'answerer',
+        counts: tally(
+          selected,
+          item => item.outcome?.answeredBy ?? null,
+          answerer => JSON.stringify(answerer),
+          answerer =>
+            answerer === null ? '' : 'declared' in answerer ? answerer.declared : answerer.userId
+        ).map(({ group, ...counts }) => ({ answeredBy: group, ...counts })),
+      };
   }
   return countBy satisfies never;
 }
 
-function countQueueByProject(
-  items: readonly AttentionCounted[]
-): Extract<AttentionQueueCounts, { by: 'project' }> {
-  const groups = new Map<string, { project: ProjectRef | null; count: number }>();
-  for (const item of items) {
-    const id =
-      item.project === null
-        ? 'none'
-        : item.project.codebaseId !== null
-          ? `codebase:${item.project.codebaseId}`
-          : `key:${item.project.key}`;
-    const group = groups.get(id) ?? { project: item.project, count: 0 };
-    group.count += 1;
-    groups.set(id, group);
-  }
-  return {
-    by: 'project',
-    counts: [...groups.values()].sort(
-      (a, b) => b.count - a.count || compareStrings(a.project?.key ?? '', b.project?.key ?? '')
-    ),
-  };
-}
-
-function countQueueByLabel(
+/** One entry per group of `items`, largest first, then by `sortKey`. */
+function tally<Group>(
   items: readonly AttentionCounted[],
-  key: string
-): Extract<AttentionQueueCounts, { by: 'label' }> {
-  const groups = new Map<string | null, number>();
+  groupOf: (item: AttentionCounted) => Group,
+  idOf: (group: Group) => string,
+  sortKey: (group: Group) => string
+): { group: Group; count: number; recommendations?: RecommendationCounts }[] {
+  const groups = new Map<
+    string,
+    { group: Group; count: number; recommendations?: RecommendationCounts }
+  >();
   for (const item of items) {
-    const value = Object.hasOwn(item.labels, key) ? (item.labels[key] ?? '') : null;
-    groups.set(value, (groups.get(value) ?? 0) + 1);
+    const group = groupOf(item);
+    const id = idOf(group);
+    const entry = groups.get(id) ?? { group, count: 0 };
+    groups.set(id, entry);
+    entry.count += 1;
+    if (item.outcome === undefined) continue;
+    const totals = (entry.recommendations ??= { asked: 0, answered: 0, followed: 0 });
+    const { recommendation } = item.outcome;
+    if (recommendation === undefined) continue;
+    totals.asked += 1;
+    if (recommendation.answered) totals.answered += 1;
+    if (recommendation.followed) totals.followed += 1;
   }
-  return {
-    by: 'label',
-    key,
-    counts: [...groups.entries()]
-      .map(([value, count]) => ({ value, count }))
-      .sort((a, b) => b.count - a.count || compareStrings(a.value ?? '', b.value ?? '')),
-  };
+  return [...groups.values()].sort(
+    (a, b) => b.count - a.count || compareStrings(sortKey(a.group), sortKey(b.group))
+  );
 }
 
 /**
  * `countAttentionQueue` over every attention wait started at or after `since`, answered
- * or still open, from the labels each wait opened with. A wait started before labels
- * were recorded on its `wait_started` row counts as having none.
+ * or still open, from events alone: the labels and ask record each `wait_started` row
+ * opened with, and the `wait_answered` row of the same occurrence. A wait started before
+ * labels or the ask record were recorded counts as having no labels and no recommendation.
  */
 export async function countAttentionWaitStarts(
   source: {
-    store: Pick<IWorkflowStore, 'listAttentionWaitStarts' | 'getWorkflowRunsByIds' | 'getCodebase'>;
+    store: Pick<
+      IWorkflowStore,
+      'listAttentionWaitStarts' | 'getWorkflowRunsByIds' | 'getCodebase' | 'listEventsForRuns'
+    >;
   },
   query: AttentionQueueQuery & { countBy: AttentionQueueCountBy; since?: Date }
 ): Promise<AttentionQueueCounts> {
@@ -650,16 +732,47 @@ export async function countAttentionWaitStarts(
   );
   const runIds = [...new Set(starts.map(start => start.runId))];
   const runs = new Map((await source.store.getWorkflowRunsByIds(runIds)).map(run => [run.id, run]));
+  const answers = await source.store.listEventsForRuns(runIds, ['wait_answered']);
   const codebases: CodebaseCache = new Map();
   const counted: AttentionCounted[] = [];
   for (const start of starts) {
     const run = runs.get(start.runId);
     if (run === undefined) continue;
-    const labels = attentionLabelsSchema.safeParse(start.labels);
+    const labels = attentionLabelsSchema.safeParse(start.data.labels);
     counted.push({
       project: await runProject(source, run, codebases),
       labels: labels.success ? labels.data : {},
+      outcome: askOutcome(start.data, answers.get(start.runId) ?? []),
     });
   }
   return countAttentionQueue(counted, query);
+}
+
+/** What became of the wait a `wait_started` row opened, from its run's `wait_answered` rows. */
+function askOutcome(
+  started: Record<string, unknown>,
+  answered: readonly Pick<WorkflowEventRow, 'data'>[]
+): AskOutcome {
+  const ask = attentionAskRecordSchema.safeParse(started);
+  if (!ask.success) return { answeredBy: null };
+  let answer: z.infer<typeof attentionAnswerRecordSchema> | undefined;
+  for (const row of answered) {
+    const record = attentionAnswerRecordSchema.safeParse(row.data);
+    if (record.success && record.data.occurrence === ask.data.occurrence) answer = record.data;
+  }
+  const recommended = ask.data.recommendation?.option;
+  return {
+    answeredBy: answer?.by ?? null,
+    ...(recommended === undefined
+      ? {}
+      : {
+          recommendation: {
+            answered: answer !== undefined,
+            followed:
+              answer !== undefined &&
+              'decision' in answer.answer &&
+              answer.answer.decision === recommended,
+          },
+        }),
+  };
 }

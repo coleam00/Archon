@@ -36,7 +36,10 @@ export const attentionOptionSchema = z.strictObject({
 });
 export type AttentionOption = z.infer<typeof attentionOptionSchema>;
 
-/** The option an attention wait recommends, why, and how sure it is. Display only. */
+/**
+ * The option an attention wait recommends, why, and how sure it is. Shown with the
+ * choices; an answer that accepts the recommendation chooses `option`.
+ */
 export const attentionRecommendationSchema = z.strictObject({
   option: attentionOptionIdSchema,
   why: z.string().trim().min(1, 'must not be empty'),

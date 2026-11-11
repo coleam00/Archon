@@ -49,8 +49,13 @@ describe('attention queue arguments', () => {
     expect(parseAttentionQueueCountBy('label:ci')).toEqual({ by: 'label', key: 'ci' });
     expect(() => parseAttentionQueueOrder('newest')).toThrow("sort must be 'age' or 'label:<key>'");
     expect(() => parseAttentionQueueOrder('label:')).toThrow('invalid label key');
+    expect(parseAttentionQueueCountBy('answerer')).toEqual({ by: 'answerer' });
     expect(() => parseAttentionQueueCountBy('codebase')).toThrow(
-      "count-by must be 'project' or 'label:<key>'"
+      "count-by must be 'project', 'label:<key>' or 'answerer'"
+    );
+    // An open item has no answer, so only a count of started waits groups by answerer.
+    expect(() => parseAttentionQueueRequest({ labels: [], countBy: 'answerer' })).toThrow(
+      "count-by 'answerer' counts answered waits from events and needs since"
     );
   });
 

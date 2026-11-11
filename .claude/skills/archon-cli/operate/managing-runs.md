@@ -59,11 +59,12 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |
 | Every run that needs someone (this project / all) | `archon workflow attention --json [--all] [--label k=v]` |
 | The queue item one run stands for | `archon workflow attention <run-id> --json` |
-| Everything that needs someone, as it happens | `archon workflow attention --watch --json [--all] [--label k=v]` |
+| Everything that needs someone, as it happens | `archon workflow attention --watch --json [--all] [--label k=v]` (each line has `needs`: `answer`, `look` or `nothing`; `--notices` adds runs that completed, were cancelled or resumed) |
 | Every change in the queue, for a program that syncs it | `archon workflow attention --watch --protocol --json [--all] [--label k=v] [--after <cursor>]` |
 | Classify an item without answering it | `archon workflow attention label <run-id> --occurrence <id> --set k=v --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
-| Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <t>]` |
+| Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>... \| --recommended] [--text <t>] [--as <name>]` |
+| Accept an attention wait's recommendation | `archon workflow respond <run-id> --recommended --occurrence <id> [--text <t>] [--as <name>] --json` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
 | End a stalled turn on a running run, keep the run | `archon workflow end-turn <run-id>` |
@@ -122,7 +123,14 @@ archon workflow answer <run-id> --occurrence <id> --choose use-dev --json       
 archon workflow answer <run-id> --occurrence <id> --choose a --choose b --json    # multi_select
 ```
 
-`approve`/`reject`/`respond <option>` are shorthand for the same answer. In the
+`approve`/`reject`/`respond <option>` are shorthand for the same answer.
+`respond <run-id> --recommended --occurrence <id>` (or `answer --recommended`) chooses the
+option the item recommends. Pass the `occurrence` of the item you read, so a run that
+moved to another ask refuses instead of accepting a recommendation you never saw. Text
+goes in `--text`. It is refused when the item has no recommendation, and it takes `--json`
+but not `--detach`. `--as <name>` records the name you declare as the answerer, which is
+how an agent's answers are told from a person's later. It is recorded on attention waits
+only and refused at a gate. In the
 `approval` form `reject` is an answer and does not cancel the run. Like a gate answer,
 the answered wait is a due continuation. Answer only what the user actually decided; an
 undeclared option is refused. A `legacy:` occurrence is a wait paused before answers

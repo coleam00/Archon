@@ -23,6 +23,6 @@ export async function listAttentionWaitStarts(): Promise<AttentionWaitStart[]> {
   return result.rows.map(row => ({
     runId: row.workflow_run_id,
     startedAt: toHydratedTimestamp(row.created_at).toISOString(),
-    labels: parseJsonObject(row.data)?.labels,
+    data: parseJsonObject(row.data) ?? {},
   }));
 }

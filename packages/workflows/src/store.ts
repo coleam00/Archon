@@ -95,8 +95,8 @@ export interface IRunTreeStore {
 export interface AttentionWaitStart {
   runId: string;
   startedAt: string;
-  /** The row's raw `data.labels`: absent on a wait started before labels were recorded. */
-  labels: unknown;
+  /** The row's raw `data`: its labels and ask record, as far as the row recorded them. */
+  data: Record<string, unknown>;
 }
 
 /** A `node_completed` row whose `structured_output` carries a `metrics` key. */
