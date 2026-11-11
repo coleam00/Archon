@@ -37,7 +37,7 @@ import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
-import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
+import { askFields, attentionWait, type DecisionEntry, withOther } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
@@ -61,7 +61,6 @@ type Decision =
 
 function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string): Decision {
   if (attention === null) throw new Error(`the ${by} decision asks without an attention item`);
-  checkAttention(attention);
   return { kind: 'asked', by, attention: withOther(attention, 'continue'), brief, reason };
 }
 
