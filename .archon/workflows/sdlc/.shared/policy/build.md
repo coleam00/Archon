@@ -44,3 +44,10 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
   instead of running another round.
 - Anything that would change a public contract, a persisted schema, authentication or
   the project's direction without a ruling.
+
+An answer acts the moment it is given, so a choice says what the queue does then. A
+choice that continues launches the next round at once: offer it only when the answer
+itself gives that round everything it needs. A choice that waits on something from
+outside the queue, such as evidence a person has to gather, an environment only they
+have or another item's work, parks the item, and a re-triage brings it back when that
+arrives.

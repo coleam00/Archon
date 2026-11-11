@@ -1,9 +1,9 @@
 name: archon-intake
 description: |
   The standing front of the label-driven pack. Every issue event records a
-  request on the issue's work item; the run then claims the best waiting item
-  and decides, with a script and before any model reads the text, whether its
-  author is a listed maintainer. A maintainer's issue is triaged, and the
+  request on the issue's work item; the run then claims that issue, or the best
+  waiting item when it does not wait, and decides, with a script and before any
+  model reads the text, whether its author is a listed maintainer. A maintainer's issue is triaged, and the
   verdict becomes the item's stage and a route label; a duplicate or an
   already delivered item the triage policy lets close is closed with a link to
   what resolved it. An outside issue gets

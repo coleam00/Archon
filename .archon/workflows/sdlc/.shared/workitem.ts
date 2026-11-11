@@ -5,8 +5,8 @@
  * The document is the item's state; its labels mirror it, and a label a person adds
  * is a request, never the state. Trust is decided once, by a script, from the
  * project's maintainer list, so no model and no workflow input can raise it. Every
- * event records a request on its item; a run then claims the best waiting item with
- * a conditional write, so two runs never work the same item, and releases the claim
+ * event records a request on its item; its run then claims that item, or the best
+ * waiting one when it does not wait, with a conditional write, so two runs never work the same item, and releases the claim
  * when it is done. A claim whose run the engine reports terminal is released by the
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
