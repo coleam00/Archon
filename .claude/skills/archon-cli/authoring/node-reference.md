@@ -110,6 +110,23 @@ only; anything with branching is a script node.
 Prefer named script files over inline bodies. Python (`runtime: uv`) preferred,
 TypeScript (`runtime: bun`) fine. `deps:` adds uv dependencies.
 
+A Bun script imports Archon's own functions from the `archon:script` module, which
+Archon provides to every Bun `script:` node; `forge(op, request)` there calls a forge
+operation, typed per operation. `archon script types --out <file>` writes the module's
+TypeScript declaration for an editor or `tsc`, and `--check` exits 1 when that file is
+missing or stale.
+
+A script that works a shared state document claims it first. In a run,
+`archon state claim` reads `[{name, ifRevision}, ...]` on stdin and takes the lease of
+the first document still at that revision and not leased by a live run; it exits 2
+when none is. `archon state put`, `patch` and `delete` accept `--held`, which refuses
+the write unless the run holds the live lease.
+
+A workflow that another run should start, such as a follow-up round, gets a binding
+file with no `schedule`. Nothing starts it on a clock; a node, a script or an operator
+starts it with `archon trigger fire --config <file>`, through the same admission,
+capacity and overlap rules as a scheduled start.
+
 ### Result contracts — the producer owns the schema
 
 Use the producing node's `output_format` for a JSON result. `returns:` selects
@@ -342,6 +359,11 @@ an answer and never cancels the run; branch on `$ask.output.decision` with `when
   when: "$review.output.decision == 'approve'"
   command: implement
 ```
+
+On a `select` wait, `other: true` adds one option with the reserved id `other` after
+the declared ones, for "none of these; here is what to do instead". An answer that
+chooses it must carry text, and the next node reads `{ decision: "other", text }` with
+no `value`.
 
 Pause only for an interactive session or a super load-bearing action. The run pauses
 in the attention queue until answered, however it was started. To ask after each pass
