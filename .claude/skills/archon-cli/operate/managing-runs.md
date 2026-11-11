@@ -172,6 +172,15 @@ you, and `terminal` means a run failed or completed with `outcome: "failed"`. Th
 restarted watch needs no cursor. Exit `4` means the store cannot read the stream's
 position: start it again.
 
+Read the watch unfiltered. In an agent shell do not pipe it through `grep`, `head` or
+any other filter: the shell's `grep` may hold every line until the watch ends, so an ask
+arrives late or never. If a JSON line is too long for your harness to show, drop `--json`:
+the text form prints each ask as a short block with its labels, the question's first
+line, the recommendation and its reason, what each option does, and the exact answer
+commands with `--occurrence` (and the `--recommended` form when there is a
+recommendation), so you can answer from the watch alone. `archon workflow attention
+<run-id>` prints the whole question when you need it.
+
 A program that keeps its own copy of the open set adds `--protocol`: the stream then
 also writes `ready` after the open set, a `bookmark` heartbeat, and a line for every
 run that ends or resumes, and `--after <cursor>` replays what came after a cursor. A
