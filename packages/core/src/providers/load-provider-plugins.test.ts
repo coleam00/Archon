@@ -147,7 +147,7 @@ test('stale first-party providers are unavailable with the versioned install com
   );
 });
 
-test('source registration skips maintained receipts and warns with the receipt path', async () => {
+test('source registration skips maintained receipts without warning', async () => {
   const dir = tempRoot(await mkdtemp(join(tmpdir(), 'provider-source-')));
   const file = receiptPath(dir, id);
   await mkdir(dirname(file), { recursive: true });
@@ -164,7 +164,7 @@ test('source registration skips maintained receipts and warns with the receipt p
   const loggerFactory = spyOn(paths, 'createLogger').mockReturnValue(logger);
   try {
     expect(await loadProviderPlugins(dir, { maintained: 'source' })).toEqual([]);
-    expect(warning).toHaveBeenCalledWith({ receipt: file }, 'provider.receipt_skipped_source');
+    expect(warning).not.toHaveBeenCalled();
   } finally {
     loggerFactory.mockRestore();
     warning.mockRestore();
