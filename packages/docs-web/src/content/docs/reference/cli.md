@@ -1085,6 +1085,7 @@ archon workflow attention --json --count-by label:class --answered --since 30d
 archon workflow attention <run-id> --json                          # one item
 archon workflow attention --watch --json --all                     # stream readable changes
 archon workflow attention --watch --json --after <cursor>          # resume a stream
+archon workflow attention --watch --needs-me --json --label merge=pr  # only lines to act on
 ```
 
 The default scope is the current project, resolved from the working directory as [`state`](#state) resolves it. `--all` covers the install. `--project` takes a codebase id, a codebase name, or a project key such as `@cwd/scratch-<digest>`; copy the exact key from `items[].project.key` in `archon workflow attention --all --json`. A run is in scope when its codebase id matches, when both sides have one, and otherwise when its project key matches, so a run paused before its codebase was renamed is still listed under the new name. Under [`--chat-project-id`](#global-options), list, count and watch use the selected project whatever the working directory; `--all` and a `--project` naming another project are rejected.
@@ -1142,6 +1143,13 @@ closed stdout stops the stream (a closed stdout is noticed at the next line), `1
 cannot start or an output write fails for another reason, `4` when the store cannot read the stream's cursor, an `--after` cursor this
 install did not issue or the stream's own position (with `--json`, the last line is
 `{"type":"error","error":"cursor_invalid"}`; rerun without `--after`).
+
+**`--needs-me`**, with `--watch`, writes only the lines someone has to act on: `attention`
+for an item that takes an answer or a look, `terminal` for a run that failed,
+`owner_lost`, `degraded` and `error`. It writes no `ready` or `bookmark`, so a silent
+stream does not prove it is reading; a program that needs that guarantee uses the full
+stream. Combine it with `--label k=v` to watch one class of question. See
+[Watch only what needs someone](/getting-started/operate/#watch-only-what-needs-someone).
 
 HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sort` and
 `countBy`, and returns `items` beside the console's `runs`, or `{ counts }`. A server has

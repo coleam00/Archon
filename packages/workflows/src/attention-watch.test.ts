@@ -10,6 +10,7 @@ import * as paths from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { readAttentionQueueItem } from './attention-queue';
 import {
+  attentionLineNeedsSomeone,
   attentionStreamLineSchema,
   watchAttentionQueue,
   type AttentionStreamLine,
@@ -1605,3 +1606,24 @@ test.each(['all', 'project'] as const)(
     }
   }
 );
+
+test('only lines someone has to act on need someone', () => {
+  const cursor = workflowEventCursor('c');
+  const run = { cursor, project: null, runId: 'r', workflow: 'ci', parentRunId: null };
+  const terminal = { type: 'terminal', ...run, outcome: null, cause: null } as const;
+  const quiet: AttentionStreamLine[] = [
+    { type: 'bookmark', cursor },
+    { type: 'ready', cursor },
+    { type: 'resumed', ...run, status: 'running' },
+    { type: 'resolved', ...run, occurrence: 'o', reason: 'withdrawn' },
+    { ...terminal, status: 'completed' },
+    { ...terminal, status: 'cancelled' },
+  ];
+  const needed: AttentionStreamLine[] = [
+    { ...terminal, status: 'failed' },
+    { type: 'owner_lost', ...run, observedStatus: 'running' },
+    { type: 'error', error: 'cursor_invalid' },
+  ];
+  expect(quiet.filter(attentionLineNeedsSomeone)).toEqual([]);
+  expect(needed.filter(attentionLineNeedsSomeone)).toEqual(needed);
+});

@@ -109,6 +109,12 @@ export const workflowHelp: HelpGroup = {
             'https://archon.diy/getting-started/operate/#stream-the-queue',
         },
         {
+          spec: '--needs-me',
+          description:
+            'With --watch: only lines someone must act on (open items, failed runs,\n' +
+            'lost owners, coverage warnings); no ready or bookmark heartbeat',
+        },
+        {
           spec: '--after <cursor>',
           description: 'With --watch: replay readable events after a cursor; gaps may remain',
         },

@@ -295,6 +295,32 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 
 The stream only reads. Stopping it affects no run.
 
+### Watch only what needs someone
+
+The full stream is a sync protocol: a program keeps an open set from it and checkpoints on `bookmark`. A person or an answering agent that should wake only when there is something to do adds `--needs-me`:
+
+```bash
+archon workflow attention --watch --needs-me --json                  # this project
+archon workflow attention --watch --needs-me --json --label merge=pr # one class of question
+```
+
+Every line it writes is one to act on:
+
+| `type` | Written when |
+|---|---|
+| `attention` | An item that takes an answer or a look opened or changed, with its message, options and recommendation. The open items come first, with `snapshot: true` |
+| `terminal` | A run in scope ended with `status: "failed"`; `cause` says where |
+| `owner_lost` | A running run's owner process on this host is gone |
+| `degraded` | The stream may have missed a run it could not read |
+| `error` | The stream cannot read its cursor; the last line, exit 4 |
+
+It writes no `ready`, `bookmark`, `resumed`, `resolved` or `unmatched` line, no `terminal` line for a run that completed or was cancelled, and no `attention` line for a `usage_limit` wait, which continues by itself. The lines have the same shape as in the full stream. Without `--json` the same lines print as text.
+
+- **`--label` turns a class on or off.** Labels are the only routing: `--label merge=pr` writes only the items a wait labelled `merge=pr`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
+- **A silent stream proves nothing.** This mode has no heartbeat, so no line can mean nothing needs you or that the stream stopped reading. A program that must tell the two apart uses the full stream and its `bookmark` lines.
+- **An item answered elsewhere is not announced.** An answer names the occurrence it read, and an answer to an item someone else already answered is refused, so the attempt is where you learn it. Keep an open set with the full stream if you need to drop the work earlier.
+- **A reconnect starts from the open items.** With no `bookmark` to checkpoint on, restart without `--after`: the snapshot is the current open set. Runs that failed while nothing watched are not replayed; `archon workflow runs` lists them.
+
 ### Stream over HTTP
 
 `GET /api/runs/attention/stream` is the same stream as server-sent events. Each line above is one event, and the event's `data` is the line exactly as `--watch --json` writes it, so switch on its `type`. Events have no `event` name, so one `onmessage` handler receives every line. The scope is the whole install unless `project` names one; `label=k=v` repeats as on the list route. It needs the same API access as the list route.

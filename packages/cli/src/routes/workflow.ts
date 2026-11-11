@@ -408,7 +408,7 @@ export async function runWorkflowAttention(route: WorkflowRoute): Promise<number
   if (positionals[3] !== undefined) {
     return await fail(
       json,
-      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key> [--answered [--since <7d|24h|2w|ISO>]]] [--watch [--after <cursor>]] [--json]'
+      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key> [--answered [--since <7d|24h|2w|ISO>]]] [--watch [--needs-me] [--after <cursor>]] [--json]'
     );
   }
   return await route.commands.workflowAttentionCommand(route.host, effectiveCwd, positionals[2], {
@@ -421,6 +421,7 @@ export async function runWorkflowAttention(route: WorkflowRoute): Promise<number
     answered: values.answered as boolean | undefined,
     since: values.since as string | undefined,
     watch: values.watch as boolean | undefined,
+    needsMe: values['needs-me'] as boolean | undefined,
     after: values.after as string | undefined,
   });
 }

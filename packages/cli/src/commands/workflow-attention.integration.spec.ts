@@ -348,6 +348,80 @@ async function streamed(
   }
 }
 
+test('watch --needs-me writes only open items in the label filter and failed runs', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-needs-me-cli-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  const host = createHost();
+  const { store } = host.deps;
+  mkdirSync(join(root, 'alpha'));
+  const dir = realpathSync(join(root, 'alpha'));
+  const running = async (): Promise<string> => {
+    const run = await store.createWorkflowRun({ workflow_name: 'ci', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.updateWorkflowRun(run.id, {
+      output_root: getProjectStoragePaths(resolveProjectStorageKey(null, dir)).root,
+    });
+    return run.id;
+  };
+  const recommendation = { option: 'merge', why: 'Review is ready.' };
+  const paused = async (merge: string): Promise<string> => {
+    const id = await running();
+    await store.pauseWorkflowRunForWait(
+      id,
+      {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: new Date().toISOString(),
+        message: 'Merge it?',
+        pauseId: `pause-${id}`,
+        form: 'select',
+        options: [{ id: 'merge' }, { id: 'hold' }],
+        recommendation,
+        labels: { merge },
+      },
+      { kind: 'started', stepName: 'ask' }
+    );
+    return id;
+  };
+  const asked = await paused('pr');
+  await paused('other');
+  const completing = await running();
+  const failing = await running();
+
+  let acted = false;
+  const { code, lines } = await streamed(
+    () =>
+      workflowAttentionCommand(host, dir, undefined, {
+        json: true,
+        labels: ['merge=pr'],
+        watch: true,
+        needsMe: true,
+      }),
+    seen => {
+      // The snapshot is out, so the stream follows the feed: end one run well, one badly.
+      if (!acted && seen.length > 0) {
+        acted = true;
+        void store
+          .completeWorkflowRun(completing, { duration_ms: 1 })
+          .then(() => store.failWorkflowRun(failing, 'boom'));
+      }
+      return seen.some(line => line.type === 'terminal');
+    }
+  );
+  expect(code).toBe(0);
+  expect(lines).toMatchObject([
+    { type: 'attention', item: { runId: asked, recommendation, labels: { merge: 'pr' } } },
+    { type: 'terminal', runId: failing, status: 'failed' },
+  ]);
+  expect(lines).toHaveLength(2);
+
+  const refused = await captured(() =>
+    workflowAttentionCommand(host, dir, undefined, { json: true, labels: [], needsMe: true })
+  );
+  expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+});
+
 test('watch streams the queue by project, refuses list-only flags, and exits 4 on a foreign cursor', async () => {
   const root = track(mkdtempSync(join(tmpdir(), 'attention-watch-cli-')));
   process.env.ARCHON_HOME = join(root, 'home');

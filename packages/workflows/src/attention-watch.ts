@@ -143,6 +143,31 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
 export type AttentionStreamLine = z.infer<typeof attentionStreamLineSchema>;
 
 /**
+ * True for a line someone has to act on: an item that takes an answer or a look, a run
+ * that failed or lost its owner, and a stream that lost coverage or ended. Everything a
+ * program needs only to keep an open set in sync is false, as is a usage-limit wait,
+ * which continues by itself.
+ */
+export function attentionLineNeedsSomeone(line: AttentionStreamLine): boolean {
+  switch (line.type) {
+    case 'attention':
+      return line.item.kind !== 'usage_limit';
+    case 'terminal':
+      return line.status === 'failed';
+    case 'owner_lost':
+    case 'degraded':
+    case 'error':
+      return true;
+    case 'resolved':
+    case 'unmatched':
+    case 'resumed':
+    case 'ready':
+    case 'bookmark':
+      return false;
+  }
+}
+
+/**
  * Watches one execution claim until its owner is lost (`observedStatus`), the claim
  * changes, or it stops needing an owner (null). Rejects or resolves early when `signal` aborts.
  */

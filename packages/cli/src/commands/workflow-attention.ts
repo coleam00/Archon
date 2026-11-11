@@ -6,7 +6,10 @@ import {
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { AttentionWatch } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
-import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
+import {
+  attentionLineNeedsSomeone,
+  type AttentionStreamLine,
+} from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
   attentionProjectForCwd,
@@ -53,6 +56,8 @@ export interface WorkflowAttentionOptions {
   since?: string;
   /** Stream every change in scope instead of reading the queue once. */
   watch?: boolean;
+  /** With `watch`: write only the lines someone has to act on. */
+  needsMe?: boolean;
   /** With `watch`: replay readable feed events strictly after this cursor. */
   after?: string;
 }
@@ -221,6 +226,7 @@ export async function workflowAttentionWatch(
     stop = resolve;
   });
   const write = (line: AttentionStreamLine): Promise<void> => {
+    if (opts.needsMe && !attentionLineNeedsSomeone(line)) return Promise.resolve();
     if (opts.json) return writeStdout(`${JSON.stringify(line)}\n`);
     if (line.type === 'error')
       return writeStderr(
@@ -325,16 +331,22 @@ export async function workflowAttentionCommand(
   }
 }
 
+/** A flag that only shapes another flag's mode is refused without it. */
+function rejectFlagsWithoutTheirMode(opts: WorkflowAttentionOptions): void {
+  const needs = (flag: string, mode: string): never => {
+    throw new Error(`workflow attention ${flag} needs ${mode}`);
+  };
+  if (opts.after !== undefined && !opts.watch) needs('--after', '--watch');
+  if (opts.needsMe && !opts.watch) needs('--needs-me', '--watch');
+  if (opts.answered && opts.countBy === undefined) needs('--answered', '--count-by');
+  if (opts.since !== undefined && !opts.answered) needs('--since', '--answered');
+}
+
 function rejectConflictingAttentionOptions(
   runId: string | undefined,
   opts: WorkflowAttentionOptions
 ): void {
-  if (opts.after !== undefined && !opts.watch)
-    throw new Error('workflow attention --after needs --watch');
-  if (opts.answered && opts.countBy === undefined)
-    throw new Error('workflow attention --answered needs --count-by');
-  if (opts.since !== undefined && !opts.answered)
-    throw new Error('workflow attention --since needs --answered');
+  rejectFlagsWithoutTheirMode(opts);
   const shaped = opts.sort !== undefined || opts.countBy !== undefined;
   if (opts.watch && (runId !== undefined || shaped))
     throw new Error('workflow attention --watch takes no run id, --sort or --count-by');

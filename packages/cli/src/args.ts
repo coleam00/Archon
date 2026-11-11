@@ -52,6 +52,8 @@ export const cliArgOptions: CliArgOptions = {
   'count-by': { type: 'string' },
   // `workflow attention --count-by <x> --answered`: count started waits from events.
   answered: { type: 'boolean' },
+  // `workflow attention --watch --needs-me`: only the lines someone has to act on.
+  'needs-me': { type: 'boolean' },
   // `workflow attention --watch --after <cursor>`: replay the stream after an earlier line.
   after: { type: 'string' },
   port: { type: 'string' },
