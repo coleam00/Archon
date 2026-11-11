@@ -40,13 +40,14 @@ export type Layering = Readonly<
 export const PACKAGE_LAYERING: Layering = {
   paths: { runtime: [] },
   'provider-contract': { runtime: [] },
+  'script-api': { runtime: [], test: ['paths'] },
   'chat-contract': { runtime: ['provider-contract'] },
   'plugin-manifest': { runtime: ['chat-contract', 'paths', 'provider-contract'] },
   git: { runtime: ['paths'] },
   forge: { runtime: ['paths'] },
   providers: { runtime: ['paths', 'provider-contract'] },
   workflows: {
-    runtime: ['git', 'paths', 'plugin-manifest', 'provider-contract'],
+    runtime: ['git', 'paths', 'plugin-manifest', 'provider-contract', 'script-api'],
     test: ['providers'],
   },
   isolation: { runtime: ['git', 'paths', 'provider-contract', 'workflows'] },

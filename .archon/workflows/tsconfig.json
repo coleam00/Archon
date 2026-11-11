@@ -1,4 +1,5 @@
 {
   "extends": "../../scripts/tsconfig.json",
+  "files": ["../../packages/script-api/src/archon-script.d.ts"],
   "include": ["*/.shared/**/*.ts", "*/*/scripts/**/*.ts"]
 }

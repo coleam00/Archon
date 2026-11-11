@@ -197,6 +197,9 @@ export class StateLeaseNotHeldError extends Error {
     );
   }
 }
+/** Why a store refused a write without making it, as a caller branches on it. */
+export const stateConflictSchema = z.enum(['revision_conflict', 'lease_held', 'lease_not_held']);
+export type StateConflict = z.infer<typeof stateConflictSchema>;
 /**
  * The lease the next revision records. A delete clears it, a write that names no change
  * keeps it, and a take or release by a run is refused while another run's lease is live.

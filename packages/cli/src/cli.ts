@@ -368,6 +368,7 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
   const ctx = { ...base, detachedRunConfig: await decodeDetachedRunConfig(base) };
 
   if (command === 'forge') return await routes.runForge(ctx);
+  if (command === 'script') return await routes.runScript(ctx);
   if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
     return await workflowRoutes.runWorkflowContinuation(ctx, subcommand);
   }

@@ -260,6 +260,8 @@ Commands:
                              output types and every enum's values. A pack (by name or
                              directory path) writes <pack>/.shared/outputs.generated.ts; a single
                              workflow needs --out. --check exits 1 when the file is stale
+  script types               Print the TypeScript declaration of the archon:script module a workflow
+                             script imports, for an editor or tsc over a pack's scripts
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove eligible worktrees by inactivity, containers by creation age (default: 7 days)
   isolation cleanup --merged Remove worktrees covered by Git integration or a merged PR

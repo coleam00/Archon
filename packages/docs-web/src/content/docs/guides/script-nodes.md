@@ -230,48 +230,64 @@ Archon preserves these relative paths in project and global source trees, bundle
 
 Keep output under the supplied `ARTIFACTS_DIR` or `STATE_DIR`, never beside a script. Bun module loading does not add files beside these sources, and Archon disables Python bytecode caching in both workflow execution and executable fixtures. This prevents import caches from changing the frozen source; it does not prevent your script from writing there explicitly.
 
-### Call the forge from a script
+### The script API
 
-A script reaches the forge (pull requests, issues, checks, labels) through `archon forge <operation>`, which answers in JSON. `archon forge types` generates a typed client for those calls, so a script neither restates the request and result shapes nor validates them by hand:
-
-```bash
-archon forge types --out .archon/workflows/my-pack/.shared/forge.generated.ts
-archon forge types --out .archon/workflows/my-pack/.shared/forge.generated.ts --check   # exit 1 when stale
-```
-
-Commit the file. It imports only Node built-ins, so it runs under Bun with no `node_modules`. Regenerate it after an Archon upgrade, and run `--check` in CI: the forge schemas own the shapes, and a stale file fails the check instead of drifting.
-
-The file exports:
-
-| Export | What it is |
-| --- | --- |
-| `ForgeOperations` | For every operation, the `request` it takes and the `result` it returns |
-| `invokeForge(op, request)` | Runs the operation through the CLI named by `ARCHON_CLI_COMMAND` and returns its typed result |
-| `ForgeOperationError` | Thrown when the host answers with a failure: `kind` is the typed reason, and `mutation` says what is known about a failed write |
-| `ForgeFailure`, `ForgeSuccess`, `ForgeResponse` | The JSON envelope the CLI prints |
+A Bun script imports what it needs from the host by name:
 
 ```typescript
-// release/scripts/publish.ts
-import { ForgeOperationError, invokeForge } from '../../.shared/forge.generated.ts';
+import { emit, forge, input, refuse, state } from 'archon:script';
 
-const ref = { repo: { host: 'github.com', path: 'owner/repository' }, number: 42 };
-const view = invokeForge('pr.view', { selector: { kind: 'number', ref } });
-if (view?.pr.is_draft) {
-  try {
-    invokeForge('pr.ready', { ref });
-  } catch (error) {
-    // A write that failed with an unknown outcome may have happened: report it, do not retry it.
-    if (error instanceof ForgeOperationError && error.mutation?.outcome === 'outcome_unknown') {
-      console.error(error.message);
-    }
-    throw error;
-  }
+const number = Number(input('pr-number'));
+if (!Number.isInteger(number)) {
+  refuse('pr-number is not a number');
+} else {
+  const ref = { repo: { host: 'github.com', path: 'owner/repository' }, number };
+  const view = forge('pr.view', { selector: { kind: 'number', ref } });
+  emit({ draft: view?.pr.is_draft ?? null });
 }
 ```
 
-A wrong operation name, request field or result field is a compile error. The host validates every request and response against the same schemas at run time, so the client does not validate them again. An error that is not a `ForgeOperationError` means the CLI gave no answer; treat a write as possibly applied.
+Archon provides the `archon:script` module to every `runtime: bun` script: named scripts, inline bodies, the modules they import, and scripts executed by a dry run or a fixture with `exec-code`. A pack carries no file for it and needs no `node_modules`. The module is a thin wrapper over what every runtime already has (the `INPUTS_*` and engine environment variables, JSON on stdout, exit codes, and the CLI named by `ARCHON_CLI_COMMAND`), so a Python script, or a Bun script that prefers to, uses those directly. A script that does not import the module runs as it always has. A process your script starts is not given the module.
 
-`invokeForge` needs `ARCHON_CLI_COMMAND`, which the host sets for every `bash:` and `script:` node of a host run. A [container execution](/guides/container-isolation/) does not receive it. To refuse early when a host has no plugin, lacks an operation or has no credential, call `invokeForge('check', { host, operations })` in the workflow's first node; see [Check forge access before a run spends](/reference/forge/#check-forge-access-before-a-run-spends).
+| Export | What it does |
+| --- | --- |
+| `input(name)` | A `with:` binding or workflow input by its declared name, as text. Empty when nothing bound it |
+| `runId()`, `artifactsDir()`, `packDir()` | The run's id, its artifact directory, and the directory of the pack the workflow belongs to. Each throws when the engine did not set it, as `packDir()` does outside a pack |
+| `emit(value)` | Writes the node's result: one JSON document on stdout |
+| `refuse(reason)` | Fails the node: the reason on stderr and exit code 1. Return after calling it |
+| `forge(op, request)` | Runs one [forge operation](/reference/forge/) and returns its typed result |
+| `state.get`, `put`, `patch`, `delete`, `list`, `listValues`, `claim` | Reads and writes the project's [state documents](/reference/cli/#state) as this run and node |
+| `outcomes()` | The engine's listing of what each node of the run has recorded (`$NODE_OUTCOMES_FILE`) |
+| `trigger.fire(binding, inputs, options)` | Fires a trigger binding (`archon trigger fire`) and returns the admission its request got |
+
+Write `input('<name>')` with a string literal. Archon checks at load that every input a script reads is provided, and it reads `input('pr-number')` in the node's own script the way it reads `process.env.INPUTS_PR_NUMBER`. A computed name, or a read inside an imported module, is not checked.
+
+Do not call `process.exit()`. Bun exits without draining stdout, so a large result written to a pipe arrives cut short and reads as a complete one. `refuse` sets the exit code instead; let the script end.
+
+**Forge errors.** `forge` throws `ForgeError` when the host answers with a failure. `kind` is the typed reason, and `mutation` is set for a write: `mutation.outcome` says whether it was refused, applied but unverified, or left with an unknown outcome. Never retry a write past an unknown outcome.
+
+```typescript
+import { ForgeError, forge } from 'archon:script';
+
+try {
+  forge('pr.ready', { ref });
+} catch (error) {
+  if (error instanceof ForgeError && error.mutation?.outcome === 'outcome_unknown') {
+    console.error(error.message); // report it, do not retry it
+  }
+  throw error;
+}
+```
+
+Every function that calls the host throws `HostCommandError` when the CLI gives no answer at all; after a write, treat it as possibly applied. The host validates each forge request and result against the forge contract, so the module does not validate them again. To refuse early when a host has no plugin, lacks an operation or has no credential, call `forge('check', { host, operations })` in the workflow's first node; see [Check forge access before a run spends](/reference/forge/#check-forge-access-before-a-run-spends).
+
+**State writes.** `state.put`, `patch` and `delete` return `{ ok: true, revision }`, or `{ ok: false, conflict }` when the store refused the write: `revision_conflict`, `lease_held` or `lease_not_held`. Their options are `ifRevision`, `lease: 'take' | 'release'` and `held`, which are the CLI's `--if-revision`, `--lease`, `--release-lease` and `--held`. `state.claim(candidates)` returns `{ claimed, skipped }`; `claimed` is null when nothing could be taken.
+
+**Types in an editor.** `archon script types --out archon-script.d.ts` writes the module's declaration: every export above, and the request and result type of every forge operation. Include that file in the `tsconfig.json` that covers your scripts, and a wrong operation name, request field or result field is a compile error. The file describes the Archon that wrote it, so write it again after an upgrade; `--check` exits 1 when it is stale.
+
+**Where it sits.** The script API is the author-facing entry of Archon's SDK family: what code running inside a workflow calls. It has no dependencies and speaks only the CLI wire. The host-facing entry, for a program that embeds the engine to define, run, govern and query workflows, is separate and is not part of this module. Every export of `archon:script` is public contract; the declaration `archon script types` writes is the complete list.
+
+**Container runs.** A script in a [container execution](/guides/container-isolation/) imports the module the same way, and `input`, `emit`, `refuse`, `outcomes` and the accessors work. A container run does not receive `ARCHON_CLI_COMMAND`, so `forge`, `state` and `trigger.fire` throw `HostCommandError` there.
 
 ### Frozen source integrity
 

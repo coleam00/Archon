@@ -576,7 +576,7 @@ describe('script node deps field — command construction', () => {
     const [cmd, args, options] = scriptCall as [string, string[], { input?: string }];
     expect(cmd).toBe('bun');
     // --no-env-file prevents repo .env auto-load; no dep flags — bun auto-installs
-    expect(args).toEqual(['--no-env-file', '-']);
+    expect(args).toEqual(['--no-env-file', expect.stringMatching(/^--preload=.*script-api/), '-']);
     expect(options.input).toBe(node.script);
     expect(args).not.toContain('--packages');
     expect(args).not.toContain('--with');
@@ -604,7 +604,7 @@ describe('script node deps field — command construction', () => {
     expect(scriptCall).toBeDefined();
     const [cmd, args, options] = scriptCall as [string, string[], { input?: string }];
     expect(cmd).toBe('bun');
-    expect(args).toEqual(['--no-env-file', '-']);
+    expect(args).toEqual(['--no-env-file', expect.stringMatching(/^--preload=.*script-api/), '-']);
     expect(options.input).toBe('console.log("hello")');
   });
 

@@ -126,9 +126,9 @@ Otherwise it exits 1 with the first reason that applies, in this order:
 
 The credential is resolved the way an operation resolves it, so for GitHub the check may run `gh auth token`. It does not contact the forge: a credential that resolves can still be expired or lack access to a repository, which the first operation reports.
 
-### Generate types for scripts
+### Call the forge from a script
 
-`archon forge types --out <file>` writes the request and result type of every operation, the failure envelope, and a typed client into one TypeScript file with no dependencies. See [Call the forge from a script](/guides/script-nodes/#call-the-forge-from-a-script).
+A Bun `script:` node calls an operation with `forge(op, request)` from the `archon:script` module, typed per operation, and gets a `ForgeError` carrying the failure's `kind` and `mutation`. See [The script API](/guides/script-nodes/#the-script-api).
 
 ## What a write reports
 

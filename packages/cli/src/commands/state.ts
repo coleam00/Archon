@@ -24,6 +24,7 @@ import {
   claimFirstStateDocument,
   stateClaimCandidatesSchema,
   type IStateDocumentStore,
+  type StateConflict,
   type StateLeaseChange,
   type StateScope,
   type StateWriter,
@@ -339,9 +340,7 @@ async function executeStateCommand(
 }
 
 /** Why a write exited `3`; scripts read this, not the message. */
-function stateConflictReason(
-  error: unknown
-): 'revision_conflict' | 'lease_held' | 'lease_not_held' | undefined {
+function stateConflictReason(error: unknown): StateConflict | undefined {
   if (error instanceof StateRevisionConflictError) return 'revision_conflict';
   if (error instanceof StateLeaseHeldError) return 'lease_held';
   if (error instanceof StateLeaseNotHeldError) return 'lease_not_held';
