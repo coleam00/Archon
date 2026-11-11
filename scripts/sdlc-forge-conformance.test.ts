@@ -101,7 +101,13 @@ const AGENT_READ_OPERATIONS: readonly ForgeRequest['op'][] = ['workitem.search',
 test('preflight capabilities cover the forge operations the pack calls', () => {
   const root = join(import.meta.dir, '../.archon/workflows/sdlc');
   const sources = [...new Bun.Glob('**/*.{ts,md}').scanSync({ cwd: root, dot: true })]
-    .filter(file => file !== '.shared/forge-check.ts' && file !== '.shared/merge.ts')
+    // The generated client types every operation the host has; it calls none.
+    .filter(
+      file =>
+        file !== '.shared/forge-check.ts' &&
+        file !== '.shared/merge.ts' &&
+        file !== '.shared/forge.generated.ts'
+    )
     .map(file => ({ file, text: readFileSync(join(root, file), 'utf8') }));
   const named = (op: string, kind: '.ts' | '.md'): string[] =>
     sources

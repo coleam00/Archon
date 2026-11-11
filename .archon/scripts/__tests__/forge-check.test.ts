@@ -26,13 +26,11 @@ function check(
     mirror?: boolean;
     remoteUrl?: string;
     capabilities?: readonly string[];
-    entry?: string;
   } = {}
 ) {
   const {
     mirror,
     remoteUrl,
-    entry = 'deliver',
     capabilities = REQUIRED_FORGE_OPERATIONS,
     ...rest
   } = options;
