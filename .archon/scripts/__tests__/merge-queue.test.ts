@@ -687,6 +687,10 @@ describe('the merge queue facts and gate', () => {
       seed(at, waiting);
       expect(ok(on(at, 'facts', { pr }))).toMatchObject({ path: 'sweep', items: [{ item: SUBJECT }] });
     }
+
+    // With nothing waiting, a red default branch holds nothing back: no agent, no ask.
+    seed(at, item(BUILT, merge('merged')));
+    expect(ok(on(at, 'facts', { pr: red }))).toMatchObject({ path: 'idle', items: [], base: { checks: { state: 'red' } } });
   }, 60_000);
 
   test('a review comment from anyone but a listed maintainer is no verdict', () => {

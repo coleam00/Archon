@@ -261,7 +261,7 @@ Before merging, the queue rechecks the pull request's closing keyword against th
 
 ### The default branch
 
-The sweep judges the default branch first. While its CI is red the gate refuses every merge, and the sweep always raises it to a maintainer, naming the pull requests merged since it was last green. It recommends a revert or fix-forward, or, when no recent merge touched the red code, a rerun of the failed jobs by hand: the forge's rerun acts only on a pull request, so the pack never reruns the default branch and never reports that it did.
+The sweep judges the default branch first. While its CI is red the gate refuses every merge, and the sweep raises it to a maintainer, naming the pull requests merged since it was last green. The merge queue reports a red default branch only when it holds back a pull request: with nothing waiting, a run ends after its script nodes whatever the branch's state. It recommends a revert or fix-forward, or, when no recent merge touched the red code, a rerun of the failed jobs by hand: the forge's rerun acts only on a pull request, so the pack never reruns the default branch and never reports that it did.
 
 A default branch that cannot be read permits no sweep or merge. The run still records what it can settle without the sweep, then fails with the read diagnostic. Items it left open keep their claims until the run ends: a failed run keeps them until it is resumed and finishes, or is abandoned.
 

@@ -9,7 +9,8 @@
  * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
  * read with the reason, without stopping the rest of the batch. Successful reads reset
  * that sequence durably before the sweep, keeping the claim until record settles it.
- * A red default branch reaches the sweep even when no pull request waits. An unreadable
+ * A red default branch reaches the sweep only with a pull request it holds back: with
+ * nothing to decide there is nothing for it to block. An unreadable
  * base reaches record for independent bookkeeping before the run reports the failure.
  *
  * A pull request the last sweep declared a `wait` on, whose facts that wait can end on
@@ -124,8 +125,7 @@ function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem 
 
 type Inspection = { base: ReturnType<typeof readBase>; error: '' } | { base: null; error: string };
 
-// The default branch is read on every run: a red one after the last merge needs the
-// sweep's question even when no pull request waits.
+// The default branch is one of the facts a pull request is decided and waits on.
 function inspectBase(repo: QualifiedPr['repo']): Inspection {
   try {
     return { base: readBase(repo), error: '' };
@@ -144,12 +144,9 @@ function emitFacts(
 ): void {
   const { base } = inspection;
   if (unchanged > 0) note(`${String(unchanged)} pull request(s) read the same as at their last wait; not swept`);
-  // An unchanged wait was declared under this same default branch state, so a red one
-  // was raised by the sweep that declared it.
-  const redUnraised = base?.checks.state === 'red' && unchanged === 0;
   const path = base === null
     ? 'record'
-    : items.length > 0 || redUnraised
+    : items.length > 0
       ? 'sweep'
       : settled.length > 0 ? 'record' : 'idle';
   emit({
