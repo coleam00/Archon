@@ -37,9 +37,10 @@ inputs:
   prior_report:
     default: ""
     description: >-
-      Path to the previous review round's report. When set, this round verifies
-      prior findings first and reviews only the delta since the commit that round
-      reviewed, which its publish recorded beside the report.
+      Path to the report a previous review published, in its run's artifacts
+      (`review/published/report.md`). When set, this round verifies prior findings
+      first and reviews only the delta since the commit that review judged, which
+      its publish recorded beside the report with its `findings.json`.
   work_order:
     default: ""
     description: >-

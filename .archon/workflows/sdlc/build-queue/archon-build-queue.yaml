@@ -288,6 +288,7 @@ nodes:
       pull_request: { from: "$facts.output.pull_request" }
       candidate: "$facts.output.continues"
       continues: "$route.output.continues"
+      rounds: { from: "$facts.output.rounds" }
     output_format:
       type: object
       properties:
@@ -298,7 +299,10 @@ nodes:
         reviewed: { type: [string, 'null'] }
         # The pull request the round continues, or null when it starts fresh.
         pull_request: { type: [integer, 'null'], minimum: 1 }
-      required: [head, reviewed, pull_request]
+        # The report an earlier round published at `reviewed`, which the round's first
+        # review continues from; empty when that review reads the whole change.
+        prior_report: { type: string }
+      required: [head, reviewed, pull_request, prior_report]
 
   # The round. Intake triaged the item and route declared this round's route, so the
   # run triages nothing: archon-build is archon-ship without its triage.
@@ -317,6 +321,7 @@ nodes:
         item; no triage report is in this run's artifacts.
       related: "$facts.output.related"
       pull_request: "$checkout.output.pull_request"
+      prior_report: "$checkout.output.prior_report"
       branch: "$facts.output.branch"
       ci: "$INPUTS.ci"
 

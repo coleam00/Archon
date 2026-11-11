@@ -6,7 +6,7 @@
  * the newer commits fixed.
  */
 import { describe, expect, it } from 'bun:test';
-import { mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -83,7 +83,44 @@ function round(
   });
 }
 
+/** Delivery's `prior-review` node: the report a round's review is bound to. */
+function priorReview(previous: string, earlier: string): string {
+  const run = runPackScript('deliver/scripts/prior-review', {
+    inputs: { INPUTS_PREVIOUS: previous, INPUTS_EARLIER: earlier },
+  });
+  expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: '' });
+  return (JSON.parse(run.stdout) as { report: string }).report;
+}
+
 describe('review-round', () => {
+  it("continues a new run's first review from the report an earlier run published, and reviews from the start without one", () => {
+    const { cwd, older, newer } = history();
+    // An earlier run's artifacts: its published report, the commit it reviewed, and an open tests blocker.
+    const earlier = join(trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-earlier-run-'))), 'review');
+    mkdirSync(earlier);
+    writeFileSync(join(earlier, 'report.md'), 'Not ready');
+    writeFileSync(join(earlier, 'reviewed-head'), `${older}\n`);
+    const blocker = { id: 'R1', severity: 'blocking', sources: ['tests'], claim: 'c', status: 'open', round: 2 };
+    writeFileSync(join(earlier, 'findings.json'), JSON.stringify([blocker]));
+    const mode = (prior: string): Record<string, unknown> => {
+      const run = runPackScript('review/scripts/review-round', {
+        cwd,
+        inputs: { INPUTS_PRIOR_REPORT: prior, INPUTS_PART: '', ARCHON_NODE_EXECUTION: JSON.stringify(execution(newer)) },
+      });
+      expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: '' });
+      return JSON.parse(run.stdout) as Record<string, unknown>;
+    };
+
+    // The run's first round has no previous round, so the caller's report is the one continued.
+    const first = priorReview('', join(earlier, 'report.md'));
+    expect(first).toBe(join(earlier, 'report.md'));
+    expect(mode(first)).toMatchObject({ continuation: true, head: newer, cursor: older, code: true, tests: true, seams: false });
+    // A later round continues from this run's own report, not the caller's.
+    expect(priorReview('/run/review/report.md', join(earlier, 'report.md'))).toBe('/run/review/report.md');
+    // Neither: a first review of the whole change.
+    expect(mode(priorReview('', ''))).toMatchObject({ continuation: false, head: newer, cursor: '', code: false, tests: false });
+  });
+
   // A standalone review of a pull request started from another checkout: the round
   // refuses at its first node, before any agent has spent anything on it.
   it("refuses a pull-request URL scope when the checkout is not at that pull request's head", () => {
