@@ -162,6 +162,8 @@ export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
 
 export const ISOLATION_ENV_ID_METADATA_KEY = 'isolation_env_id';
 
+export const CONTAINER_ISOLATION_MARKER = { key: 'isolation', value: 'container' } as const;
+
 /**
  * Keys the run-lifecycle machinery writes into a row's untyped `metadata` JSONB, and the
  * shape of each value. `metadata` is `Record<string, unknown>`, so a typo in a string
@@ -478,7 +480,7 @@ export function readWorkflowSourceState(
  * executor will refuse (#2565). Reads defensively from possibly-absent metadata.
  */
 export function isContainerRun(run: { metadata?: Record<string, unknown> }): boolean {
-  return run.metadata?.isolation === 'container';
+  return run.metadata?.[CONTAINER_ISOLATION_MARKER.key] === CONTAINER_ISOLATION_MARKER.value;
 }
 
 export const ownedWorktreeSchema = z

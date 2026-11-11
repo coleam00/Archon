@@ -16,6 +16,7 @@ import {
   type PackWorkflowLocation,
   yamlCountError,
 } from '../workflow-discovery/pack-layout';
+import { getRuntimeForExtension } from '../script-runtime';
 import { METRIC_VIEWS_FILE } from '../schemas/metric-view';
 import type { BundledScriptPack } from './bundled-script-pack';
 
@@ -101,12 +102,6 @@ function validateName(name: string, path: string): void {
     throw new Error(`Invalid bundled filename or directory "${path}".`);
 }
 
-function runtime(extension: string): Script['runtime'] | undefined {
-  if (extension === '.py') return 'uv';
-  if (extension === '.ts' || extension === '.js') return 'bun';
-  return undefined;
-}
-
 // Non-shared bundled sources have always dereferenced authored links. Dirent alone
 // describes the link, so using its isFile/isDirectory would silently omit those files.
 async function entryType(
@@ -121,7 +116,11 @@ async function entryType(
 // otherwise be selected and fail generation.
 function isSharedFile(name: string): boolean {
   const extension = extname(name);
-  return runtime(extension) !== undefined || extension === '.md' || name === METRIC_VIEWS_FILE;
+  return (
+    getRuntimeForExtension(extension) !== undefined ||
+    extension === '.md' ||
+    name === METRIC_VIEWS_FILE
+  );
 }
 
 async function sharedFiles(directory: string): Promise<string[]> {
@@ -202,7 +201,7 @@ async function collectPack(workflowsRoot: string, pack: string, add: AddSource):
 function sharedScript(packPath: string): { name: string; runtime: Script['runtime'] } | undefined {
   const prefix = `${PACK_SHARED_SCRIPTS_PATH}/`;
   const extension = extname(packPath);
-  const scriptRuntime = runtime(extension);
+  const scriptRuntime = getRuntimeForExtension(extension);
   if (!packPath.startsWith(prefix) || scriptRuntime === undefined) return undefined;
   if (packPath.slice(prefix.length).split('/').length > 2) return undefined;
   return { name: basename(packPath, extension), runtime: scriptRuntime };
@@ -320,7 +319,7 @@ async function collectScripts(
   for (const entry of await readdir(scripts, { withFileTypes: true })) {
     for (const candidate of await scriptCandidates(scripts, entry)) {
       const extension = extname(candidate);
-      const scriptRuntime = runtime(extension);
+      const scriptRuntime = getRuntimeForExtension(extension);
       if (scriptRuntime === undefined) continue;
       const name = basename(candidate, extension);
       validateName(name, candidate);
