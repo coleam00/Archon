@@ -259,6 +259,7 @@ Archon provides the `archon:script` module to every `runtime: bun` script: named
 | `state.get`, `put`, `patch`, `delete`, `list`, `listValues`, `claim` | Reads and writes the project's [state documents](/reference/cli/#state) as this run and node |
 | `outcomes()` | The engine's listing of what each node of the run has recorded (`$NODE_OUTCOMES_FILE`) |
 | `trigger.fire(binding, inputs, options)` | Fires a trigger binding (`archon trigger fire`) and returns the admission its request got |
+| `notice(text, labels)` | Tells whoever watches attention with `--notices` what the run did (`archon workflow notice`). The run does not pause |
 
 Write `input('<name>')` with a string literal. Archon checks at load that every input a script reads is provided, and it reads `input('pr-number')` in the node's own script the way it reads `process.env.INPUTS_PR_NUMBER`. A computed name, or a read inside an imported module, is not checked.
 
@@ -283,6 +284,8 @@ Every function that calls the host throws `HostCommandError` when the CLI gives 
 
 **State writes.** `state.put`, `patch` and `delete` return `{ ok: true, revision }`, or `{ ok: false, conflict }` when the store refused the write: `revision_moved`, `lease_held` or `lease_not_held`. Their options are `ifRevision`, `lease: 'take' | 'release'` and `held`, which are the CLI's `--if-revision`, `--lease`, `--release-lease` and `--held`. `state.claim(candidates)` returns `{ claimed, skipped }`; `claimed` is null when nothing could be taken.
 
+**Notices.** `notice('Merged pull request 7', { kind: 'merged', pr: '7' })` records one line about what the run did; a reader of `archon workflow attention --watch --notices` sees it, and `--notices --since 24h` lists it later. Call it when something real happened, not on a pass that found nothing to do. The text is one line of at most 300 characters and a run may emit 50; past a bound the call throws `HostCommandError`, so catch it where a refused notice must not fail the node. See [Notices](/getting-started/operate/#notices-what-the-work-did).
+
 **Types in an editor.** `archon script types --out archon-script.d.ts` writes the module's declaration: every export above, and the request and result type of every forge operation. Include that file in the `tsconfig.json` that covers your scripts, and a wrong operation name, request field or result field is a compile error. The file describes the Archon that wrote it, so write it again after an upgrade; `--check` exits 1 when it is stale.
 
 **Outside a run.** Plain `bun` cannot resolve `archon:script`; only a run provides it. `archon script preload --out test/archon-script.preload.ts` writes the file a run uses, and then `bun --preload ./test/archon-script.preload.ts scripts/triage.ts` runs the script, and `bun test --preload ./test/archon-script.preload.ts` (or `preload` under `[test]` in `bunfig.toml`) lets a pack's tests import its scripts in-process.
@@ -291,7 +294,7 @@ The preload only makes the module resolve. A script still reads its inputs from 
 
 **Where it sits.** The script API is the author-facing entry of Archon's SDK family: what code running inside a workflow calls. It has no dependencies and speaks only the CLI wire. The host-facing entry, for a program that embeds the engine to define, run, govern and query workflows, is separate and is not part of this module. Every export of `archon:script` is public contract; the declaration `archon script types` writes is the complete list.
 
-**Container runs.** A script in a [container execution](/guides/container-isolation/) imports the module the same way, and `input`, `emit`, `refuse`, `outcomes` and the accessors work. A container run does not receive `ARCHON_CLI_COMMAND`, so `forge`, `state` and `trigger.fire` throw `HostCommandError` there.
+**Container runs.** A script in a [container execution](/guides/container-isolation/) imports the module the same way, and `input`, `emit`, `refuse`, `outcomes` and the accessors work. A container run does not receive `ARCHON_CLI_COMMAND`, so `forge`, `state`, `trigger.fire` and `notice` throw `HostCommandError` there.
 
 ### Frozen source integrity
 

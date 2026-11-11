@@ -15,6 +15,7 @@ import { waitForRunAttention } from '@archon/core/services/run-attention-watch';
 import type { RunWaitResult } from '@archon/core/services/run-attention-watch';
 import { resolveWorkflowName, suggestWorkflowNames } from '@archon/workflows/router';
 import { workflowSourceConfigFrom } from '@archon/workflows/run-source';
+import { latestWorkflowNotices } from '@archon/workflows/workflow-notice';
 import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
 import type { WorkflowLoadError, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
 import { workflowRunStatusSchema, runAttention } from '@archon/workflows/schemas/workflow-run';
@@ -318,11 +319,17 @@ export async function workflowStatusCommand(
 ): Promise<void> {
   const codebase = await resolveStatusCodebase(host, cwd, opts.all);
   let runs: DashboardWorkflowRun[];
+  let notices: Awaited<ReturnType<typeof latestWorkflowNotices>>;
   try {
     const result = await host.operations.getWorkflowStatus(
       codebase ? { codebaseId: codebase.id } : undefined
     );
     runs = result.runs;
+    // What each live run last said it is doing, so one read answers "what is running".
+    notices = await latestWorkflowNotices(
+      host.deps.store,
+      runs.map(run => run.id)
+    );
   } catch (error) {
     const err = error as Error;
     getLog().error({ err, cwd }, 'cli.workflow_status_failed');
@@ -334,14 +341,21 @@ export async function workflowStatusCommand(
   if (opts.json) {
     if (!opts.verbose) {
       await writeJsonLine({
-        runs: runs.map(run => ({ ...run, attention: runAttention(run) })),
+        runs: runs.map(run => ({
+          ...run,
+          attention: runAttention(run),
+          notice: notices.get(run.id) ?? null,
+        })),
         scopeFallback,
       });
       return;
     }
 
     const runsOutput = await verboseStatusRuns(host, runs, opts.rawEvents);
-    await writeJsonLine({ runs: runsOutput, scopeFallback });
+    await writeJsonLine({
+      runs: runsOutput.map(run => ({ ...run, notice: notices.get(run.id) ?? null })),
+      scopeFallback,
+    });
     return;
   }
 
@@ -356,7 +370,7 @@ export async function workflowStatusCommand(
 
   console.log(`\nActive workflows (${runs.length}):\n`);
   for (const run of runs) {
-    await printStatusRun(host, run, opts.verbose);
+    await printStatusRun(host, run, opts.verbose, notices.get(run.id));
   }
 }
 
