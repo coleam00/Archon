@@ -10,8 +10,7 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
 
 - **Launch** a triaged item a run can start from, as the triage policy's readiness
   bar defines it: the body says what outcome is wanted, and triage chose its route. The
-  brief points the run at the body as the contract; it does not restate or widen it,
-  and it names the elements triage recorded as left out, for the planner to shape.
+  brief points the run at the body as the contract; it does not restate or widen it.
 - **Prove a bug first.** Reproduce the symptom on the current base before launching, or
   hold other concrete evidence of it, such as a failing test, a log or a recorded run.
 - **Continue** a run that stopped on something the contract already answers:
