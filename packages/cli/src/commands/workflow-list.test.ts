@@ -4,6 +4,7 @@ import {
   firstJsonPayload,
   mockDiscoverWorkflowsWithConfig,
   spyOnJsonStdout,
+  spyOnStderr,
 } from '../test-support/workflow-command-harness';
 import { providerRegistry } from '@archon/providers';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
@@ -462,7 +463,9 @@ describe('workflowListCommand', () => {
     expect(discoverWorkflowsWithConfig).toHaveBeenCalledWith(
       '/test/path',
       expect.any(Function),
-      providerRegistry
+      providerRegistry,
+      undefined,
+      { gitIgnoreRoot: undefined }
     );
   });
 
@@ -593,7 +596,9 @@ describe('workflowTestCommand', () => {
     expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledWith(
       '/test/repository',
       expect.any(Function),
-      providerRegistry
+      providerRegistry,
+      undefined,
+      { gitIgnoreRoot: undefined }
     );
     expect(fixtureRunner.runFixtures).toHaveBeenCalledWith(
       expect.objectContaining({ cwd: '/test/repository', targetCwd: '/test/repository/tools' })
@@ -907,5 +912,175 @@ describe('workflowTestCommand', () => {
 
     await expect(workflowTestCommand('/test/path', undefined)).rejects.toThrow(/bad yaml/);
     expect(fixtureRunner.runFixtures).not.toHaveBeenCalled();
+  });
+});
+
+describe('workflow source warnings', () => {
+  const warning =
+    'Git ignores ".archon/workflows/build/x.yaml" (workflows: "x"); it may be missing from other checkouts.';
+  let stdout: ReturnType<typeof spyOnJsonStdout>;
+  let stderr: ReturnType<typeof spyOnStderr>;
+  let consoleSpy: ReturnType<typeof spyOn>;
+  beforeEach(async () => {
+    stdout = spyOnJsonStdout();
+    stderr = spyOnStderr();
+    consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
+    mockDiscoverWorkflowsWithConfig.mockClear();
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [],
+      errors: [],
+      sourceWarnings: [warning],
+    });
+    const runner = await import('@archon/workflows/fixture-runner');
+    (runner.runFixtures as ReturnType<typeof mock>).mockResolvedValue({
+      results: [],
+      passed: 0,
+      failed: 0,
+    });
+  });
+  afterEach(() => {
+    stdout.mockRestore();
+    stderr.mockRestore();
+    consoleSpy.mockRestore();
+  });
+
+  it('prints list warnings once on stderr and preserves the JSON envelope', async () => {
+    await workflowListCommand('/test/path', { json: true });
+    expect(JSON.parse(firstJsonPayload(stdout))).toEqual({
+      workflows: [],
+      errors: [],
+      sourceWarnings: [warning],
+    });
+    expect(stderr.mock.calls.map((call: readonly unknown[]) => call[0])).toEqual([
+      `Warning: ${warning}\n`,
+    ]);
+  });
+
+  it.each(['list', 'test'] as const)('prints source warnings in human %s output', async command => {
+    if (command === 'list') await workflowListCommand('/test/path');
+    else expect(await workflowTestCommand('/test/path', undefined)).toBe(0);
+    expect(stderr.mock.calls.map((call: readonly unknown[]) => call[0])).toEqual([
+      `Warning: ${warning}\n`,
+    ]);
+  });
+
+  it('reports warnings before a missing list name fails', async () => {
+    await expect(
+      workflowListCommand('/test/path', { json: true, name: 'missing' })
+    ).rejects.toThrow('not found');
+    expect(firstJsonPayload(stderr)).toContain(warning);
+    expect(stdout).not.toHaveBeenCalled();
+  });
+
+  it('preserves test JSON and exit 0 when there are no fixtures', async () => {
+    expect(await workflowTestCommand('/test/path', undefined, { json: true })).toBe(0);
+    expect(JSON.parse(firstJsonPayload(stdout))).toEqual({
+      results: [],
+      passed: 0,
+      failed: 0,
+      errors: [],
+      sourceWarnings: [warning],
+    });
+    expect(stderr.mock.calls.map((call: readonly unknown[]) => call[0])).toEqual([
+      `Warning: ${warning}\n`,
+    ]);
+  });
+
+  it('reports warnings even when fixture target selection throws', async () => {
+    const runner = await import('@archon/workflows/fixture-runner');
+    (runner.runFixtures as ReturnType<typeof mock>).mockRejectedValueOnce(
+      new Error('target missing')
+    );
+    await expect(workflowTestCommand('/test/path', 'missing', { json: true })).rejects.toThrow(
+      'target missing'
+    );
+    expect(firstJsonPayload(stderr)).toContain(warning);
+  });
+
+  it('preserves fixture failure and explicitly named no-fixture exits', async () => {
+    const runner = await import('@archon/workflows/fixture-runner');
+    (runner.runFixtures as ReturnType<typeof mock>).mockResolvedValueOnce({
+      results: [],
+      passed: 0,
+      failed: 1,
+    });
+    expect(await workflowTestCommand('/test/path', undefined, { json: true })).toBe(1);
+    expect(await workflowTestCommand('/test/path', 'x', { json: true })).toBe(1);
+    expect(stderr.mock.calls.map((call: readonly unknown[]) => call[0])).toEqual([
+      `Warning: ${warning}\n`,
+      `Warning: ${warning}\n`,
+    ]);
+  });
+
+  it('omits the optional field for clean discovery', async () => {
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
+    await workflowListCommand('/test/path', { json: true });
+    expect(JSON.parse(firstJsonPayload(stdout))).toEqual({ workflows: [], errors: [] });
+    stdout.mockClear();
+    await workflowTestCommand('/test/path', undefined, { json: true });
+    expect(JSON.parse(firstJsonPayload(stdout))).not.toHaveProperty('sourceWarnings');
+    expect(stderr).not.toHaveBeenCalled();
+  });
+
+  it('excludes an explicitly registered folder despite an enclosing repository', async () => {
+    const codebases = await import('@archon/core/db/codebases');
+    const lookup = spyOn(codebases, 'findCodebaseByDefaultCwd').mockResolvedValue({
+      id: 'folder',
+      name: 'folder',
+      kind: 'folder',
+      default_cwd: '/test/folder',
+      repository_url: null,
+      default_branch: null,
+      ai_assistant_type: null,
+      commands: {},
+      created_at: new Date(0),
+      updated_at: new Date(0),
+    });
+    const git = await import('@archon/git');
+    const probe = spyOn(git, 'findRepoRoot').mockResolvedValue(git.toRepoPath('/test'));
+    probe.mockClear();
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
+    try {
+      await workflowListCommand('/test/folder', { json: true });
+      expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledWith(
+        '/test/folder',
+        expect.any(Function),
+        providerRegistry,
+        undefined,
+        { gitIgnoreRoot: undefined }
+      );
+      expect(probe).not.toHaveBeenCalled();
+      expect(stderr).not.toHaveBeenCalled();
+    } finally {
+      lookup.mockRestore();
+      probe.mockRestore();
+    }
+  });
+
+  it('keeps eligibility failures observable and non-blocking', async () => {
+    const git = await import('@archon/git');
+    const probe = spyOn(git, 'findRepoRoot').mockRejectedValue(new Error('Git unavailable'));
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [], errors: [] });
+    try {
+      await workflowListCommand('/test/path', { json: true });
+      expect(JSON.parse(firstJsonPayload(stdout))).toMatchObject({
+        workflows: [],
+        errors: [],
+        sourceWarnings: [expect.stringContaining('Could not determine')],
+      });
+      expect(firstJsonPayload(stderr)).toContain('Could not determine');
+    } finally {
+      probe.mockRestore();
+    }
+  });
+
+  it('keeps shared loader callers opted out of ignore checks', async () => {
+    const { loadWorkflows } = await import('./workflow-list');
+    await loadWorkflows('/test/path');
+    expect(mockDiscoverWorkflowsWithConfig).toHaveBeenCalledWith(
+      '/test/path',
+      expect.any(Function),
+      providerRegistry
+    );
   });
 });

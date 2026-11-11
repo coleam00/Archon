@@ -522,6 +522,7 @@ export interface ParsedWorkflowLoadError extends WorkflowLoadError {
  * Result of workflow discovery - includes both successful loads and errors
  */
 export interface WorkflowLoadResult {
+  readonly sourceWarnings?: readonly string[];
   /** Every dispatchable workflow: the only list a run, route, or listing may resolve against. */
   readonly workflows: readonly WorkflowWithSource[];
   /**

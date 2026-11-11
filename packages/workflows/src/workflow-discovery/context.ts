@@ -6,6 +6,7 @@ import type { WorkflowParseContext } from './load-dir';
 /** What one `discoverWorkflows` call shares across its scopes. */
 export interface DiscoveryContext extends WorkflowParseContext {
   cwd: string | null;
+  gitIgnoreRoot?: string;
   roots: WorkflowSourceRoots;
   /** The verified capture when `roots` are a run's frozen source. */
   capture: Awaited<ReturnType<typeof loadWorkflowSource>> | undefined;
