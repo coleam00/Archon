@@ -6,11 +6,7 @@ import {
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { AttentionWatch } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
-import {
-  attentionLineClassifier,
-  attentionWatchLevelPasses,
-  type AttentionWatchLevel,
-} from '@archon/workflows/attention-needs';
+import { attentionWatchReader, type AttentionWatchLevel } from '@archon/workflows/attention-needs';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
@@ -33,8 +29,9 @@ import {
   type AttentionQueueSource,
 } from '@archon/workflows/attention-queue';
 import { resolveMetricsWindow } from '@archon/workflows/metrics';
+import { countWorkflowNotices, listWorkflowNotices } from '@archon/workflows/workflow-notice';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
-import { attentionItemLines, attentionStreamText } from './workflow-attention-text';
+import { attentionItemLines, attentionStreamText, noticeText } from './workflow-attention-text';
 import {
   getLog,
   inheritedWorkflowCodebase,
@@ -63,8 +60,9 @@ export interface WorkflowAttentionOptions {
    */
   protocol?: boolean;
   /**
-   * With `watch`: also write what happened to work that nobody has to act on, such as a
-   * run that completed or resumed.
+   * With `watch`: also write what happened to work that nobody has to act on: a run that
+   * completed or resumed, and the notices runs emit. With `since` and no `watch`: list
+   * the notices emitted in that window, or count them with `countBy`.
    */
   notices?: boolean;
   /** With `watch` and `protocol`: replay readable feed events strictly after this cursor. */
@@ -118,7 +116,7 @@ export async function attentionScope(
  * `workflow attention --watch`: stream the queue until a signal or a closed stdout. By
  * default it writes only the lines someone has to act on; `--notices` adds what happened
  * to work nobody has to act on; `--protocol` writes every line, for a program that keeps
- * an open set (`attentionWatchLevelPasses`). Every JSON line carries its `needs`. Exit 0 on a
+ * an open set (`attentionWatchReader`). Every JSON line carries its `needs`. Exit 0 on a
  * signal or closed stdout, 1 on other output failures, and 4 on an `error` line: the
  * stream's cursor (from `--after`, or the tail's own position) is not one this install's
  * store can read, so the fix is to rerun without it. Read-only: stopping the stream
@@ -141,13 +139,13 @@ export async function workflowAttentionWatch(
     : opts.notices
       ? 'notices'
       : 'quiet';
-  const classify = attentionLineClassifier({ resumed: opts.after !== undefined });
+  const read = attentionWatchReader(level, { resumed: opts.after !== undefined });
   const write = (unclassified: AttentionStreamLine): Promise<void> => {
-    const line = classify(unclassified);
+    const line = read(unclassified);
     // A person starting a watch below the protocol is told it runs, off the stream itself.
-    if (!opts.protocol && !opts.json && line.type === 'ready')
-      return writeStderr(`${attentionStreamText(line, scope).join('\n')}\n`);
-    if (!attentionWatchLevelPasses(level, line)) return Promise.resolve();
+    if (!opts.protocol && !opts.json && unclassified.type === 'ready')
+      return writeStderr(`${attentionStreamText(unclassified, scope).join('\n')}\n`);
+    if (line === undefined) return Promise.resolve();
     if (opts.json) return writeStdout(`${JSON.stringify(line)}\n`);
     if (line.type === 'error')
       return writeStderr(
@@ -218,6 +216,8 @@ export async function workflowAttentionCommand(
 
     const { labels, order, countBy } = parseAttentionQueueRequest(opts);
     const scope = await attentionScope(host, cwd, opts);
+    if (opts.notices && opts.since !== undefined)
+      return await noticesCommand(host, scope, labels, countBy, opts.since, opts.json);
     if (opts.since !== undefined && countBy !== undefined) {
       const { since } = resolveMetricsWindow({ since: opts.since });
       return await renderAttentionCounts(
@@ -257,11 +257,55 @@ function rejectFlagsWithoutTheirMode(opts: WorkflowAttentionOptions): void {
     throw new Error(`workflow attention ${flag} needs ${mode}`);
   };
   if (opts.protocol && !opts.watch) needs('--protocol', '--watch');
-  if (opts.notices && !opts.watch) needs('--notices', '--watch');
+  if (opts.notices && !opts.watch && opts.since === undefined)
+    needs('--notices', '--watch, or --since to list the notices of a window');
   if (opts.notices && opts.protocol)
     throw new Error('workflow attention --watch takes --notices or --protocol, not both');
   if (opts.after !== undefined && !opts.protocol) needs('--after', '--watch --protocol');
-  if (opts.since !== undefined && opts.countBy === undefined) needs('--since', '--count-by');
+  if (opts.since !== undefined && opts.countBy === undefined && !opts.notices)
+    needs('--since', '--count-by or --notices');
+  if (opts.since !== undefined && opts.watch)
+    throw new Error('workflow attention --watch takes no --since; the stream starts now');
+}
+
+/**
+ * `workflow attention --notices --since <window>`: the notices runs emitted in the window,
+ * oldest first, or how many fall under each project or label value.
+ */
+async function noticesCommand(
+  host: WorkflowHost,
+  scope: AttentionQueueScope,
+  labels: AttentionQueueItem['labels'],
+  countBy: ReturnType<typeof parseAttentionQueueRequest>['countBy'],
+  sinceText: string,
+  json: boolean | undefined
+): Promise<number> {
+  const { since } = resolveMetricsWindow({ since: sinceText });
+  const source = { store: host.deps.store };
+  if (countBy !== undefined) {
+    if (countBy.by === 'answerer') throw new Error('A notice has no answerer to count by');
+    return await renderAttentionCounts(
+      await countWorkflowNotices(source, { scope, labels, since, countBy }),
+      scope,
+      json,
+      [],
+      'No notices in that window.'
+    );
+  }
+  const notices = await listWorkflowNotices(source, { scope, labels, since });
+  if (json) {
+    await writeJsonLine({
+      ok: true,
+      action: 'attention',
+      scope,
+      since: since.toISOString(),
+      notices,
+    });
+    return 0;
+  }
+  for (const notice of notices) console.log(noticeText(notice));
+  if (notices.length === 0) console.log('No notices in that window.');
+  return 0;
 }
 
 function rejectConflictingAttentionOptions(
@@ -270,6 +314,8 @@ function rejectConflictingAttentionOptions(
 ): void {
   rejectFlagsWithoutTheirMode(opts);
   const shaped = opts.sort !== undefined || opts.countBy !== undefined;
+  if (opts.notices && !opts.watch && (runId !== undefined || opts.sort !== undefined))
+    throw new Error('workflow attention --notices --since takes no run id or --sort');
   if (opts.watch && (runId !== undefined || shaped))
     throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
   const scoped = opts.project !== undefined || opts.all || opts.labels.length > 0;

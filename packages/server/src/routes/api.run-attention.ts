@@ -26,10 +26,7 @@ import {
   selectAttentionQueue,
   type AttentionQueueScope,
 } from '@archon/workflows/attention-queue';
-import {
-  attentionLineClassifier,
-  attentionWatchLevelPasses,
-} from '@archon/workflows/attention-needs';
+import { attentionWatchReader } from '@archon/workflows/attention-needs';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { IWorkflowEngine } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
@@ -214,10 +211,10 @@ export function registerAttentionStreamRoute(
         end = resolve;
       });
       stream.onAbort(end);
-      const classify = attentionLineClassifier({ resumed: after !== undefined });
+      const read = attentionWatchReader(level, { resumed: after !== undefined });
       const listener = async (unclassified: AttentionStreamLine): Promise<void> => {
-        const line = classify(unclassified);
-        if (!attentionWatchLevelPasses(level, line)) return;
+        const line = read(unclassified);
+        if (line === undefined) return;
         const id = idOf(line);
         try {
           await writer.writeSSE({

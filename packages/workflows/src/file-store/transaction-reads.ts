@@ -28,6 +28,7 @@ type TransactionReads = Pick<
   | 'listEventsForRuns'
   | 'listMetricRecords'
   | 'listAttentionWaitStarts'
+  | 'listWorkflowNoticeRows'
   | 'getDagResumeSnapshot'
   | 'findChildRuns'
   | 'getRunAncestry'
@@ -145,6 +146,21 @@ export function createTransactionReads(
         .map(event => ({
           runId: event.workflow_run_id,
           startedAt: event.created_at,
+          data: structuredClone(event.data),
+        })),
+    listWorkflowNoticeRows: async () =>
+      events
+        .filter(event => event.event_type === 'workflow_notice' && runs.has(event.workflow_run_id))
+        // A run's own notices of one moment keep the order it emitted them in.
+        .sort(
+          (a, b) =>
+            a.created_at.localeCompare(b.created_at) ||
+            (a.event_order ?? 0) - (b.event_order ?? 0) ||
+            a.id.localeCompare(b.id)
+        )
+        .map(event => ({
+          runId: event.workflow_run_id,
+          at: event.created_at,
           data: structuredClone(event.data),
         })),
     listMetricRecords: async () =>

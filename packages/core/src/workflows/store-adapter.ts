@@ -22,7 +22,7 @@ import * as resourceStarts from '../db/resource-starts';
 import { toHydratedTimestamp } from '../db/timestamps';
 import * as workflowEventDb from '../db/workflow-events';
 import { listMetricRecords } from '../db/workflow-metrics';
-import { listAttentionWaitStarts } from '../db/attention-wait-starts';
+import { listAttentionWaitStarts, listWorkflowNoticeRows } from '../db/attention-wait-starts';
 import * as workflowNodeSessionDb from '../db/workflow-node-sessions';
 import {
   listWorkflowRunNodeSessions,
@@ -188,6 +188,7 @@ export function createWorkflowStore(): IWorkflowStore {
     labelAttentionWait: workflowDb.labelAttentionWait,
     listAttentionQueueRows: () => workflowDb.listAttentionQueueRows(),
     listAttentionWaitStarts,
+    listWorkflowNoticeRows,
     signalWorkflowWait: workflowDb.signalWorkflowWait,
     resumeWorkflowRun: workflowDb.resumeWorkflowRun,
     releasePausedRunSlot: workflowDb.releasePausedRunSlot,

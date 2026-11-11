@@ -62,10 +62,10 @@ Route by intent:
    archon workflow attention --watch --json        # this project; add --all for the install
    ```
 
-   Every line is something to act on, and its `needs` field says what: `answer` for an
-   `attention` line that wants a decision, `look` for a `resolved` line (the item no
-   longer needs you) and for a `terminal` line (a run failed or completed with
-   `outcome: "failed"`). A run that completes otherwise writes no line unless you add
+   Its `needs` field says what a line asks of you: `answer` for an `attention` line that
+   wants a decision, `look` for a `terminal` line (a run failed or completed with
+   `outcome: "failed"`), and `nothing` for a `resolved` line, which only tells you an
+   ask you were shown has closed, so stop working on it. A run that completes otherwise writes no line unless you add
    `--notices`, which also writes the `needs: "nothing"` lines for runs that completed,
    were cancelled or resumed. Or check `archon workflow runs --json`, or block on one run
    with `archon workflow wait <run-id> --json`. Act on the line, then keep reading.

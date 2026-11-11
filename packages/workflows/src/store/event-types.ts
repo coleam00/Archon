@@ -155,6 +155,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // `data.notice` is the composed message; absence means not deprecated OR the run
   // predates this event type.
   'workflow_deprecation_notice',
+  // A notice a node of the run emitted (`workflow notice`): something the run did that
+  // nobody has to act on. `data` is `workflowNoticeDataSchema`: `text`, `labels` and the
+  // emitting `node`; the row's timestamp is when. Never pauses the run.
+  'workflow_notice',
   // #2512 — audit snapshot of a composed fan-out's ordered instance set (identity +
   // item per ordinal), written before the first instance schedules.
   'fan_out_instances',

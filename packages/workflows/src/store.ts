@@ -99,6 +99,14 @@ export interface AttentionWaitStart {
   data: Record<string, unknown>;
 }
 
+/** One `workflow_notice` row as recorded. */
+export interface WorkflowNoticeRow {
+  runId: string;
+  at: string;
+  /** The row's raw `data`; `listWorkflowNotices` reads it. */
+  data: Record<string, unknown>;
+}
+
 /** A `node_completed` row whose `structured_output` carries a `metrics` key. */
 export interface MetricRecordRow {
   eventId: string;
@@ -304,6 +312,12 @@ export interface IWorkflowStore
    * decides which count.
    */
   listAttentionWaitStarts(): Promise<AttentionWaitStart[]>;
+  /**
+   * Every `workflow_notice` row on the install, oldest first, for runs that still exist;
+   * a run's rows of one moment stay in the order it emitted them.
+   * Rows are raw: `listWorkflowNotices` decides which are read.
+   */
+  listWorkflowNoticeRows(): Promise<WorkflowNoticeRow[]>;
   /** Atomically record an unexpired event signal and its audit event without changing lifecycle. */
   signalWorkflowWait(
     id: string,
