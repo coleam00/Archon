@@ -37,6 +37,9 @@ if (argv[0] === 'workflow' && argv[1] === 'runs') {
     process.stderr.write('refused');
     process.exitCode = 1;
   } else process.stdout.write(JSON.stringify({ runId: `launched-${argv[2]}` }));
+} else if (argv[0] === 'workflow' && argv[1] === 'notice') {
+  // Accepted; a test reads what was said from `ARCHON_CALL_LOG`.
+  process.stdout.write(JSON.stringify({ ok: true, action: 'notice', runId: process.env.WORKFLOW_ID ?? '', count: 1, limit: 50 }));
 } else if (argv[0] === 'trigger' && argv[1] === 'fire') {
   if (process.env.ARCHON_RUN_REFUSES) {
     process.stderr.write('refused');

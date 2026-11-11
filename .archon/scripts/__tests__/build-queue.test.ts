@@ -240,6 +240,9 @@ function run(
       INPUTS_REPO_PATH: PR.repo.path,
       INPUTS_REPO: JSON.stringify(PR.repo),
       INPUTS_ROUND_LIMIT: '3',
+      INPUTS_BUILD_LANE: 'auto',
+      INPUTS_ROUTE: 'deliver',
+      INPUTS_ITEM: JSON.stringify(SUBJECT),
       ...inputs,
     },
   });
@@ -255,6 +258,20 @@ const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
 
 /** A run that named no item, whose operator set the build-queue binding. */
 const SELECTED = { INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json', INPUTS_NUMBER: '' };
+
+/** The notices a script emitted, from its call log: each one's text and `key=value` labels. */
+function notices(calls: string): { text: string | undefined; labels: string[] }[] {
+  return readFileSync(calls, 'utf8')
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line) as string[])
+    .filter(argv => argv[0] === 'workflow' && argv[1] === 'notice')
+    .map(argv => ({ text: argv.at(-1), labels: argv.filter((_, index) => argv[index - 1] === '--label') }));
+}
+
+function callLog(): string {
+  return join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+}
 
 /**
  * The next round fires the build-queue binding for the item it continues, keyed by the
@@ -575,6 +592,7 @@ describe('the build queue scripts', () => {
     expect(ok(applied)).toMatchObject({ decision: 'continue', question: '', options: [], asked: null });
     expectNextRound(calls);
     expect(ok(applied).summary).toContain('its next round started at once (run fired-run)');
+    expect(notices(calls)).toEqual([{ text: 'Issue 7: another round; R1 is correctable', labels: ['stage=build', 'kind=continued', 'item=7'] }]);
     const doc = stored(at).value;
     expect(doc).toMatchObject({
       claim: null,
@@ -729,8 +747,12 @@ describe('the build queue scripts', () => {
     const at = install();
     seed(at, triaged(CLAIMED));
     const done = { decision: 'done', brief: '', ...PUSH, reason: 'Ready at the head and CI green', ask: null };
-    const applied = ok(run(at, 'apply', applyInputs(done)));
+    const calls = callLog();
+    const applied = ok(run(at, 'apply', { ...applyInputs(done), ARCHON_CALL_LOG: calls }));
     expect(applied).toMatchObject({ decision: 'ready', question: '', asked: null });
+    expect(notices(calls)).toEqual([
+      { text: 'Issue 7: PR 42 is Ready and waits for the merge queue', labels: ['stage=build', 'kind=ready', 'item=7', 'pr=42'] },
+    ]);
     expectPushed(at, applied);
     const doc = stored(at).value;
     expect(doc).toMatchObject({ claim: null, facts: { build: { status: 'ready', brief: '', decisions: [{ decision: 'ready' }] } } });
@@ -904,8 +926,22 @@ Object.defineProperty(Bun, 'spawnSync', { value: (argv, settings) => {
     const base = git(at.checkout, 'rev-parse', 'HEAD');
     const pr = JSON.stringify({ repo: PR.repo, number: 42 });
     const item = JSON.stringify(SUBJECT);
-    expect(ok(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr }))).toEqual({ head: null, reviewed: null, pull_request: null });
+    const calls = callLog();
+    const fresh = { INPUTS_ITEM: item, INPUTS_CANDIDATE: '42', INPUTS_CONTINUES: 'null', INPUTS_PULL_REQUEST: pr };
+    expect(ok(run(at, 'checkout', { ...fresh, ARCHON_CALL_LOG: calls }))).toEqual({ head: null, reviewed: null, pull_request: null });
     expect(git(at.checkout, 'rev-parse', 'HEAD')).toBe(base);
+    // The round's start is said once, with the labels "what is building?" filters by.
+    expect(notices(calls)).toEqual([{ text: 'Issue 7: build round started (deliver)', labels: ['stage=build', 'kind=started', 'item=7'] }]);
+
+    // Under the manual build lane a round starts only on a maintainer's answer.
+    const manual = { ...fresh, INPUTS_BUILD_LANE: 'manual' };
+    seed(at, triaged(CLAIMED, record({ status: 'next', decisions: [{ at: AT, run_id: 'run-0', decision: 'continue', reason: 'R1 is correctable', links: [] }] })));
+    const unanswered = run(at, 'checkout', manual);
+    expect(unanswered.code).not.toBe(0);
+    expect(unanswered.stderr).toContain('the build lane is manual and no maintainer answered for issue 7');
+    const answer = { choice: 'relax', text: '', at: AT };
+    seed(at, triaged(CLAIMED, record({ status: 'next', decisions: [{ at: AT, run_id: 'run-0', decision: 'answered: continue', reason: 'Relax it', links: [], answer }] })));
+    expect(ok(run(at, 'checkout', manual))).toEqual({ head: null, reviewed: null, pull_request: null });
     expect(run(at, 'checkout', { INPUTS_ITEM: item, INPUTS_CANDIDATE: 'null', INPUTS_CONTINUES: '42', INPUTS_PULL_REQUEST: pr }).code).not.toBe(0);
   }, 60_000);
 

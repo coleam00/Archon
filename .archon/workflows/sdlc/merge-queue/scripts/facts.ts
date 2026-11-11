@@ -13,18 +13,17 @@
  * base reaches record for independent bookkeeping before the run reports the failure.
  */
 
-import { join } from 'node:path';
-import { artifactsDir, emit, input, refuse, runId as workflowRunId } from 'archon:script';
-import { writeScriptApiPreload } from '../../.shared/host.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { type QualifiedPr } from '../../.shared/identity.ts';
 import { latestValidation, type Validation } from '../../.shared/build.ts';
 import {
   itemPr,
-  MERGE_METHODS,
   type CiMode,
   MERGE_PICKUP,
-  type MergeMethod,
+  listSetting,
   parseCiMode,
+  parseLane,
+  protectedChanges,
   type MergeRecord,
   type MergeSettled,
   type PrFacts,
@@ -47,23 +46,14 @@ interface Item {
   readonly record: MergeRecord | null;
   /** The latest validation its build rounds recorded, which the gate trusts under `ci: none`. */
   readonly validation: Validation | null;
+  /** The changed paths the `protected_paths` setting matches; with any, the gate needs an approval at the head. */
+  readonly protected: readonly string[];
 }
 
 function positive(name: string, value: string): number {
   const parsed = Number(value);
   if (!Number.isInteger(parsed) || parsed <= 0) throw new Error(`${name} must be a positive integer`);
   return parsed;
-}
-
-function parseMethod(value: string): MergeMethod {
-  const method = MERGE_METHODS.find(candidate => candidate === value);
-  if (method === undefined) throw new Error(`merge_method must be one of ${MERGE_METHODS.join(', ')}, not "${value}"`);
-  return method;
-}
-
-/** A shell word: the sweep pastes the gate command into its shell. */
-function quoted(word: string): string {
-  return `'${word.replaceAll("'", "'\\''")}'`;
 }
 
 function claimAll(limit: number, runId: string, pickup: Pickup): WorkItem[] {
@@ -122,7 +112,7 @@ function emitFacts(
   repo: QualifiedPr['repo'],
   items: readonly Item[],
   settled: readonly MergeSettled[],
-  gate: string,
+  lane: string,
   ci: CiMode
 ): void {
   // The default branch is read on every run: a red one after the last merge needs the
@@ -145,15 +135,16 @@ function emitFacts(
     base_error: inspection.error,
     items,
     settled,
-    gate,
+    lane,
     ci,
   });
 }
 
 function main(): void {
   const limit = positive('limit', input('limit').trim());
-  const method = parseMethod(input('merge_method').trim());
   const ci = parseCiMode(input('ci').trim());
+  const lane = parseLane('merge_lane', input('merge_lane').trim());
+  const protectedPaths = listSetting(input('protected_paths'));
   const repo = workflowRepo();
   const runId = workflowRunId();
 
@@ -188,22 +179,10 @@ function main(): void {
       facts,
       record: current.facts.merge ?? null,
       validation: latestValidation(current),
+      protected: protectedChanges(pr, protectedPaths),
     });
   }
-  // The sweep agent runs the gate as a plain command, with no engine to give it `archon:script`.
-  const gate = [
-    process.execPath,
-    '--preload',
-    writeScriptApiPreload(join(artifactsDir(), 'merge-queue', 'archon-script.preload.ts')),
-    join(import.meta.dir, 'gate.ts'),
-    '--method',
-    method,
-    '--ci',
-    ci,
-  ]
-    .map(quoted)
-    .join(' ');
-  emitFacts(repo, items, settled, gate, ci);
+  emitFacts(repo, items, settled, lane, ci);
 }
 
 try {

@@ -147,6 +147,29 @@ besides a Ready review verdict.
   requires a passing validation at exactly the head it merges. This trusts the agent's
   report of the run, which is weaker than CI.
 
+**Ask the user** how much the factory does by itself. Two settings turn it down, and
+they are the off switch:
+
+- `build_lane`: `auto` (the default) launches a clear item's build round by itself.
+  `manual` launches none until a maintainer answered the build queue's question about
+  the item, so every launch arrives on the attention queue with a recommendation.
+- `merge_lane`: `auto` (the default) merges a clear pull request by itself. `manual`
+  merges nothing until a maintainer approved the pull request at its head.
+- `protected_paths`: comma-separated globs, empty by default. A pull request that
+  changes a matching path never merges on the auto lane, whatever `merge_lane` says: it
+  is asked about, and merges once approved at its head. Use it for what a person must
+  read first, such as `.archon/workflows/**,infra/**`.
+
+```yaml
+settings:
+  merge_lane: manual
+  protected_paths: ".archon/workflows/**,.archon/packs/**"
+```
+
+The settings are checked by scripts, not by an agent's reading of them: the build
+queue's checkout refuses a launch, and the merge gate refuses a merge, that the setting
+does not allow.
+
 Check: `.pack/pack.yaml` lists every setting under `inputs:` with its values. A value
 it does not declare is refused when a run starts.
 

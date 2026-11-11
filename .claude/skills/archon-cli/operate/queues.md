@@ -199,7 +199,7 @@ back to the build queue for a new round.
 A pull request whose read fails twice in a row is parked with the read error until
 the build queue readies the item again.
 
-A sweep merges a clear pull request on its own. An unclear one, such as a very large
+A sweep merges a clear pull request on its own, unless the project's `merge_lane` setting is `manual` or the pull request changes a path its `protected_paths` setting matches: then it is asked about and merges only once approved at its head. An unclear one, such as a very large
 change, pauses as an attention item labelled `stage: merge` and `kind: approve` with the choices `merge`,
 `return`, `park` and `other`. A red default branch asks nobody: the sweep merges nothing and its run completes
 with a failed outcome whose summary (the `record` node's, in `archon workflow get <run-id> --verbose`) names the failing checks, the

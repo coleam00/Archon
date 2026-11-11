@@ -22,7 +22,7 @@ Pauses, waits, claims, leases and terminal states are the engine's. Work items l
 
 Agents discover a project's commands, branches and CI and record them as typed output. Prompts carry practice that transfers between projects. A project's strong opinions live in policy: defaults in [`.shared/policy/`](.shared/policy), which a project's `.archon/sdlc/policy/<topic>.md` adds to and overrides. A node names only the policy its decision needs. Anything that must be exact, such as label names or allow-lists, is never prose an agent interprets. Pack files carry no tracker references or history.
 
-- Today: label names are fixed in code, in [`.shared/labels.ts`](.shared/labels.ts), and the maintainer list is the project's `.archon/sdlc/policy/maintainers.json`. The pack has one typed setting, `ci`, in [`.pack/pack.yaml`](.pack/pack.yaml).
+- Today: label names are fixed in code, in [`.shared/labels.ts`](.shared/labels.ts), and the maintainer list is the project's `.archon/sdlc/policy/maintainers.json`. The pack's typed settings are in [`.pack/pack.yaml`](.pack/pack.yaml): what the merge gate trusts (`ci`), whether each queue acts by itself (`build_lane`, `merge_lane`), and the paths a person reads first (`protected_paths`).
 - Direction: an exact value a project needs to change is a typed setting.
 
 ## CI is the validation

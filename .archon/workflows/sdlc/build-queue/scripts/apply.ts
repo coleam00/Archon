@@ -39,7 +39,7 @@ import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
-import type { DecisionEntry } from '../../.shared/queue.ts';
+import { announce, type DecisionEntry } from '../../.shared/queue.ts';
 import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
@@ -237,6 +237,14 @@ function prLabel(round: BuildRound | null): string {
   return pr === undefined ? '' : String(pr);
 }
 
+/** Say what the queue did with the item, once its work item holds it. An ask says it itself. */
+function announceDecision(decision: Decision, item: string, pr: string): void {
+  const labels = { stage: 'build', kind: decision.kind, item };
+  if (decision.kind === 'ready') announce(`Issue ${item}: PR ${pr} is Ready and waits for the merge queue`, { ...labels, pr });
+  if (decision.kind === 'continue') announce(`Issue ${item}: another round; ${decision.reason}`, { ...labels, kind: 'continued' });
+  if (decision.kind === 'parked') announce(`Issue ${item}: parked; ${decision.reason}`, labels);
+}
+
 function main(): void {
   const path = input('path').trim();
   const noItem = noItemSummary(path);
@@ -297,6 +305,7 @@ function main(): void {
       release: asking === null,
     })
   );
+  announceDecision(decision, result.item, result.pr);
   emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
 }
 

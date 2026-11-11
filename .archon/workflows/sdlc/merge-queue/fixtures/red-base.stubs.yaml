@@ -10,8 +10,10 @@ facts:
       url: "https://github.com/example/repo/pull/1"
       facts: null
       record: null
+      validation: null
+      protected: []
   settled: []
-  gate: "stub-gate"
+  lane: auto
   ci: forge
 sweep:
   decisions:
@@ -26,7 +28,7 @@ sweep:
   base:
     summary: "stub: lint fails in src/a.ts, which pull request 2 changed; revert it or fix forward"
   summary: "stub: merged nothing"
-  gate_error: ""
+merge: { gated: [] }
 record:
   merged: []
   summary: "stub: The default branch dev is red at fixturebase (lint); nothing merges until it is green."
@@ -44,4 +46,4 @@ fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
   authored: failed
-  reached: [facts, sweep, record]
+  reached: [facts, sweep, merge, record]

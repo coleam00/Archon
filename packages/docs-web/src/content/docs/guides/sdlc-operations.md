@@ -13,7 +13,7 @@ This page is the operator manual for the bundled `sdlc` pack. Set the pack up fi
 
 ## Pack settings
 
-A project sets the pack's settings in `.archon/packs/sdlc.yaml`. The pack's README says what each setting means and how to choose it: [Choose the pack settings](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#6-choose-the-pack-settings).
+A project sets the pack's settings in `.archon/packs/sdlc.yaml`: what the merge gate trusts (`ci`), whether the build and merge queues act by themselves or ask first (`build_lane`, `merge_lane`), and the paths whose changes a maintainer approves before they merge (`protected_paths`). The pack's README says what each setting means and how to choose it: [Choose the pack settings](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#6-choose-the-pack-settings).
 
 ## Bindings
 
@@ -246,15 +246,16 @@ The sweep measures each diff with git against the merge base, not the forge's co
 
 ### The gate
 
-Every merge goes through one gate script, which reads the pull request and the default branch fresh and refuses unless:
+The sweep agent declares which pull requests merge. A script node then merges them, in the sweep's order, each through one gate, which reads the pull request and the default branch fresh and refuses unless:
 
 - the verdict says Ready for the head;
 - what the [`ci` setting](#pack-settings) trusts passes at the head: green CI, or a passing validation recorded at that head;
 - the default branch's CI is not red (pending does not hold a merge);
 - the pull request is open, not a draft, into the default branch, at the head the sweep named;
-- that head contains the default branch's head, or the forge reports it merges cleanly.
+- that head contains the default branch's head, or the forge reports it merges cleanly;
+- under `merge_lane: manual`, or when the pull request changes a path `protected_paths` matches, the work item holds a maintainer's approval at exactly that head.
 
-Open review threads are the sweep's judgment, not the gate's: the sweep holds a merge only for a thread that raises a defect in code the pull request changes or makes reachable. The gate merges pinned to that head, by squash unless `--input merge_method=merge` asks for a merge commit, and reports the commit the forge's own read-back says it landed as. A merge the forge cannot verify, as when it queues merges, fails the gate with the forge's outcome, and the sweep waits.
+Open review threads are the sweep's judgment, not the gate's: the sweep holds a merge only for a thread that raises a defect in code the pull request changes or makes reachable. The gate merges pinned to that head, by squash unless `--input merge_method=merge` asks for a merge commit. A merge moves the default branch, so the forge may not have computed the next pull request's merge yet: the script reads it again a few times before it refuses. A pull request the gate refuses, or whose merge the forge cannot verify, as when it queues merges, is recorded as waiting with the gate's reasons, and the next sweep decides it again.
 
 Before merging, the queue rechecks the pull request's closing keyword against the review's stamped contract coverage and the issue's latest ruling, and corrects it in either direction.
 
@@ -268,7 +269,7 @@ A default branch that cannot be read permits no sweep or merge. The run still re
 
 The queue reads every pull request back after the sweep: the forge, not the sweep, says what merged, at the head the forge merged.
 
-- A sweep that says it merged a pull request the forge does not show merged fails the run after every other decision is written. That pull request is recorded as waiting, or parked if it was closed.
+- A pull request the sweep declared to merge that the forge does not show merged is recorded as waiting with the gate's reasons, or parked if it was closed.
 - A decision for a pull request this run did not claim is skipped and reported, because that item belongs to another run.
 - A claimed pull request the sweep left undecided waits for the next sweep.
 - A red default branch asks nobody. The sweep merges nothing and the run completes with a failed outcome, which the attention watch shows as a line that needs a look. Read the diagnosis in the `record` node's summary with `archon workflow get <run-id> --verbose`: the failing checks and what each points at, the pull requests merged since the branch was green, the one the sweep suspects, and whether to rerun, revert or fix forward. Every sweep repeats that line while the branch stays red. A sweep that also asked about a pull request ends only once that question is answered.
@@ -330,6 +331,30 @@ Who removes each checkout:
 - A worktree launched with `--branch` waits for the merged sweep.
 
 A server already runs a merged sweep on its cleanup schedule, so the `worktree-cleanup` binding is for installs that run only the CLI. Its resource is named for the host, not the repository, because one pass covers every project registered there: generated for two repositories, the two schedules share one slot and `overlap: skip` drops the second pass.
+
+## Notices
+
+Each queue says what it did on the attention stream, at the notices level. A notice asks nothing of anyone. Every notice carries `stage` and `kind`, and `item` or `pr` where it has one.
+
+| `kind` | Said when | Labels |
+| --- | --- | --- |
+| `started` | a build round is about to start | `stage=build`, `item` |
+| `ready` | the build queue hands a pull request to the merge queue | `stage=build`, `item`, `pr` |
+| `continued` | the build queue starts another round on the item | `stage=build`, `item` |
+| `parked` | a queue stops working an item | `stage`, `item` |
+| `merged` | the merge queue merged a pull request | `stage=merge`, `item`, `pr`, `lane` (`manual` when a maintainer approved it at the merged head, else `auto`) |
+| `returned` | the merge queue sent a pull request back to the build queue | `stage=merge`, `item`, `pr` |
+| `closed` | intake closed an issue triage found resolved | `stage=intake`, `item` |
+| `blocked` | intake left an issue where no run can start | `stage=intake`, `item` |
+
+```bash
+archon workflow attention --notices --since 24h --label kind=merged     # what merged
+archon workflow attention --notices --since 24h --label kind=started    # what started building
+archon workflow attention --notices --since 30d --label kind=merged --count-by label:lane   # share merged without a person
+archon workflow attention --watch --notices                             # as it happens
+```
+
+A notice the host refuses is reported on the node's stderr and never fails the run.
 
 ## Measure the factory
 

@@ -237,6 +237,7 @@ nodes:
       brief: "$facts.output.brief"
       pull_request: { from: "$facts.output.pull_request" }
       continues: "$facts.output.continues"
+      lane: "$INPUTS.build_lane"
     output_format:
       type: object
       properties:
@@ -305,6 +306,7 @@ nodes:
       pull_request: { from: "$facts.output.pull_request" }
       candidate: "$facts.output.continues"
       continues: "$route.output.continues"
+      route: "$route.output.route"
     output_format:
       type: object
       properties:
