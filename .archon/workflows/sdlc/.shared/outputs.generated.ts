@@ -163,6 +163,9 @@ export interface WorkflowOutputs {
       readonly blocked: ReadonlyArray<{
         readonly number: number;
         readonly summary: string;
+        readonly blocked_at: string;
+        readonly blocked_reason: string;
+        readonly blocked_by: ReadonlyArray<string>;
       }>;
       readonly blocked_count: number;
     };
