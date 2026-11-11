@@ -683,6 +683,17 @@ describe('the build queue scripts', () => {
     });
   }, 60_000);
 
+  test('an attention item recommending a choice it does not offer refuses before any write', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    const before = stored(at).revision;
+    const bad = { ...ASK, attention: { ...ATTENTION, recommendation: { ...ATTENTION.recommendation, choice: 'merge' } } };
+    const applied = run(at, 'apply', applyInputs(bad));
+    expect(applied.code).not.toBe(0);
+    expect(applied.stderr).toContain('"merge" is not offered');
+    expect(stored(at).revision).toBe(before);
+  }, 60_000);
+
   const PUSH = { push: { repo: PR.repo, number: PR.number } };
 
   function expectPushed(at: Install, applied: Record<string, unknown>): void {

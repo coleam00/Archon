@@ -61,6 +61,21 @@ export interface DecisionEntry {
   readonly answer?: { readonly choice: string; readonly text: string; readonly at: string };
 }
 
+/**
+ * Refuse an attention item a person could not answer: no choices, two choices with one
+ * id, or a recommendation of a choice that was never offered. The schema the agent
+ * answered already certified each field's shape. The wait refuses the same item, but
+ * only when it pauses, after the queue has recorded the ask; this check runs before.
+ */
+export function checkAttention<Effect extends string>(attention: Attention<Effect>): void {
+  const ids = attention.choices.map(choice => choice.id);
+  if (ids.length === 0) throw new Error('the attention item offers no choice');
+  if (new Set(ids).size !== ids.length) throw new Error('two choices share one id');
+  if (!ids.includes(attention.recommendation.choice)) {
+    throw new Error(`the recommended choice "${attention.recommendation.choice}" is not offered`);
+  }
+}
+
 // Decisions and their prose are capped so a queue's record keeps the work item well under
 // the state store's 64 KiB limit. `archon state log` keeps every revision.
 const KEPT_DECISIONS = 20;
