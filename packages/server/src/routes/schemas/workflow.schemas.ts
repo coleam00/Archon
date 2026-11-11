@@ -13,7 +13,7 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
  */
 import { z } from '@hono/zod-openapi';
 import {
-  attentionQueueCountsSchema,
+  openAttentionQueueCountsSchema,
   attentionQueueItemSchema,
 } from '@archon/workflows/attention-queue';
 import {
@@ -415,7 +415,7 @@ export const runsNeedingAttentionResponseSchema = z
 /** GET /api/runs/attention response when `countBy` is given. */
 export const attentionQueueCountsResponseSchema = z
   .object({
-    counts: attentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }),
+    counts: openAttentionQueueCountsSchema.meta({ id: 'AttentionQueueCounts' }),
     degraded: z.array(attentionDegradedSchema).optional(),
   })
   .openapi('AttentionQueueCountsResponse');

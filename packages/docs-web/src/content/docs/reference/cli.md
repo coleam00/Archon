@@ -1189,7 +1189,7 @@ install did not issue or the stream's own position (with `--json`, the last line
 `{"type":"error","error":"cursor_invalid","needs":"look"}`; rerun without `--after`).
 
 HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sort` and
-`countBy`, and returns `items` beside the console's `runs`, or `{ counts }`. A server has
+`countBy` (`project` or `label:<key>`; it counts open items, so not `answerer`), and returns `items` beside the console's `runs`, or `{ counts }`. A server has
 no working directory, so without `project` it covers the whole install.
 `GET /api/runs/<run-id>/attention` reads one item.
 

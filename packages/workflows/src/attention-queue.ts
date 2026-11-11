@@ -596,17 +596,26 @@ const groupCountFields = {
   recommendations: recommendationCountsSchema.optional(),
 };
 
+const countsByProjectSchema = z.object({
+  by: z.literal('project'),
+  counts: z.array(z.object({ project: projectRefSchema.nullable(), ...groupCountFields })),
+});
+const countsByLabelSchema = z.object({
+  by: z.literal('label'),
+  key: z.string(),
+  /** `value` is null for the items that have no such label. */
+  counts: z.array(z.object({ value: z.string().nullable(), ...groupCountFields })),
+});
+
+/** The counts of the items open now. They have no answer yet, so none groups by answerer. */
+export const openAttentionQueueCountsSchema = z.discriminatedUnion('by', [
+  countsByProjectSchema,
+  countsByLabelSchema,
+]);
+
 export const attentionQueueCountsSchema = z.discriminatedUnion('by', [
-  z.object({
-    by: z.literal('project'),
-    counts: z.array(z.object({ project: projectRefSchema.nullable(), ...groupCountFields })),
-  }),
-  z.object({
-    by: z.literal('label'),
-    key: z.string(),
-    /** `value` is null for the items that have no such label. */
-    counts: z.array(z.object({ value: z.string().nullable(), ...groupCountFields })),
-  }),
+  countsByProjectSchema,
+  countsByLabelSchema,
   z.object({
     by: z.literal('answerer'),
     /** `answeredBy` is null for waits still open and for answers that recorded nobody. */

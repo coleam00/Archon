@@ -6905,26 +6905,6 @@ export interface components {
               followed: number;
             };
           }[];
-        }
-      | {
-          /** @enum {string} */
-          by: 'answerer';
-          counts: {
-            answeredBy:
-              | {
-                  declared: string;
-                }
-              | {
-                  userId: string;
-                }
-              | unknown;
-            count: number;
-            recommendations?: {
-              asked: number;
-              answered: number;
-              followed: number;
-            };
-          }[];
         };
     AttentionQueueItemResponse: {
       item:

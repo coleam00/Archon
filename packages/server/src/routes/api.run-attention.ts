@@ -138,6 +138,10 @@ async function attentionHttpRequest(query: z.infer<typeof attentionQueueQuerySch
   request: ReturnType<typeof parseAttentionQueueRequest>;
 }> {
   const label = query.label ?? [];
+  // This route counts the items open now, which have no answerer; that count reads
+  // started waits from events and is the CLI's `--count-by answerer --since`.
+  if (query.countBy === 'answerer')
+    throw new Error("countBy must be 'project' or 'label:<key>', got 'answerer'");
   const request = parseAttentionQueueRequest({
     ...query,
     all: query.all === 'true',
