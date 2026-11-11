@@ -138,7 +138,8 @@ happened, not on a pass that found nothing. One line of at most 300 characters, 
 Notices exist so whoever watches can answer three questions with one command each:
 
 - What merged today, or what did the factory do since 08:00?
-  `archon workflow attention --notices --since 8h --all` (add `--label kind=merged`).
+  `archon workflow attention --notices --since 2026-11-11T08:00:00Z --all`, or
+  `--since 8h` for the last eight hours (add `--label kind=merged`).
 - What is building right now? `archon workflow status --all`: each live run shows the
   latest notice it emitted, so a run should say what it is about when it starts the work.
 - What is waiting for me? `archon workflow attention --all`.

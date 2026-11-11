@@ -349,7 +349,7 @@ With notices, one command answers each of the simple questions someone asks the 
 
 | Question | Command |
 |---|---|
-| What merged today? What did the factory do since 08:00? | `archon workflow attention --notices --since 8h --all`, with `--label kind=merged` for one kind, or an ISO time such as `--since 2026-11-11T08:00` |
+| What merged today? What did the factory do since 08:00? | `archon workflow attention --notices --since 2026-11-11T08:00:00Z --all` for a time of day (an ISO time with its offset), or `--since 8h` for the last eight hours; add `--label kind=merged` for one kind |
 | What is building right now? | `archon workflow status --all`: every running or paused run, each with its `Notice:` line, the latest notice it emitted |
 | What is waiting for me? | `archon workflow attention --all` |
 
@@ -359,8 +359,8 @@ The labels in these commands are examples: a workflow chooses its own. For the s
 - **Labels are the workflow's own.** Archon does not interpret them. What deserves a notice, and which labels it carries, is the workflow's decision, like what deserves an ask.
 - **A live run carries its latest notice.** `archon workflow status` prints it as `Notice:` under the run, and `--json` gives each run a `notice` of `{ at, node, text, labels }`, or null when it emitted none. That is what the run is about now, with no second read.
 - **The window list is the recap.** `--notices --since` reads the recorded notices of the window, oldest first, and `--count-by` counts them per project or per label value. `--json` prints `{ ok, action: "attention", scope, since, notices }`, each notice with `at`, `runId`, `workflow`, `parentRunId`, `project`, `node`, `text` and `labels`.
-- **A notice is not a log.** The text is one line of at most 300 characters, with at most 16 labels, and a run may emit 50. An emit past a bound exits 1 and says which. Details belong in an artifact; keep secrets out of the text, which every reader of the stream sees.
-- **Only a node of a running run can emit one.** The command reads the run and node from the environment Archon gives a node, as `archon state` does, and refuses anywhere else.
+- **A notice is not a log.** The text is one line of at most 300 characters, with at most 16 labels, neither with control characters, and a run may emit 50. An emit past a bound exits 1 and says which. Details belong in an artifact; keep secrets out of the text, which every reader of the stream sees.
+- **Only a node of a running run can emit one.** The command reads the run and node from the environment Archon gives a node, as `archon state` does, and refuses anywhere else. A node of a [container run](/guides/container-isolation/) cannot: it has no host CLI to call, so `notice()` throws `HostCommandError` there.
 
 ### The full protocol for programs
 

@@ -30,6 +30,15 @@ export const WORKFLOW_NOTICE_LIMITS = {
   perRun: 50,
 } as const;
 
+/** A notice prints as one terminal line: a control character could break or rewrite it. */
+function isPrintable(text: string): boolean {
+  for (const char of text) {
+    const code = char.codePointAt(0) ?? 0;
+    if (code < 0x20 || (code >= 0x7f && code < 0xa0)) return false;
+  }
+  return true;
+}
+
 /** What a `workflow_notice` event records in its `data`. */
 export const workflowNoticeDataSchema = z.object({
   text: z
@@ -40,7 +49,8 @@ export const workflowNoticeDataSchema = z.object({
       WORKFLOW_NOTICE_LIMITS.textLength,
       `A notice is at most ${String(WORKFLOW_NOTICE_LIMITS.textLength)} characters`
     )
-    .refine(text => !/[\r\n]/u.test(text), 'A notice is one line'),
+    .refine(text => !/[\r\n]/u.test(text), 'A notice is one line')
+    .refine(isPrintable, 'A notice has no control characters'),
   labels: attentionLabelsSchema
     .refine(
       labels => Object.keys(labels).length <= WORKFLOW_NOTICE_LIMITS.labels,
@@ -52,6 +62,10 @@ export const workflowNoticeDataSchema = z.object({
           value => value.length <= WORKFLOW_NOTICE_LIMITS.labelValueLength
         ),
       `A notice label value is at most ${String(WORKFLOW_NOTICE_LIMITS.labelValueLength)} characters`
+    )
+    .refine(
+      labels => Object.entries(labels).every(([key, value]) => isPrintable(key + value)),
+      'A notice label has no control characters or line breaks'
     ),
   /** The path of the node that emitted it. */
   node: z.string().nullable(),

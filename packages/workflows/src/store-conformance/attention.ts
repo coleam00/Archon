@@ -675,6 +675,11 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
 
       expect(await rejection(say(ended.id, 'Merged'))).toMatchObject({ reason: 'run_not_running' });
       expect(await rejection(say(run.id, 'x'.repeat(301)))).toMatchObject({ reason: 'invalid' });
+      // A label value that would print as a second line, or rewrite the first.
+      for (const value of ['merged\nanother entry', 'merged\u001b[2K'])
+        expect(await rejection(say(run.id, 'Merged', { kind: value }))).toMatchObject({
+          reason: 'invalid',
+        });
       expect(await say(run.id, 'Merged pull request 7', { kind: 'merged' })).toEqual({
         runId: run.id,
         count: 1,

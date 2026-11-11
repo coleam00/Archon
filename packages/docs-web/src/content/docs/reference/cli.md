@@ -1197,28 +1197,6 @@ in the window, oldest first, one line each: time, text, labels. Scope and
 `--json` prints `{ ok, action: "attention", scope, since, notices }`. A run id, `--sort`
 and `--count-by answerer` are refused.
 
-### `workflow notice`
-
-Say what a run did, from inside one of its nodes, for whoever watches attention with
-`--notices`. The run does not pause and nobody can answer. See
-[Notices](/getting-started/operate/#notices-what-the-work-did).
-
-```bash
-archon workflow notice "Merged pull request 7 into dev" --label kind=merged --label pr=7
-```
-
-| Flag | Effect |
-| --- | --- |
-| `--label <k=v>` | A label readers filter and count by; repeatable, at most 16, each value at most 200 characters |
-| `--json` | Print `{ ok, action: "notice", runId, count, limit }`, or `{ ok: false, error, reason }` |
-
-The text is one line of at most 300 characters, and a run may emit 50 notices. The command
-exits 1 without recording anything when the text or labels are outside those bounds
-(`reason: "invalid"`), when the run has reached its limit (`run_limit`), when the run is
-not running (`run_not_running`), and when it is not called from a workflow node: it reads
-`WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` from the node's environment, and the two must
-name the same run. Put the text after `--` when it may start with a dash.
-
 **`--protocol`**, with `--watch`, writes the full sync protocol, for a program that keeps its
 own copy of the open set: one `attention` line per open
 item in scope and an identifier-free `degraded` warning for each batch report of an affected
@@ -1251,6 +1229,30 @@ HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sor
 `countBy` (`project` or `label:<key>`; it counts open items, so not `answerer`), and returns `items` beside the console's `runs`, or `{ counts }`. A server has
 no working directory, so without `project` it covers the whole install.
 `GET /api/runs/<run-id>/attention` reads one item.
+
+### `workflow notice`
+
+Say what a run did, from inside one of its nodes, for whoever watches attention with
+`--notices`. The run does not pause and nobody can answer. See
+[Notices](/getting-started/operate/#notices-what-the-work-did).
+
+```bash
+archon workflow notice "Merged pull request 7 into dev" --label kind=merged --label pr=7
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--label <k=v>` | A label readers filter and count by; repeatable, at most 16, each value at most 200 characters |
+| `--json` | Print `{ ok, action: "notice", runId, count, limit }`, or `{ ok: false, error }` with `reason` when the engine refused the notice itself |
+
+The text is one line of at most 300 characters with no control characters, which labels
+may not contain either, and a run may emit 50 notices. The command
+exits 1 without recording anything when the text or labels are outside those bounds
+(`reason: "invalid"`), when the run has reached its limit (`run_limit`), when the run is
+not running (`run_not_running`), and, with no `reason`, when a label is not `key=value` or
+it is not called from a workflow node: it reads
+`WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` from the node's environment, and the two must
+name the same run. Put the text after `--` when it may start with a dash.
 
 ### `workflow attention label`
 
