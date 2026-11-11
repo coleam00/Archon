@@ -1,22 +1,18 @@
 /**
- * The discoveries a run recorded outside its own scope: which records a run relays,
- * and the terminal report's line that counts them.
+ * The discoveries a run recorded outside its own scope, for the discoveries workflow,
+ * and the pull request a failed run already published, for its terminal report.
  *
  * A run's discoveries are the latest review verdict's certified records, plus any raw
  * record under `discoveries/` that a node wrote after that review, or every raw
  * record when no review ran. The last review judged every earlier raw record and may
- * have rejected some, so a rejected record is never raised again. The terminal report
- * and the discoveries workflow read the same set through `relayedDiscoveries`.
- *
- * The report is presentation only. Discoveries never gate readiness, so nothing in it
- * may fail a tail that has already done its irreversible work: an unreadable record
- * degrades to a named problem, never to silence and never to a throw.
+ * have rejected some, so a rejected record is never raised again. An unreadable
+ * record is a named problem, never silence and never a throw.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join } from 'node:path';
 import { decodePrPublicationRecord, PR_CREATE_RECORD, PR_CREATE_UNRESOLVED, RUN_FAILED } from './pr.ts';
-import { isObject, type TypedOutput, UNREADABLE_OUTPUTS } from './inputs.ts';
+import { isObject, type TypedOutput } from './inputs.ts';
 import { latestOutcomeOf, readOutcomes } from './outcomes.ts';
 
 /** One discovery record a run relays, with a reference stable within its run. */
@@ -152,42 +148,20 @@ function verdictFrom(value: unknown, at: number | undefined): LatestVerdict | un
   return Array.isArray(discoveries) ? { discoveries, at } : undefined;
 }
 
-/** This run's `review-report` outputs, as its node bound them; null when unreadable. */
-export type Reviews = readonly TypedOutput<unknown>[] | null;
-
-/**
- * The report's closing line: how many discoveries the run relays and where they are,
- * or empty when there are none. The review's report names and judges them; this only
- * points at the records. `reviews` is passed in rather than read from the environment,
- * so the reusable report never silently depends on ambient state.
- */
-export function caveats(artifacts: string, options: { readonly reviews: Reviews }): string {
-  const where = `${join(artifacts, 'discoveries.md')} and ${join(artifacts, 'discoveries')}`;
-  if (options.reviews === null) return `\n\nDiscoveries could not be counted: ${UNREADABLE_OUTPUTS}. Open ${where}.`;
-  const latest = options.reviews.at(-1);
-  const relayed = relayedDiscoveries(artifacts, latest && verdictFrom(latest.value, Date.parse(latest.at)));
-  const count = relayed.records.length + relayed.problems.length;
-  return count === 0 ? '' : `\n\nDiscoveries: ${String(count)} recorded outside this run's scope, in ${where}.`;
-}
-
 /** A verified publication can outlive a failed node with no typed output. */
-function createdPr(artifacts: string): { url: string; unresolved?: true; problem?: string } {
+function createdPr(artifacts: string): { url: string; unresolved?: true } {
   const path = join(artifacts, PR_CREATE_RECORD);
   try {
     const claim = decodePrPublicationRecord(JSON.parse(readFileSync(path, 'utf8')));
     return claim.state === 'verified' ? { url: claim.pr.url } : { url: '', unresolved: true };
   } catch (error) {
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return { url: '' };
-    return {
-      url: '',
-      unresolved: true,
-      problem: `Could not read ${path}: ${error instanceof Error ? error.message : String(error)}`,
-    };
+    console.error(`could not read ${path}: ${error instanceof Error ? error.message : String(error)}`);
+    return { url: '', unresolved: true };
   }
 }
 
 export interface ReportListings {
-  readonly reviews: Reviews;
   /** This run's `pull-request` outputs, as its node bound them; null when unreadable. */
   readonly pullRequests: readonly TypedOutput<unknown>[] | null;
 }
@@ -218,18 +192,8 @@ export function failedPublication(
 }
 
 /**
- * The summary a tail's report node writes when a node failure kept the run from
- * reaching its outcome. It names no result: the engine's terminal record names the
- * failed node, and nothing here may read as a delivery.
+ * The summary of a run a node failure kept from reaching its outcome. The typed
+ * `reason` says whether a pull request create is unresolved; the engine's terminal
+ * record names the failed node.
  */
-export function failed(artifacts: string, options: ReportListings): string {
-  const { problem } = createdPr(artifacts);
-  const unresolved = failedPublication(artifacts, options).reason === PR_CREATE_UNRESOLVED;
-  return (
-    'Not done: a node failed before this run reported its result. The run\'s terminal record names the node and its error. ' +
-    'Anything the run already published, such as a pushed branch or a pull request, is left as it is.' +
-    (!unresolved ? '' : `\n\nReconcile the PR create recorded at ${join(artifacts, PR_CREATE_RECORD)} before continuing; its identity may not have been saved.`) +
-    (problem ? `\n\n${problem}` : '') +
-    caveats(artifacts, options)
-  );
-}
+export const FAILED_SUMMARY = 'Not done: a node failed before this run reported its result.';

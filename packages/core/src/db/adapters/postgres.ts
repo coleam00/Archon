@@ -415,6 +415,7 @@ export class PostgresAdapter implements IDatabase, DbNotificationListener {
  * PostgreSQL SQL dialect helpers
  */
 export const postgresDialect: SqlDialect = {
+  messageOrderTieBreaker: 'id',
   generateUuid(): string {
     return crypto.randomUUID();
   },

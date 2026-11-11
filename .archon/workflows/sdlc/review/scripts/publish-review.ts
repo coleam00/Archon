@@ -7,10 +7,12 @@
  * verdict passes through unchanged either way: publication is not what makes a
  * review true.
  *
- * This is the review's one head check. A report goes public only about the
- * commit its round fixed at the start (review-round): the checkout must still be
- * at it and the pull request's remote head must be it. Any mismatch refuses, so a verdict about one commit can never
- * stand as the verdict on another. This node stamps that commit and the certified
+ * A report goes public only about the commit its round fixed at the start
+ * (review-round): the checkout must still be at it and the pull request's remote
+ * head must be it (../../.shared/review-head.ts). review-round already refused a
+ * pull-request URL whose head was another commit; this check is the one that covers
+ * every scope, after a review long enough for the head to move. Any mismatch
+ * refuses, so a verdict about one commit can never stand as the verdict on another. This node stamps that commit and the certified
  * verdict on the comment itself (../../.shared/review-comment.ts) rather than trusting
  * the report's text to name them; the merge queue's gate reads both. Once published, the
  * commit is recorded beside the report as the next round's cursor.
@@ -31,11 +33,12 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
-import { upsertComment, viewPr } from '../../.shared/pr.ts';
+import { upsertComment } from '../../.shared/pr.ts';
 import { emit, input, refuse } from 'archon:script';
 import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { record } from '../../.shared/inputs.ts';
 import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
+import { requirePrHead } from '../../.shared/review-head.ts';
 
 /** The pull request delivery recorded, when the scope is that JSON record. */
 function recordedPr(scope: string): QualifiedPr | undefined {
@@ -52,10 +55,6 @@ function recordedPr(scope: string): QualifiedPr | undefined {
 function declaredPr(value: string): QualifiedPr | undefined {
   const target = value.trim() || 'null';
   return JSON.parse(target) === null ? undefined : parseQualifiedPr(target);
-}
-
-function label(pr: QualifiedPr | undefined): string {
-  return pr ? `${pr.repo.host}/${pr.repo.path}#${String(pr.number)}` : 'no pull request';
 }
 
 try {
@@ -78,14 +77,7 @@ try {
   if (checkout !== head) {
     throw new Error(`this round reviewed ${head}, but the checkout is now at ${checkout}`);
   }
-  if (pr) {
-    const remote = viewPr(pr).pr.head_revision;
-    if (remote !== head) {
-      throw new Error(
-        `this round reviewed ${head}, but ${label(pr)} is at ${remote ?? 'an unknown head'}: push the commits under review, or review from a checkout of the pull request's head`
-      );
-    }
-  }
+  if (pr) requirePrHead(pr, head);
   if (!pr) {
     console.error('publish-review: the review scope is a working diff, so no comment was published.');
   } else {

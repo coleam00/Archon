@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
@@ -7,7 +7,6 @@ import type { JsonValue } from '../packages/workflows/src/output-ref';
 import type { TypedOutputRecord } from '../packages/workflows/src/schemas/node-bindings';
 import type { TypedOutput } from '../.archon/workflows/sdlc/.shared/inputs';
 import { scriptApiPreload } from '../.archon/scripts/__tests__/deliver-checks-harness';
-import { failed } from '../.archon/workflows/sdlc/.shared/report';
 
 /**
  * The SDLC pack's terminal-report module, tested where the pack lives in this
@@ -30,21 +29,6 @@ const engineReadsPack = (record: TypedOutput<JsonValue>): TypedOutputRecord => (
 });
 void packReadsEngine;
 void engineReadsPack;
-
-describe('failed', () => {
-  it('claims no result and still relays the discoveries the run recorded', async () => {
-    const dir = artifactsDir();
-    mkdirSync(join(dir, 'discoveries'));
-    writeFileSync(
-      join(dir, 'discoveries', 'implement.json'),
-      JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
-    );
-    const text = failed(dir, { reviews: [], pullRequests: [] });
-    expect(text.startsWith('Not done:')).toBe(true);
-    expect(text).toContain('Discoveries: 1 recorded');
-    expect(text).not.toContain('Ready');
-  });
-});
 
 /**
  * Each tail's `report` node, run as the engine runs it: its bindings as env text,
@@ -72,16 +56,10 @@ describe.each([
 
   async function run(outcome: string): Promise<Record<string, unknown>> {
     const dir = artifactsDir();
-    mkdirSync(join(dir, 'discoveries'));
-    writeFileSync(
-      join(dir, 'discoveries', 'implement.json'),
-      JSON.stringify([{ title: 'Guard refuses an empty diff', relation: 'note' }])
-    );
     const child = Bun.spawnSync([process.execPath, '--preload', scriptApiPreload(), script], {
       env: {
         ...process.env,
         ARTIFACTS_DIR: dir,
-        INPUTS_REVIEWS: '[]',
         INPUTS_PULL_REQUESTS: '[]',
         INPUTS_OUTCOME: outcome,
       },
@@ -91,12 +69,10 @@ describe.each([
     return JSON.parse(child.stdout.toString()) as Record<string, unknown>;
   }
 
-  it('reports a failed run as not done, with the discoveries it recorded', async () => {
+  it('reports a failed run as not done', async () => {
     const report = await run('null');
     expect(report[result]).toBe(false);
     expect(report.reason).toBe('failed');
-    expect(String(report.summary)).toStartWith('Not done:');
-    expect(String(report.summary)).toContain('Discoveries: 1 recorded');
   });
 
   it("relays the outcome node's report unchanged when it ran", async () => {
