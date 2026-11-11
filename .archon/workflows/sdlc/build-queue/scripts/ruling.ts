@@ -18,8 +18,9 @@
  */
 
 import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
-import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredChoice, type Choice, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
@@ -52,10 +53,10 @@ const ABOUT: Record<AskedBy, string> = {
 function main(): void {
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
-  const asked = nullableJson(process.env.INPUTS_ASKED) as Asked | null;
+  const asked = nullableJson(input('asked')) as Asked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const choice = answeredChoice(nullableJson(process.env.INPUTS_CHOICE) as Choice<BuildEffect> | null, 'continue');
-  const words = trimmed(process.env.INPUTS_TEXT);
+  const choice = answeredChoice(nullableJson(input('choice')) as Choice<BuildEffect> | null, 'continue');
+  const words = input('text').trim();
   const at = new Date().toISOString();
 
   if (choice.effect === 'ready') requireReadyPr(item, choice.id);

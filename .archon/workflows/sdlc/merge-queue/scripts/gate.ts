@@ -19,7 +19,7 @@
  * failed one exits nonzero.
  */
 
-import { emit, refuse } from '../../.shared/io.ts';
+import { emit, refuse } from 'archon:script';
 import { latestValidation } from '../../.shared/build.ts';
 import { type CiTrust, gateRefusals, MERGE_METHODS, mergeAtHead, parseCiMode, readBase, readPr } from '../../.shared/merge.ts';
 import { prFromUrl } from '../../.shared/pr.ts';

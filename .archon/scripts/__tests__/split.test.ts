@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { filedIssues, splitMarker } from '../../workflows/sdlc/.shared/split';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import { mirrorLabels, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { gitCheckout, hostCli, labelWrites, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
 
@@ -68,7 +68,7 @@ function inProcess<T>(at: Install, body: () => T): T {
 /** Store the item as a split queue run holding its claim finds it. */
 function seed(at: Install, change: (doc: WorkItem) => WorkItem = doc => doc): void {
   inProcess(at, () => {
-    const stored = stateGet('work/7');
+    const stored = state.get('work/7');
     const current = stored.value === null ? newWorkItem(SUBJECT, AT) : parseWorkItem(stored.value);
     const doc = change({
       ...current,
@@ -77,12 +77,12 @@ function seed(at: Install, change: (doc: WorkItem) => WorkItem = doc => doc): vo
       claim: { run_id: 'run-1', at: AT, requests: [] },
       facts: { ...current.facts, triage: TRIAGE },
     });
-    expect(statePut('work/7', doc, stored.revision)).toBe('ok');
+    expect(state.put('work/7', doc, { ifRevision: stored.revision }).ok).toBe(true);
   });
 }
 
 function stored(at: Install): WorkItem {
-  return inProcess(at, () => parseWorkItem(stateGet('work/7').value));
+  return inProcess(at, () => parseWorkItem(state.get('work/7').value));
 }
 
 function publish(

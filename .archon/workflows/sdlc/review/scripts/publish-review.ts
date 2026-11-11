@@ -34,8 +34,9 @@ import { readFileSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { parseQualifiedPr, record, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, refuse, text } from '../../.shared/io.ts';
+import { emit, input, refuse } from 'archon:script';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
+import { record } from '../../.shared/inputs.ts';
 import { REVIEW_MARKER, reviewCommentBody } from '../../.shared/review-comment.ts';
 import { requirePrHead } from '../../.shared/review-head.ts';
 
@@ -58,18 +59,18 @@ function declaredPr(value: string): QualifiedPr | undefined {
 
 try {
   const verdict = {
-    ready: JSON.parse(text(process.env.INPUTS_READY)) as boolean,
-    action: text(process.env.INPUTS_ACTION),
-    findings_summary: text(process.env.INPUTS_SUMMARY),
-    report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
-    discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as unknown,
-    contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
+    ready: JSON.parse(input('ready')) as boolean,
+    action: input('action'),
+    findings_summary: input('summary'),
+    report: JSON.parse(input('report_pointer')) as unknown,
+    discoveries: JSON.parse(input('discoveries')) as unknown,
+    contract_left: JSON.parse(input('contract_left')) as unknown,
   };
   // Complete only on an empty list: a review that left anything open never lets a merge close the issue.
   const coverage = Array.isArray(verdict.contract_left) && verdict.contract_left.length === 0 ? 'complete' : 'open';
-  const pr = recordedPr(text(process.env.INPUTS_SCOPE)) ?? declaredPr(text(process.env.INPUTS_PR));
-  const head = text(process.env.INPUTS_HEAD).trim();
-  const reportPath = text(process.env.INPUTS_REPORT);
+  const pr = recordedPr(input('scope')) ?? declaredPr(input('pr'));
+  const head = input('head').trim();
+  const reportPath = input('report');
   const report = readFileSync(reportPath, 'utf8');
   if (report.trim() === '') throw new Error('the review report is empty');
   const checkout = nodeStartCommit();
@@ -78,14 +79,14 @@ try {
   }
   if (pr) requirePrHead(pr, head);
   if (!pr) {
-    note('publish-review: the review scope is a working diff, so no comment was published.');
+    console.error('publish-review: the review scope is a working diff, so no comment was published.');
   } else {
     const comment = upsertComment(
       { kind: 'pr', ref: pr },
       REVIEW_MARKER,
       reviewCommentBody(head, verdict.ready, coverage, report)
     );
-    note(`publish-review: canonical review comment at ${comment.url}`);
+    console.error(`publish-review: canonical review comment at ${comment.url}`);
   }
   // review-round reads this as the next round's cursor.
   writeFileSync(join(dirname(reportPath), 'reviewed-head'), `${head}\n`);

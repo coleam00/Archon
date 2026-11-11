@@ -1,74 +1,17 @@
 /**
- * The SDLC pack restates the forge contract it consumes, because the pack runs outside this
- * repository and may not import engine code. These tests hold each restated projection to
- * the owner it copies: `@archon/forge` for wire types, schemas and error kinds, and
- * `@archon/paths` for the per-host token names.
+ * What the SDLC pack still states about the forge contract by hand: its close reasons, and
+ * which operations each preflight asks the host for. The pack's forge calls themselves are
+ * typed by `archon:script`.
  */
 import { expect, test } from 'bun:test';
 import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  cliForgeMetadataRequestSchema,
-  cliForgeResponseSchema,
-} from '../packages/forge/src/cli-response';
-import type { PrRef } from '../packages/forge/src/identity';
-import {
-  closeReasonSchema,
-  type ForgePrRecord,
-  forgePrRecordSchema,
-  mutationOperationSchema,
-} from '../packages/forge/src/lifecycle';
-import {
-  type ForgeRequest,
-  forgeErrorSchema,
-  forgeRequestSchema,
-} from '../packages/forge/src/operations';
-import {
-  forgeResult,
-  type PrRecord,
-  type QualifiedPr,
-  REMEDY,
-} from '../.archon/workflows/sdlc/.shared/forge';
+import { closeReasonSchema, mutationOperationSchema } from '../packages/forge/src/lifecycle';
+import { type ForgeRequest, forgeRequestSchema } from '../packages/forge/src/operations';
 import { REQUIRED_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/forge-check';
 import { MERGE_QUEUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/merge';
 import { TEST_VALUE_FORGE_OPERATIONS } from '../.archon/workflows/sdlc/.shared/test-value';
 import { CLOSE_REASONS } from '../.archon/workflows/sdlc/.shared/issue';
-
-// These assignments check that the pack's projection stays compatible with the owning
-// wire type in both directions.
-const consumesPr = (value: PrRef): QualifiedPr => value;
-const producesPr = (value: QualifiedPr): PrRef => value;
-const consumesPrRecord = (value: ForgePrRecord): PrRecord => value;
-const producesPrRecord = (value: PrRecord): ForgePrRecord => value;
-
-test('the pack consumes the owning qualified identity and pull-request record', () => {
-  const ref = { repo: { host: 'forge.example', path: 'group/team/repo' }, number: 42 };
-  expect(producesPr(consumesPr(ref))).toEqual(ref);
-
-  // parsePrRecord validates every pull-request result the pack's write nodes read, so a
-  // field the owning schema grows must reach it or the pack starts rejecting records
-  // @archon/forge produced.
-  const pr: ForgePrRecord = forgePrRecordSchema.parse({
-    schemaVersion: 1,
-    repo: ref.repo,
-    number: ref.number,
-    url: 'https://forge.example/group/team/repo/pull/42',
-    head: 'feature',
-    base: 'dev',
-    is_draft: true,
-    state: 'open',
-    head_repo: ref.repo,
-    head_revision: 'headsha',
-    base_revision: 'basesha',
-    maintainer_can_modify: null,
-  });
-  expect(producesPrRecord(consumesPrRecord(pr))).toEqual(pr);
-});
-
-// A remedy keyed by a kind the contract no longer names would never be shown.
-test("every refusal remedy is keyed by a kind the forge contract's errors carry", () => {
-  expect(forgeErrorSchema.shape.kind.options).toEqual(expect.arrayContaining(Object.keys(REMEDY)));
-});
 
 test('every reason the pack closes an issue with is a forge close reason', () => {
   for (const reason of CLOSE_REASONS) expect(closeReasonSchema.parse(reason)).toBe(reason);
@@ -126,40 +69,4 @@ test('preflight capabilities cover the forge operations the pack calls', () => {
   expect(used.filter(op => !preflighted.has(op))).toEqual([]);
   const outsideMerge = [...REQUIRED_FORGE_OPERATIONS, ...TEST_VALUE_FORGE_OPERATIONS];
   expect(outsideMerge.filter(op => !used.includes(op))).toEqual([]);
-});
-
-test('the pack reads host responses with credential attribution and metadata intact', () => {
-  const metadata = {
-    protocol: 1,
-    name: 'github',
-    version: 'test',
-    forge: 'github',
-    hosts: ['github.com'],
-    capabilities: ['pr.view'],
-    token_env: ['GH_TOKEN'],
-  };
-  const request = cliForgeMetadataRequestSchema.parse({
-    operationId: 'meta',
-    op: 'metadata',
-    host: 'github.com',
-  });
-  const response = cliForgeResponseSchema.parse({
-    operationId: request.operationId,
-    ok: true,
-    result: { op: request.op, value: metadata },
-  });
-  expect(forgeResult(request.op, response, 0)).toEqual(metadata);
-  for (const ok of [true, false]) {
-    const response = cliForgeResponseSchema.parse({
-      operationId: 'read',
-      ok,
-      credentialSource: 'GH_TOKEN',
-      ...(ok
-        ? { result: { op: 'pr.view', value: null } }
-        : { error: { kind: 'authorization', message: 'Rejected' } }),
-    });
-    const read = () => forgeResult('pr.view', response, ok ? 0 : 1);
-    if (ok) expect(read()).toBeNull();
-    else expect(read).toThrow('source: GH_TOKEN');
-  }
 });

@@ -5,7 +5,8 @@ import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { JsonValue } from '../packages/workflows/src/output-ref';
 import type { TypedOutputRecord } from '../packages/workflows/src/schemas/node-bindings';
-import type { TypedOutput } from '../.archon/workflows/sdlc/.shared/io';
+import type { TypedOutput } from '../.archon/workflows/sdlc/.shared/inputs';
+import { scriptApiPreload } from '../.archon/scripts/__tests__/deliver-checks-harness';
 
 /**
  * The SDLC pack's terminal-report module, tested where the pack lives in this
@@ -55,7 +56,7 @@ describe.each([
 
   async function run(outcome: string): Promise<Record<string, unknown>> {
     const dir = artifactsDir();
-    const child = Bun.spawnSync([process.execPath, script], {
+    const child = Bun.spawnSync([process.execPath, '--preload', scriptApiPreload(), script], {
       env: {
         ...process.env,
         ARTIFACTS_DIR: dir,

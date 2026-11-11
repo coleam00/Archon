@@ -22,12 +22,12 @@
  * before delivery skips this node; the workflow's `report` node answers then.
  */
 
-import { emit, text } from '../../.shared/io.ts';
+import { emit, input } from 'archon:script';
 
-const route = text(process.env.INPUTS_ROUTE);
-const contract = text(process.env.INPUTS_CONTRACT);
-const summary = text(process.env.INPUTS_SUMMARY);
-const delivered = text(process.env.INPUTS_DELIVERED) || 'null';
+const route = input('route');
+const contract = input('contract');
+const summary = input('summary');
+const delivered = input('delivered') || 'null';
 
 /** Why no delivery ran. */
 type Stop = 'no_action' | 'blocked' | 'needs_contract' | 'split' | 'refuted' | 'not_rooted' | 'ask';
@@ -39,10 +39,10 @@ function stopped(): { readonly reason: Stop; readonly summary: string } {
   if (contract !== 'READY') return { reason: 'needs_contract', summary };
   if (route === 'split') return { reason: 'split', summary };
   if (route === 'investigate') {
-    const refuted = text(process.env.INPUTS_INV_VERDICT) === 'refuted';
-    return { reason: refuted ? 'refuted' : 'not_rooted', summary: text(process.env.INPUTS_INV_SUMMARY) };
+    const refuted = input('inv_verdict') === 'refuted';
+    return { reason: refuted ? 'refuted' : 'not_rooted', summary: input('inv_summary') };
   }
-  return { reason: 'ask', summary: text(process.env.INPUTS_PLAN_SUMMARY) };
+  return { reason: 'ask', summary: input('plan_summary') };
 }
 
 if (delivered === 'null') {
@@ -50,8 +50,8 @@ if (delivered === 'null') {
 } else {
   emit({
     delivered: delivered === 'true',
-    reason: text(process.env.INPUTS_DELIVERY_REASON),
-    pr_url: text(process.env.INPUTS_PR_URL),
-    summary: text(process.env.INPUTS_DELIVERY),
+    reason: input('delivery_reason'),
+    pr_url: input('pr_url'),
+    summary: input('delivery'),
   });
 }

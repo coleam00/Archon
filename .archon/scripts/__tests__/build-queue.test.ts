@@ -14,7 +14,7 @@ import {
 } from '../../workflows/sdlc/.shared/build';
 import { reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { mergeWaits } from '../../workflows/sdlc/.shared/merge';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import {
   newWorkItem,
   parseWorkItem,
@@ -199,16 +199,16 @@ function inProcess<T>(at: Install, body: () => T): T {
 /** Store the item; a claimed one takes its run's lease, as a real claim does. */
 function seed(at: Install, doc: WorkItem): void {
   inProcess(at, () => {
-    const stored = stateGet('work/7');
+    const stored = state.get('work/7');
     if (doc.claim !== null) process.env.WORKFLOW_ID = doc.claim.run_id;
-    const lease = doc.claim === null ? undefined : 'take';
-    expect(statePut('work/7', doc, stored.revision, lease)).toBe('ok');
+    const lease = doc.claim === null ? {} : { lease: 'take' as const };
+    expect(state.put('work/7', doc, { ifRevision: stored.revision, ...lease }).ok).toBe(true);
   });
 }
 
 function stored(at: Install): { revision: number; value: WorkItem | null } {
   return inProcess(at, () => {
-    const read = stateGet('work/7');
+    const read = state.get('work/7');
     return { revision: read.revision, value: read.value === null ? null : parseWorkItem(read.value) };
   });
 }

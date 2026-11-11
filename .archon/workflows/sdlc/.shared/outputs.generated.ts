@@ -466,6 +466,7 @@ export interface WorkflowOutputs {
         } | null;
       };
       readonly summary: string;
+      readonly gate_error: string;
     };
     record: {
       readonly merged: ReadonlyArray<number>;

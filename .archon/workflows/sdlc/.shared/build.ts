@@ -7,13 +7,12 @@
  * know whether the item waits for it.
  */
 
-import { type QualifiedPr, sameRepo } from './forge.ts';
+import { input, state } from 'archon:script';
+import { type QualifiedPr, sameRepo } from './identity.ts';
 import { followUp } from './follow-up.ts';
-import { note, text } from './io.ts';
 import type { NodeOutput } from './outputs.generated.ts';
 import { findPrByHead, PR_CREATE_UNRESOLVED, prFromUrl } from './pr.ts';
 import { type Attention, clipped, type DecisionEntry, withDecision } from './queue.ts';
-import { stateDocuments, statePut } from './state.ts';
 import {
   type Claim,
   type HistoryEntry,
@@ -144,20 +143,20 @@ const REVISITED = 'revisited';
 export function dueBlocked(at: string, runId: string): BlockedItem[] {
   const due = new Date(Date.parse(at) - REVISIT_EVERY_MS).toISOString();
   const items: BlockedItem[] = [];
-  for (const stored of stateDocuments('work/')) {
+  for (const stored of state.listValues('work/')) {
     if (stored.value === null) continue;
     let doc: WorkItem;
     try {
       doc = parseWorkItem(stored.value);
     } catch (error) {
-      note(`revisit skips ${stored.name}: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`revisit skips ${stored.name}: ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
     const last = doc.history.filter(entry => entry.outcome === REVISITED).at(-1)?.at ?? '';
     if (doc.stage !== 'blocked' || doc.claim !== null || last >= due) continue;
     const entry: HistoryEntry = { at, stage: 'build', run_id: runId, outcome: REVISITED, summary: 'listed for the revisit agent' };
-    if (statePut(stored.name, { ...doc, history: newest([...doc.history, entry]) }, stored.revision) !== 'ok') {
-      note(`revisit leaves ${stored.name} to the run that changed it`);
+    if (!state.put(stored.name, { ...doc, history: newest([...doc.history, entry]) }, { ifRevision: stored.revision }).ok) {
+      console.error(`revisit leaves ${stored.name} to the run that changed it`);
       continue;
     }
     const triaged = doc.history.filter(entry => entry.outcome === 'blocked').at(-1);
@@ -275,7 +274,7 @@ export const ENDED_UNDECIDED = 'ended_undecided';
 export function nextRound(item: QualifiedPr, runId: string): string {
   const { host, path } = item.repo;
   return followUp(
-    text(process.env.INPUTS_BUILD_QUEUE_BINDING),
+    input('build_queue_binding'),
     `build-round:${host}/${path}#${String(item.number)}:${runId}`,
     { repo_host: host, repo_path: path, number: String(item.number) },
     'its next round'

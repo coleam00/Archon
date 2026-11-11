@@ -354,7 +354,7 @@ describe('publish-pr opens the pull request at most once', () => {
   it('fails loudly when the forge is unavailable', () => {
     const result = publishPr({ forge: { kind: 'no-host' } });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('ARCHON_CLI_COMMAND is not set');
+    expect(result.stderr).toContain('ARCHON_CLI_COMMAND');
   });
 });
 

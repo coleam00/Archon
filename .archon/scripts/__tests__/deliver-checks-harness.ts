@@ -30,6 +30,13 @@ export function hostCli(): string[] {
   }
   return JSON.parse(value) as string[];
 }
+
+/** The host's `archon:script` preload, which the test preload wrote for this process. */
+export function scriptApiPreload(): string {
+  const file = process.env.ARCHON_SCRIPT_PRELOAD;
+  if (!file) throw new Error('ARCHON_SCRIPT_PRELOAD is not set; archon-script-preload.ts sets it for `bun test`');
+  return file;
+}
 export const PR = { repo: { host: 'ghe.example.com', path: 'example/repo' }, number: 42 };
 export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 
@@ -462,7 +469,7 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
   Object.assign(env, forgeEnv(root, forge, { forge: forgeLog, requests: requestLog, reads: readsLog }));
 
   // Parent env files must not reintroduce workflow inputs omitted by the fixture.
-  const result = spawnSync(process.execPath, ['--no-env-file', '--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
+  const result = spawnSync(process.execPath, ['--no-env-file', '--preload', scriptApiPreload(), '--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
     cwd: options.cwd ?? root,
     env,
     encoding: 'utf8',

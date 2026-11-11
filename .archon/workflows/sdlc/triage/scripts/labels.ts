@@ -12,7 +12,7 @@
  * Bound inputs: INPUTS_TRIAGE, the triage node's whole output; INPUTS_PUBLISH.
  */
 
-import { emit, refuse, text } from '../../.shared/io.ts';
+import { emit, input, refuse } from 'archon:script';
 import { PACK_LABEL_NAMES, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 
@@ -27,11 +27,11 @@ function requireTriaged(decision: Decision): Exclude<Decision, NotTriaged> {
 }
 
 try {
-  const output = JSON.parse(text(process.env.INPUTS_TRIAGE)) as NodeOutput<'archon-triage-block', 'triage'>;
+  const output = JSON.parse(input('triage')) as NodeOutput<'archon-triage-block', 'triage'>;
   const triage = { ...output, decision: requireTriaged(output.decision) };
   const wanted = wantedLabels(triage.decision, triage.type.value, triage.size.value);
   const labels = triageLabels(triage);
-  const published = text(process.env.INPUTS_PUBLISH) === 'true' && triage.item.number !== 0;
+  const published = input('publish') === 'true' && triage.item.number !== 0;
   emit({
     labels: published
       ? writeLabels(triage.item, labels, PACK_LABEL_NAMES.filter(name => !wanted.some(label => label === name)))

@@ -11,9 +11,9 @@
  */
 
 import { randomUUID } from 'node:crypto';
-import { invokeForge, qualifiedRepo, sameRepo, type QualifiedPr } from './forge.ts';
+import { forge, input } from 'archon:script';
+import { type QualifiedPr, sameRepo } from './identity.ts';
 import { git, gitOrThrow } from './git.ts';
-import { trimmed } from './io.ts';
 
 type Repo = QualifiedPr['repo'];
 
@@ -80,8 +80,8 @@ export function remoteRepos(): Repo[] {
  * the fork, so a run there passes both inputs; a binding always does.
  */
 export function workflowRepo(): Repo {
-  const host = trimmed(process.env.INPUTS_REPO_HOST);
-  const path = trimmed(process.env.INPUTS_REPO_PATH);
+  const host = input('repo_host').trim();
+  const path = input('repo_path').trim();
   if (host !== '' && path !== '') return { host, path };
   if (host !== '' || path !== '') throw new Error('set both repo_host and repo_path, or neither');
   // A remote with several `url` entries is listed once per URL; git fetches from the first.
@@ -97,15 +97,13 @@ export function workflowRepo(): Repo {
     );
   }
   // The URL stays out of the message: a configured remote URL can carry a credential.
-  const value = invokeForge('resolve', { remote: remote.url });
-  if (value?.kind !== 'resolved') {
+  const value = forge('resolve', { remote: remote.url });
+  if (value.kind !== 'resolved') {
     throw new Error(
       `repo_host and repo_path are empty, and git remote ${remote.name} does not resolve to a repository through an installed forge plugin`
     );
   }
-  const repo = qualifiedRepo(value.repo);
-  if (repo === undefined) throw new Error('forge resolve returned no repository');
-  return repo;
+  return value.repo;
 }
 
 /** The one remote whose URL names `repo`, undefined when none does; refuses on several. */

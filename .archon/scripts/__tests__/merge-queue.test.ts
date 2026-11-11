@@ -16,7 +16,7 @@ import {
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { type TrackerComment, gitCheckout, hostCli, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
@@ -182,14 +182,14 @@ function seed(at: Install, doc: WorkItem): void {
   const name = `work/${String(doc.subject.number)}`;
   inProcess(at, () => {
     if (doc.claim !== null) process.env.WORKFLOW_ID = doc.claim.run_id;
-    const lease = doc.claim === null ? undefined : 'take';
-    expect(statePut(name, doc, stateGet(name).revision, lease)).toBe('ok');
+    const lease = doc.claim === null ? {} : { lease: 'take' as const };
+    expect(state.put(name, doc, { ifRevision: state.get(name).revision, ...lease }).ok).toBe(true);
   });
 }
 
 function stored(at: Install, number = SUBJECT.number): { revision: number; value: WorkItem | null } {
   return inProcess(at, () => {
-    const read = stateGet(`work/${String(number)}`);
+    const read = state.get(`work/${String(number)}`);
     return { revision: read.revision, value: read.value === null ? null : parseWorkItem(read.value) };
   });
 }
@@ -358,7 +358,7 @@ function recordInputs(
     INPUTS_ITEMS: ITEMS,
     INPUTS_SETTLED: '[]',
     INPUTS_BASE: JSON.stringify(FACTS_BASE_GREEN),
-    INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept' }),
+    INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept', gate_error: '' }),
   };
 }
 
@@ -451,6 +451,17 @@ describe('the merge queue scripts', () => {
     expect(doc.claim).toBeNull();
     expect(doc.facts.merge?.decisions).toHaveLength(4);
     expect(mergeWaits(doc)).toBe(true);
+  }, 60_000);
+
+  test('a gate the sweep could not run fails the record, after the wait is recorded and the claim released', () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const inputs = recordInputs([decision({ action: 'wait', reason: 'the gate could not run' })]);
+    const sweep = { ...(JSON.parse(inputs.INPUTS_SWEEP ?? '') as object), gate_error: "Cannot find package 'archon:script'" };
+    const failed = run(at, 'record', { ...inputs, INPUTS_SWEEP: JSON.stringify(sweep) });
+    expect(failed.code).not.toBe(0);
+    expect(failed.stderr).toContain("the merge gate could not run, so nothing was gated or merged: Cannot find package 'archon:script'");
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
   }, 60_000);
 
   test('a claimed merge the forge does not show fails the record after every other decision is written', () => {
@@ -643,6 +654,23 @@ describe('the merge queue facts and gate', () => {
     expect(output.gate).toContain('gate.ts');
     expect(stored(at).value?.claim?.run_id).toBe('run-1');
     expect(ok(on(at, 'facts', {}, { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
+  }, 60_000);
+
+  // The command is quoted for a POSIX shell, which is what an agent runs it in; cmd.exe cannot parse it.
+  test.skipIf(process.platform === 'win32')('the gate command facts hands the sweep agent starts when run as the agent runs it, outside a script node', () => {
+    const at = install();
+    seed(at, item());
+    const facts = on(at, 'facts');
+    const { gate } = ok(facts) as { gate: string };
+    const ran = spawnSync(`${gate} --item 7 --pr ${PR_URL} --head ${HEAD}`, {
+      shell: true,
+      cwd: at.checkout,
+      encoding: 'utf8',
+      env: { ...process.env, ...at.env, ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, FAKE_ARCHON]), ARTIFACTS_DIR: facts.artifacts, WORKFLOW_ID: 'run-1' },
+    });
+    // A plain subprocess has no forge stand-in, so the host's own forge answers the gate's
+    // first call: no plugin claims the test host, so its URL resolves to no pull request.
+    expect(ran.stderr).toBe(`merge-queue gate: "${PR_URL}" is not a pull request URL\n`);
   }, 60_000);
 
   test('a review comment from anyone but a listed maintainer is no verdict', () => {
