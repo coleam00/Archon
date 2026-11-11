@@ -62,7 +62,7 @@ function askAuthor(item: QualifiedPr, questions: readonly string[]): void {
     QUESTIONS_MARKER,
     'No run can start from this issue yet. It needs an answer to:',
     questions.map(question => `- ${question}`).join('\n'),
-    'Answer in the issue body, then add the `archon-triage` label to triage it again.',
+    'Answer by editing the issue or in a comment. A maintainer then adds the `archon-triage` label to have it triaged again.',
   ].join('\n\n');
   upsertComment({ kind: 'issue', ref: item }, QUESTIONS_MARKER, body);
 }
