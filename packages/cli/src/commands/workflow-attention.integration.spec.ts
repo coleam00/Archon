@@ -347,8 +347,8 @@ async function streamed(
   }
 }
 
-test('watch --needs-me writes only open items in the label filter and failed runs', async () => {
-  const root = track(mkdtempSync(join(tmpdir(), 'attention-needs-me-cli-')));
+test('watch writes only open items in the label filter and failed runs', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-quiet-watch-cli-')));
   process.env.ARCHON_HOME = join(root, 'home');
   const host = createHost();
   const { store } = host.deps;
@@ -395,7 +395,6 @@ test('watch --needs-me writes only open items in the label filter and failed run
         json: true,
         labels: ['merge=pr'],
         watch: true,
-        needsMe: true,
       }),
     seen => {
       // The snapshot is out, so the stream follows the feed: end one run well, one badly.
@@ -415,10 +414,13 @@ test('watch --needs-me writes only open items in the label filter and failed run
   ]);
   expect(lines).toHaveLength(2);
 
-  const refused = await captured(() =>
-    workflowAttentionCommand(host, dir, undefined, { json: true, labels: [], needsMe: true })
-  );
-  expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+  // The protocol flags belong to the watch, and a replay cursor to the protocol.
+  for (const opts of [{ protocol: true }, { watch: true, after: 'x' }]) {
+    const refused = await captured(() =>
+      workflowAttentionCommand(host, dir, undefined, { json: true, labels: [], ...opts })
+    );
+    expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+  }
 });
 
 test('watch streams the queue by project, refuses list-only flags, and exits 4 on a foreign cursor', async () => {
@@ -462,6 +464,7 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
           json: true,
           labels: [],
           watch: true,
+          protocol: true,
           ...opts,
         }),
       lines => lines.some(line => line.type === 'ready')
@@ -519,6 +522,7 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
         json: true,
         labels: [],
         watch: true,
+        protocol: true,
         after: 'sql:1',
       })
     )
@@ -588,6 +592,7 @@ test.each([true, false])(
         all: true,
         labels: [],
         watch: true,
+        protocol: true,
       });
     try {
       if (json) {
@@ -662,6 +667,7 @@ test("watch text names a child run's parent and a failure with no recorded error
           all: true,
           labels: [],
           watch: true,
+          protocol: true,
         }),
       text => text.includes('Run top failed')
     );
@@ -742,6 +748,7 @@ test.each([
         all: true,
         labels: [],
         watch: true,
+        protocol: true,
       });
       expect(result).toBe(code === 'EPIPE' ? (type === 'error' ? 4 : 0) : 1);
       expect(rejected).toBe(code === 'EPIPE' ? undefined : failure);
@@ -846,6 +853,7 @@ test.each(['beta', 'scratch'])(
           json: true,
           labels: [],
           watch: true,
+          protocol: true,
           project: projectKeyForCodebase(alpha.project, alpha.project.default_cwd),
         }),
       lines => lines.some(line => line.type === 'ready')

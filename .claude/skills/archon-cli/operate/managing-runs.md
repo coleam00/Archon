@@ -59,7 +59,8 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |
 | Every run that needs someone (this project / all) | `archon workflow attention --json [--all] [--label k=v]` |
 | The queue item one run stands for | `archon workflow attention <run-id> --json` |
-| Every change in the queue, as it happens | `archon workflow attention --watch --json [--all] [--label k=v] [--after <cursor>]` |
+| Everything that needs someone, as it happens | `archon workflow attention --watch --json [--all] [--label k=v]` |
+| Every change in the queue, for a program that syncs it | `archon workflow attention --watch --protocol --json [--all] [--label k=v] [--after <cursor>]` |
 | Classify an item without answering it | `archon workflow attention label <run-id> --occurrence <id> --set k=v --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
 | Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <t>]` |
@@ -150,17 +151,21 @@ finishes.
 
 `workflow wait` follows one run whose id you hold. To follow every run in scope,
 including runs started later by triggers, schedules or other sessions, run
-`archon workflow attention --watch --json --all` as a background task. It prints one
-JSON line per change: each `attention` line is an item that needs attention, carrying
-the same item the list returns, so treat it as a wake and answer by its `runId` and
-`occurrence`. `resolved` means it no longer does, and `terminal` means a run ended. The
-lines before `ready` are the whole open set. After a restart, `--after <cursor>`
-replays what came after that cursor. A cursor names a feed event, not a line, and one
-event can emit two lines with the same cursor (a `resolved` and the `attention` that
-replaces it, or a `resolved` and a `terminal`). `--after` skips the whole event, so
-checkpoint on a `bookmark` line you handled, or on the cursor before an event you
-handled only partly, and accept duplicate lines on replay. Exit `4` means the store
-cannot read the stream's cursor: rerun without `--after`.
+`archon workflow attention --watch --json --all` as a background task. It prints a
+JSON line only when someone has to act: each `attention` line is an item that needs
+attention, carrying the same item the list returns, so treat it as a wake and answer by
+its `runId` and `occurrence`. `resolved` means an item you were sent no longer needs
+you, and `terminal` means a run failed. The items already open come first, so a
+restarted watch needs no cursor. Exit `4` means the store cannot read the stream's
+position: start it again.
+
+A program that keeps its own copy of the open set adds `--protocol`: the stream then
+also writes `ready` after the open set, a `bookmark` heartbeat, and a line for every
+run that ends or resumes, and `--after <cursor>` replays what came after a cursor. A
+cursor names a feed event, not a line, and one event can emit two lines with the same
+cursor. `--after` skips the whole event, so checkpoint on a `bookmark` line you
+handled, or on the cursor before an event you handled only partly, and accept
+duplicate lines on replay.
 
 Or deliberately in two steps:
 

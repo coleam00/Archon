@@ -7,7 +7,7 @@ import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { AttentionWatch } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
 import {
-  attentionLineNeedsSomeone,
+  attentionNeedsSomeoneFilter,
   type AttentionStreamLine,
 } from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -57,9 +57,12 @@ export interface WorkflowAttentionOptions {
   since?: string;
   /** Stream every change in scope instead of reading the queue once. */
   watch?: boolean;
-  /** With `watch`: write only the lines someone has to act on. */
-  needsMe?: boolean;
-  /** With `watch`: replay readable feed events strictly after this cursor. */
+  /**
+   * With `watch`: write every line of the sync protocol, for a program that keeps an open
+   * set. Without it the watch writes only the lines someone has to act on.
+   */
+  protocol?: boolean;
+  /** With `watch` and `protocol`: replay readable feed events strictly after this cursor. */
   after?: string;
 }
 
@@ -209,10 +212,13 @@ function attentionStreamText(
 }
 
 /**
- * `workflow attention --watch`: stream the queue until a signal or a closed stdout. Exit
- * 0 then, 1 on other output failures, and 4 on an `error` line: the stream's cursor
- * (from `--after`, or the tail's own position) is not one this install's store can read,
- * so the fix is to rerun without it. Read-only: stopping the stream affects no run.
+ * `workflow attention --watch`: stream the queue until a signal or a closed stdout. By
+ * default it writes only the lines someone has to act on (`attentionNeedsSomeoneFilter`);
+ * `--protocol` writes every line, for a program that keeps an open set. Exit 0 on a
+ * signal or closed stdout, 1 on other output failures, and 4 on an `error` line: the
+ * stream's cursor (from `--after`, or the tail's own position) is not one this install's
+ * store can read, so the fix is to rerun without it. Read-only: stopping the stream
+ * affects no run.
  */
 export async function workflowAttentionWatch(
   host: WorkflowHost,
@@ -226,12 +232,16 @@ export async function workflowAttentionWatch(
   const stopped = new Promise<void>(resolve => {
     stop = resolve;
   });
+  const needsSomeone = attentionNeedsSomeoneFilter();
   const write = (line: AttentionStreamLine): Promise<void> => {
-    if (opts.needsMe && !attentionLineNeedsSomeone(line)) return Promise.resolve();
+    // A person starting the quiet watch is told it runs, off the stream itself.
+    if (!opts.protocol && !opts.json && line.type === 'ready')
+      return writeStderr(`${attentionStreamText(line, scope).join('\n')}\n`);
+    if (!opts.protocol && !needsSomeone(line)) return Promise.resolve();
     if (opts.json) return writeStdout(`${JSON.stringify(line)}\n`);
     if (line.type === 'error')
       return writeStderr(
-        'The stream cursor is not one this install can read. Rerun without --after: the lines before "ready" are the open set.\n'
+        'The stream cursor is not one this install can read. Rerun without --after: the stream starts from the open set.\n'
       );
     const text = attentionStreamText(line, scope);
     return text.length === 0 ? Promise.resolve() : writeStdout(`${text.join('\n')}\n`);
@@ -336,8 +346,8 @@ function rejectFlagsWithoutTheirMode(opts: WorkflowAttentionOptions): void {
   const needs = (flag: string, mode: string): never => {
     throw new Error(`workflow attention ${flag} needs ${mode}`);
   };
-  if (opts.after !== undefined && !opts.watch) needs('--after', '--watch');
-  if (opts.needsMe && !opts.watch) needs('--needs-me', '--watch');
+  if (opts.protocol && !opts.watch) needs('--protocol', '--watch');
+  if (opts.after !== undefined && !opts.protocol) needs('--after', '--watch --protocol');
   if (opts.since !== undefined && opts.countBy === undefined) needs('--since', '--count-by');
 }
 

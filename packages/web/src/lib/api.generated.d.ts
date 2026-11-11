@@ -2077,6 +2077,7 @@ export interface paths {
           project?: string;
           all?: 'true' | 'false';
           label?: string | string[];
+          needsSomeone?: 'true' | 'false';
         };
         header?: {
           'last-event-id'?: string;

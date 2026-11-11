@@ -101,19 +101,21 @@ export const workflowHelp: HelpGroup = {
         {
           spec: '--watch',
           description:
-            'Stream readable changes until stopped; the open set comes first\n' +
-            'A degraded warning means coverage may have gaps. Repair and replay:\n' +
+            'Stream what needs someone until stopped: open items first, then items that\n' +
+            'open, change or close, and runs that fail or lose their owner\n' +
+            'A degraded warning means coverage may have gaps:\n' +
             'https://archon.diy/getting-started/operate/#stream-the-queue',
         },
         {
-          spec: '--needs-me',
+          spec: '--protocol',
           description:
-            'With --watch: only lines someone must act on (open items, failed runs,\n' +
-            'lost owners, coverage warnings); no ready or bookmark heartbeat',
+            'With --watch: the full sync protocol for programs (ready, bookmark,\n' +
+            'every run end and resume)',
         },
         {
           spec: '--after <cursor>',
-          description: 'With --watch: replay readable events after a cursor; gaps may remain',
+          description:
+            'With --watch --protocol: replay readable events after a cursor; gaps may remain',
         },
       ],
     },
