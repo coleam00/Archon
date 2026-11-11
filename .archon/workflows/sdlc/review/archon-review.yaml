@@ -290,8 +290,8 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/report.md] }
           required: [type, run_id, path]
-        # Work this review proved but the change does not do. The run's outcome
-        # relays each record; the human-readable copy is discoveries.md.
+        # Work this review proved but the change does not do. The discoveries workflow
+        # drains each record; the human-readable copy is discoveries.md.
         discoveries: &discovery_records
           type: array
           items:
