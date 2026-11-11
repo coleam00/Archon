@@ -165,7 +165,7 @@ it('skips captured roots and makes Git failure observable without changing loade
     expect(result.errors).toEqual([]);
     expect(result.workflows).toHaveLength(1);
     expect(result.sourceWarnings).toEqual([
-      'Could not check workflow source files against Git ignore rules.',
+      'Could not check workflow source file ".archon/workflows/x.yaml" against Git ignore rules.',
     ]);
   } finally {
     probe.mockRestore();
@@ -324,4 +324,63 @@ it('excludes a project command resolved outside the Git checkout', async () => {
   expect(result.errors).toEqual([]);
   expect(result.workflows).toHaveLength(1);
   expect(result.sourceWarnings).toBeUndefined();
+});
+
+it('keeps independent workflow, command and script warnings when a submodule cannot be checked', async () => {
+  const roots = await setup();
+  await put('.gitignore', 'build/\n*.md\n*.ts\n');
+  await put('sub/check.md', 'Submodule command.');
+  await execFileAsync('git', ['init', join(root, 'sub')]);
+  await execFileAsync('git', [
+    '-C',
+    join(root, 'sub'),
+    '-c',
+    'user.name=Test',
+    '-c',
+    'user.email=test@example.test',
+    'commit',
+    '--allow-empty',
+    '-m',
+    'Submodule',
+  ]);
+  const { stdout } = await execFileAsync('git', ['-C', join(root, 'sub'), 'rev-parse', 'HEAD']);
+  await execFileAsync('git', [
+    '-C',
+    root,
+    'update-index',
+    '--add',
+    '--cacheinfo',
+    `160000,${stdout.trim()},sub`,
+  ]);
+  await put('.archon/commands/local.md', 'Local command.');
+  await put('.archon/scripts/report.ts', 'console.log("ok");');
+  await put(
+    '.archon/workflows/build/x.yaml',
+    workflow(
+      'x',
+      '  - id: sub\n    command: check\n  - id: local\n    command: local\n  - id: report\n    script: report\n    runtime: bun\n'
+    )
+  );
+  const result = await discoverWorkflows(root, {
+    providers: providerRegistry,
+    loadDefaults: false,
+    sourceRoots: roots,
+    gitIgnoreRoot: root,
+    commandFolder: 'sub',
+  });
+  expect(result.errors).toEqual([]);
+  expect(result.workflows.map(entry => entry.workflow.name)).toEqual(['x']);
+  expect(result.sourceWarnings).toHaveLength(4);
+  for (const path of [
+    '.archon/workflows/build/x.yaml',
+    '.archon/commands/local.md',
+    '.archon/scripts/report.ts',
+  ]) {
+    expect(result.sourceWarnings).toContain(
+      `Git ignores ${JSON.stringify(path)} (workflows: "x"); it may be missing from other checkouts.`
+    );
+  }
+  expect(result.sourceWarnings).toContain(
+    'Could not check workflow source file "sub/check.md" against Git ignore rules.'
+  );
 });

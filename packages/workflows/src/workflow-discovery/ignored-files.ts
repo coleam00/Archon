@@ -39,19 +39,36 @@ export async function collectIgnoredSourceWarnings(
     for (const path of projectScriptPaths(roots.project, workflow, namedScripts))
       add(path, workflow.name);
   }
-  try {
-    const ignored = await findIgnoredFiles(gitIgnoreRoot, [...candidates.keys()].sort());
-    for (const path of ignored.sort()) {
-      const owners = [...(candidates.get(path) ?? [])].sort().map(name => JSON.stringify(name));
-      warnings.push(
-        `Git ignores ${JSON.stringify(path)} (workflows: ${owners.join(', ')}); it may be missing from other checkouts.`
-      );
-    }
-  } catch (error) {
-    getLog().warn({ err: error }, 'workflow_source_ignore_check_failed');
-    warnings.push('Could not check workflow source files against Git ignore rules.');
+  const ignored = await checkSourcePaths(gitIgnoreRoot, [...candidates.keys()].sort(), warnings);
+  for (const path of ignored.sort()) {
+    const owners = [...(candidates.get(path) ?? [])].sort().map(name => JSON.stringify(name));
+    warnings.push(
+      `Git ignores ${JSON.stringify(path)} (workflows: ${owners.join(', ')}); it may be missing from other checkouts.`
+    );
   }
   return warnings;
+}
+
+async function checkSourcePaths(
+  root: string,
+  paths: readonly string[],
+  warnings: string[]
+): Promise<string[]> {
+  try {
+    return await findIgnoredFiles(root, paths);
+  } catch (error) {
+    getLog().warn({ err: error }, 'workflow_source_ignore_check_failed');
+    if (paths.length === 1) {
+      warnings.push(
+        `Could not check workflow source file ${JSON.stringify(paths[0])} against Git ignore rules.`
+      );
+      return [];
+    }
+    // Git rejects an entire batch when a path crosses a submodule boundary.
+    const ignored: string[] = [];
+    for (const path of paths) ignored.push(...(await checkSourcePaths(root, [path], warnings)));
+    return ignored;
+  }
 }
 
 async function projectCommandPaths(
