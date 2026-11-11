@@ -9,9 +9,11 @@ import {
   gateRefusals,
   type MergeAttention,
   type MergeRecord,
+  type MergeSettled,
   mergeWaits,
   type PrFacts,
   MERGE_QUEUE_FORGE_OPERATIONS,
+  UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
 import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
@@ -199,6 +201,8 @@ interface FakePr {
   /** CI at the head; `unknown` is a forge unit state that is neither green nor pending. */
   readonly checks?: 'green' | 'red' | 'unknown';
   readonly threads?: number;
+  /** Fail every pull request read, or only the listed pull requests. */
+  readonly unreadable?: boolean | readonly number[];
   /** The merge is accepted and the pull request stays open, as when the forge queues merges. */
   readonly queuesMerge?: boolean;
   /** The merge is applied but names no landed commit, which the contract allows. */
@@ -212,6 +216,8 @@ interface FakePr {
   /** Pull requests, by number, that read back merged whatever `state` says. */
   readonly merged?: readonly number[];
   readonly baseUnreadable?: boolean;
+  /** Merge-queue operations the forge plugin's metadata leaves out. */
+  readonly missingOps?: readonly string[];
   /** The head `pr.merge-state` reports, when it answers about another commit than `pr.view`. */
   readonly mergeStateHead?: string;
   /** The revision `checks.state` reports, when it answers about another commit than `pr.view`. */
@@ -233,9 +239,10 @@ const forgeOp = (op, request) => {
   const ref = request.ref ?? request.subject?.ref ?? request.selector?.ref;
   const units = state => [{ unit: { kind: 'check', id: '1', name: 'test' }, state }];
   const state = () => (forgePr.merged ?? []).includes(ref.number) ? 'merged' : forgePr.state.toLowerCase();
+  const unreadable = () => forgePr.unreadable === true || Array.isArray(forgePr.unreadable) && forgePr.unreadable.includes(ref.number);
   // The harness's forge resolves a pull request URL.
   if (op === 'resolve') return null;
-  if (op === 'metadata') return out(true, { capabilities: ${JSON.stringify(MERGE_QUEUE_FORGE_OPERATIONS)} });
+  if (op === 'metadata') return out(true, { capabilities: ${JSON.stringify(MERGE_QUEUE_FORGE_OPERATIONS)}.filter(name => !(forgePr.missingOps ?? []).includes(name)) });
   if (op === 'checks.commit') return forgePr.baseUnreadable ? failed('HTTP 502 reading base') : out(true, { repo: request.repo, branch: 'dev', revision: ${JSON.stringify(OLD)}, units: units(forgePr.baseChecks ?? 'green') });
   if (op === 'pr.merge') {
     if (request.conditions.head !== forgePr.headRefOid) return failed('Head branch was modified', { op, target: ref, outcome: 'refused' });
@@ -244,6 +251,7 @@ const forgeOp = (op, request) => {
     forgePr.mergeCommit = '3333333333333333333333333333333333333333';
     return out(true, { target: ref, outcome: 'applied', changed: true, method: request.method, conditions: request.conditions, enforcedConditions: ['head'], landed: { commit: forgePr.landsNoCommit ? null : forgePr.mergeCommit, tree: null, parents: null } });
   }
+  if (unreadable()) return failed('HTTP 502');
   if (op === 'pr.view') {
     appendFileSync('{ARTIFACTS}/forge-gh.log', 'snapshot\\n');
     const url = ${JSON.stringify(PR_URL.replace(/42$/, ''))} + ref.number;
@@ -383,6 +391,63 @@ describe('the merge queue scripts', () => {
     expect(duplicate.code).toBe(1);
     expect(JSON.parse(duplicate.stdout).refusals).toEqual(['its review verdict is duplicate']);
     expect(merges(duplicate)).toEqual([]);
+  }, 60_000);
+
+  test('a second consecutive unreadable pull request parks, releases its claim, and leaves the rest of the batch readable', () => {
+    const at = install();
+    seed(at, item());
+    seed(at, { ...item({ ...BUILT, rounds: BUILT.rounds.map(round => ({ ...round, pr_url: OTHER_URL })) }), subject: OTHER });
+    for (const status of ['waiting', 'parked'] as const) {
+      const output = ok(run(at, 'facts', {}, { pr: { unreadable: [PR.number] } })) as { path: string; items: { item: typeof SUBJECT }[]; settled: MergeSettled[] };
+      expect(output).toMatchObject({ path: 'sweep', settled: [{ item: SUBJECT, pr: PR, status, decision: UNREADABLE }] });
+      expect(output.items.map(entry => entry.item)).toEqual([OTHER]);
+      expect(output.settled[0]?.reason).toContain('HTTP 502');
+      ok(run(at, 'record', {
+        ...recordInputs([decision({ number: OTHER_PR.number, action: 'wait', reason: 'CI pending' })]),
+        INPUTS_ITEMS: JSON.stringify(output.items),
+        INPUTS_SETTLED: JSON.stringify(output.settled),
+      }));
+      expect(stored(at, OTHER.number).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
+      const doc = stored(at).value as WorkItem;
+      expect(doc).toMatchObject({ claim: null, facts: { merge: { status } } });
+      expect(doc.facts.merge?.decisions.at(-1)).toMatchObject({ decision: UNREADABLE, reason: output.settled[0]?.reason });
+      expect(doc.facts.merge?.decisions).toHaveLength(status === 'waiting' ? 1 : 2);
+      expect(mergeWaits(doc)).toBe(status === 'waiting');
+    }
+    expect(ok(run(at, 'facts', {}))).toMatchObject({ path: 'sweep', items: [{ item: OTHER }], settled: [] });
+    const parked = stored(at).value as WorkItem;
+    const readyAt = new Date(Date.parse(parked.facts.merge?.at ?? '') + 1).toISOString();
+    seed(at, { ...parked, facts: { ...parked.facts, build: { ...BUILT, at: readyAt } } });
+    expect(mergeWaits(stored(at).value as WorkItem)).toBe(true);
+    for (const status of ['waiting', 'parked'] as const) {
+      const output = ok(run(at, 'facts', {}, { pr: { unreadable: [PR.number] } })) as { settled: MergeSettled[] };
+      expect(output.settled).toMatchObject([{ item: SUBJECT, status, decision: UNREADABLE }]);
+      ok(run(at, 'record', {
+        INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null',
+      }));
+      expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status } } });
+      expect(mergeWaits(stored(at).value as WorkItem)).toBe(status === 'waiting');
+    }
+  }, 60_000);
+
+  test('a successful read and sweep decision break the consecutive unreadable sequence', () => {
+    const at = install();
+    seed(at, item());
+    const failAndRecord = () => {
+      const output = ok(run(at, 'facts', {}, { pr: { unreadable: true } })) as { settled: MergeSettled[] };
+      expect(output.settled).toMatchObject([{ status: 'waiting', decision: UNREADABLE }]);
+      ok(run(at, 'record', { INPUTS_PATH: 'record', INPUTS_ITEMS: '[]', INPUTS_SETTLED: JSON.stringify(output.settled), INPUTS_SWEEP: 'null' }));
+    };
+    failAndRecord();
+    const readable = ok(run(at, 'facts', {}));
+    expect(readable).toMatchObject({ path: 'sweep', settled: [] });
+    ok(run(at, 'record', { ...recordInputs([decision({ action: 'wait', reason: 'CI pending' })]), INPUTS_ITEMS: JSON.stringify(readable.items) }));
+    expect(stored(at).value?.facts.merge?.decisions.at(-1)?.decision).toBe('wait (clear)');
+    failAndRecord();
+    const doc = stored(at).value as WorkItem;
+    expect(doc.claim).toBeNull();
+    expect(doc.facts.merge?.decisions).toHaveLength(4);
+    expect(mergeWaits(doc)).toBe(true);
   }, 60_000);
 
   test('a claimed merge the forge does not show fails the record after every other decision is written', () => {
@@ -651,6 +716,33 @@ describe('the gate under ci: none', () => {
 });
 
 describe('the merge queue on the forge', () => {
+  test('facts refuses a plugin without every merge-queue operation before claiming anything', () => {
+    const at = install();
+    seed(at, item());
+    const refused = run(at, 'facts', {}, { pr: { missingOps: ['pr.merge-state'] } });
+    expect(refused.code).not.toBe(0);
+    expect(refused.stderr).toContain("lacks the merge queue's pr.merge-state");
+    expect(forgeCalls(refused)).toEqual(['forge metadata']);
+    expect(stored(at).value?.claim ?? null).toBeNull();
+    expect(stored(at).value?.facts.merge).toBeUndefined();
+  }, 60_000);
+
+  test('the facts and the merge use exactly the operations the plugin must advertise, besides the sweep agent\'s rerun', () => {
+    const at = install();
+    seed(at, item());
+    const args = ['--method', 'squash', '--ci', 'forge', '--pr', PR_URL, '--head', HEAD, '--merge'];
+    const facts = run(at, 'facts', {}, {});
+    const gate = run(at, 'gate', {}, { args });
+    expect([facts.code, gate.code]).toEqual([0, 0]);
+    const used = [...forgeCalls(facts), ...forgeCalls(gate)];
+    // `resolve` runs no preflight: the host refuses it on a plugin that cannot resolve a URL.
+    const preflighted = used.filter(call => call.startsWith('forge ') && !['forge metadata', 'forge resolve'].includes(call));
+    expect(new Set(preflighted.map(call => call.split(' ')[1]))).toEqual(
+      // The sweep agent, not a script, reruns a pull request's failed checks.
+      new Set(MERGE_QUEUE_FORGE_OPERATIONS.filter(op => op !== 'checks.rerun'))
+    );
+  }, 60_000);
+
   test.each([
     ['merge state', { mergeStateHead: OLD }, 'moved while it was read'],
     ['checks', { checksRevision: OLD }, 'are not on its head'],
