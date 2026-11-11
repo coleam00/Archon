@@ -697,6 +697,41 @@ export interface WorkflowOutputs {
       readonly shape_unmatched: number;
     };
   };
+  'archon-ship-land': {
+    read: {
+      readonly head: string;
+      readonly state: 'none' | 'pending' | 'green' | 'red';
+      readonly failing: ReadonlyArray<string>;
+      readonly pending: ReadonlyArray<string>;
+      readonly settled: boolean;
+      readonly read_at: string;
+    };
+    checks: {
+      readonly head: string;
+      readonly state: 'none' | 'pending' | 'green' | 'red';
+      readonly failing: ReadonlyArray<string>;
+      readonly pending: ReadonlyArray<string>;
+      readonly settled: boolean;
+      readonly read_at: string;
+    };
+    gate: {
+      readonly refusals: ReadonlyArray<string>;
+      readonly merge_commit: string | null;
+      readonly at: string;
+    };
+    outcome: {
+      readonly merged: boolean;
+      readonly pull_request: string;
+      readonly reason: string;
+      readonly failing_checks: ReadonlyArray<string>;
+      readonly pending_checks: ReadonlyArray<string>;
+      readonly rounds: number | null;
+      readonly first_ready_at: string | null;
+      readonly checks_settled_at: string | null;
+      readonly merged_at: string | null;
+      readonly merge_commit: string | null;
+    };
+  };
   'archon-simplify': {
     simplify: {
       readonly findings: boolean;
@@ -999,6 +1034,14 @@ export const OUTPUT_ENUMS = {
       'report.type': ['archon_artifact'],
       'report.path': ['review/report.md'],
       'discoveries[].relation': ['unrelated', 'scope_conflict', 'note'],
+    },
+  },
+  'archon-ship-land': {
+    read: {
+      state: ['none', 'pending', 'green', 'red'],
+    },
+    checks: {
+      state: ['none', 'pending', 'green', 'red'],
     },
   },
   'archon-split': {

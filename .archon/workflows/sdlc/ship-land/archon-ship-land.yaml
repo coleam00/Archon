@@ -1,0 +1,185 @@
+name: archon-ship-land
+description: |
+  EXPERIMENT, not part of the pack's supported surface. One run per issue, from
+  triage to merged: archon-ship's nodes, then a wait inside the same run until
+  every check at the pull request's head has finished, then the merge queue's
+  gate with merge. No agent runs while it waits and the run holds no worker slot.
+  It measures the one-run shape against the queues; a maintainer starts each run
+  by hand on their own issue.
+
+  Use when: measuring how long one issue takes from first Ready to merged when
+  nothing has to notice it between stages.
+  NOT for: issues from outside contributors (nothing here checks trust), a
+  project that sets `ci: none`, or unattended use. A red check, a refused gate
+  or a delivery that is not ready ends the run with the reason; it starts no
+  further round and asks nobody.
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to take through the pipeline: an issue, document, plan, report, or
+      free-form request. When empty, the run's trigger message is the target.
+  merge_method:
+    default: "squash"
+    description: How the gate merges, squash or merge.
+
+returns: outcome
+outcome_field: merged
+
+nodes:
+  # archon-ship unchanged: triage, then investigate, plan or deliver, ending at a
+  # reviewed pull request. Its result is the build report: `delivered`, `reason`,
+  # `pr_url`, `summary`.
+  - id: ship
+    include: archon-ship
+    with:
+      target: "$INPUTS.target"
+
+  # Waits for the checks without an agent: read them, and while any still runs (or
+  # none has started), pause the run for 75 seconds and read again. The pause is a
+  # durable time wait, so the run is `paused` and holds no worker slot. 40 reads is
+  # about 50 minutes; running out completes the loop and the read below reports
+  # what is still pending.
+  - id: await-checks
+    depends_on: [ship]
+    when: "$ship.output.delivered == true"
+    loop_group:
+      until_bash: |
+        settled=$read.output.settled
+        test "$settled" = "true"
+      max_iterations: 40
+      on_exhausted: complete
+      nodes:
+        - id: read
+          script: checks
+          runtime: bun
+          with:
+            pr_url: "$ship.output.pr_url"
+          output_format: &checks
+            type: object
+            properties:
+              head: { type: string }
+              state: { type: string, enum: [none, pending, green, red] }
+              failing: { type: array, items: { type: string } }
+              pending: { type: array, items: { type: string } }
+              settled: { type: boolean }
+              read_at: { type: string }
+            required: [head, state, failing, pending, settled, read_at]
+
+        - id: pause
+          depends_on: [read]
+          when: "$read.output.settled == false"
+          wait:
+            duration_ms: 75000
+
+  # The loop's output is its pause, not its read, so the checks are read once more
+  # here, where the gate and the outcome can bind them.
+  - id: checks
+    script: checks
+    runtime: bun
+    depends_on: [await-checks]
+    with:
+      pr_url: "$ship.output.pr_url"
+    output_format: *checks
+
+  # The merge queue's gate, unchanged, decides and merges. It prints its refusals and
+  # exits nonzero when it refuses; that is an answer, and `outcome` reports it. A gate
+  # that prints nothing could not read the forge or could not verify its merge: the
+  # node fails with the gate's own message, and a resume runs the gate again.
+  - id: gate
+    depends_on: [checks]
+    when: "$checks.output.state == 'green'"
+    runtime: bun
+    with:
+      pr_url: "$ship.output.pr_url"
+      head: "$checks.output.head"
+      merge_method: "$INPUTS.merge_method"
+    script: |
+      const gate = Bun.spawnSync(
+        [
+          process.execPath,
+          `${process.env.PACK_DIR}/merge-queue/scripts/gate.ts`,
+          '--method', process.env.INPUTS_MERGE_METHOD,
+          '--ci', 'forge',
+          '--pr', process.env.INPUTS_PR_URL,
+          '--head', process.env.INPUTS_HEAD,
+          '--merge',
+        ],
+        { stderr: 'inherit' }
+      );
+      const printed = gate.stdout.toString().trim();
+      if (printed === '') process.exitCode = 1;
+      else console.log(JSON.stringify({ ...JSON.parse(printed), at: new Date().toISOString() }));
+    output_format:
+      type: object
+      properties:
+        refusals: { type: array, items: { type: string } }
+        merge_commit: { type: [string, 'null'] }
+        at: { type: string }
+      required: [refusals, merge_commit, at]
+
+  # The run's result on every ending the nodes above reach. `first_ready_at` is when
+  # delivery's hand-off agent last declared the pull request ready, and `rounds` is
+  # the last delivery round a review reported in.
+  - id: outcome
+    depends_on: [ship, gate]
+    trigger_rule: all_done
+    runtime: bun
+    with:
+      delivery: "$ship.output"
+      checks: { from: "$checks.output", if_skipped: null }
+      gate: { from: "$gate.output", if_skipped: null }
+      reviews: { outputs: review-report, if_unreadable: null }
+      handoffs: { outputs: ci-report, if_unreadable: null }
+    script: |
+      const delivery = JSON.parse(process.env.INPUTS_DELIVERY);
+      const checks = JSON.parse(process.env.INPUTS_CHECKS);
+      const gate = JSON.parse(process.env.INPUTS_GATE);
+      const reviews = JSON.parse(process.env.INPUTS_REVIEWS);
+      const handoffs = JSON.parse(process.env.INPUTS_HANDOFFS);
+      const merged = typeof gate?.merge_commit === 'string';
+      const reason = !delivery.delivered
+        ? `not merged: delivery not ready: ${delivery.reason}`
+        : checks.state !== 'green'
+          ? `not merged: checks ${checks.state}`
+          : merged
+            ? 'merged'
+            : `not merged: gate refused: ${gate.refusals.join('; ')}`;
+      const ready = (handoffs ?? []).filter(handoff => handoff.value.state === 'ready').at(-1);
+      console.log(JSON.stringify({
+        merged,
+        pull_request: delivery.pr_url,
+        reason,
+        failing_checks: checks?.failing ?? [],
+        pending_checks: checks?.pending ?? [],
+        rounds: reviews === null ? null : Math.max(0, ...reviews.map(review => review.loop[0]?.iteration ?? 0)),
+        first_ready_at: ready?.at ?? null,
+        checks_settled_at: checks?.settled ? checks.read_at : null,
+        merged_at: merged ? gate.at : null,
+        merge_commit: gate?.merge_commit ?? null,
+      }));
+    output_format:
+      type: object
+      properties:
+        merged: { type: boolean }
+        pull_request: { type: string }
+        reason: { type: string }
+        failing_checks: { type: array, items: { type: string } }
+        pending_checks: { type: array, items: { type: string } }
+        rounds: { type: [integer, 'null'] }
+        first_ready_at: { type: [string, 'null'] }
+        checks_settled_at: { type: [string, 'null'] }
+        merged_at: { type: [string, 'null'] }
+        merge_commit: { type: [string, 'null'] }
+      required:
+        - merged
+        - pull_request
+        - reason
+        - failing_checks
+        - pending_checks
+        - rounds
+        - first_ready_at
+        - checks_settled_at
+        - merged_at
+        - merge_commit
