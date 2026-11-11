@@ -131,6 +131,8 @@ nodes:
 
 `intervalSeconds` is required and has no default. `runAtLoad` is also required. Set it to `true` to request one start when launchd loads the job, or `false` to wait for the first interval.
 
+`schedule` itself is optional. A configuration without it is a [fire-only binding](#start-a-binding-only-with-trigger-fire).
+
 Test the binding once before installing it:
 
 ```bash
@@ -184,6 +186,33 @@ A server with `ARCHON_TRIGGER_HOST` set already drains its host. Without a runni
 Use the first command as a systemd `ExecStart` or cron command on Linux. On Windows Task Scheduler, set the absolute Archon executable as the program and pass `trigger fire --config C:\Users\Alice\.archon\triggers\repository-refresh.json` as its arguments. Configure the working directory and `ARCHON_HOME` separately in the scheduler.
 
 These recipes share Archon's trigger boundary, but the host scheduler owns login, sleep, wake, missed-time, and credential-loading behavior. Test the real scheduled task under its configured user before relying on unattended execution.
+
+## Start a binding only with `trigger fire`
+
+A binding file without `schedule` is fire-only: no clock starts it. A workflow node, a script or an operator starts it with `archon trigger fire --config <file>`, and the start goes through the same receipt, resource admission, capacity, overlap policy and deduplication as a scheduled one. Use it for a workflow that other runs start, such as a follow-up a run requests when it finishes. A fire from inside a node records the requesting run on the receipt (see [preparation and retained records](#preparation-and-retained-records)).
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-follow-up",
+  "binding": {
+    "bindingId": "widgets-follow-up",
+    "bindingRevision": null,
+    "hostId": "alice-macbook",
+    "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
+    "resource": "github:acme/widgets:follow-up",
+    "overlap": "queue",
+    "launch": {
+      "cwd": "/Users/alice/Projects/widgets",
+      "workflowName": "follow-up",
+      "inputs": {},
+      "isolation": { "kind": "default" }
+    }
+  }
+}
+```
+
+`archon trigger schedule install` refuses a fire-only binding, because it has no timer to install. A `schedule` that is present must be complete: a file with an empty or partial `schedule` is invalid, not fire-only.
 
 ## Choose a resource, capacity, and overlap policy
 
@@ -440,12 +469,11 @@ Save `/srv/archon/polled-orders.json` using your own `runAsUserId` from `archon 
       "inputs": {},
       "isolation": { "kind": "in-place" }
     }
-  },
-  "schedule": { "intervalSeconds": 60, "runAtLoad": false }
+  }
 }
 ```
 
-The configuration still requires `schedule`, but `fire` does not install or run that schedule. Schedule the poll script itself, rather than `trigger schedule install`, which fires without event values. Set `ARCHON_HOME`, `ORDERS_URL`, and a `PATH` containing the tools your workflows run for the scheduled user, and use absolute executable paths:
+The configuration has no `schedule`, so it is a [fire-only binding](#start-a-binding-only-with-trigger-fire). Schedule the poll script itself; `trigger schedule install` would fire without event values, and refuses a fire-only binding. Set `ARCHON_HOME`, `ORDERS_URL`, and a `PATH` containing the tools your workflows run for the scheduled user, and use absolute executable paths:
 
 ```bash
 #!/bin/sh

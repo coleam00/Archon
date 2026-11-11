@@ -38,6 +38,11 @@ import { resolveCliUserId } from './auth';
 import { readCallingNode } from '../utils/calling-node';
 import { requestedBy } from '../utils/requested-by';
 
+/**
+ * The file `trigger fire --config` reads. Without `schedule` the binding is fire-only:
+ * nothing but `trigger fire` starts it, and `trigger schedule install` refuses it. A
+ * `schedule` that is present must be complete, so a half-written one is never fire-only.
+ */
 export const timerTriggerConfigSchema = z
   .object({
     version: z.literal(1),
@@ -45,7 +50,8 @@ export const timerTriggerConfigSchema = z
     binding: resourceStartBindingIntentSchema.omit({ eventInputs: true }),
     schedule: z
       .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
-      .strict(),
+      .strict()
+      .optional(),
   })
   .strict();
 
@@ -431,12 +437,18 @@ async function scheduleTrigger(
       'Usage: archon trigger schedule <install|remove> --config <timer-binding.json>'
     );
   const config = await loadTimerConfig(options.config);
-  if (args[0] !== 'remove') await assertKnownRunAsUser(host, config);
   const scheduleId = createHash('sha256')
     .update(JSON.stringify([getArchonHome(), config.sourceInstanceId, config.binding.bindingId]))
     .digest('hex');
+  // Remove needs no schedule, so a timer installed before the file lost its `schedule`
+  // can still be removed.
   if (args[0] === 'remove') await removeMacosNativeSchedule(scheduleId);
   else {
+    if (config.schedule === undefined)
+      throw new Error(
+        `Binding '${config.binding.bindingId}' is fire-only: its configuration has no schedule, so there is no timer to install. Start it with: archon trigger fire --config ${options.config}`
+      );
+    await assertKnownRunAsUser(host, config);
     const [executable, ...prefix] = cliProgramArguments();
     await installMacosNativeSchedule({
       id: scheduleId,

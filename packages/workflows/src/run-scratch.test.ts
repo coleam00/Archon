@@ -1,8 +1,9 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { chmod, mkdir, writeFile } from 'node:fs/promises';
-import { hostname } from 'node:os';
+import { chmod, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
+import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { execFileAsync } from '@archon/git';
 import {
   getArchonWorkspacesPath,
   getRunArtifactsDirForRoot,
@@ -35,7 +36,12 @@ test('removes only the scratch child of the run', async () => {
   await mkdir(checkout, { recursive: true });
   await writeFile(join(artifactsDir, 'report.md'), 'evidence');
 
-  await releaseRunScratch({ id, output_root: root, metadata: ownedBy(process.pid) });
+  await releaseRunScratch({
+    id,
+    output_root: root,
+    working_path: null,
+    metadata: ownedBy(process.pid),
+  });
 
   expect(existsSync(getRunScratchDir(artifactsDir))).toBe(false);
   expect(existsSync(join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR))).toBe(true);
@@ -50,6 +56,7 @@ test("a container run's scratch is left for its container teardown", async () =>
   await releaseRunScratch({
     id,
     output_root: root,
+    working_path: null,
     metadata: { ...ownedBy(process.pid), isolation: 'container' },
   });
 
@@ -61,9 +68,56 @@ test('scratch is kept while a process on this host may still execute the run', a
   const checkout = join(getRunScratchDir(artifactsDir), 'bisect', '.git');
   await mkdir(checkout, { recursive: true });
 
-  await releaseRunScratch({ id, output_root: root, metadata: ownedBy(process.ppid) });
+  await releaseRunScratch({
+    id,
+    output_root: root,
+    working_path: null,
+    metadata: ownedBy(process.ppid),
+  });
 
   expect(existsSync(checkout)).toBe(true);
+});
+
+test("deregisters the worktrees a node added under scratch from the run's repository", async () => {
+  const { id, root, artifactsDir } = runStorage();
+  const base = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'run-scratch-repo-'))));
+  const repo = join(base, 'repo');
+  const git = (...args: string[]): Promise<{ stdout: string }> =>
+    execFileAsync('git', ['-C', repo, ...args]);
+  await mkdir(repo);
+  await git('init', '-q');
+  await git(
+    '-c',
+    'user.name=t',
+    '-c',
+    'user.email=t@example.com',
+    'commit',
+    '-q',
+    '--allow-empty',
+    '-m',
+    'init'
+  );
+  const scratch = getRunScratchDir(artifactsDir);
+  await mkdir(scratch, { recursive: true });
+  const inScratch = join(scratch, 'lens', 'tree');
+  const sibling = join(base, 'sibling');
+  await git('worktree', 'add', '-q', '--detach', inScratch);
+  await git('worktree', 'add', '-q', '--detach', sibling);
+  // Uncommitted work never keeps a scratch worktree registered.
+  await writeFile(join(inScratch, 'dirty.txt'), 'tried a mutation');
+
+  await releaseRunScratch({
+    id,
+    output_root: root,
+    working_path: repo,
+    metadata: ownedBy(process.pid),
+  });
+
+  expect(existsSync(scratch)).toBe(false);
+  const { stdout } = await git('worktree', 'list', '--porcelain');
+  const listed = stdout.split('\n').filter(line => line.startsWith('worktree '));
+  expect(listed).toEqual([`worktree ${repo}`, `worktree ${sibling}`]);
+  expect(existsSync(join(sibling, '.git'))).toBe(true);
 });
 
 describe('noExecutorCanWrite', () => {
