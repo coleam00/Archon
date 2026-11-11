@@ -258,7 +258,8 @@
       "src/adapters/cli-adapter.test.ts"
     ],
     [
-      "src/commands/forge.test.ts"
+      "src/commands/forge.test.ts",
+      "src/commands/forge-types.test.ts"
     ],
     [
       "src/commands/plugin.test.ts",

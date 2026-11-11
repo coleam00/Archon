@@ -35,6 +35,7 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
       ['bun', 'run', 'check:chat-contract-schema'],
       ['bun', 'run', 'check:api-types'],
       ['bun', 'run', 'check:workflow-output-types'],
+      ['bun', 'run', 'check:forge-types'],
     ],
   },
   {

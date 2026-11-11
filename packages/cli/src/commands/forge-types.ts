@@ -1,0 +1,183 @@
+/**
+ * `archon forge types`: one self-contained TypeScript file a script commits to call
+ * `archon forge` with the request and result types of every operation. The forge
+ * schemas own the shapes; check mode fails when the committed file no longer matches.
+ */
+import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { dirname, relative, resolve, sep } from 'node:path';
+import { cliForgeJsonSchemas } from '@archon/forge';
+import {
+  convertOutputSchema,
+  indent,
+  quote,
+  UnsupportedSchemaError,
+} from '@archon/workflows/output-types/schema-to-ts';
+import { writeJsonLine, writeStdout } from '../utils/stdout';
+
+function typeOf(what: string, schema: unknown): string {
+  try {
+    return convertOutputSchema(schema).type;
+  } catch (error) {
+    if (!(error instanceof UnsupportedSchemaError)) throw error;
+    throw new Error(`The forge schema of ${what} cannot be stated as a type: ${error.message}`, {
+      cause: error,
+    });
+  }
+}
+
+/** The client every generated file ends with. It imports only what Node and Bun both ship. */
+const CLIENT = `/** One forge operation's answer as \`archon forge <operation> --json\` prints it. */
+export type ForgeResponse<Op extends keyof ForgeOperations> =
+  | (ForgeSuccess & {
+      readonly result: { readonly op: Op; readonly value: ForgeOperations[Op]['result'] };
+    })
+  | ForgeFailure;
+
+/**
+ * The host answered that the operation failed. \`kind\` is the typed reason. \`mutation\`
+ * is set for a write and says whether it was refused, applied but unverified, or left
+ * with an unknown outcome; never retry a write past an unknown outcome.
+ */
+export class ForgeOperationError extends Error {
+  readonly kind: ForgeFailure['error']['kind'];
+  readonly mutation: ForgeFailure['mutation'];
+  constructor(
+    readonly op: keyof ForgeOperations,
+    readonly failure: ForgeFailure
+  ) {
+    super(\`forge \${op} \${failure.mutation?.outcome ?? 'failed'}: \${failure.error.message}\`);
+    this.name = 'ForgeOperationError';
+    this.kind = failure.error.kind;
+    this.mutation = failure.mutation;
+  }
+}
+
+function archonCommand(): string[] {
+  let command: unknown;
+  try {
+    command = JSON.parse(process.env.ARCHON_CLI_COMMAND ?? '');
+  } catch {
+    command = undefined;
+  }
+  const valid =
+    Array.isArray(command) && command.length > 0 && command.every(part => typeof part === 'string');
+  if (!valid) {
+    throw new Error(
+      'ARCHON_CLI_COMMAND is not a JSON string array; the host that starts a run publishes it'
+    );
+  }
+  return command as string[];
+}
+
+/**
+ * Run one forge operation through the host CLI and return its result.
+ *
+ * Throws {@link ForgeOperationError} when the host answers with a failure. Any other
+ * error means the host gave no answer, so a write may or may not have happened. The
+ * request travels as a file, which keeps authored text out of every process's argv.
+ */
+export function invokeForge<Op extends keyof ForgeOperations>(
+  op: Op,
+  request: ForgeOperations[Op]['request']
+): ForgeOperations[Op]['result'] {
+  const [executable = '', ...args] = archonCommand();
+  const directory = mkdtempSync(join(tmpdir(), 'archon-forge-'));
+  try {
+    const path = join(directory, 'request.json');
+    writeFileSync(path, JSON.stringify(request), { mode: 0o600 });
+    const run = spawnSync(executable, [...args, 'forge', op, '--json', '--data-file', path], {
+      encoding: 'utf8',
+      maxBuffer: 64 * 1024 * 1024,
+    });
+    let response: ForgeResponse<Op> | null;
+    try {
+      response = JSON.parse(run.stdout);
+    } catch {
+      response = null;
+    }
+    if (typeof response !== 'object' || response === null) {
+      const detail = (run.error?.message ?? run.stderr).trim();
+      throw new Error(\`forge \${op} gave no answer (exit \${String(run.status)}): \${detail}\`);
+    }
+    if (!response.ok) throw new ForgeOperationError(op, response);
+    // Exit 2 with a result: the operation completed and the host could not record it
+    // in the run's audit log. The result is still the result.
+    if (run.status === 2) {
+      process.stderr.write(\`forge \${op} completed, but the host could not audit it.\\n\`);
+    } else if (run.status !== 0 || response.result.op !== op) {
+      throw new Error(\`forge \${op} returned an unexpected answer (exit \${String(run.status)})\`);
+    }
+    return response.result.value;
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+`;
+
+/** The generated file. Deterministic: operations in the order the forge contract lists them. */
+export function renderForgeTypes(command: string): { content: string; operations: string[] } {
+  const schemas = cliForgeJsonSchemas();
+  const members = schemas.operations.map(({ op, request, result }) => {
+    const fields = `readonly request: ${typeOf(`${op}'s request`, request)};\nreadonly result: ${typeOf(`${op}'s result`, result)};`;
+    return `${quote(op)}: {\n${indent(fields)}\n};`;
+  });
+  const content = `// Generated by \`${command}\` from the forge operation schemas. Do not edit.
+// Rerun the command after an Archon upgrade; with --check it fails while this file is stale.
+
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+
+/**
+ * Every \`archon forge <operation>\`: the request it reads from \`--data\` or
+ * \`--data-file\`, and the value of its result.
+ */
+export interface ForgeOperations {
+${indent(members.join('\n'))}
+}
+
+/** What every successful answer carries beside its result. */
+export type ForgeSuccess = ${typeOf('a successful answer', schemas.success)};
+
+/** A failed operation: the typed reason and, for a write, what is known of its outcome. */
+export type ForgeFailure = ${typeOf('a failed answer', schemas.failure)};
+
+${CLIENT}`;
+  return { content, operations: schemas.operations.map(({ op }) => op) };
+}
+
+export async function forgeTypesCommand(
+  cwd: string,
+  options: { out?: string; check?: boolean; json?: boolean }
+): Promise<number> {
+  if (options.out === undefined)
+    throw new Error('Usage: archon forge types --out <file> [--check]');
+  const path = resolve(cwd, options.out);
+  // The header names the file relative to the invoking directory with `/`, so the same
+  // command from the same directory writes the same bytes on every machine.
+  const command = `archon forge types --out ${relative(cwd, path).split(sep).join('/')}`;
+  const { content, operations } = renderForgeTypes(command);
+  let existing: string | undefined;
+  try {
+    existing = await readFile(path, 'utf8');
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error;
+  }
+  // A checkout that converts line endings hands the file back with CRLF; compare on LF.
+  const same = existing?.replaceAll('\r\n', '\n') === content;
+  const status = options.check ? (same ? 'current' : 'stale') : same ? 'unchanged' : 'written';
+  if (status === 'written') {
+    await mkdir(dirname(path), { recursive: true });
+    await writeFile(path, content);
+  }
+  if (options.json) {
+    await writeJsonLine({ ok: status !== 'stale', path, status, operations: operations.length });
+  } else if (status === 'stale') {
+    console.error(`Error: ${path} is missing or stale. Run '${command}' and commit the result.`);
+  } else {
+    const verb = { written: 'Wrote', unchanged: 'Unchanged:', current: 'Up to date:' }[status];
+    await writeStdout(`${verb} ${path} (${String(operations.length)} forge operation(s))\n`);
+  }
+  return status === 'stale' ? 1 : 0;
+}

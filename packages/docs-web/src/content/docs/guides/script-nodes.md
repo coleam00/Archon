@@ -210,6 +210,49 @@ Archon preserves these relative paths in project and global source trees, bundle
 
 Keep output under the supplied `ARTIFACTS_DIR` or `STATE_DIR`, never beside a script. Bun module loading does not add files beside these sources, and Archon disables Python bytecode caching in both workflow execution and executable fixtures. This prevents import caches from changing the frozen source; it does not prevent your script from writing there explicitly.
 
+### Call the forge from a script
+
+A script reaches the forge (pull requests, issues, checks, labels) through `archon forge <operation>`, which answers in JSON. `archon forge types` generates a typed client for those calls, so a script neither restates the request and result shapes nor validates them by hand:
+
+```bash
+archon forge types --out .archon/workflows/my-pack/.shared/forge.generated.ts
+archon forge types --out .archon/workflows/my-pack/.shared/forge.generated.ts --check   # exit 1 when stale
+```
+
+Commit the file. It imports only Node built-ins, so it runs under Bun with no `node_modules`. Regenerate it after an Archon upgrade, and run `--check` in CI: the forge schemas own the shapes, and a stale file fails the check instead of drifting.
+
+The file exports:
+
+| Export | What it is |
+| --- | --- |
+| `ForgeOperations` | For every operation, the `request` it takes and the `result` it returns |
+| `invokeForge(op, request)` | Runs the operation through the CLI named by `ARCHON_CLI_COMMAND` and returns its typed result |
+| `ForgeOperationError` | Thrown when the host answers with a failure: `kind` is the typed reason, and `mutation` says what is known about a failed write |
+| `ForgeFailure`, `ForgeSuccess`, `ForgeResponse` | The JSON envelope the CLI prints |
+
+```typescript
+// release/scripts/publish.ts
+import { ForgeOperationError, invokeForge } from '../../.shared/forge.generated.ts';
+
+const ref = { repo: { host: 'github.com', path: 'owner/repository' }, number: 42 };
+const view = invokeForge('pr.view', { selector: { kind: 'number', ref } });
+if (view?.pr.is_draft) {
+  try {
+    invokeForge('pr.ready', { ref });
+  } catch (error) {
+    // A write that failed with an unknown outcome may have happened: report it, do not retry it.
+    if (error instanceof ForgeOperationError && error.mutation?.outcome === 'outcome_unknown') {
+      console.error(error.message);
+    }
+    throw error;
+  }
+}
+```
+
+A wrong operation name, request field or result field is a compile error. The host validates every request and response against the same schemas at run time, so the client does not validate them again. An error that is not a `ForgeOperationError` means the CLI gave no answer; treat a write as possibly applied.
+
+`invokeForge` needs `ARCHON_CLI_COMMAND`, which the host sets for every `bash:` and `script:` node of a host run. A [container execution](/guides/container-isolation/) does not receive it. To refuse early when a host has no plugin, lacks an operation or has no credential, call `invokeForge('check', { host, operations })` in the workflow's first node; see [Check forge access before a run spends](/reference/forge/#check-forge-access-before-a-run-spends).
+
 ### Frozen source integrity
 
 When a run uses captured source, Archon rechecks the full capture against the run's pinned digest and source-resolution settings before each named-script attempt, including retries, and before lookup or subprocess dispatch. Any change to the capture refuses the node before it starts. Inline scripts are already held in the workflow definition and do not read the capture at execution time.
