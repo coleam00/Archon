@@ -150,8 +150,15 @@ export type AttentionStreamLine = z.infer<typeof attentionStreamLineSchema>;
  * stream that lost coverage or ended.
  * It drops what only a program syncing the full protocol needs, and a usage-limit wait,
  * which continues by itself, unless that wait replaces an item it passed.
+ *
+ * `resumed` is for a stream that continues an earlier one from a cursor. The filter did
+ * not see what that earlier stream passed, so it passes every close: telling a reader
+ * that an item it never held has closed is harmless, and dropping the close of one it
+ * holds leaves it working on an ask that is gone.
  */
-export function attentionNeedsSomeoneFilter(): (line: AttentionStreamLine) => boolean {
+export function attentionNeedsSomeoneFilter(
+  options: { resumed?: boolean } = {}
+): (line: AttentionStreamLine) => boolean {
   const passed = new Set<string>();
   return line => {
     switch (line.type) {
@@ -161,7 +168,7 @@ export function attentionNeedsSomeoneFilter(): (line: AttentionStreamLine) => bo
         return true;
       case 'resolved':
       case 'unmatched':
-        return passed.delete(line.runId);
+        return passed.delete(line.runId) || options.resumed === true;
       case 'terminal':
         // A run that ran to the end and judged its work unsuccessful needs a look too.
         return line.status === 'failed' || line.outcome === 'failed';

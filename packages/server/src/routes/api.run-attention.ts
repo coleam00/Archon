@@ -207,7 +207,9 @@ export function registerAttentionStreamRoute(
         end = resolve;
       });
       stream.onAbort(end);
-      const wanted = quiet ? attentionNeedsSomeoneFilter() : (): boolean => true;
+      const wanted = quiet
+        ? attentionNeedsSomeoneFilter({ resumed: after !== undefined })
+        : (): boolean => true;
       const listener = async (line: AttentionStreamLine): Promise<void> => {
         if (!wanted(line)) return;
         const id = idOf(line);
