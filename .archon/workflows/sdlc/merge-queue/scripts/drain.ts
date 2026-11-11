@@ -12,11 +12,12 @@
  */
 
 import { followUp } from '../../.shared/follow-up.ts';
-import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { nullableJson } from '../../.shared/inputs.ts';
 
 function main(): void {
-  const merged = (nullableJson(process.env.INPUTS_MERGED) ?? []) as number[];
-  const binding = trimmed(process.env.INPUTS_DISCOVERIES_BINDING);
+  const merged = (nullableJson(input('merged')) ?? []) as number[];
+  const binding = input('discoveries_binding').trim();
   if (merged.length === 0) {
     emit({ summary: 'This sweep merged nothing, so no discoveries drain starts.' });
     return;

@@ -13,9 +13,9 @@
  */
 
 import { BUILD_BRANCH_PREFIX } from './build.ts';
-import { invokeForge, parsePrRecord, record, sameRepo } from './forge.ts';
+import { forge, type ForgeOperations } from 'archon:script';
+import { sameRepo } from './identity.ts';
 import { resolvePrUrl } from './pr.ts';
-import { note } from './io.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */
@@ -69,24 +69,22 @@ export function factoryPrRuns(items: readonly WorkItem[]): Map<string, string[]>
  * optional in the forge contract because a plugin that predates it omits it, so a
  * view without it refuses rather than counting the pull request with no times.
  */
-export function prFacts(url: string, view: Record<string, unknown> | null): PrFacts {
+export function prFacts(url: string, view: ForgeOperations['pr.view']['result']): PrFacts {
   if (view === null) throw new Error(`forge pr.view reported no pull request for ${url}`);
-  const pr = parsePrRecord(view.pr);
-  const times = record(view.timestamps);
+  const { pr, timestamps: times } = view;
   if (times === undefined) {
     throw new Error(
       `forge pr.view reported no timestamps for ${url}; PR metrics need a forge plugin whose pr.view reports them`
     );
   }
-  const time = (field: string): string | null => (typeof times[field] === 'string' ? (times[field] as string) : null);
-  const createdAt = time('created_at');
+  const createdAt = times.created_at;
   if (createdAt === null) throw new Error(`forge pr.view reported no creation time for ${url}`);
   return {
     url,
     state: pr.state === 'open' ? 'OPEN' : pr.state === 'merged' ? 'MERGED' : 'CLOSED',
     createdAt,
-    mergedAt: time('merged_at'),
-    closedAt: time('closed_at'),
+    mergedAt: times.merged_at,
+    closedAt: times.closed_at,
     headRefName: pr.head,
     isCrossRepository: pr.head_repo === null || !sameRepo(pr.head_repo, pr.repo),
   };
@@ -102,10 +100,10 @@ export function readPrFacts(urls: Iterable<string>): PrFacts[] {
   for (const url of urls) {
     const ref = resolvePrUrl(url);
     if (ref === undefined) {
-      note(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
+      console.error(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
       continue;
     }
-    facts.push(prFacts(url, invokeForge('pr.view', { selector: { kind: 'number', ref } })));
+    facts.push(prFacts(url, forge('pr.view', { selector: { kind: 'number', ref } })));
   }
   return facts;
 }

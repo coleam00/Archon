@@ -30,14 +30,15 @@ import {
   type Validation,
   withBuild,
 } from '../../.shared/build.ts';
-import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson, typedOutputs, UNREADABLE_OUTPUTS } from '../../.shared/inputs.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed, typedOutputs, UNREADABLE_OUTPUTS, workflowRunId } from '../../.shared/io.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
-import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
+import { askFields, attentionWait, checkAttention, type DecisionEntry } from '../../.shared/queue.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
@@ -62,7 +63,7 @@ type Decision =
 function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string): Decision {
   if (attention === null) throw new Error(`the ${by} decision asks without an attention item`);
   checkAttention(attention);
-  return { kind: 'asked', by, attention: withOther(attention, 'continue'), brief, reason };
+  return { kind: 'asked', by, attention, brief, reason };
 }
 
 function decide(
@@ -141,7 +142,7 @@ function markReady(pr: PrRecord | null, head: string | null | undefined): string
 /** The pull request write the decision declared: a push, taking it out of draft, or none. */
 function writePullRequest(route: RouteOutput | null, answer: AnswerOutput | null, push: QualifiedPr | null): string | null {
   if (answer === null && route?.decision === 'ready')
-    return markReady(nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null, route.ready_head);
+    return markReady(nullableJson(input('pull_request')) as PrRecord | null, route.ready_head);
   return push === null ? null : pushTo(push);
 }
 
@@ -169,12 +170,12 @@ function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; 
     case 'idle':
       return {
         decision: path,
-        summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
+        summary: idleSummary('No item waits for the build queue.', stuckItems(workflowRunId())),
       };
     case 'order':
-      return { decision: path, summary: text(process.env.INPUTS_ORDER) };
+      return { decision: path, summary: input('order') };
     case 'handoff':
-      return { decision: path, summary: text(process.env.INPUTS_HANDOFF) };
+      return { decision: path, summary: input('handoff') };
     default:
       return null;
   }
@@ -186,9 +187,9 @@ function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; 
  * metric reads its run's artifacts instead or skips its pull request.
  */
 function reviewsOf(): Pick<BuildRound, 'reviews'> {
-  const reviews = typedOutputs<{ ready: boolean }>(process.env.INPUTS_REVIEWS);
+  const reviews = typedOutputs<{ ready: boolean }>(input('reviews'));
   if (reviews !== null) return { reviews: runReviews(reviews) };
-  note(`the round records no review verdicts: ${UNREADABLE_OUTPUTS}`);
+  console.error(`the round records no review verdicts: ${UNREADABLE_OUTPUTS}`);
   return {};
 }
 
@@ -198,9 +199,9 @@ function reviewsOf(): Pick<BuildRound, 'reviews'> {
  * until a later round records one.
  */
 function validationOf(): Pick<BuildRound, 'validation'> {
-  const reports = typedOutputs<{ validation: Validation | null }>(process.env.INPUTS_CI);
+  const reports = typedOutputs<{ validation: Validation | null }>(input('ci'));
   if (reports === null) {
-    note(`the round records no validation: ${UNREADABLE_OUTPUTS}`);
+    console.error(`the round records no validation: ${UNREADABLE_OUTPUTS}`);
     return {};
   }
   const validation = reports.map(report => report.value.validation).filter(ran => ran !== null).at(-1);
@@ -218,13 +219,13 @@ function prNumberOf(url: string, repo: QualifiedPr['repo']): Pick<BuildRound, 'p
   try {
     return { pr_number: roundPrNumber(url, repo) };
   } catch (error) {
-    note(`the round records no pull request number: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`the round records no pull request number: ${error instanceof Error ? error.message : String(error)}`);
     return {};
   }
 }
 
 function main(): void {
-  const path = trimmed(process.env.INPUTS_PATH);
+  const path = input('path').trim();
   const noItem = noItemSummary(path);
   if (noItem !== null) {
     emit({ ...noItem, attention: '', options: [], recommendation: null, class: '', asked: null });
@@ -232,10 +233,10 @@ function main(): void {
   }
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
-  const ending = nullableJson(process.env.INPUTS_ENDING) as ShipReport | null;
+  const ending = nullableJson(input('ending')) as ShipReport | null;
   const at = new Date().toISOString();
-  const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
-  const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
+  const answer = nullableJson(input('answer')) as AnswerOutput | null;
+  const route = nullableJson(input('route')) as RouteOutput | null;
   const round: BuildRound | null =
     ending === null
       ? null
@@ -255,7 +256,11 @@ function main(): void {
   const wait =
     asking === null
       ? null
-      : attentionWait(`Build queue, issue ${String(item.number)}: ${asking.by} decision`, asking.attention);
+      : attentionWait(
+          `Build queue, issue ${String(item.number)}: ${asking.by} decision`,
+          asking.attention,
+          'Your text is written into the issue body as the ruling, and the next round works from it.'
+        );
   const links = [
     ...(round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '')),
     ...(asking?.attention.links ?? []),

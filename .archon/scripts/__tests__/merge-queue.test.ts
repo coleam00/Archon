@@ -16,7 +16,7 @@ import {
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { type TrackerComment, gitCheckout, hostCli, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
@@ -182,14 +182,14 @@ function seed(at: Install, doc: WorkItem): void {
   const name = `work/${String(doc.subject.number)}`;
   inProcess(at, () => {
     if (doc.claim !== null) process.env.WORKFLOW_ID = doc.claim.run_id;
-    const lease = doc.claim === null ? undefined : 'take';
-    expect(statePut(name, doc, stateGet(name).revision, lease)).toBe('ok');
+    const lease = doc.claim === null ? {} : { lease: 'take' as const };
+    expect(state.put(name, doc, { ifRevision: state.get(name).revision, ...lease }).ok).toBe(true);
   });
 }
 
 function stored(at: Install, number = SUBJECT.number): { revision: number; value: WorkItem | null } {
   return inProcess(at, () => {
-    const read = stateGet(`work/${String(number)}`);
+    const read = state.get(`work/${String(number)}`);
     return { revision: read.revision, value: read.value === null ? null : parseWorkItem(read.value) };
   });
 }
@@ -242,7 +242,10 @@ const forgeOp = (op, request) => {
   const unreadable = () => forgePr.unreadable === true || Array.isArray(forgePr.unreadable) && forgePr.unreadable.includes(ref.number);
   // The harness's forge resolves a pull request URL.
   if (op === 'resolve') return null;
-  if (op === 'metadata') return out(true, { capabilities: ${JSON.stringify(MERGE_QUEUE_FORGE_OPERATIONS)}.filter(name => !(forgePr.missingOps ?? []).includes(name)) });
+  if (op === 'check') {
+    const unsupported = request.operations.filter(name => (forgePr.missingOps ?? []).includes(name));
+    return unsupported.length === 0 ? out(true, request) : out(false, { error: { kind: 'unsupported_op', message: 'plugin fake does not support ' + unsupported.join(', ') }, unsupported });
+  }
   if (op === 'checks.commit') return forgePr.baseUnreadable ? failed('HTTP 502 reading base') : out(true, { repo: request.repo, branch: 'dev', revision: ${JSON.stringify(OLD)}, units: units(forgePr.baseChecks ?? 'green') });
   if (op === 'pr.merge') {
     if (request.conditions.head !== forgePr.headRefOid) return failed('Head branch was modified', { op, target: ref, outcome: 'refused' });
@@ -355,7 +358,7 @@ function recordInputs(
     INPUTS_ITEMS: ITEMS,
     INPUTS_SETTLED: '[]',
     INPUTS_BASE: JSON.stringify(FACTS_BASE_GREEN),
-    INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept' }),
+    INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept', gate_error: '' }),
   };
 }
 
@@ -448,6 +451,17 @@ describe('the merge queue scripts', () => {
     expect(doc.claim).toBeNull();
     expect(doc.facts.merge?.decisions).toHaveLength(4);
     expect(mergeWaits(doc)).toBe(true);
+  }, 60_000);
+
+  test('a gate the sweep could not run fails the record, after the wait is recorded and the claim released', () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const inputs = recordInputs([decision({ action: 'wait', reason: 'the gate could not run' })]);
+    const sweep = { ...(JSON.parse(inputs.INPUTS_SWEEP ?? '') as object), gate_error: "Cannot find package 'archon:script'" };
+    const failed = run(at, 'record', { ...inputs, INPUTS_SWEEP: JSON.stringify(sweep) });
+    expect(failed.code).not.toBe(0);
+    expect(failed.stderr).toContain("the merge gate could not run, so nothing was gated or merged: Cannot find package 'archon:script'");
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
   }, 60_000);
 
   test('a claimed merge the forge does not show fails the record after every other decision is written', () => {
@@ -614,6 +628,16 @@ describe('the merge queue scripts', () => {
     expect(doc.facts.build?.brief).toContain('rework PR 42');
     expect(doc.facts.build?.brief).toContain(heading);
   }, 60_000);
+
+  test('an `other` answer, which returns no choice, parks a pull request the sweep wrote no brief for', () => {
+    const at = install();
+    seed(at, item(BUILT, merge('asking'), CLAIMED));
+    const asked = JSON.stringify({ ...(JSON.parse(ASKED) as object), brief: '' });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: '', INPUTS_TEXT: 'Wait for the release.', ...SELECTED });
+    expect(ok(ruled)).toMatchObject({ decision: 'park' });
+    expect(ruled.bodies[0]).toContain("The maintainer's words: Wait for the release.");
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
+  }, 60_000);
 });
 
 describe('the merge queue facts and gate', () => {
@@ -630,6 +654,23 @@ describe('the merge queue facts and gate', () => {
     expect(output.gate).toContain('gate.ts');
     expect(stored(at).value?.claim?.run_id).toBe('run-1');
     expect(ok(on(at, 'facts', {}, { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
+  }, 60_000);
+
+  // The command is quoted for a POSIX shell, which is what an agent runs it in; cmd.exe cannot parse it.
+  test.skipIf(process.platform === 'win32')('the gate command facts hands the sweep agent starts when run as the agent runs it, outside a script node', () => {
+    const at = install();
+    seed(at, item());
+    const facts = on(at, 'facts');
+    const { gate } = ok(facts) as { gate: string };
+    const ran = spawnSync(`${gate} --item 7 --pr ${PR_URL} --head ${HEAD}`, {
+      shell: true,
+      cwd: at.checkout,
+      encoding: 'utf8',
+      env: { ...process.env, ...at.env, ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, FAKE_ARCHON]), ARTIFACTS_DIR: facts.artifacts, WORKFLOW_ID: 'run-1' },
+    });
+    // A plain subprocess has no forge stand-in, so the host's own forge answers the gate's
+    // first call: no plugin claims the test host, so its URL resolves to no pull request.
+    expect(ran.stderr).toBe(`merge-queue gate: "${PR_URL}" is not a pull request URL\n`);
   }, 60_000);
 
   test('a review comment from anyone but a listed maintainer is no verdict', () => {
@@ -721,8 +762,8 @@ describe('the merge queue on the forge', () => {
     seed(at, item());
     const refused = run(at, 'facts', {}, { pr: { missingOps: ['pr.merge-state'] } });
     expect(refused.code).not.toBe(0);
-    expect(refused.stderr).toContain("lacks the merge queue's pr.merge-state");
-    expect(forgeCalls(refused)).toEqual(['forge metadata']);
+    expect(refused.stderr).toContain('does not support pr.merge-state');
+    expect(forgeCalls(refused)).toEqual(['forge check']);
     expect(stored(at).value?.claim ?? null).toBeNull();
     expect(stored(at).value?.facts.merge).toBeUndefined();
   }, 60_000);
@@ -736,7 +777,7 @@ describe('the merge queue on the forge', () => {
     expect([facts.code, gate.code]).toEqual([0, 0]);
     const used = [...forgeCalls(facts), ...forgeCalls(gate)];
     // `resolve` runs no preflight: the host refuses it on a plugin that cannot resolve a URL.
-    const preflighted = used.filter(call => call.startsWith('forge ') && !['forge metadata', 'forge resolve'].includes(call));
+    const preflighted = used.filter(call => call.startsWith('forge ') && !['forge check', 'forge resolve'].includes(call));
     expect(new Set(preflighted.map(call => call.split(' ')[1]))).toEqual(
       // The sweep agent, not a script, reruns a pull request's failed checks.
       new Set(MERGE_QUEUE_FORGE_OPERATIONS.filter(op => op !== 'checks.rerun'))

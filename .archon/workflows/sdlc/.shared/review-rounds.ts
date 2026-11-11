@@ -19,8 +19,7 @@ import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { type BuildRound, KEPT_ROUNDS, type ReviewVerdict } from './build.ts';
 import { type PrFacts, prRuns } from './factory-prs.ts';
-import { record } from './forge.ts';
-import type { TypedOutput } from './io.ts';
+import { record, type TypedOutput } from './inputs.ts';
 import type { WorkItem } from './workitem.ts';
 
 /**

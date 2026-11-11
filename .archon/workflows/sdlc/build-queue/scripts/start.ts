@@ -6,13 +6,13 @@
  * run picks up as a scheduled run does.
  */
 
-import { emit, refuse, trimmed } from '../../.shared/io.ts';
+import { emit, input, refuse } from 'archon:script';
 import { workflowRepo } from '../../.shared/remote.ts';
 
 try {
   emit({
     repo: workflowRepo(),
-    message: trimmed(process.env.INPUTS_NUMBER) === '' && trimmed(process.env.ARGUMENTS) !== '',
+    message: input('number').trim() === '' && (process.env.ARGUMENTS ?? '').trim() !== '',
   });
 } catch (error) {
   refuse(`build-queue start: ${error instanceof Error ? error.message : String(error)}`);

@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { filedIssues, splitMarker } from '../../workflows/sdlc/.shared/split';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import { mirrorLabels, newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { gitCheckout, hostCli, labelWrites, packScriptRunner, PR, type ScriptRun, type TrackerIssue } from './deliver-checks-harness';
 
@@ -31,7 +31,7 @@ const ISSUES = [
   { key: 'measure', title: 'Measure the signal', body: 'The measurement contract.' },
   { key: 'feature', title: 'Ship the thin slice', body: 'The slice contract.' },
 ];
-const LATER = [{ title: 'Widen to every route', signal: 'the slice moves the median' }];
+const COMMENT = 'A PRD, split by phase.\n\nLater: widen to every route, once the slice moves the median.';
 
 interface Install {
   readonly checkout: string;
@@ -68,7 +68,7 @@ function inProcess<T>(at: Install, body: () => T): T {
 /** Store the item as a split queue run holding its claim finds it. */
 function seed(at: Install, change: (doc: WorkItem) => WorkItem = doc => doc): void {
   inProcess(at, () => {
-    const stored = stateGet('work/7');
+    const stored = state.get('work/7');
     const current = stored.value === null ? newWorkItem(SUBJECT, AT) : parseWorkItem(stored.value);
     const doc = change({
       ...current,
@@ -77,18 +77,18 @@ function seed(at: Install, change: (doc: WorkItem) => WorkItem = doc => doc): vo
       claim: { run_id: 'run-1', at: AT, requests: [] },
       facts: { ...current.facts, triage: TRIAGE },
     });
-    expect(statePut('work/7', doc, stored.revision)).toBe('ok');
+    expect(state.put('work/7', doc, { ifRevision: stored.revision }).ok).toBe(true);
   });
 }
 
 function stored(at: Install): WorkItem {
-  return inProcess(at, () => parseWorkItem(stateGet('work/7').value));
+  return inProcess(at, () => parseWorkItem(state.get('work/7').value));
 }
 
 function publish(
   at: Install,
   split: unknown,
-  { issues = [], existing = [], planned = ISSUES, later = [] }: { issues?: TrackerIssue[]; existing?: unknown[]; planned?: unknown[]; later?: unknown[] } = {}
+  { issues = [], existing = [], planned = ISSUES }: { issues?: TrackerIssue[]; existing?: unknown[]; planned?: unknown[] } = {}
 ): ScriptRun {
   return runPackScript('split/scripts/publish', {
     cwd: at.checkout,
@@ -101,8 +101,8 @@ function publish(
       INPUTS_ITEM: JSON.stringify(SUBJECT),
       INPUTS_SPLIT: JSON.stringify(split),
       INPUTS_ISSUES: JSON.stringify(planned),
-      INPUTS_LATER: JSON.stringify(later),
       INPUTS_EXISTING: JSON.stringify(existing),
+      INPUTS_COMMENT: COMMENT,
       INPUTS_SUMMARY: 'Measure first.',
     },
   });
@@ -114,17 +114,20 @@ function ok(result: ScriptRun): Record<string, unknown> {
 }
 
 describe('split publish', () => {
-  test('files the current phase once, records later phases unfiled, and a rerun files none again', () => {
+  test("files the current phase once, posts the agent's comment as written, and a rerun files none again", () => {
     const at = install();
     seed(at);
-    const first = publish(at, { kind: 'prd' }, { later: LATER });
+    const first = publish(at, { kind: 'prd' });
     expect(ok(first)).toMatchObject({ path: 'slice', item: 7, kind: 'prd' });
     expect(first.createdIssues.map(issue => [issue.number, issue.title])).toEqual([
       [100, 'Measure the signal'],
       [101, 'Ship the thin slice'],
     ]);
     expect(first.createdIssues[0]?.body).toBe(`${splitMarker(7, 'measure')}\n\nThe measurement contract.`);
-    expect(first.comments).toEqual([{ issue: 7, body: expect.stringContaining('- Widen to every route. Filed once the earlier work shows: the slice moves the median') }]);
+    // The agent's text is posted unchanged; the script adds only the marker and the filed issues.
+    expect(first.comments).toEqual([
+      { issue: 7, body: `<!-- archon-split -->\n\n${COMMENT}\n\n- #100 Measure the signal\n- #101 Ship the thin slice` },
+    ]);
     expect(labelWrites(first, 7).add).toContain('archon-prd');
     expect(first.closes).toEqual([]);
     expect(stored(at)).toMatchObject({ claim: null, facts: { split: { status: 'done', kind: 'prd' } } });
@@ -132,21 +135,6 @@ describe('split publish', () => {
     // A re-triage sends the item back; the next split lists the same keys.
     seed(at);
     expect(publish(at, { kind: 'prd' }, { issues: [...first.createdIssues] }).createdIssues).toEqual([]);
-  });
-
-  test("a later phase owned by an existing issue does not claim an earlier phase's filing", () => {
-    const at = install();
-    seed(at, doc => ({
-      ...doc,
-      facts: {
-        ...doc.facts,
-        split: { status: 'done', kind: 'prd', issues: [{ key: 'measure', number: 100, url: 'u', title: 'Measure' }], adopted: [], at: AT, run_id: 'old-run' },
-      },
-    }));
-    const owner: TrackerIssue = { number: 200, title: 'The next phase', body: 'Owned elsewhere.', state: 'OPEN' };
-    const run = publish(at, { kind: 'prd' }, { issues: [owner], existing: [{ number: 200, why: 'owns the next phase' }], planned: [] });
-    ok(run);
-    expect(run.comments[0]?.body).toContain("This PRD's current phase is owned by existing open issues, so nothing new is filed.");
   });
 
   test('an issue filed before a stop, but not recorded, is recovered by its marker', () => {
@@ -179,7 +167,6 @@ describe('split publish', () => {
     const run = publish(at, { kind: 'prd' }, { issues: [owner], existing: [{ number: 50, why: 'it owns the light route' }], planned: [] });
     expect(ok(run)).toMatchObject({ adopted: [{ number: 50, why: 'it owns the light route' }] });
     expect(run.createdIssues).toEqual([]);
-    expect(run.comments[0]?.body).toContain('- #50 it owns the light route');
 
     const other = install();
     seed(other);
@@ -195,7 +182,7 @@ describe('split publish', () => {
     const run = publish(at, { kind: 'whole', route: 'plan' }, { planned: [] });
     expect(ok(run)).toMatchObject({ kind: 'whole', issues: [] });
     expect(run.createdIssues).toEqual([]);
-    expect(run.comments).toEqual([{ issue: 7, body: expect.stringContaining('Measure first.') }]);
+    expect(run.comments).toEqual([{ issue: 7, body: `<!-- archon-split -->\n\n${COMMENT}` }]);
     expect(labelWrites(run, 7)).toEqual({ add: ['archon-plan'], remove: ['archon-split'] });
     const doc = stored(at);
     expect(doc).toMatchObject({ stage: 'plan', claim: null, facts: { split: { status: 'whole', route: 'plan' } } });

@@ -305,6 +305,7 @@ function openAttentionWait(
     const observedStatus = latestRun.status;
     if (resolution.kind !== 'owner_required') {
       discardOwnerWatch();
+      await deliverAttached(observedStatus);
       return { kind: 'rechecked', observedStatus, resolution, ownerAttachment };
     }
     const reattached = await attachOwner(resolution);
@@ -322,6 +323,7 @@ function openAttentionWait(
     }
     if (verified.kind !== 'owner_required') {
       discardOwnerWatch();
+      await deliverAttached(verifiedRun.status);
     } else if ((await attachOwner(verified)) === 'attached' && !ownerWatchEnded) {
       await deliverAttached(verifiedRun.status);
     }

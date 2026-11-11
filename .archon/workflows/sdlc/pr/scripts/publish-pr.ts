@@ -35,13 +35,9 @@
 import { readFileSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { encodePrPublicationRecord, PR_CREATE_RECORD, DESCRIPTION_SECTION, createPr, editPrBody, findOpenPrByHead, viewPr } from '../../.shared/pr.ts';
-import {
-  ForgeOperationError,
-  record,
-  type PrRecord,
-  type QualifiedPr,
-} from '../../.shared/forge.ts';
-import { artifactsDir, emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, emit, ForgeError, input, refuse } from 'archon:script';
+import { type PrRecord, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson, record } from '../../.shared/inputs.ts';
 import { pushHead } from '../../.shared/push.ts';
 
 type Repo = QualifiedPr['repo'];
@@ -115,9 +111,9 @@ async function withDescriptionSection(live: string, section: string): Promise<st
 
 /** The prepared section's content, or undefined when prepare declared none. */
 async function preparedSection(artifacts: string): Promise<string | undefined> {
-  const pointer = record(nullableJson(process.env.INPUTS_DESCRIPTION));
+  const pointer = record(nullableJson(input('description')));
   if (pointer === undefined) return undefined;
-  if (trimmed(process.env.INPUTS_PUBLISH_DESCRIPTION) !== 'true') {
+  if (input('publish_description').trim() !== 'true') {
     throw new Error('prepare declared a description section, but the caller did not allow publishing one');
   }
   if (
@@ -140,7 +136,7 @@ async function applyDescription(pr: PrRecord, section: string): Promise<void> {
   const live = viewPr(ref).body;
   const body = await withDescriptionSection(live, section);
   if (body === live) {
-    note(`publish-pr: ${pr.url}'s description section is already current.`);
+    console.error(`publish-pr: ${pr.url}'s description section is already current.`);
     return;
   }
   editPrBody(ref, body);
@@ -159,12 +155,12 @@ function recordPublishedPr(claimPath: string, pr: PrRecord, required: boolean): 
 }
 
 function publish(hasDescription: boolean): PrRecord {
-  const repo = JSON.parse(text(process.env.INPUTS_REPO)) as Repo;
-  const headRepo = JSON.parse(text(process.env.INPUTS_HEAD_REPO)) as Repo;
-  const existing = nullableJson(process.env.INPUTS_EXISTING) as number | null;
+  const repo = JSON.parse(input('repo')) as Repo;
+  const headRepo = JSON.parse(input('head_repo')) as Repo;
+  const existing = nullableJson(input('existing')) as number | null;
   const artifacts = artifactsDir();
 
-  const named = nullableJson(process.env.INPUTS_PULL_REQUEST) as number | null;
+  const named = nullableJson(input('pull_request')) as number | null;
   if (named !== null && existing !== named) {
     throw new Error(
       `the caller named pull request ${String(named)} to continue, but prepare declared ${String(existing ?? 'none')}`
@@ -174,9 +170,9 @@ function publish(hasDescription: boolean): PrRecord {
   // A branch the caller selected decides the pull request over one prepare found
   // unnamed, which may sit on the checkout's other branch: only an open pull request
   // with that head is reused below.
-  const branch = trimmed(process.env.INPUTS_BRANCH);
+  const branch = input('branch').trim();
   if (existing !== null && named === null && branch) {
-    note(`publish-pr: the caller selected ${branch}; pull request ${String(existing)} is reused only if it has that head.`);
+    console.error(`publish-pr: the caller selected ${branch}; pull request ${String(existing)} is reused only if it has that head.`);
   } else if (existing !== null) {
     const view = viewPr({ repo, number: existing });
     const prHeadRepo = view.pr.head_repo;
@@ -195,17 +191,17 @@ function publish(hasDescription: boolean): PrRecord {
     return view.pr;
   }
 
-  const head = branch || text(process.env.INPUTS_HEAD);
+  const head = branch || input('head');
   const headRevision = pushHead({ repo, head_repo: headRepo, head });
 
   const open = findOpenPrByHead(repo, headRepo, head);
   if (open) {
-    note(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
+    console.error(`publish-pr: ${open.pr.url} already has this head, so no pull request was opened.`);
     recordPublishedPr(join(artifacts, PR_CREATE_RECORD), open.pr, hasDescription);
     return open.pr;
   }
 
-  const body = record(nullableJson(process.env.INPUTS_BODY));
+  const body = record(nullableJson(input('body')));
   if (body === undefined) {
     throw new Error(`no open pull request has ${headRepo.path}:${head}, and prepare wrote no body to open one with`);
   }
@@ -240,10 +236,10 @@ function publish(hasDescription: boolean): PrRecord {
         headRepo,
         head,
         headRevision,
-        base: text(process.env.INPUTS_BASE),
-        title: text(process.env.INPUTS_TITLE),
+        base: input('base'),
+        title: input('title'),
         bodyPath,
-        draft: trimmed(process.env.INPUTS_DRAFT) === 'true',
+        draft: input('draft').trim() === 'true',
       }
     );
     recordPublishedPr(claimPath, pr, true);
@@ -251,7 +247,7 @@ function publish(hasDescription: boolean): PrRecord {
   } catch (error) {
     // A forge refusal is definite: no write was sent, so the claim would only block
     // a retry. Every other failure may have left a pull request behind.
-    if (error instanceof ForgeOperationError && error.mutation?.outcome === 'refused') {
+    if (error instanceof ForgeError && error.mutation?.outcome === 'refused') {
       unlinkSync(claimPath);
     }
     throw error;

@@ -246,7 +246,10 @@ nodes:
               required: *attention
           required: [summary, attention]
         summary: { type: string }
-      required: [decisions, base, summary]
+        # What the gate command printed when it could not run at all; empty when every
+        # gate call ran, refusals included. Non-empty fails the record node.
+        gate_error: { type: string }
+      required: [decisions, base, summary, gate_error]
 
   # Checks the decisions, reads back every pull request and records one decision per
   # item; raises at most one attention item. It also runs when no sweep was due.
@@ -326,6 +329,7 @@ nodes:
       attention: "$record.output.attention"
       form: select
       options: "$record.output.options"
+      other: true
       recommendation: "$record.output.recommendation"
       labels:
         merge: "$record.output.class"

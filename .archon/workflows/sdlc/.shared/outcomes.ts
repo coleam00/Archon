@@ -1,33 +1,15 @@
-/**
- * Read this run's node outcomes: the engine's listing at `NODE_OUTCOMES_FILE`, one
- * entry per node invocation with its state. The listing is the engine's, read across
- * a boundary this pack cannot import types over, so its envelope is checked rather
- * than assumed.
- */
+/** Finding one node's outcome in the engine's listing of this run's node outcomes. */
 
-import { readFileSync } from 'node:fs';
-import { isObject, type TypedOutput } from './io.ts';
+import { type NodeOutcomesListing, outcomes } from 'archon:script';
+import type { TypedOutput } from './inputs.ts';
 
-export type LoopFrame = { readonly groupId: string; readonly iteration: number };
-
-export interface NodeOutcome {
-  /** The step path: a loop body node is `<group>.<id>`. */
-  readonly node_id: string;
-  readonly state: string;
-  readonly loop_group_path?: readonly LoopFrame[];
-}
+type NodeOutcome = NodeOutcomesListing['nodes'][number];
+export type LoopFrame = NonNullable<NodeOutcome['loop_group_path']>[number];
 
 /** The listing's entries in the engine's order, or undefined when it cannot be read. */
-export function readOutcomes(file: string | undefined): readonly NodeOutcome[] | undefined {
-  if (file === undefined || file === '') return undefined;
+export function readOutcomes(): readonly NodeOutcome[] | undefined {
   try {
-    const listing: unknown = JSON.parse(readFileSync(file, 'utf8'));
-    if (!isObject(listing) || !Array.isArray(listing.nodes)) return undefined;
-    const nodes = listing.nodes.filter(
-      (entry): entry is NodeOutcome =>
-        isObject(entry) && typeof entry.node_id === 'string' && typeof entry.state === 'string'
-    );
-    return nodes.length === listing.nodes.length ? nodes : undefined;
+    return outcomes().nodes;
   } catch {
     return undefined;
   }
@@ -48,14 +30,14 @@ export function sameFrames(left: readonly LoopFrame[] = [], right: readonly Loop
  * the exact path, and the last entry for that path is the node's latest invocation.
  */
 export function latestOutcomeOf(
-  outcomes: readonly NodeOutcome[],
+  listed: readonly NodeOutcome[],
   output: Pick<TypedOutput<unknown>, 'node' | 'loop'>
 ): NodeOutcome | undefined {
   const frames = output.loop.map(frame => ({ groupId: frame.group, iteration: frame.iteration }));
-  const own = outcomes.find(
+  const own = listed.find(
     entry =>
       (entry.node_id === output.node || entry.node_id.endsWith(`.${output.node}`)) &&
       sameFrames(entry.loop_group_path, frames)
   );
-  return own && [...outcomes].reverse().find(entry => entry.node_id === own.node_id);
+  return own && [...listed].reverse().find(entry => entry.node_id === own.node_id);
 }

@@ -21,14 +21,9 @@
 
 import { writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import {
-  invokeForge,
-  parsePrRecord,
-  record,
-  type PrRecord,
-  type QualifiedPr,
-} from '../../.shared/forge.ts';
-import { artifactsDir, emit, nullableJson, refuse, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, forge, input, refuse } from 'archon:script';
+import { type PrRecord, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson, record } from '../../.shared/inputs.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 
 interface ThreadComment {
@@ -61,7 +56,7 @@ interface PrThreads {
 function readThreads(pr: QualifiedPr): PrThreads {
   const ref = { repo: pr.repo, number: pr.number };
   const view = viewPr(pr);
-  const value = invokeForge('pr.threads', { ref });
+  const value = forge('pr.threads', { ref });
   if (!Array.isArray(value?.threads)) throw new Error('forge pr.threads returned no thread list');
   const threads = value.threads.map((raw): Thread => {
     const node = record(raw);
@@ -103,8 +98,8 @@ function postAnswers(
   for (const answer of answers) {
     if (byId.get(answer.thread)?.resolved) continue;
     // Each write reads itself back; a failure throws with its outcome evidence.
-    invokeForge('pr.thread.reply', { ref, thread: answer.thread, body: answer.reply });
-    invokeForge('pr.thread.resolve', { ref, thread: answer.thread });
+    forge('pr.thread.reply', { ref, thread: answer.thread, body: answer.reply });
+    forge('pr.thread.resolve', { ref, thread: answer.thread });
   }
 }
 
@@ -120,9 +115,9 @@ function draftAfterFailure(pr: QualifiedPr): string {
 
 let pr: PrRecord | undefined;
 try {
-  pr = parsePrRecord(nullableJson(process.env.INPUTS_PR));
+  pr = nullableJson(input('pr')) as PrRecord;
   // The settle-threads node's schema certified each answer's thread and reply.
-  const answers = (nullableJson(text(process.env.INPUTS_ANSWERS)) as Answer[] | null) ?? [];
+  const answers = (nullableJson(input('answers')) as Answer[] | null) ?? [];
   let read = readThreads(pr);
   if (answers.length > 0) {
     postAnswers(pr, read.threads, answers);

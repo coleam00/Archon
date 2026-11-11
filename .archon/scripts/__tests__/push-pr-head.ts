@@ -1,10 +1,10 @@
-import { parsePrRecord } from '../../workflows/sdlc/.shared/forge.ts';
-import { refuse, report, text } from '../../workflows/sdlc/.shared/io.ts';
+import { input, refuse } from 'archon:script';
+import type { PrRecord } from '../../workflows/sdlc/.shared/identity.ts';
 import { pushHead } from '../../workflows/sdlc/.shared/push.ts';
 
 // Drives the push publish-pr makes, so its target choice and refusals are testable alone.
 try {
-  report(pushHead(parsePrRecord(JSON.parse(text(process.env.INPUTS_PR)))));
+  console.log(pushHead(JSON.parse(input('pr')) as PrRecord));
 } catch (error) {
   refuse(`push: ${error instanceof Error ? error.message : String(error)}`);
 }

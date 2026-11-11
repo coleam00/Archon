@@ -15,12 +15,17 @@ export async function runScript({
   cwd,
   json,
 }: CliRouteContext): Promise<number> {
-  if (subcommand !== 'types')
-    return await fail(json, 'Usage: archon script types [--out <file>] [--check]');
-  const { scriptTypesCommand } = await loadRoute(() => import('../commands/script-types'), {
-    providers: false,
-  });
-  return await scriptTypesCommand(cwd, {
+  if (subcommand !== 'types' && subcommand !== 'preload')
+    return await fail(
+      json,
+      'Usage: archon script types [--out <file>] [--check]\n       archon script preload --out <file> [--check]'
+    );
+  const { scriptTypesCommand, scriptPreloadCommand } = await loadRoute(
+    () => import('../commands/script-types'),
+    { providers: false }
+  );
+  const run = subcommand === 'types' ? scriptTypesCommand : scriptPreloadCommand;
+  return await run(cwd, {
     json,
     check: values.check === true,
     out: typeof values.out === 'string' ? values.out : undefined,

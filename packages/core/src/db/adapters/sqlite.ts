@@ -760,6 +760,7 @@ export class SqliteAdapter implements IDatabase {
  * SQLite SQL dialect helpers
  */
 export const sqliteDialect: SqlDialect = {
+  messageOrderTieBreaker: 'rowid',
   generateUuid(): string {
     return crypto.randomUUID();
   },
@@ -769,7 +770,6 @@ export const sqliteDialect: SqlDialect = {
   },
 
   jsonMerge(column: string, paramIndex: number): string {
-    // SQLite json_patch: merges two JSON objects
     // Use $N placeholder (not raw ?) so convertPlaceholders can reorder params correctly
     return `json_patch(${column}, $${String(paramIndex)})`;
   },

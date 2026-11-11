@@ -21,7 +21,8 @@
  * - INPUTS_*_SUMMARY: each node's summary; the one that decided the round is reported.
  */
 
-import { artifactsDir, emit, nullableJson, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, input } from 'archon:script';
+import { nullableJson } from '../../.shared/inputs.ts';
 
 /** Why a round ended. */
 type Ended =
@@ -35,17 +36,17 @@ type Ended =
   | 'ci_pr_caused'
   | 'ci_other';
 
-const previous = Number.parseInt(text(process.env.INPUTS_PREVIOUS), 10);
+const previous = Number.parseInt(input('previous'), 10);
 const round = (Number.isNaN(previous) ? 0 : previous) + 1;
-const green = text(process.env.INPUTS_GREEN);
-const redCause = text(process.env.INPUTS_RED_CAUSE);
-const reviewReady = text(process.env.INPUTS_REVIEW_READY);
-const reviewAction = text(process.env.INPUTS_REVIEW_ACTION);
+const green = input('green');
+const redCause = input('red_cause');
+const reviewReady = input('review_ready');
+const reviewAction = input('review_action');
 const reviewSummary = process.env.INPUTS_REVIEW_SUMMARY;
-const ci = text(process.env.INPUTS_CI_STATE);
-const prUrl = text(process.env.INPUTS_PR_URL);
-const threadsOpen = text(process.env.INPUTS_THREADS_OPEN);
-const contractLeft = nullableJson(process.env.INPUTS_REVIEW_CONTRACT_LEFT);
+const ci = input('ci_state');
+const prUrl = input('pr_url');
+const threadsOpen = input('threads_open');
+const contractLeft = nullableJson(input('review_contract_left'));
 
 /** The reason this round ended, whether another round can change it, and the deciding node's summary. */
 function decide(): { reason: Ended; again: boolean; summary: string | undefined } {
@@ -59,7 +60,7 @@ function decide(): { reason: Ended; again: boolean; summary: string | undefined 
     }
     return { reason: 'review_open', again: true, summary: reviewSummary };
   }
-  if (text(process.env.INPUTS_SIMPLIFY) === 'true') {
+  if (input('simplify') === 'true') {
     return { reason: 'simplify_open', again: true, summary: 'simplify recorded smaller shapes in shape.md.' };
   }
   const ciSummary = process.env.INPUTS_CI_SUMMARY;
@@ -67,7 +68,7 @@ function decide(): { reason: Ended; again: boolean; summary: string | undefined 
   if (ci !== 'ready') return { reason: 'ci_other', again: false, summary: ciSummary };
   // An open thread is unjudged work; one settle-threads could not settle needs a decision.
   if (Number(threadsOpen) > 0) {
-    return text(process.env.INPUTS_SETTLE_ASK) === 'true'
+    return input('settle_ask') === 'true'
       ? { reason: 'ask', again: false, summary: process.env.INPUTS_SETTLE_SUMMARY }
       : { reason: 'threads_open', again: true, summary: process.env.INPUTS_THREADS_SUMMARY };
   }
@@ -82,11 +83,11 @@ emit({
   ready: reason === 'delivered',
   reason,
   // A round whose implementer stopped opens no pull request; an earlier round's stands.
-  pr_url: prUrl === 'null' ? text(process.env.INPUTS_PREVIOUS_PR_URL) : prUrl,
+  pr_url: prUrl === 'null' ? input('previous_pr_url') : prUrl,
   // The next round's review continues from the last published report, if any.
   prior_report:
-    reviewReady === 'null' ? text(process.env.INPUTS_PRIOR_REPORT) : `${artifactsDir()}/review/report.md`,
+    reviewReady === 'null' ? input('prior_report') : `${artifactsDir()}/review/report.md`,
   // The latest review's open contract items; null until a review has judged coverage.
-  contract_left: contractLeft ?? nullableJson(process.env.INPUTS_PREVIOUS_CONTRACT_LEFT),
-  summary: `Round ${round}: ${reason}. ${text(summary)}`,
+  contract_left: contractLeft ?? nullableJson(input('previous_contract_left')),
+  summary: summary ?? '',
 });

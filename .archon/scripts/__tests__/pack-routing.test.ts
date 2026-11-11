@@ -13,7 +13,7 @@ describe("deliver's report after a node failure", () => {
   const published = (...values: object[]): string =>
     JSON.stringify(values.map(value => ({ node: 'pr__publish', loop: [{ group: 'rounds', iteration: 1 }], at: '2026-11-06T10:00:00Z', value })));
   /** A report node's bindings after a node failure, in a run with no typed output. */
-  const FAILED = { INPUTS_OUTCOME: 'null', INPUTS_REVIEWS: '[]', INPUTS_PULL_REQUESTS: '[]' };
+  const FAILED = { INPUTS_OUTCOME: 'null', INPUTS_PULL_REQUESTS: '[]' };
   const failedReport = (pullRequests: string, extra: Partial<Parameters<typeof runPackScript>[1]> = {}) =>
     runPackScript('deliver/scripts/report', {
       ...extra,
@@ -57,10 +57,7 @@ describe("deliver's report after a node failure", () => {
       artifacts: { 'pr-create-started': JSON.stringify({ pr: { url: PR_URL } }) },
     });
     expect(result.code).toBe(0);
-    expect(JSON.parse(result.stdout)).toMatchObject({
-      reason: 'pr_create_unresolved',
-      pr_url: '', summary: expect.stringContaining('invalid pull-request record'),
-    });
+    expect(JSON.parse(result.stdout)).toMatchObject({ reason: 'pr_create_unresolved', pr_url: '' });
   });
 
   for (const script of ['deliver/scripts/report', 'build-route/scripts/report']) {
@@ -74,7 +71,7 @@ describe("deliver's report after a node failure", () => {
           preload: kind === 'directory' ? `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');` : undefined,
         });
         expect(run.code).toBe(0);
-        expect(JSON.parse(run.stdout)).toMatchObject({ reason: 'pr_create_unresolved', pr_url: '', summary: expect.stringContaining('pr-create-started') });
+        expect(JSON.parse(run.stdout)).toMatchObject({ reason: 'pr_create_unresolved', pr_url: '' });
       }
     );
   }
