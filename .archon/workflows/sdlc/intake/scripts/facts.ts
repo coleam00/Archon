@@ -1,6 +1,6 @@
 /**
- * Record this run's event on its issue, claim the best waiting item, and decide what
- * it needs before any model reads its text.
+ * Record this run's event on its issue, claim that issue, or the best waiting item when
+ * it does not wait, and decide what the claimed item needs before any model reads its text.
  *
  * Trust is one fact read here: is the issue's author on the project's maintainer list.
  * A label request counts only when its actor, as the forge event reported it, is on
@@ -12,15 +12,32 @@ import { viewIssue } from '../../.shared/issue.ts';
 import { TRIAGE_REQUEST } from '../../.shared/labels.ts';
 import {
   bodyDigest,
+  claimable,
+  claimItem,
   claimNext,
   decideIntake,
   enqueue,
+  INTAKE_PICKUP,
   type IntakeRequest,
+  read,
   REQUEST_ACTIONS,
   type RequestAction,
+  type WorkItem,
+  workItemName,
 } from '../../.shared/workitem.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { workflowRepo } from '../../.shared/remote.ts';
+
+/**
+ * Claim the issue this run's event names when it waits, else the best waiting item.
+ * Events that arrive together each start a run, and a run that took another event's
+ * issue would leave its own to a run that may already have looked and found nothing:
+ * the last issue would wait with no run left to triage it.
+ */
+function claim(kind: string, number: number, at: string, runId: string): WorkItem | null {
+  const own = kind === 'issue' ? read(workItemName(number)) : undefined;
+  return (claimable(own, INTAKE_PICKUP) ? claimItem(own, at, runId) : null) ?? claimNext(at, runId);
+}
 
 function main(): void {
   const runId = workflowRunId();
@@ -53,7 +70,7 @@ function main(): void {
     enqueue(subject, request);
   }
 
-  const doc = claimNext(at, runId);
+  const doc = claim(kind, number, at, runId);
   if (doc === null) {
     emit({ path: 'idle', item: null, target: '', decision: null });
     return;
