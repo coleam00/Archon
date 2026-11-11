@@ -151,6 +151,9 @@ export function buildThreadConfig(
         : {}),
     },
   };
+  if (codexConfig.modelReasoningEffort !== undefined) {
+    config.model_reasoning_effort = codexConfig.modelReasoningEffort;
+  }
   if (codexConfig.webSearchMode) config.web_search = codexConfig.webSearchMode;
   if (mcpServers) config.mcp_servers = mcpServers;
   // Scoped requests must not advertise ambient skills. Direct chat keeps the user's setting.
