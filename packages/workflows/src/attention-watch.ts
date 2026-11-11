@@ -60,6 +60,7 @@ import {
 } from './store';
 import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
 import { firstFailedNodeEvent, getTerminalRecord, recordedFailureKind } from './terminal-record';
+import { workflowNoticeDataSchema } from './workflow-notice';
 
 function getLog(): ReturnType<typeof createLogger> {
   return createLogger('workflow.attention_watch');
@@ -136,6 +137,13 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     cause: z.object({ node: z.string(), errorClass: nodeFailureKindSchema.nullable() }).nullable(),
   }),
   z.object({ type: z.literal('resumed'), ...lineBase, status: z.literal('running') }),
+  /** What a node of the run said the run did (`workflow notice`); `at` is when it said it. */
+  z.object({
+    type: z.literal('notice'),
+    ...lineBase,
+    at: z.string(),
+    ...workflowNoticeDataSchema.shape,
+  }),
   z.object({ type: z.literal('owner_lost'), ...lineBase, observedStatus: workflowRunStatusSchema }),
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
   /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
@@ -676,6 +684,18 @@ export async function watchAttentionQueue(
     }
     if (event.event_type === 'workflow_resumed')
       await emit({ type: 'resumed', ...lifecycleFields(delivery, view), status: 'running' });
+    if (event.event_type === 'workflow_notice') {
+      // The label filter selects notices as it selects items; a row that does not read
+      // as a notice is not one.
+      const notice = workflowNoticeDataSchema.safeParse(event.data);
+      if (notice.success && matchesAttentionLabels(notice.data, labels))
+        await emit({
+          type: 'notice',
+          ...lifecycleFields(delivery, view),
+          at: event.created_at,
+          ...notice.data,
+        });
+    }
   };
 
   const handle = async (delivery: WorkflowRunDelivery): Promise<void> => {

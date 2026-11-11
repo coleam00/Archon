@@ -5,12 +5,12 @@
  * nothing but the declaration file.
  */
 import { afterAll, beforeAll, expect, spyOn, test } from 'bun:test';
-import { mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, readFileSync, realpathSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import ts from 'typescript';
 import { removeTempTree } from '@archon/paths/test-utils';
-import { ForgeError, forge, HostCommandError, state, trigger } from './module';
+import { ForgeError, forge, HostCommandError, notice, state, trigger } from './module';
 import { scriptApiDeclaration } from './text';
 
 const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-script-api-')));
@@ -21,7 +21,7 @@ beforeAll(() => {
   // Stands in for `archon`: answers each command from the arguments and input it was handed.
   writeFileSync(
     host,
-    `import { readFileSync } from 'node:fs';
+    `import { readFileSync, writeFileSync } from 'node:fs';
 const args = process.argv.slice(2);
 const [command, sub] = args;
 const answer = (value: unknown, code = 0): void => {
@@ -41,6 +41,10 @@ if (command === 'forge') {
   answer({ claimed: null, skipped: [{ name: 'a', reason: 'missing' }] }, 2);
 } else if (command === 'state') {
   answer({ name: args[2], revision: 4, args: args.slice(3), stdin: await Bun.stdin.text() });
+} else if (command === 'workflow' && sub === 'notice') {
+  const text = args.at(-1)!;
+  if (text === 'too many') answer({ ok: false, action: 'notice', error: 'limit reached', reason: 'run_limit' }, 1);
+  else writeFileSync(${JSON.stringify(join(root, 'notice.json'))}, JSON.stringify(args.slice(2)));
 } else if (command === 'trigger') {
   const inputs = readFileSync(args[args.indexOf('--inputs') + 1]!, 'utf8');
   answer({ id: 'receipt-1', args: args.slice(2, 6), bindings: [{ disposition: { status: 'admitted', requestId: 'q', runId: inputs } }] });
@@ -120,6 +124,23 @@ test('trigger.fire hands the binding its inputs in a stable order and returns th
     receiptId: 'receipt-1',
     disposition: { status: 'admitted', requestId: 'q', runId: '{"a":1,"b":2}' },
   });
+});
+
+test('notice sends its text after the labels, and a refusal is the host error', () => {
+  notice('-merged pull request 7', { kind: 'merged', pr: '7' });
+  expect(JSON.parse(readFileSync(join(root, 'notice.json'), 'utf8'))).toEqual([
+    '--json',
+    '--label',
+    'kind=merged',
+    '--label',
+    'pr=7',
+    '--',
+    '-merged pull request 7',
+  ]);
+  const refused = thrownBy(() => notice('too many'));
+  expect(refused).toBeInstanceOf(HostCommandError);
+  expect(refused).toMatchObject({ command: 'workflow notice', exitCode: 1 });
+  expect((refused as Error).message).toContain('limit reached');
 });
 
 test('the declaration alone type-checks a script against the forge and state contracts', () => {

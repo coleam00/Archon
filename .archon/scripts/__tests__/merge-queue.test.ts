@@ -672,7 +672,8 @@ describe('the merge queue facts and gate', () => {
     expect(ok(on(at, 'facts', {}, { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
   }, 60_000);
 
-  test('the gate command facts hands the sweep agent starts when run as the agent runs it, outside a script node', () => {
+  // The command is quoted for a POSIX shell, which is what an agent runs it in; cmd.exe cannot parse it.
+  test.skipIf(process.platform === 'win32')('the gate command facts hands the sweep agent starts when run as the agent runs it, outside a script node', () => {
     const at = install();
     seed(at, item());
     const facts = on(at, 'facts');
