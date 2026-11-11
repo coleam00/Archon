@@ -153,7 +153,7 @@ The answer is one declared choice, or `other`, which every item offers: its text
 - A `ready` choice hands the pull request to the merge queue as it stands, as after a maintainer finished it by hand. The merge gate still checks it. An item with no pull request refuses the answer.
 - A `park` choice stops working the item until a re-triage.
 
-A run cancelled while it waits leaves the item asking, and only a re-triage starts it over.
+A run cancelled while it waits leaves the item asking, and only a re-triage starts it over. The same holds for a run abandoned after the wait refused its question. Until then, a queue run that claims nothing names the item and completes with a failed outcome.
 
 ### What it records
 

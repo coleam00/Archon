@@ -669,6 +669,21 @@ describe('the build queue scripts', () => {
     });
   }, 60_000);
 
+  test('an asked item whose run was abandoned unanswered is never picked up again, and an idle run ends not healthy naming it', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    ok(run(at, 'apply', applyInputs(ASK)));
+    // The wait refused the ask, the run failed and was abandoned: the next pickup frees its claim and takes nothing.
+    const later = { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"cancelled"}' };
+    expect(ok(run(at, 'facts', later))).toMatchObject({ path: 'idle', item: null });
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'asking' } } });
+    const idle = ok(run(at, 'apply', { ...later, INPUTS_PATH: 'idle' }));
+    expect(idle).toMatchObject({ decision: 'idle', healthy: false, question: '' });
+    expect(idle.summary).toContain(
+      'work/7 (issue 7 is recorded asking (run run-1, ask stop: the plan asks to relax a constraint), but no run waits on that question; re-triage it to start it over)'
+    );
+  }, 60_000);
+
   const PUSH = { push: { repo: PR.repo, number: PR.number } };
 
   function expectPushed(at: Install, applied: Record<string, unknown>): void {
