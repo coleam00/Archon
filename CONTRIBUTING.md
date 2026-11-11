@@ -42,6 +42,7 @@ The wrapper cannot distinguish successful zero-file execution from report loss a
 CI is the full validation gate. While working, choose checks for the files and packages
 you changed: package `type-check` and `test` scripts, `bun run lint`,
 or `bun run test <path>` for root scripts. Keep package tests isolated through their runners.
+The isolation PR lookup conformance test requires `jq` on PATH to execute the production `gh --jq` projection.
 
 Optional `bun run validate` runs `cli-import-boundary`, `package-edges`,
 `generated-files`, `type-check`, `lint`, `ratchet`,
