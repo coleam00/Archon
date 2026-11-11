@@ -240,6 +240,9 @@
       "src/commands/workflow-wait.integration.spec.ts"
     ],
     [
+      "src/commands/workflow-attention-text.test.ts"
+    ],
+    [
       "src/commands/workflow-attention.integration.spec.ts"
     ],
     [
