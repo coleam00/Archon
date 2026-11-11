@@ -15,6 +15,7 @@ import type { OperationContext } from './context';
 import {
   answerText,
   assertAnswerAdmissible,
+  assertGateTakesNoAnswerer,
   ChildRunRedirectError,
   lostGateError,
   unreadableGateMessage,
@@ -164,6 +165,7 @@ export async function approveWorkflow(
   await ctx.assertMayAct(run, actor, 'approve');
   assertAnswerAdmissible(run, origin);
   const approval = assertApprovable(run);
+  assertGateTakesNoAnswerer(run, actor);
 
   const approvalComment = comment ?? 'Approved';
   const isInteractiveLoop = approval.type === 'interactive_loop';

@@ -190,7 +190,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--as <name>',
     description:
-      "For 'workflow approve/reject/respond/answer': the name the answerer declares for itself,\nrecorded with an attention wait's answer as a claim (never checked; a gate answer records none)",
+      "For 'workflow approve/reject/respond/answer': the name the answerer declares for itself,\nrecorded with an attention wait's answer as a claim (never checked; refused at a gate)",
     owners: [
       { command: 'workflow', subcommand: 'approve' },
       { command: 'workflow', subcommand: 'reject' },

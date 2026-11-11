@@ -1234,17 +1234,17 @@ The next node reads the answer as `$<wait-id>.output`: `{ text }`, `{ decision, 
 `--recommended` takes the place of `--choose` and chooses the option the wait's
 recommendation names. It records the same answer as naming that option and passes the
 same validation. It is refused, and the run stays paused, when the wait has no
-recommendation, when the wait's form is `message` or `multi_select`, and when the
-recommended option is the reserved `other`, whose answer needs text of its own.
+recommendation, and when the wait's form is `message` or `multi_select`.
 
 `--as <name>` records the name the answerer declares for itself, 1 to 64 characters on
 one line. It is a claim: Archon does not check it and no permission depends on it. Use
 it to tell an agent's answers from a person's. `approve`, `reject` and `respond` take it
-too; it is recorded when they answer an attention wait, and a gate's answer records none.
+too; it is recorded when they answer an attention wait. A gate's answer records the
+surface only, so `--as` is refused at a gate and the run stays paused.
 
 The answer records `answeredVia` and `answeredAt` on the run's `metadata.wait`, and
-`answeredBy` when the answerer is known: `{ declared }` for `--as`, or `{ userId }` for
-the Archon user of an answer through a chat platform. A
+`answeredBy` when the answerer is known: `{ declared }` is the name `--as` claimed, and
+`{ userId }` is the Archon user that Archon resolved a chat platform's sender to. A
 `wait_answered` event carries the surface as `via`, the `occurrence`, the answer, and the
 answerer as `by`. Like `approve`,
 human mode continues the run inline, and `--json` records the answer and returns

@@ -292,7 +292,7 @@ async function cliAnswerOrigin(
 
 /**
  * The CLI's actor: the operator, with the name `--as` declared for whoever is answering.
- * The name is a claim recorded with an attention wait's answer; a gate answer records none.
+ * The name is a claim recorded with an attention wait's answer; a gate answer refuses it.
  */
 function cliActor(declared: string | undefined): RunActor {
   return declared === undefined ? { kind: 'operator' } : { kind: 'operator', declared };
@@ -489,7 +489,7 @@ export async function workflowApproveCommand(
       // The SAME gates approveWorkflow enforces, in the same order — not a copy of
       // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
       assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
-      assertResponseAccepted(run, 'approve', comment);
+      assertResponseAccepted(run, 'approve', comment, cliActor(answerer));
       // The child always auto-resumes after approving, and the inline path below
       // refuses a run with no recorded working path. Same check here (message
       // copied verbatim) so the refusal is synchronous instead of buried in a log.
@@ -594,7 +594,7 @@ export async function workflowRejectCommand(
       // The SAME gates rejectWorkflow enforces, in the same order — not a copy of
       // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
       assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
-      assertResponseAccepted(run, 'reject', reason);
+      assertResponseAccepted(run, 'reject', reason, cliActor(answerer));
       return run;
     });
   }
@@ -711,7 +711,7 @@ export async function workflowRespondCommand(
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
       assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
-      assertResponseAccepted(run, decision, text);
+      assertResponseAccepted(run, decision, text, cliActor(answerer));
       if (!run.working_path) {
         throw new Error(
           `Workflow run '${resolvedId}' has no working path recorded.\n` +

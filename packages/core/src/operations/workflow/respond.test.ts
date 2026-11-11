@@ -192,6 +192,25 @@ describe('respondToWorkflow', () => {
     }
   );
 
+  test.each(['approve', 'reject', 'revise'])(
+    'a %s answer that declares an answerer is refused at a gate, which records none',
+    async decision => {
+      mockGetWorkflowRun.mockResolvedValue(declaredGate('pause-one'));
+      await expect(
+        respondToWorkflow(
+          'run-1',
+          decision,
+          undefined,
+          { kind: 'operator', declared: 'triage-agent' },
+          { via: 'cli' }
+        )
+      ).rejects.toThrow(
+        'The answerer is recorded on attention waits only; run run-1 is paused at a gate. Answer it without a declared answerer.'
+      );
+      expect(mockResolveApprovalGate).not.toHaveBeenCalled();
+    }
+  );
+
   test('a malformed surface id is refused before anything is written', async () => {
     mockGetWorkflowRun.mockResolvedValue(declaredGate('pause-one'));
     await expect(

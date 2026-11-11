@@ -15,10 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- `archon workflow respond <run> --recommended [text]` and `archon workflow answer --recommended` answer an attention wait with the option it recommends. The answer is refused when the wait has no recommendation, takes none in its form, or recommends the reserved `other` option.
+- `archon workflow respond <run> --recommended [text]` and `archon workflow answer --recommended` answer an attention wait with the option it recommends. The answer is refused when the wait has no recommendation or takes none in its form.
 - Every line of `archon workflow attention --watch --json` and of the HTTP stream carries `needs`: `answer`, `look` or `nothing`. `--watch --notices` (`level=notices`) also writes the `nothing` lines that say what happened to work, such as a run that completed or resumed.
 - An attention wait's `wait_started` event records its form, the option ids it offered and the recommended option with its confidence, and `archon workflow attention --count-by ... --since` reports per group how many waits carried a recommendation and how many answers followed it.
-- `--as <name>` on `answer`, `respond`, `approve` and `reject` records a self-declared answerer on an attention wait's answer. `resolved` stream lines carry it as `answeredBy`, and `--count-by answerer --since` groups by it. The name is a claim that nothing checks.
+- `--as <name>` on `answer`, `respond`, `approve` and `reject` records a self-declared answerer on an attention wait's answer. `resolved` stream lines carry it as `answeredBy`, and `--count-by answerer --since` groups by it. The name is a claim that nothing checks; a gate records no answerer and refuses `--as`.
 - A source checkout and Docker run the GitHub forge plugin from source, as they run the maintained providers, and skip an installed `archon-forge-github`. Release binaries still load the installed plugin.
 - `archon forge types --out <file>` writes the request and result types of every forge operation and a typed `invokeForge` client into one TypeScript file; `--check` exits 1 when the file is missing or stale.
 - `archon forge check` answers whether a plugin serves a host, supports the named operations and has a credential, without running a forge operation. It exits 1 with a typed reason, so a workflow can refuse before it spends on agents.

@@ -340,7 +340,7 @@ Options:
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
                              and attention label)
   --as <name>                For 'workflow approve/reject/respond/answer': the name the answerer declares for itself,
-                             recorded with an attention wait's answer as a claim (never checked; a gate answer records none)
+                             recorded with an attention wait's answer as a claim (never checked; refused at a gate)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
