@@ -1,10 +1,10 @@
 import { childUsageSchema } from '../schemas/node-execution';
 import { tokenUsageSchema, type TokenUsage } from '@archon/provider-contract';
 import type { DagResumeSnapshot } from '../store';
-import type { RunUsageFigures } from './usage';
+import { incrementalCallUsage, type RunUsageFigures } from './usage';
 
 const tokenAxes = tokenUsageSchema
-  .omit({ cachePartial: true, total: true, cost: true })
+  .omit({ cachePartial: true, total: true, cost: true, calls: true, callsPartial: true })
   .keyof().options;
 
 export function reportedChildUsage(usage: RunUsageFigures & { childRunId: string }) {
@@ -22,7 +22,7 @@ export function unreportedChildUsage(
   const tokensUnknown = total.tokensUnknown === true || reported.tokensUnknown === true;
   let tokens: TokenUsage | undefined;
   if (!tokensUnknown && total.tokens !== undefined) {
-    tokens = { ...total.tokens };
+    tokens = { ...total.tokens, ...incrementalCallUsage(total.tokens, reported.tokens) };
     for (const axis of tokenAxes) {
       const value = total.tokens[axis];
       if (value !== undefined) tokens[axis] = Math.max(0, value - (reported.tokens?.[axis] ?? 0));

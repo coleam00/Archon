@@ -28,6 +28,8 @@ export {
   SESSION_PREVIEW_LENGTH,
   sessionPreview,
   tokenUsageSchema,
+  modelCallUsageSchema,
+  type ModelCallUsage,
   type ProviderResult,
   type ProviderStopReason,
   type ResolvedModel,

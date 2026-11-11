@@ -186,6 +186,16 @@ describe('buildResultChunk', () => {
     expect(chunk.type).toBe('result');
     if (chunk.type === 'result') {
       expect(chunk.tokens).toEqual({
+        calls: [
+          {
+            input: 10,
+            output: 5,
+            cacheRead: 0,
+            cacheWrite: 0,
+            provider: undefined,
+            model: undefined,
+          },
+        ],
         input: 10,
         output: 5,
         cacheRead: 0,
@@ -1101,6 +1111,30 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     };
   }
 
+  test('retains each request identity and gross input before summing the turn', () => {
+    const make = (id: string, input: number) => ({
+      ...assistant({ input, output: 10, cacheRead: 20, cacheWrite: 5, cost: 0 }, 'stop'),
+      provider: 'foundry',
+      model: 'gpt-6.1-sol',
+      responseId: id,
+    });
+    const result = buildResultChunk([make('one', 200_000), make('two', 200_000)]);
+    if (result.type !== 'result') throw new Error('expected result');
+    expect(result.tokens?.input).toBe(400_050);
+    expect(result.tokens?.calls).toEqual(
+      ['one', 'two'].map(responseId => ({
+        provider: 'foundry',
+        model: 'gpt-6.1-sol',
+        responseId,
+        input: 200_025,
+        output: 10,
+        cacheRead: 20,
+        cacheWrite: 5,
+      }))
+    );
+    expect(result.tokens?.callsPartial).toBeUndefined();
+  });
+
   const toolResult = { role: 'toolResult', toolCallId: 't', content: [] };
 
   function agentEnd(messages: Record<string, unknown>[]): AgentSessionEvent {
@@ -1163,6 +1197,11 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
     ]);
 
     expect(result.tokens).toEqual({
+      calls: expect.arrayContaining([
+        expect.objectContaining({ input: 1000, output: 700 }),
+        expect.objectContaining({ input: 1000, output: 1500 }),
+        expect.objectContaining({ input: 1200, output: 40 }),
+      ]),
       input: 900 + 100 + (150 + 850) + (200 + 1000),
       output: 700 + 1500 + 40,
       cacheRead: 850 + 1000,
@@ -1343,6 +1382,8 @@ describe('bridgeSession usage covers every model call of the prompt', () => {
       ]),
     ]);
 
+    expect(result.tokens?.callsPartial).toBe(true);
+    expect(result.tokens?.calls?.map(call => call.input)).toEqual([150, 300]);
     expect(result.tokens?.input).toBe(150 + 90000 + 20000 + 300);
     expect(result.tokens?.output).toBe(4000 + 400 + 400 + 30);
     expect(result.cost).toBeCloseTo(0.15 + 0.09 + 0.02 + 0.3, 10);

@@ -1,6 +1,20 @@
 import { z } from 'zod';
 import { providerFailureSchema } from './failure';
 
+/** One model request, before a provider turn or workflow node aggregates usage. */
+export const modelCallUsageSchema = z.object({
+  /** Provider-native identity; absent when the SDK does not expose it. */
+  responseId: z.string().optional(),
+  provider: z.string().optional(),
+  model: z.string().optional(),
+  /** Gross input, including cache reads and writes. Output includes reasoning. */
+  input: z.number().int().nonnegative(),
+  output: z.number().int().nonnegative(),
+  cacheRead: z.number().int().nonnegative().optional(),
+  cacheWrite: z.number().int().nonnegative().optional(),
+});
+export type ModelCallUsage = z.infer<typeof modelCallUsageSchema>;
+
 /** Token usage statistics from AI provider responses. */
 export const tokenUsageSchema = z.object({
   /** Gross prompt input, including cache reads and writes reported separately. */
@@ -22,6 +36,10 @@ export const tokenUsageSchema = z.object({
   /** Total of gross input, output, and any provider-reported reasoning tokens. */
   total: z.number().optional(),
   cost: z.number().optional(),
+  /** Request-level evidence, never reconstructed from aggregate token counts. */
+  calls: z.array(modelCallUsageSchema).optional(),
+  /** Some contributing usage did not expose its request breakdown. */
+  callsPartial: z.literal(true).optional(),
 });
 export type TokenUsage = z.infer<typeof tokenUsageSchema>;
 
@@ -136,6 +154,13 @@ export function mergeTokenUsage(usages: readonly TokenUsage[]): TokenUsage | und
   }
   if (partial && (merged.cacheRead !== undefined || merged.cacheWrite !== undefined)) {
     merged.cachePartial = true;
+  }
+  const callReporters = usages.filter(usage => usage.calls !== undefined);
+  if (callReporters.length > 0) {
+    merged.calls = callReporters.flatMap(usage => usage.calls ?? []);
+    if (callReporters.length < usages.length || usages.some(usage => usage.callsPartial)) {
+      merged.callsPartial = true;
+    }
   }
   return merged;
 }
