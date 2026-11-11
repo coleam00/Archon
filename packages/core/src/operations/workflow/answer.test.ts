@@ -89,13 +89,4 @@ describe('accepting the recommendation', () => {
       message: `Run run-1's attention wait (form '${form}') takes no recommendation: only forms 'select' and 'approval' have one. Answer it in its form.`,
     });
   });
-
-  test("is refused when the reserved 'other' option is recommended, even with text", () => {
-    const fields = { other: true, recommendation: { ...recommendation, option: 'other' } } as const;
-    expect(refusal(fields, 'Rebase first.')).toMatchObject({
-      reason: 'recommends_other',
-      message:
-        "Run run-1's attention wait recommends the reserved option 'other', which needs text of its own. Choose 'other' and say what to do instead.",
-    });
-  });
 });

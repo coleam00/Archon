@@ -1,4 +1,3 @@
-import { OTHER_ATTENTION_OPTION } from '@archon/workflows/schemas/dag-node';
 import {
   attentionAnswerProblem,
   attentionAnswererSchema,
@@ -33,7 +32,7 @@ export type AttentionAnswerRequest =
 /** Why an answer that accepts the recommendation cannot: the wait has none to accept. */
 export class RecommendationRefusedError extends Error {
   constructor(
-    readonly reason: 'form_takes_none' | 'none_recorded' | 'recommends_other',
+    readonly reason: 'form_takes_none' | 'none_recorded',
     message: string
   ) {
     super(message);
@@ -55,11 +54,6 @@ function recommendedOption(run: WorkflowRun, wait: WorkflowAttentionWaitContext)
     throw new RecommendationRefusedError(
       'none_recorded',
       `${subject} has no recommendation to accept. Choose one of its options.`
-    );
-  if (wait.other === true && option === OTHER_ATTENTION_OPTION.id)
-    throw new RecommendationRefusedError(
-      'recommends_other',
-      `${subject} recommends the reserved option '${option}', which needs text of its own. Choose '${option}' and say what to do instead.`
     );
   return option;
 }
