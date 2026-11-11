@@ -1166,7 +1166,8 @@ run that failed or that completed with `outcome: "failed"`, `owner_lost`, `degra
 a run could not be read, and `error`. It writes nothing for a run that completed with any
 other outcome, was cancelled or resumed, and it has no
 heartbeat, so a silent stream does not prove it is reading. Every JSON line carries
-`needs`: `answer`, `look` or `nothing`, and the watch writes the first two
+`needs`: `answer`, `look` or `nothing`. The watch writes the first two, and the close of an
+item it wrote, which needs `nothing`
 ([what each means](/getting-started/operate/#stream-the-queue)). Combine it with `--label k=v`
 to watch one queue or class of question. With `--json` each line is one compact JSON
 object. Without it each line is text a reader can act on: an ask is a short block with its

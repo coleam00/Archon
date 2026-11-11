@@ -6,11 +6,7 @@ import {
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { AttentionWatch } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
-import {
-  attentionLineClassifier,
-  attentionWatchLevelPasses,
-  type AttentionWatchLevel,
-} from '@archon/workflows/attention-needs';
+import { attentionWatchReader, type AttentionWatchLevel } from '@archon/workflows/attention-needs';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
@@ -118,7 +114,7 @@ export async function attentionScope(
  * `workflow attention --watch`: stream the queue until a signal or a closed stdout. By
  * default it writes only the lines someone has to act on; `--notices` adds what happened
  * to work nobody has to act on; `--protocol` writes every line, for a program that keeps
- * an open set (`attentionWatchLevelPasses`). Every JSON line carries its `needs`. Exit 0 on a
+ * an open set (`attentionWatchReader`). Every JSON line carries its `needs`. Exit 0 on a
  * signal or closed stdout, 1 on other output failures, and 4 on an `error` line: the
  * stream's cursor (from `--after`, or the tail's own position) is not one this install's
  * store can read, so the fix is to rerun without it. Read-only: stopping the stream
@@ -141,13 +137,13 @@ export async function workflowAttentionWatch(
     : opts.notices
       ? 'notices'
       : 'quiet';
-  const classify = attentionLineClassifier({ resumed: opts.after !== undefined });
+  const read = attentionWatchReader(level, { resumed: opts.after !== undefined });
   const write = (unclassified: AttentionStreamLine): Promise<void> => {
-    const line = classify(unclassified);
+    const line = read(unclassified);
     // A person starting a watch below the protocol is told it runs, off the stream itself.
-    if (!opts.protocol && !opts.json && line.type === 'ready')
-      return writeStderr(`${attentionStreamText(line, scope).join('\n')}\n`);
-    if (!attentionWatchLevelPasses(level, line)) return Promise.resolve();
+    if (!opts.protocol && !opts.json && unclassified.type === 'ready')
+      return writeStderr(`${attentionStreamText(unclassified, scope).join('\n')}\n`);
+    if (line === undefined) return Promise.resolve();
     if (opts.json) return writeStdout(`${JSON.stringify(line)}\n`);
     if (line.type === 'error')
       return writeStderr(

@@ -553,7 +553,7 @@ test('--recommended answers as the declared answerer, and the notices watch says
     { type: 'attention', needs: 'answer', item: { runId: asked } },
     {
       type: 'resolved',
-      needs: 'look',
+      needs: 'nothing',
       runId: asked,
       reason: 'answered',
       answeredVia: 'cli',
