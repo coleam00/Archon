@@ -134,7 +134,8 @@ function main(): void {
   }
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
-  const decision = nullableJson(process.env.INPUTS_DECISION) as IntakeDecision;
+  const decision = nullableJson(process.env.INPUTS_DECISION) as IntakeDecision | null;
+  if (decision === null) throw new Error('facts claimed an item and decided nothing for it');
   const triage = triageResult();
   const at = new Date().toISOString();
 

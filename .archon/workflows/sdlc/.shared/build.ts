@@ -38,8 +38,7 @@ export type BuildEffect = (typeof BUILD_EFFECTS)[number];
 export type BuildAttention = Attention<BuildEffect>;
 
 /** Which decision raised an attention item: its class label, which the YAML also declares. */
-export const ASKED_BY = ['route', 'stop', 'scope'] as const;
-export type AskedBy = (typeof ASKED_BY)[number];
+export type AskedBy = 'route' | 'stop' | 'scope';
 
 /** The stages a triaged item can be launched from: a READY verdict's routes. */
 export const LAUNCH_STAGES = [

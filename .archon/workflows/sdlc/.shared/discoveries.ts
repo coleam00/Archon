@@ -126,9 +126,6 @@ export interface Queue {
   readonly runs: readonly QueuedRun[];
 }
 
-/** The deciding agent's outcomes; the decide node's output schema must admit exactly these. */
-export const AGENT_OUTCOMES = ['file', 'track', 'drop', 'ask', 'wait'] as const;
-
 /** What the deciding agent declared for one discovery, as its output schema admits it. */
 export type AgentDecision = {
   readonly key: string;
