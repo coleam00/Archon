@@ -317,6 +317,17 @@ function setupCommitResponse(
 }
 
 describe('getPrsForCommit', () => {
+  test('a successful association makes one API request and skips commit inspection', async () => {
+    setupCommitResponse(undefined, 'commit');
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+      state: 'FOUND',
+      prs: [{ state: 'MERGED', headSha: HEAD }],
+    });
+    const apiCalls = mockExecFileAsync.mock.calls.filter(([, args]) => args[0] === 'api');
+    expect(apiCalls).toHaveLength(1);
+    expect(apiCalls[0][1]).toContain('--paginate');
+  });
+
   test('the subprocess projection feeds the parser for every PR state', async () => {
     setupCommitResponse();
     await getPrsForCommit(COMMIT, REPO);
@@ -384,24 +395,6 @@ describe('getPrsForCommit', () => {
         'api',
         '--hostname',
         'github.com',
-        'graphql',
-        '-f',
-        'query=query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){__typename oid}}}',
-        '-f',
-        'owner=owner',
-        '-f',
-        'name=repo',
-        '-f',
-        `oid=${COMMIT}`,
-      ],
-      expect.any(Object)
-    );
-    expect(mockExecFileAsync).toHaveBeenCalledWith(
-      'gh',
-      [
-        'api',
-        '--hostname',
-        'github.com',
         `repos/owner/repo/commits/${COMMIT}/pulls?per_page=100`,
         '--paginate',
         '--jq',
@@ -431,17 +424,25 @@ describe('getPrsForCommit', () => {
     ]);
   });
 
-  test('a successful null Git object identifies an unknown commit without a PR request', async () => {
-    mockLogger.warn.mockClear();
-    setupCommitResponse(undefined, undefined, undefined, undefined, {
-      data: { repository: { object: null } },
-    });
-    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNKNOWN_COMMIT' });
-    expect(mockExecFileAsync.mock.calls.some(([, args]) => args.includes('--paginate'))).toBe(
-      false
-    );
-    expect(mockLogger.warn).not.toHaveBeenCalled();
-  });
+  test.each(['empty', 'failed'] as const)(
+    'a null Git object identifies an unknown commit after a %s association',
+    async association => {
+      mockLogger.warn.mockClear();
+      setupCommitResponse(
+        [[]],
+        association === 'failed' ? 'pulls' : undefined,
+        undefined,
+        undefined,
+        {
+          data: { repository: { object: null } },
+        }
+      );
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNKNOWN_COMMIT' });
+      expect(mockExecFileAsync.mock.calls[2][1]).toContain('--paginate');
+      expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
+      expect(mockLogger.warn).not.toHaveBeenCalled();
+    }
+  );
 
   test.each([
     null,
@@ -455,16 +456,33 @@ describe('getPrsForCommit', () => {
     { data: { repository: { object: null } }, errors: [{ type: 'FORBIDDEN' }] },
     { data: { repository: { object: null } }, errors: {} },
   ])('rejects incomplete or failed object inspection: %j', async payload => {
-    setupCommitResponse(undefined, undefined, undefined, undefined, payload);
+    setupCommitResponse([[]], undefined, undefined, undefined, payload);
     expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
-    expect(mockExecFileAsync.mock.calls.some(([, args]) => args.includes('--paginate'))).toBe(
-      false
-    );
+    expect(mockExecFileAsync.mock.calls[2][1]).toContain('--paginate');
+    expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
   });
 
   test('empty pages are successful absence', async () => {
     setupCommitResponse([[]]);
     expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'NONE' });
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'gh',
+      [
+        'api',
+        '--hostname',
+        'github.com',
+        'graphql',
+        '-f',
+        'query=query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){__typename oid}}}',
+        '-f',
+        'owner=owner',
+        '-f',
+        'name=repo',
+        '-f',
+        `oid=${COMMIT}`,
+      ],
+      expect.any(Object)
+    );
   });
 
   test.each(
@@ -490,7 +508,7 @@ describe('getPrsForCommit', () => {
   test.each(['remote', 'repository', 'commit', 'pulls'] as const)(
     'retains failure at %s',
     async stage => {
-      setupCommitResponse(undefined, stage);
+      setupCommitResponse([[]], stage);
       expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
     }
   );
@@ -515,7 +533,7 @@ describe('getPrsForCommit', () => {
     async stage => {
       mockLogger.warn.mockClear();
       setupCommitResponse(
-        undefined,
+        [[]],
         stage,
         Object.assign(new Error('https://user:secret@github.com/owner/repo'), { code: 1 })
       );
@@ -530,11 +548,7 @@ describe('getPrsForCommit', () => {
   test.each(['repository', 'commit', 'pulls'] as const)(
     'missing gh at %s is unavailable',
     async stage => {
-      setupCommitResponse(
-        undefined,
-        stage,
-        Object.assign(new Error('missing'), { code: 'ENOENT' })
-      );
+      setupCommitResponse([[]], stage, Object.assign(new Error('missing'), { code: 'ENOENT' }));
       expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
     }
   );

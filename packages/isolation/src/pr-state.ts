@@ -179,7 +179,10 @@ function parseCommitPr(pr: unknown, repository: string): Extract<PrLookup, { hea
   };
 }
 
-function parseCommitPrs(stdout: string, repository: string): CommitPrLookup {
+function parseCommitPrs(
+  stdout: string,
+  repository: string
+): Extract<CommitPrLookup, { state: 'NONE' | 'FOUND' }> {
   const prs = stdout
     .trim()
     .split('\n')
@@ -261,24 +264,35 @@ export async function getPrsForCommit(
     ) {
       throw new Error('Invalid repository identity');
     }
+    stage = 'pulls';
+    let result: ReturnType<typeof parseCommitPrs> | { state: 'UNAVAILABLE'; error: unknown };
+    try {
+      const { stdout } = await execFileAsync(
+        'gh',
+        [
+          'api',
+          '--hostname',
+          'github.com',
+          `repos/${repository.nameWithOwner}/commits/${sha}/pulls?per_page=100`,
+          '--paginate',
+          '--jq',
+          'map({state, merged_at, head: {sha: .head.sha}, base: {repo: {full_name: .base.repo.full_name}}})',
+        ],
+        { timeout: 15000, cwd: repoPath }
+      );
+      result = parseCommitPrs(stdout, repository.nameWithOwner);
+    } catch (error) {
+      result = { state: 'UNAVAILABLE', error };
+    }
+    if (result.state === 'FOUND') return result;
     stage = 'commit';
     if (!(await commitExistsOnGithub(sha, repository.nameWithOwner, repoPath)))
       return { state: 'UNKNOWN_COMMIT' };
-    stage = 'pulls';
-    const { stdout } = await execFileAsync(
-      'gh',
-      [
-        'api',
-        '--hostname',
-        'github.com',
-        `repos/${repository.nameWithOwner}/commits/${sha}/pulls?per_page=100`,
-        '--paginate',
-        '--jq',
-        'map({state, merged_at, head: {sha: .head.sha}, base: {repo: {full_name: .base.repo.full_name}}})',
-      ],
-      { timeout: 15000, cwd: repoPath }
-    );
-    return parseCommitPrs(stdout, repository.nameWithOwner);
+    if (result.state === 'UNAVAILABLE') {
+      stage = 'pulls';
+      throw result.error;
+    }
+    return result;
   } catch (error) {
     const code = errorCode(error);
     // Exec errors can embed remote credentials and response bodies; log only the stage and code.
