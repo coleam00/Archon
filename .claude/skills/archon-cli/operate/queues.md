@@ -10,7 +10,7 @@ workflows. Each run does one step and stops only for a decision it cannot make:
 
 | Workflow | One run |
 |---|---|
-| `archon-intake` | Records an issue event and triages the best waiting issue. The verdict becomes the item's stage and a route label. |
+| `archon-intake` | Records an issue event and triages that issue, or the best waiting one when it does not wait. The verdict becomes the item's stage and a route label. |
 | `archon-build-queue` | Claims the best waiting triaged item, or the one `number` names, and takes it to a pull request whose review says Ready, one round per run. |
 | `archon-merge-queue` | Claims the items the build queue finished and merges what policy allows, one at a time, through a gate. |
 | `archon-discoveries` | Decides the out-of-scope findings finished runs recorded: file, track, drop or ask. |
