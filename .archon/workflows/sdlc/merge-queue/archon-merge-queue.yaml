@@ -272,6 +272,7 @@ nodes:
       items: { from: "$facts.output.items" }
       settled: { from: "$facts.output.settled" }
       base: { from: "$facts.output.base" }
+      ci: "$facts.output.ci"
       sweep: { from: "$sweep.output", if_skipped: null }
       gated: { from: "$merge.output.gated", if_skipped: [] }
     output_format:

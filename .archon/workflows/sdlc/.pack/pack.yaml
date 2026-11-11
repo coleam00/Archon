@@ -52,6 +52,7 @@ bindings:
       number: { event: subject.number }
       kind: { event: subject.kind }
       action: { event: event.action }
+      build_queue_binding: { binding: build-queue }
   intake-labels:
     workflow: archon-intake
     resource: intake
@@ -73,6 +74,7 @@ bindings:
       action: { event: event.action }
       label: { event: label.name }
       label_actor: { event: label.actor.login }
+      build_queue_binding: { binding: build-queue }
   build-queue:
     workflow: archon-build-queue
     resource: build
@@ -92,11 +94,14 @@ bindings:
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }
+  # A short interval stands in for an event the forge does not deliver: a pull request
+  # whose checks were pending merges soon after they finish. A sweep where nothing
+  # changed runs no agent.
   merge-queue:
     workflow: archon-merge-queue
     resource: merge
-    overlap: queue
-    schedule: { interval_seconds: 1800 }
+    overlap: skip
+    schedule: { interval_seconds: 300 }
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }
