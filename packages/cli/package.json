@@ -107,9 +107,6 @@
       "src/commands/workflow-list.test.ts"
     ],
     [
-      "src/commands/workflow-ignored-files.integration.spec.ts"
-    ],
-    [
       "src/commands/workflow-types.test.ts"
     ],
     [

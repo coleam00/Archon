@@ -77,7 +77,6 @@ export async function discoverWorkflows(
      * is correct for every listing and in-place caller.
      */
     sourceRoots?: WorkflowSourceRoots;
-    gitIgnoreRoot?: string;
     /**
      * Names (never values) from `.archon/config.yaml`'s `env:` section, threaded from
      * `discoverWorkflowsWithConfig` — live or from a frozen capture's recorded source
@@ -89,7 +88,6 @@ export async function discoverWorkflows(
   const roots = options.sourceRoots ?? liveSourceRoots(cwd);
   const context: DiscoveryContext = {
     cwd,
-    gitIgnoreRoot: options.gitIgnoreRoot,
     roots,
     providers: options.providers,
     capture:
@@ -168,12 +166,7 @@ async function finishDiscovery(
     },
     'workflows_discovery_completed'
   );
-  return {
-    workflows,
-    support: installed.support,
-    errors: allErrors,
-    ...(legacy.sourceWarnings?.length ? { sourceWarnings: legacy.sourceWarnings } : {}),
-  };
+  return { workflows, support: installed.support, errors: allErrors };
 }
 
 /**
@@ -205,8 +198,7 @@ export async function discoverWorkflowsWithConfig(
    * whether the bundled scope counts at all — and a resume must use the ones in force
    * when the capture was taken, not the target's.
    */
-  sourceRoots?: WorkflowSourceRoots,
-  diagnostics?: { gitIgnoreRoot?: string }
+  sourceRoots?: WorkflowSourceRoots
 ): Promise<WorkflowLoadResult> {
   const sourceConfig = sourceRoots && workflowSourceConfigForRoots(sourceRoots);
   let loadDefaults = sourceConfig?.load_default_workflows ?? true;
@@ -232,6 +224,5 @@ export async function discoverWorkflowsWithConfig(
     loadDefaultCommands,
     envVarNames,
     sourceRoots,
-    gitIgnoreRoot: diagnostics?.gitIgnoreRoot,
   });
 }
