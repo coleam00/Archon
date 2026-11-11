@@ -1223,9 +1223,12 @@ including for `approve` and `reject`. An undeclared decision is refused with the
 allowed ids, and the run stays paused. Without authored decisions, use `approve`
 or `reject`. In human mode it continues the run as [`approve`](#workflow-approve) does, including when a continuation host claims it first.
 
-`archon workflow respond <run-id> --recommended [text]` answers an attention wait with the
-option it recommends, as [`workflow answer --recommended`](#workflow-answer) does;
-`--occurrence` is optional here. It takes no `--detach`. `--as <name>` declares who is
+`archon workflow respond <run-id> --recommended --occurrence <id> [--text <text>]` answers an
+attention wait with the option it recommends, as
+[`workflow answer --recommended`](#workflow-answer) does. `--occurrence` is required, so a
+run that has moved to another pause refuses instead of accepting a recommendation the
+answerer never read. `--recommended` takes the place of the decision: a positional
+decision or text beside it is refused. It takes no `--detach`. `--as <name>` declares who is
 answering, as on `answer`.
 
 ### `workflow answer`

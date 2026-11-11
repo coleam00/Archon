@@ -384,15 +384,15 @@ async function continueAnsweredRun(
 
 /**
  * Answer a paused attention wait in its declared form: `selection` holds declared option
- * ids, or accepts the wait's recommendation, and `text` is the free text. With
- * `occurrence`, an answer prepared for an earlier pause is refused. Like approve, `--json`
+ * ids, or accepts the wait's recommendation, and `text` is the free text. `occurrence` is
+ * required, so an answer prepared for an earlier pause is refused. Like approve, `--json`
  * records the answer for a continuation host; otherwise this process continues the run
  * inline.
  */
 export async function workflowAnswerCommand(
   host: WorkflowHost,
   runId: string,
-  occurrence: string | undefined,
+  occurrence: string,
   selection: { choose: readonly string[] } | { recommended: true },
   text: string | undefined,
   json?: boolean,

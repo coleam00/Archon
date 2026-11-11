@@ -24,7 +24,8 @@ import {
 } from '../test-support/workflow-store';
 import { stateCommand } from './state';
 import { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
-import { workflowAnswerCommand } from './workflow-control';
+import * as workflowCommands from './workflow';
+import { runWorkflowRespond } from '../routes/workflow';
 
 const track = trackTempRoots();
 const scopeSpy = spyOn(chatScope, 'readChatProjectScope');
@@ -459,17 +460,32 @@ test('--recommended answers as the declared answerer, and the notices watch says
     );
     return id;
   };
-  const answer = (id: string): Promise<number> =>
-    workflowAnswerCommand(
+  // `respond <id> [decision] --recommended --text Agreed. --as triage-agent --json`.
+  const answer = (
+    id: string,
+    occurrence: string | null = `pause-${id}`,
+    decision: string[] = []
+  ): Promise<number> =>
+    runWorkflowRespond({
+      commands: workflowCommands,
       host,
-      id,
-      undefined,
-      { recommended: true },
-      'Agreed.',
-      true,
-      dir,
-      'triage-agent'
-    );
+      positionals: ['workflow', 'respond', id, ...decision],
+      values: {
+        recommended: true,
+        ...(occurrence === null ? {} : { occurrence }),
+        text: 'Agreed.',
+        as: 'triage-agent',
+        json: true,
+      },
+      command: 'workflow',
+      subcommand: 'respond',
+      cwd: dir,
+      effectiveCwd: dir,
+      json: true,
+      detachedRunConfig: undefined,
+      inheritedEnv: process.env,
+      forgeTrustedEnv: process.env,
+    });
 
   const unadvised = await paused(false);
   const refused = await captured(() => answer(unadvised));
@@ -482,7 +498,20 @@ test('--recommended answers as the declared answerer, and the notices watch says
   });
   await store.cancelWorkflowRun(unadvised);
 
+  // Accepting a recommendation names the occurrence it was read on, and takes no decision.
   const accepted = await paused(true);
+  for (const refused of [
+    () => answer(accepted, null),
+    () => answer(accepted, 'an-earlier-pause'),
+    () => answer(accepted, `pause-${accepted}`, ['hold']),
+  ])
+    expect(await captured(refused)).toMatchObject({ code: 1, json: { ok: false } });
+  expect((await captured(() => answer(accepted, 'an-earlier-pause'))).json).toMatchObject({
+    error: expect.stringContaining(`It is now awaiting occurrence 'pause-${accepted}'`),
+  });
+  expect(
+    (await store.listWorkflowEvents(accepted)).some(event => event.event_type === 'wait_answered')
+  ).toBe(false);
   expect(await captured(() => answer(accepted))).toMatchObject({
     code: 0,
     json: { ok: true, answer: { decision: 'merge', text: 'Agreed.' } },

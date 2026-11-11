@@ -362,16 +362,25 @@ export async function runWorkflowReject(route: WorkflowRoute): Promise<number> {
 export async function runWorkflowRespond(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
   const respondRunId = positionals[2];
-  // `--recommended` stands in for the decision, so every later positional is text.
-  if (respondRunId && values.recommended === true) {
+  // `--recommended` stands in for the decision. It accepts a recommendation the answerer
+  // read, so it must name the occurrence it read it on: without one it would accept the
+  // recommendation of whichever wait the run has moved to since.
+  if (values.recommended === true) {
+    const occurrence = values.occurrence as string | undefined;
+    if (!respondRunId || occurrence === undefined || positionals[3] !== undefined)
+      return await fail(
+        json,
+        'Usage: archon workflow respond <run-id> --recommended --occurrence <id> [--text <text>] [--as <name>] [--json]\n' +
+          '  --recommended takes the place of <decision>, so it takes no positional decision or text.'
+      );
     if (values.detach === true)
       return await fail(json, 'workflow respond --recommended takes no --detach');
     return await route.commands.workflowAnswerCommand(
       route.host,
       respondRunId,
-      values.occurrence as string | undefined,
+      occurrence,
       { recommended: true },
-      responseText(values.text, positionals.slice(3)),
+      values.text as string | undefined,
       json,
       effectiveCwd,
       values.as as string | undefined
@@ -381,7 +390,7 @@ export async function runWorkflowRespond(route: WorkflowRoute): Promise<number> 
   if (!respondRunId || !decision) {
     return await fail(
       json,
-      'Usage: archon workflow respond <run-id> <decision>|--recommended [text]\n' +
+      'Usage: archon workflow respond <run-id> <decision> [text]\n' +
         "  'approve' and 'reject' are sugar for the equivalent dedicated commands; " +
         'any other decision must be one the gate actually declared.'
     );

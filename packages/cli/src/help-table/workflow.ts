@@ -205,8 +205,8 @@ export const workflowHelp: HelpGroup = {
         {
           spec: '--recommended',
           description:
-            'In place of <decision>: answer an attention wait with the option it\n' +
-            'recommends; refused when it recommends none',
+            'In place of <decision> [text]: answer an attention wait with the option it\n' +
+            'recommends; needs --occurrence, takes --text, refused when it recommends none',
         },
       ],
     },

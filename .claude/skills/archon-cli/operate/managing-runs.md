@@ -64,7 +64,7 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Classify an item without answering it | `archon workflow attention label <run-id> --occurrence <id> --set k=v --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
 | Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>... \| --recommended] [--text <t>] [--as <name>]` |
-| Accept an attention wait's recommendation | `archon workflow respond <run-id> --recommended [text] [--as <name>] --json` |
+| Accept an attention wait's recommendation | `archon workflow respond <run-id> --recommended --occurrence <id> [--text <t>] [--as <name>] --json` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
 | End a stalled turn on a running run, keep the run | `archon workflow end-turn <run-id>` |
@@ -124,8 +124,10 @@ archon workflow answer <run-id> --occurrence <id> --choose a --choose b --json  
 ```
 
 `approve`/`reject`/`respond <option>` are shorthand for the same answer.
-`respond <run-id> --recommended [text]` (or `answer --recommended`) chooses the option the
-item recommends; it is refused when the item has no recommendation, and it takes `--json`
+`respond <run-id> --recommended --occurrence <id>` (or `answer --recommended`) chooses the
+option the item recommends. Pass the `occurrence` of the item you read, so a run that
+moved to another ask refuses instead of accepting a recommendation you never saw. Text
+goes in `--text`. It is refused when the item has no recommendation, and it takes `--json`
 but not `--detach`. `--as <name>` records the name you declare as the answerer, which is
 how an agent's answers are told from a person's later. It is recorded on attention waits
 only and refused at a gate. In the

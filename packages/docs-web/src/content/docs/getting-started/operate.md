@@ -57,7 +57,7 @@ Copy the command the item prints, or write it yourself:
 
 ```bash
 archon workflow respond <run-id> <choice> "why"                # any declared choice
-archon workflow respond <run-id> --recommended "why"           # the choice the item recommends
+archon workflow respond <run-id> --recommended --occurrence <id> --text "why"   # the choice the item recommends
 archon workflow approve <run-id> "Looks good"
 archon workflow reject <run-id> --reason "Not this week"
 archon workflow answer <run-id> --occurrence <id> --choose use-dev
@@ -66,9 +66,9 @@ archon workflow answer <run-id> --occurrence <id> --text "Rotated the key"
 
 `respond`, `approve` and `reject` work on both gates and attention waits: each verb picks the option with its id. `answer` speaks the attention wait's own form. `--choose` names a declared option, repeated for a `multi_select` and left out for a `message`. `--text` records free text with the answer. An undeclared choice is refused and the run stays paused. A `select` wait declared with [`other: true`](/reference/workflow-language/#attention-waits) also offers `other`, which needs text: `archon workflow respond <run-id> other "what to do instead"`.
 
-`--recommended` answers an attention wait with the option its recommendation names, in place of a choice on `respond` or of `--choose` on `answer`. Text stays optional. It is the same answer as naming that option, so it is validated the same way. It is refused when the wait has no recommendation, and when its form is `message` or `multi_select`, which take none.
+`--recommended` answers an attention wait with the option its recommendation names, in place of a choice on `respond` or of `--choose` on `answer`. It needs `--occurrence`, the occurrence of the item you read, so that a run which has moved to another question refuses instead of accepting a recommendation you never saw. Text stays optional and goes in `--text`. It is the same answer as naming that option, so it is validated the same way. It is refused when the wait has no recommendation, and when its form is `message` or `multi_select`, which take none.
 
-`--as <name>` records who is answering, on `answer`, `respond`, `approve` and `reject`: `archon workflow respond <run-id> --recommended --as triage-agent`. The name is whatever the answerer declares, up to 64 characters. Archon does not check it, and nothing is allowed or refused because of it. It tells an agent's answers from a person's when you read the record later. An attention wait's answer stores it as `answeredBy: { "declared": "<name>" }`. An answer through a chat platform stores `{ "userId": "<id>" }` instead: `declared` is what the answerer claims, and `userId` is the Archon user that Archon itself resolved the sender to. A gate's answer records the surface only, so `--as` is refused at a gate.
+`--as <name>` records who is answering, on `answer`, `respond`, `approve` and `reject`: `archon workflow respond <run-id> --recommended --occurrence <id> --as triage-agent`. The name is whatever the answerer declares, up to 64 characters. Archon does not check it, and nothing is allowed or refused because of it. It tells an agent's answers from a person's when you read the record later. An attention wait's answer stores it as `answeredBy: { "declared": "<name>" }`. An answer through a chat platform stores `{ "userId": "<id>" }` instead: `declared` is what the answerer claims, and `userId` is the Archon user that Archon itself resolved the sender to. A gate's answer records the surface only, so `--as` is refused at a gate.
 
 `--occurrence` pins the answer to one pause. If the run has moved on to a different pause, the answer is refused and the refusal names the current occurrence. A second answer to the same pause is refused too, so two answerers never both win.
 
