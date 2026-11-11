@@ -25,6 +25,7 @@ import {
 } from './packaged-workflow';
 import { FIXTURES_DIR } from './fixture-layout';
 import type { WorkflowSource } from './schemas';
+import { getRuntimeForExtension, type ScriptRuntime } from './script-runtime';
 
 /** Normalize path separators to forward slashes for cross-platform consistency */
 function normalizeSep(p: string): string {
@@ -38,29 +39,13 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/** Supported script runtime */
-export type ScriptRuntime = 'bun' | 'uv';
+export type { ScriptRuntime } from './script-runtime';
 
 /** A discovered script with its metadata */
 export interface ScriptDefinition {
   name: string;
   path: string;
   runtime: ScriptRuntime;
-}
-
-/** Supported file extensions and their runtimes */
-const EXTENSION_RUNTIME_MAP: Record<string, ScriptRuntime> = {
-  '.ts': 'bun',
-  '.js': 'bun',
-  '.py': 'uv',
-};
-
-/**
- * Derive the runtime from a file extension.
- * Returns undefined for unknown extensions.
- */
-function getRuntimeForExtension(ext: string): ScriptRuntime | undefined {
-  return EXTENSION_RUNTIME_MAP[ext];
 }
 
 /**

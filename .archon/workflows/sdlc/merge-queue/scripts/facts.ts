@@ -19,8 +19,9 @@
  */
 
 import { join } from 'node:path';
-import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, note, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { writeScriptApiPreload } from '../../.shared/host.ts';
+import { type QualifiedPr } from '../../.shared/identity.ts';
 import { latestValidation, type Validation } from '../../.shared/build.ts';
 import {
   itemPr,
@@ -143,7 +144,7 @@ function emitFacts(
   ci: CiMode
 ): void {
   const { base } = inspection;
-  if (unchanged > 0) note(`${String(unchanged)} pull request(s) read the same as at their last wait; not swept`);
+  if (unchanged > 0) console.error(`${String(unchanged)} pull request(s) read the same as at their last wait; not swept`);
   const path = base === null
     ? 'record'
     : items.length > 0
@@ -161,9 +162,9 @@ function emitFacts(
 }
 
 function main(): void {
-  const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
-  const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
-  const ci = parseCiMode(trimmed(process.env.INPUTS_CI));
+  const limit = positive('limit', input('limit').trim());
+  const method = parseMethod(input('merge_method').trim());
+  const ci = parseCiMode(input('ci').trim());
   const repo = workflowRepo();
   const runId = workflowRunId();
 
@@ -207,8 +208,11 @@ function main(): void {
       validation: latestValidation(current),
     });
   }
+  // The sweep agent runs the gate as a plain command, with no engine to give it `archon:script`.
   const gate = [
     process.execPath,
+    '--preload',
+    writeScriptApiPreload(join(artifactsDir(), 'merge-queue', 'archon-script.preload.ts')),
     join(import.meta.dir, 'gate.ts'),
     '--method',
     method,

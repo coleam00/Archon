@@ -68,7 +68,9 @@ nodes:
   # continues a previous round, the commit under review (the checkout's HEAD as
   # the engine observed it), and, on a continuation, the previous round's
   # reviewed commit, which the head must descend from. Every later node reads both
-  # commits from here; publish refuses a report about any other commit. A
+  # commits from here; publish refuses a report about any other commit. A scope
+  # that is a pull request's URL is held to that pull request's head here, before
+  # any agent runs. A
   # caller's pull-request record names the PR, never the commit: its head
   # revision goes stale with every push after the PR opens. The node also turns
   # the input into the routable facts the lens gates read: on a continuation the
@@ -81,6 +83,7 @@ nodes:
     script: review-round
     runtime: bun
     with:
+      scope: "$INPUTS.scope"
       prior_report: "$INPUTS.prior_report"
       part: "$INPUTS.part"
     output_format:
@@ -132,7 +135,7 @@ nodes:
         # The qualified pull request this round reviewed, or `null` for a working
         # diff. publish below writes to this record and to nothing else, so the
         # comment can never land on an ambient branch→PR mapping. The bounds match
-        # parseQualifiedPr in .shared/forge.ts, which publish runs on this value:
+        # parseQualifiedPr in .shared/identity.ts, which publish runs on this value:
         # non-blank host and path, a positive number.
         pr:
           type: [object, 'null']
@@ -287,8 +290,8 @@ nodes:
             run_id: { type: string }
             path: { type: string, enum: [review/report.md] }
           required: [type, run_id, path]
-        # Work this review proved but the change does not do. The run's outcome
-        # relays each record; the human-readable copy is discoveries.md.
+        # Work this review proved but the change does not do. The discoveries workflow
+        # drains each record; the human-readable copy is discoveries.md.
         discoveries: &discovery_records
           type: array
           items:
@@ -377,9 +380,9 @@ nodes:
 
   # The reviewer judges and writes the report; this node owns the one public
   # write, so every round edits the same marked comment instead of appending
-  # another, through the forge plugin. It is also the one head check: the report
-  # goes public only when the checkout and the pull request are both still at the
-  # commit mode fixed. The verdict passes through unchanged: publication is not
+  # another, through the forge plugin. It is also the last head check, the one
+  # that covers every scope: the report goes public only when the checkout and the
+  # pull request are both still at the commit mode fixed. The verdict passes through unchanged: publication is not
   # what makes a review true.
   - id: publish
     script: publish-review

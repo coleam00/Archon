@@ -1,4 +1,4 @@
-import type { ScriptRuntime } from '../script-discovery';
+import type { ScriptRuntime } from '../script-runtime';
 
 /** Files retain authored pack-relative paths; only entry points can be script nodes. */
 export interface BundledScriptPack {

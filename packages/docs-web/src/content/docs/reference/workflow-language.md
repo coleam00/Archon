@@ -122,8 +122,8 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
 | `model` | string | inherited | Per-node model override |
 | `output_format` | object | unset | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi (answered through a `structured_output` tool call, with JSON extracted from the reply as the fallback) and Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. Also valid on `bash:`/`script:` nodes, where the node's own stdout is the payload being certified. See [Result contracts](#result-contracts). |
-| `allowed_tools` | string[] | unset | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
-| `denied_tools` | string[] | unset | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
+| `allowed_tools` | string[] | unset | Whitelist of provider-restricted built-in tools. `[]` selects none of those tools; see [Pi caveat](#allowed_tools-and-denied_tools-for-tool-restrictions). All providers except Codex |
+| `denied_tools` | string[] | unset | Provider-restricted tools to remove; precedence depends on the provider. See [Tool Restrictions](#allowed_tools-and-denied_tools-for-tool-restrictions). All providers except Codex |
 | `hooks` | object | unset | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string \| `{ path, optional }` | unset | Path to MCP server config JSON file: checkout first, then the declaring home workflow YAML's directory (its captured copy for captured runs). Other scopes use only the checkout. Claude/Codex/Copilot. Any other provider fails the run before it starts, unless the declaration is `{ path: ..., optional: true }`, which runs the node without the servers when the provider lacks MCP or the file is missing. See [MCP Servers](/guides/mcp-servers/#optional-servers) |
 | `skills` | string[] | unset | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
@@ -593,7 +593,7 @@ precedence over this warning.
 
 > **Codex strict-mode normalization.** Archon adds `additionalProperties: false` to object schemas before sending them to Codex. For a one-level `oneOf` or `anyOf` with flat inline properties, partial branches inherit the enclosing object's declared properties and required names. Branch constraints and composition operators remain enforced. Branch-only fields must be declared on the parent. An explicitly closed or typed partial branch is refused; declare all parent properties in that branch. A union without enclosing object properties or required names uses self-contained branches, which may contain nested objects, arrays and independent unions. Compositions that merge enclosing fields refuse nested compositions, nested object or array constraints, references or resource identifiers. `allOf`, `dependentRequired`, `dependentSchemas`, schema-valued `dependencies`, `if`/`then`/`else`/`not`, and any use of `contains` or `unevaluatedItems` are refused with the keyword, schema path and supported alternative. Use flat inline branches or a provider without strict conversion for these shapes. Ordinary nested objects and array items outside compositions remain supported. Launch preflight, `archon validate workflows`, and Codex requests share this preparation, so unsupported shapes fail before agent execution. This does not guarantee keyword acceptance by every configured Codex route. Open-record `additionalProperties` values are replaced with `false` and logged as `codex.output_format_open_record_closed`; Codex structured output cannot represent open records.
 >
-> **Codex strict-mode object schemas.** OpenAI's Structured Outputs validator rejects an object schema that omits `properties`, or where a key declared in `properties` is absent from `required`. Archon also refuses required names absent from the prepared object's `properties`, naming the fields and schema path: strict closure would forbid those required fields. Apart from copying enclosing requirements into partial composition branches, Archon does not fill in missing `properties` or `required`: it cannot infer a bare object's intended shape, and filling `required` would silently change an optional field into a required one. Instead, the launch preflight and `archon validate workflows` report the node and exact schema path before any run starts. Declare every object's properties and include every property key in `required`. To express an *optional* value, give its type an absent-value form: a `["string","null"]` or `["object","null"]` union, or an enum with a sentinel like `"none"`: the field is then always "present" in the output, carrying the absent value when not applicable.
+> **Codex strict-mode object schemas.** OpenAI's Structured Outputs validator rejects an object schema that omits `properties`, or where a key declared in `properties` is absent from `required`. When an object declares a record-valued `properties` field, Archon also refuses required names absent from the prepared object's `properties`, naming the fields and schema path: strict closure would forbid those required fields. An object with `required` but no `properties` does not receive this named-field diagnostic. Apart from copying enclosing requirements into partial composition branches, Archon does not fill in missing `properties` or `required`: it cannot infer a bare object's intended shape, and filling `required` would silently change an optional field into a required one. Instead, the launch preflight and `archon validate workflows` report the node and exact schema path before any run starts. Declare every object's properties and include every property key in `required`. To express an *optional* value, give its type an absent-value form: a `["string","null"]` or `["object","null"]` union, or an enum with a sentinel like `"none"`: the field is then always "present" in the output, carrying the absent value when not applicable.
 
 ```yaml
 nodes:
@@ -641,7 +641,7 @@ The generator states a schema exactly or refuses it. It reads `type` (a name or 
 
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
 
-Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced at the Claude SDK level.
+Restrict which built-in tools a node can use without relying on prompt instructions. Each provider enforces its supported restrictions. The following examples use Claude tool names:
 
 ```yaml
 nodes:
@@ -658,10 +658,14 @@ nodes:
     allowed_tools: []                   # empty list = disable all built-in tools
 ```
 
-- `allowed_tools: []` disables all built-in tools (useful for MCP-only nodes). Use the `mcp` field on a node to attach per-node MCP servers. See [Node Fields](#node-fields)
-- If both are set, `denied_tools` is applied after `allowed_tools`
-- `undefined` (field absent) and `[]` have different semantics: absent means use default tool set, `[]` means no tools
+- `allowed_tools: []` selects no provider-restricted built-in tools (useful for Claude MCP-only nodes). Use the `mcp` field on a node to attach per-node MCP servers. See [Node Fields](#node-fields).
+- If both are set, provider precedence applies: Pi subtracts `denied_tools` after `allowed_tools`; Copilot gives `allowed_tools` precedence.
+- An absent field uses the default tool set; `allowed_tools: []` selects none of the built-in tools governed by the filter. On Pi, this does not mean the node has no tools, as explained below.
 - Supported on all providers except Codex: Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
+
+On **Pi**, these lists filter only `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls` (case-insensitive). An empty allow list selects none of these tools; a deny list subtracts from the allow list, or from this full set when no allow list is given. Names outside this set produce a `pi.unknown_tools` warning and do not filter other tools. Explicit restrictions select from this set rather than Pi's configured `defaultTools`.
+
+`allowed_tools: []` does **not** restrict user Pi extension tools, and naming them in `denied_tools` does not block them. The lists also do not filter tools Archon adds separately: native tools such as `manage_run` when supplied, and `structured_output` when structured output is requested. Extensions remain user-owned Pi configuration. Remove or exclude unwanted extensions through [Pi's settings resources](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md#resources); see [Pi Extensions](/getting-started/ai-assistants/#extensions) for package and local-file controls.
 
 ### Inline sub-agents
 

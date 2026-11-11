@@ -42,7 +42,7 @@ export type ClaudeEffortsAreComplete = AssertNever<
 
 // ─── SDK Hooks Building (absorbed from dag-executor) ───────────────────────
 
-/** YAML hook matcher shape (matches @archon/workflows/schemas/dag-node WorkflowNodeHooks) */
+/** YAML hook matcher shape (matches @archon/workflows/schemas/hooks WorkflowNodeHooks) */
 interface YAMLHookMatcher {
   matcher?: string;
   response: unknown;

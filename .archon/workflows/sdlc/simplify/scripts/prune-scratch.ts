@@ -5,12 +5,12 @@
  * - INPUTS_LENS: the one lens directory to remove, or '' for every lens's.
  */
 
-import { artifactsDir, refuse, report, trimmed } from '../../.shared/io.ts';
+import { artifactsDir, input, refuse } from 'archon:script';
 import { pruneScratch, scratchDir } from '../../.shared/scratch.ts';
 
 try {
-  const removed = pruneScratch(scratchDir(artifactsDir(), trimmed(process.env.INPUTS_LENS)));
-  report(`prune-scratch: removed ${String(removed.length)} scratch worktree(s)`);
+  const removed = pruneScratch(scratchDir(artifactsDir(), input('lens').trim()));
+  console.log(`prune-scratch: removed ${String(removed.length)} scratch worktree(s)`);
 } catch (error) {
   refuse(`prune-scratch: ${error instanceof Error ? error.message : String(error)}`);
 }

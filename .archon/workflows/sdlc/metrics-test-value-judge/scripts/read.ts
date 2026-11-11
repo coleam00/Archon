@@ -6,8 +6,7 @@
  * outside test files, such as a shared conformance suite that test files run.
  */
 
-import { invokeForge } from '../../.shared/forge.ts';
-import { refuse, report, trimmed } from '../../.shared/io.ts';
+import { forge, input, refuse } from 'archon:script';
 import { prFromUrl } from '../../.shared/pr.ts';
 import { readCriteria } from '../../.shared/test-value.ts';
 import { holdsTestCode } from './test-code.ts';
@@ -32,12 +31,12 @@ function changedFiles(value: Record<string, unknown> | null): { head: string; fi
   return { head, files };
 }
 
-const url = trimmed(process.env.INPUTS_PR);
+const url = input('pr').trim();
 
 try {
   const pr = prFromUrl(url);
   // Text is read at the head the file list was read at, so it matches the patches.
-  const { head, files } = changedFiles(invokeForge('pr.files', { ref: { repo: pr.repo, number: pr.number } }));
+  const { head, files } = changedFiles(forge('pr.files', { ref: { repo: pr.repo, number: pr.number } }));
 
   const sections = files.map(file => {
     const parts = [`<patch>\n${file.patch ?? '(no patch: binary or too large)'}\n</patch>`];
@@ -45,13 +44,13 @@ try {
       // repo.file refuses a file over 1 MB or not UTF-8 with the same error kind as a
       // transient failure, so this pull request's judge refuses rather than inlining a
       // placeholder: the run reports it as skipped instead of judging it on a guess.
-      const text = invokeForge('repo.file', { repo: pr.repo, path: file.path, revision: head })?.text;
+      const text = forge('repo.file', { repo: pr.repo, path: file.path, revision: head })?.text;
       if (typeof text !== 'string') throw new Error(`forge repo.file returned no text for ${file.path}`);
       parts.push(text.length <= MAX_FULL_TEXT ? `<full_text>\n${text}\n</full_text>` : '<full_text>(too large to inline)</full_text>');
     }
     return `<file path="${file.path}" status="${file.status}">\n${parts.join('\n')}\n</file>`;
   });
-  report(
+  console.log(
     `<criteria>\n${readCriteria()}\n</criteria>\n\n<pull_request url="${url}">\n${sections.join('\n\n')}\n</pull_request>`
   );
 } catch (error) {

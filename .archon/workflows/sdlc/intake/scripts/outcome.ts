@@ -15,9 +15,10 @@
 
 import { buildWaits } from '../../.shared/build.ts';
 import { type ClosePlan, planClose } from '../../.shared/close.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { nextPickup } from '../../.shared/follow-up.ts';
-import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
 import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
@@ -35,7 +36,7 @@ import {
 
 /** Triage's verdict from its node's typed output, or null when triage did not run on this path. */
 function triageResult(): TriageResult | null {
-  const triage = nullableJson(process.env.INPUTS_TRIAGE) as NodeOutput<'archon-triage-block', 'triage'> | null;
+  const triage = nullableJson(input('triage')) as NodeOutput<'archon-triage-block', 'triage'> | null;
   if (triage === null) return null;
   // The triage block's labels node refuses a NOT_TRIAGED decision, so none reaches intake.
   const decision = triage.decision as Exclude<typeof triage.decision, { contract: 'NOT_TRIAGED' }>;
@@ -120,11 +121,11 @@ function summary(item: QualifiedPr, next: WorkItem, runId: string): string {
   const stage = `Issue ${String(item.number)}: ${next.stage}${latest?.run_id === runId ? `; ${latest.summary}` : ''}`;
   if (!buildWaits(next)) return stage;
   const key = `${item.repo.host}/${item.repo.path}#${String(item.number)}:${runId}`;
-  return `${stage}; ${nextPickup(text(process.env.INPUTS_BUILD_QUEUE_BINDING), key)}`;
+  return `${stage}; ${nextPickup(input('build_queue_binding'), key)}`;
 }
 
 function main(): void {
-  const path = trimmed(process.env.INPUTS_PATH);
+  const path = input('path').trim();
   if (path === 'idle') {
     emit({
       path,
@@ -133,13 +134,13 @@ function main(): void {
       trust: null,
       promoted: false,
       labels: [],
-      summary: idleSummary('No item waits for intake.', stuckItems(text(process.env.WORKFLOW_ID))),
+      summary: idleSummary('No item waits for intake.', stuckItems(workflowRunId())),
     });
     return;
   }
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
-  const decision = nullableJson(process.env.INPUTS_DECISION) as IntakeDecision | null;
+  const decision = nullableJson(input('decision')) as IntakeDecision | null;
   if (decision === null) throw new Error('facts claimed an item and decided nothing for it');
   const triage = triageResult();
   const at = new Date().toISOString();

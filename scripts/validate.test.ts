@@ -58,12 +58,12 @@ describe('validate check selection', () => {
   });
 
   interface MatrixLeg {
-    os: string;
     check: string;
     part: string;
   }
   interface WorkflowJob {
-    strategy?: { matrix: { os?: string[]; include?: MatrixLeg[] } };
+    'runs-on'?: string;
+    strategy?: { matrix: { include?: MatrixLeg[] } };
     steps?: { if?: string; run?: string; env?: Record<string, string> }[];
   }
   const readWorkflow = (): { jobs: Record<string, WorkflowJob> } =>
@@ -90,18 +90,23 @@ describe('validate check selection', () => {
   test('on each OS the test legs run every part of every workspace shard', () => {
     // A missing leg, or a part list such as 1/3 and 2/3 without 3/3, would leave some test
     // groups unrun on that OS while every leg reports green.
-    const { test: testJob } = readWorkflow().jobs;
-    const legs = testJob.strategy?.matrix.include ?? [];
+    // Each OS has its own job: `test` on Linux, `test-windows` on Windows.
     const workspaceChecks = ['cli-tests', 'core-tests', 'package-tests'];
-    const oses = ['ubuntu-latest', 'windows-latest'];
-    for (const os of oses) {
+    const { jobs } = readWorkflow();
+    for (const [id, runsOn] of [
+      ['test', 'ubuntu-latest'],
+      ['test-windows', 'windows-latest'],
+    ]) {
+      const job = jobs[id];
+      expect({ id, runsOn: job['runs-on'] }).toEqual({ id, runsOn });
+      const legs = job.strategy?.matrix.include ?? [];
       for (const check of workspaceChecks) {
-        const parts = legs.filter(leg => leg.os === os && leg.check === check).map(leg => leg.part);
+        const parts = legs.filter(leg => leg.check === check).map(leg => leg.part);
         // One part count per shard, so an empty list (the shard dropped from this OS) fails too.
         const counts = [...new Set(parts.map(part => Number(part.split('/')[1])))];
         const count = counts[0] ?? 0;
-        expect({ os, check, counts, parts: parts.sort() }).toEqual({
-          os,
+        expect({ id, check, counts, parts: parts.sort() }).toEqual({
+          id,
           check,
           counts: [Math.max(count, 1)],
           parts: Array.from(
@@ -110,37 +115,32 @@ describe('validate check selection', () => {
           ),
         });
       }
-    }
-    expect(
-      legs.filter(leg => !oses.includes(leg.os) || !workspaceChecks.includes(leg.check))
-    ).toEqual([]);
+      expect(legs.filter(leg => !workspaceChecks.includes(leg.check))).toEqual([]);
 
-    // One validate step per OS, each running the leg's own check and part.
-    const validateSteps = (testJob.steps ?? []).filter(step =>
-      (step.run ?? '').includes('bun run validate')
-    );
-    expect(validateSteps.map(step => step.if).sort()).toEqual([
-      "runner.os == 'Linux'",
-      "runner.os == 'Windows'",
-    ]);
-    for (const step of validateSteps) {
-      expect(step.run).toContain('bun run validate --only ${{ matrix.check }}');
-      expect(step.env?.ARCHON_TEST_PART).toBe('${{ matrix.part }}');
+      // One validate step, running the leg's own check and part.
+      const validateSteps = (job.steps ?? []).filter(step =>
+        (step.run ?? '').includes('bun run validate')
+      );
+      expect(validateSteps).toHaveLength(1);
+      expect(validateSteps[0].run).toContain('bun run validate --only ${{ matrix.check }}');
+      expect(validateSteps[0].env?.ARCHON_TEST_PART).toBe('${{ matrix.part }}');
     }
   });
 
   test('the scripts shard runs on every OS', () => {
-    const job = readWorkflow().jobs['test-scripts'];
-    for (const os of ['Linux', 'Windows']) {
-      const checks = (job.steps ?? [])
-        .filter(step => step.if === `runner.os == '${os}'`)
-        .flatMap(step => stepChecks(job, step.run ?? ''));
-      expect({ os, runsScripts: checks.includes('script-tests') }).toEqual({
-        os,
+    const { jobs } = readWorkflow();
+    for (const [id, runsOn] of [
+      ['test-scripts', 'ubuntu-latest'],
+      ['test-scripts-windows', 'windows-latest'],
+    ]) {
+      const job = jobs[id];
+      const checks = (job.steps ?? []).flatMap(step => stepChecks(job, step.run ?? ''));
+      expect({ id, runsOn: job['runs-on'], runsScripts: checks.includes('script-tests') }).toEqual({
+        id,
+        runsOn,
         runsScripts: true,
       });
     }
-    expect(job.strategy?.matrix.os).toEqual(['ubuntu-latest', 'windows-latest']);
   });
 
   test.each([

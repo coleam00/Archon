@@ -60,7 +60,7 @@ describe('resolvePiTools', () => {
     expect(resolvePiTools(cwd, {})).toEqual({ tools: undefined, unknownTools: [] });
   });
 
-  test('allowed_tools: [] returns empty tools array (no-tools idiom)', () => {
+  test('allowed_tools: [] returns empty tools array (no built-in tools)', () => {
     const result = resolvePiTools(cwd, { allowed_tools: [] });
     expect(result.tools).toEqual([]);
     expect(result.unknownTools).toEqual([]);

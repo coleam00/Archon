@@ -95,7 +95,8 @@ Run workflows directly from your terminal without needing the server:
 │   orchestrator do?"                                             │
 │                                                                 │
 │ 🔧 READ                                                         │
-│ Reading: packages/core/src/orchestrator/orchestrator.ts                │
+│ Reading:                                                        │
+│ packages/core/src/orchestrator/orchestrator-agent.ts            │
 │                                                                 │
 │ The orchestrator is the main entry point that routes incoming  │
 │ messages. It checks if it's a slash command, loads conversation│
@@ -118,7 +119,8 @@ Just talk to the AI like you would in Claude Code terminal:
 │                                                                 │
 │ You: What does the handleMessage function do?                   │
 │                                                                 │
-│ Archon: Looking at packages/core/src/orchestrator/orchestrator.ts...          │
+│ Archon: Looking at                                              │
+│ packages/core/src/orchestrator/orchestrator-agent.ts            │
 │                                                                 │
 │         The handleMessage function is the main entry point      │
 │         that routes incoming messages. It:                      │
@@ -127,7 +129,8 @@ Just talk to the AI like you would in Claude Code terminal:
 │         3. Routes to AI client for processing                   │
 │         4. Streams responses back to platform                   │
 │                                                                 │
-│         See: packages/core/src/orchestrator/orchestrator.ts            │
+│         See:                                                    │
+│ packages/core/src/orchestrator/orchestrator-agent.ts            │
 │                                                                 │
 └─────────────────────────────────────────────────────────────────┘
 ```

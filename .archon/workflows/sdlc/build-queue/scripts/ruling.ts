@@ -2,7 +2,8 @@
  * Act on a person's answer to the build queue's attention item.
  *
  * The answer is one of the declared choices, and the wait returns that choice as the
- * answer's value, so its effect is read from the choice, never from the answer's text. The choice's ruling and the person's words are written
+ * answer's value, so its effect is read from the choice, never from the answer's text.
+ * An `other` answer returns no choice: its text is the ruling and the item continues. The choice's ruling and the person's words are written
  * into the issue body as one dated "Current scope" section and read back, so the next
  * run and its review read the ruling as the contract. Then the answer is recorded on the
  * work item as the item's next owner, and the claim is released: `continue` keeps it in
@@ -12,15 +13,16 @@
  * waits for the next queue run as before.
  *
  * Bound inputs: INPUTS_ITEM from facts; INPUTS_ASKED, what apply asked; INPUTS_CHOICE,
- * the chosen choice (the answer's value), and INPUTS_TEXT, the answer's text;
+ * the chosen choice (the answer's value, empty for `other`), and INPUTS_TEXT, the answer's text;
  * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
 import { type AskedBy, type BuildAttention, type BuildEffect, type BuildStatus, itemPullRequest, nextRound, withBuild } from '../../.shared/build.ts';
-import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { type Choice, rulingHeading } from '../../.shared/queue.ts';
+import { answeredChoice, type Choice, rulingHeading } from '../../.shared/queue.ts';
 import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
 
 interface Asked {
@@ -51,11 +53,10 @@ const ABOUT: Record<AskedBy, string> = {
 function main(): void {
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
-  const asked = nullableJson(process.env.INPUTS_ASKED) as Asked | null;
+  const asked = nullableJson(input('asked')) as Asked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const choice = nullableJson(process.env.INPUTS_CHOICE) as Choice<BuildEffect> | null;
-  if (choice === null) throw new Error('the answer carries no chosen choice');
-  const words = trimmed(process.env.INPUTS_TEXT);
+  const choice = answeredChoice(nullableJson(input('choice')) as Choice<BuildEffect> | null, 'continue');
+  const words = input('text').trim();
   const at = new Date().toISOString();
 
   if (choice.effect === 'ready') requireReadyPr(item, choice.id);

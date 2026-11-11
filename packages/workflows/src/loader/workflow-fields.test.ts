@@ -1,9 +1,14 @@
 // @archon-test-isolated
 import { mockLogger, parseWorkflow, parseWorkflowYaml } from './test-utils';
 import { describe, it, expect } from 'bun:test';
-import { KNOWN_WORKFLOW_KEYS, workflowContainerPolicySchema } from '../schemas/workflow';
+import { z } from 'zod';
+import {
+  KNOWN_WORKFLOW_KEYS,
+  workflowContainerPolicySchema,
+  workflowWorktreePolicySchema,
+} from '../schemas/workflow';
 import type { WorkflowDefinition } from '../schemas/workflow';
-import { parseContainerPolicy } from './workflow-fields';
+import { parseContainerPolicy, parseWorktreePolicy } from './workflow-fields';
 
 // ---------------------------------------------------------------------------
 // Workflow signature: inputs / returns (#2470)
@@ -421,6 +426,92 @@ nodes:
     );
     expect(workflow).toBeNull();
     expect(error?.error).toContain('a model ref string or a preference list');
+  });
+});
+
+describe('worktree policy', () => {
+  it('retains single-parse outputs from optional schema extensions and drops invalid siblings', () => {
+    const shape = workflowWorktreePolicySchema.shape;
+    const extensions = {
+      probe: z
+        .string()
+        .transform(value => value.length)
+        .optional(),
+      defaulted: z.string().default('fallback'),
+      suffix: z
+        .string()
+        .transform(value => `${value}!`)
+        .optional(),
+    };
+    Object.assign(shape, extensions);
+    try {
+      mockLogger.warn.mockClear();
+      const { workflow, error } = parseWorkflow(
+        `
+name: extended-policy
+description: optional schema extensions
+worktree:
+  enabled: invalid
+  probe: abc
+  suffix: x
+nodes:
+  - id: only
+    prompt: hi
+`,
+        'policy.yaml'
+      );
+      expect(error).toBeNull();
+      expect<Record<string, unknown> | undefined>(workflow?.worktree).toStrictEqual({
+        probe: 3,
+        suffix: 'x!',
+        defaulted: 'fallback',
+      });
+      expect(mockLogger.warn.mock.calls).toEqual([
+        [{ filename: 'policy.yaml', value: 'invalid' }, 'invalid_worktree_enabled_value_ignored'],
+      ]);
+
+      mockLogger.warn.mockClear();
+      expect<Record<string, unknown> | undefined>(
+        parseWorktreePolicy({ probe: 7, suffix: 'x' }, 'policy.yaml')
+      ).toStrictEqual({ suffix: 'x!', defaulted: 'fallback' });
+      expect(mockLogger.warn.mock.calls).toEqual([
+        [{ filename: 'policy.yaml', value: 7 }, 'invalid_worktree_probe_value_ignored'],
+      ]);
+      expect<Record<string, unknown> | undefined>(
+        parseWorktreePolicy({ defaulted: 'provided' }, 'policy.yaml')
+      ).toStrictEqual({ defaulted: 'provided' });
+      mockLogger.warn.mockClear();
+      expect<Record<string, unknown> | undefined>(
+        parseWorktreePolicy({ defaulted: 7 }, 'policy.yaml')
+      ).toStrictEqual({ defaulted: 'fallback' });
+      expect(mockLogger.warn.mock.calls).toEqual([
+        [{ filename: 'policy.yaml', value: 7 }, 'invalid_worktree_defaulted_value_ignored'],
+      ]);
+    } finally {
+      for (const key of Object.keys(extensions)) Reflect.deleteProperty(shape, key);
+    }
+  });
+
+  it.each<[unknown, Record<string, unknown> | undefined, [unknown, string][]]>([
+    [undefined, undefined, []],
+    [{}, undefined, []],
+    [{ enabled: undefined }, undefined, []],
+    [{ unknown: true }, undefined, []],
+    [{ enabled: false, unknown: true }, { enabled: false }, []],
+    [{ enabled: true }, { enabled: true }, []],
+    [null, undefined, [[null, 'invalid_worktree_block_ignored']]],
+    [[], undefined, [[[], 'invalid_worktree_block_ignored']]],
+    ['yes', undefined, [['yes', 'invalid_worktree_block_ignored']]],
+    [{ enabled: 'yes' }, undefined, [['yes', 'invalid_worktree_enabled_value_ignored']]],
+    [{ enabled: null }, undefined, [[null, 'invalid_worktree_enabled_value_ignored']]],
+  ])('parses %j with field-level warnings', (raw, expected, warnings) => {
+    mockLogger.warn.mockClear();
+    expect<Record<string, unknown> | undefined>(parseWorktreePolicy(raw, 'policy.yaml')).toEqual(
+      expected
+    );
+    expect(mockLogger.warn.mock.calls).toEqual(
+      warnings.map(([value, event]) => [{ filename: 'policy.yaml', value }, event])
+    );
   });
 });
 

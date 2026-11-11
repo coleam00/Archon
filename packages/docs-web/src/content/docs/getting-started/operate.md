@@ -291,7 +291,26 @@ archon workflow attention --watch --json --label merge=pr # one class of questio
 | `degraded` | A run could not be read, so the stream may have missed something. The operator log names the run |
 | `error` | The store can no longer read the stream's position. The last line; exit 4. Start the watch again |
 
-The lines have the shape the [full protocol](#the-full-protocol-for-programs) gives them, and its table lists their fields. Without `--json` each line prints as a sentence, and a line on stderr says what is being watched.
+The lines have the shape the [full protocol](#the-full-protocol-for-programs) gives them, and its table lists their fields. Without `--json` each line prints as text, and a line on stderr says what is being watched.
+
+The text form is the one to sit on, for a person or an agent: an ask prints as a block you can answer without a second read.
+
+```text
+Needs attention now:
+  7c1e4f0a  archon-merge  acme/web  paused 2m ago
+    labels: merge=pr, pr=5496
+    ask: Merge pull request 5496?
+    recommended: merge (high confidence). Review is ready and checks are green.
+    option merge: Squash-merge it into dev.
+    option hold: Leave it open and stop.
+    accept the recommendation: archon workflow respond 7c1e4f0a --recommended --occurrence e0f4a2 [--text <why>]
+    answer: archon workflow respond 7c1e4f0a <option> --occurrence e0f4a2 [text]
+    full question: archon workflow attention 7c1e4f0a
+```
+
+The block carries the workflow, the labels, the first line of the question under the node's id, the recommendation with its reason, each option with what it does, and the commands that answer this occurrence. The rest of the message is one command away: `archon workflow attention <run-id>` prints it in full. A gate prints its approve command with its occurrence. A failed run, a lost owner and an unreadable item name the run and the command that shows more (`archon workflow get <run-id>`). The close of an ask is one line, and says who answered when that was recorded. `archon workflow attention` without `--watch` prints the same blocks. `--json` is the complete machine form and carries every field.
+
+Read the watch unfiltered. A filter between the watch and its reader can hold lines back: some shells replace `grep` with a tool that writes nothing to a pipe until its input closes, so an ask would arrive only when the watch ends.
 
 Every JSON line carries `needs`, which says what the line asks of you:
 

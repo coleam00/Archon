@@ -23,10 +23,11 @@ import {
   RUNS_PREFIX,
   runName,
 } from '../../.shared/discoveries.ts';
-import { artifactsDir, emit, note, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId, state } from 'archon:script';
+import { listRuns } from '../../.shared/host.ts';
 import { fetchDefaultBranch, workflowRepo } from '../../.shared/remote.ts';
+import { claimEnded } from '../../.shared/workitem.ts';
 import { latestVerdictOf, relayedDiscoveries } from '../../.shared/report.ts';
-import { claimEnded, listRuns, stateDocuments, stateGet, statePut } from '../../.shared/state.ts';
 
 /** The CLI lists at most this many runs, newest first. */
 const LISTING = 1000;
@@ -42,7 +43,7 @@ function parseTime(name: string, value: string): number | undefined {
 /** Every drained run's document, by run id, in one read. */
 function readRunDocuments(): Map<string, RunDocument> {
   const documents = new Map<string, RunDocument>();
-  for (const { name, value } of stateDocuments(RUNS_PREFIX)) {
+  for (const { name, value } of state.listValues(RUNS_PREFIX)) {
     const document = parseRunDocument(name, value);
     if (document !== null) documents.set(name.slice(RUNS_PREFIX.length), document);
   }
@@ -64,15 +65,15 @@ function settledOf(document: RunDocument | undefined): ((ref: string) => boolean
  */
 function claimRun(runId: string, self: string, at: string): RunDocument | null {
   const name = runName(runId);
-  const stored = stateGet(name);
+  const stored = state.get(name);
   const current = parseRunDocument(name, stored.value);
   const held = current?.claim ?? null;
   if (held !== null && held.run_id !== self && !claimEnded(held.run_id, stored)) {
-    if (stored.lease?.runId !== held.run_id) note(`${name} stays claimed: run ${held.run_id} holds no engine lease on it`);
+    if (stored.lease?.runId !== held.run_id) console.error(`${name} stays claimed: run ${held.run_id} holds no engine lease on it`);
     return null;
   }
   const claimed: RunDocument = { ...(current ?? { version: 1 }), claim: { run_id: self, at } };
-  return statePut(name, claimed, stored.revision, 'take') === 'ok' ? claimed : null;
+  return state.put(name, claimed, { ifRevision: stored.revision, lease: 'take' }).ok ? claimed : null;
 }
 
 /** The run's undecided records and its questions, from the document this pass decides against. */
@@ -100,9 +101,9 @@ function claimUndecided<R extends { ref: string }>(
 
 function main(): void {
   // Every input is validated before anything is read or written.
-  const since = parseTime('since', trimmed(process.env.INPUTS_SINCE));
-  const until = parseTime('until', trimmed(process.env.INPUTS_UNTIL));
-  const limit = Number(trimmed(process.env.INPUTS_LIMIT));
+  const since = parseTime('since', input('since').trim());
+  const until = parseTime('until', input('until').trim());
+  const limit = Number(input('limit').trim());
   if (!Number.isInteger(limit) || limit <= 0) throw new Error('limit must be a positive integer');
   const repo = workflowRepo();
   const self = workflowRunId();
@@ -113,7 +114,7 @@ function main(): void {
 
   const listed = listRuns(LISTING);
   if (listed.length >= LISTING) {
-    note(`only the newest ${String(LISTING)} runs are listed; older runs are not drained in this pass`);
+    console.error(`only the newest ${String(LISTING)} runs are listed; older runs are not drained in this pass`);
   }
   const candidates = listed
     .filter(run => typeof run.id === 'string' && run.id !== self)
@@ -139,11 +140,11 @@ function main(): void {
     try {
       relayed = relayedDiscoveries(artifacts, latestVerdictOf(artifacts));
     } catch (error) {
-      note(`run ${id} is left queued: ${error instanceof Error ? error.message : String(error)}`);
+      console.error(`run ${id} is left queued: ${error instanceof Error ? error.message : String(error)}`);
       continue;
     }
     if (relayed.problems.length > 0) {
-      note(`run ${id} is left queued: ${relayed.problems.join('; ')}`);
+      console.error(`run ${id} is left queued: ${relayed.problems.join('; ')}`);
       continue;
     }
     const all = relayed.records.map(record => ({ ...record, ref: `${id}:${record.ref}` }));
