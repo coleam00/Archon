@@ -262,6 +262,8 @@ Commands:
                              workflow needs --out. --check exits 1 when the file is stale
   script types               Print the TypeScript declaration of the archon:script module a workflow
                              script imports, for an editor or tsc over a pack's scripts
+  script preload             Write the preload file that provides the archon:script module, to run or
+                             test a workflow script outside a run: bun --preload <file> script.ts
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove eligible worktrees by inactivity, containers by creation age (default: 7 days)
   isolation cleanup --merged Remove worktrees covered by Git integration or a merged PR

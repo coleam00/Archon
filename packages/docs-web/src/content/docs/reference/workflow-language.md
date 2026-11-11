@@ -122,8 +122,8 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `provider` | string | inherited | Per-node provider override (any registered provider, e.g. `'claude'`, `'codex'`) |
 | `model` | string | inherited | Per-node model override |
 | `output_format` | object | unset | JSON Schema for structured output. SDK-enforced on Claude/Codex/OpenCode; best-effort on Pi (answered through a `structured_output` tool call, with JSON extracted from the reply as the fallback) and Copilot (schema appended to prompt, JSON extracted + repaired). The parsed output is validated against the schema (every provider); a node that declares `output_format` but returns no schema-valid output **fails** rather than degrading silently. Also valid on `bash:`/`script:` nodes, where the node's own stdout is the payload being certified. See [Result contracts](#result-contracts). |
-| `allowed_tools` | string[] | unset | Whitelist of built-in tools. `[]` = no tools. All providers except Codex |
-| `denied_tools` | string[] | unset | Tools to remove. Applied after `allowed_tools`. All providers except Codex |
+| `allowed_tools` | string[] | unset | Whitelist of provider-restricted built-in tools. `[]` selects none of those tools; see [Pi caveat](#allowed_tools-and-denied_tools-for-tool-restrictions). All providers except Codex |
+| `denied_tools` | string[] | unset | Provider-restricted tools to remove; precedence depends on the provider. See [Tool Restrictions](#allowed_tools-and-denied_tools-for-tool-restrictions). All providers except Codex |
 | `hooks` | object | unset | Per-node SDK hook callbacks. Claude only. See [Hooks](/guides/hooks/) |
 | `mcp` | string \| `{ path, optional }` | unset | Path to MCP server config JSON file: checkout first, then the declaring home workflow YAML's directory (its captured copy for captured runs). Other scopes use only the checkout. Claude/Codex/Copilot. Any other provider fails the run before it starts, unless the declaration is `{ path: ..., optional: true }`, which runs the node without the servers when the provider lacks MCP or the file is missing. See [MCP Servers](/guides/mcp-servers/#optional-servers) |
 | `skills` | string[] | unset | Exact Claude-native skill selection (omission/`[]` selects none); skill declarations for Pi/Copilot. Codex workflow commands/prompts invoke installed skills explicitly with `$skill-name` instead; a non-empty list on Codex or OpenCode fails the run before it starts. See [Skills](/guides/skills/) |
@@ -641,7 +641,7 @@ The generator states a schema exactly or refuses it. It reads `type` (a name or 
 
 ### `allowed_tools` and `denied_tools` for Tool Restrictions
 
-Restrict which built-in tools a node can use without relying on prompt instructions. Restrictions are enforced at the Claude SDK level.
+Restrict which built-in tools a node can use without relying on prompt instructions. Each provider enforces its supported restrictions. The following examples use Claude tool names:
 
 ```yaml
 nodes:
@@ -658,10 +658,14 @@ nodes:
     allowed_tools: []                   # empty list = disable all built-in tools
 ```
 
-- `allowed_tools: []` disables all built-in tools (useful for MCP-only nodes). Use the `mcp` field on a node to attach per-node MCP servers. See [Node Fields](#node-fields)
-- If both are set, `denied_tools` is applied after `allowed_tools`
-- `undefined` (field absent) and `[]` have different semantics: absent means use default tool set, `[]` means no tools
+- `allowed_tools: []` selects no provider-restricted built-in tools (useful for Claude MCP-only nodes). Use the `mcp` field on a node to attach per-node MCP servers. See [Node Fields](#node-fields).
+- If both are set, provider precedence applies: Pi subtracts `denied_tools` after `allowed_tools`; Copilot gives `allowed_tools` precedence.
+- An absent field uses the default tool set; `allowed_tools: []` selects none of the built-in tools governed by the filter. On Pi, this does not mean the node has no tools, as explained below.
 - Supported on all providers except Codex: Codex nodes/steps emit a warning and continue (Codex doesn't support per-call tool restrictions)
+
+On **Pi**, these lists filter only `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls` (case-insensitive). An empty allow list selects none of these tools; a deny list subtracts from the allow list, or from this full set when no allow list is given. Names outside this set produce a `pi.unknown_tools` warning and do not filter other tools. Explicit restrictions select from this set rather than Pi's configured `defaultTools`.
+
+`allowed_tools: []` does **not** restrict user Pi extension tools, and naming them in `denied_tools` does not block them. The lists also do not filter tools Archon adds separately: native tools such as `manage_run` when supplied, and `structured_output` when structured output is requested. Extensions remain user-owned Pi configuration. Remove or exclude unwanted extensions through [Pi's settings resources](https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/settings.md#resources); see [Pi Extensions](/getting-started/ai-assistants/#extensions) for package and local-file controls.
 
 ### Inline sub-agents
 
