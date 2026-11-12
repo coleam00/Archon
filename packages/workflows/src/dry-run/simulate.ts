@@ -36,28 +36,28 @@ function isReached(
   ctx: DryRunContext,
   iteration?: number
 ): boolean {
-  const boundaryDecision = checkComposedBlockBoundaries(node, outputs, ctx.inputs, {
-    loopBodyScopes: ctx.loopBodyScopes,
-  });
-  if (boundaryDecision.decision === 'skip') {
-    recordSkipped(
-      node,
-      outputs,
-      ctx,
-      skipReasonForCause(boundaryDecision.cause),
-      boundaryDecision.cause,
-      iteration,
-      boundaryDecision.error instanceof Error ? boundaryDecision.error.message : undefined
-    );
-    return false;
-  }
-  const triggerDecision = checkTriggerRule(node, outputs);
-  if (triggerDecision.decision === 'skip') {
-    recordSkipped(node, outputs, ctx, 'trigger_rule', triggerDecision.cause, iteration);
-    return false;
-  }
-  if (node.when) {
-    try {
+  try {
+    const boundaryDecision = checkComposedBlockBoundaries(node, outputs, ctx.inputs, {
+      loopBodyScopes: ctx.loopBodyScopes,
+    });
+    if (boundaryDecision.decision === 'skip') {
+      recordSkipped(
+        node,
+        outputs,
+        ctx,
+        skipReasonForCause(boundaryDecision.cause),
+        boundaryDecision.cause,
+        iteration,
+        boundaryDecision.error instanceof Error ? boundaryDecision.error.message : undefined
+      );
+      return false;
+    }
+    const triggerDecision = checkTriggerRule(node, outputs);
+    if (triggerDecision.decision === 'skip') {
+      recordSkipped(node, outputs, ctx, 'trigger_rule', triggerDecision.cause, iteration);
+      return false;
+    }
+    if (node.when) {
       // `ctx.inputs` mirrors the executor's `resolveRunInputs` (#2610): a `when:`
       // referencing `$INPUTS.<name>` branches on the same effective map a real run reads.
       const condition = evaluateCondition(node.when, outputs, ctx.inputs, {
@@ -85,10 +85,10 @@ function isReached(
         );
         return false;
       }
-    } catch (error) {
-      recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
-      return false;
     }
+  } catch (error) {
+    recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
+    return false;
   }
   return true;
 }

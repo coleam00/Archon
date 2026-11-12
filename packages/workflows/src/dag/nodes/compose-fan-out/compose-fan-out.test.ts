@@ -67,7 +67,7 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
     await removeTempTree(testDir);
   });
 
-  it('reports each instance boundary once across its loop iterations and on resume', async () => {
+  it('fails each instance entry and reports its descendant skip once on resume', async () => {
     await writeBlock(
       `name: error-leaf
 description: leaf
@@ -123,7 +123,15 @@ nodes:
     });
     await executeDagWorkflow(options);
     const skips = eventsOf(deps.store).filter(e => e.event_type === 'node_skipped');
-    expect(skips).toHaveLength(8);
+    expect(skips).toHaveLength(2);
+    const entryFailures = eventsOf(deps.store).filter(
+      e => e.event_type === 'node_failed' && e.step_name.endsWith('__entry')
+    );
+    expect(entryFailures).toHaveLength(2);
+    for (const failure of entryFailures) {
+      expect(failure.data.error).toContain('cannot evaluate when:');
+      expect(failure.data.error).toContain('resolved to an object');
+    }
     const owners = new Set(
       skips.map(
         e =>
@@ -239,8 +247,8 @@ ${
                 e.step_name.endsWith(`fan__${buildInstanceSnapshots([1])[0].identity}__result`)
             )?.data.cause
           ).toMatchObject({
-            kind: 'upstream_skipped',
-            origin: `fan__${buildInstanceSnapshots([1])[0].identity}__${dependencies[0] === 'closed' ? 'closed' : 'review_qa__work'}`,
+            kind: 'upstream_failed',
+            origin: `fan__${buildInstanceSnapshots([1])[0].identity}__review_qa__work`,
           });
         }
         const failures = events.filter(
@@ -249,7 +257,8 @@ ${
         expect(failures).toHaveLength(2);
         for (const snapshot of buildInstanceSnapshots([1, 2])) {
           const failure = failures.find(e => e.step_name.endsWith(`__${snapshot.identity}`));
-          expect(failure?.data.error).toContain('condition evaluation error: $');
+          expect(failure?.data.error).toContain('cannot evaluate when:');
+          expect(failure?.data.error).toContain('resolved to an object');
           expect(failure?.data.error).toContain("source.output.route == 'go'");
           expect(failure?.data.error).toContain(`//fan/${snapshot.identity}__["review_qa"]`);
           expect(failure?.data.error).not.toContain('automatic replay is unsafe');
@@ -260,10 +269,12 @@ ${
             e.event_type === (join === 'all_done' ? 'node_completed' : 'node_failed')
         );
         expect(fan).toBeDefined();
-        expect(JSON.stringify(fan?.data)).toContain('condition evaluation error');
-        const warnings = deliveredMessages(platform).filter(m => m.startsWith("Include '"));
-        expect(warnings).toHaveLength(2);
-        for (const warning of warnings) expect(warning).toContain('review_qa');
+        expect(JSON.stringify(fan?.data)).toContain('cannot evaluate when:');
+        const failuresReported = deliveredMessages(platform).filter(
+          m => m.startsWith("Node '") && m.includes('failed before execution:')
+        );
+        expect(failuresReported).toHaveLength(2);
+        for (const message of failuresReported) expect(message).toContain('review_qa');
       });
     }
   }
