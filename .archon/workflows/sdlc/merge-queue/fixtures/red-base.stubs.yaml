@@ -1,0 +1,49 @@
+# Dry-run fixture, a red default branch: the sweep merges nothing and asks nobody, and
+# the run completes with a failed outcome whose summary carries the diagnosis.
+facts:
+  path: sweep
+  base: { branch: dev, head: "fixturebase", checks: { state: red, failing: [lint], pending: [] } }
+  base_error: ""
+  items:
+    - item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+      pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
+      url: "https://github.com/example/repo/pull/1"
+      facts: null
+      record: null
+      validation: null
+      protected: []
+  settled: []
+  lane: auto
+  ci: forge
+sweep:
+  decisions:
+    - number: 1
+      action: wait
+      class: clear
+      head: "abc1234"
+      reran: false
+      reason: "stub: the default branch is red; nothing merges this sweep"
+      brief: ""
+      ask: null
+  base:
+    summary: "stub: lint fails in src/a.ts, which pull request 2 changed; revert it or fix forward"
+  summary: "stub: merged nothing"
+merge: { gated: [] }
+record:
+  merged: []
+  summary: "stub: The default branch dev is red at fixturebase (lint); nothing merges until it is green."
+  question: ""
+  options: []
+  recommendation: null
+  kind: ""
+  item: ""
+  pr: ""
+  asked: null
+  healthy: false
+retriage: { retriaged: [], summary: "stub: nothing to re-triage" }
+drain: { summary: "stub: no drain" }
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: completed
+  authored: failed
+  reached: [facts, sweep, merge, record]

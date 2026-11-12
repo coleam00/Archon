@@ -14,7 +14,7 @@ import { providerRegistry } from '@archon/providers';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
 import type { DashboardWorkflowRun } from '@archon/core/db/workflows';
 import type { resolveRunWorkflow } from '@archon/core/workflows/resolve-run-workflow';
-import type { IWorkflowStore } from '@archon/workflows/store';
+import { PROVIDER_EVENT_ROW_TYPES, type IWorkflowStore } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type {
   ProviderEventQuery,
@@ -420,13 +420,7 @@ mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mockListWorkflowEvents,
   createWorkflowEvent: mockCreateWorkflowEvent,
   listProviderEvents: mockListProviderEvents,
-  PROVIDER_EVENT_ROW_TYPES: [
-    'provider_event',
-    'tool_called',
-    'tool_completed',
-    'task_activity',
-    'hook_activity',
-  ],
+  PROVIDER_EVENT_ROW_TYPES,
 }));
 
 mock.module('@archon/core/db/messages', () => ({

@@ -78,7 +78,7 @@ describe('durable workflow waits', () => {
     const [, eventParams] = mockQuery.mock.calls[1] as [string, unknown[]];
     expect(JSON.parse(pauseParams[1] as string)).toEqual(attentionWait);
     const eventData = JSON.parse(eventParams[5] as string) as Record<string, unknown>;
-    expect(eventData).toEqual({ kind: 'attention' });
+    expect(eventData).toEqual({ kind: 'attention', labels: {} });
     expect(eventData).not.toHaveProperty('resume_at');
   });
 
@@ -123,6 +123,7 @@ describe('durable workflow waits', () => {
     expect(query).toContain("metadata->>'continuation_retry_at' IS NULL");
     expect(query).toContain("metadata->'approval'->>'resolved' IN ('approved', 'rejected')");
     expect(query).toContain("NOT IN ('child_workflow', 'fan_out', 'writeback')");
+    expect(query.match(/COALESCE\(metadata->>'isolation', ''\) <> 'container'/g)).toHaveLength(3);
     expect(query).toContain("ORDER BY CASE WHEN COALESCE(metadata->>'continuation_retry_at'");
     expect(params).toEqual(['2026-08-25T10:00:00.000Z', 25, 0]);
   });

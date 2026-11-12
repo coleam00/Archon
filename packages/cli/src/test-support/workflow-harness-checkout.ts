@@ -30,12 +30,17 @@ export const mockResolveFolderBackend = mock(() => ({
 // Mock @archon/isolation (getIsolationProvider moved here from @archon/core)
 const {
   worktreeRegistrationMetadata,
+  generatedTaskBranch,
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
   releaseRunVerificationImages: realReleaseRunVerificationImages,
 } = await import('@archon/isolation');
 export { realReleaseRunVerificationImages };
 mock.module('@archon/isolation', () => ({
+  generatedTaskBranch,
+  getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
+    state: 'NONE',
+  })),
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
   dockerCli: mock(async () => ({ stdout: '', stderr: '' })),

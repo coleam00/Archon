@@ -207,7 +207,7 @@ Usage:
   archon <command> [subcommand] [options] [arguments]
 
 Commands:
-  state <get|put|patch|log|delete|list>
+  state <get|put|patch|log|delete|list|claim>
                              Read and audit durable project or install JSON documents
   metrics [name]             Aggregate metric records by name, window and instrument
   forge resolve              Resolve an explicit remote through optional forge plugins
@@ -217,6 +217,8 @@ Commands:
   project config <id|name>   Show a project's merged config with secrets removed (env key names only)
   trigger <fire|drain|list|inspect|withdraw|recover-preparation|schedule>
                              Start configured workflows and inspect durable resource admission
+  pack bindings <pack>       Write a pack's recommended trigger bindings as files for one repository;
+                             registers and schedules nothing. Needs --repo, --host, --run-as and --out
   chat <message>             Send a message to the orchestrator
   setup [--scope <home|project>] Interactive setup wizard for credentials and config
   workflow list [name] [--full] [--json]
@@ -246,6 +248,8 @@ Commands:
                              Answer a paused attention wait in its declared form
   workflow reset-sessions <workflow-name>
                              Delete persisted sessions for a workflow (omits --scope only with --yes; [--node <id>] [--json])
+  workflow notice <text>     Inside a workflow node: say what the run did, for whoever watches attention
+                             with --notices. Never pauses the run and cannot be answered
   workflow event emit        Emit a workflow event into a run
   workflow test [<name>|<folder>|<path>]
                              Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a
@@ -254,9 +258,17 @@ Commands:
                              repository root. With no target, runs every fixture. Never creates a
                              run or contacts a provider; exec-code fixtures execute in a
                              scratch worktree of HEAD
+  workflow types <name|folder|path> Generate TypeScript for each node's output_format: the node
+                             output types and every enum's values. A pack (by name or
+                             directory path) writes <pack>/.shared/outputs.generated.ts; a single
+                             workflow needs --out. --check exits 1 when the file is stale
+  script types               Print the TypeScript declaration of the archon:script module a workflow
+                             script imports, for an editor or tsc over a pack's scripts
+  script preload             Write the preload file that provides the archon:script module, to run or
+                             test a workflow script outside a run: bun --preload <file> script.ts
   isolation list             List all active worktrees/environments
   isolation cleanup [days]   Remove eligible worktrees by inactivity, containers by creation age (default: 7 days)
-  isolation cleanup --merged Remove environments with branches merged into the base branch
+  isolation cleanup --merged Remove worktrees covered by Git integration or a merged PR
   complete <branch> [...]    Remove worktree and local branch; retain remote branch
   serve                      Start the web UI server (binary installs download server and UI on first run)
   skill add [path]           Add archon-cli into .claude/skills and .agents/skills
@@ -316,9 +328,13 @@ Options:
   --supersedes <run-id>      Record this fresh run as replacing the prior run's open item (no lane inheritance)
   --dry-run                  Simulate workflow DAG control flow without creating a run or contacting a provider
   --stubs <path>             YAML node-output map for --dry-run
-  --stubs-init <path>        Write a complete dry-run stub scaffold and exit
-  --default-stubs            Fill missing reached nodes with validated placeholders during --dry-run
-  --exec-code                Execute trusted bash/script nodes during --dry-run (default: require stubs)
+  --stubs-init <path>        Write a dry-run stub scaffold and exit; omits child workflows.
+                             Reached child workflows need authored stubs unless fan-out items resolve to [].
+  --default-stubs            Fill missing reached AI, bash, and script nodes with validated placeholders during --dry-run.
+                             With --exec-code, unstubbed bash/script nodes execute locally instead. Explicit stubs win.
+                             Reached child workflows need authored stubs unless fan-out items resolve to [].
+  --exec-code                Execute trusted unstubbed bash/script nodes locally during --dry-run, even with --default-stubs.
+                             Explicit stubs win; default is no code execution.
   --pause-at-gates           Stop a dry-run at approval gates instead of auto-approving
   --providers <ids>          Add comma-separated maintained providers, skipping the setup provider question
   --spawn                    Open setup wizard in a new terminal window (for setup command)
@@ -329,6 +345,8 @@ Options:
   --occurrence <id>          For 'workflow approve/reject/respond/answer/attention label': refuse the write unless the run is still
                              paused at this occurrence (the 'occurrence' that 'workflow wait --json' reports; required by answer
                              and attention label)
+  --as <name>                For 'workflow approve/reject/respond/answer': the name the answerer declares for itself,
+                             recorded with an attention wait's answer as a claim (never checked; refused at a gate)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
@@ -372,6 +390,13 @@ Examples:
   archon plugin add coleam00/Archon/plugins/forge-github
 
 `;
+
+  it('advertises throughput on the two run-history views', () => {
+    expect(scopedHelpOptions(['workflow', 'get'])).toContain('--throughput');
+    expect(scopedHelpOptions(['workflow', 'get'])).toContain('per recorded agent attempt and run');
+    expect(scopedHelpOptions(['workflow', 'runs'])).toContain('--throughput');
+    expect(scopedHelpOptions(['workflow', 'runs'])).toContain('across listed runs');
+  });
 
   it('archon --help matches the supported global index byte-for-byte', () => {
     expect(`${renderHelp()}\n`).toBe(EXPECTED_GLOBAL_HELP);

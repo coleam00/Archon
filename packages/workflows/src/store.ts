@@ -91,6 +91,22 @@ export interface IRunTreeStore {
   getRunAncestry(runId: string): Promise<WorkflowRun[]>;
 }
 
+/** One attention wait as its `wait_started` row recorded it. */
+export interface AttentionWaitStart {
+  runId: string;
+  startedAt: string;
+  /** The row's raw `data`: its labels and ask record, as far as the row recorded them. */
+  data: Record<string, unknown>;
+}
+
+/** One `workflow_notice` row as recorded. */
+export interface WorkflowNoticeRow {
+  runId: string;
+  at: string;
+  /** The row's raw `data`; `listWorkflowNotices` reads it. */
+  data: Record<string, unknown>;
+}
+
 /** A `node_completed` row whose `structured_output` carries a `metrics` key. */
 export interface MetricRecordRow {
   eventId: string;
@@ -176,9 +192,11 @@ export interface IWorkflowStore
     runId: string,
     options?: { excludeEventTypes?: readonly string[] }
   ): Promise<WorkflowEventRow[]>;
+  /** Strict reads reject malformed event data instead of returning a partial history. */
   listEventsForRuns(
     runIds: readonly string[],
-    eventTypes: readonly WorkflowEventType[]
+    eventTypes: readonly WorkflowEventType[],
+    options?: { strict?: boolean }
   ): Promise<Map<string, WorkflowEventRow[]>>;
 
   // Run lifecycle
@@ -288,6 +306,18 @@ export interface IWorkflowStore
    * `@archon/workflows/attention-queue` builds items from readable rows.
    */
   listAttentionQueueRows(): Promise<AttentionRead<WorkflowRun>[]>;
+  /**
+   * The `wait_started` row of every attention wait on the install, open or answered,
+   * oldest first, for runs that still exist. Rows are raw: `countAttentionWaitStarts`
+   * decides which count.
+   */
+  listAttentionWaitStarts(): Promise<AttentionWaitStart[]>;
+  /**
+   * Every `workflow_notice` row on the install, oldest first, for runs that still exist;
+   * a run's rows of one moment stay in the order it emitted them.
+   * Rows are raw: `listWorkflowNotices` decides which are read.
+   */
+  listWorkflowNoticeRows(): Promise<WorkflowNoticeRow[]>;
   /** Atomically record an unexpired event signal and its audit event without changing lifecycle. */
   signalWorkflowWait(
     id: string,
@@ -360,7 +390,8 @@ export interface IWorkflowStore
    * Atomically fail a pending or running run and persist its matching lifecycle event.
    * `failed` is false when the run was already terminal: a no-op that leaves the winning
    * outcome in place, so the caller must not announce its own failure. Missing runs and
-   * other start states reject.
+   * other start states reject unless a supplied failure condition mismatches.
+   * `pendingOnly` refuses claimed, settled, or missing runs without writing.
    * `exitReason` is recorded on that event as the run's categorical failure cause, and — with
    * `signal`, when a signal arriving at the owning process is what stopped the run —
    * on the run row as `metadata.stop_reason`, which is what the operator surfaces

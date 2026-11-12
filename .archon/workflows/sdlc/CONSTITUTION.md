@@ -20,11 +20,14 @@ Pauses, waits, claims, leases and terminal states are the engine's. Work items l
 
 ## Every workflow works on any project
 
-Agents discover a project's commands, branches and CI and record them as typed output. Prompts carry practice that transfers between projects. A project's strong opinions live in policy: defaults in [`.shared/policy/`](.shared/policy), which a project's `.archon/sdlc/policy/<topic>.md` adds to and overrides. A node names only the policy its decision needs. Anything that must be exact, such as label names or allow-lists, is typed configuration. Pack files carry no tracker references or history.
+Agents discover a project's commands, branches and CI and record them as typed output. Prompts carry practice that transfers between projects. A project's strong opinions live in policy: defaults in [`.shared/policy/`](.shared/policy), which a project's `.archon/sdlc/policy/<topic>.md` adds to and overrides. A node names only the policy its decision needs. Anything that must be exact, such as label names or allow-lists, is never prose an agent interprets. Pack files carry no tracker references or history.
+
+- Today: label names are fixed in code, in [`.shared/labels.ts`](.shared/labels.ts), and the maintainer list is the project's `.archon/sdlc/policy/maintainers.json`. The pack's typed settings are in [`.pack/pack.yaml`](.pack/pack.yaml): what the merge gate trusts (`ci`), whether each queue acts by itself (`build_lane`, `merge_lane`), and the paths a person reads first (`protected_paths`).
+- Direction: an exact value a project needs to change is a typed setting.
 
 ## CI is the validation
 
-An implementer checks only what it changed; CI is the full validation. One agent node judges CI: green marks the pull request ready, red from the change goes back to the implementer, and a flake outside the change gets one re-run. Any other red ends the delivery not ready and the stage pauses. Without CI, that agent runs the full validation once. A red pull request never stays ready.
+An implementer checks only what it changed; CI is the full validation. The merge queue judges it at the head before it merges: pending waits, red from the change goes back to the build queue, and red outside the change gets one re-run. Nothing merges without what the project's CI setting trusts at its head: green CI, or, in a project that sets `ci: none` because it has no CI, a passing full validation delivery recorded at that same head. Delivery never waits for CI: once review passes, one agent node hands the pull request off ready, and sends a check already red because of the change back to the implementer. Under `ci: none`, that agent runs the full validation once and records it.
 
 ## Stages hand off through queues
 
@@ -35,9 +38,9 @@ The implement-review-fix loop is one composed run; queues sit between stages, ne
 
 ## Stops the pack can't answer pause
 
-An unanswerable stop pauses as an attention item labelled with its stage and class, such as `build: scope` or `merge: base`.
+An unanswerable stop pauses as an attention item. The deciding agent writes the question, its options and its recommendation, and they reach the person as written. Every item carries four labels: `stage` (the queue that asks), `kind` (the decision, such as `scope` or `approve`), `item` (the issue number) and `pr` (the pull request number, or empty).
 
-- Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by label:build` shows which build classes recur.
+- Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by label:kind --since 30d` shows which decisions recur and how often the answer followed the recommendation.
 - Direction: a recurring class gets a small handler workflow that answers its items through the normal answer channel, without changing the main path or the engine.
 
 ## Smaller is the default

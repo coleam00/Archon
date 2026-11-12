@@ -538,10 +538,8 @@ describe('project storage collisions', () => {
       expect((await store.findCodebaseByRepoUrl('git@github.com:acme/api.git'))?.id).toBe(known.id);
       expect(warnings).toEqual([
         expect.objectContaining({
-          err: expect.objectContaining({
-            type: 'ProjectRegistrationError',
-            message: expect.stringContaining(broken.default_cwd),
-          }),
+          msg: 'registration.lookup_legacy_unavailable',
+          path: broken.default_cwd,
         }),
       ]);
       expect(await store.findCodebaseByRepoUrl('https://github.com/acme/unknown')).toBeNull();
@@ -1031,21 +1029,17 @@ describe('project storage collisions', () => {
             level: 40,
             module: 'registration.remote',
             msg: 'registration.lookup_legacy_unavailable',
-            err: expect.objectContaining({
-              type: 'ProjectRegistrationError',
-              message: expect.stringContaining(legacyPath),
-            }),
-          }),
-        ]);
-        expect(warnings[0]).toMatchObject({
-          err: {
-            message: expect.stringContaining(
+            project: 'Legacy',
+            path: legacyPath,
+            reason: expect.stringContaining(
               state === 'corrupt'
                 ? `Cannot read registration config at ${legacyPath}/.archon/config.yaml`
-                : 'Remote error: Command failed: git'
+                : 'Command failed: git'
             ),
-          },
-        });
+          }),
+        ]);
+        // One short line: no stack and no nested copies of the git error.
+        expect(warnings[0]).not.toHaveProperty('err');
       }
       expect(await store.findCodebaseByRepoUrl('https://github.com/acme/new')).toBeNull();
       const localPath = await gitCheckout(join(root, 'local'), 'https://github.com/acme/local');

@@ -36,7 +36,10 @@ export const attentionOptionSchema = z.strictObject({
 });
 export type AttentionOption = z.infer<typeof attentionOptionSchema>;
 
-/** The option an attention wait recommends, why, and how sure it is. Display only. */
+/**
+ * The option an attention wait recommends, why, and how sure it is. Shown with the
+ * choices; an answer that accepts the recommendation chooses `option`.
+ */
 export const attentionRecommendationSchema = z.strictObject({
   option: attentionOptionIdSchema,
   why: z.string().trim().min(1, 'must not be empty'),
@@ -80,6 +83,17 @@ export const attentionLabelKeySchema = z
 export const attentionLabelsSchema = z.record(attentionLabelKeySchema, z.string());
 export type AttentionLabels = z.infer<typeof attentionLabelsSchema>;
 
+/**
+ * The option `other: true` adds to a `select` wait: none of the declared options, with
+ * the answer's text saying what to do instead. Its id is reserved on such a wait, and an
+ * answer choosing it is refused without text (`attentionAnswerProblem`).
+ */
+export const OTHER_ATTENTION_OPTION = {
+  id: 'other',
+  label: 'Other',
+  does: 'None of these. The answer text says what to do instead.',
+} as const satisfies AttentionOption;
+
 /** The answers an `approval` attention wait accepts. */
 export const APPROVAL_ATTENTION_OPTIONS: readonly AttentionOption[] = [
   { id: 'approve' },
@@ -92,9 +106,15 @@ export const APPROVAL_ATTENTION_OPTIONS: readonly AttentionOption[] = [
  * a recommendation on a form that takes none is refused either way.
  */
 function literalDeclarationProblem(
-  value: { options?: readonly AttentionOption[] | string; recommendation?: unknown },
+  value: {
+    options?: readonly AttentionOption[] | string;
+    recommendation?: unknown;
+    other?: boolean;
+  },
   form: AttentionForm
 ): string | undefined {
+  if (value.other === true && form !== 'select')
+    return `'other' is only valid for form 'select', not '${form}'`;
   if (value.recommendation !== undefined) {
     const formProblem = recommendationFormProblem(form);
     if (formProblem !== undefined) return formProblem;
@@ -106,6 +126,7 @@ function literalDeclarationProblem(
     form,
     ...(Array.isArray(value.options) ? { options: value.options } : {}),
     ...(recommendation.success ? { recommendation: recommendation.data } : {}),
+    ...(value.other === true ? { other: true } : {}),
   });
 }
 
@@ -118,17 +139,22 @@ function recommendationFormProblem(form: AttentionForm): string | undefined {
 
 /**
  * Why a resolved attention declaration cannot pause, or undefined when it can: a
- * recommendation on a form that takes none or of an option the wait does not offer, or a
- * `value` on a `multi_select` option, whose answer returns no value. The load check runs
- * it on literal fields and the pause runs it on resolved ones, so both refuse the same.
+ * recommendation on a form that takes none or of an option the wait does not offer, a
+ * `value` on a `multi_select` option, whose answer returns no value, or a declared option
+ * that takes the id `other: true` reserves. `options` are the declared ones, without the
+ * reserved option. The load check runs it on literal fields and the pause runs it on
+ * resolved ones, so both refuse the same.
  */
 export function attentionDeclarationProblem(declaration: {
   form: AttentionForm;
   options?: readonly AttentionOption[];
   recommendation?: AttentionRecommendation;
+  other?: boolean;
 }): string | undefined {
   const { form, recommendation } = declaration;
   const options = form === 'approval' ? APPROVAL_ATTENTION_OPTIONS : (declaration.options ?? []);
+  if (declaration.other === true && options.some(o => o.id === OTHER_ATTENTION_OPTION.id))
+    return `option id '${OTHER_ATTENTION_OPTION.id}' is reserved when 'other: true' is set`;
   if (form === 'multi_select' && options.some(option => option.value !== undefined))
     return "'value' is only valid on options of form 'select', not 'multi_select'";
   if (recommendation === undefined) return undefined;
@@ -225,6 +251,8 @@ const waitConfigVariantSchemas = [
         .optional(),
       /** Values may hold runtime references, resolved when the wait pauses. */
       labels: attentionLabelsSchema.optional(),
+      /** `select` only: also offer `OTHER_ATTENTION_OPTION`, answered with text. */
+      other: z.boolean().optional(),
     })
     .superRefine((value, ctx) => {
       const form = value.form ?? 'message';
@@ -274,6 +302,8 @@ export type WaitCondition =
       /** A literal recommendation, or the whole reference resolved at pause time. */
       recommendation?: AttentionRecommendation | string;
       labels?: AttentionLabels;
+      /** The wait also offers `OTHER_ATTENTION_OPTION`. */
+      other?: true;
     };
 
 export function waitCondition(config: WaitConfig): WaitCondition {
@@ -293,6 +323,7 @@ export function waitCondition(config: WaitConfig): WaitCondition {
     ...(config.options !== undefined ? { options: config.options } : {}),
     ...(config.recommendation !== undefined ? { recommendation: config.recommendation } : {}),
     ...(config.labels !== undefined ? { labels: config.labels } : {}),
+    ...(config.other === true ? { other: true } : {}),
   };
 }
 

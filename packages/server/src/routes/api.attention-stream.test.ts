@@ -212,6 +212,75 @@ describe('GET /api/runs/attention/stream', () => {
     ]);
   });
 
+  test('level selects the lines sent, and every line says what it needs', async () => {
+    const app = new OpenAPIHono();
+    const cursor = workflowEventCursor('c');
+    registerAttentionStreamRoute(app, async listener => {
+      await listener({ type: 'ready', cursor });
+      await listener({ type: 'bookmark', cursor });
+      await listener({
+        type: 'terminal',
+        cursor,
+        project: null,
+        runId: 'r',
+        workflow: 'ci',
+        parentRunId: null,
+        status: 'completed',
+        outcome: null,
+        cause: null,
+      });
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return { close: async () => undefined };
+    });
+    const linesOf = async (query: string): Promise<string[]> => {
+      const client = sseClient(await app.request(`/api/runs/attention/stream${query}`));
+      await client.done;
+      return client.events.map(event => event.line.type);
+    };
+    expect(await linesOf('?level=quiet')).toEqual(['error']);
+    expect(await linesOf('?level=notices')).toEqual(['terminal', 'error']);
+    expect(await linesOf('')).toEqual(['ready', 'bookmark', 'terminal', 'error']);
+    const sent = await (await app.request('/api/runs/attention/stream')).text();
+    expect(sent.match(/"needs":"[a-z]+"/g)).toEqual([
+      '"needs":"nothing"',
+      '"needs":"nothing"',
+      '"needs":"nothing"',
+      '"needs":"look"',
+    ]);
+    expect((await app.request('/api/runs/attention/stream?level=loud')).status).toBe(400);
+  });
+
+  test('a resumed quiet stream sends the close of an item this connection never sent', async () => {
+    const app = new OpenAPIHono();
+    const cursor = workflowEventCursor('c');
+    const closed = {
+      type: 'resolved',
+      cursor,
+      project: null,
+      runId: 'r',
+      workflow: 'ci',
+      parentRunId: null,
+      occurrence: 'o',
+      reason: 'withdrawn',
+    } as const;
+    registerAttentionStreamRoute(app, async listener => {
+      await listener(closed);
+      await listener({ type: 'bookmark', cursor });
+      await listener({ type: 'error', error: 'cursor_invalid' });
+      return { close: async () => undefined };
+    });
+    const linesOf = async (headers: Record<string, string>): Promise<string[]> => {
+      const client = sseClient(
+        await app.request('/api/runs/attention/stream?level=quiet', { headers })
+      );
+      await client.done;
+      return client.events.map(event => event.line.type);
+    };
+    // The item may have closed while the client was away; it cannot be told otherwise.
+    expect(await linesOf({ 'Last-Event-ID': 'c' })).toEqual(['resolved', 'error']);
+    expect(await linesOf({})).toEqual(['error']);
+  });
+
   test('scopes the watch by project and label as the list route does', async () => {
     const seen: AttentionWatchOptions[] = [];
     const app = new OpenAPIHono();

@@ -59,7 +59,7 @@ Commands resolve by **filename without extension**. Project, global, and bundled
 2. **Global / home-scoped** -- `~/.archon/workflows/`, `~/.archon/commands/`, `~/.archon/scripts/` (override bundled by filename).
 3. **Repo-specific** -- `<repoRoot>/.archon/workflows/`, `<repoRoot>/.archon/commands/`, `<repoRoot>/.archon/scripts/` (override global by filename).
 
-Same-named legacy/shared files at a higher scope win. Packaged commands and scripts resolve only within their owning package and never fall through to another scope.
+Same-named legacy/shared files at a higher scope win. Packaged commands and scripts resolve only within their owning pack and never fall through to another scope.
 
 ## Installed workflow packs
 
@@ -72,6 +72,7 @@ review-kit/                     # plugin root: owner/repo or owner/repo/<path>
 ├── archon-plugin.json
 ├── .shared/                    # modules and documents the pack's scripts use
 │   ├── metric-views.json       # optional overview cards for the console
+│   ├── scripts/preflight.ts    # a script any workflow of the pack can name
 │   └── util.ts
 ├── .github/workflows/ci.yml    # a dot directory: never a workflow folder
 ├── tests/                      # no direct YAML: not a workflow folder

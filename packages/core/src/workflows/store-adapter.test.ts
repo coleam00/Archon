@@ -227,7 +227,10 @@ describe('createWorkflowStore', () => {
     const events = await store.listWorkflowEvents('run', options);
     expect(events[0]?.created_at).toBe('2026-03-08T01:30:00.000Z');
     expect(mockListWorkflowEvents).toHaveBeenCalledWith('run', options);
-    const batch = await store.listEventsForRuns(['run'], ['node_completed']);
+    const batch = await store.listEventsForRuns(['run'], ['node_completed'], { strict: true });
+    expect(mockListEventsForRuns).toHaveBeenCalledWith(['run'], ['node_completed'], {
+      strict: true,
+    });
     expect(batch.get('run')?.[0]?.created_at).toBe(events[0]?.created_at);
     expect(row.created_at).toBe('2026-03-08 01:30:00');
     const previousTimezone = process.env.TZ;

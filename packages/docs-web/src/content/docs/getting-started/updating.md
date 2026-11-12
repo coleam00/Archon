@@ -25,6 +25,11 @@ Until you do, a run that needs one fails before it starts and prints this
 command. `archon doctor` lists each provider's installed version. Docker and
 source installs run providers from source and skip this step.
 
+A release binary also runs the GitHub forge plugin you installed, at the version
+you installed. Update it with `archon plugin update coleam00/Archon/plugins/forge-github`.
+Docker and source installs run the GitHub forge plugin from source too, so it
+always matches the checkout.
+
 ## Homebrew
 
 ```bash

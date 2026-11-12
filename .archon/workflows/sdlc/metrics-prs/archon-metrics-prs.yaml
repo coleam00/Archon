@@ -1,23 +1,59 @@
 name: archon-metrics-prs
 description: |
   Record the outcomes of the pull requests the build queue opened, as metrics:
-  sdlc.prs_opened, sdlc.prs_merged, sdlc.prs_abandoned and sdlc.pr_merge_rate.
+  sdlc.prs_opened, sdlc.prs_merged, sdlc.prs_abandoned and sdlc.pr_merge_rate,
+  and for each merged one the review rounds it took to reach Ready:
+  sdlc.review_rounds, sdlc.review_one_round and sdlc.review_five_plus_rounds.
   Each record is attributed to the build-queue runs that built its pull request,
   so `archon metrics --compare` splits pull requests by when those runs started.
   Pull requests a round only continued, such as a contributor's, are reported in
-  `skipped` and count in no metric. Re-runs replace earlier records.
+  `skipped` and count in no metric; merged ones whose rounds cannot be counted
+  are reported in `review_rounds_skipped`. It also records each issue the queue
+  worked: sdlc.issues_built, sdlc.issues_merged, sdlc.issue_lead_time,
+  sdlc.issue_build_rounds and sdlc.issue_asks, each again per route, such as
+  sdlc.issues_merged.plan. Given `lines_since`, each merged pull request merged
+  since then also records the lines it added in test files and in production
+  files (sdlc.test_lines_added, sdlc.production_lines_added); ones whose lines
+  cannot be counted are reported in `lines_skipped`. Re-runs replace earlier
+  records. One run records the pull requests and issues that changed in its
+  window, `since` (seven days by default) up to `until`; the records of
+  everything older stand as an earlier run left them.
 
-  Use when: an operator wants current PR counts and merge rate (`archon metrics
-  sdlc.pr_merge_rate`), or a schedule binding the operator installed starts it
-  (see the SDLC pack README, "Metrics"). The pack installs no binding.
+  Use when: an operator wants current PR counts, merge rate and review rounds
+  (`archon metrics sdlc.pr_merge_rate`), or a schedule binding the operator
+  installed starts it
+  (see https://archon.diy/guides/sdlc-metrics/). The pack installs no binding.
   NOT for: pull requests opened by hand. It needs a forge plugin whose pr.view
   reports pull request timestamps, and refuses without them.
 
-# It reads the state store and the forge, not a checkout, so it runs beside any
-# other run on the same checkout.
+# It reads the state store and the forge (and, for rounds recorded before they
+# carried their review verdicts, the build runs' artifacts), not a
+# checkout, so it runs beside any other run on the same checkout.
 worktree:
   enabled: false
 mutates_checkout: false
+
+inputs:
+  since:
+    required: false
+    description: >-
+      An ISO date or time, or a number of days back from now such as 7d (the
+      default). The run records the pull requests opened, merged or closed and
+      the issues built or merged at or after it. A node's output is capped at
+      1 MiB, so a busy window may not fit: record a long history in several
+      runs, each a slice from `since` up to `until`.
+  until:
+    required: false
+    description: >-
+      The end of the window, in the same form; without it, now. Only for
+      recording an older slice of history.
+  lines_since:
+    required: false
+    description: >-
+      An ISO date or time, or a number of days back from now such as 7d. Merged
+      pull requests merged at or after it record their test and production
+      lines, one pr.files read each, so the window sets the cost. Without it,
+      no line records are written.
 
 nodes:
   - id: prs

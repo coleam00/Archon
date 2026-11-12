@@ -1,0 +1,52 @@
+# Dry-run fixture, an ask: route cannot launch the item and asks. The run pauses on
+# the question, options and recommendation route wrote, which apply hands on unchanged.
+start:
+  repo: { host: github.com, path: example/repo }
+  message: false
+facts:
+  path: route
+  item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
+  url: "https://github.com/example/repo/issues/7"
+  record: null
+  brief: ""
+  rounds: []
+  at_cap: false
+  pull_request: null
+  continues: null
+  branch: "build/7-stub-fixture"
+  related: []
+blocked:
+  blocked: []
+  blocked_count: 0
+route:
+  decision: ask
+  route: plan
+  continues: null
+  ready_head: null
+  brief: "stub-brief: build issue 7 under the ruling"
+  reason: "stub: the body names two outcomes that conflict"
+  ask: &ask
+    question: "Issue 7: build the import as a new command, or extend `sync`? The body asks for both. An `other` answer's text is written into the issue body as the ruling, and the next round works from it.\n\nhttps://github.com/example/repo/issues/7"
+    options:
+      - id: new-command
+        label: "A new command"
+        does: "Launches a round that adds `import` and leaves `sync` alone."
+        value: { effect: continue, ruling: "The import is its own command; `sync` does not change." }
+      - id: park
+        label: "Park it"
+        does: "Stops the queue working the item until a re-triage."
+        value: { effect: park, ruling: "" }
+    recommendation: { option: new-command, why: "The acceptance list only names `import`.", confidence: medium }
+apply:
+  decision: asked
+  summary: "stub: Issue 7: asked."
+  <<: *ask
+  class: route
+  item: "7"
+  pr: ""
+  asked: { ask: *ask, brief: "stub-brief: build issue 7 under the ruling", by: route }
+  healthy: true
+fixture:
+  inputs: { repo_host: github.com, repo_path: example/repo }
+  expect: paused
+  reached: [facts, route, apply]

@@ -6,6 +6,7 @@ import {
   attentionRevision,
   pausedAttentionWait,
   queuedRunAttention,
+  readWorkflowWaitContext,
   type WorkflowWaitContext,
   type WorkflowRun,
 } from '../schemas/workflow-run';
@@ -13,6 +14,7 @@ import { join } from 'node:path';
 import { getArchonWorkspacesPath, projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
   countAttentionQueue,
+  countAttentionWaitStarts,
   listAttentionQueue,
   readAttentionQueueItem,
   selectAttentionQueue,
@@ -21,6 +23,11 @@ import {
   type ProjectRef,
 } from '../attention-queue';
 import { watchAttentionQueue, type AttentionStreamLine } from '../attention-watch';
+import {
+  emitWorkflowNotice,
+  listWorkflowNotices,
+  WORKFLOW_NOTICE_LIMITS,
+} from '../workflow-notice';
 import type { WorkflowStoreHarness } from '../store-conformance';
 import {
   CONFORMANCE_CODEBASE_ID,
@@ -153,12 +160,20 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         expect(await next('attention')).toMatchObject({
           item: { runId: run.id, occurrence: 'ask-1' },
         });
-        await store.answerAttentionWait(run.id, attentionAnswer('use-main'));
+        await store.answerAttentionWait(
+          run.id,
+          attentionAnswer('use-main', 'ask-1', { declared: 'triage-agent' })
+        );
         expect(await next('resolved')).toMatchObject({
           runId: run.id,
           reason: 'answered',
           answeredVia: 'cli',
+          answeredBy: { declared: 'triage-agent' },
         });
+        const answered = (await store.listWorkflowEvents(run.id)).find(
+          event => event.event_type === 'wait_answered'
+        );
+        expect(answered?.data).toMatchObject({ by: { declared: 'triage-agent' } });
         await store.resumeWorkflowRun(run.id);
         await store.completeWorkflowRun(run.id, { duration_ms: 1 });
         expect(await next('terminal')).toMatchObject({ runId: run.id, status: 'completed' });
@@ -498,6 +513,115 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         labels: { ci: 'other', team: 'web', class: 'ci-other' },
       });
     });
+    test('started attention waits are counted from events, with how their recommendations fared', async () => {
+      const pause = async (
+        labels: Record<string, string>,
+        input: Partial<Parameters<IWorkflowStore['createWorkflowRun']>[0]> = {},
+        recommended?: string
+      ): Promise<Extract<WorkflowWaitContext, { kind: 'attention' }> & { runId: string }> => {
+        const run = await running(store, input);
+        const context = {
+          ...attentionWait,
+          pauseId: `ask-${run.id}`,
+          labels,
+          ...(recommended === undefined
+            ? {}
+            : {
+                recommendation: {
+                  option: recommended,
+                  why: 'Main is green',
+                  confidence: 'high' as const,
+                },
+              }),
+        };
+        await store.pauseWorkflowRunForWait(run.id, context, { kind: 'started', stepName: 'ask' });
+        return { ...context, runId: run.id };
+      };
+      const answered = await pause(
+        { class: 'ci' },
+        { codebase_id: CONFORMANCE_CODEBASE_ID },
+        'use-main'
+      );
+      await store.answerAttentionWait(
+        answered.runId,
+        attentionAnswer('use-main', answered.pauseId, { declared: 'triage-agent' })
+      );
+      await store.resumeWorkflowRun(answered.runId);
+      const stored = readWorkflowWaitContext(
+        (await store.getWorkflowRun(answered.runId))?.metadata.wait
+      );
+      if (stored === undefined) throw new Error('Expected the answered wait');
+      expect(
+        await store.clearWorkflowWaitContext(answered.runId, stored, {
+          stepName: 'ask',
+          result: { status: 'satisfied', waited_ms: 1 },
+        })
+      ).toMatchObject({ cleared: true });
+      expect((await store.getWorkflowRun(answered.runId))?.metadata.wait).toBeUndefined();
+      const declined = await pause({ class: 'ci' }, {}, 'use-main');
+      await store.answerAttentionWait(declined.runId, attentionAnswer('use-dev', declined.pauseId));
+      await pause({ class: 'ci' }, {}, 'use-dev');
+      await pause({ class: 'review' });
+      // A wait started before labels and the ask were recorded, and a wait that is not an
+      // attention wait.
+      const old = await running(store);
+      await store.persistWorkflowEvent({
+        workflow_run_id: old.id,
+        event_type: 'wait_started',
+        step_name: 'ask',
+        data: { kind: 'attention' },
+      });
+      const timed = await running(store);
+      await store.pauseWorkflowRunForWait(timed.id, wait, { kind: 'started', stepName: 'wait' });
+
+      const started = (await store.listWorkflowEvents(answered.runId)).find(
+        event => event.event_type === 'wait_started'
+      );
+      // Ids only: the message, and why the option is recommended, stay off the event.
+      expect(started?.data).toEqual({
+        kind: 'attention',
+        labels: { class: 'ci' },
+        occurrence: answered.pauseId,
+        form: 'select',
+        options: ['use-main', 'use-dev'],
+        recommendation: { option: 'use-main', confidence: 'high' },
+      });
+
+      const count = (query: Partial<Parameters<typeof countAttentionWaitStarts>[1]>) =>
+        countAttentionWaitStarts(
+          { store },
+          { scope: { kind: 'all' }, labels: {}, countBy: { by: 'label', key: 'class' }, ...query }
+        );
+      const none = { asked: 0, answered: 0, followed: 0 };
+      expect((await count({})).counts).toEqual([
+        { value: 'ci', count: 3, recommendations: { asked: 3, answered: 2, followed: 1 } },
+        { value: null, count: 1, recommendations: none },
+        { value: 'review', count: 1, recommendations: none },
+      ]);
+      expect((await count({ countBy: { by: 'answerer' } })).counts).toEqual([
+        { answeredBy: null, count: 4, recommendations: { asked: 2, answered: 1, followed: 0 } },
+        {
+          answeredBy: { declared: 'triage-agent' },
+          count: 1,
+          recommendations: { asked: 1, answered: 1, followed: 1 },
+        },
+      ]);
+      expect((await count({ since: new Date(Date.now() - 3_600_000) })).counts).toHaveLength(3);
+      expect((await count({ since: new Date(Date.now() + 3_600_000) })).counts).toEqual([]);
+      expect((await count({ labels: { class: 'review' } })).counts).toEqual([
+        { value: 'review', count: 1, recommendations: none },
+      ]);
+      const codebase = await store.getCodebase(CONFORMANCE_CODEBASE_ID);
+      const project: ProjectRef = {
+        key: projectKeyForCodebase(codebase, codebase?.default_cwd ?? ''),
+        codebaseId: CONFORMANCE_CODEBASE_ID,
+        name: 'conformance',
+      };
+      expect((await count({ scope: { kind: 'project', project } })).counts).toEqual([
+        { value: 'ci', count: 1, recommendations: { asked: 1, answered: 1, followed: 1 } },
+      ]);
+    });
+
     test('a parent blocked on a sub-run with no row is the same unreadable item listed and read', async () => {
       const parent = await running(store);
       const missing = crypto.randomUUID();
@@ -541,6 +665,49 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         );
         expect(await readAttentionQueueItem(source, item.runId)).toEqual(item);
       }
+    });
+    test('a notice is recorded only for a running run, listed with its labels, and bounded per run', async () => {
+      const run = await running(store);
+      const ended = await running(store);
+      await store.completeWorkflowRun(ended.id, { duration_ms: 1 });
+      const say = (runId: string, text: string, labels: Record<string, string> = {}) =>
+        emitWorkflowNotice(store, { runId, node: 'merge', text, labels });
+
+      expect(await rejection(say(ended.id, 'Merged'))).toMatchObject({ reason: 'run_not_running' });
+      expect(await rejection(say(run.id, 'x'.repeat(301)))).toMatchObject({ reason: 'invalid' });
+      // A label value that would print as a second line, or rewrite the first.
+      for (const value of ['merged\nanother entry', 'merged\u001b[2K'])
+        expect(await rejection(say(run.id, 'Merged', { kind: value }))).toMatchObject({
+          reason: 'invalid',
+        });
+      expect(await say(run.id, 'Merged pull request 7', { kind: 'merged' })).toEqual({
+        runId: run.id,
+        count: 1,
+        limit: WORKFLOW_NOTICE_LIMITS.perRun,
+      });
+      await say(run.id, 'Returned pull request 9', { kind: 'returned' });
+      // The run is still running: a notice changed nothing about it.
+      expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
+
+      const mine = (await store.listWorkflowNoticeRows()).filter(row => row.runId === run.id);
+      // In the order the run emitted them, also when both carry one timestamp.
+      expect(mine.map(row => row.data)).toEqual([
+        { text: 'Merged pull request 7', labels: { kind: 'merged' }, node: 'merge' },
+        { text: 'Returned pull request 9', labels: { kind: 'returned' }, node: 'merge' },
+      ]);
+      expect(Number.isNaN(Date.parse(mine[0]?.at ?? ''))).toBe(false);
+
+      const query = { scope: { kind: 'all' as const }, labels: { kind: 'merged' } };
+      expect(await listWorkflowNotices({ store }, query)).toMatchObject([
+        { runId: run.id, workflow: run.workflow_name, text: 'Merged pull request 7' },
+      ]);
+      expect(
+        await listWorkflowNotices({ store }, { ...query, since: new Date(Date.now() + 60_000) })
+      ).toEqual([]);
+
+      for (let emitted = 2; emitted < WORKFLOW_NOTICE_LIMITS.perRun; emitted++)
+        await say(run.id, 'Merged another');
+      expect(await rejection(say(run.id, 'One too many'))).toMatchObject({ reason: 'run_limit' });
     });
   });
 }

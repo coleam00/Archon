@@ -41,6 +41,9 @@ export class InMemoryStore implements IWorkflowStore {
   deleteStateDocument: IWorkflowStore['deleteStateDocument'] = async () => {
     throw new Error('Unexpected deleteStateDocument');
   };
+  claimStateDocument: IWorkflowStore['claimStateDocument'] = async () => {
+    throw new Error('Unexpected claimStateDocument');
+  };
   listStateRevisions: IWorkflowStore['listStateRevisions'] = async () => {
     throw new Error('Unexpected listStateRevisions');
   };
@@ -147,6 +150,8 @@ export class InMemoryStore implements IWorkflowStore {
   listEventsForRuns: IWorkflowStore['listEventsForRuns'] = async (ids, types) =>
     readEventsForRuns(this.events, ids, types);
   listMetricRecords: IWorkflowStore['listMetricRecords'] = async () => [];
+  listAttentionWaitStarts: IWorkflowStore['listAttentionWaitStarts'] = async () => [];
+  listWorkflowNoticeRows: IWorkflowStore['listWorkflowNoticeRows'] = async () => [];
   findWorkflowRunsByIdPrefix: IWorkflowStore['findWorkflowRunsByIdPrefix'] = async () => [];
   listWorkflowRuns: IWorkflowStore['listWorkflowRuns'] = () => {
     throw new Error('Unexpected listWorkflowRuns');

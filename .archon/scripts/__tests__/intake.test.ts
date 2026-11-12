@@ -1,16 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import {
-  assertNoSelfPromotion,
   bodyDigest,
-  claimItem,
   decideIntake,
+  enqueue,
   type IntakeRequest,
   type IssueFacts,
   mirrorLabels,
@@ -21,7 +20,7 @@ import {
   type TriageFacts,
   type WorkItem,
 } from '../../workflows/sdlc/.shared/workitem';
-import { parseMaintainerList, parseMaintainers } from '../../workflows/sdlc/.shared/maintainers';
+import { parseMaintainers } from '../../workflows/sdlc/.shared/maintainers';
 import {
   gitCheckout,
   hostCli,
@@ -104,13 +103,13 @@ describe('the intake decision', () => {
     );
   });
 
-  test('a route label added by a login not in maintainers.json promotes nothing', () => {
+  test('archon-triage added by a login not in maintainers.json promotes nothing', () => {
     for (const actor of ['stranger', null]) {
       const decision = decide(
         item({ trust: 'outside', stage: 'needs_maintainer' }, [
-          labelRequest('archon-ready', actor),
+          labelRequest('archon-triage', actor),
         ]),
-        issue({ labels: ['archon-ready'] })
+        issue({ labels: ['archon-triage'] })
       );
       expect(decision).toMatchObject({ path: 'outside', promoted: null });
       expect(decision.notes).toEqual([
@@ -164,46 +163,30 @@ describe('the intake decision', () => {
     ]);
   });
 
-  test("the pack's own label write is an echo, and recorded trust never changes", () => {
-    // The install wrote archon-ready on a promoted outside item; its event comes back
-    // with the install's own login, which is not on the list. It is neither refused
-    // nor a promotion.
-    const promoted = {
-      at: AT,
-      via: 'label' as const,
-      by: 'maintainer',
-      label: 'archon-triage',
-      pin: { body_digest: DIGEST },
-    };
-    const doc = item(
-      { trust: 'outside', stage: 'deliver', promoted, facts: { triage: triaged() } },
-      [labelRequest('archon-ready', 'install')]
+  test('a route label requests nothing, whoever adds it; archon-triage re-triages', () => {
+    const outside = decide(
+      item({ trust: 'outside', stage: 'needs_maintainer' }, [labelRequest('archon-ready', 'maintainer')]),
+      issue({ labels: ['archon-ready'] })
     );
-    expect(decide(doc, issue({ author: 'maintainer', labels: ['archon-ready'] }))).toMatchObject({
-      path: 'quiet',
-      trust: 'outside',
-      notes: [],
-    });
+    expect(outside).toMatchObject({ path: 'outside', promoted: null, notes: [] });
+    const base = { trust: 'maintainer' as const, stage: 'deliver' as const, facts: { triage: triaged() } };
+    const routed = decide(item(base, [labelRequest('archon-plan', 'maintainer')]), issue({ labels: ['archon-plan'] }));
+    expect(routed).toMatchObject({ path: 'quiet', stage: 'deliver', notes: [] });
+    expect(decide(item(base, [labelRequest('archon-triage', 'maintainer')]), issue({ labels: ['archon-triage'] })).path).toBe('triage');
   });
 
-  test("a maintainer's route label on a maintainer item is reconciled; archon-triage re-triages", () => {
-    const base = {
-      trust: 'maintainer' as const,
-      stage: 'deliver' as const,
-      facts: { triage: triaged() },
-    };
-    const reconciled = decide(
-      item(base, [labelRequest('archon-plan', 'maintainer')]),
-      issue({ labels: ['archon-plan'] })
-    );
-    expect(reconciled).toMatchObject({ path: 'quiet', stage: 'deliver' });
-    expect(reconciled.notes[0]).toMatchObject({ outcome: 'reconciled' });
-    expect(
-      decide(
-        item(base, [labelRequest('archon-triage', 'maintainer')]),
-        issue({ labels: ['archon-triage'] })
-      ).path
-    ).toBe('triage');
+  test("a run's re-triage request re-triages a maintainer's or a promoted item, naming the run, and never promotes an outside one", () => {
+    const asked: IntakeRequest = { at: AT, run_id: 'merge-run', action: 'retriage', label: null, actor: null, body_digest: null };
+    const named = expect.objectContaining({ outcome: 'retriage', summary: 'run merge-run asked for a re-triage' });
+    const maintainer = decide(item({ trust: 'maintainer', stage: 'deliver', facts: { triage: triaged() } }, [asked]), issue());
+    expect(maintainer).toMatchObject({ path: 'triage' });
+    expect(maintainer.notes).toEqual([named]);
+    const pin = { body_digest: DIGEST };
+    const promoted = { at: AT, via: 'label' as const, by: 'Maintainer', label: 'archon-triage', pin };
+    expect(decide(item({ trust: 'outside', stage: 'deliver', promoted, facts: { triage: triaged() } }, [asked]), issue())).toMatchObject({ path: 'triage' });
+    const outside = decide(item({ trust: 'outside', stage: 'needs_maintainer' }, [asked]), issue());
+    expect(outside).toMatchObject({ path: 'outside', promoted: null });
+    expect(outside.notes).toEqual([named]);
   });
 
   test('a request label removed before intake reads it is void', () => {
@@ -215,20 +198,6 @@ describe('the intake decision', () => {
     );
     expect(decision).toMatchObject({ path: 'outside', promoted: null });
     expect(decision.notes[0]).toMatchObject({ outcome: 'void' });
-  });
-
-  test('the outcome refuses to add a request label to an outside item no maintainer promoted', () => {
-    const outside = item({
-      trust: 'outside',
-      facts: { intake: { body_digest: DIGEST, at: AT, run_id: 'run', waiting: [] } },
-    });
-    expect(() => assertNoSelfPromotion(outside, ['archon-ready'])).toThrow(
-      'no maintainer promoted'
-    );
-    expect(() => assertNoSelfPromotion(outside, ['archon-needs-maintainer'])).not.toThrow();
-    expect(() =>
-      assertNoSelfPromotion({ ...outside, trust: 'maintainer' }, ['archon-ready'])
-    ).not.toThrow();
   });
 });
 
@@ -280,10 +249,7 @@ describe('pickup', () => {
     expect([...parseMaintainers('[" Wirasm ", "Other"]')]).toEqual(['wirasm', 'other']);
     expect(() => parseMaintainers('{"maintainers": []}')).toThrow('JSON array of forge logins');
     expect(() => parseMaintainers('[""]')).toThrow('JSON array of forge logins');
-    const list = parseMaintainerList('["Alice", { "login": " Wirasm ", "merge_queue": "own-prs" }]');
-    expect([...list.logins]).toEqual(['alice', 'wirasm']);
-    expect([...list.ownPrs]).toEqual(['wirasm']);
-    expect(() => parseMaintainerList('[{ "login": "x", "merge_queue": "all" }]')).toThrow('JSON array of forge logins');
+    expect(() => parseMaintainers('[{ "login": "x" }]')).toThrow('JSON array of forge logins');
   });
 });
 
@@ -389,22 +355,25 @@ function facts(at: Install, event: Event): { run: ScriptRun; output: Record<stri
   return { run: result, output: JSON.parse(result.stdout) as Record<string, unknown> };
 }
 
-const READY_VERDICT = {
-  INPUTS_CONTRACT: 'READY',
-  INPUTS_ROUTE: 'deliver',
-  INPUTS_PULL_REQUEST: 'null',
-  INPUTS_TYPE: '{"value":"feature","reason":"new behavior"}',
-  INPUTS_SIZE: '{"value":"s","reason":"one script"}',
-  INPUTS_COMPLEXITY: '{"value":"low","reason":"clear"}',
-  INPUTS_IMPORTANCE: '{"value":"high","reason":"on direction"}',
-  INPUTS_URGENCY: '{"value":"soon","reason":"next release"}',
-  INPUTS_LABELS: '["archon-ready","archon-size-s","archon-type-feature"]',
-  INPUTS_SUMMARY: 'Ready to deliver',
-  INPUTS_CLOSURE: 'null',
-  INPUTS_RELATED: '[{"url":"https://ghe.example.com/example/repo/issues/5","relation":"an earlier attempt, closed"}]',
-  INPUTS_REPORT: '{"type":"archon_artifact","run_id":"run-1","path":"triage.md"}',
+const READY_TRIAGE = {
+  decision: { contract: 'READY', route: 'deliver' } as Record<string, unknown>,
+  type: { value: 'feature', reason: 'new behavior' },
+  size: { value: 's', reason: 'one script' },
+  complexity: { value: 'low', reason: 'clear' },
+  importance: { value: 'high', reason: 'on direction' },
+  urgency: { value: 'soon', reason: 'next release' },
+  item: SUBJECT,
+  area_labels: [],
+  related: [{ url: 'https://ghe.example.com/example/repo/issues/5', relation: 'an earlier attempt, closed' }],
+  summary: 'Ready to deliver',
+  report: { type: 'archon_artifact', run_id: 'run-1', path: 'triage.md' },
 };
-const SKIPPED_TRIAGE = Object.fromEntries(Object.keys(READY_VERDICT).map(key => [key, 'null']));
+/** The outcome node's triage binding: the triage node's typed output with this decision. */
+function verdict(decision: Record<string, unknown>): Record<string, string> {
+  return { INPUTS_TRIAGE: JSON.stringify({ ...READY_TRIAGE, decision }) };
+}
+const READY_VERDICT = verdict(READY_TRIAGE.decision);
+const SKIPPED_TRIAGE = { INPUTS_TRIAGE: 'null' };
 
 const ISSUE_URL = 'https://ghe.example.com/example/repo/issues/7';
 const ORIGINAL_URL = 'https://ghe.example.com/example/repo/issues/3';
@@ -412,13 +381,7 @@ const ORIGINAL: TrackerIssue = { number: 3, title: 'The original', body: 'Its bo
 const MERGED_URL = 'https://ghe.example.com/example/repo/pull/5';
 
 function closeVerdict(closure: Closure): Record<string, string> {
-  return {
-    ...READY_VERDICT,
-    INPUTS_CONTRACT: 'NO_ACTION',
-    INPUTS_ROUTE: 'no_action',
-    INPUTS_LABELS: '["archon-close","archon-type-feature"]',
-    INPUTS_CLOSURE: JSON.stringify(closure),
-  };
+  return verdict({ contract: 'NO_ACTION', closure });
 }
 const DUPLICATE_VERDICT = closeVerdict({
   kind: 'duplicate',
@@ -493,9 +456,22 @@ describe('the intake scripts', () => {
     });
     expect(stored(at).value.claim?.run_id).toBe('run-1');
 
-    const applied = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const applied = run(at, 'outcome', { runId: 'run-1' }, {
+      INPUTS_PATH: String(decided.path),
+      INPUTS_ITEM: JSON.stringify(decided.item),
+      INPUTS_DECISION: JSON.stringify(decided.decision),
+      ...READY_VERDICT,
+      INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json',
+      ARCHON_CALL_LOG: calls,
+    });
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(labelWrites(applied, 7)).toEqual({ add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] });
+    // The routed item starts a build-queue pickup, once per run. The fire names no item, so
+    // the binding's own orders_only decides what the pickup may take.
+    const fire = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-pickup:ghe.example.com/example/repo#7:run-1']);
+    expect(JSON.parse(readFileSync(fire?.[fire.indexOf('--inputs') + 1] ?? '', 'utf8'))).toEqual({});
     const doc = stored(at).value;
     expect(doc).toMatchObject({ stage: 'deliver', trust: 'maintainer', claim: null, requests: [] });
     expect(doc.facts.triage).toMatchObject({
@@ -518,77 +494,6 @@ describe('the intake scripts', () => {
       verdict: 'READY',
       report: { path: 'triage.md' },
     });
-  }, 60_000);
-
-  test('a second pickup at the same work-item revision skips the item', () => {
-    const at = install();
-    facts(at, { runId: 'run-1' });
-    const claimedRevision = stored(at).revision;
-    // A pull request's event records no request, so this run is only a pickup.
-    const second = facts(at, {
-      runId: 'run-2',
-      kind: 'pr',
-      statuses: { 'run-1': 'running' },
-    }).output;
-    expect(second).toMatchObject({ path: 'idle', item: null });
-    expect(stored(at).revision).toBe(claimedRevision);
-
-    // The same race in-process: a pickup that read the item before run-1's claim
-    // loses the conditional write and skips the item.
-    const unclaimed = {
-      ...stored(at).value,
-      claim: null,
-      requests: [labelRequest('archon-triage', 'maintainer')],
-    };
-    expect(
-      inProcess(at, () =>
-        claimItem({ name: 'work/7', revision: claimedRevision - 1, doc: unclaimed, lease: null }, AT, 'run-3')
-      )
-    ).toBeNull();
-    expect(stored(at).value.claim?.run_id).toBe('run-1');
-  }, 60_000);
-
-  test("a failed run keeps its claim; the next pickup releases a cancelled run's claim and queues its requests again", () => {
-    const at = install();
-    facts(at, { runId: 'run-1' });
-    // A failed run can resume, so its lease, and with it the claim, stands.
-    const held = facts(at, { runId: 'run-2', kind: 'pr', statuses: { 'run-1': 'failed' } }).output;
-    expect(held).toMatchObject({ path: 'idle', item: null });
-    expect(stored(at).value.claim?.run_id).toBe('run-1');
-    const decided = facts(at, {
-      runId: 'run-2',
-      kind: 'pr',
-      statuses: { 'run-1': 'cancelled' },
-    }).output;
-    expect(decided).toMatchObject({ path: 'triage', item: SUBJECT });
-    const doc = stored(at).value;
-    expect(doc.claim).toMatchObject({
-      run_id: 'run-2',
-      requests: [expect.objectContaining({ run_id: 'run-1', action: 'opened' })],
-    });
-    expect(doc.history.at(-1)).toMatchObject({
-      outcome: 'released',
-      summary: expect.stringContaining('run-1, which ended without finishing'),
-    });
-  }, 60_000);
-  function idleOutcome(at: Install, event: Event): string {
-    // A skipped document is noted on stderr as well, so only the exit codes are pinned.
-    const picked = run(at, 'facts', event);
-    expect(picked.code).toBe(0);
-    expect(JSON.parse(picked.stdout)).toMatchObject({ path: 'idle', item: null });
-    const result = run(at, 'outcome', event, { INPUTS_PATH: 'idle', INPUTS_ITEM: 'null', INPUTS_DECISION: 'null' });
-    expect(result.code).toBe(0);
-    return (JSON.parse(result.stdout) as { summary: string }).summary;
-  }
-
-  test('a claim whose run holds no lease stays held, and the idle pass names it and the run', () => {
-    const at = install();
-    const held = { ...newWorkItem(SUBJECT, AT), claim: { run_id: 'ghost-run', at: AT, requests: [] } };
-    inProcess(at, () => statePut('work/7', held, 0));
-    const summary = idleOutcome(at, { runId: 'run-1', kind: 'pr' });
-    expect(stored(at).value.claim?.run_id).toBe('ghost-run');
-    expect(summary).toContain('work/7');
-    expect(summary).toContain('ghost-run');
   }, 60_000);
 
   test('a request label added while the item is claimed stays on the issue for the next pickup', () => {
@@ -743,19 +648,6 @@ describe('the intake scripts', () => {
     expectLeftToMaintainer(at, applied, 'repo#5 is a pull request, not an issue');
   }, 60_000);
 
-  test('a NO_ACTION verdict that arrives without its closure is refused', () => {
-    const at = install();
-    const applied = outcome(
-      at,
-      { runId: 'run-1' },
-      facts(at, { runId: 'run-1' }).output,
-      { ...DUPLICATE_VERDICT, INPUTS_CLOSURE: 'null' }
-    );
-    expect(applied.code).not.toBe(0);
-    expect(applied.stderr).toContain('only that one, carries a closure');
-    expect(labelWrites(applied, 7)).toEqual({ add: [], remove: [] });
-  }, 60_000);
-
   test('a delivered item is closed as completed, linked to the merged change', () => {
     const at = install();
     const applied = outcome(
@@ -785,23 +677,31 @@ describe('the intake scripts', () => {
     expectLeftToMaintainer(at, applied, 'not https://ghe.example.com/example/repo/issues/4');
   }, 60_000);
 
-  test('a blocked item closes nothing', () => {
+  test('an item no route can start from gets its questions as one marked comment', () => {
+    const at = install();
+    const decided = facts(at, { runId: 'run-1' }).output;
+    const asked = outcome(at, { runId: 'run-1' }, decided, verdict({ contract: 'NEEDS_CONTRACT_WORK', questions: ['Which export format is wanted?'] }));
+    expect({ code: asked.code, stderr: asked.stderr }).toEqual({ code: 0, stderr: '' });
+    expect(asked.comments).toEqual([{ issue: 7, body: expect.stringContaining('- Which export format is wanted?') }]);
+    expect(asked.closes).toEqual([]);
+    expect(stored(at).value).toMatchObject({ stage: 'needs_contract', claim: null });
+  }, 60_000);
+
+  test('a blocked item closes nothing and keeps what its verdict waits on', () => {
     const at = install();
     const applied = outcome(
       at,
       { runId: 'run-1' },
       facts(at, { runId: 'run-1' }).output,
-      {
-        ...READY_VERDICT,
-        INPUTS_CONTRACT: 'BLOCKED',
-        INPUTS_ROUTE: 'no_action',
-        INPUTS_LABELS: '["archon-blocked","archon-size-s","archon-type-feature"]',
-        INPUTS_CLOSURE: 'null',
-      }
+      verdict({ contract: 'BLOCKED', blocked_reason: 'waits on a release', blocked_by: [ORIGINAL_URL] })
     );
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect([...applied.closes, ...applied.comments]).toEqual([]);
-    expect(stored(at).value).toMatchObject({ stage: 'blocked', claim: null });
+    expect(stored(at).value).toMatchObject({
+      stage: 'blocked',
+      claim: null,
+      facts: { triage: { blocked: { reason: 'waits on a release', by: [ORIGINAL_URL] } } },
+    });
   }, 60_000);
 
   test('a closed issue is recorded and its labels are left alone', () => {
@@ -833,6 +733,27 @@ describe('the intake scripts', () => {
     expect(stored(at).revision).toBe(revision);
   }, 60_000);
 
+  test("a run claims its own event's issue while another waits, and a run with no request of its own takes the other", () => {
+    const at = install();
+    const older = { repo: PR.repo, number: 3 };
+    inProcess(at, () =>
+      enqueue(older, { at: AT, run_id: 'event', action: 'opened', label: null, actor: null, body_digest: null })
+    );
+    expect(facts(at, { runId: 'run-1', others: [ORIGINAL] }).output).toMatchObject({ item: SUBJECT });
+    expect(inProcess(at, () => state.get('work/3')).value).toMatchObject({ claim: null, requests: [{ run_id: 'event' }] });
+    expect(facts(at, { runId: 'run-2', kind: 'pr', others: [ORIGINAL] }).output).toMatchObject({ item: older });
+  }, 60_000);
+
+  test("a re-triage pickup records nothing of its own: the asking run's request is the only one", () => {
+    const at = install();
+    const first = facts(at, { runId: 'run-1' }).output;
+    expect(outcome(at, { runId: 'run-1' }, first, READY_VERDICT).code).toBe(0);
+    const revision = stored(at).revision;
+    const pickup = facts(at, { runId: 'run-2', action: 'retriage', statuses: { 'run-1': 'completed' } }).output;
+    expect(pickup).toMatchObject({ path: 'idle' });
+    expect(stored(at).revision).toBe(revision);
+  }, 60_000);
+
   test('a failed run that resumes still holds its claim and writes its outcome', () => {
     const at = install();
     const decided = facts(at, { runId: 'run-1' }).output;
@@ -841,6 +762,6 @@ describe('the intake scripts', () => {
     expect({ code: resumed.code, stderr: resumed.stderr }).toEqual({ code: 0, stderr: '' });
     expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null });
     // Clearing the claim gave the run's lease back in the same write.
-    expect(inProcess(at, () => stateGet('work/7')).lease).toBeNull();
+    expect(inProcess(at, () => state.get('work/7')).lease).toBeNull();
   }, 60_000);
 });

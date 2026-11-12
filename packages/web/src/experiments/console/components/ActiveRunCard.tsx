@@ -5,6 +5,7 @@ import { StatusStrip } from './StatusStrip';
 import { RunningDot } from './LiveDot';
 import { OwnerObservationHint } from './OwnerObservationHint';
 import { OriginBadge } from './OriginBadge';
+import { RelativeRunStart } from './RelativeRunStart';
 import { ApprovalPanel } from './ApprovalPanel';
 import { AttentionAnswerPanel, isLegacyAttention } from './AttentionAnswerPanel';
 import { ApprovalContext } from './ApprovalContext';
@@ -172,6 +173,10 @@ function RunCardHeader({
         <span className="font-mono text-console-11 tabular-nums text-text-tertiary">
           {runElapsedLabel(run, elapsed)}
         </span>
+        <RelativeRunStart
+          className="whitespace-nowrap font-mono text-console-11 text-text-tertiary"
+          startedAt={run.startedAt}
+        />
         {ideWorkingPath !== null ? (
           <OpenInIdeButton workingPath={ideWorkingPath} ideEnv={ideEnv} />
         ) : null}

@@ -1,6 +1,6 @@
 # Investigate
 
-Establish the proven causal chain for the target — from the observed symptom to the root cause that actually explains it — and write a report a fixer or planner can act on without repeating your work. You change nothing and fix nothing: the repository must be exactly as you found it when you finish. No one watches the run; the report and your declared fields are the only things that persist.
+Establish the proven causal chain for the target — from the observed symptom to the root cause that actually explains it — and write a report a fixer or planner can act on without repeating your work. You change nothing and fix nothing. No one watches the run; the report and your declared fields are the only things that persist.
 
 The target — an issue reference, a symptom, a failing command, or a question (may be empty — empty means the run's trigger message is the target):
 
@@ -67,7 +67,7 @@ Omit a section that does not apply; never write a placeholder to preserve one.
 
 ## Preserve proved unrelated defects
 
-A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/investigate.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`investigate`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record; the run's outcome relays them to the operator.
+A proved defect you meet that this work does not need is a discovery, never silence: reporting it now costs less than rediscovering it later. Write `$ARTIFACTS_DIR/discoveries/investigate.json` as a JSON array of records with `title`, `claim`, `evidence` (concrete `file:line` facts or command results), `relation` (`unrelated`, or `scope_conflict` when the requested outcome itself would need an explicit boundary crossed), and `source_node` (`investigate`). Write no file for no discovery; never append to another node's file or record suspicion. When delivery follows in the same run, its review validates each record; the pack's discoveries workflow drains them into issues where a project runs it.
 
 ## Not your job
 
@@ -90,8 +90,8 @@ Do not modify source files, commit, branch, push, open or comment on pull reques
   declare. `run_id` is the value above verbatim, and `path` is relative to
   `$ARTIFACTS_DIR`.
 
-Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, no unresolved gap was disguised by extra breadth, and `git status` matches what you started with.
+Before declaring, re-read the report: confirm every cited location exists in the current code, every command you cite actually ran in this session, and no unresolved gap was disguised by extra breadth.
 
 ## Docker verification builds
 
-For disposable Docker verification builds, follow the [Docker verification guidance](../../README.md#docker-verification).
+For disposable Docker verification builds, follow the [Docker verification guidance](https://archon.diy/reference/variables/#disposable-docker-verification-images).

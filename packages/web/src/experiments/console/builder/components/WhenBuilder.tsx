@@ -10,7 +10,8 @@
  * shows the parse error — never silently rewritten.
  */
 import { type ChangeEvent, type ReactElement } from 'react';
-import { format, parse } from '../validation';
+import { INPUTS_REF_PREFIX } from '@/lib/input-ref';
+import { format, formatRef, parse } from '../validation/when-grammar';
 import type { AtomNode, InputAtom, NodeAtom, WhenAst, WhenOp } from '../types';
 
 interface WhenBuilderProps {
@@ -101,7 +102,7 @@ function InputRefFields({
 }): ReactElement {
   return (
     <>
-      <span className="font-mono text-console-11 text-text-tertiary">$INPUTS.</span>
+      <span className="font-mono text-console-11 text-text-tertiary">{INPUTS_REF_PREFIX}</span>
       <input
         aria-label="Input name"
         type="text"
@@ -132,6 +133,8 @@ function AtomRow({
     <div className="flex items-center gap-1">
       {atom.kind === 'input' ? (
         <InputRefFields atom={atom} onChange={onChange} />
+      ) : atom.kind === 'loop_prev' ? (
+        <span className="font-mono text-console-11">{formatRef(atom)}</span>
       ) : (
         <NodeRefFields atom={atom} upstreamIds={upstreamIds} onChange={onChange} />
       )}

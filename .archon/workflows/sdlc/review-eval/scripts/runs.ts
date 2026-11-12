@@ -16,7 +16,7 @@
 import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { git, gitOrThrow } from '../../.shared/git.ts';
-import { isObject } from '../../.shared/typed.ts';
+import { isObject } from '../../.shared/inputs.ts';
 
 export const TIERS = ['small', 'medium', 'large'] as const;
 export type Tier = (typeof TIERS)[number];

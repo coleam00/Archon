@@ -1,6 +1,7 @@
 import { createHmac } from 'node:crypto';
 import { afterAll, describe, expect, test } from 'bun:test';
-import createGitHubWebhookSource, { githubWebhookSourceConfigSchema } from './source-plugin';
+import createGitHubWebhookSource from './source-plugin';
+import { githubWebhookSourceConfigSchema } from './source-config';
 import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import type { z } from '@hono/zod-openapi';
 

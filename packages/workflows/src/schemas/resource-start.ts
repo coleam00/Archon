@@ -95,19 +95,22 @@ export function readAdmissionCheckoutGuard(launch: PreparedWorkflowLaunch): bool
 
 /** Run metadata key naming the receipt binding that requested a resource start. */
 export const RESOURCE_START_METADATA_KEY = 'resource_start';
-export interface ResourceStartRunMetadata {
-  receiptId: string;
-  bindingId: string;
-}
+export const resourceStartReceiptOriginSchema = z
+  .object({ receiptId: z.string().uuid(), bindingId: z.string().min(1) })
+  .strict();
+export type ResourceStartRunMetadata = z.infer<typeof resourceStartReceiptOriginSchema>;
 
-/** The receipt that requested this run's start, from its `resource_start` metadata. */
+/**
+ * The receipt that requested this run's start, from its `resource_start` metadata.
+ * Attribution only: a missing or malformed origin reads as no receipt.
+ */
 export function readResourceStartReceiptId(
   metadata: Readonly<Record<string, unknown>> | undefined
 ): string | undefined {
-  const origin = metadata?.[RESOURCE_START_METADATA_KEY];
-  if (typeof origin !== 'object' || origin === null || Array.isArray(origin)) return undefined;
-  const receiptId = (origin as Record<string, unknown>).receiptId;
-  return typeof receiptId === 'string' ? receiptId : undefined;
+  const origin = resourceStartReceiptOriginSchema.safeParse(
+    metadata?.[RESOURCE_START_METADATA_KEY]
+  );
+  return origin.success ? origin.data.receiptId : undefined;
 }
 
 /**
@@ -172,10 +175,7 @@ export const resourceStartIntentSchema = z
     hostId: z.string().trim().min(1),
     overlap: resourceStartOverlapSchema,
     launch: preparedWorkflowLaunchSchema,
-    receipt: z
-      .object({ receiptId: z.string().uuid(), bindingId: z.string().min(1) })
-      .strict()
-      .optional(),
+    receipt: resourceStartReceiptOriginSchema.optional(),
   })
   .strict();
 export type ResourceStartIntent = z.infer<typeof resourceStartIntentSchema>;
@@ -271,6 +271,18 @@ export const resourceStartBindingIntentSchema = z
   })
   .strict();
 export type ResourceStartBindingIntent = z.infer<typeof resourceStartBindingIntentSchema>;
+
+/** A receipt binding as stores report it, without any store's own bookkeeping. */
+export const startBindingInspectionSchema = z.object({
+  receiptId: z.string(),
+  bindingId: z.string(),
+  bindingRevision: z.string().nullable(),
+  hostId: z.string().nullable(),
+  status: startBindingPreparationStatusSchema,
+  ownerId: z.string().nullable(),
+  error: z.string().nullable(),
+  intent: resourceStartBindingIntentSchema.nullable(),
+});
 
 const sourceReceiptAcceptanceBaseSchema = z
   .object({

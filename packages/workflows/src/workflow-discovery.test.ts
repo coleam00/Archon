@@ -352,7 +352,9 @@ nodes:
       expect(result.errors).toEqual([
         expect.objectContaining({
           errorType: 'validation_error',
-          error: expect.stringContaining('Named packaged script'),
+          // A module beside `.shared/scripts/` is not a script; both searched places are named.
+          error:
+            "Named script 'helper' was not found in module-pack/release/scripts/ or module-pack/.shared/scripts/.",
         }),
       ]);
     });
@@ -544,7 +546,19 @@ nodes:
       await writeFile(join(workflowDir, 'two.yaml'), 'name: two\ndescription: two\nnodes: []\n');
       const result = await discoverWorkflows(testDir, { loadDefaults: false });
       expect(result.errors).toHaveLength(1);
-      expect(result.errors[0].error).toContain('must contain exactly one .yaml or .yml file');
+      expect(result.errors[0].error).toBe(
+        "Packaged workflow 'team/flow' must contain exactly one .yaml or .yml file (found 2)."
+      );
+      expect(result.workflows).toEqual([]);
+    });
+
+    it('reports an invalid packaged workflow folder name', async () => {
+      const workflowDir = join(testDir, '.archon', 'workflows', 'team', 'flow..v2');
+      await mkdir(workflowDir, { recursive: true });
+      await writeFile(join(workflowDir, 'flow.yaml'), 'name: flow\ndescription: flow\nnodes: []\n');
+      const result = await discoverWorkflows(testDir, { loadDefaults: false });
+      expect(result.errors).toHaveLength(1);
+      expect(result.errors[0].error).toBe("Invalid packaged workflow directory 'team/flow..v2'.");
       expect(result.workflows).toEqual([]);
     });
   });

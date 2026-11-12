@@ -28,6 +28,7 @@ export const cliArgOptions: CliArgOptions = {
   quiet: { type: 'boolean', short: 'q' },
   verbose: { type: 'boolean', short: 'v' },
   json: { type: 'boolean' },
+  throughput: { type: 'boolean' },
   events: { type: 'boolean' },
   watch: { type: 'boolean' },
   event: { type: 'string' },
@@ -43,12 +44,20 @@ export const cliArgOptions: CliArgOptions = {
   occurrence: { type: 'string' },
   // Repeatable: `--choose a --choose b` answers a multi_select attention wait with both.
   choose: { type: 'string', multiple: true },
+  // `workflow respond|answer --recommended`: answer with the option the wait recommends.
+  recommended: { type: 'boolean' },
+  // `workflow approve|reject|respond|answer --as <name>`: the name the answerer declares.
+  as: { type: 'string' },
   // Repeatable attention-queue filters and label writes: `--label k=v`, `--set k=v`, `--unset k`.
   label: { type: 'string', multiple: true },
   set: { type: 'string', multiple: true },
   unset: { type: 'string', multiple: true },
   sort: { type: 'string' },
   'count-by': { type: 'string' },
+  // `workflow attention --watch --protocol`: the full sync protocol, for programs.
+  protocol: { type: 'boolean' },
+  // `workflow attention --watch --notices`: also what happened to work nobody has to act on.
+  notices: { type: 'boolean' },
   // `workflow attention --watch --after <cursor>`: replay the stream after an earlier line.
   after: { type: 'string' },
   port: { type: 'string' },
@@ -79,12 +88,17 @@ export const cliArgOptions: CliArgOptions = {
   values: { type: 'boolean' },
   lease: { type: 'boolean' },
   'release-lease': { type: 'boolean' },
+  held: { type: 'boolean' },
   timeout: { type: 'string' },
   follow: { type: 'boolean' },
   format: { type: 'string' },
   effort: { type: 'string' },
   full: { type: 'boolean' },
   'dry-run': { type: 'boolean' },
+  // `archon workflow types`: compare instead of writing. `--out` is the file it writes,
+  // and the directory `archon pack bindings` writes into.
+  check: { type: 'boolean' },
+  out: { type: 'string' },
   stubs: { type: 'string' },
   'stubs-init': { type: 'string' },
   'default-stubs': { type: 'boolean' },
@@ -100,8 +114,13 @@ export const cliArgOptions: CliArgOptions = {
   'delivery-id': { type: 'string' },
   inputs: { type: 'string' },
   owner: { type: 'string' },
+  // `archon pack bindings`: the operator's choices a pack's binding declaration lacks.
+  repo: { type: 'string' },
+  'run-as': { type: 'string' },
+  only: { type: 'string' },
   // Private sealed handoff appended by the parent of a detached workflow run.
   'internal-detached-run-config': { type: 'string' },
   // Private handoff: the run row the detached parent created before forking (#2872).
   'internal-detached-run-id': { type: 'string' },
+  'internal-detached-worktree-identifier': { type: 'string' },
 };

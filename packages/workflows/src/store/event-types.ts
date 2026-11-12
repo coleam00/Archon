@@ -1,5 +1,6 @@
 import {
   DEFERRED_NODE_USAGE_EVENT_TYPE,
+  NODE_EXECUTION_EVENT_TYPES,
   type SerializedDeferredNodeUsageEvent,
   type SerializedNodeEvent,
 } from '../node-record-serialization';
@@ -12,11 +13,7 @@ import { TERMINAL_RUN_EVENT_TYPES } from '../schemas/workflow-run';
 import { WORKTREE_SETUP_EVENT_TYPES } from '../schemas/worktree-setup';
 
 export const NODE_LIFECYCLE_EVENT_TYPES = [
-  'node_started',
-  'node_suspended',
-  'node_completed',
-  'node_failed',
-  'node_skipped',
+  ...Object.values(NODE_EXECUTION_EVENT_TYPES),
   'node_skipped_prior_success',
 ] as const;
 
@@ -158,6 +155,10 @@ export const WORKFLOW_EVENT_TYPES = [
   // `data.notice` is the composed message; absence means not deprecated OR the run
   // predates this event type.
   'workflow_deprecation_notice',
+  // A notice a node of the run emitted (`workflow notice`): something the run did that
+  // nobody has to act on. `data` is `workflowNoticeDataSchema`: `text`, `labels` and the
+  // emitting `node`; the row's timestamp is when. Never pauses the run.
+  'workflow_notice',
   // #2512 — audit snapshot of a composed fan-out's ordered instance set (identity +
   // item per ordinal), written before the first instance schedules.
   'fan_out_instances',

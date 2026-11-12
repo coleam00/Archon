@@ -82,7 +82,10 @@ export const mockLogger = {
   trace: mock(() => undefined),
 };
 export const mockCaptureApprovalResolved = mock(() => undefined);
+// The rest stays real: run scratch release loads `@archon/git`, which reads its paths here.
+const realPaths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...realPaths,
   captureApprovalResolved: mockCaptureApprovalResolved,
   createLogger: mock(() => mockLogger),
 }));

@@ -283,6 +283,7 @@ function armAttention(pass: WaitPass, condition: Extract<WaitCondition, { kind: 
     pauseId: randomUUID(),
     form: condition.form,
     ...(options !== undefined ? { options } : {}),
+    ...(condition.other === true ? { other: true as const } : {}),
     ...(recommendation !== undefined ? { recommendation } : {}),
     ...(labels !== undefined ? { labels } : {}),
     ...(discarded !== undefined ? { reaskedFrom: discarded.occurrence } : {}),
@@ -472,6 +473,7 @@ function attentionNotification(
     runId,
     form: attentionForm(wait),
     options: [...attentionOptions(wait)],
+    ...(wait.other === true ? { other: true } : {}),
     ...(wait.recommendation !== undefined ? { recommendation: wait.recommendation } : {}),
     occurrence: attentionOccurrence(wait),
   });

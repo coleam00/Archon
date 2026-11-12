@@ -1,0 +1,98 @@
+name: archon-ship
+description: |
+  Ground an issue or request against the current repository before spending on
+  it, then take the least speculative path: investigate an unknown cause, plan
+  an undecided shape, deliver an implementation-ready work order, or stop when
+  no work remains. Actionable paths converge on the reviewed delivery tail.
+  One governed run, one artifact store, no inherited issue assumptions.
+
+  Use when: an issue or request should be taken from current-truth check
+  through to a reviewed PR — "fix this issue", "implement issue #123", "take
+  this work item to a PR".
+  NOT for: bypassing triage with already-prepared work (deliver directly),
+  reviewing an existing PR, or merging.
+
+inputs:
+  target:
+    default: ""
+    description: >-
+      What to take through the pipeline — an issue, document, plan, report, or
+      free-form request. When empty, the run's trigger message is the target.
+  ci:
+    default: "forge"
+    description: The pack's `ci` setting, forwarded to delivery; an includer passes its own.
+  errors:
+    default: "auto"
+    description: Silent-failure lens — auto, true, or false.
+  part:
+    default: ""
+    description: >-
+      The part of an approved multi-part plan this run delivers, forwarded
+      unchanged to delivery's reviews. archon-review's `part` input owns its
+      shape. Empty delivers the whole contract.
+  publish:
+    default: "false"
+    description: >-
+      Let triage write its derived labels to the tracker item — true or false.
+      Off by default. Forwarded unchanged to triage; a scheduled ship run is the
+      only place an unattended intake can turn it on.
+  pull_request:
+    default: ""
+    description: >-
+      The number of an open pull request this run continues, as the caller
+      resolved it; empty or `null` when it names none and leaves it to triage.
+      Delivery finishes a named one whichever route triage takes; triage naming a
+      different one refuses the run.
+  branch:
+    default: ""
+    description: >-
+      The branch a new pull request opens from, as the caller resolved it,
+      forwarded unchanged to delivery. When an open pull request already has that
+      head, the push updates it instead of opening another. Empty opens it from the
+      checkout's branch.
+
+# `delivered:false` is a valid completion: an honest "no work is owed" is a
+# successful run that shipped nothing, and lifecycle status and work outcome are
+# separate facts.
+returns: build
+outcome_field: delivered
+
+nodes:
+  # Refuses the run before any agent spends when the forge plugin cannot
+  # act: no plugin for the host, or no usable credential.
+  - id: forge
+    script: forge-check
+    runtime: bun
+
+  # The source is history, not a work order. Triage checks it against current
+  # code and direction before deciding which kind of reasoning is still owed.
+  - id: triage
+    include: archon-triage-block
+    depends_on: [forge]
+    with:
+      target: "$INPUTS.target"
+      publish: "$INPUTS.publish"
+
+  # Everything after the verdict: investigate, plan or deliver by the route, and the
+  # terminal report. The build queue includes the same block with the route its own
+  # agent declared, so only this workflow triages inside the run.
+  - id: build
+    include: archon-build
+    depends_on: [triage]
+    with:
+      route: "$triage.output.decision.route"
+      work: >-
+        The work item's assessment is $ARTIFACTS_DIR/triage.md, written by this
+        run's triage against the current repository. It records which route the
+        item takes and which source assumptions were corrected; its handoff is
+        the question to investigate, the decisions to plan, or the verified work
+        order.
+      related: "$triage.output.related"
+      contract: "$triage.output.decision.contract"
+      summary: "$triage.output.summary"
+      pull_request: "$INPUTS.pull_request"
+      triage_pull_request: "$triage.output.decision.pull_request"
+      branch: "$INPUTS.branch"
+      ci: "$INPUTS.ci"
+      errors: "$INPUTS.errors"
+      part: "$INPUTS.part"

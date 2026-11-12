@@ -127,7 +127,16 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
           () => workflowGetCommand(host, FULL_ID, json, undefined, '/repo'),
           () => workflowWaitCommand(host, FULL_ID, json, '/repo'),
           () => workflowArtifactsCommand(host, [FULL_ID], { json, cwd: '/repo' }),
-          () => workflowAnswerCommand(host, FULL_ID, 'occurrence', [], 'answer', json, '/repo'),
+          () =>
+            workflowAnswerCommand(
+              host,
+              FULL_ID,
+              'occurrence',
+              { choose: [] },
+              'answer',
+              json,
+              '/repo'
+            ),
           () => workflowAbandonCommand(host, FULL_ID, json, '/repo'),
           () => workflowCancelCommand(host, FULL_ID, json, '/repo'),
           ...[false, true].flatMap(detach => [

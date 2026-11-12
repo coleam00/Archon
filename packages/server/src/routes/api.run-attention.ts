@@ -26,6 +26,7 @@ import {
   selectAttentionQueue,
   type AttentionQueueScope,
 } from '@archon/workflows/attention-queue';
+import { attentionWatchReader } from '@archon/workflows/attention-needs';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { IWorkflowEngine } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
@@ -134,6 +135,10 @@ async function attentionHttpRequest(query: z.infer<typeof attentionQueueQuerySch
   request: ReturnType<typeof parseAttentionQueueRequest>;
 }> {
   const label = query.label ?? [];
+  // This route counts the items open now, which have no answerer; that count reads
+  // started waits from events and is the CLI's `--count-by answerer --since`.
+  if (query.countBy === 'answerer')
+    throw new Error("countBy must be 'project' or 'label:<key>', got 'answerer'");
   const request = parseAttentionQueueRequest({
     ...query,
     all: query.all === 'true',
@@ -175,7 +180,9 @@ export function attentionSseIds(): (line: AttentionStreamLine) => string | undef
 
 /**
  * GET /api/runs/attention/stream - The attention queue over SSE: the open set, `ready`,
- * then every change, each line as `--watch --json` writes it. `watchAttention` is the
+ * then every change, each line as `--watch --protocol --json` writes it; `level=quiet`
+ * sends only the lines `--watch` writes by default, and `level=notices` the lines
+ * `--watch --notices` writes. `watchAttention` is the
  * engine watcher `--watch` uses. Read-only, so like the list route it needs only the
  * `/api/*` access gate.
  */
@@ -184,13 +191,15 @@ export function registerAttentionStreamRoute(
   watchAttention: IWorkflowEngine['watchAttention']
 ): void {
   openApiRouteRegistrar(app)(getAttentionStreamRoute, async c => {
+    const query = getValidatedQuery(c, attentionStreamQuerySchema);
     let parsed: Awaited<ReturnType<typeof attentionHttpRequest>>;
     try {
-      parsed = await attentionHttpRequest(getValidatedQuery(c, attentionStreamQuerySchema));
+      parsed = await attentionHttpRequest(query);
     } catch (refusal) {
       return apiError(c, 400, (refusal as Error).message);
     }
     const { scope, request } = parsed;
+    const level = query.level ?? 'protocol';
     const lastEventId = c.req.header('last-event-id');
     const after = lastEventId === undefined ? undefined : workflowEventCursor(lastEventId);
 
@@ -202,7 +211,10 @@ export function registerAttentionStreamRoute(
         end = resolve;
       });
       stream.onAbort(end);
-      const listener = async (line: AttentionStreamLine): Promise<void> => {
+      const read = attentionWatchReader(level, { resumed: after !== undefined });
+      const listener = async (unclassified: AttentionStreamLine): Promise<void> => {
+        const line = read(unclassified);
+        if (line === undefined) return;
         const id = idOf(line);
         try {
           await writer.writeSSE({

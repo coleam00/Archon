@@ -164,7 +164,6 @@ const mockCleanupMergedEnvironments = mock<typeof IsolationOperations.cleanupMer
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-      baseRef: toBranchName('origin/dev'),
     })
 );
 
@@ -211,10 +210,13 @@ const mockDestroyWorktree = mock<ReturnType<typeof Isolation.getIsolationProvide
   })
 );
 
-const { VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } = await import(
-  '@archon/isolation'
-);
+const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } =
+  await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  generatedTaskBranch,
+  getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
+    state: 'NONE',
+  })),
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
   dockerCli: mock(async () => ({ stdout: '', stderr: '' })),
@@ -1259,7 +1261,6 @@ describe('isolationCleanupMergedCommand', () => {
       errors: [],
       releasedFailedRuns: [],
       warnings: [],
-      baseRef: toBranchName('origin/dev'),
     });
   });
 
@@ -1275,7 +1276,6 @@ describe('isolationCleanupMergedCommand', () => {
         removed: ['done'],
         warnings: [],
         releasedFailedRuns: [],
-        baseRef: toBranchName('origin/dev'),
         skipped: failed ? [] : [{ branchName: 'kept', reason: 'has uncommitted changes' }],
         errors: failed ? [{ branchName: 'kept', error: 'registration changed' }] : [],
       });
@@ -1319,23 +1319,18 @@ describe('isolationCleanupMergedCommand', () => {
     expect(mockCleanupMergedEnvironments).toHaveBeenCalledWith('cb-1', '/test/repo', {});
   });
 
-  // The command used to claim "merged into main" while comparing against the repo's
-  // configured base branch (#3471).
   it('names each failed run whose lock the sweep released', async () => {
     mockCleanupMergedEnvironments.mockResolvedValueOnce({
       removed: ['settled'],
       skipped: [],
       warnings: [],
       errors: [],
-      releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'PR closed' }],
-      baseRef: toBranchName('origin/dev'),
+      releasedFailedRuns: [{ branchName: 'settled', runId: 'run-failed-1', reason: 'merged' }],
     });
 
     await isolationCleanupMergedCommand({ includeClosed: true });
 
-    expect(consoleLogSpy).toHaveBeenCalledWith(
-      '  Released failed run run-fail (PR closed): settled'
-    );
+    expect(consoleLogSpy).toHaveBeenCalledWith('  Released failed run run-fail (merged): settled');
   });
 
   it('shows retained remote branch warnings from merged cleanup', async () => {
@@ -1345,20 +1340,11 @@ describe('isolationCleanupMergedCommand', () => {
       errors: [],
       releasedFailedRuns: [],
       warnings: [{ branchName: 'settled', message: "Remote branch retained 'settled'" }],
-      baseRef: toBranchName('origin/dev'),
     });
     await isolationCleanupMergedCommand();
     expect(consoleLogSpy).toHaveBeenCalledWith(
       "  Warning: settled: Remote branch retained 'settled'"
     );
-  });
-
-  it('names the base ref the sweep compared against, never a hardcoded main', async () => {
-    await isolationCleanupMergedCommand();
-
-    expect(consoleLogSpy).toHaveBeenCalledWith('  Base: origin/dev');
-    const printed = consoleLogSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n');
-    expect(printed).not.toContain('merged into main');
   });
 });
 

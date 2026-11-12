@@ -7,7 +7,8 @@
  * so a name declared anywhere else is a copy that can drift.
  */
 
-import { invokeForge, readRepositoryLabels, type QualifiedPr } from './forge.ts';
+import { forge } from 'archon:script';
+import { type QualifiedPr } from './identity.ts';
 import { viewIssue } from './issue.ts';
 
 interface LabelSpec {
@@ -32,7 +33,7 @@ export const PACK_LABELS = {
   },
   'archon-needs-contract': {
     color: 'D93F0B',
-    description: "Triage: one of the contract's six elements is missing",
+    description: 'Triage: no route can start until the author answers its questions',
   },
   'archon-blocked': {
     color: 'B60205',
@@ -66,25 +67,10 @@ export const PACK_LABELS = {
 
 export type PackLabel = keyof typeof PACK_LABELS;
 
+export const PACK_LABEL_NAMES = Object.keys(PACK_LABELS) as PackLabel[];
+
 export function isPackLabel(name: string): name is PackLabel {
   return Object.hasOwn(PACK_LABELS, name);
-}
-
-// Labels an earlier version of the pack wrote. A write removes them from the item
-// and never creates them, so re-triaging an item clears its old size label, and
-// intake's next write on an item clears archon-issue, the investigate route's old name.
-const RETIRED_LABELS = ['archon-small', 'archon-risky', 'archon-large', 'archon-issue'] as const;
-
-/** A label the pack owns on an item: one it writes now, or one it retired. */
-export type OwnedLabel = PackLabel | (typeof RETIRED_LABELS)[number];
-
-export const OWNED_LABEL_NAMES: readonly OwnedLabel[] = [
-  ...(Object.keys(PACK_LABELS) as PackLabel[]),
-  ...RETIRED_LABELS,
-];
-
-export function isOwnedLabel(name: string): name is OwnedLabel {
-  return (OWNED_LABEL_NAMES as readonly string[]).includes(name);
 }
 
 export type Contract = 'READY' | 'NEEDS_CONTRACT_WORK' | 'BLOCKED' | 'NO_ACTION';
@@ -126,18 +112,11 @@ export const SIZE_LABEL = {
 } as const satisfies Record<Size, PackLabel>;
 
 /**
- * The labels a person adds to ask intake for something: `archon-triage` asks for
- * triage, and a route label on an outside item promotes it. The pack's own write of
- * a route label is not a request; intake recognizes it as the work item's mirror.
+ * The one label a person adds to ask intake for something: a triage, which on an
+ * outside item is also its promotion. The pack never writes it; route and state labels
+ * are the pack's own writes and request nothing.
  */
-export const REQUEST_LABELS: readonly PackLabel[] = [
-  'archon-triage',
-  ...new Set(Object.values(ROUTE_LABEL)),
-];
-
-export function isRequestLabel(name: string): boolean {
-  return (REQUEST_LABELS as readonly string[]).includes(name);
-}
+export const TRIAGE_REQUEST = 'archon-triage' satisfies PackLabel;
 
 /** A triage verdict as far as labels read it: a READY item carries its route. */
 export type LabelVerdict =
@@ -158,6 +137,24 @@ export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size):
 }
 
 /**
+ * Every label a triage output puts on its item: the pack labels its decision derives
+ * and the area labels triage picked, sorted. A pack label among the area labels
+ * refuses: it would be added beside the derived ones, or read as a request.
+ */
+export function triageLabels(triage: {
+  readonly decision: LabelVerdict;
+  readonly type: { readonly value: WorkType };
+  readonly size: { readonly value: Size };
+  readonly area_labels: readonly string[];
+}): string[] {
+  if (triage.area_labels.some(isPackLabel)) {
+    throw new Error('area_labels may not name a pack label; those derive from the verdict');
+  }
+  const wanted = wantedLabels(triage.decision, triage.type.value, triage.size.value);
+  return [...new Set([...wanted, ...triage.area_labels])].sort();
+}
+
+/**
  * Add and remove labels on an issue as a delta, then read the result back.
  *
  * The issue's identity is verified before anything is written. A missing pack
@@ -168,26 +165,26 @@ export function wantedLabels(verdict: LabelVerdict, type: WorkType, size: Size):
 export function writeLabels(
   item: QualifiedPr,
   add: readonly string[],
-  remove: readonly OwnedLabel[]
+  remove: readonly PackLabel[]
 ): string[] {
   // Single add and remove operations, never a whole-set write, so labels another
   // writer adds concurrently survive. Each forge write reads itself back, and a write
   // that does not fails with its outcome, so there is nothing left to re-check here.
   const current = new Set(viewIssue(item).labels);
-  const present = new Set(readRepositoryLabels(item.repo));
+  const present = new Set(forge('repo.labels.list', { repo: item.repo }).labels.map(label => label.name));
   for (const name of add) {
     if (!present.has(name) && isPackLabel(name)) {
-      invokeForge('repo.label.ensure', { repo: item.repo, name, ...PACK_LABELS[name] });
+      forge('repo.label.ensure', { repo: item.repo, name, ...PACK_LABELS[name] });
       present.add(name);
     }
   }
   const applied = [...new Set(add.filter(name => present.has(name)))].sort();
-  const subject = { kind: 'issue', ref: item };
+  const subject = { kind: 'issue', ref: item } as const;
   for (const name of applied.filter(label => !current.has(label))) {
-    invokeForge('workitem.label.add', { subject, name });
+    forge('workitem.label.add', { subject, name });
   }
   for (const name of remove.filter(label => current.has(label))) {
-    invokeForge('workitem.label.remove', { subject, name });
+    forge('workitem.label.remove', { subject, name });
   }
   return applied;
 }

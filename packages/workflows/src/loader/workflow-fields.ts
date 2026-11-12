@@ -1,4 +1,4 @@
-import type { z } from 'zod';
+import { z } from 'zod';
 import type { DagNode, IncludeDirective } from '../schemas';
 import { effortLevelSchema, betasSchema } from '../schemas/dag-node';
 import { INPUT_NAME_PATTERN, inputEnvKey } from '../schemas/node-bindings';
@@ -11,6 +11,7 @@ import {
   workflowDeprecationSchema,
   workflowInputSpecSchema,
   workflowContainerPolicySchema,
+  workflowWorktreePolicySchema,
 } from '../schemas/workflow';
 import type {
   WorkflowRequirement,
@@ -55,27 +56,32 @@ export function parseOptionalField<S extends z.ZodType>(
   return undefined;
 }
 
-/**
- * Parse workflow-level worktree policy. Same warn-and-ignore pattern used
- * for `modelReasoningEffort` — invalid values are dropped
- * rather than rejected, so a typo in one workflow doesn't nuke the whole
- * discovery pass. Only `worktree.enabled` is recognised today.
- */
+/** Parse worktree policy fields through their schemas, warning and dropping invalid values. */
 export function parseWorktreePolicy(
   raw: unknown,
   filename: string
-): { enabled?: boolean } | undefined {
+): z.infer<typeof workflowWorktreePolicySchema> | undefined {
   if (raw === undefined) return undefined;
   if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
     getLog().warn({ filename, value: raw }, 'invalid_worktree_block_ignored');
     return undefined;
   }
-  const rawEnabled = (raw as Record<string, unknown>).enabled;
-  if (typeof rawEnabled === 'boolean') return { enabled: rawEnabled };
-  if (rawEnabled !== undefined) {
-    getLog().warn({ filename, value: rawEnabled }, 'invalid_worktree_enabled_value_ignored');
+  const shape = workflowWorktreePolicySchema.shape;
+  const catchInvalidField = <S extends z.ZodType>(key: string, field: S): z.ZodType<z.output<S>> =>
+    field.catch(ctx => {
+      if (ctx.input !== undefined) {
+        getLog().warn({ filename, value: ctx.input }, `invalid_worktree_${key}_value_ignored`);
+      }
+      return field.parse(undefined);
+    });
+  const fields = Object.fromEntries(
+    Object.entries(shape).map(([key, field]) => [key, catchInvalidField(key, field)])
+  ) as { [K in keyof typeof shape]: z.ZodType<z.output<(typeof shape)[K]>> };
+  const policy = z.object(fields).parse(raw);
+  for (const [key, value] of Object.entries(policy)) {
+    if (value === undefined) Reflect.deleteProperty(policy, key);
   }
-  return undefined;
+  return Object.keys(policy).length > 0 ? policy : undefined;
 }
 
 /**

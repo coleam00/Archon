@@ -22,7 +22,7 @@ import {
 } from '../schemas';
 import { COMPOSE_FAN_OUT_STEP_MARKER } from '../fan-out-identity';
 import { isBindingDirective } from '../schemas/node-bindings';
-import { WHEN_INPUTS_SCOPE } from '../when-atom';
+import { INPUTS_SCOPE } from '../reference-scopes';
 import {
   EXECUTION_CHECKOUT_REF_SOURCE,
   OUTPUT_REF_SOURCE,
@@ -240,8 +240,14 @@ function checkResumeAncestry(node: DagNode | IncludeDirective, scope: DagScope):
   if (source === undefined) {
     return `Node '${node.id}' context.resume references unknown node '${sourceId}'`;
   }
-  if (isIncludeDirective(source) || !(isAgentNode(source) || isLoopNode(source))) {
-    return `Node '${node.id}' context.resume source '${sourceId}' is not a session-producing command, prompt, or loop node`;
+  // An include names the session of the node its workflow returns. Expansion rebinds the
+  // reference to that node and validates the flattened graph again, so the node it
+  // resolves to is judged below on that second pass.
+  if (!isIncludeDirective(source) && !(isAgentNode(source) || isLoopNode(source))) {
+    const alias = scope.includeAliases?.get(sourceId);
+    const found =
+      alias === undefined ? `'${sourceId}'` : `'${alias}' (include returns '${sourceId}')`;
+    return `Node '${node.id}' context.resume source ${found} is not a session-producing command, prompt, or loop node`;
   }
   if (nodesById.has(sourceId) && !scope.transitiveDepsOf(node.id).has(sourceId)) {
     return `Node '${node.id}' context.resume source '${sourceId}' is not an upstream dependency`;
@@ -356,7 +362,7 @@ function bindingProducerIds(
     const refPattern = new RegExp(OUTPUT_REF_SOURCE, 'g');
     let refMatch: RegExpExecArray | null;
     while ((refMatch = refPattern.exec(value)) !== null) {
-      if (refMatch[1] !== WHEN_INPUTS_SCOPE) producerIds.push(refMatch[1]);
+      if (refMatch[1] !== INPUTS_SCOPE) producerIds.push(refMatch[1]);
     }
   } else if (isBindingDirective(value)) {
     const ref = parseWholeOutputRef(value.from);

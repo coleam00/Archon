@@ -368,18 +368,24 @@ async function dispatchCommand(base: CliRouteContext): Promise<number> {
   const ctx = { ...base, detachedRunConfig: await decodeDetachedRunConfig(base) };
 
   if (command === 'forge') return await routes.runForge(ctx);
+  if (command === 'script') return await routes.runScript(ctx);
   if (command === 'workflow' && (subcommand === 'wake' || subcommand === 'signal')) {
     return await workflowRoutes.runWorkflowContinuation(ctx, subcommand);
   }
   if (command === 'continue') return await routes.runRemovedContinue(ctx);
   if (command === 'provider') return await routes.runProvider(ctx);
   if (command === 'plugin') return await routes.runPlugin(ctx);
+  // Reads the pack from --cwd as discovery finds it; the checkout need not be registered.
+  if (command === 'pack') return await routes.runPack(ctx);
   // Note: orphaned run cleanup moved to `workflow cleanup` command only.
   // Running it on every CLI startup killed parallel workflow runs (all
   // 'running' status rows were marked failed by each new process).
 
   if (command === 'workflow' && subcommand === 'test') {
     return await workflowRoutes.runWorkflowTest(ctx);
+  }
+  if (command === 'workflow' && subcommand === 'types') {
+    return await workflowRoutes.runWorkflowTypes(ctx);
   }
 
   const effectiveCwd = await resolveEffectiveCwd(ctx);
@@ -408,10 +414,11 @@ const NO_GIT_COMMANDS = [
 
 function requiresGitRepo(command: string | undefined, subcommand: string | undefined): boolean {
   // `workflow attention` resolves its own scope: `--all`, `--project`, or the working
-  // directory's project, which need not be registered or a git repository.
+  // directory's project, which need not be registered or a git repository. `workflow
+  // notice` acts on the run its environment names, wherever the node runs.
   return (
     !NO_GIT_COMMANDS.includes(command ?? '') &&
-    !(command === 'workflow' && subcommand === 'attention')
+    !(command === 'workflow' && (subcommand === 'attention' || subcommand === 'notice'))
   );
 }
 
@@ -534,6 +541,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowResetSessions(route);
         case 'event':
           return await workflowRoutes.runWorkflowEvent(route);
+        case 'notice':
+          return await workflowRoutes.runWorkflowNotice(route);
         default:
           return await workflowRoutes.runUnknownWorkflowSubcommand(route);
       }

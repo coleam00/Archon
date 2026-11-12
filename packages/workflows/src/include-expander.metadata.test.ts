@@ -1,3 +1,4 @@
+import { expandComposeInstance } from './dag/nodes/compose-fan-out/compose-fan-out-expansion';
 import { describe, test, expect } from 'bun:test';
 import { expandWorkflowIncludes } from './include-expander';
 import type { WorkflowDefinition } from './schemas';
@@ -64,6 +65,7 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
 
     expect(composedBoundaries(nodeById(workflows.get('parent')!, 'first__done'))).toEqual([
       {
+        boundary: { includeId: 'first', workflow: 'gated-block' },
         dependsOn: ['gate-a'],
         entryTriggerRules: ['all_done'],
         when: "$gate-a.output == 'A'",
@@ -72,6 +74,7 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
     ]);
     expect(composedBoundaries(nodeById(workflows.get('parent')!, 'second__done'))).toEqual([
       {
+        boundary: { includeId: 'second', workflow: 'gated-block' },
         dependsOn: ['gate-b'],
         entryTriggerRules: ['all_done'],
         when: "$gate-b.output == 'B'",
@@ -110,12 +113,14 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
     expect(errors).toHaveLength(0);
     expect(composedBoundaries(nodeById(workflows.get('top')!, 'outer__inner__work'))).toEqual([
       {
+        boundary: { includeId: 'outer', workflow: 'middle' },
         dependsOn: ['outer-gate'],
         entryTriggerRules: ['all_success'],
         when: "$outer-gate.output == 'outer'",
         isEntry: false,
       },
       {
+        boundary: { includeId: 'outer__inner', workflow: 'leaf' },
         dependsOn: ['outer__local-gate'],
         entryTriggerRules: ['all_success'],
         when: "$outer__local-gate.output == 'local'",
@@ -161,6 +166,10 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
     expect(errors).toHaveLength(0);
     const loop = nodeById(workflows.get('top')!, 'outer__inner__loop');
     const body = loopGroupNodes(loop)?.find(node => node.id === 'body');
+    expect(composedBoundaries(body)?.map(boundary => boundary.boundary)).toEqual([
+      { includeId: 'outer', workflow: 'middle' },
+      { includeId: 'outer__inner', workflow: 'leaf' },
+    ]);
     expect(composedBoundaries(body)?.map(boundary => boundary.dependsOn)).toEqual([
       ['t-gate'],
       ['outer__m-gate'],
@@ -177,6 +186,199 @@ describe('expandWorkflowIncludes — composed-node metadata survives nesting', (
         new Map([['outer__m-gate', { state: 'completed', output: 'run' }]])
       )
     ).toEqual({ parsed: true, result: true });
+  });
+
+  test('same include name in sibling loop bodies keeps distinct ownership through nesting', () => {
+    const leaf = wf('leaf', [{ id: 'work', bash: 'echo work' }]);
+    const middle = wf(
+      'middle',
+      ['first', 'second'].map(id => ({
+        id,
+        loop_group: {
+          until_bash: 'true',
+          max_iterations: 1,
+          nodes: [{ id: 'review', include: 'leaf', when: "$INPUTS.route == 'run'" }],
+        },
+      })),
+      { inputs: { route: { required: true } } }
+    );
+    const top = wf('top', [
+      { id: 'pick', bash: 'echo run' },
+      {
+        id: 'outer',
+        include: 'middle',
+        depends_on: ['pick'],
+        with: { route: '$pick.output' },
+        when: "$pick.output == 'run'",
+      },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, top));
+    expect(errors).toHaveLength(0);
+    for (const id of ['first', 'second']) {
+      const group = nodeById(workflows.get('middle')!, id);
+      const local = loopGroupNodes(group)?.[0];
+      expect(composedBoundaries(local)?.map(b => b.boundary)).toEqual([
+        { includeId: `${id}.review`, workflow: 'leaf' },
+      ]);
+      const outerGroup = nodeById(workflows.get('top')!, `outer__${id}`);
+      const nested = loopGroupNodes(outerGroup)?.[0];
+      expect(composedBoundaries(nested)?.map(b => b.boundary)).toEqual([
+        { includeId: 'outer', workflow: 'middle' },
+        { includeId: `outer__${id}.review`, workflow: 'leaf' },
+      ]);
+    }
+  });
+
+  test('loop scope delimiters cannot alias authored IDs, even for the same workflow', () => {
+    const leaf = wf('leaf', [{ id: 'work', bash: 'exit 99' }]);
+    const nested = {
+      id: 'two',
+      loop_group: {
+        until_bash: 'true',
+        max_iterations: 1,
+        nodes: [{ id: 'review', include: 'leaf', when: "$INPUTS.route == 'run'" }],
+      },
+    };
+    const parent = wf(
+      'parent',
+      [
+        {
+          id: 'one.two',
+          loop_group: {
+            until_bash: 'true',
+            max_iterations: 1,
+            nodes: [{ id: 'review', include: 'leaf', when: "$INPUTS.route == 'run'" }],
+          },
+        },
+        { id: 'one', loop_group: { until_bash: 'true', max_iterations: 1, nodes: [nested] } },
+      ],
+      { inputs: { route: { default: 'stop' } } }
+    );
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, parent));
+    expect(errors).toEqual([]);
+    const expanded = workflows.get('parent')!;
+    const dotted = loopGroupNodes(nodeById(expanded, 'one.two'))?.[0];
+    const inner = loopGroupNodes(nodeById(expanded, 'one'))?.[0];
+    const nestedWork = loopGroupNodes(inner)?.[0];
+    expect(composedBoundaries(dotted)?.[0]?.boundary).toEqual({
+      includeId: 'one%2Etwo.review',
+      workflow: 'leaf',
+    });
+    expect(composedBoundaries(nestedWork)?.[0]?.boundary).toEqual({
+      includeId: 'one.two.review',
+      workflow: 'leaf',
+    });
+  });
+
+  test('fan-out item scopes cannot alias authored include names or other component splits', () => {
+    const leaf = wf('leaf', [{ id: 'work', bash: 'exit 99' }]);
+    const middle = wf('middle', [
+      { id: 'gate', bash: 'echo stop' },
+      { id: 'review', include: 'leaf', depends_on: ['gate'], when: "$gate.output == 'run'" },
+    ]);
+    const top = wf('top', [{ id: 'batch__item-a', include: 'middle' }]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, top));
+    expect(errors).toEqual([]);
+    const staticOwner = composedBoundaries(
+      nodeById(workflows.get('top')!, 'batch__item-a__review__work')
+    )?.[0]?.boundary.includeId;
+    const owners = [staticOwner];
+    for (const [id, identity] of [
+      ['batch', 'item-a'],
+      ['batch__item', 'a'],
+    ]) {
+      const expanded = expandComposeInstance(
+        {
+          id,
+          kind: 'compose_fan_out',
+          include: 'middle',
+          fan_out: {
+            items: '$source.output.items',
+            as: 'item',
+            join: 'all_success',
+            max_parallel: 2,
+          },
+        },
+        identity,
+        {},
+        workflows.get('middle')!,
+        new Map()
+      );
+      if ('error' in expanded) throw new Error(expanded.error);
+      owners.push(composedBoundaries(expanded.nodes[1])?.[0]?.boundary.includeId);
+    }
+    expect(owners).toEqual([
+      'batch%5F%5Fitem-a__review',
+      'batch/item-a__review',
+      'batch%5F%5Fitem/a__review',
+    ]);
+  });
+
+  test('fan-out instances namespace the complete include identity with the parent scope', () => {
+    const leaf = wf('leaf', [{ id: 'work', bash: 'echo work' }]);
+    const middle = wf('middle', [
+      { id: 'gate', bash: 'echo run' },
+      { id: 'review', include: 'leaf', depends_on: ['gate'], when: "$gate.output == 'run'" },
+    ]);
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle));
+    expect(errors).toHaveLength(0);
+    const node = {
+      id: 'batch',
+      kind: 'compose_fan_out',
+      include: 'middle',
+      fan_out: { items: '$source.output.items', as: 'item', join: 'all_success', max_parallel: 2 },
+    } as const;
+    for (const identity of ['item-a', 'item-b']) {
+      const includeId = `cycle.outer__batch__${identity}`;
+      const expanded = expandComposeInstance(
+        node,
+        identity,
+        {},
+        workflows.get('middle')!,
+        new Map(),
+        includeId
+      );
+      if ('error' in expanded) throw new Error(expanded.error);
+      expect(
+        composedBoundaries(
+          expanded.nodes.find(n => n.id === `batch__${identity}__review__work`)
+        )?.map(b => b.boundary)
+      ).toEqual([{ includeId: `${includeId}__review`, workflow: 'leaf' }]);
+    }
+  });
+
+  test("a loop_group body boundary gets the block's input substituted in its gate", () => {
+    // A block that gates an include on one of its own inputs: the caller binds the input
+    // to a node output. The loop body's copy of that gate kept `$INPUTS.route`, which
+    // cannot be evaluated, so every body node was skipped on the first iteration.
+    const leaf = wf('leaf', [
+      {
+        id: 'loop',
+        loop_group: {
+          until_bash: 'test 1 = 1',
+          max_iterations: 1,
+          nodes: [{ id: 'body', bash: 'echo body' }],
+        },
+      },
+    ]);
+    const middle = wf(
+      'middle',
+      [
+        { id: 'seed', bash: 'echo seed' },
+        { id: 'inner', include: 'leaf', depends_on: ['seed'], when: "$INPUTS.route == 'run'" },
+      ],
+      { inputs: { route: { required: true } } }
+    );
+    const top = wf('top', [
+      { id: 'pick', bash: 'echo run' },
+      { id: 'outer', include: 'middle', depends_on: ['pick'], with: { route: '$pick.output' } },
+    ]);
+
+    const { workflows, errors } = expandWorkflowIncludes(mapOf(leaf, middle, top));
+    expect(errors).toHaveLength(0);
+    const loop = nodeById(workflows.get('top')!, 'outer__inner__loop');
+    const body = loopGroupNodes(loop)?.find(node => node.id === 'body');
+    expect(composedBoundaries(body)?.at(-1)?.when).toBe("$pick.output == 'run'");
   });
 });
 

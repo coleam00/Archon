@@ -1,9 +1,10 @@
 import { randomUUID } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 import { getArchonConfigPath, getArchonHome } from '@archon/paths/archon-paths';
-import { getPluginsPath } from '@archon/paths';
-import { discoverPlugins } from '@archon/forge/discovery';
-import { dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
+import { BUNDLED_IS_BINARY, getPluginsPath } from '@archon/paths';
+import { getSourceGithubForgeEntry } from '@archon/paths/source-tree-paths';
+import { discoverPlugins, type SourcePlugin } from '@archon/forge/discovery';
+import { checkForgeAccess, dispatchForge, type ForgeOperationAudit } from '@archon/forge/dispatch';
 import { type ForgePluginConfig, forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import {
   forgeRequestSchema,
@@ -13,6 +14,7 @@ import {
   type ForgeRequest,
 } from '@archon/forge/operations';
 import {
+  cliForgeCheckRequestSchema,
   cliForgeMetadataRequestSchema,
   cliForgeResponseSchema,
   type CliForgeResponse,
@@ -48,6 +50,22 @@ async function persistAudit(audit: ForgeOperationAudit, runId: string): Promise<
   }
 }
 
+/**
+ * Release binaries carry no forge plugin and load only installed executables. Source
+ * checkouts and Docker run the GitHub plugin from this checkout, as they run the
+ * maintained providers, so the plugin is never older than the host that calls it.
+ */
+export function sourceForgePlugins(isBinary: boolean = BUNDLED_IS_BINARY): SourcePlugin[] {
+  if (isBinary) return [];
+  return [
+    {
+      name: 'github',
+      command: process.execPath,
+      args: ['--no-env-file', getSourceGithubForgeEntry()],
+    },
+  ];
+}
+
 interface ForgeCommandOptions {
   data?: string;
   dataFile?: string;
@@ -58,6 +76,7 @@ interface ForgeCommandOptions {
 interface ForgeCommandDependencies {
   dispatch?: typeof dispatchForge;
   readConfig?: () => Promise<unknown>;
+  sourcePlugins?: readonly SourcePlugin[];
   audit?: typeof persistAudit;
   write?: typeof writeJsonLine;
   env?: NodeJS.ProcessEnv;
@@ -107,6 +126,7 @@ export async function forgeCommand(
   try {
     const input = await readForgeInput(subcommand, options, context);
     if (input.op === 'metadata') return await answerMetadata(input, context);
+    if (input.op === 'check') return await answerCheck(input, context);
     const result = await dispatchRequest(input, context);
     response = result.response;
     const auditFailure = await auditOperation(result.audit, response, context);
@@ -148,19 +168,36 @@ async function readForgeInput(
 }
 
 /**
+ * Where metadata, check and dispatch all find plugins, so a preflight never answers
+ * for a different plugin than the one dispatch runs.
+ */
+function trustedDiscovery(
+  { archonHome, config }: ForgeInput,
+  { trustedEnv, dependencies }: ForgeCommandContext
+): {
+  config: ForgePluginConfig;
+  env: NodeJS.ProcessEnv;
+  pluginsDir: string;
+  sourcePlugins: readonly SourcePlugin[];
+} {
+  return {
+    config,
+    env: trustedEnv,
+    // The trusted directory `archon plugin add` writes; repo env cannot move it.
+    pluginsDir: getPluginsPath(archonHome),
+    sourcePlugins: dependencies.sourcePlugins ?? sourceForgePlugins(),
+  };
+}
+
+/**
  * Host introspection reads the same trusted discovery metadata as dispatch;
  * it is not a plugin operation and never resolves a credential.
  */
-async function answerMetadata(
-  { archonHome, op, supplied, config }: ForgeInput,
-  { operationId, trustedEnv, write }: ForgeCommandContext
-): Promise<number> {
+async function answerMetadata(input: ForgeInput, context: ForgeCommandContext): Promise<number> {
+  const { op, supplied } = input;
+  const { operationId, write } = context;
   const { host } = cliForgeMetadataRequestSchema.parse({ ...supplied, op, operationId });
-  const discovery = await discoverPlugins({
-    config,
-    env: trustedEnv,
-    pluginsDir: getPluginsPath(archonHome),
-  });
+  const discovery = await discoverPlugins(trustedDiscovery(input, context));
   const plugin = discovery.byHost.get(host.toLowerCase());
   if (plugin) {
     await write({ operationId, ok: true, result: { op: 'metadata', value: plugin.metadata } });
@@ -180,18 +217,51 @@ async function answerMetadata(
   return 1;
 }
 
+/**
+ * A preflight for a workflow about to spend: the plugin, its capabilities and the
+ * credential source, read the way dispatch reads them. No plugin operation runs, so
+ * there is nothing to audit.
+ */
+async function answerCheck(input: ForgeInput, context: ForgeCommandContext): Promise<number> {
+  const { op, supplied } = input;
+  const { operationId, env, write } = context;
+  const request = cliForgeCheckRequestSchema.parse({ ...supplied, op, operationId });
+  const check = await checkForgeAccess(request, {
+    ...trustedDiscovery(input, context),
+    credentialEnv: env,
+  });
+  if (!check.ok) {
+    const { error, unsupported } = check;
+    await write({ operationId, ok: false, error, ...(unsupported ? { unsupported } : {}) });
+    return 1;
+  }
+  const { plugin, credentialSource } = check;
+  await write({
+    operationId,
+    ok: true,
+    result: {
+      op: 'check',
+      value: {
+        host: request.host.toLowerCase(),
+        plugin,
+        operations: request.operations,
+        ...(credentialSource ? { credentialSource } : {}),
+      },
+    },
+  });
+  return 0;
+}
+
 async function dispatchRequest(
-  { archonHome, op, supplied, config }: ForgeInput,
+  input: ForgeInput,
   context: ForgeCommandContext
 ): Promise<ForgeDispatchResult> {
+  const { op, supplied } = input;
   const { attempt, operationId } = context;
   attempt.request = forgeRequestSchema.parse({ ...supplied, operationId, op });
   attempt.dispatched = true;
   const result = await (context.dependencies.dispatch ?? dispatchForge)(attempt.request, {
-    config,
-    env: context.trustedEnv,
-    // The trusted directory `archon plugin add` writes; repo env cannot move it.
-    pluginsDir: getPluginsPath(archonHome),
+    ...trustedDiscovery(input, context),
     // Repo scope may supply the credential named by trusted user config. It
     // cannot replace executable discovery or the plugin's runtime identity.
     credentialEnv: context.env,

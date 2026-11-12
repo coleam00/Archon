@@ -87,15 +87,29 @@ layout below. Existing projects keep their names and storage.
   engine-owned `.archon/` child so concurrent runs never share the deferred read and
   workflow-authored root files remain untouched. That child is the engine's own bookkeeping:
   `archon workflow get` and the console run page list a run's artifacts without it. Archon
-  retains filesystem run artifacts until the operator removes them, with one exception:
+  retains filesystem run artifacts until the operator removes them, except for scratch and tagged caches:
   `.archon/scratch/`, where a workflow puts throwaway checkouts and dependency installs, is
   removed once the run is completed, failed or cancelled (including a failed run that is
-  resumed later) and its nodes have stopped. A container run's scratch is removed when its
-  container is. A run whose nodes Archon cannot confirm stopped (its owner ran on another
-  host, or its owner process is still alive) keeps its scratch until the operator removes it.
+  resumed later) and its nodes have stopped. Git worktrees of the run's repository that a
+  node added under scratch are removed from that repository first, so no registration
+  outlives its files. Tagged cache directories anywhere beneath `$ARTIFACTS_DIR` are removed
+  at that same release point. A container run's scratch and tagged caches are removed when
+  its container is. A run whose nodes Archon cannot confirm stopped (its owner ran on another
+  host, or its owner process is still alive) keeps its scratch and caches until the operator
+  removes them.
   A CLI run stopped by a signal (Ctrl-C, SIGTERM) is marked failed without stopping its nodes
-  through Archon, so it keeps its scratch until it is abandoned or its conversation is reset.
-  Everything else in `$ARTIFACTS_DIR` is kept.
+  through Archon, so it keeps its scratch and caches until it is abandoned or its conversation is reset.
+  A cache tag must be a regular file named `CACHEDIR.TAG` whose first 43 bytes are exactly
+  `Signature: 8a477f597d28d172789f06886806bc55`; no newline is required. A valid tag makes
+  that entire descendant directory disposable, including all its contents, even under
+  `.archon/`. Invalid tags are ignored. The artifacts root itself is always retained,
+  even if tagged, and symlinks are never followed. Untagged evidence outside scratch
+  and tagged subtrees is kept. Each removed cache is logged with its run context,
+  artifacts path, relative cache path and `estimatedFreedBytes`: allocated blocks counted
+  once per inode within that subtree. This is an estimate, not an exact free-space delta
+  (hard links outside the subtree, shared storage and compression can affect reclamation).
+  A failed measurement is logged and reports a null estimate if removal succeeds; failed
+  removals are logged without changing the run's outcome.
   `archon workflow cleanup` deletes old database run records, not these directories.
 - `workspaces/<project>/logs/` - One JSONL execution log per run.
 - `workspaces/<project>/state/` - `$STATE_DIR`. Cross-run workflow state, shared by every
@@ -106,7 +120,9 @@ layout below. Existing projects keep their names and storage.
   each plugin's receipt is `installed/<owner>/<repo>[/<path>]/receipt.json`, and
   workflow pack trees live under `packs/`. Release binaries load the Claude, Codex
   and Pi providers only from these receipts; source checkouts and Docker run them
-  from source and ignore receipts for those three.
+  from source and ignore receipts for those three. Source checkouts and Docker also
+  run the GitHub forge plugin from source and skip an `archon-forge-github`
+  executable here.
 - `install.json` - Discovery metadata for the last compiled Archon invoked. GUI and
   service consumers may use its absolute `binary` path when the user has not
   configured one explicitly. Source/Bun runs do not write this file.

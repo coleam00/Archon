@@ -39,7 +39,7 @@ Note: The root `bun dev` uses `--filter` to fix hot reload path issues, but this
 
 Bun merges a `mock.module()` factory over the real module: an export the factory leaves out keeps its real implementation. When a mocked module gains an export, every factory that does not list it starts running real code (a database, the network, the filesystem) while its tests still pass, often until a 5-second timeout.
 
-`bun run check:mock-modules` (validate id `mock-modules`, run in CI) fails on every factory that leaves out a value export of the module it mocks, naming the file, line, specifier and missing names. Mock each missing export, or spread the real module to keep the rest real on purpose:
+`bun run check:mock-modules` (part of `bun run lint`, so it runs in CI) fails on every factory that leaves out a value export of the module it mocks, naming the file, line, specifier and missing names. Mock each missing export, or spread the real module to keep the rest real on purpose:
 
 ```ts
 mock.module('../db/workflows', async () => ({

@@ -42,9 +42,11 @@ function fakeGitHub(answer: (call: Call) => unknown): { fetch: typeof fetch; cal
   return { fetch: fetchImpl, calls };
 }
 
-const comment = (id: string, body: string) => ({
+const comment = (id: string, body: string, createdAt = '2026-11-11T10:00:00Z') => ({
   id,
   author: { login: 'reviewer', databaseId: 42 },
+  createdAt,
+  originalCommit: { oid: `${id}-commit` },
   body,
   url: `https://github.com/archon/test/pull/7#discussion_${id}`,
 });
@@ -130,6 +132,138 @@ describe('pr.threads', () => {
     });
     expect(threads[1]).toMatchObject({ resolved: true, comments: [{ author: null }] });
     expect(github.calls.filter(call => call.query?.includes('reviewThreads'))).toHaveLength(2);
+  });
+
+  test('every thread and comment carries when it was created and on which commit', async () => {
+    const github = fakeGitHub(() => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                thread('t1', [
+                  comment('c1', 'before', '2026-11-11T09:00:00Z'),
+                  { ...comment('c2', 'after', '2026-11-11T11:00:00Z'), originalCommit: null },
+                ]),
+              ],
+            },
+          },
+        },
+      },
+    }));
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      { token: 'token', fetch: github.fetch }
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        value: {
+          threads: [
+            {
+              id: 't1',
+              createdAt: '2026-11-11T09:00:00Z',
+              commit: 'c1-commit',
+              comments: [
+                { id: 'c1', createdAt: '2026-11-11T09:00:00Z', commit: 'c1-commit' },
+                { id: 'c2', createdAt: '2026-11-11T11:00:00Z', commit: null },
+              ],
+            },
+          ],
+        },
+      },
+    });
+  });
+
+  test('a read that GitHub answers 502 is repeated, and one it refuses is not', async () => {
+    const page = {
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [thread('t1', [comment('c1', 'first')])],
+            },
+          },
+        },
+      },
+    };
+    const waits: number[] = [];
+    const sleep = async (ms: number): Promise<void> => {
+      waits.push(ms);
+    };
+    const answers = [json({}, 502), json({}, 502), json(page)];
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      {
+        token: 'token',
+        fetch: async () => answers.shift() ?? json({ message: 'unexpected call' }, 500),
+        sleep,
+      }
+    );
+    expect(response).toMatchObject({ ok: true, result: { value: { threads: [{ id: 't1' }] } } });
+    expect(waits).toEqual([1_000, 2_000]);
+
+    let calls = 0;
+    const refused = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      {
+        token: 'token',
+        fetch: async () => {
+          calls++;
+          return json({}, 403);
+        },
+        sleep,
+      }
+    );
+    expect(refused).toMatchObject({ ok: false, error: { kind: 'authorization', status: 403 } });
+    expect(calls).toBe(1);
+  });
+
+  test('a read is repeated three times at most, and a dropped connection counts as transient', async () => {
+    const waits: number[] = [];
+    const sleep = async (ms: number): Promise<void> => {
+      waits.push(ms);
+    };
+    let calls = 0;
+    const down = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      {
+        token: 'token',
+        fetch: async () => {
+          calls++;
+          return json({}, 502);
+        },
+        sleep,
+      }
+    );
+    expect(down).toMatchObject({ ok: false });
+    expect(calls).toBe(4);
+    expect(waits).toEqual([1_000, 2_000, 4_000]);
+
+    const page = {
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
+          },
+        },
+      },
+    };
+    let drops = 2;
+    const recovered = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      {
+        token: 'token',
+        fetch: async () => {
+          if (drops-- > 0) throw new TypeError('socket hang up');
+          return json(page);
+        },
+        sleep,
+      }
+    );
+    expect(recovered).toMatchObject({ ok: true, result: { value: { threads: [] } } });
   });
 
   test('a GraphQL errors document is a failure, not an empty list', async () => {

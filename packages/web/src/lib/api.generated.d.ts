@@ -2077,6 +2077,7 @@ export interface paths {
           project?: string;
           all?: 'true' | 'false';
           label?: string | string[];
+          level?: 'quiet' | 'notices' | 'protocol';
         };
         header?: {
           'last-event-id'?: string;
@@ -3762,6 +3763,74 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/artifacts/{runId}/{filename}': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    /** Read a workflow artifact file */
+    get: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          runId: string;
+          /** @description The complete relative filename encoded as one path value, including slash characters. */
+          filename: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: never;
+      responses: {
+        /** @description Artifact file contents */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'text/plain': string;
+            'text/markdown': string;
+          };
+        };
+        /** @description Invalid artifact path or filename */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Run or artifact not found */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    put?: never;
+    post?: never;
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/config': {
     parameters: {
       query?: never;
@@ -4785,25 +4854,45 @@ export interface components {
                     /** @enum {string} */
                     kind: 'condition';
                     expr: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'condition_parse_error';
                     expr: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'timeout';
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'upstream_failed';
                     origin: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'upstream_skipped';
                     origin: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   };
             }
           | {
@@ -4828,25 +4917,45 @@ export interface components {
           /** @enum {string} */
           kind: 'condition';
           expr: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'condition_parse_error';
           expr: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'timeout';
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'upstream_failed';
           origin: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'upstream_skipped';
           origin: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         };
     WebPushPayload: {
       runId: string;
@@ -4905,6 +5014,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -5080,14 +5191,34 @@ export interface components {
     };
     UpdateUserTiersBody: {
       tiers: {
-        small?: components['schemas']['TierEntry'] & unknown;
-        medium?: components['schemas']['TierEntry'] & unknown;
-        large?: components['schemas']['TierEntry'] & unknown;
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateUserAliasesBody: {
       aliases: {
-        [key: string]: components['schemas']['TierEntry'] & unknown;
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateUserDefaultBody: {
@@ -5639,6 +5770,7 @@ export interface components {
             labels?: {
               [key: string]: string;
             };
+            other?: boolean;
           };
       cancel?: string;
       script?: string;
@@ -6314,25 +6446,45 @@ export interface components {
                       /** @enum {string} */
                       kind: 'condition';
                       expr: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'condition_parse_error';
                       expr: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'timeout';
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'upstream_failed';
                       origin: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'upstream_skipped';
                       origin: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     };
               }
             | {
@@ -6414,6 +6566,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -6433,6 +6587,13 @@ export interface components {
                 text: string;
               };
           answeredVia?: string;
+          answeredBy?:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              };
           /** Format: date-time */
           answeredAt?: string;
           labels?: {
@@ -6556,6 +6717,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -6575,6 +6738,13 @@ export interface components {
                 text: string;
               };
           answeredVia?: string;
+          answeredBy?:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              };
           /** Format: date-time */
           answeredAt?: string;
           labels?: {
@@ -6642,6 +6812,8 @@ export interface components {
             does?: string;
             value?: unknown;
           }[];
+          /** @enum {boolean} */
+          other?: true;
           recommendation?: {
             option: string;
             why: string;
@@ -6773,6 +6945,11 @@ export interface components {
               name: string;
             } | null;
             count: number;
+            recommendations?: {
+              asked: number;
+              answered: number;
+              followed: number;
+            };
           }[];
         }
       | {
@@ -6782,6 +6959,11 @@ export interface components {
           counts: {
             value: string | null;
             count: number;
+            recommendations?: {
+              asked: number;
+              answered: number;
+              followed: number;
+            };
           }[];
         };
     AttentionQueueItemResponse: {
@@ -6825,6 +7007,8 @@ export interface components {
               does?: string;
               value?: unknown;
             }[];
+            /** @enum {boolean} */
+            other?: true;
             recommendation?: {
               option: string;
               why: string;
@@ -6952,7 +7136,7 @@ export interface components {
       };
       unset?: string[];
     };
-    AttentionStreamLine:
+    AttentionStreamLine: (
       | {
           /** @enum {string} */
           type: 'attention';
@@ -7005,6 +7189,8 @@ export interface components {
                   does?: string;
                   value?: unknown;
                 }[];
+                /** @enum {boolean} */
+                other?: true;
                 recommendation?: {
                   option: string;
                   why: string;
@@ -7133,6 +7319,14 @@ export interface components {
               /** @enum {string} */
               reason: 'answered';
               answeredVia: string | null;
+              answeredBy:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
               answeredAt: string | null;
             }
           | {
@@ -7201,6 +7395,7 @@ export interface components {
               | 'config'
               | null;
           } | null;
+          reason?: string[];
         }
       | {
           /** @enum {string} */
@@ -7216,6 +7411,25 @@ export interface components {
           parentRunId: string | null;
           /** @enum {string} */
           status: 'running';
+        }
+      | {
+          /** @enum {string} */
+          type: 'notice';
+          cursor: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          runId: string;
+          workflow: string | null;
+          parentRunId: string | null;
+          at: string;
+          text: string;
+          labels: {
+            [key: string]: string;
+          };
+          node: string | null;
         }
       | {
           /** @enum {string} */
@@ -7254,7 +7468,11 @@ export interface components {
           type: 'error';
           /** @enum {string} */
           error: 'cursor_invalid';
-        };
+        }
+    ) & {
+      /** @enum {string} */
+      needs: 'answer' | 'look' | 'nothing';
+    };
     DashboardRunsResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
       total: number;
@@ -7326,7 +7544,10 @@ export interface components {
     AnswerWorkflowRunBody: {
       occurrence: string;
       choose?: string[];
+      /** @enum {boolean} */
+      recommended?: true;
       text?: string;
+      as?: string;
     };
     ResetWorkflowNodeSessionsResponse: {
       success: boolean;
@@ -7450,25 +7671,45 @@ export interface components {
                   /** @enum {string} */
                   kind: 'condition';
                   expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'condition_parse_error';
                   expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'timeout';
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'upstream_failed';
                   origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'upstream_skipped';
                   origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 };
             fan_out_outcome?: {
               tally: {
@@ -7618,25 +7859,45 @@ export interface components {
                 /** @enum {string} */
                 kind: 'condition';
                 expr: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'condition_parse_error';
                 expr: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'timeout';
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'upstream_failed';
                 origin: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'upstream_skipped';
                 origin: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               };
           fan_out_outcome?: {
             tally: {
@@ -8152,14 +8413,34 @@ export interface components {
     };
     UpdateTiersBody: {
       tiers: {
-        small?: components['schemas']['TierEntry'] & unknown;
-        medium?: components['schemas']['TierEntry'] & unknown;
-        large?: components['schemas']['TierEntry'] & unknown;
+        small?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        medium?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
+        large?: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     UpdateAliasesBody: {
       aliases: {
-        [key: string]: components['schemas']['TierEntry'] & unknown;
+        [key: string]: {
+          provider: string;
+          model: string;
+          /** @enum {string} */
+          effort?: 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra' | 'persistent';
+        } | null;
       };
     };
     ProviderListResponse: {

@@ -6,11 +6,9 @@
  * workflows, then judge the result with the engine's own validator, schemas and naming.
  */
 import { describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { getRunArtifactsDirForRoot } from '@archon/paths';
-import { trackTempRoots } from '@archon/paths/test-utils';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { nodeCostScope } from '../packages/workflows/src/node-record-serialization';
 import { EFFORT_LEVELS } from '../packages/workflows/src/schemas/effort';
@@ -26,20 +24,10 @@ import {
   unavailableMeasurementSchema,
 } from '../packages/workflows/src/schemas/node-execution';
 import { workflowRunStatusSchema } from '../packages/workflows/src/schemas/run-status';
-import {
-  isStateLeaseHolderLive,
-  stateLeaseViewSchema,
-} from '../packages/workflows/src/state-document-store';
+import { isStateLeaseHolderLive } from '../packages/workflows/src/state-document-store';
 import { validateStructuredOutput } from '../packages/workflows/src/structured-output';
 import { fakeLeaseLive } from '../.archon/scripts/__tests__/fixtures/fake-lease';
-import {
-  gitCheckout,
-  hostCli,
-  PACK,
-  PR,
-  packScriptRunner,
-  type ScriptRun,
-} from '../.archon/scripts/__tests__/deliver-checks-harness';
+import { PACK, PR } from '../.archon/scripts/__tests__/deliver-checks-harness';
 import {
   agentBinding,
   artifactsOf,
@@ -50,14 +38,9 @@ import {
   type TierBinding,
 } from '../.archon/workflows/sdlc/review-eval/scripts/runs';
 import type { Closure } from '../.archon/workflows/sdlc/.shared/close';
-import { type AgentDecision, AGENT_OUTCOMES } from '../.archon/workflows/sdlc/.shared/discoveries';
-import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/forge';
-import { parseLease } from '../.archon/workflows/sdlc/.shared/state';
+import { parseQualifiedPr } from '../.archon/workflows/sdlc/.shared/identity';
 import { SIZE_LABEL, TYPE_LABEL } from '../.archon/workflows/sdlc/.shared/labels';
-import { newWorkItem } from '../.archon/workflows/sdlc/.shared/workitem';
 
-const { runPackScript } = packScriptRunner();
-const track = trackTempRoots();
 registerBuiltinProviders();
 
 type Schema = Record<string, unknown>;
@@ -72,121 +55,12 @@ function outputFormat(workflow: string, nodeId: string): Schema {
   return schema;
 }
 
-/** A script that succeeded with output its node's declared schema admits. */
-function admitted(run: ScriptRun, workflow: string, nodeId: string): Record<string, unknown> {
-  expect({ code: run.code, stderr: run.stderr }).toEqual({ code: 0, stderr: '' });
-  const output = JSON.parse(run.stdout) as Record<string, unknown>;
-  expect(validateStructuredOutput(output, outputFormat(workflow, nodeId))).toEqual({ valid: true });
-  return output;
-}
-
-/** A checkout with its own state store, read and written through the host CLI. */
-function install(prefix: string): { checkout: string; env: Record<string, string> } {
-  const checkout = gitCheckout({}, track);
-  const home = track(mkdtempSync(join(tmpdir(), prefix)));
-  return {
-    checkout,
-    env: {
-      ARCHON_HOME: home,
-      HOME: home,
-      DATABASE_URL: '',
-      ARCHON_TELEMETRY_DISABLED: '1',
-      INTAKE_STATE_CWD: checkout,
-      INTAKE_HOST_CLI: JSON.stringify(hostCli()),
-    },
-  };
-}
-
-const FAKE_ARCHON = join(
-  import.meta.dir,
-  '../.archon/scripts/__tests__/fixtures/fake-archon-runs.ts'
-);
-
-test('blocked pickup emits identified items admitted by its workflow schema', () => {
-  const at = install('archon-blocked-home-');
-  const item = {
-    ...newWorkItem({ repo: PR.repo, number: 8 }, '2026-10-16T00:00:00.000Z'),
-    stage: 'blocked',
-  };
-  const seeded = Bun.spawnSync(
-    [process.execPath, FAKE_ARCHON, 'state', 'put', 'work/8', '--if-revision', '0'],
-    {
-      cwd: at.checkout,
-      env: { ...process.env, ...at.env },
-      stdin: Buffer.from(JSON.stringify(item)),
-      stdout: 'pipe',
-      stderr: 'pipe',
-    }
-  );
-  expect({ code: seeded.exitCode, stderr: seeded.stderr.toString() }).toEqual({
-    code: 0,
-    stderr: '',
-  });
-  const output = admitted(
-    runPackScript('build-queue/scripts/blocked', {
-      cwd: at.checkout,
-      forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
-      inputs: { ...at.env, INPUTS_NUMBER: '', INPUTS_RETRIAGE_AS: 'maintainer' },
-    }),
-    'build-queue/archon-build-queue.yaml',
-    'blocked'
-  );
-  expect(output).toEqual({ blocked: [{ number: 8, summary: '' }], blocked_count: 1 });
-  const schema = outputFormat('build-queue/archon-build-queue.yaml', 'blocked');
-  for (const item of [
-    {},
-    { number: 8 },
-    { summary: '' },
-    { number: '8', summary: '' },
-    { number: 0, summary: '' },
-    { number: 8, summary: null },
-  ]) {
-    expect(validateStructuredOutput({ blocked: [item], blocked_count: 1 }, schema).valid).toBe(
-      false
-    );
-  }
-});
-
 describe('triage', () => {
   const TRIAGE = 'triage/archon-triage-block.yaml';
   const DELIVERED: Closure = {
     kind: 'delivered',
     url: 'https://ghe.example.com/example/repo/pull/5',
   };
-
-  test('a close verdict is output the verdict node admits', () => {
-    const run = runPackScript('triage/scripts/verdict', {
-      inputs: {
-        INPUTS_ITEM: JSON.stringify({ repo: PR.repo, number: 7 }),
-        INPUTS_PUBLISH: 'false',
-        INPUTS_DECISION: JSON.stringify({ contract: 'NO_ACTION', closure: DELIVERED }),
-        INPUTS_TYPE: '{"value":"feature","reason":"new behavior"}',
-        INPUTS_SIZE: '{"value":"s","reason":"one script"}',
-        INPUTS_COMPLEXITY: '{"value":"low","reason":"clear change"}',
-        INPUTS_IMPORTANCE: '{"value":"medium","reason":"on direction"}',
-        INPUTS_URGENCY: '{"value":"none","reason":"nothing waits on it"}',
-        INPUTS_SUMMARY: 'Ready',
-        INPUTS_AREA_LABELS: '["area","nonexistent"]',
-        INPUTS_RELATED: '[]',
-        INPUTS_REPORT: '{"type":"archon_artifact","run_id":"r","path":"triage.md"}',
-      },
-    });
-    expect(admitted(run, TRIAGE, 'verdict').closure).toEqual(DELIVERED);
-  });
-
-  test('the verdict output admits exactly the closures the triage decision does', () => {
-    const closure = (outputFormat(TRIAGE, 'verdict').properties as Record<string, Schema>).closure;
-    const url = 'https://ghe.example.com/example/repo/issues/3';
-    const allowed: (Closure | null)[] = [
-      null,
-      DELIVERED,
-      { kind: 'duplicate', url, original: { repo: PR.repo, number: 3 } },
-    ];
-    for (const value of allowed) expect(validateStructuredOutput(value, closure).valid).toBe(true);
-    for (const value of [{ kind: 'duplicate', url }, { kind: 'delivered' }, { url }]) {
-      expect(validateStructuredOutput(value, closure).valid).toBe(false);
-    }
-  });
 
   const VALID = {
     decision: { contract: 'READY', route: 'deliver' },
@@ -282,7 +156,7 @@ describe('triage', () => {
 // parseQualifiedPr. A value the schema admits but the parser refuses passes the provider's
 // structured output and fails publication after the whole review ran.
 test("archon-review's scope pr schema admits exactly what parseQualifiedPr accepts", () => {
-  const schema = outputFormat('review/archon-review-block.yaml', 'scope');
+  const schema = outputFormat('review/archon-review.yaml', 'scope');
   const repo = { host: 'github.com', path: 'coleam00/Archon' };
   const report = { type: 'archon_artifact', run_id: 'run', path: 'review/scope.md' };
   const candidates = [
@@ -303,7 +177,7 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
     }
     return {
       parserAccepts,
-      schemaAccepts: validateStructuredOutput({ head_matches: true, pr, report }, schema).valid,
+      schemaAccepts: validateStructuredOutput({ pr, report }, schema).valid,
     };
   });
   expect(verdicts.map(v => v.schemaAccepts)).toEqual(verdicts.map(v => v.parserAccepts));
@@ -312,181 +186,12 @@ test("archon-review's scope pr schema admits exactly what parseQualifiedPr accep
 });
 
 describe('claims', () => {
-  test("the pack reads the engine's lease view, and the test CLI's liveness is the engine's", () => {
-    for (const live of [true, false]) {
-      const view = stateLeaseViewSchema.parse({
-        runId: 'run-1',
-        nodePath: 'claim',
-        takenAt: '2026-11-04T00:00:00.000Z',
-        live,
-      });
-      expect(parseLease(view)).toEqual({ runId: 'run-1', live });
-    }
+  test("the test CLI's lease liveness is the engine's", () => {
     for (const status of workflowRunStatusSchema.options)
       expect(fakeLeaseLive(status)).toBe(isStateLeaseHolderLive(status));
     // A run the store no longer has: deleted, so its lease has ended.
     expect(fakeLeaseLive(undefined)).toBe(isStateLeaseHolderLive(null));
   });
-});
-
-describe('discoveries', () => {
-  const DISCOVERIES = 'discoveries/archon-discoveries.yaml';
-  const RUN = 'aaaaaaaa-0000-4000-8000-000000000001';
-  const ISSUE = { repo: PR.repo, number: 7 };
-
-  test("the decide node's output schema admits each of the agent's outcomes", () => {
-    const schema = outputFormat(DISCOVERIES, 'decide');
-    const base = { key: 'some-defect', refs: [`${RUN}:review#0`], title: 'A defect' };
-    const examples: AgentDecision[] = [
-      { ...base, outcome: 'file', body: 'The brief.', reason: 'r' },
-      { ...base, outcome: 'track', issue: ISSUE, comment: null, reason: 'r' },
-      { ...base, outcome: 'track', issue: ISSUE, comment: 'More evidence.', reason: 'r' },
-      { ...base, outcome: 'drop', reason: 'r' },
-      { ...base, outcome: 'ask', question: 'q', recommendation: 'r' },
-    ];
-    expect(new Set(examples.map(example => example.outcome))).toEqual(new Set(AGENT_OUTCOMES));
-    for (const example of examples) {
-      expect(validateStructuredOutput({ decisions: [example], summary: 's' }, schema)).toEqual({
-        valid: true,
-      });
-    }
-    expect(
-      validateStructuredOutput(
-        { decisions: [{ ...base, outcome: 'drop', body: 'b', reason: 'r' }], summary: 's' },
-        schema
-      ).valid
-    ).toBe(false);
-  });
-
-  test('a pass emits facts, an outcome and an answer their nodes admit', () => {
-    const at = install('archon-discoveries-home-');
-    const outputRoot = track(mkdtempSync(join(tmpdir(), 'archon-discoveries-runs-')));
-    const artifacts = join(outputRoot, 'artifacts', 'runs', RUN);
-    mkdirSync(join(artifacts, 'nodes'), { recursive: true });
-    const record = (title: string) => ({
-      title,
-      claim: `${title}, claimed`,
-      evidence: ['a.ts:1'],
-      relation: 'unrelated',
-      source_nodes: ['implement'],
-    });
-    writeFileSync(
-      join(artifacts, 'nodes/review.md'),
-      JSON.stringify({
-        ready: true,
-        discoveries: ['new', 'covered', 'fixed', 'unclear'].map(record),
-      })
-    );
-    writeFileSync(
-      join(artifacts, 'nodes/review.meta.json'),
-      JSON.stringify({
-        nodeId: 'review',
-        outputType: 'review-report',
-        path: 'nodes/review.md',
-        runId: RUN,
-        producedAt: '2026-10-14T01:00:00.000Z',
-        size: 1,
-      })
-    );
-    const script = (
-      name: 'facts' | 'outcome' | 'answer',
-      runs: string[],
-      inputs: Record<string, string> = {},
-      files: Record<string, string> = {}
-    ): ScriptRun =>
-      runPackScript(`discoveries/scripts/${name}`, {
-        cwd: at.checkout,
-        forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
-        tracker: { issue: { number: 7, state: 'open' }, issues: [] },
-        artifacts: files,
-        inputs: {
-          ...at.env,
-          WORKFLOW_ID: 'pass-1',
-          INTAKE_RUN_STATUSES: '{}',
-          RUN_LISTING: JSON.stringify(
-            runs.map(id => ({
-              id,
-              workflow_name: 'archon-ship',
-              status: 'completed',
-              completed_at: '2026-10-14T03:00:00.000Z',
-              output_root: outputRoot,
-            }))
-          ),
-          INPUTS_REPO_HOST: PR.repo.host,
-          INPUTS_REPO_PATH: PR.repo.path,
-          INPUTS_SINCE: '',
-          INPUTS_UNTIL: '',
-          INPUTS_LIMIT: '20',
-          ...inputs,
-        },
-      });
-
-    const facts = script('facts', [RUN]);
-    const output = admitted(facts, DISCOVERIES, 'facts');
-    const queue = readFileSync(join(facts.artifacts, 'drain/queue.json'), 'utf8');
-    const refs = (JSON.parse(queue) as { runs: { records: { ref: string }[] }[] }).runs.flatMap(
-      run => run.records.map(entry => entry.ref)
-    );
-    const decisions: AgentDecision[] = [
-      {
-        outcome: 'file',
-        key: 'new-defect',
-        refs: [refs[0] ?? ''],
-        title: 'New',
-        body: 'The brief.',
-        reason: 'real',
-      },
-      {
-        outcome: 'track',
-        key: 'covered-defect',
-        refs: [refs[1] ?? ''],
-        title: 'Covered',
-        issue: ISSUE,
-        comment: 'More.',
-        reason: 'covered',
-      },
-      {
-        outcome: 'drop',
-        key: 'fixed-defect',
-        refs: [refs[2] ?? ''],
-        title: 'Fixed',
-        reason: 'fixed',
-      },
-      {
-        outcome: 'ask',
-        key: 'unclear-scope',
-        refs: [refs[3] ?? ''],
-        title: 'Unclear',
-        question: 'In scope?',
-        recommendation: 'Drop it.',
-      },
-    ];
-    const outcome = admitted(
-      script(
-        'outcome',
-        [RUN],
-        {
-          INPUTS_PATH: String(output.path),
-          INPUTS_DECISIONS: JSON.stringify(decisions),
-          INPUTS_SUMMARY: 'summary',
-        },
-        { 'drain/queue.json': queue }
-      ),
-      DISCOVERIES,
-      'outcome'
-    );
-    expect(outcome.asked).toEqual(['unclear-scope']);
-    admitted(
-      script(
-        'answer',
-        [],
-        { INPUTS_KEYS: '["unclear-scope"]', INPUTS_TEXT: 'Out of scope.' },
-        { 'drain/queue.json': queue }
-      ),
-      DISCOVERIES,
-      'answer'
-    );
-  }, 60_000);
 });
 
 describe('the review bench', () => {

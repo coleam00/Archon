@@ -27,7 +27,7 @@ nodes:
 
   - id: judge
     depends_on: [read]
-    model: large
+    model: ['@review-eval-judge', large]
     allowed_tools: []
     prompt: |
       You are judging one sample of a review bench. A code review ran on a change into

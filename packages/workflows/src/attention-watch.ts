@@ -35,6 +35,7 @@ import { followWorkflowEventFeed, type WorkflowEventFeedFollower } from './run-s
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
+  attentionAnswererSchema,
   attentionOccurrence,
   gateOccurrence,
   isApprovalContext,
@@ -44,6 +45,7 @@ import {
   terminalWorkflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowRunStatusSchema,
+  type AttentionAnswerer,
   type RunTerminalStatus,
   type WorkflowRun,
   type WorkflowRunStatus,
@@ -57,7 +59,13 @@ import {
   type WorkflowEventPage,
 } from './store';
 import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
-import { firstFailedNodeEvent, getTerminalRecord, recordedFailureKind } from './terminal-record';
+import {
+  firstFailedNodeEvent,
+  getTerminalRecord,
+  recordedFailureKind,
+  failedOutcomeReason,
+} from './terminal-record';
+import { workflowNoticeDataSchema } from './workflow-notice';
 
 function getLog(): ReturnType<typeof createLogger> {
   return createLogger('workflow.attention_watch');
@@ -102,6 +110,8 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
       occurrence: z.string().nullable(),
       reason: z.literal('answered'),
       answeredVia: recordSurfaceSchema.nullable(),
+      /** Who answered an attention wait, when the answer recorded it; a declared name is a claim. */
+      answeredBy: attentionAnswererSchema.nullable(),
       /** Null when the row had already moved past the answer when the stream read it. */
       answeredAt: z.string().nullable(),
     }),
@@ -130,8 +140,20 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
      * for any other status and when the record names no failed node or there is no record.
      */
     cause: z.object({ node: z.string(), errorClass: nodeFailureKindSchema.nullable() }).nullable(),
+    /**
+     * A fixed launch-failure indication, or why a run completed with a failed outcome.
+     * A failed run's error text never rides the stream: `cause` names where it failed.
+     */
+    reason: z.array(z.string()).min(1).optional(),
   }),
   z.object({ type: z.literal('resumed'), ...lineBase, status: z.literal('running') }),
+  /** What a node of the run said the run did (`workflow notice`); `at` is when it said it. */
+  z.object({
+    type: z.literal('notice'),
+    ...lineBase,
+    at: z.string(),
+    ...workflowNoticeDataSchema.shape,
+  }),
   z.object({ type: z.literal('owner_lost'), ...lineBase, observedStatus: workflowRunStatusSchema }),
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
   /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
@@ -179,7 +201,12 @@ function occurrenceOf(item: AttentionQueueItem): string | null {
 }
 
 type Resolution =
-  | { reason: 'answered'; answeredVia: string | null; answeredAt: string | null }
+  | {
+      reason: 'answered';
+      answeredVia: string | null;
+      answeredBy: AttentionAnswerer | null;
+      answeredAt: string | null;
+    }
   | { reason: 'withdrawn' };
 
 /** How `occurrence` closed, from the row when it still records the answer. */
@@ -191,6 +218,7 @@ function rowResolution(run: WorkflowRun, occurrence: string | null): Resolution 
       ? {
           reason: 'answered',
           answeredVia: approval.answeredVia ?? null,
+          answeredBy: null,
           answeredAt: approval.answeredAt ?? null,
         }
       : undefined;
@@ -203,6 +231,7 @@ function rowResolution(run: WorkflowRun, occurrence: string | null): Resolution 
     return {
       reason: 'answered',
       answeredVia: wait.answeredVia ?? null,
+      answeredBy: wait.answeredBy ?? null,
       answeredAt: wait.answeredAt ?? null,
     };
   return undefined;
@@ -210,18 +239,21 @@ function rowResolution(run: WorkflowRun, occurrence: string | null): Resolution 
 
 const answerKey = (runId: string, occurrence: string): string => `${runId}\u0000${occurrence}`;
 
-/** The surface of each answer event in a page, by run and occurrence. */
-function indexAnswers(page: WorkflowEventPage): Map<string, string | null> {
-  const answers = new Map<string, string | null>();
+type AnswerOrigin = Pick<Extract<Resolution, { reason: 'answered' }>, 'answeredVia' | 'answeredBy'>;
+
+/** The surface and answerer of each answer event in a page, by run and occurrence. */
+function indexAnswers(page: WorkflowEventPage): Map<string, AnswerOrigin> {
+  const answers = new Map<string, AnswerOrigin>();
   for (const { event } of page.events) {
     if (event.event_type !== 'approval_received' && event.event_type !== 'wait_answered') continue;
-    const { occurrence, via } = event.data;
+    const { occurrence, via, by } = event.data;
     if (typeof occurrence !== 'string') continue;
     const surface = recordSurfaceSchema.safeParse(via);
-    answers.set(
-      answerKey(event.workflow_run_id, occurrence),
-      surface.success ? surface.data : null
-    );
+    const answerer = attentionAnswererSchema.safeParse(by);
+    answers.set(answerKey(event.workflow_run_id, occurrence), {
+      answeredVia: surface.success ? surface.data : null,
+      answeredBy: answerer.success ? answerer.data : null,
+    });
   }
   return answers;
 }
@@ -265,10 +297,17 @@ function itemContext(
 function terminalFacts(
   event: WorkflowEventRow,
   status: RunTerminalStatus
-): { outcome: 'succeeded' | 'failed' | null; firstFailedNode: string | null } {
+): { outcome: 'succeeded' | 'failed' | null; firstFailedNode: string | null; reason: string[] } {
   try {
     const record = getTerminalRecord(status, [event]);
-    return { outcome: record?.outcome ?? null, firstFailedNode: record?.first_failed_node ?? null };
+    return {
+      outcome: record?.outcome ?? null,
+      firstFailedNode: record?.first_failed_node ?? null,
+      reason:
+        status === 'failed' && event.data.exit_reason === 'launch_failed'
+          ? ['launch failed before the first node']
+          : failedOutcomeReason(record),
+    };
   } catch (error) {
     // A malformed record must not stall the stream on one row; the line still reports
     // the status, and `workflow get` remains the full read.
@@ -276,7 +315,7 @@ function terminalFacts(
       { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
       'workflow.attention_watch_terminal_record_unreadable'
     );
-    return { outcome: null, firstFailedNode: null };
+    return { outcome: null, firstFailedNode: null, reason: [] };
   }
 }
 
@@ -437,7 +476,7 @@ export async function watchAttentionQueue(
   // was read, so the row reflects at least every event in it.
   let views = new Map<string, Promise<RunView | null>>();
   let codebases = new Map<string, ReturnType<IWorkflowStore['getCodebase']>>();
-  let answers = new Map<string, string | null>();
+  let answers = new Map<string, AnswerOrigin>();
   const projectRun = async (
     runId: string,
     cache = new Map<string, ReturnType<IWorkflowStore['getCodebase']>>()
@@ -548,11 +587,11 @@ export async function watchAttentionQueue(
   ): Promise<void> => {
     const occurrence = occurrenceOf(prev);
     const fromRow = run === null ? undefined : rowResolution(run, occurrence);
-    const via = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
+    const origin = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
     const resolution: Resolution =
       fromRow ??
-      (via !== undefined
-        ? { reason: 'answered', answeredVia: via, answeredAt: null }
+      (origin !== undefined
+        ? { reason: 'answered', ...origin, answeredAt: null }
         : { reason: 'withdrawn' });
     await emit({
       type: 'resolved',
@@ -651,17 +690,30 @@ export async function watchAttentionQueue(
     const { event } = delivery;
     const status = terminalRunStatusForEventType(event.event_type);
     if (status !== undefined) {
-      const { outcome, firstFailedNode } = terminalFacts(event, status);
+      const { outcome, firstFailedNode, reason } = terminalFacts(event, status);
       await emit({
         type: 'terminal',
         ...lifecycleFields(delivery, view),
         status,
         outcome,
         cause: status === 'failed' ? await failureCause(event, firstFailedNode) : null,
+        ...(reason.length > 0 ? { reason } : {}),
       });
     }
     if (event.event_type === 'workflow_resumed')
       await emit({ type: 'resumed', ...lifecycleFields(delivery, view), status: 'running' });
+    if (event.event_type === 'workflow_notice') {
+      // The label filter selects notices as it selects items; a row that does not read
+      // as a notice is not one.
+      const notice = workflowNoticeDataSchema.safeParse(event.data);
+      if (notice.success && matchesAttentionLabels(notice.data, labels))
+        await emit({
+          type: 'notice',
+          ...lifecycleFields(delivery, view),
+          at: event.created_at,
+          ...notice.data,
+        });
+    }
   };
 
   const handle = async (delivery: WorkflowRunDelivery): Promise<void> => {

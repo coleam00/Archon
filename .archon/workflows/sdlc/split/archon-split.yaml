@@ -6,22 +6,28 @@ description: |
   claim, or the one the number input names. One agent checks triage's reason first:
   when one work item would work after all, it hands the item to the build queue
   whole, with why. Otherwise it files only the current piece: a PRD's current phase,
-  an epic's current increment, or every task of a bundle. Later phases are recorded
-  on the item, each with what the earlier work must show first, and filed by a later
-  split. A script files each issue once and records it on the item's work item. A
+  an epic's current increment, or every task of a bundle. The agent's comment on the
+  item names the later phases, each with what the earlier work must show first, and a
+  later split files them. A script files each issue once and records it on the item's
+  work item. A
   PRD is labelled archon-prd and stays open until its hypothesis has a verdict; an
   epic stays open until its increments merge; a bundle is closed with links to its
   issues. The filed issues come back through intake like any other.
 
-  Use when: a trigger binding the operator installed starts it (see the SDLC pack
-  README, "Split queue").
+  Use when: a trigger binding the operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#split-queue).
   NOT for: writing a PRD, triaging (archon-intake), or building the filed issues
   (archon-build-queue).
 
 inputs:
   repo_host:
-    description: The forge host of the repository whose work items the queue splits.
+    default: ""
+    description: >-
+      The forge host of the repository whose work items the queue splits. The queue
+      reads each item's repository from its work item, so it needs neither input;
+      bindings may still pass both.
   repo_path:
+    default: ""
     description: The owner/name path of that repository.
   number:
     default: ""
@@ -31,6 +37,8 @@ inputs:
       work item, another run holds it, or it does not wait for the split queue.
 
 returns: publish
+# False only when a run that claimed nothing found stored items no pickup can act on.
+outcome_field: healthy
 
 # Reads the checkout and writes only to the tracker and the state store: runs in the
 # launch checkout beside any other run, and creates no worktree.
@@ -72,7 +80,7 @@ nodes:
     command: slice
     depends_on: [facts]
     when: "$facts.output.path == 'slice'"
-    model: large
+    model: ['@split', large]
     with:
       url: "$facts.output.url"
       filed: { from: "$facts.output.filed" }
@@ -109,17 +117,6 @@ nodes:
               title: { type: string, pattern: '\S' }
               body: { type: string, pattern: '\S' }
             required: [key, title, body]
-        # Later phases or increments, recorded on the item and not filed yet, each
-        # with what the earlier work must show before it is filed.
-        later:
-          type: array
-          items:
-            type: object
-            additionalProperties: false
-            properties:
-              title: { type: string, pattern: '\S' }
-              signal: { type: string, pattern: '\S' }
-            required: [title, signal]
         # Existing open issues that already own part of the outcome, listed instead
         # of filed again.
         existing:
@@ -131,13 +128,17 @@ nodes:
               number: { type: integer, minimum: 1 }
               why: { type: string, pattern: '\S' }
             required: [number, why]
+        # The comment posted on the item as written: the plan, with each later phase
+        # and what the earlier work must show before it is filed, or why one work
+        # item works. The next split and a later triage read it.
+        comment: { type: string, pattern: '\S' }
         summary: { type: string, pattern: '\S' }
-      required: [split, issues, later, existing, summary]
+      required: [split, issues, existing, comment, summary]
 
-  # Files each current issue once, records it on the work item as it goes, comments
-  # the list and the later phases on the item, then labels a PRD or closes a bundle,
-  # and releases the claim. An item
-  # built whole gets the comment with why and moves to its build route instead.
+  # Files each current issue once, records it on the work item as it goes, posts the
+  # agent's comment on the item with the filed issues listed under it, then labels a
+  # PRD or closes a bundle, and releases the claim. An item built whole gets the
+  # agent's comment and moves to its build route instead.
   - id: publish
     script: publish
     runtime: bun
@@ -148,8 +149,8 @@ nodes:
       item: { from: "$facts.output.item" }
       split: { from: "$slice.output.split", if_skipped: null }
       issues: { from: "$slice.output.issues", if_skipped: null }
-      later: { from: "$slice.output.later", if_skipped: null }
       existing: { from: "$slice.output.existing", if_skipped: null }
+      comment: { from: "$slice.output.comment", if_skipped: null }
       summary: { from: "$slice.output.summary", if_skipped: null }
     output_format:
       type: object
@@ -177,4 +178,5 @@ nodes:
               why: { type: string }
             required: [number, url, why]
         summary: { type: string }
-      required: [path, item, kind, issues, adopted, summary]
+        healthy: { type: boolean }
+      required: [path, item, kind, issues, adopted, summary, healthy]

@@ -1,4 +1,5 @@
 /** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
+import { formatSkipCause } from './skip-cause';
 import { createLogger, getArchonTempPath } from '@archon/paths';
 import { validateStructuredOutput } from './structured-output';
 import { randomUUID } from 'node:crypto';
@@ -21,7 +22,12 @@ import {
   type WorkflowRunOutcome,
 } from './schemas';
 import type { DryRunContext } from './dry-run/context';
-import { dryRunResultSchema, type DryRunResult, type DryRunResolution } from './dry-run/schemas';
+import {
+  dryRunResultSchema,
+  type DryRunResult,
+  type DryRunResolution,
+  type DryRunTraceEntry,
+} from './dry-run/schemas';
 import { isRecord, type DryRunStubs } from './dry-run/stubs';
 import { simulateNodes } from './dry-run/simulate';
 
@@ -165,6 +171,8 @@ function createDryRunContext(
     checkoutProducers: collectCheckoutProducers(options.workflow.nodes),
     ...(inputs ? { inputs } : {}),
     loopBodyScopes: [],
+    loopGroupPath: [],
+    typedOutputs: [],
     artifactsDir: join(tempRoot, 'artifacts'),
     stateDir: join(tempRoot, 'state'),
     logDir: join(tempRoot, 'logs'),
@@ -242,17 +250,11 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
 }
 
 export function formatDryRunTrace(result: DryRunResult): string {
-  const lines = [`Dry-run: ${result.workflow}`, ''];
-  for (const entry of result.trace) {
-    const suffix = entry.reason ? ` — ${entry.reason}` : '';
-    const iteration = entry.iteration ? ` [iteration ${String(entry.iteration)}]` : '';
-    lines.push(
-      `${entry.state.toUpperCase().padEnd(9)} ${entry.nodeId} (${entry.nodeType})${iteration}${suffix}`
-    );
-    if (entry.resolution) lines.push(...formatDryRunResolution(entry.resolution));
-    if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
-    if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);
-  }
+  const lines = [
+    `Dry-run: ${result.workflow}`,
+    '',
+    ...result.trace.flatMap(formatDryRunTraceEntry),
+  ];
   lines.push(
     '',
     `Simulation outcome: ${result.outcome}`,
@@ -263,6 +265,46 @@ export function formatDryRunTrace(result: DryRunResult): string {
   if (result.unusedStubs.length > 0) lines.push(`Unused stubs: ${result.unusedStubs.join(', ')}`);
   if (result.summary) lines.push(`Summary: ${result.summary}`);
   return lines.join('\n');
+}
+
+/** The part of a trace entry its first line renders: identity, status and reason. */
+export type DryRunTraceSummary = Pick<DryRunTraceEntry, 'nodeId' | 'nodeType' | 'state'> & {
+  readonly iteration?: number;
+  readonly reason?: string;
+};
+
+/**
+ * What a failed fixture publishes per node: identity, status and the engine's own reason,
+ * never resolved text, outputs or skip conditions, which can carry input values. A failed
+ * node's reason is its diagnostic, which the fixture reports in `nodeFailures`.
+ */
+export function summarizeTraceEntry(entry: DryRunTraceEntry): DryRunTraceSummary {
+  return {
+    nodeId: entry.nodeId,
+    nodeType: entry.nodeType,
+    state: entry.state,
+    ...(entry.iteration ? { iteration: entry.iteration } : {}),
+    ...(entry.state !== 'failed' && entry.reason ? { reason: entry.reason } : {}),
+  };
+}
+
+/** One trace entry's status line; `workflow test` prints these under a failed fixture. */
+export function formatDryRunTraceLine(entry: DryRunTraceSummary): string {
+  const suffix = entry.reason ? ` — ${entry.reason}` : '';
+  const iteration = entry.iteration ? ` [iteration ${String(entry.iteration)}]` : '';
+  return `${entry.state.toUpperCase().padEnd(9)} ${entry.nodeId} (${entry.nodeType})${iteration}${suffix}`;
+}
+
+function formatDryRunTraceEntry(entry: DryRunTraceEntry): string[] {
+  const reason =
+    entry.state === 'skipped' ? `${entry.reason} (${formatSkipCause(entry.cause)})` : entry.reason;
+  const lines = [formatDryRunTraceLine({ ...entry, reason })];
+  if (entry.state === 'skipped' && entry.diagnostic)
+    lines.push(`  diagnostic: ${entry.diagnostic}`);
+  if (entry.resolution) lines.push(...formatDryRunResolution(entry.resolution));
+  if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
+  if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);
+  return lines;
 }
 
 function formatDryRunResolution(resolution: DryRunResolution): string[] {

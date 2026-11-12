@@ -1,4 +1,11 @@
 // @archon-test-isolated
+import {
+  oldSerializedNodeDataSchema,
+  oldSkippedLifecycleSchema,
+  oldRunSkippedNodeSchema,
+} from './skip-cause.compatibility-fixture';
+import { skipCauseSchema, type SkipCause } from './schemas/node-state';
+import { buildRunNodeStates } from './terminal-record';
 import { finishNodeExecution, startNodeExecution, newNodeInvocation } from './node-execution';
 import {
   isExecNodeRecord,
@@ -17,6 +24,7 @@ import {
   serializeNodeTranscript,
 } from './node-record-serialization';
 import { nodeExecutionMetadataSchema, type NodeExecutionRecord } from './schemas/node-execution';
+import { NODE_LIFECYCLE_EVENT_TYPES } from './store';
 
 const record = (): NodeExecutionRecord => ({
   runId: 'run-1',
@@ -71,6 +79,44 @@ const record = (): NodeExecutionRecord => ({
 });
 
 describe('node record serializers', () => {
+  const lifecycles = {
+    started: { status: 'started' },
+    suspended: { status: 'suspended', point: 'wait' },
+    completed: { status: 'completed' },
+    failed: { status: 'failed', error: 'body failed' },
+    skipped: {
+      status: 'skipped',
+      reason: 'trigger_rule',
+      cause: { kind: 'upstream_failed', origin: 'peer' },
+    },
+  } satisfies {
+    [Status in NodeExecutionRecord['lifecycle']['status']]: Extract<
+      NodeExecutionRecord['lifecycle'],
+      { status: Status }
+    >;
+  };
+
+  it.each(Object.values(lifecycles))(
+    'admits and reconstructs $status execution events',
+    lifecycle => {
+      const source = { ...record(), lifecycle };
+      const durable = serializeNodeStateRecord(source);
+      expect(NODE_LIFECYCLE_EVENT_TYPES.some(type => type === durable.event_type)).toBe(true);
+      expect(readNodeRecordEvent(durable)?.metadata?.lifecycle).toEqual(lifecycle);
+    }
+  );
+
+  it('preserves persisted lifecycle selection order', () => {
+    expect(NODE_LIFECYCLE_EVENT_TYPES).toEqual([
+      'node_started',
+      'node_suspended',
+      'node_completed',
+      'node_failed',
+      'node_skipped',
+      'node_skipped_prior_success',
+    ]);
+  });
+
   it('persists and reads every schema-owned metadata field', () => {
     const source = record();
     const durable = serializeNodeStateRecord(source);
@@ -561,4 +607,53 @@ it('preserves an empty strict composed contract through persistence and authoriz
       '$review.output.undeclared'
     )
   ).toThrow('not declared');
+});
+
+describe('include skip provenance compatibility', () => {
+  const legacyCauses = [
+    { kind: 'condition', expr: "$gate.output == 'go'" },
+    { kind: 'condition_parse_error', expr: '$missing.output.route' },
+    { kind: 'timeout' },
+    { kind: 'upstream_failed', origin: 'source' },
+    { kind: 'upstream_skipped', origin: 'source' },
+  ] satisfies SkipCause[];
+
+  it.each(legacyCauses)('preserves $kind provenance while older readers accept it', legacyCause => {
+    const boundary = { includeId: 'outer__cycle.review', workflow: 'review-block' };
+    const cause = { ...legacyCause, boundary };
+    expect(skipCauseSchema.parse(legacyCause)).toEqual(legacyCause);
+    const reason =
+      cause.kind === 'condition'
+        ? 'when_condition'
+        : cause.kind === 'condition_parse_error'
+          ? 'when_condition_parse_error'
+          : cause.kind === 'timeout'
+            ? 'timeout'
+            : 'trigger_rule';
+    const lifecycle = { status: 'skipped', reason, cause } as const;
+    const source = { ...record(), lifecycle };
+    const durable = serializeNodeStateRecord(source);
+    expect(readNodeRecordEvent(durable)?.metadata?.lifecycle).toEqual(lifecycle);
+    expect(readNodeRecordEvent(durable)?.data.cause).toEqual(cause);
+    expect(serializeNodeOutput(source)).toMatchObject({ state: 'skipped', cause });
+    expect(serializeNodeEmitter(source)).toMatchObject({ type: 'node_skipped', reason, cause });
+    const oldData = oldSerializedNodeDataSchema.parse(durable.data);
+    expect(oldData.cause).toEqual(legacyCause);
+    expect(oldSkippedLifecycleSchema.parse(lifecycle)).toEqual({
+      ...lifecycle,
+      cause: legacyCause,
+    });
+    const oldSource = { ...source, lifecycle: { ...lifecycle, cause: legacyCause } };
+    expect(oldData).toEqual(
+      oldSerializedNodeDataSchema.parse(serializeNodeStateRecord(oldSource).data)
+    );
+    const nodes = buildRunNodeStates({ id: source.runId, metadata: {} }, [durable]);
+    expect(nodes).toEqual([{ node_id: source.path, state: 'skipped', reason, cause }]);
+    expect(oldRunSkippedNodeSchema.parse(nodes[0])).toEqual({
+      node_id: source.path,
+      state: 'skipped',
+      reason,
+      cause: legacyCause,
+    });
+  });
 });

@@ -1,6 +1,6 @@
 /**
  * The host CLI for queue and discoveries script tests: `workflow runs --json` answers from
- * the rows in `RUN_LISTING`, `workflow run <name>` acknowledges `launched-<name>` and
+ * the rows in `RUN_LISTING`, and `workflow get <id> --json` with the row of that id, `workflow run <name>` acknowledges `launched-<name>` and
  * `trigger fire` a receipt whose binding was admitted as run `fired-run`, without
  * starting anything (either refuses, exit 1, when `ARCHON_RUN_REFUSES` is set); every
  * other command runs the real CLI, whose argv the test passes as a JSON array in
@@ -27,11 +27,19 @@ if (argv[0] === 'workflow' && argv[1] === 'runs') {
   // The project's run listing, from `RUN_LISTING` (a JSON array of run rows).
   const runs = JSON.parse(process.env.RUN_LISTING ?? '[]') as unknown[];
   process.stdout.write(JSON.stringify({ runs, total: runs.length, scopeFallback: false }));
+} else if (argv[0] === 'workflow' && argv[1] === 'get') {
+  const runs = JSON.parse(process.env.RUN_LISTING ?? '[]') as { id?: unknown }[];
+  const run = runs.find(row => row.id === argv[2]);
+  if (run === undefined) process.exitCode = 1;
+  process.stdout.write(JSON.stringify(run ?? { ok: false, runId: argv[2], error: 'not_found' }));
 } else if (argv[0] === 'workflow' && argv[1] === 'run') {
   if (process.env.ARCHON_RUN_REFUSES) {
     process.stderr.write('refused');
     process.exitCode = 1;
   } else process.stdout.write(JSON.stringify({ runId: `launched-${argv[2]}` }));
+} else if (argv[0] === 'workflow' && argv[1] === 'notice') {
+  // Accepted; a test reads what was said from `ARCHON_CALL_LOG`.
+  process.stdout.write(JSON.stringify({ ok: true, action: 'notice', runId: process.env.WORKFLOW_ID ?? '', count: 1, limit: 50 }));
 } else if (argv[0] === 'trigger' && argv[1] === 'fire') {
   if (process.env.ARCHON_RUN_REFUSES) {
     process.stderr.write('refused');

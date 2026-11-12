@@ -31,6 +31,8 @@ import {
 import {
   findRemoteOwner,
   assertProjectRegistrationAvailable,
+  readRemoteIdentities,
+  type RemoteIdentityReader,
 } from '../services/registration-remote';
 import { getProjectLocations } from '../services/project-locations';
 
@@ -58,8 +60,11 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-export async function createCodebase(data: CreateCodebaseInput): Promise<Codebase> {
-  return insertCodebase(data, false);
+export async function createCodebase(
+  data: CreateCodebaseInput,
+  readIdentity?: RemoteIdentityReader
+): Promise<Codebase> {
+  return insertCodebase(data, false, readIdentity);
 }
 
 /** Forge registrations own managed source paths, so allocation must move that path with the name. */
@@ -67,8 +72,25 @@ export async function createManagedCodebase(data: CreateCodebaseInput): Promise<
   return insertCodebase(data, true);
 }
 
-async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Promise<Codebase> {
+async function insertCodebase(
+  data: CreateCodebaseInput,
+  managed: boolean,
+  readIdentity?: RemoteIdentityReader
+): Promise<Codebase> {
   assertAbsoluteDefaultCwd(data.default_cwd, data.name);
+  // Reading every registered project's remote identity runs git for seconds. Inside the
+  // transaction, any write another process commits meanwhile fails the INSERT with
+  // SQLITE_BUSY_SNAPSHOT and the block replays, reads included, so under steady writers it
+  // never finishes. The reads happen here; the transaction reads only rows that are new or
+  // changed since. A folder project owns no remote, so nothing is read for it.
+  const knownIdentities =
+    data.kind === 'folder'
+      ? undefined
+      : await readRemoteIdentities(
+          (await pool.query<Codebase>('SELECT * FROM remote_agent_codebases')).rows,
+          undefined,
+          readIdentity
+        );
   const result = await getDatabase().withTransaction(async query => {
     // Share the rename lock: a concurrent rename must not take the new registration's name.
     if (getDatabaseType() === 'postgresql') {
@@ -98,7 +120,12 @@ async function insertCodebase(data: CreateCodebaseInput, managed: boolean): Prom
           : project.default_cwd,
       };
     }
-    await assertProjectRegistrationAvailable(project, registered.rows);
+    await assertProjectRegistrationAvailable(
+      project,
+      registered.rows,
+      knownIdentities,
+      readIdentity
+    );
     return query<Codebase>(
       'INSERT INTO remote_agent_codebases (name, repository_url, default_cwd, default_branch, ai_assistant_type, kind) VALUES ($1, $2, $3, $4, $5, $6) RETURNING *',
       [

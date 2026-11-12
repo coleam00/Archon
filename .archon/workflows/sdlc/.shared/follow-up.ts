@@ -10,8 +10,9 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { archonCommand, record } from './forge.ts';
-import { artifactsDir, note, nullableJson } from './io.ts';
+import { artifactsDir } from 'archon:script';
+import { archonCommand } from './host.ts';
+import { nullableJson, record } from './inputs.ts';
 
 /** The admission the fired binding's request got, as `trigger fire` prints its receipt. */
 function disposition(stdout: string): Record<string, unknown> | undefined {
@@ -23,9 +24,16 @@ function disposition(stdout: string): Record<string, unknown> | undefined {
 /**
  * Fire `binding` (an absolute timer-binding config path) with `inputs` as its event
  * inputs, keyed by `deliveryId`, which must be built from values a retry repeats.
- * Returns how `what` proceeds, for the run's summary.
+ * `later` says what starts `what` when this fire does not. Returns how `what`
+ * proceeds, for the run's summary.
  */
-export function followUp(binding: string, deliveryId: string, inputs: Record<string, string>, what: string): string {
+export function followUp(
+  binding: string,
+  deliveryId: string,
+  inputs: Record<string, string>,
+  what: string,
+  later = 'the next queue run picks it up'
+): string {
   if (binding === '') return `no follow-up binding is set, so the next queue run picks up ${what}`;
   // Stable key order: the receipt digest covers the inputs as written.
   const sorted = Object.fromEntries(Object.entries(inputs).sort(([a], [b]) => (a < b ? -1 : 1)));
@@ -45,6 +53,16 @@ export function followUp(binding: string, deliveryId: string, inputs: Record<str
     result.exitCode === 0
       ? `its binding ${String(admitted?.status ?? 'admitted nothing')}`
       : (result.stderr.toString().trim().split('\n')[0] ?? '') || `trigger fire exited ${String(result.exitCode)}`;
-  note(`${what} did not start, so the next queue run picks it up: ${why}`);
-  return `${what} did not start (${why}), so the next queue run picks it up`;
+  console.error(`${what} did not start, so ${later}: ${why}`);
+  return `${what} did not start (${why}), so ${later}`;
+}
+
+/**
+ * Start a build-queue pickup now through the operator's build-queue binding, for an
+ * item intake just routed. The fire names no item: the binding names the repository,
+ * and a pickup takes the waiting item that sorts first under the binding's own
+ * `orders_only`, which a named item would pass.
+ */
+export function nextPickup(binding: string, key: string): string {
+  return followUp(binding, `build-pickup:${key}`, {}, 'a build-queue run');
 }

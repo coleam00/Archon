@@ -9,7 +9,100 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
-- The bundled SDLC pack reaches the forge only through `archon forge` and an installed forge plugin; the pack's `gh` path is gone and nothing falls back to `gh`. Install the plugin with `archon plugin add coleam00/Archon/plugins/forge-github` (v0.13.0 or later for delivery and the merge queue, whose forge checks refuse a plugin missing an operation they need; the metrics workflows and the build queue's lookup of a dead round's pull request need a release after v0.13.2, for `pr.view` timestamps, `pr.view` of a head in any state, `pr.files` and `repo.file`). Your existing `gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN` is still the credential, and a leftover `ARCHON_SDLC_FORGE` is ignored. A pack run in a container refuses at its forge check, since a container has no host command. The merge queue's own-PR enrollment notes that the forge cannot list a maintainer's pull requests and continues with the queue's other work. A red default branch is now always raised to a maintainer instead of rerun, because the forge reruns checks only on a pull request. (#5222)
+- The SDLC merge queue's sweep agent no longer merges. It declares `merge`, and a script node gates and merges each declared pull request. The gate command the agent ran (`gate.ts`) is gone, with the facts node's `gate` output and the sweep's `gate_error` output. A pull request the gate refuses is recorded as waiting with the gate's reasons instead of failing the run.
+- The SDLC merge queue no longer asks about a red default branch. The sweep merges nothing and its run completes with a failed outcome, which `archon workflow attention --watch` writes as a line that needs a look; `archon workflow get <run-id> --verbose` shows the diagnosis in the `record` node's summary. It is reported once per change: while the branch's head and check state read the same, later sweeps run no agent and end idle. No paused run holds the queue, so someone has to be on the watch. A queue run (intake, split, build or merge) that claims nothing while a stored work item is stuck also completes with a failed outcome that names the item, once per item until the item changes.
+- The SDLC pack's attention items carry the labels `stage` (`build`, `merge`, `discoveries`), `kind` (`route`, `stop`, `scope`, `pick`, `approve`, `question`), `item` and `pr` in place of `build: <class>`, `merge: <class>` and `discoveries: question`. A watcher or count that filters on the old keys matches nothing asked after this change: `--label merge=pr` becomes `--label stage=merge`, and `--count-by label:build` becomes `--count-by label:kind`. Answer the pack's open questions before you upgrade: a run paused on the old shape cannot be answered by the new scripts.
+- The SDLC pack's deciding agents write a question's text, options and recommendation themselves, and the queue's scripts no longer check or rewrite them. A question the wait refuses (two options with one id, or a recommendation of an option that is not offered) fails its run after the item is recorded as asking; abandon the run and re-triage the item.
+- A state document claim is recorded as its own operation (`claim`) in the state log. Archon binaries older than this release cannot read a document revision written by `archon state claim` and exit 1; once a store holds a claim, use only this release or later on it. A source checkout and an installed release can share one Archon home, so after the first claim the older of the two fails on that document.
+- `archon workflow attention --watch` writes only what needs someone: an item that opens or changes, the close of an item it wrote, a run that failed, completed with a failed outcome or lost its owner, and a coverage warning. It no longer writes `ready`, `bookmark`, `resumed`, or a line for a run that completed with any other outcome or was cancelled. A program that reads those lines or resumes with `--after` must add `--protocol`, which is the previous stream unchanged; `--after` without `--protocol` is refused.
+- `GET /api/runs/attention/stream` takes `level=quiet|notices|protocol` in place of `needsSomeone`. `needsSomeone=true` is now `level=quiet`; without `level` the stream is still the full protocol.
+
+### Added
+
+- `pr.threads` says when each review thread and comment was created (`createdAt`, ISO-8601) and the commit it was made on (`commit`, null when the forge does not record one), so a script can see a comment that arrived after a reviewed commit. The GitHub plugin fills both. Both are optional: a plugin released before them still answers, and a reader treats their absence as unknown.
+- The SDLC pack has three new settings in `.archon/packs/sdlc.yaml`. `build_lane: manual` launches no build round until a maintainer answered the queue's question about the item, and `merge_lane: manual` merges nothing a maintainer did not approve at its head. `protected_paths` is a list of globs: a pull request that changes a matching path merges only once approved at its head. Scripts enforce all three.
+- The SDLC pack's queues emit notices: `started`, `ready`, `continued`, `parked`, `merged` (with `lane=auto` or `lane=manual`), `returned`, `closed` and `blocked`. `archon workflow attention --notices --since 24h --label kind=merged` lists what merged.
+- A run that completes with a failed outcome says why where the look is asked for: its `terminal` attention line carries `reason`, up to two short lines from what the `returns:` node said, and the text watch prints them. `archon workflow get` prints a `Reason:` line for a failed outcome and for a failed run, and carries `reason` in `--json`. `reason` is optional in both: the line and `workflow get --json` omit it when there is no reason text.
+- `archon workflow respond <run> --recommended --occurrence <id>` and `archon workflow answer --recommended` answer an attention wait with the option it recommends, at the occurrence the answerer read. The answer is refused when the wait has no recommendation or takes none in its form.
+- Every line of `archon workflow attention --watch --json` and of the HTTP stream carries `needs`: `answer`, `look` or `nothing`. The close of an ask needs `nothing` and the watch still shows it. `--watch --notices` (`level=notices`) also writes the `nothing` lines that say what happened to work, such as a run that completed or resumed.
+- An attention wait's `wait_started` event records its form, the option ids it offered and the recommended option with its confidence, and `archon workflow attention --count-by ... --since` reports per group how many waits carried a recommendation and how many answers followed it.
+- `--as <name>` on `answer`, `respond`, `approve` and `reject` records a self-declared answerer on an attention wait's answer. `resolved` stream lines carry it as `answeredBy`, and `--count-by answerer --since` groups by it. The name is a claim that nothing checks; a gate records no answerer and refuses `--as`.
+- The text form of `archon workflow attention`, with or without `--watch`, prints each ask as a block that can be answered by itself: the question's first line, the recommendation and its reason, what each option does, and the answer commands with `--occurrence`. `archon workflow attention <run-id>` prints the whole message. `--json` is unchanged.
+- A source checkout and Docker run the GitHub forge plugin from source, as they run the maintained providers, and skip an installed `archon-forge-github`. Release binaries still load the installed plugin.
+- A Bun `script:` node imports the host's API by name: `import { input, emit, refuse, forge, state, outcomes, trigger } from 'archon:script'`. Archon provides the module to named scripts, inline bodies and executed dry runs, so a pack carries no client code and needs no `node_modules`. `forge(op, request)` is typed per operation and throws a `ForgeError` with the failure's kind and what is known of a failed write; `state` wraps `archon state` with typed conflicts. The CLI stays the wire underneath for other runtimes. The load-time input check reads `input('<name>')` like `process.env.INPUTS_<NAME>`.
+- `archon script types [--out <file>] [--check]` writes the TypeScript declaration of `archon:script`, including every forge operation's request and result type, for an editor or `tsc` over a pack's scripts.
+- `archon forge check` answers whether a plugin serves a host, supports the named operations and has a credential, without running a forge operation. It exits 1 with a typed reason, so a workflow can refuse before it spends on agents.
+- `archon state put|patch|delete --held` writes only if the calling run holds the document's live lease, and otherwise exits 3 with `lease_not_held`.
+- `archon state claim` takes the lease on the first claimable document of a candidate list and reports why it skipped each of the others.
+- A `select` wait can declare `other: true`, which adds a free-text option. An answer that chooses it must carry text, and the next node reads `{ decision: "other", text }`.
+- `archon workflow attention --count-by` with `--since` counts the attention waits opened in a window, answered or still open.
+- A trigger binding without `schedule` is fire-only: only `archon trigger fire --config <file>` starts it, through the same admission and deduplication as a scheduled start.
+- Removing a run's scratch directory at run end first removes the git worktrees a node added under it from the run's repository, so no registration outlives its files.
+- `context: { resume: <include id> }` continues the session of the node an included workflow returns, so a node can resume a session that arrives through an `include:`.
+- A named `script:` of a packaged workflow that is not in the workflow's own `scripts/` resolves from the pack's `.shared/scripts/`, so a pack keeps one copy of a script its workflows share.
+- The forge contract can search a repository's issues and pull requests by text (`workitem.search`) and read the end of a check's log (`checks.logs`). The GitHub plugin implements both, and the SDLC pack's agents use them instead of `gh`.
+- A script node can bind every output of an `output_type` its run produced: `with: { reviews: { outputs: review-report } }` delivers them as one JSON array, across loop iterations and included blocks. The loader refuses a producer the node could race and a type no node declares. A record that cannot be read fails the node, or delivers the binding's `if_unreadable` value (null or an array) when it declares one.
+
+### Changed
+
+- The SDLC pack's forge preflights (delivery, the merge queue and the test-value metric) ask `archon forge check` for the plugin, its operations and its credential instead of comparing plugin metadata themselves. Delivery still makes one authenticated read. A missing operation is refused in the host's words (`plugin <name> does not support <operations>`).
+- The SDLC pack's scripts call the forge and the state store through `archon:script` instead of the pack's own clients. A failed forge operation is reported in the script API's words: the message no longer carries the credential source or the write's mutation record, and the plugin setup hint is added only by the forge preflights.
+- A merge-queue sweep whose gate command could not run now fails the run, naming what the gate printed, instead of recording a `wait` and completing.
+- The SDLC pack's queue questions use the wait's own `other` option. On build and pull-request items it does what the pack's own `other` choice did, and the answer must now carry text; a `merge: base` item now shows it too, and an `other` answer there holds like `hold`.
+
+## [0.14.0] - 2026-11-07
+
+The SDLC pack reaches GitHub only through the forge plugin, packs can declare settings, and `archon metrics` measures the factory.
+
+### Breaking
+
+- The bundled SDLC pack reaches the forge only through `archon forge` and an installed forge plugin; the pack's `gh` path is gone and nothing falls back to `gh`. Install the plugin with `archon plugin add coleam00/Archon/plugins/forge-github`. Delivery and the merge queue need plugin v0.13.0 or later, and their forge checks refuse a plugin missing an operation they need; the metrics workflows and the build queue's lookup of a dead round's pull request need this release's plugin, for `pr.view` timestamps, `pr.view` of a head in any state, `pr.files` and `repo.file`. Your existing `gh auth login`, `GH_TOKEN` or `GITHUB_TOKEN` is still the credential, and a leftover `ARCHON_SDLC_FORGE` is ignored. A pack run in a container refuses at its forge check, since a container has no host command. The merge queue's own-PR enrollment notes that the forge cannot list a maintainer's pull requests and continues with the queue's other work. A red default branch is now always raised to a maintainer instead of rerun, because the forge reruns checks only on a pull request. (#5222, #5365)
+
+### Added
+
+- A pack can declare settings once in `<pack>/.pack/pack.yaml`, and a project sets them in `.archon/packs/<pack>.yaml`. Every workflow of the pack reads them as inputs; an unknown key or a wrong-typed value refuses the run, naming the file and the key. (#5342)
+- `archon project config <id|name>` and `GET /api/codebases/{id}/config` show a project's merged config with secrets and env values removed. (#5334)
+- `archon metrics` and `/api/metrics` aggregate metrics that nodes return across runs, compare runs before and after a change with intervals and cost, compare the models that ran one step, report factory PR counts and merge rate attributed to the runs that built each PR, and count factory tests that protect no behavior, with the judge's agreement against hand labels. The test-value judge judges each test on its own merits and also reads tests defined outside test files. (#5314, #5319, #5323, #5324, #5329, #5346)
+- The console metrics page shows trends, judge calibration, and the overview cards a pack declares, with a Details screen. (#5339, #5354)
+- A run can hold a lease on a state document (`archon state put|patch --lease`, `--release-lease`). Reads report whether the lease is live from the holder run's status, and the engine never ends a lease on age. The SDLC pack's claims use it. (#5366)
+- Attention waits carry a recommendation, what each option does, and a value returned with the answer. (#5367)
+- The attention queue streams over SSE for HTTP clients. (#5387)
+- A run started by a trigger binding is recorded as the start's requester. (#5368)
+- A node can read which nodes in its run failed, were skipped or completed. (#5361)
+- A node can read its own pack's directory as `$PACK_DIR`. (#5363)
+- A loop that runs out of iterations can complete with its last output instead of failing the run. (#5362)
+- The forge contract can read pull request timestamps, a pull request's files, and a file at a commit. (#5379)
+- SDLC pack: the build queue can build only the work items an operator put in a work order (`orders_only`). (#5390)
+- SDLC pack: a large item is split into issues only when it can't be built as one; a PRD splits into phases that each prove an outcome. (#5322)
+- SDLC pack: review's code lens uses a user-facing change in a browser, and a new ux lens judges a UI change as its operator would. (#5389, #5392)
+
+### Changed
+
+- Built-in Codex defaults use the GPT-6.1 models. (#5378)
+- SDLC pack: queue follow-up runs start through the operator's trigger bindings, so binding capacity and deduplication apply to them. (#5369)
+- SDLC pack: the build queue stops relaunching a pull request that changed nothing since its last review. (#5303)
+- SDLC pack: transient GitHub read failures are retried, a dated scope ruling can settle a review thread, and the merge sweep decides a pull request with no Ready verdict at its head before reading any diff. (#5393)
+- SDLC pack: prompts point at the policy documents instead of restating them, and the pack keeps only the tests that guard a write or a gate. (#5364, #5382, #5385)
+- Metrics reports return in seconds and no longer block the server. (#5384)
+- Container image cleanup goes through the selected isolation backend, and Docker verification images are removed when runs finish. (#5311, #5338)
+- Worktree reuse on the wrong branch is refused. (#5292)
+- A Codex output schema that Codex cannot honor is refused before the agent runs. (#5291)
+- Partial workflow run reads reject unsupported statuses. (#5294)
+- Windows taskkill failures and Codex shutdown phases report diagnostics. (#5288, #5302)
+
+### Fixed
+
+- HTTP workflow launches resolve continuation targets the same way the CLI does, and reject unknown, ambiguous or still-running targets with a 400 before any work starts. (#5305)
+- Fan-out results are consistent across workflow types. (#5386)
+- Host workflow results survive a Docker image inventory failure. (#5333)
+- Multiline inline Bun scripts survive a Windows cmd shim. (#5308)
+- Plain loops survive an unreadable parent status. (#5284)
+- SSE heartbeat loops end after the client disconnects. (#5295)
+- Reconnects survive an OAuth refresh. (#5297)
+- The attention queue reports paused runs it cannot read, `/status` says when it cannot read the worktree inventory, and draft run launch refusals are shown in full. (#5280, #5296, #5298)
+- macOS cleans up exited plugin process groups. (#5310)
+- OpenCode retries server startup only on a structured port conflict. (#5304)
+- SDLC pack: a cancelled build round's pull request is recorded when its claim is released, and the build queue's answer no longer stalls on Codex when it has no ask class to declare. (#5313, #5326)
 
 ## [0.13.2] - 2026-10-29
 

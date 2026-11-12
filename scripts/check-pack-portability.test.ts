@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { findLeaks } from './check-pack-portability';
+import { findLeaks, PACK_ROOT } from './check-pack-portability';
 
 describe('pack portability check', () => {
   test('flags an owner, a vendor and a tracker number planted in a pack file', () => {
@@ -20,8 +20,17 @@ describe('pack portability check', () => {
   });
 
   test("allows only the forge plugin's install id, in its own file", () => {
-    const line = "export const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';";
-    expect(findLeaks('.archon/workflows/sdlc/.shared/forge.ts', line)).toEqual([]);
+    const line = "const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';";
+    expect(findLeaks('.archon/workflows/sdlc/.shared/forge-check.ts', line)).toEqual([]);
     expect(findLeaks('.archon/workflows/sdlc/.shared/other.ts', line)).toHaveLength(1);
+  });
+
+  test("allows the forge plugin's install command in the setup guide, and nothing else on that line", () => {
+    const readme = `${PACK_ROOT}/README.md`;
+    const command = 'archon plugin add coleam00/Archon/plugins/forge-github';
+    expect(findLeaks(readme, command)).toEqual([]);
+    expect(findLeaks(readme, `${command} # ask Wirasm`)).toHaveLength(1);
+    expect(findLeaks(readme, 'See coleam00/Archon for history.')).toHaveLength(1);
+    expect(findLeaks('.archon/workflows/sdlc/plan/commands/plan.md', command)).toHaveLength(1);
   });
 });

@@ -114,7 +114,9 @@ export const RUN_ARTIFACTS_ENGINE_SUBDIR = '.archon';
  * and Archon removes it once the run is completed, failed or cancelled and
  * nothing of the run can still write there (`@archon/workflows/run-scratch`).
  * Evidence a later node or the operator reads goes anywhere else in
- * `$ARTIFACTS_DIR`, which is kept.
+ * `$ARTIFACTS_DIR`, which is kept unless its containing descendant directory carries
+ * a regular CACHEDIR.TAG beginning with the standard signature. Tagged caches are
+ * released alongside scratch; the artifacts root itself is always retained.
  */
 export function getRunScratchDir(artifactsDir: string): string {
   return join(artifactsDir, RUN_ARTIFACTS_ENGINE_SUBDIR, 'scratch');

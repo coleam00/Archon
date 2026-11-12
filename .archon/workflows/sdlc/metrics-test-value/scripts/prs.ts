@@ -3,19 +3,16 @@
  * now), with the build-queue runs that built each, for the judge to fan out over.
  */
 
-import { factoryPrRuns, factoryPrs, prRuns, readPrFacts } from '../../.shared/factory-prs.ts';
-import { emit, refuse, trimmed } from '../../.shared/io.ts';
-import { stateDocuments } from '../../.shared/state.ts';
+import { factoryPrRuns, factoryPrs, prRuns, readPrFacts, sinceTime } from '../../.shared/factory-prs.ts';
+import { emit, input, refuse, state } from 'archon:script';
 import { requireTestValueSource } from '../../.shared/test-value.ts';
 import { read } from '../../.shared/workitem.ts';
 
-const since = trimmed(process.env.INPUTS_SINCE);
+const since = input('since').trim();
 
 try {
-  const days = /^(\d+)d$/.exec(since)?.[1];
-  const from = days === undefined ? Date.parse(since) : Date.now() - Number(days) * 86_400_000;
-  if (Number.isNaN(from)) throw new Error(`since must be an ISO date or time, or a number of days such as 7d; received ${JSON.stringify(since)}`);
-  const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
+  const from = sinceTime(since);
+  const items = state.listValues('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
   const runsByUrl = factoryPrRuns(items);
   const prs = factoryPrs(readPrFacts(runsByUrl.keys()))
     .factory.filter(pr => pr.state === 'MERGED' && pr.mergedAt !== null && Date.parse(pr.mergedAt) >= from)

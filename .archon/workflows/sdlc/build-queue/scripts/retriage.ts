@@ -1,49 +1,29 @@
 /**
  * Send the blocked items the revisit agent judged unblocked back to intake.
  *
- * Each gets `archon-triage` and a detached intake run with that label event, recorded
- * as added by `retriage_as`; intake decides whether the item is now ready. Every listed
- * item records the revisit, so the next one waits its turn.
+ * Each gets this run's re-triage request and one intake pickup; intake decides whether
+ * the item is now ready. The listing already recorded the revisit on every listed item.
  *
- * Bound inputs: INPUTS_BLOCKED from blocked, INPUTS_RETRIAGE from revisit, and the
- * workflow inputs INPUTS_REPO_HOST, INPUTS_REPO_PATH and INPUTS_RETRIAGE_AS.
+ * Bound inputs: INPUTS_REPO from start, INPUTS_BLOCKED from blocked, and
+ * INPUTS_RETRIAGE from revisit.
  */
 
-import { type BlockedItem, recordRevisit } from '../../.shared/build.ts';
-import { emit, note, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
-import { launchDetached } from '../../.shared/launch.ts';
-import { writeLabels } from '../../.shared/labels.ts';
+import type { BlockedItem } from '../../.shared/build.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { nullableJson } from '../../.shared/inputs.ts';
+import { requestRetriage } from '../../.shared/launch.ts';
 
 function main(): void {
-  const blocked = nullableJson(process.env.INPUTS_BLOCKED) as BlockedItem[];
-  const judged = nullableJson(process.env.INPUTS_RETRIAGE) as { number: number; reason: string }[];
-  const repo = { host: trimmed(process.env.INPUTS_REPO_HOST), path: trimmed(process.env.INPUTS_REPO_PATH) };
-  const actor = trimmed(process.env.INPUTS_RETRIAGE_AS);
-  const runId = text(process.env.WORKFLOW_ID);
+  const blocked = nullableJson(input('blocked')) as BlockedItem[];
+  const judged = nullableJson(input('retriage')) as { number: number; reason: string }[];
+  const repo = nullableJson(input('repo')) as { host: string; path: string };
+  const runId = workflowRunId();
   const listed = new Set(blocked.map(item => item.number));
   const stray = judged.find(entry => !listed.has(entry.number));
   if (stray !== undefined) throw new Error(`the revisit named issue ${String(stray.number)}, which it was not given`);
 
-  const sent = new Map<number, string>();
-  for (const { number, reason } of judged) {
-    const item = { repo, number };
-    writeLabels(item, ['archon-triage'], []);
-    const intake = launchDetached('archon-intake', {
-      repo_host: repo.host,
-      repo_path: repo.path,
-      number: String(number),
-      action: 'added',
-      label: 'archon-triage',
-      label_actor: actor,
-    });
-    sent.set(number, `asked intake to re-triage (run ${intake}): ${reason}`);
-  }
-  for (const { number } of blocked) {
-    if (!recordRevisit({ repo, number }, runId, sent.get(number) ?? 'judged still blocked')) {
-      note(`issue ${String(number)}: the revisit was not recorded, so the next run judges it again`);
-    }
-  }
-  emit({ retriaged: [...sent.keys()], summary: `Revisited ${String(blocked.length)} blocked item(s); sent ${String(sent.size)} to re-triage.` });
+  for (const { number } of judged) requestRetriage({ repo, number }, runId);
+  emit({ retriaged: judged.map(entry => entry.number), summary: `Revisited ${String(blocked.length)} blocked item(s); sent ${String(judged.length)} to re-triage.` });
 }
 
 try {

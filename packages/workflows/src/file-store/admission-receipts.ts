@@ -1,5 +1,4 @@
 import {
-  bindingInspectionSchema,
   bindingSchema,
   deliveryPathFor,
   pathFor,
@@ -10,7 +9,10 @@ import {
 import { join } from 'node:path';
 import { z } from 'zod';
 import type { WorkflowRun } from '../schemas/workflow-run';
-import { sourceReceiptAcceptanceSchema } from '../schemas/resource-start';
+import {
+  sourceReceiptAcceptanceSchema,
+  startBindingInspectionSchema,
+} from '../schemas/resource-start';
 import {
   SourceReceiptDigestConflictError,
   compareCodeUnits,
@@ -58,7 +60,7 @@ export function createReceiptOperations(
     item: z.infer<typeof bindingSchema>,
     requestId: string | null = null
   ): Promise<StartBindingInspection> {
-    const inspection = bindingInspectionSchema.parse(item);
+    const inspection = startBindingInspectionSchema.parse(item);
     const request = requestId ? await tx.request(requestId) : null;
     return {
       ...inspection,

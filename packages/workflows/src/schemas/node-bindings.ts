@@ -3,7 +3,7 @@
  * and the input-name rules every `with:` map and `$INPUTS.<name>` reference shares.
  */
 import { z } from 'zod';
-import { INPUT_NAME_SOURCE, jsonValueSchema } from '../output-ref';
+import { INPUT_NAME_SOURCE, jsonValueSchema, type JsonValue } from '../output-ref';
 
 /**
  * Node-local binding directive (#2637) — the explicit form of a `with:` value on a
@@ -25,6 +25,44 @@ export const bindingDirectiveSchema = z.strictObject({
 
 export type BindingDirective = z.infer<typeof bindingDirectiveSchema>;
 
+/**
+ * Typed-outputs directive: the `with:` value of a `script:` node that reads every
+ * certified output of one `output_type` its own run has produced so far. The type is the
+ * producer-declared `output_type`, matched exactly; it names outputs across loop
+ * iterations and include boundaries, which no `$node.output` reference can.
+ */
+export const typedOutputsDirectiveSchema = z.strictObject({
+  outputs: z.string().min(1, "'outputs' must be a non-empty output_type"),
+  /**
+   * The value the binding takes when a typed-output record of the run cannot be read.
+   * Without it that fails the node. Data, like `if_skipped`: the reader's own code
+   * decides what the value means. Null or an array, the shape a read delivers: the
+   * value takes the directive's place in the `with:` map, where an object would be read
+   * as a binding directive and a string as a reference.
+   */
+  if_unreadable: z
+    .union([z.null(), z.array(jsonValueSchema)], {
+      error: "'if_unreadable' must be null or an array",
+    })
+    .optional(),
+});
+
+export type TypedOutputsDirective = z.infer<typeof typedOutputsDirectiveSchema>;
+
+/**
+ * One certified output a typed-outputs binding delivers, in production order. A type
+ * alias, not an interface, so a record is itself a `JsonValue`.
+ */
+export type TypedOutputRecord = {
+  /** The producing node's id, as the flattened workflow names it. */
+  node: string;
+  /** The enclosing loop_group iterations, outermost first; empty at top level. */
+  loop: { group: string; iteration: number }[];
+  /** When the engine recorded the output (ISO-8601). */
+  at: string;
+  value: JsonValue;
+};
+
 export const nodeBindingsSchema = z.record(
   z.string(),
   z.union([jsonValueSchema, bindingDirectiveSchema])
@@ -41,6 +79,16 @@ export function isBindingDirective(value: unknown): value is BindingDirective {
     value !== null &&
     !Array.isArray(value) &&
     typeof (value as Record<string, unknown>).from === 'string'
+  );
+}
+
+/** Whether a `with:` value is a typed-outputs directive: an object carrying `outputs`. */
+export function isTypedOutputsDirective(value: unknown): value is TypedOutputsDirective {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    !Array.isArray(value) &&
+    Object.hasOwn(value, 'outputs')
   );
 }
 

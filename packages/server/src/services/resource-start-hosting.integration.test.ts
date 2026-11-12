@@ -1,3 +1,4 @@
+import { readWorkflowSourceState } from '@archon/workflows/schemas/run-metadata';
 import { resolveProjectPaths } from '@archon/workflows/run-paths';
 import { listWorkflowEvents } from '@archon/core/db/workflow-events';
 import { randomUUID } from 'node:crypto';
@@ -480,7 +481,7 @@ describe('server resource-start host', () => {
       if (fails) {
         await expect(start()).rejects.toThrow('exit code 7');
         expect(engine.submitted).toHaveLength(0);
-        expect((await getWorkflowRun(runId))?.status).toBe('pending');
+        expect((await getWorkflowRun(runId))?.status).toBe('failed');
       } else {
         await start();
         expect(engine.submitted[0]?.options?.preCreatedRun?.id).toBe(runId);
@@ -513,7 +514,7 @@ describe('server resource-start host', () => {
       expect(setup[1]?.data?.message).toContain(fails ? 'exit code 7' : 'completed');
       if (fails) {
         expect(setup[1]?.data?.exitCode).toBe(7);
-        await expect(start()).rejects.toThrow('its setup did not finish');
+        await expect(start()).rejects.toThrow('is failed, not pending');
         expect(engine.submitted).toHaveLength(0);
       }
     },
@@ -836,14 +837,68 @@ describe('server resource-start host', () => {
     expect(released).toBe(true);
   });
 
-  test('a worktree creation failure reports the classified isolation message, not raw git output', async () => {
-    const { deliver, engine } = await fixture(false, {
-      kind: 'worktree',
-      fromBranch: 'no-such-branch',
-    });
-    expect((await deliver('first', 'queue')).status).toBe(200);
-    const requestId = await admitWithoutStarting();
+  test.each(['missing-branch', 'missing-remote'] as const)(
+    'isolation failure %s fails the run and frees the next drain',
+    async failure => {
+      const { deliver, engine } = await fixture(false, {
+        kind: 'worktree',
+        ...(failure === 'missing-branch' ? { fromBranch: 'no-such-branch' } : {}),
+      });
+      expect((await deliver('first', 'queue')).status).toBe(200);
+      const requestId = await admitWithoutStarting();
+      const before = await getWorkflowRun(requestId);
+      const receipt = await getStartReceipt(await receiptIdOf('first'));
+      expect((await deliver('second', 'queue')).status).toBe(200);
+      await drainResourceStartHost({
+        ...createSqlWorkflowHost(),
+        hostId: HOST_ID,
+        startAdmitted: async () => {
+          throw new Error('Queued start must not execute');
+        },
+      });
+      expect((await bindingOf('second')).disposition?.status).toBe('queued');
+      if (failure === 'missing-remote')
+        await execFileAsync('git', ['remote', 'remove', 'origin'], { cwd: join(root, 'project') });
+      const host = { ...createSqlWorkflowHost(), engine };
+      let diagnostic = '';
+      try {
+        await startAdmittedResourceStart({
+          requestId,
+          hostId: HOST_ID,
+          host,
+          createPlatform: () => new HeadlessPlatform(),
+        });
+        throw new Error('Expected isolation failure');
+      } catch (error) {
+        diagnostic = (error as Error).message;
+        expect(diagnostic).toMatch(/^\*\*Error:\*\* /);
+      }
+      expect(engine.submitted).toHaveLength(0);
+      expect(await getWorkflowRun(requestId)).toMatchObject({
+        status: 'failed',
+        metadata: {
+          error: diagnostic,
+          stop_reason: { reason: 'launch_failed' },
+          resource_start: before?.metadata.resource_start,
+        },
+      });
+      expect(await getStartReceipt(await receiptIdOf('first'))).toEqual(receipt);
+      const events = await listWorkflowEvents(requestId);
+      expect(events.filter(event => event.event_type === 'node_started')).toEqual([]);
+      expect(events.filter(event => event.event_type === 'workflow_failed')).toHaveLength(1);
+      await admitWithoutStarting();
+      expect((await bindingOf('second')).disposition?.status).toBe('admitted');
+    }
+  );
 
+  test('an owned frozen-source read failure is recorded before submission', async () => {
+    const { deliver, engine } = await fixture(false);
+    await deliver('first', 'queue');
+    const requestId = await admitWithoutStarting();
+    const run = await getWorkflowRun(requestId);
+    const source = readWorkflowSourceState(run?.metadata);
+    if (source.kind !== 'recorded') throw new Error('Expected frozen source');
+    await removeTempTree(source.record.root);
     await expect(
       startAdmittedResourceStart({
         requestId,
@@ -851,8 +906,83 @@ describe('server resource-start host', () => {
         host: { ...createSqlWorkflowHost(), engine },
         createPlatform: () => new HeadlessPlatform(),
       })
-    ).rejects.toThrow(/^\*\*Error:\*\* /);
+    ).rejects.toThrow();
+    expect(await getWorkflowRun(requestId)).toMatchObject({
+      status: 'failed',
+      metadata: { stop_reason: { reason: 'launch_failed' } },
+    });
     expect(engine.submitted).toHaveLength(0);
+  });
+
+  test.each(['project', 'claim-race', 'write-error'] as const)(
+    'owned preparation failure: %s',
+    async mode => {
+      const { deliver, engine } = await fixture(false);
+      await deliver('first', 'queue');
+      const requestId = await admitWithoutStarting();
+      const host = { ...createSqlWorkflowHost(), engine };
+      const original = new Error('project read failed');
+      const writeError = new Error('store unavailable');
+      const writer = host.deps.store.failWorkflowRun.bind(host.deps.store);
+      let writes = 0;
+      host.deps.store.failWorkflowRun = async (...args) => {
+        writes++;
+        if (mode === 'write-error') throw writeError;
+        if (mode === 'claim-race') await host.deps.store.claimPendingWorkflowRun(requestId);
+        return writer(...args);
+      };
+      host.records = {
+        ...host.records,
+        codebases: {
+          ...host.records.codebases,
+          getCodebase: async () => {
+            throw original;
+          },
+        },
+      };
+      const start = startAdmittedResourceStart({
+        requestId,
+        hostId: HOST_ID,
+        host,
+        createPlatform: () => new HeadlessPlatform(),
+      });
+      if (mode === 'write-error') {
+        const error = await start.catch(error => error);
+        expect(error).toMatchObject({
+          name: 'TerminalStatusWriteError',
+          cause: writeError,
+          failure: original,
+        });
+      } else await expect(start).rejects.toBe(original);
+      expect(writes).toBe(1);
+      expect((await getWorkflowRun(requestId))?.status).toBe(
+        mode === 'project' ? 'failed' : mode === 'claim-race' ? 'running' : 'pending'
+      );
+      expect(engine.submitted).toHaveLength(0);
+    }
+  );
+
+  test('an engine rejection after claiming execution is never settled by the launch host', async () => {
+    const { deliver, engine } = await fixture(false);
+    await deliver('first', 'queue');
+    const requestId = await admitWithoutStarting();
+    engine.submit = async input => {
+      await claimPendingWorkflowRun(requestId);
+      input.options?.onExecutionClaimed?.(null);
+      throw new Error('execution already began');
+    };
+    await expect(
+      startAdmittedResourceStart({
+        requestId,
+        hostId: HOST_ID,
+        host: { ...createSqlWorkflowHost(), engine },
+        createPlatform: () => new HeadlessPlatform(),
+      })
+    ).rejects.toThrow('execution already began');
+    expect((await getWorkflowRun(requestId))?.status).toBe('running');
+    expect(
+      (await listWorkflowEvents(requestId)).filter(event => event.event_type === 'workflow_failed')
+    ).toEqual([]);
   });
 
   test.each([undefined, 'named-reuse'])(

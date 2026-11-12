@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import type { Run } from '../primitives/run';
 import { statusTextClass } from '../lib/run-status';
-import { formatElapsed, elapsedSince, formatCost, formatClock } from '../lib/format';
+import { formatElapsed, elapsedSince, formatCost, formatDateTime, ensureUtc } from '../lib/format';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
 
 /**
@@ -17,7 +17,9 @@ export function RunStartedLine({ run }: { run: Run }): ReactElement {
           ▶
         </span>
         <span className="font-medium text-text-secondary">Workflow {run.workflow} started</span>
-        <span className="font-mono text-text-tertiary">{formatClock(run.startedAt)}</span>
+        <time className="font-mono text-text-tertiary" dateTime={ensureUtc(run.startedAt)}>
+          {formatDateTime(run.startedAt)}
+        </time>
         <div className="h-px flex-1 bg-border/50" aria-hidden />
       </div>
       {run.userMessage !== '' ? (

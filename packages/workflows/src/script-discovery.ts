@@ -4,8 +4,11 @@
  * Shared scripts from `.archon/scripts/` are keyed by filename without an
  * extension. Packaged scripts live under
  * `.archon/workflows/<pack>/<workflow>/scripts/` and receive owner-qualified
- * internal keys. Runtime is inferred from the extension: .ts/.js -> bun,
- * .py -> uv.
+ * internal keys. A pack's own shared scripts, under `<pack>/.shared/scripts/`,
+ * are registered under every workflow of the pack that has no script of that
+ * name, so a lookup by a workflow's qualified key finds its own script first
+ * and the pack's shared one otherwise. Runtime is inferred from the extension:
+ * .ts/.js -> bun, .py -> uv.
  */
 import { mkdir, readdir, rename, rm, stat, writeFile } from 'fs/promises';
 import { createHash, randomUUID } from 'crypto';
@@ -17,10 +20,12 @@ import { listInstalledPacks, liveSourceRoots, type WorkflowSourceRoots } from '.
 import {
   formatPackagedResourceReference,
   isValidWorkflowFolderSegment,
+  PACK_SHARED_SCRIPTS_PATH,
   parsePackagedResourceReference,
 } from './packaged-workflow';
 import { FIXTURES_DIR } from './fixture-layout';
 import type { WorkflowSource } from './schemas';
+import { getRuntimeForExtension, type ScriptRuntime } from './script-runtime';
 
 /** Normalize path separators to forward slashes for cross-platform consistency */
 function normalizeSep(p: string): string {
@@ -34,29 +39,13 @@ function getLog(): ReturnType<typeof createLogger> {
   return cachedLog;
 }
 
-/** Supported script runtime */
-export type ScriptRuntime = 'bun' | 'uv';
+export type { ScriptRuntime } from './script-runtime';
 
 /** A discovered script with its metadata */
 export interface ScriptDefinition {
   name: string;
   path: string;
   runtime: ScriptRuntime;
-}
-
-/** Supported file extensions and their runtimes */
-const EXTENSION_RUNTIME_MAP: Record<string, ScriptRuntime> = {
-  '.ts': 'bun',
-  '.js': 'bun',
-  '.py': 'uv',
-};
-
-/**
- * Derive the runtime from a file extension.
- * Returns undefined for unknown extensions.
- */
-function getRuntimeForExtension(ext: string): ScriptRuntime | undefined {
-  return EXTENSION_RUNTIME_MAP[ext];
 }
 
 /**
@@ -256,7 +245,46 @@ async function discoverPackagedScripts(
   return scripts;
 }
 
-/** Add one pack's per-workflow scripts to `scripts`, owner-qualified. */
+/** A pack's entries, or none when the pack folder is gone. */
+async function readPackFolders(
+  packPath: string,
+  onMissing?: (path: string, error: unknown) => void
+): Promise<string[]> {
+  try {
+    return await readdir(packPath);
+  } catch (error) {
+    const err = error as NodeJS.ErrnoException;
+    if (err.code === 'ENOENT') {
+      onMissing?.(packPath, error);
+      return [];
+    }
+    throw new Error(`Failed to read packaged workflow pack "${packPath}": ${err.message}`, {
+      cause: err,
+    });
+  }
+}
+
+/** The requested script names of one pack, by workflow folder; undefined when all are wanted. */
+function requestedPackScripts(
+  requestedNames: ReadonlySet<string> | undefined,
+  source: WorkflowSource,
+  pack: string
+): Map<string, Set<string>> | undefined {
+  if (requestedNames === undefined) return undefined;
+  const byWorkflow = new Map<string, Set<string>>();
+  for (const name of requestedNames) {
+    const ref = parsePackagedResourceReference(name);
+    if (ref?.owner.source !== source || ref.owner.pack !== pack) continue;
+    const names = byWorkflow.get(ref.owner.workflow) ?? new Set<string>();
+    byWorkflow.set(ref.owner.workflow, names.add(ref.name));
+  }
+  return byWorkflow;
+}
+
+/**
+ * Add one pack's scripts to `scripts`, owner-qualified: each workflow's own, and the
+ * pack's shared scripts under every workflow that has none of that name.
+ */
 async function discoverPackScripts(
   packPath: string,
   pack: string,
@@ -265,44 +293,30 @@ async function discoverPackScripts(
   requestedNames?: ReadonlySet<string>,
   onMissing?: (path: string, error: unknown) => void
 ): Promise<void> {
-  let workflowFolders: string[];
-  try {
-    workflowFolders = await readdir(packPath);
-  } catch (error) {
-    const err = error as NodeJS.ErrnoException;
-    if (err.code === 'ENOENT') {
-      onMissing?.(packPath, error);
-      return;
-    }
-    throw new Error(`Failed to read packaged workflow pack "${packPath}": ${err.message}`, {
-      cause: err,
-    });
-  }
+  const workflowFolders = await readPackFolders(packPath, onMissing);
+  const requested = requestedPackScripts(requestedNames, source, pack);
+  if (requested?.size === 0) return;
+  const sharedScripts = await discoverScripts(
+    join(packPath, PACK_SHARED_SCRIPTS_PATH),
+    requested && new Set([...requested.values()].flatMap(names => [...names])),
+    onMissing
+  );
   for (const workflow of workflowFolders) {
-    if (workflow === FIXTURES_DIR) continue;
-    if (!isValidWorkflowFolderSegment(workflow)) continue;
-    const localNames =
-      requestedNames &&
-      new Set(
-        [...requestedNames].flatMap(name => {
-          const ref = parsePackagedResourceReference(name);
-          return ref?.owner.source === source &&
-            ref.owner.pack === pack &&
-            ref.owner.workflow === workflow
-            ? [ref.name]
-            : [];
-        })
-      );
+    if (workflow === FIXTURES_DIR || !isValidWorkflowFolderSegment(workflow)) continue;
+    const localNames = requested && (requested.get(workflow) ?? new Set<string>());
     if (localNames?.size === 0) continue;
     if (!(await isPackagedDirectory(join(packPath, workflow), 'workflow', onMissing))) continue;
-    const owner = { source, pack, workflow };
-    const localScripts = await discoverScripts(
+    const ownScripts = await discoverScripts(
       join(packPath, workflow, 'scripts'),
       localNames,
       onMissing
     );
-    for (const [name, definition] of localScripts) {
-      const qualifiedName = formatPackagedResourceReference(owner, name);
+    // Shared first, so the workflow's own script of the same name replaces it.
+    const available = [...sharedScripts, ...ownScripts].filter(
+      ([name]) => localNames === undefined || localNames.has(name)
+    );
+    for (const [name, definition] of available) {
+      const qualifiedName = formatPackagedResourceReference({ source, pack, workflow }, name);
       scripts.set(qualifiedName, { ...definition, name: qualifiedName });
     }
   }
@@ -406,12 +420,14 @@ async function discoverBundledPackagedScripts(
   const files = (await collectInstalledBundleSources(roots.bundledWorkflows)) ?? [];
   const scripts = new Map<string, ScriptDefinition>();
   for (const file of files) {
-    if (file.kind !== 'pack-file' || file.entry === undefined) continue;
-    scripts.set(file.entry.name, {
-      name: file.entry.name,
-      path: normalizeSep(file.sourcePath),
-      runtime: file.entry.runtime,
-    });
+    if (file.kind !== 'pack-file') continue;
+    for (const entry of file.entries ?? []) {
+      scripts.set(entry.name, {
+        name: entry.name,
+        path: normalizeSep(file.sourcePath),
+        runtime: entry.runtime,
+      });
+    }
   }
   return scripts;
 }

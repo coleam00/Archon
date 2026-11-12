@@ -137,7 +137,6 @@
       "@archon/core/services/run-live-owner"
     ],
     "packages/cli/src/test-support/workflow-harness-workflows.ts": [
-      "@archon/workflows/dry-run",
       "@archon/workflows/event-emitter",
       "@archon/workflows/fixture-runner",
       "@archon/workflows/run-paths",
@@ -290,7 +289,6 @@
       "@archon/paths",
       "node:fs/promises"
     ],
-    "packages/core/src/operations/workflow/test-harness.ts": ["@archon/paths"],
     "packages/core/src/orchestrator/chat-context-paused.integration.test.ts": ["../db/connection"],
     "packages/core/src/orchestrator/dispatch/background.test.ts": [
       "../../config/config-loader",
@@ -2953,9 +2951,7 @@
       "answerRun",
       "buildAliasesUpdate",
       "buildAssistantUpdate",
-      "buildSavePath",
       "buildTiersUpdate",
-      "buildWorkflowPath",
       "cancelRun",
       "createConversation",
       "deleteEnvVar",
@@ -3017,14 +3013,6 @@
       "BUNDLED_WORKFLOWS",
       "BUNDLED_WORKFLOW_OWNERS",
       "BUNDLED_WORKFLOW_PATHS"
-    ],
-    "packages/workflows/src/dry-run.ts": [
-      "RESERVED_FIXTURE_KEYS",
-      "createDryRunStubScaffold",
-      "dryRunResultSchema",
-      "dryRunStubValueSchema",
-      "dryRunStubsSchema",
-      "dryRunTraceEntrySchema"
     ],
     "packages/workflows/src/event-emitter.ts": ["resetWorkflowEventEmitter"],
     "packages/workflows/src/fixture-runner.ts": ["fixtureDeclarationSchema", "parseFixtureFile"],

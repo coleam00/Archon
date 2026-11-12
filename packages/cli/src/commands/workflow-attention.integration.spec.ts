@@ -24,6 +24,10 @@ import {
 } from '../test-support/workflow-store';
 import { stateCommand } from './state';
 import { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
+import { workflowNoticeCommand } from './workflow-notice';
+import { emitWorkflowNotice, WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
+import * as workflowCommands from './workflow';
+import { runWorkflowRespond } from '../routes/workflow';
 
 const track = trackTempRoots();
 const scopeSpy = spyOn(chatScope, 'readChatProjectScope');
@@ -252,6 +256,31 @@ test('the queue scopes by project the way archon state names it, across a rename
     },
   });
 
+  // From events: the labels each wait opened with, so the later relabel does not show.
+  const started = await captured(() =>
+    workflowAttentionCommand(host, registeredDir, undefined, {
+      json: true,
+      all: true,
+      labels: [],
+      countBy: 'label:ci',
+      since: '1h',
+    })
+  );
+  expect(started.json).toMatchObject({
+    counts: {
+      counts: [
+        { value: 'other', count: 2 },
+        { value: 'pr', count: 1 },
+      ],
+    },
+  });
+  for (const opts of [{ since: '1h' }, { countBy: 'project', since: 'soon' }]) {
+    const refused = await captured(() =>
+      workflowAttentionCommand(host, registeredDir, undefined, { json: true, labels: [], ...opts })
+    );
+    expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+  }
+
   const one = await captured(() =>
     workflowAttentionCommand(host, scratchDir, unregistered, { json: true, labels: [] })
   );
@@ -322,6 +351,235 @@ async function streamed(
   }
 }
 
+test('watch writes only open items in the label filter and failed runs', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-quiet-watch-cli-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  const host = createHost();
+  const { store } = host.deps;
+  mkdirSync(join(root, 'alpha'));
+  const dir = realpathSync(join(root, 'alpha'));
+  const running = async (): Promise<string> => {
+    const run = await store.createWorkflowRun({ workflow_name: 'ci', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.updateWorkflowRun(run.id, {
+      output_root: getProjectStoragePaths(resolveProjectStorageKey(null, dir)).root,
+    });
+    return run.id;
+  };
+  const recommendation = { option: 'merge', why: 'Review is ready.' };
+  const paused = async (merge: string): Promise<string> => {
+    const id = await running();
+    await store.pauseWorkflowRunForWait(
+      id,
+      {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: new Date().toISOString(),
+        message: 'Merge it?',
+        pauseId: `pause-${id}`,
+        form: 'select',
+        options: [{ id: 'merge' }, { id: 'hold' }],
+        recommendation,
+        labels: { merge },
+      },
+      { kind: 'started', stepName: 'ask' }
+    );
+    return id;
+  };
+  const asked = await paused('pr');
+  await paused('other');
+  const completing = await running();
+  const failing = await running();
+
+  let acted = false;
+  const { code, lines } = await streamed(
+    () =>
+      workflowAttentionCommand(host, dir, undefined, {
+        json: true,
+        labels: ['merge=pr'],
+        watch: true,
+      }),
+    seen => {
+      // The snapshot is out, so the stream follows the feed: end one run well, one badly.
+      if (!acted && seen.length > 0) {
+        acted = true;
+        void store
+          .completeWorkflowRun(completing, { duration_ms: 1 })
+          .then(() => store.failWorkflowRun(failing, 'boom'));
+      }
+      return seen.some(line => line.type === 'terminal');
+    }
+  );
+  expect(code).toBe(0);
+  expect(lines).toMatchObject([
+    { type: 'attention', item: { runId: asked, recommendation, labels: { merge: 'pr' } } },
+    { type: 'terminal', runId: failing, status: 'failed' },
+  ]);
+  expect(lines).toHaveLength(2);
+
+  // The protocol flags belong to the watch, and a replay cursor to the protocol.
+  for (const opts of [{ protocol: true }, { watch: true, after: 'x' }]) {
+    const refused = await captured(() =>
+      workflowAttentionCommand(host, dir, undefined, { json: true, labels: [], ...opts })
+    );
+    expect(refused).toMatchObject({ code: 1, json: { ok: false } });
+  }
+});
+
+test('--recommended answers as the declared answerer, and the notices watch says what each line needs', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-recommended-cli-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  const host = createHost();
+  const { store } = host.deps;
+  mkdirSync(join(root, 'alpha'));
+  const dir = realpathSync(join(root, 'alpha'));
+  const running = async (): Promise<string> => {
+    const run = await store.createWorkflowRun({ workflow_name: 'ci', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.updateWorkflowRun(run.id, {
+      output_root: getProjectStoragePaths(resolveProjectStorageKey(null, dir)).root,
+    });
+    return run.id;
+  };
+  const paused = async (recommended: boolean): Promise<string> => {
+    const id = await running();
+    await store.pauseWorkflowRunForWait(
+      id,
+      {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: new Date().toISOString(),
+        message: 'Merge it?',
+        pauseId: `pause-${id}`,
+        form: 'select',
+        options: [{ id: 'merge' }, { id: 'hold' }],
+        ...(recommended ? { recommendation: { option: 'merge', why: 'Review is ready.' } } : {}),
+        labels: { merge: 'pr' },
+      },
+      { kind: 'started', stepName: 'ask' }
+    );
+    return id;
+  };
+  // `respond <id> [decision] --recommended --text Agreed. --as triage-agent --json`.
+  const answer = (
+    id: string,
+    occurrence: string | null = `pause-${id}`,
+    decision: string[] = []
+  ): Promise<number> =>
+    runWorkflowRespond({
+      commands: workflowCommands,
+      host,
+      positionals: ['workflow', 'respond', id, ...decision],
+      values: {
+        recommended: true,
+        ...(occurrence === null ? {} : { occurrence }),
+        text: 'Agreed.',
+        as: 'triage-agent',
+        json: true,
+      },
+      command: 'workflow',
+      subcommand: 'respond',
+      cwd: dir,
+      effectiveCwd: dir,
+      json: true,
+      detachedRunConfig: undefined,
+      inheritedEnv: process.env,
+      forgeTrustedEnv: process.env,
+    });
+
+  const unadvised = await paused(false);
+  const refused = await captured(() => answer(unadvised));
+  expect(refused).toMatchObject({
+    code: 1,
+    json: {
+      ok: false,
+      error: `Run ${unadvised}'s attention wait has no recommendation to accept. Choose one of its options.`,
+    },
+  });
+  await store.cancelWorkflowRun(unadvised);
+
+  // Accepting a recommendation names the occurrence it was read on, and takes no decision.
+  const accepted = await paused(true);
+  for (const refused of [
+    () => answer(accepted, null),
+    () => answer(accepted, 'an-earlier-pause'),
+    () => answer(accepted, `pause-${accepted}`, ['hold']),
+  ])
+    expect(await captured(refused)).toMatchObject({ code: 1, json: { ok: false } });
+  expect((await captured(() => answer(accepted, 'an-earlier-pause'))).json).toMatchObject({
+    error: expect.stringContaining(`It is now awaiting occurrence 'pause-${accepted}'`),
+  });
+  expect(
+    (await store.listWorkflowEvents(accepted)).some(event => event.event_type === 'wait_answered')
+  ).toBe(false);
+  expect(await captured(() => answer(accepted))).toMatchObject({
+    code: 0,
+    json: { ok: true, answer: { decision: 'merge', text: 'Agreed.' } },
+  });
+  expect(
+    (await store.listWorkflowEvents(accepted)).find(event => event.event_type === 'wait_answered')
+      ?.data
+  ).toMatchObject({ by: { declared: 'triage-agent' } });
+
+  // The stream shares stdout with the command, so the answer under watch skips the CLI.
+  const asked = await paused(true);
+  const completing = await running();
+  let acted = false;
+  const { code, lines } = await streamed(
+    () =>
+      workflowAttentionCommand(host, dir, undefined, {
+        json: true,
+        labels: [],
+        watch: true,
+        notices: true,
+      }),
+    seen => {
+      if (!acted && seen.length > 0) {
+        acted = true;
+        void host.operations
+          .answerWorkflow(
+            asked,
+            { choose: ['hold'] },
+            { kind: 'operator', declared: 'triage-agent' },
+            { via: 'cli' }
+          )
+          .then(() => store.completeWorkflowRun(completing, { duration_ms: 1 }));
+      }
+      return seen.some(line => line.type === 'terminal');
+    }
+  );
+  expect(code).toBe(0);
+  expect(lines).toMatchObject([
+    { type: 'attention', needs: 'answer', item: { runId: asked } },
+    {
+      type: 'resolved',
+      needs: 'nothing',
+      runId: asked,
+      reason: 'answered',
+      answeredVia: 'cli',
+      answeredBy: { declared: 'triage-agent' },
+    },
+    { type: 'terminal', needs: 'nothing', runId: completing, status: 'completed' },
+  ]);
+  expect(lines).toHaveLength(3);
+
+  const counted = await captured(() =>
+    workflowAttentionCommand(host, dir, undefined, {
+      json: true,
+      labels: [],
+      countBy: 'label:merge',
+      since: '1h',
+    })
+  );
+  expect(counted.json).toMatchObject({
+    counts: {
+      counts: [{ value: 'pr', count: 3, recommendations: { asked: 2, answered: 2, followed: 1 } }],
+    },
+  });
+});
+
 test('watch streams the queue by project, refuses list-only flags, and exits 4 on a foreign cursor', async () => {
   const root = track(mkdtempSync(join(tmpdir(), 'attention-watch-cli-')));
   process.env.ARCHON_HOME = join(root, 'home');
@@ -363,6 +621,7 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
           json: true,
           labels: [],
           watch: true,
+          protocol: true,
           ...opts,
         }),
       lines => lines.some(line => line.type === 'ready')
@@ -420,10 +679,11 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
         json: true,
         labels: [],
         watch: true,
+        protocol: true,
         after: 'sql:1',
       })
     )
-  ).toEqual({ code: 4, json: { type: 'error', error: 'cursor_invalid' } });
+  ).toEqual({ code: 4, json: { type: 'error', error: 'cursor_invalid', needs: 'look' } });
 });
 
 async function streamedText(
@@ -489,13 +749,21 @@ test.each([true, false])(
         all: true,
         labels: [],
         watch: true,
+        protocol: true,
       });
     try {
       if (json) {
         const result = await streamed(command, output =>
           output.some(line => line.type === 'resumed')
         );
-        expect(result).toEqual({ code: 0, lines });
+        expect(result).toEqual({
+          code: 0,
+          lines: [
+            { ...lines[0], needs: 'nothing' },
+            { ...lines[1], needs: 'look' },
+            { ...lines[2], needs: 'nothing' },
+          ],
+        });
       } else {
         const result = await streamedText(command, text =>
           text.includes('Run healthy resumed (running).')
@@ -563,6 +831,7 @@ test("watch text names a child run's parent and a failure with no recorded error
           all: true,
           labels: [],
           watch: true,
+          protocol: true,
         }),
       text => text.includes('Run top failed')
     );
@@ -571,10 +840,10 @@ test("watch text names a child run's parent and a failure with no recorded error
       '  child  w  (no project)  pause time not recorded\n    child of run p1\n'
     );
     expect(result.text).toContain(
-      'Run child failed: node build (error class not recorded). Workflow w, child of run p1.\n'
+      'Run child failed: node build (error class not recorded). Workflow w, child of run p1. Show more with archon workflow get child.\n'
     );
     expect(result.text).toContain(
-      'Run top failed: node build (error class not recorded). Workflow w.\n'
+      'Run top failed: node build (error class not recorded). Workflow w. Show more with archon workflow get top.\n'
     );
   } finally {
     watch.mockRestore();
@@ -643,6 +912,7 @@ test.each([
         all: true,
         labels: [],
         watch: true,
+        protocol: true,
       });
       expect(result).toBe(code === 'EPIPE' ? (type === 'error' ? 4 : 0) : 1);
       expect(rejected).toBe(code === 'EPIPE' ? undefined : failure);
@@ -747,6 +1017,7 @@ test.each(['beta', 'scratch'])(
           json: true,
           labels: [],
           watch: true,
+          protocol: true,
           project: projectKeyForCodebase(alpha.project, alpha.project.default_cwd),
         }),
       lines => lines.some(line => line.type === 'ready')
@@ -893,3 +1164,164 @@ test.each([true, false].flatMap(all => [undefined, 'project'].map(countBy => ({ 
     }
   }
 );
+
+test('a notice is recorded only from a node of a running run, reaches the notices watch and the window list, and is bounded', async () => {
+  const root = track(mkdtempSync(join(tmpdir(), 'attention-notice-cli-')));
+  process.env.ARCHON_HOME = join(root, 'home');
+  const host = createHost();
+  const { store } = host.deps;
+  mkdirSync(join(root, 'alpha'));
+  const dir = realpathSync(join(root, 'alpha'));
+  const running = async (): Promise<string> => {
+    const run = await store.createWorkflowRun({ workflow_name: 'merge-queue', user_message: '' });
+    await store.claimPendingWorkflowRun(run.id);
+    await store.updateWorkflowRun(run.id, {
+      output_root: getProjectStoragePaths(resolveProjectStorageKey(null, dir)).root,
+    });
+    return run.id;
+  };
+  const node = (runId: string, as = runId): NodeJS.ProcessEnv => ({
+    WORKFLOW_ID: runId,
+    ARCHON_NODE_EXECUTION: JSON.stringify({ runId: as, path: 'merge' }),
+  });
+  const notice = (
+    env: NodeJS.ProcessEnv,
+    text = 'Merged pull request 7',
+    labels = ['kind=merged']
+  ): Promise<{ code: number; json: unknown }> =>
+    captured(() => workflowNoticeCommand(host, text, labels, true, env));
+  const watch = (level: { notices?: boolean }, emit: () => Promise<unknown>, done: string) => {
+    let acted = false;
+    return streamed(
+      () =>
+        workflowAttentionCommand(host, dir, undefined, {
+          json: true,
+          labels: ['kind=merged'],
+          watch: true,
+          ...level,
+        }),
+      seen => {
+        // The open ask is the snapshot: once it is written the watch follows the feed.
+        if (!acted && seen.length > 0) {
+          acted = true;
+          void emit();
+        }
+        return seen.some(line => line.type === done);
+      }
+    );
+  };
+
+  const run = await running();
+  const other = await running();
+  const asking = await running();
+  await store.pauseWorkflowRunForWait(
+    asking,
+    {
+      owner: 'node',
+      nodeId: 'ask',
+      kind: 'attention',
+      waitingSince: new Date().toISOString(),
+      message: 'Merge it?',
+      pauseId: `pause-${asking}`,
+      form: 'approval',
+      labels: { kind: 'merged' },
+    },
+    { kind: 'started', stepName: 'ask' }
+  );
+  // Outside a run, as another run's node, and for a run this store does not know.
+  for (const env of [{}, node(run, other), node('00000000-0000-4000-8000-000000000001')])
+    expect(await notice(env)).toMatchObject({ code: 1, json: { ok: false, action: 'notice' } });
+  expect(await notice(node(run), 'two\nlines')).toMatchObject({
+    code: 1,
+    json: { reason: 'invalid', error: 'A notice is one line' },
+  });
+  expect(await store.listWorkflowNoticeRows()).toEqual([]);
+
+  // The notices watch receives it as a line that asks nothing; a filtered-out label does not.
+  // The stream shares stdout with the command, so the emits under watch skip the CLI.
+  const say = (text: string, labels: Record<string, string>): Promise<unknown> =>
+    emitWorkflowNotice(store, { runId: run, node: 'merge', text, labels });
+  const failing = await running();
+  const noticed = await watch(
+    { notices: true },
+    async () => {
+      await say('Returned pull request 9', { kind: 'returned' });
+      await say('Merged pull request 7', { kind: 'merged', pr: '7' });
+      await store.failWorkflowRun(failing, 'boom');
+    },
+    'terminal'
+  );
+  expect(noticed.lines).toMatchObject([
+    { type: 'attention', needs: 'answer' },
+    {
+      type: 'notice',
+      needs: 'nothing',
+      runId: run,
+      workflow: 'merge-queue',
+      node: 'merge',
+      text: 'Merged pull request 7',
+      labels: { kind: 'merged', pr: '7' },
+    },
+    { type: 'terminal', needs: 'look', runId: failing },
+  ]);
+  // The quiet watch does not: only the failure reaches it.
+  const failingToo = await running();
+  const quiet = await watch(
+    {},
+    async () => {
+      await say('Merged pull request 8', { kind: 'merged' });
+      await store.failWorkflowRun(failingToo, 'boom');
+    },
+    'terminal'
+  );
+  expect(quiet.lines.map(line => line.type)).toEqual(['attention', 'terminal']);
+
+  // The window list and the count read the same rows, filtered and grouped by label.
+  const window = (opts: object): Promise<{ code: number; json: unknown }> =>
+    captured(() =>
+      workflowAttentionCommand(host, dir, undefined, {
+        json: true,
+        labels: [],
+        notices: true,
+        since: '1h',
+        ...opts,
+      })
+    );
+  expect((await window({ labels: ['kind=merged'] })).json).toMatchObject({
+    notices: [
+      { text: 'Merged pull request 7', workflow: 'merge-queue', runId: run },
+      { text: 'Merged pull request 8' },
+    ],
+  });
+  expect((await window({ countBy: 'label:kind' })).json).toMatchObject({
+    counts: {
+      by: 'label',
+      key: 'kind',
+      counts: [
+        { value: 'merged', count: 2 },
+        { value: 'returned', count: 1 },
+      ],
+    },
+  });
+
+  // The list of live runs says what each is about: the latest notice it emitted, or none.
+  const status = await captured(async () => {
+    await workflowCommands.workflowStatusCommand(host, dir, { json: true, all: true });
+    return 0;
+  });
+  const live = (status.json as { runs: { id: string; notice: unknown }[] }).runs;
+  expect(live.find(entry => entry.id === run)?.notice).toMatchObject({
+    text: 'Merged pull request 8',
+    labels: { kind: 'merged' },
+    node: 'merge',
+  });
+  expect(live.find(entry => entry.id === other)?.notice).toBeNull();
+
+  // A run past its ceiling is refused, and so is one that is no longer running.
+  for (let emitted = 3; emitted < WORKFLOW_NOTICE_LIMITS.perRun; emitted++)
+    expect((await notice(node(run))).code).toBe(0);
+  expect(await notice(node(run))).toMatchObject({ code: 1, json: { reason: 'run_limit' } });
+  expect(await store.listWorkflowNoticeRows()).toHaveLength(WORKFLOW_NOTICE_LIMITS.perRun);
+  await store.completeWorkflowRun(other, { duration_ms: 1 });
+  expect(await notice(node(other))).toMatchObject({ code: 1, json: { reason: 'run_not_running' } });
+});

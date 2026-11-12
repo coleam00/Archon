@@ -21,14 +21,13 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - `provider-capabilities.md` is generated from the providers' `capabilities.ts`
  *     (`check:capability-matrix`), and lives under the docs site without being prose.
  *   - The docs manifest is copied by the Docker dependency layer.
- *   - The SDLC README and variables reference contain Docker commands checked by
+ *   - The variables reference contains Docker commands checked by
  *     `docker-verification-label.test.ts` against the cleanup ownership label.
  *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
 const BUILD_INPUTS = [
   '.claude/skills/',
-  '.archon/workflows/sdlc/README.md',
   '.archon/architecture.md',
   '.archon/workflow-language-constitution.md',
   '.claude/commands/execute.md',
@@ -62,16 +61,17 @@ const BUILD_INPUTS = [
  */
 const INERT_PATHS = ['.gitignore', 'LICENSE', '.archon/config.example.yaml', 'assets/'];
 
-const isInert = (file: string): boolean =>
-  INERT_PATHS.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry));
+/** Whether `file` is one of `entries`: an entry ending in `/` matches a directory. */
+const matches = (entries: readonly string[], file: string): boolean =>
+  entries.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry));
+
+const isInert = (file: string): boolean => matches(INERT_PATHS, file);
 
 const isPackPrompt = (file: string): boolean =>
   file.startsWith('.archon/workflows/') &&
   file.split('/').some(segment => segment === 'commands' || segment === '.shared');
 
-const isBuildInput = (file: string): boolean =>
-  isPackPrompt(file) ||
-  BUILD_INPUTS.some(input => (input.endsWith('/') ? file.startsWith(input) : file === input));
+const isBuildInput = (file: string): boolean => isPackPrompt(file) || matches(BUILD_INPUTS, file);
 
 export function shouldRunTestSuite(files: Iterable<string>): boolean {
   for (const file of files) {
@@ -210,9 +210,10 @@ export function shouldRunWorkspaceTests(
  *     and plugins). `@archon/core` stays out although `archon state` runs on it: it changes on
  *     most pull requests, and its database and config behaviour is what its own tests guard.
  *     The other packages below the contracts are likewise left to their own tests.
- *   - The gate and the install: `test.yml`, the root manifest and the lockfile.
- *   - The root test configuration, which `packRunnerInputs` cannot reach because it is loaded
- *     by configuration, not imported: `bunfig.toml` and the preload it names.
+ *   - The test preload, which `packRunnerInputs` cannot reach because `bunfig.toml` names it
+ *     instead of a script importing it.
+ * The gate and the install (`test.yml`, the root manifest, the lockfile, `bunfig.toml`) are in
+ * `EVERY_JOB_INPUTS`, which runs these checks with every other job.
  */
 const PACK_INPUTS = [
   '.archon/workflows/',
@@ -223,10 +224,6 @@ const PACK_INPUTS = [
   'packages/workflows/',
   'packages/forge/',
   'packages/paths/',
-  '.github/workflows/test.yml',
-  'package.json',
-  'bun.lock',
-  'bunfig.toml',
   'scripts/test-preload.ts',
 ];
 
@@ -250,12 +247,80 @@ export function shouldRunPackTests(
 ): boolean {
   for (const file of files) {
     if (!shouldRunTestSuite([file])) continue;
-    if (runnerInputs.has(file)) return true;
-    if (
-      PACK_INPUTS.some(entry => (entry.endsWith('/') ? file.startsWith(entry) : file === entry))
-    ) {
-      return true;
-    }
+    if (runnerInputs.has(file) || matches(PACK_INPUTS, file)) return true;
+  }
+  return false;
+}
+
+/**
+ * A pull request runs the Linux jobs its change can affect. The other platforms and the builds
+ * (`PUSH_ONLY_MODES`) wait for the push to `dev` or `main`, which runs every job. These paths are
+ * the exception: a pull request that changes one runs every job, as a push does, because the
+ * change can break any job on any platform and nothing narrower is safe to assume.
+ *   - `.github/workflows/`: changing the gate must run the gate.
+ *   - The install and the root test configuration: the root manifest, the lockfile, `bunfig.toml`.
+ *   - The scripts that make the decision and judge the result.
+ * The scripts that run the checks (`packRunnerInputs`) count too; the caller passes them.
+ *
+ * To run every job on any other branch, dispatch the workflow on it. A dispatch always runs the
+ * full matrix.
+ */
+const EVERY_JOB_INPUTS = [
+  '.github/workflows/',
+  'package.json',
+  'bun.lock',
+  'bunfig.toml',
+  'scripts/should-run-test-suite.ts',
+  'scripts/test-suite-outcome.ts',
+];
+
+/**
+ * Whether a pull request must run every job, the push-only ones included. Only a file the suite
+ * runs for can count, so prose beside the workflows does not.
+ */
+export function shouldRunEveryJob(
+  files: Iterable<string>,
+  runnerInputs: ReadonlySet<string>
+): boolean {
+  for (const file of files) {
+    if (!shouldRunTestSuite([file])) continue;
+    if (runnerInputs.has(file) || matches(EVERY_JOB_INPUTS, file)) return true;
+  }
+  return false;
+}
+
+/**
+ * The jobs a pull request leaves to the push, each with the paths that bring it back onto the
+ * pull request because the job exists to check them. Only paths a short list can name are here.
+ *   - `full-matrix`: the Windows legs and the macOS job. Platform-dependent code is spread across
+ *     the packages, so no list names it and only `shouldRunEveryJob` selects these.
+ *   - `docker-build`: the image recipe, its entrypoint, and the scripts the build and its
+ *     upgrade test run. The image also copies every package, which is why the push builds it.
+ *   - `serve-binary`: the script that compiles the release binaries and the smoke tests the job
+ *     runs against them.
+ */
+const PUSH_ONLY_MODES = {
+  'full-matrix': [],
+  'docker-build': [
+    'Dockerfile',
+    '.dockerignore',
+    'docker-entrypoint.sh',
+    'scripts/prepare-docker-plugins.ts',
+    'scripts/provision-docker-plugins.ts',
+    'scripts/test-docker-slack-upgrade.sh',
+  ],
+  'serve-binary': [
+    'scripts/build-binaries.sh',
+    'scripts/smoke-serve.ts',
+    'packages/core/src/test/provider-plugin-smoke.ts',
+  ],
+} as const satisfies Record<string, readonly string[]>;
+type PushOnlyMode = keyof typeof PUSH_ONLY_MODES;
+
+/** Whether a pull request that does not run every job still runs this push-only job. */
+export function shouldRunPushOnlyJob(mode: PushOnlyMode, files: Iterable<string>): boolean {
+  for (const file of files) {
+    if (matches(PUSH_ONLY_MODES[mode], file)) return true;
   }
   return false;
 }
@@ -541,6 +606,9 @@ const MODES = {
   '--workspace-tests': 'workspace',
   '--pack-tests': 'pack-tests',
   '--pack-fixtures': 'pack-fixtures',
+  '--full-matrix': 'full-matrix',
+  '--docker-build': 'docker-build',
+  '--serve-binary': 'serve-binary',
 } as const;
 export type Mode = 'suite' | (typeof MODES)[keyof typeof MODES];
 
@@ -548,7 +616,7 @@ export type Mode = 'suite' | (typeof MODES)[keyof typeof MODES];
 const OPT_IN_MODES: ReadonlySet<Mode> = new Set(['pack-tests', 'pack-fixtures']);
 
 /**
- * A manual dispatch runs the suite, and the pack checks only when its input asks. The event file
+ * A manual dispatch runs every job on every platform, and the pack checks only when its input asks. The event file
  * carries a boolean input as `true` or the string `"true"`; any other value but `false`, `"false"`
  * or an absent input is a wiring bug, so it throws rather than publish a guess.
  */
@@ -580,11 +648,25 @@ const PREDICATES: Record<Mode, (files: Iterable<string>) => boolean> = {
   },
   'pack-tests': packPredicate,
   'pack-fixtures': packPredicate,
+  'full-matrix': files => shouldRunPushOnlyJob('full-matrix', files),
+  'docker-build': files => shouldRunPushOnlyJob('docker-build', files),
+  'serve-binary': files => shouldRunPushOnlyJob('serve-binary', files),
 };
 
 function packPredicate(files: Iterable<string>): boolean {
   const changed = [...files];
   return shouldRunPackTests(changed, packRunnerInputs(process.cwd(), changed));
+}
+
+/** A pull request's decision for `mode`: every job when the change calls for it, else the mode's own. */
+function pullRequestPredicate(mode: Mode): (files: Iterable<string>) => boolean {
+  return files => {
+    const changed = [...files];
+    return (
+      shouldRunEveryJob(changed, packRunnerInputs(process.cwd(), changed)) ||
+      PREDICATES[mode](changed)
+    );
+  };
 }
 
 /** Reads the event GitHub Actions names in `GITHUB_EVENT_NAME` and `GITHUB_EVENT_PATH`. */
@@ -617,7 +699,7 @@ async function main(): Promise<void> {
     console.log(true);
     return;
   }
-  console.log(decideFromDiff(range.base, range.head, PREDICATES[mode]));
+  console.log(decideFromDiff(range.base, range.head, pullRequestPredicate(mode)));
 }
 
 if (import.meta.main) await main();

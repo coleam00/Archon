@@ -1,10 +1,12 @@
-import type { SkipCause, NodeOutput, DagNode, TriggerRule } from '../schemas';
+import type { NodeSkipReason, SkipCause, NodeOutput, DagNode, TriggerRule } from '../schemas';
 import type { JsonValue } from '../output-ref';
 import { readComposedMeta, type ComposedBlockBoundary } from '../compiled-command';
 import type { LoopBodyScope } from './loop-scope';
 import { evaluateCondition } from '../condition-evaluator';
 
-export type TriggerRuleDecision = { decision: 'run' } | { decision: 'skip'; cause: SkipCause };
+export type TriggerRuleDecision =
+  | { decision: 'run' }
+  | { decision: 'skip'; cause: SkipCause; error?: unknown };
 
 export interface TriggerRuleUpstream {
   id: string;
@@ -91,25 +93,15 @@ export function checkTriggerRuleForDependencies(
     : { decision: 'skip', cause: triggerSkipCause(blocking) };
 }
 
-/**
- * Enforce caller-level include predicates that load-time flattening attached to every
- * descendant. Entry nodes normally keep using their ordinary trigger/when fields so they
- * retain the existing diagnostics. A cached entry is the exception: resume would otherwise
- * return its prior output before those fields run, so its boundary must be checked here too.
- */
 export function checkComposedBlockBoundaries(
   node: DagNode,
   nodeOutputs: Map<string, NodeOutput>,
   inputs?: Record<string, JsonValue>,
   options: {
-    evaluateEntryBoundary?: boolean;
     loopBodyScopes?: readonly LoopBodyScope[];
   } = {}
 ): TriggerRuleDecision {
-  const { evaluateEntryBoundary = false } = options;
   for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
-    if (boundary.isEntry && !evaluateEntryBoundary) continue;
-
     const triggerRules = boundary.isEntry
       ? [boundary.entryTriggerRule]
       : boundary.entryTriggerRules;
@@ -117,7 +109,10 @@ export function checkComposedBlockBoundaries(
       checkTriggerRuleForDependencies(boundary.dependsOn, rule, nodeOutputs)
     );
     if (!triggerDecisions.some(decision => decision.decision === 'run')) {
-      return triggerDecisions[0];
+      const blocked = triggerDecisions[0];
+      if (blocked.decision === 'skip') {
+        return { ...blocked, cause: { ...blocked.cause, boundary: boundary.boundary } };
+      }
     }
 
     const conditionDecision = checkBoundaryCondition(
@@ -148,20 +143,35 @@ function checkBoundaryCondition(
     if (!condition.parsed) {
       return {
         decision: 'skip',
-        cause: { kind: 'condition_parse_error', expr: boundary.when },
+        cause: { kind: 'condition_parse_error', expr: boundary.when, boundary: boundary.boundary },
       };
     }
     if (!condition.result) {
-      return { decision: 'skip', cause: { kind: 'condition', expr: boundary.when } };
+      return {
+        decision: 'skip',
+        cause: { kind: 'condition', expr: boundary.when, boundary: boundary.boundary },
+      };
     }
   } catch (error) {
-    if (boundary.isEntry) throw error;
-    // Entry nodes own the actionable missing-ref error. Descendants only need to stay
-    // inside the failed boundary, without repeating the same failure for every node.
     return {
       decision: 'skip',
-      cause: { kind: 'condition_parse_error', expr: boundary.when },
+      cause: { kind: 'condition_parse_error', expr: boundary.when, boundary: boundary.boundary },
+      error,
     };
   }
   return { decision: 'run' };
+}
+
+export function skipReasonForCause(cause: SkipCause): NodeSkipReason {
+  switch (cause.kind) {
+    case 'condition':
+      return 'when_condition';
+    case 'condition_parse_error':
+      return 'when_condition_parse_error';
+    case 'timeout':
+      return 'timeout';
+    case 'upstream_failed':
+    case 'upstream_skipped':
+      return 'trigger_rule';
+  }
 }

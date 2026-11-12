@@ -8,9 +8,9 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
 
 ## Clear: the queue acts
 
-- **Launch** a triaged item whose issue body states the problem, why, why now, the
-  outcome, the invariants and acceptance. The brief points the run at the body as the
-  contract; it does not restate or widen it.
+- **Launch** a triaged item a run can start from, as the triage policy's readiness
+  bar defines it: the body says what outcome is wanted, and triage chose its route. The
+  brief points the run at the body as the contract; it does not restate or widen it.
 - **Prove a bug first.** Reproduce the symptom on the current base before launching, or
   hold other concrete evidence of it, such as a failing test, a log or a recorded run.
 - **Continue** a run that stopped on something the contract already answers:
@@ -26,13 +26,16 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
   subtractive option. A pull request that changed nothing material since its last
   review, no commits or only cosmetic edits, never continues; the round ends as done or ask.
 - **Push** commits a run left committed but unpushed on its pull request's branch.
-- **Done** when the pull request's latest review says Ready at its head commit and CI
-  marked it ready. When the only thing left is a check no round can run, such as an
-  operator check the review deferred, the queue asks once for it at that head instead.
+- **Done** when the pull request's latest review says Ready at its head commit and the
+  delivery handed it off ready, out of draft. CI pending at that head does not hold
+  it: the merge queue judges CI before it merges and returns red the change caused.
+  When the only thing left is a check no round can run, such as an operator check the
+  review deferred, the queue asks once for it at that head instead.
 
 ## Unclear: the queue asks
 
-- A body missing one of the six elements that the issue's own comments cannot supply.
+- A body that no longer says what outcome is wanted, in a way the issue's own comments
+  cannot supply.
 - A bug it cannot reproduce and has no other concrete evidence for.
 - A stop that asks to relax a constraint the maintainer stated, add scope the contract
   does not name, or choose between designs the documents do not settle.
@@ -41,3 +44,10 @@ The queue acts on its own when the case is clear, and asks a maintainer when it 
   instead of running another round.
 - Anything that would change a public contract, a persisted schema, authentication or
   the project's direction without a ruling.
+
+An answer acts the moment it is given, so a choice says what the queue does then. A
+choice that continues launches the next round at once: offer it only when the answer
+itself gives that round everything it needs. A choice that waits on something from
+outside the queue, such as evidence a person has to gather, an environment only they
+have or another item's work, parks the item, and a re-triage brings it back when that
+arrives.

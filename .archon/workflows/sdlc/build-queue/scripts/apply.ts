@@ -1,5 +1,6 @@
 /**
- * Check the run's decision, perform the writes it declared, and read each one back.
+ * Perform the writes the run's decision declared, read each one back, and hand an ask to
+ * the wait as the deciding agent wrote it.
  *
  * The decision is the last agent's that ran: answer's over route's. An answer that asks
  * declares its own class (`stop` or `scope`), recorded as declared. A route that launched is answered after its round, so its own decision is
@@ -7,58 +8,44 @@
  * decided, since a round's work belongs on its pull request even when a person is
  * asked about it. The push comes first, then the work item, in one conditional
  * write that also releases the claim unless a person is asked; a run that asks keeps
- * its claim until the ruling node records the answer. A continue then starts the item's
- * next round at once through the operator's build-queue binding; if it does not start,
- * the item waits for the next queue run.
+ * its claim until the ruling node records the answer. The round carries the review
+ * verdicts its delivery published and the latest validation its CI agent ran. A
+ * continue then starts the item's next round at once through the operator's
+ * build-queue binding; if it does not start, the item waits for the next queue run.
  *
- * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ROUTE,
- * INPUTS_ENDING (archon-ship's report) and INPUTS_ANSWER, each the whole output of its
+ * Bound inputs: INPUTS_PATH and INPUTS_ITEM from facts; INPUTS_ORDER and INPUTS_HANDOFF,
+ * the order's and the handoff's summaries, empty when skipped; INPUTS_ROUTE,
+ * INPUTS_ENDING (archon-build's report) and INPUTS_ANSWER, each the whole output of its
  * node, "null" when it was skipped; INPUTS_PULL_REQUEST from facts;
- * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's input; INPUTS_REVIEWS and INPUTS_CI, every
+ * `review-report` and `ci-report` output of this run.
  */
 
 import {
-  type ApplyDecision,
   type AskedBy,
-  type BuildAttention,
+  type BuildAsk,
   type BuildRound,
   type BuildStatus,
   nextRound,
+  roundPrNumber,
+  type Validation,
   withBuild,
 } from '../../.shared/build.ts';
-import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/forge.ts';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { parseQualifiedPr, type PrRecord, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson, typedOutputs, UNREADABLE_OUTPUTS } from '../../.shared/inputs.ts';
 import { gitOrThrow } from '../../.shared/git.ts';
-import { artifactsDir, emit, nullableJson, refuse, text, trimmed } from '../../.shared/io.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
-import { askFields, attentionWait, checkAttention, type DecisionEntry, withOther } from '../../.shared/queue.ts';
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
+import { runReviews } from '../../.shared/review-rounds.ts';
+import { announce, type DecisionEntry } from '../../.shared/queue.ts';
+import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
-interface RouteOutput {
-  readonly decision: 'launch' | 'ask' | 'ready';
-  readonly ready_head?: string | null;
-  readonly brief: string;
-  readonly reason: string;
-  readonly attention: BuildAttention | null;
-}
-
-interface AnswerOutput {
-  readonly decision: 'done' | 'continue' | 'ask';
-  readonly brief: string;
-  readonly push: QualifiedPr | null;
-  readonly reason: string;
-  /** The agent's own class for an ask; the round count does not decide it. Ignored otherwise. */
-  readonly ask_class: Exclude<AskedBy, 'route'>;
-  readonly attention: BuildAttention | null;
-}
-
-interface ShipReport {
-  readonly delivered: boolean;
-  readonly reason: string;
-  readonly pr_url: string;
-  readonly summary: string;
-}
+type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
+type AnswerOutput = NodeOutput<'archon-build-queue', 'answer'>;
+type ShipReport = NodeOutput<'archon-build', 'report'>;
 
 /** What the run decided, before anything is written. */
 type Decision =
@@ -69,15 +56,14 @@ type Decision =
   | {
       readonly kind: 'asked';
       readonly by: AskedBy;
-      readonly attention: BuildAttention;
+      readonly ask: BuildAsk;
       readonly brief: string;
       readonly reason: string;
     };
 
-function asked(by: AskedBy, attention: BuildAttention | null, brief: string, reason: string): Decision {
-  if (attention === null) throw new Error(`the ${by} decision asks without an attention item`);
-  checkAttention(attention);
-  return { kind: 'asked', by, attention: withOther(attention, 'continue'), brief, reason };
+function asked(by: AskedBy, ask: BuildAsk | null, brief: string, reason: string): Decision {
+  if (ask === null) throw new Error(`the ${by} decision asks without its ask`);
+  return { kind: 'asked', by, ask, brief, reason };
 }
 
 function decide(
@@ -88,12 +74,12 @@ function decide(
   if (path === 'closed') return { kind: 'parked', reason: 'the issue is closed' };
   if (answer !== null) {
     if (answer.decision === 'done') return { kind: 'ready', reason: answer.reason };
-    if (answer.decision === 'ask') return asked(answer.ask_class, answer.attention, answer.brief, answer.reason);
+    if (answer.decision === 'ask') return asked(answer.ask_class, answer.ask, answer.brief, answer.reason);
     if (answer.brief.trim() === '') throw new Error('a continue decision has no brief to launch from');
     return { kind: 'continue', brief: answer.brief, reason: answer.reason };
   }
   if (route === null) throw new Error(`the ${path} path reached apply with no decision`);
-  if (route.decision === 'ask') return asked('route', route.attention, route.brief, route.reason);
+  if (route.decision === 'ask') return asked('route', route.ask, route.brief, route.reason);
   if (route.decision === 'ready') return { kind: 'ready', reason: route.reason };
   // A launch is answered after its round, so a run never ends on one.
   return { kind: 'launch', brief: route.brief, reason: route.reason };
@@ -156,7 +142,7 @@ function markReady(pr: PrRecord | null, head: string | null | undefined): string
 /** The pull request write the decision declared: a push, taking it out of draft, or none. */
 function writePullRequest(route: RouteOutput | null, answer: AnswerOutput | null, push: QualifiedPr | null): string | null {
   if (answer === null && route?.decision === 'ready')
-    return markReady(nullableJson(process.env.INPUTS_PULL_REQUEST) as PrRecord | null, route.ready_head);
+    return markReady(nullableJson(input('pull_request')) as PrRecord | null, route.ready_head);
   return push === null ? null : pushTo(push);
 }
 
@@ -178,47 +164,124 @@ function afterWrite(summary: string, wrote: string | null, decision: Decision, i
   return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
 }
 
+/** The summary of a path with no item, so nothing is written or asked; null on an item's path. */
+function noItemSummary(path: string): { decision: 'idle' | 'order' | 'handoff'; summary: string; healthy: boolean } | null {
+  switch (path) {
+    case 'idle':
+      return {
+        decision: path,
+        ...idleOutcome('No item waits for the build queue.', stuckItems(workflowRunId(), 'build')),
+      };
+    case 'order':
+      return { decision: path, summary: input('order'), healthy: true };
+    case 'handoff':
+      return { decision: path, summary: input('handoff'), healthy: true };
+    default:
+      return null;
+  }
+}
+
+/**
+ * The review verdicts this run's delivery published, for the round's record. Unreadable
+ * outputs leave them out, noted: the round is still recorded, and the review-round
+ * metric reads its run's artifacts instead or skips its pull request.
+ */
+function reviewsOf(): Pick<BuildRound, 'reviews'> {
+  const reviews = typedOutputs<{ ready: boolean }>(input('reviews'));
+  if (reviews !== null) return { reviews: runReviews(reviews) };
+  console.error(`the round records no review verdicts: ${UNREADABLE_OUTPUTS}`);
+  return {};
+}
+
+/**
+ * The latest full validation this run's CI agent ran, for the round's record. Unreadable
+ * outputs leave it out, noted: under `ci: none` the gate then refuses the pull request
+ * until a later round records one.
+ */
+function validationOf(): Pick<BuildRound, 'validation'> {
+  const reports = typedOutputs<{ validation: Validation | null }>(input('ci'));
+  if (reports === null) {
+    console.error(`the round records no validation: ${UNREADABLE_OUTPUTS}`);
+    return {};
+  }
+  const validation = reports.map(report => report.value.validation).filter(ran => ran !== null).at(-1);
+  return validation == null ? {} : { validation };
+}
+
+/**
+ * The number of the round's pull request, resolved through the forge, for the round's
+ * record. A forge that cannot answer now leaves it out, noted: the round is still
+ * recorded, and the next read of the item's pull request resolves the URL, and refuses
+ * there if it is not one of the item's repository.
+ */
+function prNumberOf(url: string, repo: QualifiedPr['repo']): Pick<BuildRound, 'pr_number'> {
+  if (url === '') return {};
+  try {
+    return { pr_number: roundPrNumber(url, repo) };
+  } catch (error) {
+    console.error(`the round records no pull request number: ${error instanceof Error ? error.message : String(error)}`);
+    return {};
+  }
+}
+
+const NO_ASK = { question: '', options: [], recommendation: null, class: '', asked: null } as const;
+
+/** The wait's fields for the run's ask, as the deciding agent wrote them. */
+function raisedAsk({ ask, brief, by }: Extract<Decision, { kind: 'asked' }>) {
+  return { ...ask, class: by, asked: { ask, brief, by } };
+}
+
+/** The ask's `pr` label: the number of the round's pull request, or of the item's; empty with none. */
+function prLabel(round: BuildRound | null): string {
+  const pr = round?.pr_number ?? (nullableJson(input('pull_request')) as PrRecord | null)?.number;
+  return pr === undefined ? '' : String(pr);
+}
+
+/** Say what the queue did with the item, once its work item holds it. An ask says it itself. */
+function announceDecision(decision: Decision, item: string, pr: string): void {
+  const labels = { stage: 'build', kind: decision.kind, item };
+  if (decision.kind === 'ready') announce(`Issue ${item}: PR ${pr} is Ready and waits for the merge queue`, { ...labels, pr });
+  if (decision.kind === 'continue') announce(`Issue ${item}: another round; ${decision.reason}`, { ...labels, kind: 'continued' });
+  if (decision.kind === 'parked') announce(`Issue ${item}: parked; ${decision.reason}`, labels);
+}
+
 function main(): void {
-  const path = trimmed(process.env.INPUTS_PATH);
-  if (path === 'idle') {
-    emit({
-      decision: 'idle',
-      summary: idleSummary('No item waits for the build queue.', stuckItems(text(process.env.WORKFLOW_ID))),
-      attention: '',
-      options: [],
-      recommendation: null,
-      class: '',
-      asked: null,
-    });
+  const path = input('path').trim();
+  const noItem = noItemSummary(path);
+  if (noItem !== null) {
+    emit({ ...noItem, ...NO_ASK, item: '', pr: '' });
     return;
   }
-  const runId = text(process.env.WORKFLOW_ID);
-  if (runId === '') throw new Error('WORKFLOW_ID is not set; the engine supplies it to every exec node');
+  const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
-  const ending = nullableJson(process.env.INPUTS_ENDING) as ShipReport | null;
+  const ending = nullableJson(input('ending')) as ShipReport | null;
   const at = new Date().toISOString();
+  const answer = nullableJson(input('answer')) as AnswerOutput | null;
+  const route = nullableJson(input('route')) as RouteOutput | null;
   const round: BuildRound | null =
-    ending === null ? null : { run_id: runId, at, ...ending, artifacts: artifactsDir() };
-  const answer = nullableJson(process.env.INPUTS_ANSWER) as AnswerOutput | null;
-  const route = nullableJson(process.env.INPUTS_ROUTE) as RouteOutput | null;
+    ending === null
+      ? null
+      : {
+          run_id: runId,
+          at,
+          ...ending,
+          ...prNumberOf(ending.pr_url, item.repo),
+          artifacts: artifactsDir(),
+          ...(route === null ? {} : { route: route.route }),
+          ...reviewsOf(),
+          ...validationOf(),
+        };
   const decision = decide(path, route, answer);
   const push = answer?.push ?? null;
   const asking = decision.kind === 'asked' ? decision : null;
-  const wait =
-    asking === null
-      ? null
-      : attentionWait(`Build queue, issue ${String(item.number)}: ${asking.by} decision`, asking.attention);
-  const links = [
-    ...(round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '')),
-    ...(asking?.attention.links ?? []),
-  ];
+  const links = round === null ? [] : [round.pr_url, round.artifacts].filter(link => link !== '');
   const result = {
-    decision: decision.kind satisfies ApplyDecision,
+    decision: decision.kind,
     summary: summaryOf(item, decision),
-    ...askFields(wait),
-    class: asking?.by ?? '',
-    asked:
-      asking === null ? null : { attention: asking.attention, brief: asking.brief, by: asking.by },
+    ...(asking === null ? NO_ASK : raisedAsk(asking)),
+    item: String(item.number),
+    pr: prLabel(round),
+    healthy: true,
   };
 
   if (decision.kind === 'launch') throw new Error('a launch reached apply without its round');
@@ -242,6 +305,7 @@ function main(): void {
       release: asking === null,
     })
   );
+  announceDecision(decision, result.item, result.pr);
   emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
 }
 

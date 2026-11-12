@@ -1,16 +1,12 @@
 import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
+import { RelativeRunStart } from './RelativeRunStart';
 import { runDetailPath, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
-
-// console-token-exception grid-cols-[220px_minmax(0,1fr)_140px_84px_70px_auto_auto] -- All-project row topology includes the project column.
-const GLOBAL_COLUMNS = 'grid-cols-[220px_minmax(0,1fr)_140px_84px_70px_auto_auto]';
-// console-token-exception grid-cols-[220px_minmax(0,1fr)_84px_70px_auto_auto] -- Project-scoped row topology omits the project column.
-const PROJECT_COLUMNS = 'grid-cols-[220px_minmax(0,1fr)_84px_70px_auto_auto]';
 
 interface RecentRunRowProps {
   run: Run;
@@ -25,8 +21,8 @@ const STATUS_GLYPH: Record<string, string> = {
 };
 
 /**
- * Compact one-liner row for terminal-state runs (completed / failed /
- * cancelled). ~36px tall, monospace, data-heavy. Scans like a log.
+ * Compact row for terminal-state runs (completed / failed / cancelled).
+ * Wraps to fit the available feed width.
  *
  * Failed rows keep the error-red glyph and status text so they still catch
  * the eye in a sea of muted completed rows.
@@ -64,11 +60,8 @@ export function RecentRunRow({
     navigate(`/console/p/${run.projectId}?${params.toString()}`);
   };
 
-  // Design v2 row grid: status | body | (project) | id | duration | cost | CLI.
-  const gridCols = showProject ? GLOBAL_COLUMNS : PROJECT_COLUMNS;
-
   const renderStatus = (): ReactElement => (
-    <span className="flex items-center gap-2.25">
+    <span className="flex shrink-0 items-center gap-2.25">
       {run.status === 'failed' ? (
         <span aria-hidden className={`text-console-12 leading-none ${statusTextClass.failed}`}>
           {glyph}
@@ -94,8 +87,8 @@ export function RecentRunRow({
 
   const renderRunSummary = (): ReactElement => (
     <>
-      <span className="flex min-w-0 items-baseline gap-2.5">
-        <span className="shrink-0 truncate font-mono text-console-13 font-bold text-text-primary">
+      <span className="flex min-w-0 flex-1 basis-72 items-baseline gap-2.5">
+        <span className="max-w-[60%] shrink-0 truncate font-mono text-console-13 font-bold text-text-primary">
           {run.workflow}
         </span>
         {run.parentRunId ? (
@@ -117,7 +110,7 @@ export function RecentRunRow({
       </span>
 
       {showProject ? (
-        <span className="truncate text-console-12 text-text-secondary">
+        <span className="max-w-35 truncate text-console-12 text-text-secondary">
           {run.projectName ?? ''}
         </span>
       ) : null}
@@ -125,8 +118,12 @@ export function RecentRunRow({
       <span className="text-right font-mono text-console-12 text-text-tertiary">
         {shortRunId(run.id)}
       </span>
-      <span className="text-right font-mono text-console-12 tabular-nums text-text-secondary">
+      <span className="whitespace-nowrap text-right font-mono text-console-12 tabular-nums text-text-secondary">
         {elapsed}
+        <RelativeRunStart
+          className="ml-2 whitespace-nowrap text-text-tertiary"
+          startedAt={run.startedAt}
+        />
       </span>
       <span
         className="text-right font-mono text-console-12 tabular-nums text-text-primary"
@@ -158,7 +155,7 @@ export function RecentRunRow({
             }
           : undefined
       }
-      className={`group grid items-center gap-4.5 border-b border-border/40 px-4.5 py-3.25 transition-colors last:border-b-0 hover:bg-surface-hover ${gridCols} ${
+      className={`group flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/40 px-4.5 py-3.25 transition-colors last:border-b-0 hover:bg-surface-hover ${
         selected ? 'bg-surface-hover ring-2 ring-inset ring-accent-bright/40' : ''
       } ${canOpen ? 'cursor-pointer' : ''}`}
     >
@@ -167,9 +164,9 @@ export function RecentRunRow({
       {renderRunSummary()}
 
       {/* trailing: origin + hover actions + CLI */}
-      <span className="flex items-center justify-end gap-1.5">
+      <span className="ml-auto flex items-center justify-end gap-1.5">
         {/* Origin + quick actions reveal on hover; the resting row matches the
-            design (status · body · id · duration · cost · CLI). */}
+            design (status · body · id · duration + start · cost · CLI). */}
         <span className="flex items-center gap-1.5 opacity-0 transition-opacity group-hover:opacity-100">
           <OriginBadge origin={run.origin} />
           {canRerun ? (

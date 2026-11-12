@@ -115,6 +115,12 @@ describe('the attention queue over HTTP', () => {
       expect(await twice.json()).toMatchObject({ error: "Label 'ci' is given twice" });
       expect((await app.request('/api/runs/attention?sort=newest')).status).toBe(400);
       expect((await app.request('/api/runs/attention?sort=age&countBy=project')).status).toBe(400);
+      // Open items have no answerer; that count reads events and is the CLI's.
+      const byAnswerer = await app.request('/api/runs/attention?countBy=answerer');
+      expect(byAnswerer.status).toBe(400);
+      expect(((await byAnswerer.json()) as { error: string }).error).toBe(
+        "countBy must be 'project' or 'label:<key>', got 'answerer'"
+      );
       expect((await app.request('/api/runs/attention?project=nowhere')).status).toBe(400);
     } finally {
       mockListAttentionQueueRows.mockReset();

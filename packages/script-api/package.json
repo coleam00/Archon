@@ -1,0 +1,26 @@
+{
+  "name": "@archon/script-api",
+  "version": "0.14.0",
+  "type": "module",
+  "main": "./src/module.ts",
+  "types": "./src/module.ts",
+  "exports": {
+    ".": "./src/module.ts",
+    "./text": "./src/text.ts"
+  },
+  "scripts": {
+    "test": "bun run ../../scripts/package-tests.ts",
+    "type-check": "bun x tsc --noEmit"
+  },
+  "devDependencies": {
+    "@archon/paths": "workspace:*"
+  },
+  "peerDependencies": {
+    "typescript": "^5.0.0"
+  },
+  "testGroups": [
+    [
+      "src/"
+    ]
+  ]
+}

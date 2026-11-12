@@ -1,7 +1,10 @@
 # Dry-run fixture, a later round: the item already has open pull request 1 in its
-# repository, and ship's triage routes `deliver`, not `continue`. The pull request
-# facts resolved still reaches delivery through ship's real `continues` script: the
-# implementer and prepare are both told to finish it.
+# repository, and route declares `deliver`, not `continue`. The pull request facts
+# resolved still reaches delivery through the round's real `continues` script, and the
+# round's real report names it to the answer node. No triage runs in the round.
+start:
+  repo: { host: github.com, path: example/repo }
+  message: false
 facts:
   path: route
   item: { repo: { host: "github.com", path: "example/repo" }, number: 7 }
@@ -13,31 +16,20 @@ facts:
   pull_request: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
   continues: 1
   branch: "build/7-stub-fixture"
+  related: []
 blocked:
   blocked: []
   blocked_count: 0
 route:
   decision: launch
+  route: deliver
   continues: 1
   ready_head: null
   brief: "stub-brief: fix the open review finding on https://github.com/example/repo/pull/1"
   reason: "stub: the finding is correctable"
-  attention: null
-checkout: { head: fixturehead, reviewed: null, pull_request: 1 }
-ship__forge: { source: forge }
+  ask: null
+checkout: { head: fixturehead, reviewed: null, pull_request: 1, prior_report: "" }
 ship__deliver__forge: { source: forge }
-ship__triage__triage:
-  decision: { contract: READY, route: deliver }
-  type: { value: bug, reason: "stub: a finding" }
-  size: { value: s, reason: "stub: size" }
-  complexity: { value: low, reason: "stub: complexity" }
-  importance: { value: medium, reason: "stub: importance" }
-  urgency: { value: none, reason: "stub: urgency" }
-  item: { repo: { host: "", path: "" }, number: 0 }
-  area_labels: []
-  related: []
-  summary: "stub: the work order is complete"
-  report: { type: archon_artifact, run_id: "fixture-run", path: "triage.md" }
 implement__implement:
   done: true
   green: true
@@ -48,7 +40,6 @@ pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { 
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "build/7-stub-fixture", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead2", base_revision: "fixturebase", maintainer_can_modify: null }
 review__route: { seams: false, code: true, tests: false, errors: false, docs: false, ux: false, reason: "stub: a small fix" }
 review__scope:
-  head_matches: true
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__code: "0 findings"
@@ -60,6 +51,7 @@ review__synthesize:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
+  coverage_gaps: []
 review__publish:
   ready: true
   action: none
@@ -70,7 +62,7 @@ review__publish:
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 threads: { open: 0, summary: "stub: no review thread is unresolved" }
-ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
+ci: { state: ready, summary: "stub: no check red at the head; marked ready", validation: null }
 ship__deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 answer:
   decision: done
@@ -78,21 +70,22 @@ answer:
   push: null
   reason: "stub: answered"
   ask_class: stop
-  attention: null
+  ask: null
 apply:
   decision: ready
   summary: "stub: Issue 7: ready."
-  attention: ""
+  question: ""
   options: []
   recommendation: null
   class: ""
+  item: "7"
+  pr: "1"
   asked: null
+  healthy: true
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed
   reached: [facts, route, ship__continues, ship__report, answer, apply]
   resolved-text-contains:
-    implement__implement: "resolved it (empty or `null` when it named none): 1. When it names one"
-    pr__prepare: "the caller resolved it (`1`"
     answer: '"pr_url":"https://github.com/example/repo/pull/1"'
 exec-code: true

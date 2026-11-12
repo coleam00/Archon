@@ -10,7 +10,7 @@
 # resolve — a pass here is proof the report is built from the delivered value and nothing
 # the checkout happens to be sitting on.
 forge: { source: forge }
-deliver__forge: { source: forge }
+build__deliver__forge: { source: forge }
 triage__triage:
   decision: { contract: READY, route: deliver }
   type: { value: feature, reason: "stub: asks for new behavior" }
@@ -33,7 +33,6 @@ pr__prepare: { repo: { host: "github.com", path: "example/repo" }, head_repo: { 
 pr__publish: { schemaVersion: 1, repo: { host: "github.com", path: "example/repo" }, number: 1, url: "https://github.com/example/repo/pull/1", head: "fixture-branch", base: "dev", is_draft: true, state: "open", head_repo: { host: "github.com", path: "example/repo" }, head_revision: "fixturehead", base_revision: "fixturebase", maintainer_can_modify: null }
 review__route: { seams: true, code: true, tests: true, errors: false, docs: false, ux: false, reason: "stub: the change touches a persisted format" }
 review__scope:
-  head_matches: true
   pr: { repo: { host: "github.com", path: "example/repo" }, number: 1 }
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/scope.md" }
 review__seams: "0 findings"
@@ -47,6 +46,7 @@ review__synthesize:
   report: { type: archon_artifact, run_id: "fixture-run", path: "review/report.md" }
   discoveries: []
   contract_left: []
+  coverage_gaps: []
 review__publish:
   ready: true
   action: none
@@ -57,13 +57,12 @@ review__publish:
 simplify__simplify: { findings: false }
 simplify__prune-scratch: "prune-scratch: removed 0 scratch worktree(s)"
 threads: { open: 0, summary: "stub: no review thread is unresolved" }
-ci: { state: green, rerun: none, summary: "stub: every check passed; marked ready" }
-deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
+ci: { state: ready, summary: "stub: no check red at the head; marked ready", validation: null }
+build__deliver__update-pr-body: { changed: false, summary: "stub: the description is still accurate" }
 fixture:
   inputs:
     part: '{"delivers":1,"parts":[{"part":1,"items":["the API returns the new state"]},{"part":2,"items":["the console shows the new state"]}]}'
   expect: completed
   resolved-text-contains:
     review__scope: '"delivers":1,"parts":[{"part":1'
-    triage__triage: "target):\n\n\n\nThe operator's request"
 exec-code: true

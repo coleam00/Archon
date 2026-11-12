@@ -14,6 +14,16 @@ import { resolveWorkflowName } from './router';
 
 export const PACK_SHARED_DIRECTORY = '.shared';
 
+/**
+ * A pack's shared scripts, relative to the pack root. A workflow's named script that its
+ * own `scripts/` does not hold resolves here, so several workflows of a pack can run one
+ * script file. The workflow's own script wins.
+ */
+export const PACK_SHARED_SCRIPTS_PATH = `${PACK_SHARED_DIRECTORY}/scripts`;
+
+/** A pack's settings declaration (`pack-settings.ts`), relative to the pack root. */
+export const PACK_DECLARATION_PATH = '.pack/pack.yaml';
+
 const PACKAGED_RESOURCE_PREFIX = '__archon_pack__';
 const OWNER_SEPARATOR = ':';
 const RESOURCE_SEPARATOR = '::';

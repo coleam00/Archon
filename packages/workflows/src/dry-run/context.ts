@@ -10,6 +10,8 @@ import {
 import { type LoopBodyScope } from '../dag/loop-scope';
 import { resolveIncludeOutputAliases } from '../compiled-command';
 import type { JsonValue } from '../output-ref';
+import type { NodeArtifactLoopFrame } from '../schemas/node-artifact';
+import type { RecordedTypedOutput } from '../typed-output-bindings';
 import { loadCommandPrompt } from '../load-command-prompt';
 import { substituteWorkflowVariables } from '../workflow-variables';
 import { resolveNodeModelScope, type WorkflowModelScope } from '../node-model-resolution';
@@ -91,6 +93,14 @@ export interface DryRunContext
    * resolves against them, as in a real run (`RunLayersContext.loopBodyScopes`).
    */
   loopBodyScopes: readonly LoopBodyScope[];
+  /** The enclosing loop_group iterations, outermost first, as a real run records them. */
+  loopGroupPath: readonly NodeArtifactLoopFrame[];
+  /**
+   * Every typed output the simulation has produced, in order: what a real run records
+   * under `nodes/` and a typed-outputs binding reads. Held in memory because a dry run
+   * writes no artifacts.
+   */
+  typedOutputs: RecordedTypedOutput[];
   /**
    * Per-simulation `$ARTIFACTS_DIR` / `$STATE_DIR` / `$LOG_DIR`, under a uniquely named root in
    * `<archonHome>/temp/` — NEVER inside the simulated repository, which holds source
@@ -246,7 +256,8 @@ export function recordSkipped(
   ctx: DryRunContext,
   reason: string,
   cause: SkipCause,
-  iteration?: number
+  iteration?: number,
+  diagnostic?: string
 ): void {
   outputs.set(node.id, { state: 'skipped', output: '', cause });
   ctx.trace.push({
@@ -255,6 +266,7 @@ export function recordSkipped(
     state: 'skipped',
     reason,
     cause,
+    ...(diagnostic !== undefined ? { diagnostic } : {}),
     ...(iteration ? { iteration } : {}),
   });
 }

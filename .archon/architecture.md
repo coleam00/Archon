@@ -10,12 +10,13 @@ A map of the code as it is, where it is going, and the boundaries that hold whil
 |---|---|---|---|
 | `paths` | Archon home and workspace paths, env loading, logger, test utilities | none | |
 | `provider-contract` | `IAgentProvider`, provider chunks and failure classes, registration rules, the provider plugin wire | none | |
+| `script-api` | The `archon:script` module a workflow script imports and its checked declaration; the author-facing SDK entry | none | `paths` |
 | `chat-contract` | `ChatPlugin`, the chat plugin wire | `provider-contract` | |
 | `plugin-manifest` | Plugin manifest schema for the `provider`, `chat`, `forge` and `workflow-pack` kinds, install receipts | `chat-contract`, `paths`, `provider-contract` | |
 | `git` | Git operations | `paths` | |
 | `forge` | Forge seam: discovery, dispatch and conformance for forge plugins | `paths` | |
 | `providers` | Claude and Codex, Pi (maintained, though it sits under `community/`), the bundled community providers OpenCode and Copilot, the provider registry | `paths`, `provider-contract` | |
-| `workflows` | The engine: loading, validation, DAG execution, durable pauses, attention queue, store contract, file store | `git`, `paths`, `plugin-manifest`, `provider-contract` | `providers` |
+| `workflows` | The engine: loading, validation, DAG execution, durable pauses, attention queue, store contract, file store | `git`, `paths`, `plugin-manifest`, `provider-contract`, `script-api` | `providers` |
 | `isolation` | Worktree provider, in-place and container backends, isolation resolver | `git`, `paths`, `provider-contract`, `workflows` | |
 | `core` | Database, conversations, chat orchestrator, workflow operations and hosts, credentials | `chat-contract`, `git`, `isolation`, `paths`, `plugin-manifest`, `provider-contract`, `providers`, `workflows` | |
 | `adapters` | Bundled chat adapters (Telegram; Discord under `community/`), the GitHub forge adapter (Gitea and GitLab under `community/`), platform policies, the Standard Webhooks source | `core`, `forge`, `git`, `isolation`, `paths`, `providers`, `workflows` | |
@@ -80,7 +81,7 @@ Rules that hold now and during the move. Each names what enforces it, or says it
 | CLI startup doesn't load core, the engine or provider SDKs before a command needs them | `check:cli-import-boundary` ([`scripts/check-cli-import-boundary.ts`](../scripts/check-cli-import-boundary.ts)) |
 | Provider SDK dependencies live only in `providers`; copied SDK types conform to the SDK | `bun run lint` ([`scripts/check-sdk-type-drift.ts`](../scripts/check-sdk-type-drift.ts)) for the copies. **The location rule is not enforced.** |
 | No provider- or platform-specific branches in engine control flow | **Not enforced.** Review only. |
-| The console uses only generated API types | `check:api-types`, plus `web` declaring no `@archon` dependency |
+| The console uses only generated API types | Generated path/method transport, `scripts/check-web-api-types.ts` in lint, `check:api-types`, plus `web` declaring no `@archon` dependency |
 | Schema changes are additive, and SQLite and PostgreSQL agree | `check:schema-upgrades`, `check:sqlite-vintages`, the schema parity tests in [`core/src/db/adapters/sqlite.test.ts`](../packages/core/src/db/adapters/sqlite.test.ts) |
 | Each provider's capabilities are declared once, in its `capabilities.ts`, and the docs derive from them | `check:capability-matrix` |
 | Workflow packs don't hardcode a project's context paths, and the engine doesn't assume a pack's conventions | **Not enforced.** Review only. |

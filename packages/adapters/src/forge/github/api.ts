@@ -22,6 +22,12 @@ export class GitHubError extends Error {
   }
 }
 
+/**
+ * A failure that says nothing about the request itself: GitHub answered 5xx, or
+ * nothing answered at all. Repeating a read that hit one may succeed.
+ */
+export class TransientGitHubError extends GitHubError {}
+
 export function repositoryPath(path: string): { owner: string; repo: string } | null {
   const parts = path.replace(/^\/+|\/+$/g, '').split('/');
   if (parts.length !== 2) return null;
@@ -68,6 +74,33 @@ export function location(repo: RepoRef): { root: string; graphql: string; path: 
   };
 }
 
+/** One authenticated GitHub call, answered with any status or lost in transit. */
+export async function githubSend(
+  fetchImpl: Fetch,
+  token: string,
+  url: string,
+  init: RequestInit = {}
+): Promise<Response> {
+  try {
+    return await fetchImpl(url, {
+      ...init,
+      headers: {
+        accept: 'application/vnd.github+json',
+        authorization: `Bearer ${token}`,
+        'content-type': 'application/json',
+        'x-github-api-version': '2022-11-28',
+        'user-agent': 'archon-forge-github',
+      },
+    });
+  } catch (cause) {
+    throw new TransientGitHubError(
+      { kind: 'forge_error', message: 'GitHub API request failed' },
+      false,
+      { cause }
+    );
+  }
+}
+
 /**
  * One GitHub API call.
  *
@@ -83,23 +116,7 @@ export async function githubRequest(
   acknowledge?: () => void,
   responseMode: 'json' | 'empty' = 'json'
 ): Promise<unknown> {
-  let response: Response;
-  try {
-    response = await fetchImpl(url, {
-      ...init,
-      headers: {
-        accept: 'application/vnd.github+json',
-        authorization: `Bearer ${token}`,
-        'content-type': 'application/json',
-        'x-github-api-version': '2022-11-28',
-        'user-agent': 'archon-forge-github',
-      },
-    });
-  } catch (cause) {
-    throw new GitHubError({ kind: 'forge_error', message: 'GitHub API request failed' }, false, {
-      cause,
-    });
-  }
+  const response = await githubSend(fetchImpl, token, url, init);
   if (!response.ok) {
     throw githubResponseError(response);
   }
@@ -230,6 +247,25 @@ export function parseRemote(remote: string | null): RepoRef | null {
   return { host: match[1].toLowerCase(), path: `${repository.owner}/${repository.repo}` };
 }
 
+/**
+ * GitHub's web URL of an issue or a pull request: `<repository>/issues/<n>` or
+ * `<repository>/pull/<n>`. A query or fragment, such as a link to one comment, is
+ * ignored; any other URL is not a subject.
+ */
+export function parseSubjectUrl(
+  value: string | null
+): { repo: RepoRef; subject: { kind: 'issue' | 'pr'; number: number } } | null {
+  const trimmed = value?.trim().replace(/[?#].*$/, '') ?? '';
+  const match = /^(https?:\/\/.+)\/(issues|pull)\/([1-9]\d*)\/?$/.exec(trimmed);
+  if (!match) return null;
+  const repo = parseUrlRemote(match[1]);
+  if (!repo) return null;
+  return {
+    repo,
+    subject: { kind: match[2] === 'pull' ? 'pr' : 'issue', number: Number(match[3]) },
+  };
+}
+
 /** Translate a thrown cause into the wire error a caller can act on. */
 export function githubErrorDetail(cause: unknown): ForgeError {
   if (cause instanceof GitHubError) return cause.detail;
@@ -245,8 +281,8 @@ export function githubErrorDetail(cause: unknown): ForgeError {
   };
 }
 
-function githubResponseError(response: Response): GitHubError {
-  return new GitHubError(
+export function githubResponseError(response: Response): GitHubError {
+  return new (response.status >= 500 ? TransientGitHubError : GitHubError)(
     {
       kind:
         response.status === 404

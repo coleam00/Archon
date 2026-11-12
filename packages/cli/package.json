@@ -1,6 +1,6 @@
 {
   "name": "@archon/cli",
-  "version": "0.13.2",
+  "version": "0.14.0",
   "type": "module",
   "main": "./src/cli.ts",
   "bin": {
@@ -105,6 +105,9 @@
     ],
     [
       "src/commands/workflow-list.test.ts"
+    ],
+    [
+      "src/commands/workflow-types.test.ts"
     ],
     [
       "src/commands/workflow-run-output.test.ts"
@@ -237,6 +240,9 @@
       "src/commands/workflow-wait.integration.spec.ts"
     ],
     [
+      "src/commands/workflow-attention-text.test.ts"
+    ],
+    [
       "src/commands/workflow-attention.integration.spec.ts"
     ],
     [
@@ -255,11 +261,15 @@
       "src/adapters/cli-adapter.test.ts"
     ],
     [
-      "src/commands/forge.test.ts"
+      "src/commands/forge.test.ts",
+      "src/commands/script-types.test.ts"
     ],
     [
       "src/commands/plugin.test.ts",
       "src/commands/plugin-pack.test.ts"
+    ],
+    [
+      "src/commands/pack.test.ts"
     ],
     [
       "src/triggers/native-schedule.test.ts"

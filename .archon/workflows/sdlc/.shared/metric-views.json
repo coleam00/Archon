@@ -4,12 +4,26 @@
     "sdlc.prs_merged": "PRs merged",
     "sdlc.prs_abandoned": "PRs abandoned",
     "sdlc.pr_merge_rate": "PR merge rate",
+    "sdlc.review_rounds": "Review rounds to Ready",
+    "sdlc.review_one_round": "Ready after one review round",
+    "sdlc.review_five_plus_rounds": "Needing 5+ review rounds",
+    "sdlc.issues_built": "Issues built",
+    "sdlc.issues_merged": "Issues merged",
+    "sdlc.issue_lead_time": "Hours from intake to merge",
+    "sdlc.issue_build_rounds": "Build rounds per merged issue",
+    "sdlc.issue_asks": "Questions answered per merged issue",
     "sdlc.tests_added": "New tests",
     "sdlc.tests_unprotective": "Useless tests",
     "sdlc.tests_unprotective_judge_agreement": "Judge agreement with hand labels",
     "sdlc.tests_unprotective_judge_catch_rate": "Judge catch rate on hand-labelled useless tests"
   },
   "cards": [
+    {
+      "shape": "count",
+      "title": "Issues merged",
+      "metric": "sdlc.issues_merged",
+      "breakdown": [{ "metric": "sdlc.issues_built", "label": "built" }]
+    },
     {
       "shape": "count",
       "title": "PRs merged",

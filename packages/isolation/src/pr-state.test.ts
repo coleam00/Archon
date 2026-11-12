@@ -28,7 +28,7 @@ mock.module('@archon/git', () => ({
   toBranchName: (b: string) => b,
 }));
 
-import { getPrState, type PrLookup } from './pr-state';
+import { getPrState, getPrsForCommit, type PrLookup } from './pr-state';
 import { toBranchName, toRepoPath } from '@archon/git';
 
 const REPO = toRepoPath('/workspace/repo');
@@ -47,30 +47,98 @@ function setupGhResponse(remoteUrl: string, ghStdout: string | Error): void {
 }
 
 describe('getPrState', () => {
-  test('returns MERGED when gh reports MERGED', async () => {
-    setupGhResponse(
-      'https://github.com/owner/repo.git',
-      '[{"state":"MERGED","headRefOid":"abc123"}]'
-    );
-    const result = await getPrState(BRANCH, REPO);
-    expect(result).toEqual({ state: 'MERGED', headSha: 'abc123' });
-    expect(mockExecFileAsync).toHaveBeenCalledWith(
-      'gh',
-      [
-        'pr',
-        'list',
-        '--head',
-        BRANCH,
-        '--state',
-        'all',
-        '--json',
-        'state,headRefOid',
-        '--limit',
-        '1',
-      ],
-      expect.any(Object)
-    );
+  test.each(['{}', 'null', '"text"', '[null]', '[{}]', '[{"state":"MERGED","headRefOid":42}]'])(
+    'returns UNAVAILABLE for unreadable branch response %s',
+    async payload => {
+      setupGhResponse('https://github.com/owner/repo.git', payload);
+      expect(await getPrState(BRANCH, REPO)).toEqual({ state: 'UNAVAILABLE' });
+    }
+  );
+
+  test('caches remote inspection failure as unavailable', async () => {
+    setupGhResponse('https://github.com/owner/repo.git', '[]');
+    mockExecFileAsync.mockRejectedValue(new Error('remote inspection failed'));
+    const cache = new Map<string, PrLookup>();
+    expect(await getPrState(BRANCH, REPO, cache)).toEqual({ state: 'UNAVAILABLE' });
+    expect(await getPrState(BRANCH, REPO, cache)).toEqual({ state: 'UNAVAILABLE' });
+    expect(mockExecFileAsync).toHaveBeenCalledTimes(1);
   });
+
+  test.each(['https://github.com/owner/repo.git', 'git@github.com:owner/repo.git'])(
+    'returns MERGED from the explicit remote %s',
+    async remoteUrl => {
+      setupGhResponse(remoteUrl, '[{"state":"MERGED","headRefOid":"abc123"}]');
+      const result = await getPrState(BRANCH, REPO);
+      expect(result).toEqual({ state: 'MERGED', headSha: 'abc123' });
+      expect(mockExecFileAsync).toHaveBeenCalledWith(
+        'gh',
+        [
+          'pr',
+          'list',
+          '--repo',
+          remoteUrl,
+          '--head',
+          BRANCH,
+          '--state',
+          'all',
+          '--json',
+          'state,headRefOid',
+          '--limit',
+          '1',
+        ],
+        expect.any(Object)
+      );
+    }
+  );
+
+  test.each([
+    ['https://user:secret@github.com/owner/repo.git', 'https://github.com/owner/repo.git'],
+    ['ssh://user:secret@github.com/owner/repo.git', 'ssh://github.com/owner/repo.git'],
+    ['secret@github.com:owner/repo.git', 'git@github.com:owner/repo.git'],
+  ])('omits remote credentials from the branch selector: %s', async (remote, selector) => {
+    setupGhResponse(remote, '[]');
+    expect(await getPrState(BRANCH, REPO)).toEqual({ state: 'NONE' });
+    expect(mockExecFileAsync.mock.calls[1][1]).toContain(selector);
+    expect(JSON.stringify(mockExecFileAsync.mock.calls[1])).not.toContain('secret');
+  });
+
+  test.each(['remote', 'query', 'unreadable', 'malformed', 'unsupported'] as const)(
+    'omits credentials and response bodies from branch logs at %s',
+    async stage => {
+      mockLogger.debug.mockClear();
+      mockLogger.warn.mockClear();
+      const remote = `https://user:secret@${stage === 'unsupported' ? 'github.com.example.org' : 'github.com'}/owner/repo.git`;
+      const error = Object.assign(new Error(`command failed: ${remote}`), { code: 1 });
+      setupGhResponse(
+        remote,
+        stage === 'query' ? error : stage === 'unreadable' ? '[{"state":"secret"}]' : 'secret'
+      );
+      if (stage === 'remote') mockExecFileAsync.mockRejectedValue(error);
+      expect(await getPrState(BRANCH, REPO)).toEqual({
+        state: stage === 'unsupported' ? 'NONE' : 'UNAVAILABLE',
+      });
+      const logs: unknown[] = [...mockLogger.debug.mock.calls, ...mockLogger.warn.mock.calls];
+      expect(logs.length).toBeGreaterThan(0);
+      expect(
+        JSON.stringify(logs, (_key, value: unknown) =>
+          value instanceof Error ? { ...value, message: value.message } : value
+        )
+      ).not.toContain('secret');
+      if (stage === 'remote' || stage === 'query') {
+        expect(logs).toContainEqual([
+          {
+            repoPath: REPO,
+            branch: BRANCH,
+            stage: stage === 'remote' ? 'remote' : 'query',
+            code: 1,
+          },
+          stage === 'remote'
+            ? 'isolation.pr_state_remote_lookup_failed'
+            : 'isolation.pr_state_lookup_failed',
+        ]);
+      }
+    }
+  );
 
   test('returns OPEN when gh reports OPEN', async () => {
     setupGhResponse(
@@ -96,25 +164,26 @@ describe('getPrState', () => {
     expect(result).toEqual({ state: 'NONE' });
   });
 
-  test('returns NONE when gh CLI is not installed (ENOENT)', async () => {
+  test('returns UNAVAILABLE when gh CLI is not installed (ENOENT)', async () => {
     const enoent = Object.assign(new Error('spawn gh ENOENT'), { code: 'ENOENT' });
     setupGhResponse('https://github.com/owner/repo.git', enoent);
     const result = await getPrState(BRANCH, REPO);
-    expect(result).toEqual({ state: 'NONE' });
+    expect(result).toEqual({ state: 'UNAVAILABLE' });
   });
 
-  test('returns NONE for non-GitHub remote URL', async () => {
-    setupGhResponse(
-      'https://gitlab.com/owner/repo.git',
-      '[{"state":"MERGED","headRefOid":"abc123"}]'
-    );
-    const result = await getPrState(BRANCH, REPO);
-    expect(result).toEqual({ state: 'NONE' });
-  });
+  test.each(['https://gitlab.com/owner/repo.git', 'https://github.com.example.org/owner/repo'])(
+    'returns NONE for unsupported remote %s',
+    async remoteUrl => {
+      setupGhResponse(remoteUrl, '[{"state":"MERGED","headRefOid":"abc123"}]');
+      const result = await getPrState(BRANCH, REPO);
+      expect(result).toEqual({ state: 'NONE' });
+      expect(mockExecFileAsync).toHaveBeenCalledTimes(1);
+    }
+  );
 
   test('queries the custom remote when provided', async () => {
     setupGhResponse(
-      'https://github.com/owner/repo.git',
+      'https://github.com/owner/upstream.git',
       '[{"state":"MERGED","headRefOid":"abc123"}]'
     );
 
@@ -124,6 +193,11 @@ describe('getPrState', () => {
     expect(mockExecFileAsync).toHaveBeenCalledWith(
       'git',
       ['-C', REPO, 'remote', 'get-url', 'upstream'],
+      expect.any(Object)
+    );
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'gh',
+      expect.arrayContaining(['--repo', 'https://github.com/owner/upstream.git']),
       expect.any(Object)
     );
   });
@@ -140,6 +214,24 @@ describe('getPrState', () => {
     expect(first).toEqual({ state: 'MERGED', headSha: 'abc123' });
     expect(second).toEqual({ state: 'MERGED', headSha: 'abc123' });
     expect(mockExecFileAsync.mock.calls.length).toBe(callsAfterFirst);
+  });
+
+  test('does not reuse cached evidence across selected remotes', async () => {
+    const cache = new Map<string, PrLookup>();
+    setupGhResponse(
+      'https://github.com/owner/repo.git',
+      '[{"state":"MERGED","headRefOid":"abc123"}]'
+    );
+    expect(await getPrState(BRANCH, REPO, cache)).toEqual({ state: 'MERGED', headSha: 'abc123' });
+    setupGhResponse(
+      'https://github.com/owner/upstream.git',
+      '[{"state":"OPEN","headRefOid":"def456"}]'
+    );
+    expect(await getPrState(BRANCH, REPO, cache, 'upstream')).toEqual({
+      state: 'OPEN',
+      headSha: 'def456',
+    });
+    expect(await getPrState(BRANCH, REPO, cache)).toEqual({ state: 'MERGED', headSha: 'abc123' });
   });
 
   // The scheduled cleanup sweep shares one cache across every registered repository,
@@ -185,4 +277,329 @@ describe('getPrState', () => {
     const result = await getPrState(BRANCH, REPO);
     expect(result).toEqual({ state: 'UNAVAILABLE' });
   });
+});
+
+const COMMIT = 'a'.repeat(40);
+const HEAD = 'b'.repeat(40);
+const mergedPr = {
+  state: 'closed',
+  merged_at: '2026-01-01T00:00:00Z',
+  head: { sha: HEAD },
+  base: { repo: { full_name: 'owner/repo' } },
+};
+
+function setupCommitResponse(
+  payload: unknown = [[mergedPr]],
+  failure?: 'remote' | 'repository' | 'commit' | 'pulls',
+  error = new Error('lookup failed'),
+  remoteUrl = 'git@github.com:owner/repo.git',
+  commitPayload: unknown = {
+    data: { repository: { object: { __typename: 'Commit', oid: COMMIT } } },
+  }
+): void {
+  mockExecFileAsync.mockReset().mockImplementation(async (cmd, args) => {
+    let stage = 'pulls';
+    if (cmd === 'git') stage = 'remote';
+    else if (args[0] === 'repo') stage = 'repository';
+    else if (args.includes('graphql')) stage = 'commit';
+    if (stage === failure) throw error;
+    const outputs: Record<string, unknown> = {
+      remote: remoteUrl,
+      repository: { nameWithOwner: 'owner/repo' },
+      commit: commitPayload,
+      pulls: payload,
+    };
+    const output = outputs[stage];
+    if (stage === 'pulls' && Array.isArray(output))
+      return { stdout: output.map(page => JSON.stringify(page)).join('\n'), stderr: '' };
+    return { stdout: typeof output === 'string' ? output : JSON.stringify(output), stderr: '' };
+  });
+}
+
+describe('getPrsForCommit', () => {
+  test('a successful association makes one API request and skips commit inspection', async () => {
+    setupCommitResponse(undefined, 'commit');
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+      state: 'FOUND',
+      prs: [{ state: 'MERGED', headSha: HEAD }],
+    });
+    const apiCalls = mockExecFileAsync.mock.calls.filter(([, args]) => args[0] === 'api');
+    expect(apiCalls).toHaveLength(1);
+    expect(apiCalls[0][1]).toContain('--paginate');
+  });
+
+  test('the subprocess projection feeds the parser for every PR state', async () => {
+    setupCommitResponse();
+    await getPrsForCommit(COMMIT, REPO);
+    const args = mockExecFileAsync.mock.calls.find(([, args]) => args.includes('--paginate'))?.[1];
+    if (!args) throw new Error('Missing commit lookup');
+    const projection = args[args.indexOf('--jq') + 1];
+    const proc = Bun.spawn(['jq', '-c', projection], {
+      stdin: new Blob([
+        JSON.stringify([
+          { ...mergedPr, body: 'discarded', merged_at: null },
+          { ...mergedPr, body: 'discarded', state: 'open', merged_at: null },
+          { ...mergedPr, body: 'discarded' },
+        ]),
+      ]),
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    const [stdout, stderr, code] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
+    expect({ code, stderr }).toEqual({ code: 0, stderr: '' });
+    expect(stdout).not.toContain('discarded');
+    setupCommitResponse(stdout);
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+      state: 'FOUND',
+      prs: [
+        { state: 'CLOSED', headSha: HEAD },
+        { state: 'OPEN', headSha: HEAD },
+        { state: 'MERGED', headSha: HEAD },
+      ],
+    });
+  });
+
+  test('reads all pages and normalizes REST merge state in the selected remote repository', async () => {
+    setupCommitResponse([
+      [
+        { ...mergedPr, merged_at: null },
+        { ...mergedPr, state: 'open', merged_at: null },
+      ],
+      [mergedPr],
+    ]);
+    expect(await getPrsForCommit(COMMIT, REPO, 'upstream')).toEqual({
+      state: 'FOUND',
+      prs: [
+        { state: 'CLOSED', headSha: HEAD },
+        { state: 'OPEN', headSha: HEAD },
+        { state: 'MERGED', headSha: HEAD },
+      ],
+    });
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'git',
+      ['-C', REPO, 'remote', 'get-url', 'upstream'],
+      expect.any(Object)
+    );
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'gh',
+      ['repo', 'view', 'git@github.com:owner/repo.git', '--json', 'nameWithOwner'],
+      expect.any(Object)
+    );
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'gh',
+      [
+        'api',
+        '--hostname',
+        'github.com',
+        `repos/owner/repo/commits/${COMMIT}/pulls?per_page=100`,
+        '--paginate',
+        '--jq',
+        'map({state, merged_at, head: {sha: .head.sha}, base: {repo: {full_name: .base.repo.full_name}}})',
+      ],
+      expect.any(Object)
+    );
+  });
+
+  test('omits remote credentials from the commit repository selector', async () => {
+    setupCommitResponse(
+      undefined,
+      undefined,
+      undefined,
+      'https://user:secret@github.com/owner/repo.git'
+    );
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+      state: 'FOUND',
+      prs: [{ state: 'MERGED', headSha: HEAD }],
+    });
+    expect(mockExecFileAsync.mock.calls[1][1]).toEqual([
+      'repo',
+      'view',
+      'https://github.com/owner/repo.git',
+      '--json',
+      'nameWithOwner',
+    ]);
+  });
+
+  test.each([
+    { status: '422', missing: true, expected: 'UNKNOWN_COMMIT' },
+    { status: '422', missing: false, expected: 'UNAVAILABLE' },
+    { status: '401', missing: true, expected: 'UNAVAILABLE' },
+    { status: '403', missing: true, expected: 'UNAVAILABLE' },
+    { status: '429', missing: true, expected: 'UNAVAILABLE' },
+    { status: '500', missing: true, expected: 'UNAVAILABLE' },
+  ])(
+    'classifies HTTP $status with missing=$missing as $expected',
+    async ({ status, missing, expected }) => {
+      mockLogger.warn.mockClear();
+      setupCommitResponse(
+        undefined,
+        'pulls',
+        Object.assign(new Error('credential-bearing error'), {
+          code: 1,
+          stdout: JSON.stringify({ message: 'arbitrary wording', status }),
+        }),
+        undefined,
+        { data: { repository: { object: missing ? null : { __typename: 'Commit', oid: COMMIT } } } }
+      );
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: expected });
+      expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
+      if (expected === 'UNKNOWN_COMMIT') expect(mockLogger.warn).not.toHaveBeenCalled();
+      else expect(mockLogger.warn).toHaveBeenCalled();
+    }
+  );
+
+  test.each(['empty', 'failed', 'malformed-json', 'malformed-pr'] as const)(
+    'a null Git object preserves the result of a %s association',
+    async association => {
+      mockLogger.warn.mockClear();
+      setupCommitResponse(
+        association === 'malformed-json'
+          ? 'not JSON'
+          : association === 'malformed-pr'
+            ? [[{ ...mergedPr, head: {} }]]
+            : [[]],
+        association === 'failed' ? 'pulls' : undefined,
+        Object.assign(new Error('https://user:secret@github.com/owner/repo'), { code: 1 }),
+        undefined,
+        {
+          data: { repository: { object: null } },
+        }
+      );
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({
+        state: association === 'empty' ? 'UNKNOWN_COMMIT' : 'UNAVAILABLE',
+      });
+      expect(mockExecFileAsync.mock.calls[2][1]).toContain('--paginate');
+      expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
+      if (association === 'empty') expect(mockLogger.warn).not.toHaveBeenCalled();
+      else {
+        expect(mockLogger.warn).toHaveBeenLastCalledWith(
+          { repoPath: REPO, stage: 'pulls', code: association === 'failed' ? 1 : undefined },
+          'isolation.commit_pr_lookup_failed'
+        );
+        expect(JSON.stringify(mockLogger.warn.mock.calls)).not.toContain('secret');
+      }
+    }
+  );
+
+  test.each([
+    null,
+    {},
+    { data: null },
+    { data: { repository: null } },
+    { data: { repository: {} } },
+    { data: { repository: { object: {} } } },
+    { data: { repository: { object: { __typename: 'Tree', oid: COMMIT } } } },
+    { data: { repository: { object: { __typename: 'Commit', oid: HEAD } } } },
+    { data: { repository: { object: null } }, errors: [{ type: 'FORBIDDEN' }] },
+    { data: { repository: { object: null } }, errors: {} },
+  ])('rejects incomplete or failed object inspection: %j', async payload => {
+    setupCommitResponse([[]], undefined, undefined, undefined, payload);
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+    expect(mockExecFileAsync.mock.calls[2][1]).toContain('--paginate');
+    expect(mockExecFileAsync.mock.calls[3][1]).toContain('graphql');
+  });
+
+  test('empty pages are successful absence', async () => {
+    setupCommitResponse([[]]);
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'NONE' });
+    expect(mockExecFileAsync).toHaveBeenCalledWith(
+      'gh',
+      [
+        'api',
+        '--hostname',
+        'github.com',
+        'graphql',
+        '-f',
+        'query=query($owner:String!,$name:String!,$oid:GitObjectID!){repository(owner:$owner,name:$name){object(oid:$oid){__typename oid}}}',
+        '-f',
+        'owner=owner',
+        '-f',
+        'name=repo',
+        '-f',
+        `oid=${COMMIT}`,
+      ],
+      expect.any(Object)
+    );
+  });
+
+  test.each(
+    [
+      'not JSON',
+      [],
+      {},
+      [[], {}],
+      [[{ ...mergedPr, head: {} }]],
+      [[{ ...mergedPr, head: { sha: '--all' } }]],
+      [[{ ...mergedPr, merged_at: undefined }]],
+      [[{ ...mergedPr, merged_at: 'invalid' }]],
+      [[{ ...mergedPr, state: 'open' }]],
+      [[{ ...mergedPr, state: 'unknown' }]],
+      [[{ ...mergedPr, base: { repo: { full_name: 'other/repo' } } }]],
+      [[mergedPr], [{ state: 'closed' }]],
+    ].map(payload => ({ payload }))
+  )('rejects malformed or incomplete pages: $payload', async ({ payload }) => {
+    setupCommitResponse(payload);
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+  });
+
+  test.each(['remote', 'repository', 'commit', 'pulls'] as const)(
+    'retains failure at %s',
+    async stage => {
+      setupCommitResponse([[]], stage);
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+    }
+  );
+
+  test.each([
+    'validation failure (422)',
+    'authentication (401)',
+    'rate limit (403)',
+    'partial pagination (502)',
+  ])('does not treat %s as an empty association', async message => {
+    setupCommitResponse(undefined, 'pulls', new Error(message));
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+  });
+
+  test('rejects a malformed repository identity', async () => {
+    setupGhResponse('https://github.com/owner/repo.git', '{"nameWithOwner":"invalid"}');
+    expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+  });
+
+  test.each(['repository', 'commit', 'pulls'] as const)(
+    'logs failed %s and exit code without credentials or response bodies',
+    async stage => {
+      mockLogger.warn.mockClear();
+      setupCommitResponse(
+        [[]],
+        stage,
+        Object.assign(new Error('https://user:secret@github.com/owner/repo'), { code: 1 })
+      );
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+      expect(mockLogger.warn).toHaveBeenLastCalledWith(
+        { repoPath: REPO, stage, code: 1 },
+        'isolation.commit_pr_lookup_failed'
+      );
+    }
+  );
+
+  test.each(['repository', 'commit', 'pulls'] as const)(
+    'missing gh at %s is unavailable',
+    async stage => {
+      setupCommitResponse([[]], stage, Object.assign(new Error('missing'), { code: 'ENOENT' }));
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'UNAVAILABLE' });
+    }
+  );
+
+  test.each(['https://gitlab.com/owner/repo', 'https://github.com.example.org/owner/repo'])(
+    'does not query an unsupported remote %s',
+    async remote => {
+      setupGhResponse(remote, 'unexpected');
+      expect(await getPrsForCommit(COMMIT, REPO)).toEqual({ state: 'NONE' });
+      expect(mockExecFileAsync).toHaveBeenCalledTimes(1);
+    }
+  );
 });

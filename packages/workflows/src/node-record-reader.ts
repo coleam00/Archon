@@ -9,6 +9,7 @@ import {
 } from './schemas/node-execution';
 import {
   DEFERRED_NODE_USAGE_EVENT_TYPE,
+  NODE_EXECUTION_EVENT_TYPES,
   isPersistedExecType,
   serializedDeferredNodeUsageDataSchema,
   serializedNodeDataSchema,
@@ -43,6 +44,7 @@ export function isExecNodeRecord(record: ReadNodeRecordEvent): boolean {
 
 const eventDataSchema = z.record(z.string(), z.unknown());
 const eventTypes = new Set<string>(NODE_STATE_EVENT_TYPES);
+const executionEventTypes = new Set<string>(Object.values(NODE_EXECUTION_EVENT_TYPES));
 const metadataKeys = Object.keys(nodeExecutionMetadataPayloadSchema.shape);
 const requiredMetadataKeys = Object.entries(nodeExecutionMetadataPayloadSchema.shape)
   .filter(([, schema]) => !schema.isOptional())
@@ -113,6 +115,7 @@ function lifecycleFor(
     case 'node_prior_cache_invalidated':
       return undefined;
   }
+  return eventType satisfies never;
 }
 
 export function readNodeRecordEvent(
@@ -122,12 +125,7 @@ export function readNodeRecordEvent(
   const eventType = envelope.event_type as SerializedNodeEvent['event_type'];
   const raw = readNodeRecordData(envelope.data);
   const data = projectSerializedData(raw);
-  const isExecutionEvent =
-    eventType === 'node_started' ||
-    eventType === 'node_completed' ||
-    eventType === 'node_failed' ||
-    eventType === 'node_skipped' ||
-    eventType === 'node_suspended';
+  const isExecutionEvent = executionEventTypes.has(eventType);
   const hasMetadata = isExecutionEvent && metadataKeys.some(key => Object.hasOwn(raw, key));
   let metadata: NodeExecutionMetadata | undefined;
   if (hasMetadata) {

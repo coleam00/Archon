@@ -21,7 +21,7 @@ They are also substituted in a node's **AI-configuration text** — `systemPromp
 | `$ARGUMENTS` | The user's input message that triggered the workflow | Primary way to pass user input to commands |
 | `$USER_MESSAGE` | Same as `$ARGUMENTS` | Alias |
 | `$WORKFLOW_ID` | Unique ID for the current workflow run | Useful for artifact naming and log correlation |
-| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. **Scratch work** (a checkout to bisect or spike against, a dependency install) goes under `$ARTIFACTS_DIR/.archon/scratch/`; create it with `mkdir -p`. Archon deletes that directory once the run is completed, failed or cancelled and its nodes have stopped (for a container run, when its container is removed), so a resumed run starts without it. A run whose nodes Archon cannot confirm stopped (its owner ran on another host, or its owner process is still alive) keeps it, and so does a CLI run stopped by a signal until it is abandoned or its conversation is reset; write evidence a later node or the operator reads anywhere else in `$ARTIFACTS_DIR`, which is kept. The deletion removes files only: remove a scratch worktree with `git worktree remove` (or use `git clone`), or its registration stays behind until `git worktree prune`. |
+| `$ARTIFACTS_DIR` | Pre-created external artifacts directory (`~/.archon/workspaces/<owner>/<repo>/artifacts/runs/<id>/`) | Always exists before node execution; stored outside the repo to avoid polluting the working tree. **Container runs (`--container`):** this host directory is bind-mounted read-write at the same absolute path inside the container, so a node writes to `$ARTIFACTS_DIR` the same way on either side of the boundary. **Scratch work** (a checkout to bisect or spike against, a dependency install) goes under `$ARTIFACTS_DIR/.archon/scratch/`; create it with `mkdir -p`. Archon deletes that directory once the run is completed, failed or cancelled and its nodes have stopped (for a container run, when its container is removed), so a resumed run starts without it. A run whose nodes Archon cannot confirm stopped (its owner ran on another host, or its owner process is still alive) keeps it, and so does a CLI run stopped by a signal until it is abandoned or its conversation is reset; write evidence a later node or the operator reads anywhere else in `$ARTIFACTS_DIR`. At the same release point, Archon also removes [validly tagged cache directories](/reference/archon-directories/#user-level-archon) anywhere beneath `$ARTIFACTS_DIR`: a regular `CACHEDIR.TAG` beginning with `Signature: 8a477f597d28d172789f06886806bc55` makes its entire directory disposable. The artifacts root and untagged evidence outside those subtrees are kept; symlinks are never followed. Removed cache paths and estimated reclaimed bytes are logged per run. Before deleting scratch, Archon removes every git worktree of the run's repository that a node added under it (`git worktree add "$ARTIFACTS_DIR/.archon/scratch/<name>"`), uncommitted changes included, so no registration stays behind; no other worktree is touched. A worktree Git refuses to remove is logged and its files are still deleted, which leaves a registration `git worktree prune` drops. A worktree of another repository, and one added inside a container run, keep their registration until `git worktree prune` there. |
 | `$TYPED_ARTIFACTS_FILE` | Absolute path to the current typed-artifact listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation grouped by exact case-sensitive `output_type`. Each agent attempt receives a fresh listing before it starts, including transient retries. Plain `loop` structured-output reasks also receive fresh listings. Ordinary agent structured-output reasks (including agents in a `loop_group` body) reuse their attempt's listing. `bash:` and `script:` nodes receive one before execution. Each `until_bash` check receives a separate listing after the plain loop's agent work or the loop group's body. Also delivered to `bash:`/`script:` as the `TYPED_ARTIFACTS_FILE` environment variable. Referencing it in a context with no listing throws rather than substituting an empty string, except in a `--dry-run` preview, which has no artifacts and substitutes an empty string. See [Typed Artifacts](/reference/workflow-language/#typed-artifacts-output_type). |
 | `$NODE_OUTCOMES_FILE` | Absolute path to the current node-outcome listing (JSON, inside `$ARTIFACTS_DIR`) | A read-only observation of every node invocation the run has recorded: its state (`pending`, `running`, `completed`, `failed`, `skipped`), a failed node's error, a skipped node's reason and cause, and a completed node's structured output. One entry per `loop_group` iteration. Written at the same moment as `$TYPED_ARTIFACTS_FILE`, to the same invocation contexts, and delivered to `bash:`/`script:` as the `NODE_OUTCOMES_FILE` environment variable. Referencing it in a context with no listing throws, except in a `--dry-run` preview, which substitutes an empty string. See [Reading what other nodes did](/reference/workflow-language/#reading-what-other-nodes-did-node_outcomes_file). |
 | `$STATE_DIR` | Pre-created external cross-run state directory (`~/.archon/workspaces/<project>/state/`) | Scoped per **project** — shared across every workflow, every conversation, and every invocation surface, so cooperating workflows can share memory. Namespace inside it yourself (`$STATE_DIR/<name>/`) if you want isolation. Survives worktree teardown, and never appears in `git status`. Throws if referenced but unresolved, exactly like `$BASE_BRANCH`. **Container runs (`--container`):** unlike `$ARTIFACTS_DIR`, this host path is not mounted into the container, so a node writing there from inside the container writes to the container's ephemeral layer. |
@@ -118,7 +118,29 @@ Use the current run's identity to opt disposable images into terminal cleanup:
 docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
 ```
 
-See the [SDLC Docker verification guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#docker-verification) for build requirements, cleanup eligibility and safe manual recovery.
+`docker buildx build --load` takes the same `--label`. Give each run unique tags, one tag per image, and use the same Docker context as the Archon host. A child run uses its own `$WORKFLOW_ID`. Remove verification containers when the check finishes, including stopped containers.
+
+**When images are removed.** Archon attempts cleanup when a completed run, or a cancelled run that cannot resume, stops writing. Nothing watches for containers removed later. These keep their images:
+
+- Failed runs, including ones interrupted by SIGINT or SIGTERM, because they can resume under the same run ID. Abandon the run, or recover by hand as below, to release them.
+- Fan-out children cancelled in a way that can resume. Abandoning does not release their images; recover by hand.
+- Images a container uses, and images whose owning run is live or cannot be established.
+- Unlabelled images and other runs' images. Shared build cache also stays: Docker cannot filter it by this label.
+
+Docker errors are reported, and the run's terminal status is unchanged.
+
+**When cleanup cannot list images.** If the first listing of a host run's verification images fails, Archon keeps the run's own exit code and reports a warning that names the run, with manual recovery guidance, whatever caused the failure. Cleanup is then inconclusive and images may remain: restore access to the intended Docker context and recover by hand. A failure after the listing (inspection, container-use checks or removal) fails an otherwise successful foreground command, as does a container run's cleanup failure. A host run skips image cleanup only when Docker is absent at both host setup and cleanup. Container runs always require Docker.
+
+**Recover by hand.** Cleanup deletes immutable image IDs without force or parent pruning, and Docker refuses an ID with several repository references, so an image with several tags needs manual cleanup under exclusive control of its tags. After removing late test containers and confirming the run cannot resume or write:
+
+```bash
+docker image ls --all --no-trunc --filter "label=archon.run_id=<run-id>"
+docker image inspect <full-id>
+docker container ls --all --filter ancestor=<full-id>
+docker image rm --no-prune <full-id>    # only for a confirmed owned, unused image
+```
+
+If several tags prevent removal, verify and remove those references by hand, only while no other build or operator can reassign them. Never force removal or prune shared images or cache.
 
 ### `$PACK_DIR`: the workflow's own pack
 
@@ -325,6 +347,12 @@ reference-looking text there is neither substituted nor validated as an output r
       iteration: { from: $iteration-ready.output.ready, if_skipped: false }
 ```
 
+On a `script:` node an object value may instead be `{ outputs: <output_type> }`: the JSON
+array of every output of that type the run has recorded, oldest first, each
+`{ node, loop, at, value }`. A record the engine cannot read fails the node unless the
+binding declares `if_unreadable:` as `null` or an array, which it then takes. See
+[Binding every output of a type](/reference/workflow-language/#binding-every-output-of-a-type).
+
 Every referenced producer must be an upstream `depends_on` dependency — the loader rejects
 the workflow otherwise, so a binding can never race its producer. Node-local bindings are
 the **nearest** input layer: they win over a composed block's inputs, which win over the
@@ -372,8 +400,9 @@ A `workflow:` parent and a fan-out aggregate relay a child's value unchanged: th
 already proved its pointers against the only run it may name. Reachability and real-path
 checks belong to the read side by design — whether a reader may see that run, and whether
 the path still resolves inside its artifacts directory once symlinks are followed.
-`GET /api/artifacts/<run_id>/<path>` does lexical containment on the untrusted request
-today; real-path resolution at read time is not yet implemented (#3160).
+`GET /api/artifacts/<run_id>/<path>` checks lexical containment, resolves symlinks in
+both the artifacts directory and requested file, and refuses a target outside the
+resolved artifacts directory before reading it.
 
 The value stays a run id plus a relative path in node outputs, events, sub-run results,
 fan-out aggregates, and resumed runs. Archon never rewrites it into an absolute path and

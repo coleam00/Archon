@@ -1,4 +1,4 @@
-import { WorkflowResourceBusyError } from '@archon/workflows/store';
+import { WorkflowNotResumableError, WorkflowResourceBusyError } from '@archon/workflows/store';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
@@ -477,6 +477,78 @@ test('approve reports a run the continuation host claimed first as continuing el
     log.mockRestore();
   }
 }, 30_000);
+
+test('approve reports a run the continuation host already completed without executing it again', async () => {
+  let refusal: unknown;
+  let attempts = 0;
+  const { host, runId, log } = await approveAfter(async (store, id) => {
+    const answered = await store.getWorkflowRun(id);
+    const gate = answered ? answeredPauseContinuation(answered) : undefined;
+    if (!gate) throw new Error('Approval did not leave an answered gate');
+    await store.resumeWorkflowRun(id, { kind: 'answered', ...gate });
+    await store.completeWorkflowRun(id, { duration_ms: 0 });
+    const resume = store.resumeWorkflowRun;
+    store.resumeWorkflowRun = async (...args) => {
+      attempts++;
+      try {
+        return await resume(...args);
+      } catch (error) {
+        refusal = error;
+        throw error;
+      }
+    };
+  });
+  try {
+    const { workflowApproveCommand } = await import('./workflow');
+    expect(await workflowApproveCommand(host, runId)).toBe(0);
+    expect(attempts).toBe(1);
+    expect(refusal).toBeInstanceOf(WorkflowNotResumableError);
+    expect(refusal).toMatchObject({ runId, currentStatus: 'completed' });
+    expect((await host.deps.store.getWorkflowRun(runId))?.status).toBe('completed');
+    expect(
+      (await host.deps.store.getDagResumeSnapshot(runId)).completedNodeOutputs.has('after')
+    ).toBe(false);
+    const output = log.mock.calls.flat().join('\n');
+    expect(output).toContain(
+      `Run ${runId} has already continued in another process and is completed.`
+    );
+    expect(output).not.toContain('failed to resume');
+    expect(output).not.toContain('to retry');
+  } finally {
+    log.mockRestore();
+  }
+}, 30_000);
+
+test.each(['other-run', 'failed', 'ordinary'] as const)(
+  'approve still fails on a %s resume error even when the run is completed',
+  async kind => {
+    const { host, runId, log } = await approveAfter(async (store, id) => {
+      const answered = await store.getWorkflowRun(id);
+      const gate = answered ? answeredPauseContinuation(answered) : undefined;
+      if (!gate) throw new Error('Approval did not leave an answered gate');
+      await store.resumeWorkflowRun(id, { kind: 'answered', ...gate });
+      await store.completeWorkflowRun(id, { duration_ms: 0 });
+      store.resumeWorkflowRun = async () => {
+        if (kind === 'ordinary') throw new Error('Run is completed in another process');
+        throw new Error('Resume refused', {
+          cause: new WorkflowNotResumableError(
+            kind === 'other-run' ? 'another-run' : id,
+            kind === 'failed' ? 'failed' : 'completed'
+          ),
+        });
+      };
+    });
+    try {
+      const { workflowApproveCommand } = await import('./workflow');
+      await expect(workflowApproveCommand(host, runId)).rejects.toThrow(
+        "Approved but failed to resume workflow 'raced'"
+      );
+      expect(log.mock.calls.flat().join('\n')).not.toContain('has already continued');
+    } finally {
+      log.mockRestore();
+    }
+  }
+);
 
 test('approve still fails when the run was cancelled before its inline resume', async () => {
   const { host, runId, log } = await approveAfter(async (store, id) => {

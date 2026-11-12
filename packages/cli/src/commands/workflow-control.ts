@@ -1,6 +1,6 @@
 import { formatAbandonResult } from './workflow-abandon-output';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { WorkflowResourceBusyError } from '@archon/workflows/store';
+import { WorkflowNotResumableError, WorkflowResourceBusyError } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   CancelRefusedError,
@@ -13,6 +13,7 @@ import {
   type ApprovalOperationResult,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
+import type { RunActor } from '@archon/core/operations/run-authorization';
 import { writeJsonLine } from '../utils/stdout';
 import {
   getLog,
@@ -289,16 +290,39 @@ async function cliAnswerOrigin(
   return cliOriginForRun(run, occurrence);
 }
 
+/**
+ * The CLI's actor: the operator, with the name `--as` declared for whoever is answering.
+ * The name is a claim recorded with an attention wait's answer; a gate answer refuses it.
+ */
+function cliActor(declared: string | undefined): RunActor {
+  return declared === undefined ? { kind: 'operator' } : { kind: 'operator', declared };
+}
+
 function cliOriginForRun(run: WorkflowRun, occurrence: string | undefined): GateAnswerOrigin {
   return occurrence === undefined
     ? { via: 'cli' }
     : { via: 'cli', expectedGate: expectedGateForOccurrence(run, occurrence) };
 }
 
+function isCompletedAnswerContinuation(error: unknown, runId: string): boolean {
+  const MAX_CAUSE_DEPTH = 5;
+  for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
+    if (
+      current instanceof WorkflowNotResumableError &&
+      current.runId === runId &&
+      current.currentStatus === 'completed'
+    ) {
+      return true;
+    }
+    if (depth >= MAX_CAUSE_DEPTH) return false;
+    current = current.cause;
+  }
+  return false;
+}
+
 /**
- * Continue a run in this process right after this process recorded its answer, the way
- * the CLI's answering commands do outside `--json`. A continuation host may claim the
- * answer first; `workflowRunCommand` reports that and returns.
+ * A continuation host may claim this answer first. `workflowRunCommand` reports an
+ * active owner; only this answer boundary treats an already-completed refusal as handled.
  */
 async function continueAnsweredRun(
   host: WorkflowHost,
@@ -311,7 +335,6 @@ async function continueAnsweredRun(
   action: 'approve' | 'reject' | 'respond' | 'answer',
   failure: { failurePrefix: string; recorded: string }
 ): Promise<void> {
-  // Look up the original platform conversation ID to keep all messages in one thread
   let platformConversationId: string | undefined;
   try {
     const originalConversation = result.conversationId
@@ -349,6 +372,14 @@ async function continueAnsweredRun(
       discoveryCwd,
     });
   } catch (error) {
+    if (isCompletedAnswerContinuation(error, resolvedId)) {
+      getLog().info(
+        { runId: resolvedId, workflowName: result.workflowName },
+        `cli.workflow_${action}_already_continued`
+      );
+      console.log(`Run ${resolvedId} has already continued in another process and is completed.`);
+      return;
+    }
     if (
       error instanceof Error &&
       error.cause instanceof WorkflowResourceBusyError &&
@@ -374,28 +405,30 @@ async function continueAnsweredRun(
 }
 
 /**
- * Answer a paused attention wait in its declared form: `choose` holds declared option ids,
- * `text` the free text. `occurrence` is required, so an answer prepared for an earlier
- * pause is refused. Like approve, `--json` records the answer for a continuation host;
- * otherwise this process continues the run inline.
+ * Answer a paused attention wait in its declared form: `selection` holds declared option
+ * ids, or accepts the wait's recommendation, and `text` is the free text. `occurrence` is
+ * required, so an answer prepared for an earlier pause is refused. Like approve, `--json`
+ * records the answer for a continuation host; otherwise this process continues the run
+ * inline.
  */
 export async function workflowAnswerCommand(
   host: WorkflowHost,
   runId: string,
   occurrence: string,
-  choose: readonly string[],
+  selection: { choose: readonly string[] } | { recommended: true },
   text: string | undefined,
   json?: boolean,
-  cwd?: string
+  cwd?: string,
+  answerer?: string
 ): Promise<number> {
-  const request = { choose, ...(text !== undefined ? { text } : {}) };
+  const request = { ...selection, ...(text !== undefined ? { text } : {}) };
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
       const result = await host.operations.answerWorkflow(
         resolvedId,
         request,
-        { kind: 'operator' },
+        cliActor(answerer),
         await cliAnswerOrigin(host, resolvedId, occurrence)
       );
       await writeJsonLine({
@@ -418,7 +451,7 @@ export async function workflowAnswerCommand(
     host.operations.answerWorkflow(
       resolvedId,
       request,
-      { kind: 'operator' },
+      cliActor(answerer),
       await cliAnswerOrigin(host, resolvedId, occurrence)
     )
   );
@@ -459,7 +492,8 @@ export async function workflowApproveCommand(
   json?: boolean,
   cwd?: string,
   detach?: boolean,
-  occurrence?: string
+  occurrence?: string,
+  answerer?: string
 ): Promise<number> {
   const { approveWorkflow } = host.operations;
 
@@ -477,7 +511,7 @@ export async function workflowApproveCommand(
       // The SAME gates approveWorkflow enforces, in the same order — not a copy of
       // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
       assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
-      assertResponseAccepted(run, 'approve', comment);
+      assertResponseAccepted(run, 'approve', comment, cliActor(answerer));
       // The child always auto-resumes after approving, and the inline path below
       // refuses a run with no recorded working path. Same check here (message
       // copied verbatim) so the refusal is synchronous instead of buried in a log.
@@ -501,7 +535,7 @@ export async function workflowApproveCommand(
       const result = await approveWorkflow(
         resolvedId,
         comment,
-        { kind: 'operator' },
+        cliActor(answerer),
         await cliAnswerOrigin(host, resolvedId, occurrence)
       );
       await writeJsonLine({
@@ -524,13 +558,11 @@ export async function workflowApproveCommand(
     approveWorkflow(
       resolvedId,
       comment,
-      { kind: 'operator' },
+      cliActor(answerer),
       await cliAnswerOrigin(host, resolvedId, occurrence)
     )
   );
 
-  // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
-  // above) is the one surface that records the decision without continuing.
   if (!result.workingPath) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -563,7 +595,8 @@ export async function workflowRejectCommand(
   json?: boolean,
   cwd?: string,
   detach?: boolean,
-  occurrence?: string
+  occurrence?: string,
+  answerer?: string
 ): Promise<number> {
   const { rejectWorkflow } = host.operations;
 
@@ -581,7 +614,7 @@ export async function workflowRejectCommand(
       // The SAME gates rejectWorkflow enforces, in the same order — not a copy of
       // one branch of them. A partial copy acks { ok: true } and lets the child die unseen.
       assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
-      assertResponseAccepted(run, 'reject', reason);
+      assertResponseAccepted(run, 'reject', reason, cliActor(answerer));
       return run;
     });
   }
@@ -597,7 +630,7 @@ export async function workflowRejectCommand(
       const result = await rejectWorkflow(
         resolvedId,
         reason,
-        { kind: 'operator' },
+        cliActor(answerer),
         await cliAnswerOrigin(host, resolvedId, occurrence)
       );
       await writeJsonLine({
@@ -622,7 +655,7 @@ export async function workflowRejectCommand(
     rejectWorkflow(
       resolvedId,
       reason,
-      { kind: 'operator' },
+      cliActor(answerer),
       await cliAnswerOrigin(host, resolvedId, occurrence)
     )
   );
@@ -634,10 +667,6 @@ export async function workflowRejectCommand(
     return 0;
   }
 
-  // Not cancelled = a legacy on_reject rework, a #2707 step-1 new-mode
-  // resolution, or a container write-back reject (discard the overlay). All
-  // three auto-resume; the resume drives the rework / continuation / the
-  // overlay discard + completion.
   if (!result.workingPath) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -677,14 +706,15 @@ export async function workflowRespondCommand(
   json?: boolean,
   cwd?: string,
   detach?: boolean,
-  occurrence?: string
+  occurrence?: string,
+  answerer?: string
 ): Promise<number> {
   const { respondToWorkflow } = host.operations;
 
   if (decision === 'approve')
-    return workflowApproveCommand(host, runId, text, json, cwd, detach, occurrence);
+    return workflowApproveCommand(host, runId, text, json, cwd, detach, occurrence, answerer);
   if (decision === 'reject')
-    return workflowRejectCommand(host, runId, text, json, cwd, detach, occurrence);
+    return workflowRejectCommand(host, runId, text, json, cwd, detach, occurrence, answerer);
 
   // --detach: same shape as approve/reject — the parent validates read-only via the
   // SAME gate respondToWorkflow enforces, then hands the whole command to a detached
@@ -697,7 +727,7 @@ export async function workflowRespondCommand(
         throw new Error(`Workflow run not found: ${resolvedId}`);
       }
       assertAnswerAdmissible(run, cliOriginForRun(run, occurrence));
-      assertResponseAccepted(run, decision, text);
+      assertResponseAccepted(run, decision, text, cliActor(answerer));
       if (!run.working_path) {
         throw new Error(
           `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -717,7 +747,7 @@ export async function workflowRespondCommand(
         resolvedId,
         decision,
         text,
-        { kind: 'operator' },
+        cliActor(answerer),
         await cliAnswerOrigin(host, resolvedId, occurrence)
       );
       await writeJsonLine({
@@ -741,7 +771,7 @@ export async function workflowRespondCommand(
       resolvedId,
       decision,
       text,
-      { kind: 'operator' },
+      cliActor(answerer),
       await cliAnswerOrigin(host, resolvedId, occurrence)
     )
   );

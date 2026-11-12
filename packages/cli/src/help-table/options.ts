@@ -116,17 +116,24 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--stubs-init <path>',
-    description: 'Write a complete dry-run stub scaffold and exit',
+    description:
+      'Write a dry-run stub scaffold and exit; omits child workflows.\n' +
+      'Reached child workflows need authored stubs unless fan-out items resolve to [].',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
     spec: '--default-stubs',
-    description: 'Fill missing reached nodes with validated placeholders during --dry-run',
+    description:
+      'Fill missing reached AI, bash, and script nodes with validated placeholders during --dry-run.\n' +
+      'With --exec-code, unstubbed bash/script nodes execute locally instead. Explicit stubs win.\n' +
+      'Reached child workflows need authored stubs unless fan-out items resolve to [].',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
     spec: '--exec-code',
-    description: 'Execute trusted bash/script nodes during --dry-run (default: require stubs)',
+    description:
+      'Execute trusted unstubbed bash/script nodes locally during --dry-run, even with --default-stubs.\n' +
+      'Explicit stubs win; default is no code execution.',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -178,6 +185,17 @@ export const orderedFlags: FlagHelp[] = [
       { command: 'workflow', subcommand: 'respond' },
       { command: 'workflow', subcommand: 'answer' },
       { command: 'workflow', subcommand: 'attention label' },
+    ],
+  },
+  {
+    spec: '--as <name>',
+    description:
+      "For 'workflow approve/reject/respond/answer': the name the answerer declares for itself,\nrecorded with an attention wait's answer as a claim (never checked; refused at a gate)",
+    owners: [
+      { command: 'workflow', subcommand: 'approve' },
+      { command: 'workflow', subcommand: 'reject' },
+      { command: 'workflow', subcommand: 'respond' },
+      { command: 'workflow', subcommand: 'answer' },
     ],
   },
   {

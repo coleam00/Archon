@@ -1,3 +1,4 @@
+import { formatSkipCause } from '@archon/workflows/skip-cause';
 import { formatDuration } from '@archon/paths/duration';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
@@ -31,6 +32,8 @@ export interface NodeSummary {
   startedAt?: string;
   durationMs?: number;
   outputPreview?: string;
+  output?: string;
+  outputTruncated?: boolean;
   error?: string;
   /** Set when the failure is "a live child run blocks this node"; abandoning it unblocks. */
   blockedOnChildRunId?: string;
@@ -79,28 +82,18 @@ export function formatFanOutOutcome(outcome: FanOutOutcome | undefined): string[
   ];
 }
 
-export function formatSkipCause(cause: SkipCause): string {
-  switch (cause.kind) {
-    case 'condition':
-      return `condition: ${cause.expr}`;
-    case 'condition_parse_error':
-      return `condition parse error: ${cause.expr}`;
-    case 'timeout':
-      return 'timeout';
-    case 'upstream_failed':
-      return `upstream failed: ${cause.origin}`;
-    case 'upstream_skipped':
-      return `upstream skipped: ${cause.origin}`;
-  }
-}
+export { formatSkipCause } from '@archon/workflows/skip-cause';
 
-/**
- * Bounded preview of a node's persisted output, shared by the two events that
- * report a success so both render the same cap.
- */
-function outputPreviewOf(rawOutput: unknown): string | undefined {
-  if (typeof rawOutput !== 'string') return undefined;
-  return rawOutput.slice(0, 200) + (rawOutput.length > 200 ? '...' : '');
+function outputFields(
+  data: ReadNodeRecordEvent['data']
+): Pick<NodeSummary, 'output' | 'outputTruncated' | 'outputPreview'> {
+  const output = data.node_output;
+  if (output === undefined) return {};
+  return {
+    output,
+    outputTruncated: data.node_output_truncated ?? false,
+    outputPreview: output.slice(0, 200) + (output.length > 200 ? '...' : ''),
+  };
 }
 
 /**
@@ -212,7 +205,7 @@ function nextNodeSummary(
         state: 'completed',
         startedAt: existing?.startedAt,
         durationMs: nodeDurationMs(record, createdAt, startTime),
-        outputPreview: outputPreviewOf(record.data.node_output),
+        ...outputFields(record.data),
         ...fanOutFields(record.data.fan_out_outcome),
         ...executionFields(execution),
       };
@@ -230,6 +223,7 @@ function nextNodeSummary(
     case 'node_skipped_prior_success':
       return priorSuccessSummary(nodeId, record, existing);
   }
+  return record.eventType satisfies never;
 }
 
 function failedNodeSummary(
@@ -271,7 +265,7 @@ function priorSuccessSummary(
   // The original node_completed is not in this log or was reset. The
   // replay still carries the prior output, so report the success it
   // describes; there is no start time to derive a duration from.
-  return { nodeId, state: 'completed', outputPreview: outputPreviewOf(record.data.node_output) };
+  return { nodeId, state: 'completed', ...outputFields(record.data) };
 }
 
 function nodeDurationMs(
@@ -335,12 +329,15 @@ export async function withRunDetail<
   Run extends Pick<WorkflowRun, 'id' | 'status' | 'metadata' | 'completed_at'>,
 >(
   host: WorkflowHost,
-  runs: Run[]
+  runs: Run[],
+  suppliedEvents?: Map<string, WorkflowEventRow[]>
 ): Promise<(Run & { nodes: NodeSummary[]; attention: RunAttention | null })[]> {
-  const eventsByRun = await host.deps.store.listEventsForRuns(
-    runs.map(run => run.id),
-    NODE_SUMMARY_EVENT_TYPES
-  );
+  const eventsByRun =
+    suppliedEvents ??
+    (await host.deps.store.listEventsForRuns(
+      runs.map(run => run.id),
+      NODE_SUMMARY_EVENT_TYPES
+    ));
   return runs.map(run => ({
     ...run,
     nodes: buildRunNodes(run, eventsByRun.get(run.id) ?? []),

@@ -3,17 +3,23 @@ description: |
   The build queue: takes intake's triaged work items to a reviewed, ready pull
   request and stops only for decisions that belong to a person. Each run claims the
   best waiting item with intake's claim, or the one the number input names. One
-  agent routes it (and proves a bug's symptom first) and launches archon-ship from a
-  brief, or marks a pull request already reviewed Ready and green ready without
-  another round; one agent answers how that round ended; and after several rounds that each
+  agent routes it (and proves a bug's symptom first) and launches archon-build from a
+  brief, or marks a pull request already reviewed Ready, with no red check the change
+  caused, ready without another round; one agent answers how that round ended; and after several rounds that each
   found new defects, one agent decides whether to ask the scope question instead of
   running another. A clear case acts on its own. Anything unclear pauses as one
-  attention item whose answer is a declared choice; the ruling is written into the
+  attention item whose answer is a declared option; the ruling is written into the
   issue body as a dated "Current scope" section. Every decision is recorded on the
   item's work item.
 
-  Use when: a trigger binding the operator installed starts it (see the SDLC pack
-  README, "Build queue").
+  A person can also say what to build in the run's message instead of naming a number:
+  one agent resolves the message to an issue to claim, a choice between issues, a work
+  order for several issues, which the run writes and the scheduled queue builds, or new
+  work it files and hands to intake. Neither is built in the run that wrote it.
+
+  Use when: a trigger binding the operator installed starts it (see
+  https://archon.diy/guides/sdlc-operations/#build-queue), or a person names the
+  item, by number or in words.
   NOT for: triaging an item (archon-intake), delivering one item by hand
   (archon-ship), or merging (archon-merge-queue).
 
@@ -21,30 +27,35 @@ requires: [github]
 
 inputs:
   repo_host:
-    description: The forge host of the repository whose work items the queue builds.
+    default: ""
+    description: >-
+      The forge host of the repository whose work items the queue builds. Empty, with
+      repo_path empty too, resolves the repository from the checkout's git remotes.
   repo_path:
+    default: ""
     description: The owner/name path of that repository.
   number:
     default: ""
     description: >-
-      The issue to build. Empty claims the waiting item that sorts first. A number
-      claims that item, and refuses the run with the reason when it cannot: it has no
-      work item, another run holds it, or it does not wait for the build queue.
+      The issue to build. Empty claims the item the run's message names, or with no
+      message the waiting item that sorts first. A number claims that item, and refuses
+      the run with the reason when it cannot: it has no work item, another run holds it,
+      or it does not wait for the build queue.
   orders_only:
     default: "false"
     description: >-
       "true" claims only items that are members of an open work order (a
-      `work-order/<id>` state document; see the SDLC pack README, "Work orders"), and
+      `work-order/<id>` state document; see
+      https://archon.diy/guides/sdlc-operations/#work-orders), and
       nothing when no order is open. It first marks done each open order whose members
       have all merged. A named item is claimed either way. Anything else picks from
       every waiting item.
-  retriage_as:
+  revisit_blocked:
     default: ""
     description: >-
-      The maintainer login a blocked item's re-triage is requested as. Set, a run that
-      names no item also revisits the blocked items: one agent judges which no longer
-      look blocked, and those get archon-triage and an intake run with that label
-      event. Empty revisits nothing.
+      "true" makes a run that names no item also revisit the blocked items: one agent
+      judges which no longer look blocked, and each of those gets this run's re-triage
+      request and one intake pickup. Anything else revisits nothing.
   round_limit:
     default: "3"
     description: >-
@@ -60,17 +71,121 @@ inputs:
       follow-up; the next queue run picks the item up.
 
 returns: apply
+# False only when a run that claimed nothing found stored items no pickup can act on.
+outcome_field: healthy
 
 nodes:
-  # Claims the item and writes the issue's body to build/issue.md, so every agent
-  # reads the same text.
-  - id: facts
-    script: facts
+  - id: start
+    script: start
     runtime: bun
     output_format:
       type: object
       properties:
-        path: { type: string, enum: [idle, closed, route] }
+        repo:
+          type: object
+          properties:
+            host: { type: string }
+            path: { type: string }
+          required: [host, path]
+        # Whether the run's message names the work: number is empty and it has one.
+        message: { type: boolean }
+      required: [repo, message]
+
+  - id: interpret
+    command: interpret
+    depends_on: [start]
+    when: "$start.output.message == true"
+    model: ['@build-interpret', large]
+    mutates_checkout: false
+    with:
+      repo: "$start.output.repo.host/$start.output.repo.path"
+    output_format:
+      type: object
+      properties:
+        decision: { type: string, enum: [build, choose, order, intake, none] }
+        number: { type: [integer, 'null'], minimum: 1 }
+        options:
+          type: array
+          items:
+            type: object
+            additionalProperties: false
+            properties:
+              id: { type: string, pattern: '^issue-[0-9]+$' }
+              label: { type: string, pattern: '\S' }
+              does: { type: string, pattern: '\S' }
+              value:
+                type: object
+                additionalProperties: false
+                properties:
+                  number: { type: integer, minimum: 1 }
+                required: [number]
+            required: [id, label, does, value]
+        # On choose, the candidate the message most likely means; null otherwise.
+        recommendation:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            option: { type: string, pattern: '^issue-[0-9]+$' }
+            why: { type: string, pattern: '\S' }
+            confidence: { type: string, enum: [low, medium, high] }
+          required: [option, why, confidence]
+        order:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+            members: { type: array, minItems: 2, items: { type: integer, minimum: 1 } }
+            unresolved:
+              type: array
+              items:
+                type: object
+                additionalProperties: false
+                properties:
+                  named: { type: string, pattern: '\S' }
+                  why: { type: string, pattern: '\S' }
+                required: [named, why]
+          required: [id, members, unresolved]
+        issue:
+          type: [object, 'null']
+          additionalProperties: false
+          properties:
+            title: { type: string, pattern: '\S' }
+            body: { type: string, pattern: '\S' }
+          required: [title, body]
+        reason: { type: string, pattern: '\S' }
+      required: [decision, number, options, recommendation, order, issue, reason]
+
+  - id: pick
+    depends_on: [interpret]
+    when: "$interpret.output.decision == 'choose'"
+    wait:
+      attention: "$interpret.output.reason"
+      form: select
+      options: "$interpret.output.options"
+      recommendation: "$interpret.output.recommendation"
+      labels:
+        stage: build
+        kind: pick
+        item: ""
+        pr: ""
+
+  # Claims the item and writes the issue's body to build/issue.md, so every agent
+  # reads the same text. With a message it claims the item interpret or the pick
+  # resolved, refuses with interpret's reason when it resolved none, and claims
+  # nothing when the message is a work order or new work for intake.
+  - id: facts
+    script: facts
+    runtime: bun
+    depends_on: [start, interpret, pick]
+    trigger_rule: none_failed_min_one_success
+    with:
+      repo: { from: "$start.output.repo" }
+      interpreted: { from: "$interpret.output", if_skipped: null }
+      picked: { from: "$pick.output.value", if_skipped: null }
+    output_format:
+      type: object
+      properties:
+        path: { type: string, enum: [idle, closed, route, order, handoff] }
         item:
           type: [object, 'null']
           properties:
@@ -102,7 +217,9 @@ nodes:
         # The branch the round opens its pull request from when route continues none: a
         # new build/<issue>-<slug>-<run>. Empty with no item.
         branch: { type: string }
-      required: [path, item, url, record, brief, rounds, at_cap, pull_request, continues, branch]
+        # The related work intake's triage found, for a round that plans.
+        related: { type: array, items: { type: object } }
+      required: [path, item, url, record, brief, rounds, at_cap, pull_request, continues, branch, related]
 
   # Routes the item and writes the brief the round starts from. The prompt names the
   # playwright-cli skill for a bug that needs a browser. It is not a `skills:` entry:
@@ -112,7 +229,7 @@ nodes:
     command: route
     depends_on: [facts]
     when: "$facts.output.path == 'route'"
-    model: large
+    model: ['@build-route', large]
     mutates_checkout: false
     with:
       url: "$facts.output.url"
@@ -120,39 +237,34 @@ nodes:
       brief: "$facts.output.brief"
       pull_request: { from: "$facts.output.pull_request" }
       continues: "$facts.output.continues"
+      lane: "$INPUTS.build_lane"
     output_format:
       type: object
       properties:
         decision: { type: string, enum: [launch, ask, ready] }
+        # The route this round takes through archon-build. Declared on every decision,
+        # read only on launch.
+        route: { type: string, enum: [investigate, plan, deliver, continue] }
         # On launch, the number of the pull request the round continues: the candidate
         # facts reports, or null when the issue's dated scope or a recorded answer
         # supersedes it and the round starts fresh from the new branch. Null otherwise.
         continues: { type: [integer, 'null'] }
-        # On ready, the full head SHA the pull request is already reviewed Ready and
-        # green at; apply takes it out of draft only while its head is still this
-        # commit. Null otherwise.
+        # On ready, the full head SHA the pull request is already reviewed Ready at,
+        # with no red check the change caused; apply takes it out of draft only while
+        # its head is still this commit. Null otherwise.
         ready_head: { type: [string, 'null'] }
-        # The brief archon-ship starts from on launch; on ask, the brief a continue
+        # The brief the round starts from on launch; on ask, the brief a continue
         # choice launches.
         brief: { type: string, pattern: '\S' }
         reason: { type: string, pattern: '\S' }
-        attention: &attention
+        # On ask, the wait's own fields as the person reads them; null otherwise. Each
+        # option's value is what the queue does when it is chosen.
+        ask: &ask
           type: [object, 'null']
           additionalProperties: false
           properties:
-            what: { type: string, pattern: '\S' }
-            why: { type: string, pattern: '\S' }
-            recommendation:
-              type: object
-              additionalProperties: false
-              properties:
-                choice: { type: string }
-                why: { type: string, pattern: '\S' }
-                evidence: { type: string, pattern: '\S' }
-                confidence: { type: string, enum: [low, medium, high] }
-                would_change: { type: string, pattern: '\S' }
-              required: [choice, why, evidence, confidence, would_change]
-            choices:
+            question: { type: string, pattern: '\S' }
+            options:
               type: array
               minItems: 1
               items:
@@ -162,13 +274,24 @@ nodes:
                   id: { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
                   label: { type: string, pattern: '\S' }
                   does: { type: string, pattern: '\S' }
-                  effect: { type: string, enum: [continue, ready, park] }
-                  ruling: { type: string }
-                required: [id, label, does, effect, ruling]
-            if_unanswered: { type: string, pattern: '\S' }
-            links: { type: array, items: { type: string } }
-          required: [what, why, recommendation, choices, if_unanswered, links]
-      required: [decision, continues, ready_head, brief, reason, attention]
+                  value:
+                    type: object
+                    additionalProperties: false
+                    properties:
+                      effect: { type: string, enum: [continue, ready, park] }
+                      ruling: { type: string }
+                    required: [effect, ruling]
+                required: [id, label, does, value]
+            recommendation:
+              type: object
+              additionalProperties: false
+              properties:
+                option: { type: string }
+                why: { type: string, pattern: '\S' }
+                confidence: { type: string, enum: [low, medium, high] }
+              required: [option, why, confidence]
+          required: [question, options, recommendation]
+      required: [decision, route, continues, ready_head, brief, reason, ask]
 
   # A round that continues a pull request (route's declaration) starts from that pull
   # request's head, not from the branch the run's checkout was cut from, so its publish
@@ -183,6 +306,8 @@ nodes:
       pull_request: { from: "$facts.output.pull_request" }
       candidate: "$facts.output.continues"
       continues: "$route.output.continues"
+      route: "$route.output.route"
+      rounds: { from: "$facts.output.rounds" }
     output_format:
       type: object
       properties:
@@ -191,31 +316,40 @@ nodes:
         # start; null on a fresh round or when it has no trusted review. Checkout refuses
         # a pull request with more than one.
         reviewed: { type: [string, 'null'] }
-        # What ship continues: the number, `none` when the item has a pull request
-        # the round does not continue, or null when it has none and ship's triage
-        # decides.
-        pull_request:
-          anyOf:
-            - { type: integer, minimum: 1 }
-            - { type: string, enum: [none] }
-            - { type: 'null' }
-      required: [head, reviewed, pull_request]
+        # The pull request the round continues, or null when it starts fresh.
+        pull_request: { type: [integer, 'null'], minimum: 1 }
+        # The report an earlier round published at `reviewed`, which the round's first
+        # review continues from; empty when that review reads the whole change.
+        prior_report: { type: string }
+      required: [head, reviewed, pull_request, prior_report]
 
+  # The round. Intake triaged the item and route declared this round's route, so the
+  # run triages nothing: archon-build is archon-ship without its triage.
   - id: ship
-    include: archon-ship-block
+    include: archon-build
     depends_on: [facts, route, checkout]
     when: "$route.output.decision == 'launch'"
     with:
-      target: "$route.output.brief"
+      route: "$route.output.route"
+      work: >-
+        $route.output.brief
+
+        The issue, its title and body, is in $ARTIFACTS_DIR/build/issue.md. Read it
+        in full: the body, with its dated "Current scope" sections, is the contract,
+        and the brief above adds only what the body does not say. Intake triaged the
+        item; no triage report is in this run's artifacts.
+      related: "$facts.output.related"
       pull_request: "$checkout.output.pull_request"
+      prior_report: "$checkout.output.prior_report"
       branch: "$facts.output.branch"
+      ci: "$INPUTS.ci"
 
   - id: answer
     command: answer
     depends_on: [facts, checkout, ship]
     trigger_rule: none_failed_min_one_success
     when: "$facts.output.path == 'route' && $route.output.decision == 'launch'"
-    model: large
+    model: ['@build-answer', large]
     mutates_checkout: false
     with:
       url: "$facts.output.url"
@@ -250,31 +384,68 @@ nodes:
         # done and continue. Not nullable: Codex's constrained decoding could not emit
         # `null` from an enum and padded whitespace until max_output_tokens.
         ask_class: { type: string, enum: [stop, scope] }
-        attention: *attention
-      required: [decision, brief, push, reason, ask_class, attention]
+        ask: *ask
+      required: [decision, brief, push, reason, ask_class, ask]
+
+  # Files the new work the message described and starts intake on it.
+  - id: handoff
+    script: handoff
+    runtime: bun
+    depends_on: [start, interpret, facts]
+    when: "$facts.output.path == 'handoff'"
+    with:
+      repo: { from: "$start.output.repo" }
+      issue: { from: "$interpret.output.issue" }
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+      required: [summary]
+
+  # Writes the work order the message named and starts intake on each member it has
+  # not seen. The scheduled build queue builds the members; this run claims none.
+  - id: order
+    script: order
+    runtime: bun
+    depends_on: [start, interpret, facts]
+    when: "$facts.output.path == 'order'"
+    with:
+      repo: { from: "$start.output.repo" }
+      order: { from: "$interpret.output.order" }
+    output_format:
+      type: object
+      properties:
+        summary: { type: string }
+      required: [summary]
 
   # Checks the decision, performs the writes it declared and reads each one back:
   # the push, then the work item.
   - id: apply
     script: apply
     runtime: bun
-    depends_on: [facts, route, answer]
+    depends_on: [facts, route, answer, order, handoff]
     trigger_rule: none_failed_min_one_success
     with:
       path: "$facts.output.path"
+      order: { from: "$order.output.summary", if_skipped: "" }
+      handoff: { from: "$handoff.output.summary", if_skipped: "" }
       item: { from: "$facts.output.item" }
       pull_request: { from: "$facts.output.pull_request" }
       route: { from: "$route.output", if_skipped: null }
       ending: { from: "$ship.output", if_skipped: null }
       answer: { from: "$answer.output", if_skipped: null }
+      # Every verdict and CI report this run's delivery rounds produced; null when a
+      # record cannot be read, so the round is still recorded, without them.
+      reviews: { outputs: review-report, if_unreadable: null }
+      ci: { outputs: ci-report, if_unreadable: null }
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [idle, parked, ready, continue, asked, launch] }
+        decision: { type: string, enum: [idle, order, handoff, parked, ready, continue, asked, launch] }
         summary: { type: string }
-        # The attention message; empty when nothing is asked.
-        attention: { type: string }
-        # Each choice as a wait option; its value is the choice the answer returns.
+        # The ask's question, options and recommendation, as the deciding agent wrote
+        # them: empty, none and null when nothing is asked.
+        question: { type: string }
         options:
           type: array
           items:
@@ -285,26 +456,33 @@ nodes:
               does: { type: string }
               value: { type: object }
             required: [id, label, does, value]
-        # The wait's recommendation; null when nothing is asked.
         recommendation: { type: [object, 'null'] }
         class: { type: string, enum: ['', route, stop, scope] }
-        # What the answer node needs: the attention item, the brief a continue choice
-        # launches and which decision asked; null when nothing is asked.
+        # The ask's subject labels: the issue number, and its pull request's or empty.
+        item: { type: string }
+        pr: { type: string }
+        # What the ruling node needs: the ask, the brief a continue option launches and
+        # which decision asked; null when nothing is asked.
         asked: { type: [object, 'null'] }
-      required: [decision, summary, attention, options, recommendation, class, asked]
+        healthy: { type: boolean }
+      required: [decision, summary, question, options, recommendation, class, item, pr, asked, healthy]
 
   # A paused run gives its resource slot back, so the next scheduled run can work
   # another item while this one waits.
   - id: ask
     depends_on: [apply]
-    when: "$apply.output.attention != ''"
+    when: "$apply.output.question != ''"
     wait:
-      attention: "$apply.output.attention"
+      attention: "$apply.output.question"
       form: select
       options: "$apply.output.options"
+      other: true
       recommendation: "$apply.output.recommendation"
       labels:
-        build: "$apply.output.class"
+        stage: build
+        kind: "$apply.output.class"
+        item: "$apply.output.item"
+        pr: "$apply.output.pr"
 
   - id: ruling
     script: ruling
@@ -313,7 +491,7 @@ nodes:
     with:
       item: { from: "$facts.output.item" }
       asked: { from: "$apply.output.asked" }
-      choice: { from: "$ask.output.value" }
+      decision: "$ask.output.decision"
       text: "$ask.output.text"
     output_format:
       type: object
@@ -338,18 +516,23 @@ nodes:
             properties:
               number: { type: integer, minimum: 1 }
               summary: { type: string }
-            required: [number, summary]
+              # When triage gave the blocked verdict, and what it said the item waits on.
+              blocked_at: { type: string }
+              blocked_reason: { type: string }
+              blocked_by: { type: array, items: { type: string } }
+            required: [number, summary, blocked_at, blocked_reason, blocked_by]
         blocked_count: { type: integer }
       required: [blocked, blocked_count]
 
   - id: revisit
     command: revisit
-    depends_on: [blocked]
+    depends_on: [start, blocked]
     when: "$blocked.output.blocked_count > 0"
-    model: medium
+    model: ['@build-revisit', medium]
     mutates_checkout: false
     with:
       blocked: { from: "$blocked.output.blocked" }
+      repo: "$start.output.repo.host/$start.output.repo.path"
     output_format:
       type: object
       properties:
@@ -367,8 +550,9 @@ nodes:
   - id: retriage
     script: retriage
     runtime: bun
-    depends_on: [blocked, revisit]
+    depends_on: [start, blocked, revisit]
     with:
+      repo: { from: "$start.output.repo" }
       blocked: { from: "$blocked.output.blocked" }
       retriage: { from: "$revisit.output.retriage" }
     output_format:

@@ -1,6 +1,6 @@
 /**
  * The pack's pull-request reads and writes, and the marked comment on an issue or
- * pull request, through the forge contract (./forge.ts).
+ * pull request, through the forge contract (`forge` of `archon:script`).
  *
  * Every write is performed and then read back by the forge plugin, which reports
  * which of the contract's four outcomes happened. Nothing here repeats a write.
@@ -9,16 +9,32 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { invokeForge, parsePrRecord, qualifiedRepo, record, type PrRecord, type QualifiedPr } from './forge.ts';
+import { forge, type ForgeOperations } from 'archon:script';
+import { type PrRecord, type QualifiedPr } from './identity.ts';
+import { record } from './inputs.ts';
+
+/**
+ * The pull request a web URL names, as the forge plugin resolves it, or undefined when
+ * the URL names none. A URL's shape belongs to the forge, so nothing in the pack parses
+ * one. A forge that cannot answer throws: that is not an answer about the URL.
+ */
+export function resolvePrUrl(url: string): QualifiedPr | undefined {
+  const value = forge('resolve', { remote: url, web: true });
+  if (value.kind !== 'resolved' || value.subject?.kind !== 'pr') return undefined;
+  return { repo: value.repo, number: value.subject.number };
+}
+
+/** The pull request a web URL names; a URL that names none refuses. */
+export function prFromUrl(url: string): QualifiedPr {
+  const pr = resolvePrUrl(url);
+  if (pr === undefined) throw new Error(`"${url}" is not a pull request URL`);
+  return pr;
+}
 
 export const PR_CREATE_UNRESOLVED = 'pr_create_unresolved';
 /** The reason a tail's report gives when a node failure ended the run. */
 export const RUN_FAILED = 'failed';
 
-/** Whether a report's reason means the run broke rather than reaching an outcome. */
-export function isFailureReason(reason: unknown): boolean {
-  return reason === RUN_FAILED || reason === PR_CREATE_UNRESOLVED;
-}
 export const PR_CREATE_RECORD = 'pr-create-started';
 
 export type PrPublicationRecord =
@@ -33,12 +49,17 @@ export function decodePrPublicationRecord(value: unknown):
   | { readonly state: 'started' }
   | { readonly state: 'verified'; readonly pr: PrRecord } {
   const row = record(value);
-  if (row && 'pr' in row) return { state: 'verified', pr: parsePrRecord(row.pr) };
-  if (
-    !qualifiedRepo(row?.repo) ||
-    !qualifiedRepo(row?.headRepo) ||
-    typeof row?.head !== 'string' || row.head === ''
-  ) throw new Error('invalid PR publication record');
+  if (row && 'pr' in row) {
+    // The file is this pack's own, written from a record the host validated; a partial one is not a verified pull request.
+    const pr = record(row.pr);
+    if (!record(pr?.repo) || typeof pr?.number !== 'number' || typeof pr.url !== 'string' || typeof pr.head !== 'string') {
+      throw new Error('invalid pull-request record in the PR publication record');
+    }
+    return { state: 'verified', pr: pr as unknown as PrRecord };
+  }
+  if (!record(row?.repo) || !record(row?.headRepo) || typeof row?.head !== 'string' || row.head === '') {
+    throw new Error('invalid PR publication record');
+  }
   return { state: 'started' };
 }
 
@@ -59,19 +80,8 @@ export interface CreatePrIntent {
   readonly draft: boolean;
 }
 
-/** A forge operation whose success always carries a result. */
-function forgeResult(op: string, request: Record<string, unknown>): Record<string, unknown> {
-  const value = invokeForge(op, request);
-  if (value === null) throw new Error(`forge ${op} returned no result`);
-  return value;
-}
-
-function forgePrView(value: Record<string, unknown>): PrView {
-  return {
-    pr: parsePrRecord(record(value)?.pr),
-    title: typeof value.title === 'string' ? value.title : '',
-    body: typeof value.body === 'string' ? value.body : '',
-  };
+function forgePrView(value: NonNullable<ForgeOperations['pr.view']['result']>): PrView {
+  return { pr: value.pr, title: value.title ?? '', body: value.body ?? '' };
 }
 
 /**
@@ -83,7 +93,7 @@ export function findOpenPrByHead(
   headRepo: QualifiedPr['repo'],
   head: string
 ): PrView | undefined {
-  const value = invokeForge('pr.view', { selector: { kind: 'head', repo, headRepo, head } });
+  const value = forge('pr.view', { selector: { kind: 'head', repo, headRepo, head } });
   return value === null ? undefined : forgePrView(value);
 }
 
@@ -94,19 +104,19 @@ export function findOpenPrByHead(
  * naming the capability.
  */
 export function findPrByHead(repo: QualifiedPr['repo'], head: string): PrRecord | undefined {
-  const value = invokeForge('pr.view', { selector: { kind: 'head', repo, headRepo: repo, head, state: 'any' } });
+  const value = forge('pr.view', { selector: { kind: 'head', repo, headRepo: repo, head, state: 'any' } });
   return value === null ? undefined : forgePrView(value).pr;
 }
 
 export function viewPr(ref: QualifiedPr): PrView {
-  return forgePrView(
-    forgeResult('pr.view', { selector: { kind: 'number', ref: { repo: ref.repo, number: ref.number } } })
-  );
+  const value = forge('pr.view', { selector: { kind: 'number', ref: { repo: ref.repo, number: ref.number } } });
+  if (value === null) throw new Error('forge pr.view returned no result');
+  return forgePrView(value);
 }
 
 /** Open the pull request and return the record the forge read back. */
 export function createPr(intent: CreatePrIntent): PrRecord {
-  const value = forgeResult('pr.create', {
+  return forge('pr.create', {
     repo: intent.repo,
     headRepo: intent.headRepo,
     head: intent.head,
@@ -115,8 +125,7 @@ export function createPr(intent: CreatePrIntent): PrRecord {
     title: intent.title,
     body: readFileSync(intent.bodyPath, 'utf8'),
     draft: intent.draft,
-  });
-  return parsePrRecord(value.pr);
+  }).pr;
 }
 
 /**
@@ -134,8 +143,7 @@ export const DESCRIPTION_SECTION = {
  * the caller's read and this write is lost.
  */
 export function editPrBody(ref: QualifiedPr, body: string): PrRecord {
-  const value = forgeResult('pr.edit-body', { ref: { repo: ref.repo, number: ref.number }, body });
-  return parsePrRecord(value.pr);
+  return forge('pr.edit-body', { ref: { repo: ref.repo, number: ref.number }, body }).pr;
 }
 
 /**
@@ -144,10 +152,7 @@ export function editPrBody(ref: QualifiedPr, body: string): PrRecord {
  * state is not written.
  */
 export function setPrDraft(ref: QualifiedPr, draft: boolean): PrRecord {
-  const value = forgeResult(draft ? 'pr.draft' : 'pr.ready', {
-    ref: { repo: ref.repo, number: ref.number },
-  });
-  return parsePrRecord(value.pr);
+  return forge(draft ? 'pr.draft' : 'pr.ready', { ref: { repo: ref.repo, number: ref.number } }).pr;
 }
 
 /** An issue or a pull request, as a comment addresses it. */
@@ -168,9 +173,7 @@ export function upsertComment(subject: CommentSubject, marker: string, body: str
   // subjects still publishes reviews; an issue needs the subject form.
   const value =
     subject.kind === 'pr'
-      ? forgeResult('comment.upsert', { ref, marker, body })
-      : forgeResult('workitem.comment.upsert', { subject: { kind: 'issue', ref }, marker, body });
-  const comment = record(value.comment);
-  if (typeof comment?.url !== 'string') throw new Error('forge returned no verified comment');
-  return { url: comment.url };
+      ? forge('comment.upsert', { ref, marker, body })
+      : forge('workitem.comment.upsert', { subject: { kind: 'issue', ref }, marker, body });
+  return { url: value.comment.url };
 }

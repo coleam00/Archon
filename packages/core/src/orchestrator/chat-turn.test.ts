@@ -37,6 +37,9 @@ import {
   mockUpdateSession,
   operator,
 } from '../test/orchestrator-agent-harness';
+import { reportChatTurn, type ChatTurn } from './chat-turn';
+import { addResultUsage, type TokenUsage } from '@archon/provider-contract';
+import { chatTurnEventProperties } from '@archon/paths/telemetry-events';
 import { handleMessage } from './orchestrator-agent';
 
 // ─── Stale session ID clearing on error_during_execution ────────────────────
@@ -1016,5 +1019,89 @@ describe('explicit registration results', () => {
     expect(messages).toContain('already registered at /prod/app; use worktrees');
     expect(messages).not.toContain('registered successfully');
     expect(mockCreateCodebase).not.toHaveBeenCalled();
+  });
+});
+
+describe('TokenUsage axis seam guard', () => {
+  const specimen: Required<TokenUsage> = {
+    input: 5000,
+    output: 1200,
+    cacheRead: 4000,
+    cacheWrite: 250,
+    cachePartial: true,
+    total: 6400,
+    cost: 0.25,
+  };
+  const wireKeys: Record<keyof TokenUsage, string | null> = {
+    input: 'tokens_in',
+    output: 'tokens_out',
+    cacheRead: 'cache_read_tokens',
+    cacheWrite: 'cache_write_tokens',
+    cachePartial: 'cache_partial',
+    total: null, // Telemetry carries gross axes, not the optional combined total.
+    cost: null, // cost_usd comes from the separate result/run scalar.
+  };
+  beforeEach(() => mockCaptureChatTurn.mockClear());
+
+  function report(result: ChatTurn['result'], outcome: 'completed' | 'failed' = 'completed') {
+    const turn: ChatTurn = { startedAt: 0, reported: false, failed: false, result };
+    reportChatTurn(turn, { outcome, platform: 'web', provider: 'claude', durationMs: 123 });
+    expect(mockCaptureChatTurn).toHaveBeenCalledTimes(1);
+    expect(turn.reported).toBe(true);
+    expect(turn.failed).toBe(outcome === 'failed');
+    const props = mockCaptureChatTurn.mock.calls[0]?.[0];
+    if (!props) throw new Error('Missing chat telemetry');
+    return { props, wire: chatTurnEventProperties(props) };
+  }
+
+  for (const outcome of ['completed', 'failed'] as const) {
+    test(`${outcome}: carries every declared axis through the chat wire serializer`, () => {
+      const { props, wire } = report({ cost: 0.75, tokens: specimen }, outcome);
+      for (const axis of Object.keys(wireKeys) as (keyof TokenUsage)[]) {
+        const key = wireKeys[axis];
+        if (key !== null) expect(wire[key], `${axis} -> ${key}`).toBe(specimen[axis]);
+        else {
+          expect(props).not.toHaveProperty(axis);
+          expect(wire).not.toHaveProperty(axis);
+        }
+      }
+      expect(wire.cost_usd).toBe(0.75);
+    });
+  }
+
+  test.each([
+    undefined,
+    {},
+    { cost: 0.75 },
+    { tokens: { input: 10, output: 2 } },
+    { tokens: { input: 10, output: 2, cacheRead: 0, cacheWrite: 0 } },
+    { tokens: { input: 10, output: 2, cacheRead: 0, cachePartial: true as const } },
+  ])('preserves absent usage, reported zero, and partial flags: %j', result => {
+    const { wire } = report(result);
+    for (const [key, value] of Object.entries({
+      cost_usd: result?.cost,
+      tokens_in: result?.tokens?.input,
+      tokens_out: result?.tokens?.output,
+      cache_read_tokens: result?.tokens?.cacheRead,
+      cache_write_tokens: result?.tokens?.cacheWrite,
+      cache_partial: result?.tokens?.cachePartial,
+    })) {
+      if (value === undefined) expect(wire).not.toHaveProperty(key);
+      else expect(wire[key]).toBe(value);
+    }
+  });
+
+  test('reports floor totals from mixed cache reporting across results', () => {
+    const result = addResultUsage(
+      addResultUsage({}, { tokens: { input: 10, output: 2, cacheRead: 4, cacheWrite: 0 } }),
+      { tokens: { input: 20, output: 3 } }
+    );
+    expect(report(result).wire).toMatchObject({
+      tokens_in: 30,
+      tokens_out: 5,
+      cache_read_tokens: 4,
+      cache_write_tokens: 0,
+      cache_partial: true,
+    });
   });
 });

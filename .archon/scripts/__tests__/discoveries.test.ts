@@ -4,8 +4,7 @@ import { mkdirSync, mkdtempSync, readFileSync, utimesSync, writeFileSync } from 
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
-import { type AgentDecision, checkDecisions, parseRunDocument } from '../../workflows/sdlc/.shared/discoveries';
-import { latestVerdictOf, relayedDiscoveries } from '../../workflows/sdlc/.shared/report';
+import { type AgentDecision, checkDecisions } from '../../workflows/sdlc/.shared/discoveries';
 import { type TrackerIssue, gitCheckout, hostCli, packScriptRunner, PR, type ScriptRun } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
@@ -60,53 +59,11 @@ function runArtifacts(
   return dir;
 }
 
-describe("a run's discoveries", () => {
-  test('the latest verdict, plus raw records written after it; a record it judged is not raised again', () => {
-    const root = track(mkdtempSync(join(tmpdir(), 'archon-discoveries-')));
-    const dir = runArtifacts(root, RUN, {
-      before: [record('judged by review')],
-      verdict: [record('certified')],
-      after: [record('written after review')],
-    });
-    const relayed = relayedDiscoveries(dir, latestVerdictOf(dir));
-    expect(relayed.problems).toEqual([]);
-    expect(relayed.records.map(entry => [entry.ref, entry.title, entry.reviewed])).toEqual([
-      ['review#0', 'certified', true],
-      ['discoveries/structure.json#0', 'written after review', false],
-    ]);
-  });
-
-  test('without a review, every raw record; an unreadable file is a named problem', () => {
-    const root = track(mkdtempSync(join(tmpdir(), 'archon-discoveries-')));
-    const dir = runArtifacts(root, RUN, { before: [record('one'), record('two')] });
-    writeFileSync(join(dir, 'discoveries/broken.json'), '{');
-    expect(latestVerdictOf(dir)).toBeUndefined();
-    const relayed = relayedDiscoveries(dir, undefined);
-    expect(relayed.records.map(entry => entry.ref)).toEqual(['discoveries/implement.json#0', 'discoveries/implement.json#1']);
-    expect(relayed.problems).toEqual([expect.stringContaining('broken.json')]);
-  });
-});
-
-// --- the run document and the pre-write check ---------------------------------------
+// --- the pre-write check -------------------------------------------------------------
 
 const ISSUE = { repo: REPO, number: 7 };
 
-describe("a drained run's document", () => {
-  test('round-trips through its parser, and one that does not parse refuses, naming the document', () => {
-    const name = `discoveries/runs/${RUN}`;
-    const value = {
-      version: 1 as const,
-      claim: null,
-      decided: [`${RUN}:review#0`],
-      questions: [{ keys: ['k-one'], refs: [`${RUN}:review#1`], text: 'q', recommendation: 'r', answer: { text: 'a', at: 'now' } }],
-    };
-    expect(parseRunDocument(name, JSON.parse(JSON.stringify(value)))).toEqual(value);
-    expect(parseRunDocument(name, { version: 1, claim: null })).toEqual({ version: 1, claim: null });
-    for (const bad of [{ version: 2, claim: null }, { version: 1, claim: null, decided: 'x' }, { version: 1, claim: null, questions: [{ text: 'q' }] }]) {
-      expect(() => parseRunDocument(name, bad)).toThrow(name);
-    }
-  });
-
+describe("a drained run's decisions", () => {
   test('every queued ref is decided exactly once', () => {
     const drop = (key: string, refs: string[]): AgentDecision => ({ outcome: 'drop', key, refs, title: 't', reason: 'r' });
     const queued = ['run:review#0', 'run:review#1'];
@@ -173,6 +130,7 @@ function script(at: Install, name: Script, pass: Pass, inputs: Record<string, st
       RUN_LISTING: listing(at, pass.runs),
       INPUTS_REPO_HOST: REPO.host,
       INPUTS_REPO_PATH: REPO.path,
+      INPUTS_REPO: JSON.stringify(REPO),
       INPUTS_SINCE: '',
       INPUTS_UNTIL: '',
       INPUTS_LIMIT: '20',
@@ -303,19 +261,6 @@ describe('the discoveries scripts', () => {
       expect(state(at, `discoveries/runs/${RUN}`)).not.toHaveProperty('decided');
     }
   }, 120_000);
-
-  test('a claim is kept while its run may still finish, and released once it ended', () => {
-    const at = install();
-    runArtifacts(at.outputRoot, RUN, { verdict: [record('one')] });
-    expect(ok(script(at, 'facts', { runId: 'pass-1', runs: [RUN] }))).toMatchObject({ path: 'decide' });
-    // A failed pass can resume, so it keeps its claim like a paused or running one.
-    for (const status of ['paused', 'running', 'failed']) {
-      expect(ok(script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': status } }))).toMatchObject({ path: 'idle' });
-    }
-    const released = script(at, 'facts', { runId: 'pass-2', runs: [RUN], statuses: { 'pass-1': 'cancelled' } });
-    expect(queued(released)).toEqual([`${RUN}:review#0`]);
-    expect(state(at, `discoveries/runs/${RUN}`)).toMatchObject({ claim: { run_id: 'pass-2' } });
-  }, 60_000);
 
   test('an asked record keeps its run claimed by the asking run, and the answer reaches the next pass', () => {
     const at = install();

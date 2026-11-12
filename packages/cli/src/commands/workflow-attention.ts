@@ -6,6 +6,7 @@ import {
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { AttentionWatch } from '@archon/workflows/engine-port';
 import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
+import { attentionWatchReader, type AttentionWatchLevel } from '@archon/workflows/attention-needs';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
 import {
@@ -16,6 +17,7 @@ import {
 } from '@archon/core/operations/attention-queue';
 import {
   countAttentionQueue,
+  countAttentionWaitStarts,
   listAttentionQueue,
   parseAttentionLabelPairs,
   parseAttentionQueueRequest,
@@ -26,11 +28,11 @@ import {
   type AttentionQueueScope,
   type AttentionQueueSource,
 } from '@archon/workflows/attention-queue';
-import { attentionAnswerLines, spellWorkflowCommand } from '@archon/workflows/deps';
-import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
+import { resolveMetricsWindow } from '@archon/workflows/metrics';
+import { countWorkflowNotices, listWorkflowNotices } from '@archon/workflows/workflow-notice';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
+import { attentionItemLines, attentionStreamText, noticeText } from './workflow-attention-text';
 import {
-  formatAge,
   getLog,
   inheritedWorkflowCodebase,
   printJsonWriteError,
@@ -45,9 +47,25 @@ export interface WorkflowAttentionOptions {
   labels: readonly string[];
   sort?: string;
   countBy?: string;
+  /**
+   * With `countBy`: count the attention waits opened since this duration ago or ISO time,
+   * answered or still open, from events, in place of the items open now.
+   */
+  since?: string;
   /** Stream every change in scope instead of reading the queue once. */
   watch?: boolean;
-  /** With `watch`: replay readable feed events strictly after this cursor. */
+  /**
+   * With `watch`: write every line of the sync protocol, for a program that keeps an open
+   * set. Without it the watch writes only the lines someone has to act on.
+   */
+  protocol?: boolean;
+  /**
+   * With `watch`: also write what happened to work that nobody has to act on: a run that
+   * completed or resumed, and the notices runs emit. With `since` and no `watch`: list
+   * the notices emitted in that window, or count them with `countBy`.
+   */
+  notices?: boolean;
+  /** With `watch` and `protocol`: replay readable feed events strictly after this cursor. */
   after?: string;
 }
 
@@ -94,113 +112,15 @@ export async function attentionScope(
   return { kind: 'project', project };
 }
 
-function attentionItemLines(item: AttentionQueueItem): string[] {
-  const paused =
-    item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
-  const lines = [
-    `  ${item.runId}  ${item.workflow}  ${item.project?.name ?? '(no project)'}  ${paused}`,
-  ];
-  if (item.fanOut !== null)
-    lines.push(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
-  else if (item.parentRunId !== null) lines.push(`    child of run ${item.parentRunId}`);
-  const labels = Object.entries(item.labels);
-  if (labels.length > 0)
-    lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
-  switch (item.kind) {
-    case 'attention':
-      lines.push(`    ${item.node}: ${item.message}`);
-      for (const line of attentionAnswerLines(CLI_WORKFLOW_SURFACE, item))
-        lines.push(`    ${line}`);
-      break;
-    case 'awaiting_response':
-      lines.push(
-        `    gate '${item.node}': ${item.message}`,
-        `    Answer with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `approve ${item.runId}`)}, reject or respond.`
-      );
-      break;
-    case 'usage_limit':
-      lines.push(
-        `    ${item.node}: provider usage or rate limit reached; tries again by itself at ${item.resetAt}`,
-        `    Retry sooner with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `resume ${item.runId}`)}, or stop it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${item.runId}`)}.`
-      );
-      break;
-    case 'unreadable':
-      lines.push(`    needs a look: ${item.detail}`);
-      break;
-  }
-  return lines;
-}
-
-export function printAttentionItem(item: AttentionQueueItem): void {
-  for (const line of attentionItemLines(item)) console.log(line);
-}
-
-type RunLine = Extract<AttentionStreamLine, { runId: string }>;
-
-/** What the run is part of, as a trailing sentence; empty when the stream could not read it. */
-function runContextText(line: RunLine): string {
-  if (line.workflow === null) return '';
-  return line.parentRunId === null
-    ? ` Workflow ${line.workflow}.`
-    : ` Workflow ${line.workflow}, child of run ${line.parentRunId}.`;
-}
-
-function terminalText(line: Extract<AttentionStreamLine, { type: 'terminal' }>): string {
-  const outcome = line.outcome === null ? '' : ` (${line.outcome})`;
-  const cause =
-    line.cause === null
-      ? ''
-      : `: node ${line.cause.node} (${line.cause.errorClass ?? 'error class not recorded'})`;
-  return `Run ${line.runId} ${line.status}${outcome}${cause}.`;
-}
-
-/** The text for one stream line; none for a bookmark. */
-function attentionStreamText(
-  line: Exclude<AttentionStreamLine, { type: 'error' }>,
-  scope: AttentionQueueScope
-): string[] {
-  switch (line.type) {
-    case 'attention':
-      return [
-        line.snapshot ? 'Needs attention:' : 'Needs attention now:',
-        ...attentionItemLines(line.item),
-      ];
-    case 'resolved':
-      return [
-        (line.reason === 'answered'
-          ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}.`
-          : `Run ${line.runId} no longer needs attention.`) + runContextText(line),
-      ];
-    case 'unmatched':
-      return [`Run ${line.runId} no longer matches the label filter.${runContextText(line)}`];
-    case 'terminal':
-      return [terminalText(line) + runContextText(line)];
-    case 'resumed':
-      return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
-    case 'owner_lost':
-      return [
-        `Run ${line.runId} is ${line.observedStatus} but its owner is gone. ` +
-          `Abandon it with ${spellWorkflowCommand(CLI_WORKFLOW_SURFACE, `abandon ${line.runId}`)}.` +
-          runContextText(line),
-      ];
-    case 'ready':
-      return [
-        `Watching ${scope.kind === 'all' ? 'this install' : `project ${scope.project.name}`} for attention. Ctrl-C stops.`,
-      ];
-    case 'degraded':
-      return [
-        'Attention stream coverage may be incomplete because a run could not be read. Check the operator log; reconnect after repairing the read failure.',
-      ];
-    case 'bookmark':
-      return [];
-  }
-}
-
 /**
- * `workflow attention --watch`: stream the queue until a signal or a closed stdout. Exit
- * 0 then, 1 on other output failures, and 4 on an `error` line: the stream's cursor
- * (from `--after`, or the tail's own position) is not one this install's store can read,
- * so the fix is to rerun without it. Read-only: stopping the stream affects no run.
+ * `workflow attention --watch`: stream the queue until a signal or a closed stdout. By
+ * default it writes only the lines someone has to act on; `--notices` adds what happened
+ * to work nobody has to act on; `--protocol` writes every line, for a program that keeps
+ * an open set (`attentionWatchReader`). Every JSON line carries its `needs`. Exit 0 on a
+ * signal or closed stdout, 1 on other output failures, and 4 on an `error` line: the
+ * stream's cursor (from `--after`, or the tail's own position) is not one this install's
+ * store can read, so the fix is to rerun without it. Read-only: stopping the stream
+ * affects no run.
  */
 export async function workflowAttentionWatch(
   host: WorkflowHost,
@@ -214,11 +134,22 @@ export async function workflowAttentionWatch(
   const stopped = new Promise<void>(resolve => {
     stop = resolve;
   });
-  const write = (line: AttentionStreamLine): Promise<void> => {
+  const level: AttentionWatchLevel = opts.protocol
+    ? 'protocol'
+    : opts.notices
+      ? 'notices'
+      : 'quiet';
+  const read = attentionWatchReader(level, { resumed: opts.after !== undefined });
+  const write = (unclassified: AttentionStreamLine): Promise<void> => {
+    const line = read(unclassified);
+    // A person starting a watch below the protocol is told it runs, off the stream itself.
+    if (!opts.protocol && !opts.json && unclassified.type === 'ready')
+      return writeStderr(`${attentionStreamText(unclassified, scope).join('\n')}\n`);
+    if (line === undefined) return Promise.resolve();
     if (opts.json) return writeStdout(`${JSON.stringify(line)}\n`);
     if (line.type === 'error')
       return writeStderr(
-        'The stream cursor is not one this install can read. Rerun without --after: the lines before "ready" are the open set.\n'
+        'The stream cursor is not one this install can read. Rerun without --after: the stream starts from the open set.\n'
       );
     const text = attentionStreamText(line, scope);
     return text.length === 0 ? Promise.resolve() : writeStdout(`${text.join('\n')}\n`);
@@ -285,6 +216,21 @@ export async function workflowAttentionCommand(
 
     const { labels, order, countBy } = parseAttentionQueueRequest(opts);
     const scope = await attentionScope(host, cwd, opts);
+    if (opts.notices && opts.since !== undefined)
+      return await noticesCommand(host, scope, labels, countBy, opts.since, opts.json);
+    if (opts.since !== undefined && countBy !== undefined) {
+      const { since } = resolveMetricsWindow({ since: opts.since });
+      return await renderAttentionCounts(
+        await countAttentionWaitStarts(
+          { store: host.deps.store },
+          { scope, labels, countBy, since }
+        ),
+        scope,
+        opts.json,
+        [],
+        'No attention waits opened in that window.'
+      );
+    }
     const { values: items, degraded } = splitAttentionRead(await listAttentionQueue(source));
     const reports = scopeAttentionDegraded(degraded, scope).degraded ?? [];
     if (countBy !== undefined)
@@ -305,13 +251,71 @@ export async function workflowAttentionCommand(
   }
 }
 
+/** A flag that only shapes another flag's mode is refused without it. */
+function rejectFlagsWithoutTheirMode(opts: WorkflowAttentionOptions): void {
+  const needs = (flag: string, mode: string): never => {
+    throw new Error(`workflow attention ${flag} needs ${mode}`);
+  };
+  if (opts.protocol && !opts.watch) needs('--protocol', '--watch');
+  if (opts.notices && !opts.watch && opts.since === undefined)
+    needs('--notices', '--watch, or --since to list the notices of a window');
+  if (opts.notices && opts.protocol)
+    throw new Error('workflow attention --watch takes --notices or --protocol, not both');
+  if (opts.after !== undefined && !opts.protocol) needs('--after', '--watch --protocol');
+  if (opts.since !== undefined && opts.countBy === undefined && !opts.notices)
+    needs('--since', '--count-by or --notices');
+  if (opts.since !== undefined && opts.watch)
+    throw new Error('workflow attention --watch takes no --since; the stream starts now');
+}
+
+/**
+ * `workflow attention --notices --since <window>`: the notices runs emitted in the window,
+ * oldest first, or how many fall under each project or label value.
+ */
+async function noticesCommand(
+  host: WorkflowHost,
+  scope: AttentionQueueScope,
+  labels: AttentionQueueItem['labels'],
+  countBy: ReturnType<typeof parseAttentionQueueRequest>['countBy'],
+  sinceText: string,
+  json: boolean | undefined
+): Promise<number> {
+  const { since } = resolveMetricsWindow({ since: sinceText });
+  const source = { store: host.deps.store };
+  if (countBy !== undefined) {
+    if (countBy.by === 'answerer') throw new Error('A notice has no answerer to count by');
+    return await renderAttentionCounts(
+      await countWorkflowNotices(source, { scope, labels, since, countBy }),
+      scope,
+      json,
+      [],
+      'No notices in that window.'
+    );
+  }
+  const notices = await listWorkflowNotices(source, { scope, labels, since });
+  if (json) {
+    await writeJsonLine({
+      ok: true,
+      action: 'attention',
+      scope,
+      since: since.toISOString(),
+      notices,
+    });
+    return 0;
+  }
+  for (const notice of notices) console.log(noticeText(notice));
+  if (notices.length === 0) console.log('No notices in that window.');
+  return 0;
+}
+
 function rejectConflictingAttentionOptions(
   runId: string | undefined,
   opts: WorkflowAttentionOptions
 ): void {
-  if (opts.after !== undefined && !opts.watch)
-    throw new Error('workflow attention --after needs --watch');
+  rejectFlagsWithoutTheirMode(opts);
   const shaped = opts.sort !== undefined || opts.countBy !== undefined;
+  if (opts.notices && !opts.watch && (runId !== undefined || opts.sort !== undefined))
+    throw new Error('workflow attention --notices --since takes no run id or --sort');
   if (opts.watch && (runId !== undefined || shaped))
     throw new Error('workflow attention --watch takes no run id, --sort or --count-by');
   const scoped = opts.project !== undefined || opts.all || opts.labels.length > 0;
@@ -338,7 +342,7 @@ async function attentionRunCommand(
   }
   if (json) await writeJsonLine({ ok: true, action: 'attention', runId: resolvedId, item });
   else if (item === null) console.log(`Run ${resolvedId} needs no attention now.`);
-  else printAttentionItem(item);
+  else for (const line of attentionItemLines(item, 'full')) console.log(line);
   return 0;
 }
 
@@ -354,7 +358,8 @@ async function renderAttentionCounts(
   counts: AttentionQueueCounts,
   scope: AttentionQueueScope,
   json: boolean | undefined,
-  degraded: AttentionDegraded[]
+  degraded: AttentionDegraded[],
+  none = 'No runs need attention.'
 ): Promise<number> {
   if (json) {
     await writeJsonLine({
@@ -367,20 +372,45 @@ async function renderAttentionCounts(
     return 0;
   }
   printAttentionDegraded(degraded);
-  const rows =
-    counts.by === 'project'
-      ? counts.counts.map(entry => [entry.count, entry.project?.name ?? '(no project)'] as const)
-      : counts.counts.map(
-          entry => [entry.count, entry.value ?? `(no '${counts.key}' label)`] as const
-        );
-  for (const [count, name] of rows) console.log(`  ${String(count).padStart(4)}  ${name}`);
+  const rows = attentionCountRows(counts);
+  for (const [entry, name] of rows)
+    console.log(
+      `  ${String(entry.count).padStart(4)}  ${name}${recommendationText(entry.recommendations)}`
+    );
   if (rows.length === 0)
     console.log(
       degraded.length === 0
-        ? 'No runs need attention.'
+        ? none
         : 'No readable matching runs need attention; counts are incomplete.'
     );
   return 0;
+}
+
+type AttentionCountEntry = AttentionQueueCounts['counts'][number];
+
+/** Each group of a count with the name it prints under. */
+function attentionCountRows(counts: AttentionQueueCounts): [AttentionCountEntry, string][] {
+  switch (counts.by) {
+    case 'project':
+      return counts.counts.map(entry => [entry, entry.project?.name ?? '(no project)']);
+    case 'label':
+      return counts.counts.map(entry => [entry, entry.value ?? `(no '${counts.key}' label)`]);
+    case 'answerer':
+      return counts.counts.map(entry => [
+        entry,
+        entry.answeredBy === null
+          ? '(open, or answerer not recorded)'
+          : 'declared' in entry.answeredBy
+            ? `${entry.answeredBy.declared} (self-declared)`
+            : `user ${entry.answeredBy.userId}`,
+      ]);
+  }
+}
+
+/** How a group's recommendations fared; empty when the count is of open items or none carried one. */
+function recommendationText(totals: AttentionCountEntry['recommendations']): string {
+  if (totals === undefined || totals.asked === 0) return '';
+  return `  (${String(totals.asked)} with a recommendation: ${String(totals.answered)} answered, ${String(totals.followed)} as recommended)`;
 }
 
 async function renderAttentionItems(
@@ -411,7 +441,7 @@ async function renderAttentionItems(
   }
   console.log(`\n${String(selected.length)} run(s) need attention in ${where}:\n`);
   for (const item of selected) {
-    printAttentionItem(item);
+    for (const line of attentionItemLines(item, 'brief')) console.log(line);
     console.log('');
   }
   return 0;

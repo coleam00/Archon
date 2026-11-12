@@ -6,6 +6,7 @@
 import { z } from 'zod';
 import {
   APPROVAL_ATTENTION_OPTIONS,
+  OTHER_ATTENTION_OPTION,
   attentionFormSchema,
   attentionLabelsSchema,
   attentionOptionSchema,
@@ -61,13 +62,31 @@ export const attentionAnswerSchema = z.union([
 ]);
 export type AttentionAnswer = z.infer<typeof attentionAnswerSchema>;
 
+/** A name an answerer declares for itself. */
+export const declaredAnswererNameSchema = z
+  .string()
+  .regex(/^\S(?:[^\r\n]{0,62}\S)?$/u, 'must be 1 to 64 characters on one line');
+
+/**
+ * Who answered an attention wait, as far as the engine knows. `declared` is a name the
+ * answerer gave for itself: a claim nothing checks and nothing authorizes on. `userId` is
+ * the Archon user a chat platform resolved its sender to.
+ */
+export const attentionAnswererSchema = z.union([
+  z.strictObject({ declared: declaredAnswererNameSchema }),
+  z.strictObject({ userId: z.string().min(1) }),
+]);
+export type AttentionAnswerer = z.infer<typeof attentionAnswererSchema>;
+
 /**
  * An attention wait paused before answers existed has only `waitingSince` and `message`:
  * no `pauseId`, it reads as the `message` form, and only `resume` continues it. A newer
  * wait carries its occurrence, its form, resolved options and recommendation, and once
- * answered, the answer with the surface it came through and when. `labels` holds the
+ * answered, the answer with the surface it came through, when, and who answered when
+ * that is known (`attentionAnswererSchema`). `labels` holds the
  * node's resolved labels merged with every label write since, and `revision` counts those
- * writes from 1; a wait without them has no labels and is at revision 1.
+ * writes from 1; a wait without them has no labels and is at revision 1. `other` marks a
+ * wait whose last option is the reserved `OTHER_ATTENTION_OPTION`.
  */
 const workflowWaitAttentionFields = {
   kind: z.literal('attention'),
@@ -76,9 +95,11 @@ const workflowWaitAttentionFields = {
   pauseId: z.string().min(1).optional(),
   form: attentionFormSchema.optional(),
   options: z.array(attentionOptionSchema).optional(),
+  other: z.literal(true).optional(),
   recommendation: attentionRecommendationSchema.optional(),
   answer: attentionAnswerSchema.optional(),
   answeredVia: recordSurfaceSchema.optional(),
+  answeredBy: attentionAnswererSchema.optional(),
   answeredAt: z.string().datetime().optional(),
   labels: attentionLabelsSchema.optional(),
   revision: z.number().int().positive().optional(),
@@ -201,9 +222,9 @@ export function attentionOptions(wait: AttentionDeclaration): readonly Attention
  * Why choosing `choose` does not answer a wait in `form` that declares the option ids
  * `declared`, or undefined when it does: a message takes only text; approval and select
  * take exactly one declared option; multi_select takes one or more distinct declared
- * options. Every answer surface, and a dry run's authored answer, holds this one rule.
+ * options.
  */
-export function attentionChoiceProblem(
+function attentionChoiceProblem(
   form: AttentionForm,
   declared: readonly string[],
   choose: readonly string[]
@@ -220,6 +241,35 @@ export function attentionChoiceProblem(
   return choose.length === 1
     ? undefined
     : `takes exactly one option. Declared options: ${declared.join(', ')}.`;
+}
+
+/**
+ * Why an answer choosing the reserved `other` option is refused, or undefined when it is
+ * not: on a wait declared with `other: true`, that choice must carry text.
+ */
+function otherTextProblem(
+  other: boolean | undefined,
+  choose: readonly string[],
+  text: string
+): string | undefined {
+  return other === true && choose.includes(OTHER_ATTENTION_OPTION.id) && text.trim() === ''
+    ? `needs text with option '${OTHER_ATTENTION_OPTION.id}': say what to do instead.`
+    : undefined;
+}
+
+/**
+ * Why `answer` does not answer `wait`, or undefined when it does. Every answer surface,
+ * and a dry run's authored answer, holds this one rule.
+ */
+export function attentionAnswerProblem(
+  wait: AttentionDeclaration & { other?: boolean },
+  answer: { choose: readonly string[]; text: string }
+): string | undefined {
+  const declared = attentionOptions(wait).map(option => option.id);
+  return (
+    attentionChoiceProblem(attentionForm(wait), declared, answer.choose) ??
+    otherTextProblem(wait.other, answer.choose, answer.text)
+  );
 }
 
 /** An attention wait's current labels. */

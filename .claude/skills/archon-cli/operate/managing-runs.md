@@ -59,10 +59,12 @@ For reusable alternate setups, prefer a config layer instead of long flag lists
 | Block until the run ends or needs attention | `archon workflow wait <run-id> --json` |
 | Every run that needs someone (this project / all) | `archon workflow attention --json [--all] [--label k=v]` |
 | The queue item one run stands for | `archon workflow attention <run-id> --json` |
-| Every change in the queue, as it happens | `archon workflow attention --watch --json [--all] [--label k=v] [--after <cursor>]` |
+| Everything that needs someone, as it happens | `archon workflow attention --watch --json [--all] [--label k=v]` (each line has `needs`: `answer`, `look` or `nothing`; `--notices` adds runs that completed, were cancelled or resumed) |
+| Every change in the queue, for a program that syncs it | `archon workflow attention --watch --protocol --json [--all] [--label k=v] [--after <cursor>]` |
 | Classify an item without answering it | `archon workflow attention label <run-id> --occurrence <id> --set k=v --json` |
 | Resolve a gate with any declared decision | `archon workflow respond <run-id> <decision> [text]` |
-| Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>]... [--text <t>]` |
+| Answer an attention wait in its form | `archon workflow answer <run-id> --occurrence <id> [--choose <id>... \| --recommended] [--text <t>] [--as <name>]` |
+| Accept an attention wait's recommendation | `archon workflow respond <run-id> --recommended --occurrence <id> [--text <t>] [--as <name>] --json` |
 | Approve (default vocabulary) | `archon workflow approve <run-id> [text]` |
 | Reject (default vocabulary) | `archon workflow reject <run-id> "<reason>"` |
 | End a stalled turn on a running run, keep the run | `archon workflow end-turn <run-id>` |
@@ -85,9 +87,7 @@ unclear, risky, or outside what they have told you.
 3. Give a reason in the text. Workflows record the answer's text with the decision,
    and some write it down as a ruling: the SDLC build queue and merge items owned by
    a build add it to the issue body as a dated "Current scope" section that later
-   rounds work from. Enrolled own PRs keep the answer on the work item's merge
-   decision entry and write no issue section. A bare choice teaches
-   the next round nothing.
+   rounds work from. A bare choice teaches the next round nothing.
 4. Answer detached, so the continuation does not run in your shell:
 
    ```bash
@@ -123,7 +123,14 @@ archon workflow answer <run-id> --occurrence <id> --choose use-dev --json       
 archon workflow answer <run-id> --occurrence <id> --choose a --choose b --json    # multi_select
 ```
 
-`approve`/`reject`/`respond <option>` are shorthand for the same answer. In the
+`approve`/`reject`/`respond <option>` are shorthand for the same answer.
+`respond <run-id> --recommended --occurrence <id>` (or `answer --recommended`) chooses the
+option the item recommends. Pass the `occurrence` of the item you read, so a run that
+moved to another ask refuses instead of accepting a recommendation you never saw. Text
+goes in `--text`. It is refused when the item has no recommendation, and it takes `--json`
+but not `--detach`. `--as <name>` records the name you declare as the answerer, which is
+how an agent's answers are told from a person's later. It is recorded on attention waits
+only and refused at a gate. In the
 `approval` form `reject` is an answer and does not cancel the run. Like a gate answer,
 the answered wait is a due continuation. Answer only what the user actually decided; an
 undeclared option is refused. A `legacy:` occurrence is a wait paused before answers
@@ -150,19 +157,37 @@ first open child, so list the queue to find them all, and answer each child by i
 `runId`. Answers can arrive in any order; the parent stays paused until every child
 finishes.
 
-`workflow wait` follows one run whose id you hold. To follow every run in scope,
+`workflow wait` follows one run whose id you hold. If the shell that called it times
+out, run it again: the run is unaffected. Never cancel or abandon a run to unstick a
+wait.
+
+To follow every run in scope,
 including runs started later by triggers, schedules or other sessions, run
-`archon workflow attention --watch --json --all` as a background task. It prints one
-JSON line per change: each `attention` line is an item that needs attention, carrying
-the same item the list returns, so treat it as a wake and answer by its `runId` and
-`occurrence`. `resolved` means it no longer does, and `terminal` means a run ended. The
-lines before `ready` are the whole open set. After a restart, `--after <cursor>`
-replays what came after that cursor. A cursor names a feed event, not a line, and one
-event can emit two lines with the same cursor (a `resolved` and the `attention` that
-replaces it, or a `resolved` and a `terminal`). `--after` skips the whole event, so
-checkpoint on a `bookmark` line you handled, or on the cursor before an event you
-handled only partly, and accept duplicate lines on replay. Exit `4` means the store
-cannot read the stream's cursor: rerun without `--after`.
+`archon workflow attention --watch --json --all` as a background task. It prints a
+JSON line only when someone has to act. That is the default: without `--protocol`
+there are no heartbeat or sync lines, so every line is worth a turn. Each `attention` line is an item that needs
+attention, carrying the same item the list returns, so treat it as a wake and answer by
+its `runId` and `occurrence`. `resolved` means an item you were sent no longer needs
+you, and `terminal` means a run failed or completed with `outcome: "failed"`; a failed outcome carries `reason`, the run's own short account of why, and `archon workflow get <run-id>` prints a `Reason:` line for either. The items already open come first, so a
+restarted watch needs no cursor. Exit `4` means the store cannot read the stream's
+position: start it again.
+
+Read the watch unfiltered. In an agent shell do not pipe it through `grep`, `head` or
+any other filter: the shell's `grep` may hold every line until the watch ends, so an ask
+arrives late or never. If a JSON line is too long for your harness to show, drop `--json`:
+the text form prints each ask as a short block with its labels, the question's first
+line, the recommendation and its reason, what each option does, and the exact answer
+commands with `--occurrence` (and the `--recommended` form when there is a
+recommendation), so you can answer from the watch alone. `archon workflow attention
+<run-id>` prints the whole question when you need it.
+
+A program that keeps its own copy of the open set adds `--protocol`: the stream then
+also writes `ready` after the open set, a `bookmark` heartbeat, and a line for every
+run that ends or resumes, and `--after <cursor>` replays what came after a cursor. A
+cursor names a feed event, not a line, and one event can emit two lines with the same
+cursor. `--after` skips the whole event, so checkpoint on a `bookmark` line you
+handled, or on the cursor before an event you handled only partly, and accept
+duplicate lines on replay.
 
 Or deliberately in two steps:
 
@@ -281,14 +306,14 @@ Report outcomes with their evidence: "completed, review verdict ready:false —
 ## Discoveries: the SDLC pack's out-of-scope findings
 
 A convention of the bundled SDLC workflows (`archon-ship`, `archon-deliver`,
-`archon-review`, `archon-upkeep`), not of workflows in general. Their review lenses
+`archon-review`), not of workflows in general. Their review lenses
 record proven findings that fall outside the run's accepted scope as discovery records
 instead of blocking findings: raw per-producer files at
 `<artifacts>/discoveries/*.json` (records of `title`, `claim`, `evidence`, `relation:
 unrelated | scope_conflict | note`, `source_node`), consolidated by the review into
 the verdict's `discoveries` records and a readable `discoveries.md`.
 
-The run that found them files nothing. Its terminal report lists them, and
+The run that found them files nothing. Its terminal report counts them and names their files, and
 `archon-discoveries` later decides every recorded discovery across finished runs:
 file an issue with a full brief, track it on the open issue that already covers it,
 drop it with a reason, or ask a maintainer. Run that drain rather than filing
@@ -296,7 +321,7 @@ discoveries by hand (see `queues.md`, "Discoveries drain").
 
 When the user asks about one run's discoveries before a drain has run:
 
-1. Read the report's Discoveries section and, when it names any, open
+1. When the report's Discoveries line counts any, open
    `discoveries.md` (find it through `leave_behind.artifactFiles`).
 2. On a failed run, also check the raw `discoveries/*.json` records: consolidation
    runs late, so a run that died mid-flight can hold records no report mentions.

@@ -288,81 +288,55 @@ archon isolation cleanup [days] (default: 7)
 
 ## `isolation cleanup --merged` Flow
 
-```
-┌─────────────────────────────────────────────────────────────────┐
-│ archon isolation cleanup --merged [--include-closed]            │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ isolation.ts  isolationCleanupMergedCommand({ includeClosed })  │
-│ For each codebase → cleanupMergedWorktrees(codebaseId, path)    │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │
-                     For each active environment
-                                  │
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ judgeBranchForRemoval() — three-signal union                    │
-│  localBranchExists()     gate: (a) and (b) need the local ref   │
-│  (a) isBranchMerged()    git ancestry (fast-forward/merge)      │
-│  (b) isPatchEquivalent() git cherry  (1-commit squash-merge)    │
-│  (c) getPrState()        gh CLI      (MERGED/CLOSED/OPEN/NONE/  │
-│                                      UNAVAILABLE)               │
-│                                                                 │
-│  any git signal          → 'merged' if the worktree HEAD        │
-│                            also passes `git cherry <base> HEAD` │
-│  MERGED                  → 'merged' if the worktree HEAD        │
-│                            and the branch ref (where each       │
-│                            exists) are at or behind the PR head │
-│  CLOSED                  → 'pr-closed' the same way, only if    │
-│                            includeClosed                        │
-│  OPEN                    → 'open-pr', always kept               │
-│  UNAVAILABLE             → 'pr-unavailable', kept and reported  │
-│  NONE and ref present    → 'unmerged', not reclaimed            │
-│  NONE and ref gone       → 'unjudgeable', kept and reported     │
-└─────────────────────────────────┬───────────────────────────────┘
-                                  │ 'merged' or 'pr-closed'
-                                  ▼
-┌─────────────────────────────────────────────────────────────────┐
-│ Guard checks: no uncommitted changes, no run lock (checkRemoval │
-│ → getCleanupRunLock; a failed run's lock is released by the     │
-│ verdict, running/pending/paused runs always lock)               │
-│ provider.destroy() → remove worktree and local branch           │
-│ → commit registration retirement; retain remote branch         │
-└─────────────────────────────────────────────────────────────────┘
-```
+1. `isolationCleanupMergedCommand` calls `cleanupMergedWorktrees` for each codebase.
+2. `judgeBranchForRemoval` first checks base ancestry and patch equivalence, requiring
+   coverage of both the branch ref and worktree HEAD. Otherwise it checks the branch-name PR. A merged PR authorizes
+   removal only if its head covers every existing local tip: worktree HEAD and
+   recorded branch ref (`isRevCoveredBy`). With neither tip left, its state suffices.
+3. If branch lookup cannot prove coverage, `getPrsForCommit` discovers candidates
+   from HEAD and then the branch tip, querying equal tips only once. A merged
+   candidate must cover both tips by itself. An open branch PR does not suppress
+   a covering merged candidate, and coverage is never combined across PR heads.
+4. Missing candidate heads are fetched from the configured remote. A comparison
+   failure immediately stops judgment for that environment, reports the error, and
+   retains the worktree without trying later candidates. Lookup failure produces
+   `pr-unavailable`; both failures keep the environment and prevent scheduled stale deletion.
+5. Commit association lookup first requests associated PRs. A nonempty result skips
+   commit inspection. If the lookup fails or returns no PRs, it queries GitHub's object
+   by OID in the configured repository. After an empty association or a structured HTTP 422 rejection, an
+   error-free response with an accessible repository and a null object produces
+   `UNKNOWN_COMMIT`; this proves absence only in that repository. It does not
+   establish absence across GitHub. Lookup errors and malformed responses stay
+   `UNAVAILABLE`, even if object inspection returns null, except for that confirmed
+   422 rejection. HTTP 422 alone does not prove absence. An unknown tip does not stop
+   inspection of other tips or covering candidates. Without eligible proof, an unknown
+   commit produces `unknown-commit`, reporting that no PR covers all local work because
+   a local commit was not found in the configured repository, and preventing scheduled
+   stale deletion. An open PR then produces `open-pr`; the
+   remaining verdicts are `unmerged`, or `unjudgeable` when the branch ref is gone
+   and no PR answers.
+   Manual merged cleanup reports all of these. Ordinary `unmerged` can still
+   proceed through the scheduled age policy and its unpushed-commit checks.
+6. A `merged` or explicitly included `pr-closed` verdict reaches `checkRemoval`: dirty worktrees and running, pending,
+   or paused owners stay. A failed run's lock may be released by this settlement.
+   `provider.destroy` removes the worktree and local branch, then retires the
+   registration. Remote branches are retained with a warning because ownership
+   cannot be proved after retirement.
 
-Completion and merged cleanup retain remote branches, including with force,
-because registration ownership cannot be proved after retirement. Retention is
-logged as a warning and displayed in both completion and merged-cleanup reports.
-Enable GitHub's **Automatically delete head branches** setting for
-merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup).
+Manual `includeClosed` also authorizes closed PRs whose head covers every local tip,
+with a `pr-closed` verdict and `PR closed` release reason. Scheduled cleanup does not
+opt in. A base inspection failure immediately stops judgment for that environment,
+reports the error, and retains the worktree without trying PR evidence. The optional
+`gh` CLI currently provides GitHub evidence. An unsupported remote returns `NONE` (no PR proof).
+For a GitHub remote, missing `gh` or another lookup failure returns `UNAVAILABLE`,
+retaining and reporting the worktree and blocking scheduled stale deletion when
+Git has not already proved integration. A failed lookup is never an empty
+successful response. No pack branch naming is used.
 
-Signals are evaluated in order — the first positive match short-circuits to avoid
-unnecessary `gh` API calls. The `gh` CLI is a soft dependency: when it is not installed or
-the remote is not GitHub, only git signals are used (`NONE`). When `gh` is there but fails
-(auth, rate limit, unreadable output) the result is `UNAVAILABLE`, and the environment is
-kept and reported rather than passed to the staleness sweep.
-
-A multi-commit squash merge is invisible to both git signals, so PR state is the only
-one that sees it. Both git signals also need the local branch ref: once it is gone, the
-PR is the only judge, and a branch with no PR is reported as unverifiable instead of
-failing the check. A MERGED or CLOSED PR only covers the commits it carried. Run
-branch names are reused, and removal deletes both the worktree and the branch, so each
-local tip that still exists, the worktree's HEAD and the branch ref, must be the PR's head
-commit or an ancestor of it (`isRevCoveredBy`). A detached HEAD or a reused branch with
-commits past the PR head is unmerged work. The same holds when git proves the merge: the worktree's
-HEAD must also pass `git cherry <base> HEAD`, which answers for both git signals (an
-ancestor of the base lists nothing, a squash-merged commit lists as `-`). A HEAD it
-cannot answer for is reported as a failed merge check. A PR head pushed from elsewhere and never fetched here is
-fetched by SHA from the branch's remote first; if that fetch fails, the check fails and
-the worktree is kept, with the fetch error in the reason. The scheduled sweep (`runScheduledCleanup`) makes the same call, so
-both paths agree on what counts as merged.
-
-**Code:** `packages/core/src/services/cleanup/` — `judgeBranchForRemoval()` in `merge-verdict.ts`, `cleanupMergedWorktrees()` in `merged-sweep.ts`, `getCleanupRunLock()` in `run-lock.ts`; `runScheduledCleanup()` in `packages/core/src/services/cleanup-service.ts`
-**Code:** `packages/isolation/src/pr-state.ts` — `getPrState()`
-**Code:** `packages/git/src/branch.ts` — `isPatchEquivalent()`, `localBranchExists()`
+**Code:** `packages/core/src/services/cleanup/` — `merge-verdict.ts`,
+`merged-sweep.ts`, `scheduled-sweep.ts`, `run-lock.ts` and `remove-environment.ts`.
+PR reads live in `packages/isolation/src/pr-state.ts`; ancestry and head fetching
+live in `packages/git/src/branch.ts`.
 
 ---
 

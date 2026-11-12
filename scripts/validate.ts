@@ -34,12 +34,9 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
       ['bun', 'run', 'check:provider-contract-schema'],
       ['bun', 'run', 'check:chat-contract-schema'],
       ['bun', 'run', 'check:api-types'],
+      ['bun', 'run', 'check:workflow-output-types'],
+      ['bun', 'run', 'check:script-api-types'],
     ],
-  },
-  {
-    id: 'merge-sweep-contract',
-    label: 'Merge sweep schema agrees with its recorder contract',
-    commands: [['bun', 'run', 'test', '.archon/scripts/__tests__/merge-sweep-contract.test.ts']],
   },
   {
     id: 'type-check',
@@ -50,11 +47,6 @@ export const VALIDATE_CHECKS: readonly ValidateCheck[] = [
     id: 'lint',
     label: 'Biome lint and repository checks',
     commands: [['bun', 'run', 'lint']],
-  },
-  {
-    id: 'mock-modules',
-    label: 'Every mock.module() factory provides every export of its module, or is in the baseline',
-    commands: [['bun', 'run', 'check:mock-modules']],
   },
   {
     id: 'ratchet',

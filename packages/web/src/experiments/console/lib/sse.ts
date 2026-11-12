@@ -199,11 +199,11 @@ export function useRunStreamSSE(conversationPlatformId: string | null, runId: st
 /**
  * Subscribe to a conversation stream for a pure chat view (no associated run).
  * Identical to {@link useRunStreamSSE} minus the run-detail branches: it only
- * invalidates the message cache on text/tool events, and surfaces the
+ * invalidates the message cache on text/tool events and lock release, and surfaces the
  * conversation lock so the composer can disable while the agent is responding.
  *
  *   text / tool_call / tool_result → messages changed (debounced refetch)
- *   conversation_lock              → onLockChange(locked)
+ *   conversation_lock              → refetch on unlock + onLockChange(locked)
  */
 export function useConversationSSE(
   conversationPlatformId: string | null,
@@ -242,6 +242,9 @@ export function useConversationSSE(
           scheduleFlush();
           break;
         case 'conversation_lock':
+          // The server awaits its unlock flush; earlier text/tool events can
+          // trigger refetches before the buffered reply is persisted.
+          if (ev.locked === false) invalidate(K.messages(conversationPlatformId));
           if (typeof ev.locked === 'boolean') onLockChange?.(ev.locked);
           break;
         // No run-detail cache here; ignore workflow_* and everything else.

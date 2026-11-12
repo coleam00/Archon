@@ -5,6 +5,8 @@ import type { RunExitReason, RunStopSignal } from './schemas/run-terminal-reason
 import { DETACHED_LAUNCH_METADATA_KEY, executionClaim } from './store';
 
 export interface WorkflowRunFailureOptions {
+  /** Restrict failure to a pending run; mismatches do not write. */
+  pendingOnly?: true;
   exitReason?: RunExitReason;
   signal?: RunStopSignal;
   /** Restrict failure to the matching detached launch while pending; mismatches do not write. */
@@ -19,20 +21,19 @@ export function prepareWorkflowRunFailure(
   error: string,
   options?: WorkflowRunFailureOptions
 ): WorkflowRun | null {
-  if (options?.pendingLaunchToken !== undefined) {
-    if (
-      current?.status !== 'pending' ||
-      current.metadata[DETACHED_LAUNCH_METADATA_KEY] !== options.pendingLaunchToken
-    )
-      return null;
-  }
-  if (options?.expectedExecutionClaim !== undefined) {
-    if (
-      current?.status !== 'running' ||
-      executionClaim(current.metadata) !== options.expectedExecutionClaim
-    )
-      return null;
-  }
+  if (options?.pendingOnly && current?.status !== 'pending') return null;
+  if (
+    options?.pendingLaunchToken !== undefined &&
+    (current?.status !== 'pending' ||
+      current.metadata[DETACHED_LAUNCH_METADATA_KEY] !== options.pendingLaunchToken)
+  )
+    return null;
+  if (
+    options?.expectedExecutionClaim !== undefined &&
+    (current?.status !== 'running' ||
+      executionClaim(current.metadata) !== options.expectedExecutionClaim)
+  )
+    return null;
   if (!current) throw new Error(`Run missing: ${id}`);
   const run = structuredClone(current);
   if (isTerminalRunStatus(run.status)) return null;

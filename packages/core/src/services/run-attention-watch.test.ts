@@ -450,6 +450,47 @@ describe('waitForRunAttention', () => {
     expect(ownerUnsubscribes[0]).toHaveBeenCalledTimes(1);
   });
 
+  test.each(['recheck', 'verify'] as const)(
+    'announces attachment before the deadline when the %s read no longer needs an owner',
+    async branch => {
+      const running = putRun('r1');
+      putRun('r1', {
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'hold',
+            kind: 'time',
+            waitingSince: '2026-08-28T10:00:00.000Z',
+            resumeAt: '2026-08-28T11:00:00.000Z',
+          },
+        },
+      });
+      mockGetWorkflowRun.mockResolvedValueOnce(running);
+      reachableOwners = new Set(branch === 'verify' ? ['r1'] : []);
+      const events: string[] = [];
+      const onAttached = mock(async () => {
+        await Promise.resolve();
+        events.push('attached');
+      });
+
+      const result = await waitForRunAttention(store, 'r1', {
+        pollIntervalMs: 60_000,
+        deadlineMs: 0,
+        onAttached,
+      });
+      events.push(result.kind);
+
+      expect(result).toEqual({ kind: 'deadline', runId: 'r1', observedStatus: 'paused' });
+      expect(onAttached).toHaveBeenCalledTimes(1);
+      expect(onAttached).toHaveBeenCalledWith('paused');
+      expect(events).toEqual(['attached', 'deadline']);
+      expect(mockGetWorkflowRun).toHaveBeenCalledTimes(2);
+      expect(ownerUnsubscribes).toHaveLength(branch === 'verify' ? 1 : 0);
+      for (const unsubscribe of ownerUnsubscribes) expect(unsubscribe).toHaveBeenCalledTimes(1);
+    }
+  );
+
   test('says nothing about attaching when the first read already has an answer', async () => {
     // Nothing was ever waited for, so there is no watch to announce.
     const attached: string[] = [];

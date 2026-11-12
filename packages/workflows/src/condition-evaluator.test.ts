@@ -116,7 +116,7 @@ describe('evaluateCondition', () => {
     ).toEqual({ result: true, parsed: true });
   });
 
-  it('dot notation: rejects array fields and logs safe diagnostic metadata', () => {
+  it('dot notation: rejects array fields without reporting before admission', () => {
     mockLogFn.mockClear();
     const jsonOutput = JSON.stringify({ items: ['todo', 'fix'], count: 2 });
     const outputs = new Map([['gather', makeOutput(jsonOutput)]]);
@@ -124,15 +124,7 @@ describe('evaluateCondition', () => {
     expect(() => evaluateCondition("$gather.output.items == 'true'", outputs)).toThrow(
       "Condition reference '$gather.output.items' resolved to an array"
     );
-    expect(mockLogFn).toHaveBeenCalledWith(
-      {
-        nodeId: 'gather',
-        field: 'items',
-        actualType: 'array',
-        exprSnippet: "$gather.output.items == 'true'",
-      },
-      'dag.condition_field_not_primitive'
-    );
+    expect(mockLogFn).not.toHaveBeenCalled();
   });
 
   it('dot notation: rejects object fields', () => {
@@ -154,15 +146,7 @@ describe('evaluateCondition', () => {
         loopPrevOutputs: priorOutputs,
       })
     ).toThrow("Condition reference '$LOOP_PREV.work.output.route' resolved to an object");
-    expect(mockLogFn).toHaveBeenCalledWith(
-      {
-        nodeId: 'work',
-        field: 'route',
-        actualType: 'object',
-        exprSnippet: "$LOOP_PREV.work.output.route == 'true'",
-      },
-      'dag.condition_field_not_primitive'
-    );
+    expect(mockLogFn).not.toHaveBeenCalled();
   });
 
   it('resolves a nested prior-iteration output path', () => {
@@ -1010,7 +994,7 @@ describe('typed $INPUTS values in when: (#2637)', () => {
 describe('structured $INPUTS values in when: (#2999)', () => {
   const noOutputs = new Map<string, NodeOutput>();
 
-  it('rejects object-valued inputs, failing false-skips loudly with safe diagnostic log', () => {
+  it('rejects object-valued inputs, with an actionable error', () => {
     mockLogFn.mockClear();
     expect(() =>
       evaluateCondition("$INPUTS.route == 'true'", noOutputs, { route: { ready: true } })
@@ -1019,17 +1003,10 @@ describe('structured $INPUTS values in when: (#2999)', () => {
         "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
         'or inspect structured data in a script node.'
     );
-    expect(mockLogFn).toHaveBeenCalledWith(
-      {
-        input: 'route',
-        actualType: 'object',
-        exprSnippet: "$INPUTS.route == 'true'",
-      },
-      'dag.condition_field_not_primitive'
-    );
+    expect(mockLogFn).not.toHaveBeenCalled();
   });
 
-  it('rejects array-valued inputs, failing false-skips loudly with safe diagnostic log', () => {
+  it('rejects array-valued inputs, with an actionable error', () => {
     mockLogFn.mockClear();
     expect(() =>
       evaluateCondition("$INPUTS.items == 'true'", noOutputs, { items: ['a', 'b'] })
@@ -1038,14 +1015,7 @@ describe('structured $INPUTS values in when: (#2999)', () => {
         "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
         'or inspect structured data in a script node.'
     );
-    expect(mockLogFn).toHaveBeenCalledWith(
-      {
-        input: 'items',
-        actualType: 'array',
-        exprSnippet: "$INPUTS.items == 'true'",
-      },
-      'dag.condition_field_not_primitive'
-    );
+    expect(mockLogFn).not.toHaveBeenCalled();
   });
 
   it('rejects stringify-coincidence comparisons against hand-typed JSON literals', () => {

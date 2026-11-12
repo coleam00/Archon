@@ -91,11 +91,11 @@ export type { IsolationResolverDeps } from './resolver';
 
 // --- Provider ---
 export { WorktreeProvider, resolveRepoLocalOverride } from './providers/worktree';
-export { isGeneratedTaskBranch } from './providers/worktree/branches';
+export { generatedTaskBranch, isGeneratedTaskBranch } from './providers/worktree/branches';
 
 // --- PR state lookup ---
-export { getPrState } from './pr-state';
-export type { PrLookup } from './pr-state';
+export { getPrState, getPrsForCommit } from './pr-state';
+export type { PrLookup, CommitPrLookup } from './pr-state';
 
 // --- Worktree copy utility ---
 export {

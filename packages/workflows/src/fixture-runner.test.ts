@@ -427,6 +427,69 @@ describe('runFixtures', () => {
     expect(report.passed).toBe(1);
   });
 
+  // #5442: the printed failure named a downstream field reference; only the per-node
+  // trace showed that every loop body node had been skipped.
+  it('prints each node status for a failed fixture, without node payloads', async () => {
+    const { cwd } = writeTempProject({
+      workflowYaml:
+        'name: test-wf\ndescription: test\nnodes:\n' +
+        '  - id: rounds\n' +
+        '    loop_group:\n' +
+        '      until_bash: "true"\n' +
+        '      max_iterations: 1\n' +
+        '      nodes:\n' +
+        '        - id: gate\n          prompt: decide payload-marker\n' +
+        '          output_format: { type: object, properties: { status: { type: string } } }\n' +
+        '        - id: deliver\n          prompt: ship\n          depends_on: [gate]\n' +
+        `          when: "$gate.output.status == 'go-payload-marker'"\n` +
+        '  - id: report\n    prompt: $rounds.output.pr_url\n    depends_on: [rounds]\n',
+      body: [
+        'fixture:',
+        '  expect: completed',
+        "gate: { status: stop, note: 'payload-marker' }",
+        'deliver: "shipped"',
+      ].join('\n'),
+    });
+    const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+
+    const result = report.results[0];
+    expect(result.pass).toBe(false);
+    expect(result.trace).toEqual([
+      { nodeId: 'gate', nodeType: 'prompt', state: 'stubbed', iteration: 1 },
+      {
+        nodeId: 'deliver',
+        nodeType: 'prompt',
+        state: 'skipped',
+        iteration: 1,
+        reason: 'when_condition',
+      },
+      expect.objectContaining({ nodeId: 'rounds', state: 'completed' }),
+      { nodeId: 'report', nodeType: 'prompt', state: 'failed' },
+    ]);
+    const rendered = formatFixtureReport(report);
+    expect(rendered).toContain(
+      '    trace:\n' +
+        '      STUBBED   gate (prompt) [iteration 1]\n' +
+        '      SKIPPED   deliver (prompt) [iteration 1] — when_condition\n'
+    );
+    expect(rendered).toContain('      FAILED    report (prompt)\n');
+    expect(rendered).toContain(`    report: ${result.nodeFailures?.[0]?.reason}`);
+    const json = JSON.stringify(report);
+    expect(JSON.parse(json).results[0].trace).toEqual(result.trace);
+    // Resolved prompts, stub outputs and `when:` expressions stay out of the report.
+    expect(rendered).not.toContain('payload-marker');
+    expect(json).not.toContain('payload-marker');
+  });
+
+  it('keeps a passing fixture free of the trace', async () => {
+    const { cwd } = writeTempProject({ body: STUB_FIXTURE });
+    const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+
+    expect(report.results[0].pass).toBe(true);
+    expect(report.results[0].trace).toBeUndefined();
+    expect(formatFixtureReport(report)).not.toContain('trace:');
+  });
+
   it('reports the full failed set when a single fail-node cannot cover it', async () => {
     const { cwd } = writeTempProject({
       workflowYaml:

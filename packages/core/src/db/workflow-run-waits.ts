@@ -15,6 +15,7 @@ import {
   type WorkflowRun,
   type WorkflowWaitContext,
 } from '@archon/workflows/schemas/workflow-run';
+import { CONTAINER_ISOLATION_MARKER } from '@archon/workflows/schemas/run-metadata';
 import { PAUSE_CAUSE_METADATA_KEY, pauseCauseOfWait } from '@archon/workflows/schemas/pause-cause';
 import {
   answeredAttentionWait,
@@ -23,6 +24,7 @@ import {
   waitAnsweredEvent,
   waitCompletionEvents,
   waitContinuedEvent,
+  waitStartedEvent,
   type AttentionAnswerWrite,
   type AttentionLabelWrite,
   type NodeStateEventInput,
@@ -70,18 +72,7 @@ export async function pauseWorkflowRunForWait(
         throw new Error(`Workflow run not found or not in running state (id: ${id})`);
       }
       if (pause.kind === 'started') {
-        await insertWorkflowEvent(query, {
-          workflow_run_id: id,
-          event_type: 'wait_started',
-          step_name: pause.stepName,
-          data: {
-            kind: parsedWaitContext.kind,
-            ...(parsedWaitContext.kind !== 'attention'
-              ? { resume_at: parsedWaitContext.resumeAt }
-              : {}),
-            ...(parsedWaitContext.kind === 'event' ? { event: parsedWaitContext.event } : {}),
-          },
-        });
+        await insertWorkflowEvent(query, waitStartedEvent(id, parsedWaitContext, pause.stepName));
       } else {
         await insertWorkflowEvent(query, waitContinuedEvent(id, parsedWaitContext));
       }
@@ -156,13 +147,13 @@ export async function listDueWorkflowContinuations(
   const scheduledTriggeredAt = metadataText('scheduled_resume.triggeredAt');
   const retryAt = metadataText('continuation_retry_at');
   const answeredGate = `status = 'paused' AND ${metadataText('wait')} IS NULL
-               AND COALESCE(${metadataText('isolation')}, '') <> 'container'
+               AND COALESCE(${metadataText(CONTAINER_ISOLATION_MARKER.key)}, '') <> '${CONTAINER_ISOLATION_MARKER.value}'
                AND ${metadataText('approval.resolved')} IN ('approved', 'rejected')
                AND ${metadataText('approval.pauseId')} IS NOT NULL
                AND COALESCE(${metadataText('approval.nodeId')}, '') <> ''
                AND COALESCE(${metadataText('approval.type')}, 'approval') NOT IN ('child_workflow', 'fan_out', 'writeback')`;
   const answeredAttention = `status = 'paused' AND ${waitKind} = 'attention'
-               AND COALESCE(${metadataText('isolation')}, '') <> 'container'
+               AND COALESCE(${metadataText(CONTAINER_ISOLATION_MARKER.key)}, '') <> '${CONTAINER_ISOLATION_MARKER.value}'
                AND ${metadataText('wait.pauseId')} IS NOT NULL
                AND ${metadataText('wait.answer')} IS NOT NULL`;
   // Each row sorts by its own kind's time. A run resumed from a quota schedule keeps the
@@ -185,7 +176,7 @@ export async function listDueWorkflowContinuations(
           OR (${answeredGate})
           OR (${answeredAttention})
           OR (status = 'paused' AND ${metadataText(`${SOURCE_RELEASE_METADATA_KEY}.nodeId`)} IS NOT NULL
-              AND COALESCE(${metadataText('isolation')}, '') <> 'container'))
+              AND COALESCE(${metadataText(CONTAINER_ISOLATION_MARKER.key)}, '') <> '${CONTAINER_ISOLATION_MARKER.value}'))
        ORDER BY CASE WHEN ${dueAt} IS NULL THEN 1 ELSE 0 END, ${dueAt} ASC, id ASC
        LIMIT $2 OFFSET $3`,
         [now.toISOString(), limit, offset]

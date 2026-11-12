@@ -1,3 +1,4 @@
+import { generatedTaskBranch } from '@archon/isolation';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
@@ -471,7 +472,7 @@ interface DetachedRunClaim {
 export async function launchDetachedRun(launch: DetachedLaunch): Promise<void> {
   const { host, cwd, runConfig, destination: childDestination } = launch;
   const claim = await claimDetachedRun(launch);
-  const { extraArgs, pinnedBranch } = buildDetachedChildArgs(launch, claim.launchedRunId);
+  const { extraArgs, generatedIdentifier } = buildDetachedChildArgs(launch, claim.launchedRunId);
   const transcriptPath = await resolveDetachedTranscriptPath(launch, claim.detachedRunId);
   const runConfigPayload = runConfig
     ? JSON.stringify(sealWorkflowRunConfig(runConfig.layer, runConfig.source))
@@ -507,7 +508,9 @@ export async function launchDetachedRun(launch: DetachedLaunch): Promise<void> {
   }
   await printDetachedLaunchAck(launch, {
     detachedRunId: claim.detachedRunId,
-    pinnedBranch,
+    branch: generatedIdentifier
+      ? generatedTaskBranch(generatedIdentifier)
+      : launch.options.branchName,
     transcriptPath,
     logPath,
   });
@@ -581,7 +584,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
 function buildDetachedChildArgs(
   launch: DetachedLaunch,
   launchedRunId: string | undefined
-): { extraArgs: string[]; pinnedBranch: string | undefined } {
+): { extraArgs: string[]; generatedIdentifier: string | undefined } {
   const {
     workflowName,
     options,
@@ -591,23 +594,20 @@ function buildDetachedChildArgs(
     declaration,
   } = launch;
   const extraArgs: string[] = [];
-  let pinnedBranch: string | undefined;
+  let generatedIdentifier: string | undefined;
   // Pin identity after name resolution so a rename cannot redirect the child.
   if (!launch.isContinuation && options.codebaseId && launch.codebase) {
     extraArgs.push('--project', launch.codebase.id);
   }
-  // Pin a generated branch only when isolating AND the caller didn't pass
-  // --branch (an explicit --branch is already in argv). Without this, the child
-  // would generate its own timestamped branch and fork a second worktree.
-  // Never pin a branch for folder projects — they run in place with no worktree.
+  // Transfer the identifier without making the engine's branch an operator-named branch.
   if (
     wantsIsolation &&
     !detachIsFolder &&
     options.branchName === undefined &&
     options.adoptRunId === undefined
   ) {
-    pinnedBranch = `${workflowName}-${String(Date.now())}`;
-    extraArgs.push('--branch', pinnedBranch);
+    generatedIdentifier = `${workflowName}-${String(Date.now())}`;
+    extraArgs.push('--internal-detached-worktree-identifier', generatedIdentifier);
   }
   // A continued chat run retains its transport thread across the fork.
   if (options.conversationId === undefined && childDestination.kind === 'conversation') {
@@ -633,7 +633,7 @@ function buildDetachedChildArgs(
   if (launchedRunId !== undefined) {
     extraArgs.push('--internal-detached-run-id', launchedRunId);
   }
-  return { extraArgs, pinnedBranch };
+  return { extraArgs, generatedIdentifier };
 }
 
 function continuationChildArgs(declaration: NonNullable<DetachedLaunch['declaration']>): string[] {
@@ -693,13 +693,13 @@ async function printDetachedLaunchAck(
   launch: DetachedLaunch,
   ack: {
     detachedRunId: string;
-    pinnedBranch: string | undefined;
+    branch: string | undefined;
     transcriptPath: string | null;
     logPath: string | null;
   }
 ): Promise<void> {
   const { options, workflow, destination: childDestination } = launch;
-  const { detachedRunId, pinnedBranch, transcriptPath, logPath } = ack;
+  const { detachedRunId, branch, transcriptPath, logPath } = ack;
   if (options.json) {
     await writeJsonLine({
       ok: true,
@@ -709,7 +709,7 @@ async function printDetachedLaunchAck(
       // can query or wait on it without polling for the run to appear.
       runId: detachedRunId,
       workflow: workflow.name,
-      branch: pinnedBranch ?? options.branchName ?? null,
+      branch: branch ?? null,
       conversationId:
         childDestination.kind === 'conversation'
           ? destinationCorrelationId(childDestination)

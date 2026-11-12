@@ -74,9 +74,11 @@ describe('parsePackDeclaration', () => {
         'p/.pack/pack.yaml'
       )
     ).toEqual({
-      strict: { type: 'bool', default: 'true' },
-      forge: { type: 'enum', values: ['gh', 'glab'], required: true },
-      note: { type: 'string', description: 'free text' },
+      settings: {
+        strict: { type: 'bool', default: 'true' },
+        forge: { type: 'enum', values: ['gh', 'glab'], required: true },
+        note: { type: 'string', description: 'free text' },
+      },
     });
   });
 
@@ -93,6 +95,95 @@ describe('parsePackDeclaration', () => {
     expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow(PackSettingsError);
     expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow(reason);
     expect(() => parsePackDeclaration(yaml, 'p/.pack/pack.yaml')).toThrow('p/.pack/pack.yaml');
+  });
+});
+
+describe('parsePackDeclaration bindings', () => {
+  const timer = (extra = ''): string =>
+    `  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule: { interval_seconds: 60 }\n${extra}`;
+
+  it('reads a timer, an event and a fire-only binding, applying the defaults', () => {
+    const declared = parsePackDeclaration(
+      `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n      next: { binding: follow-up }\n')}  follow-up:\n    workflow: sweep\n    resource: follow-up\n    overlap: queue\n  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    inputs:\n      number: { event: subject.number }\n`,
+      'p/.pack/pack.yaml'
+    );
+    expect(declared).toEqual({
+      bindings: {
+        sweep: {
+          workflow: 'sweep',
+          resource: 'sweep',
+          resource_scope: 'repo',
+          capacity: 1,
+          overlap: 'skip',
+          isolation: { kind: 'default' },
+          schedule: { interval_seconds: 60 },
+          inputs: {
+            self: { binding: 'sweep' },
+            host: { repo: 'host' },
+            mode: 'fast',
+            next: { binding: 'follow-up' },
+          },
+        },
+        // Neither `schedule` nor `event`: only `trigger fire` starts it.
+        'follow-up': {
+          workflow: 'sweep',
+          resource: 'follow-up',
+          resource_scope: 'repo',
+          capacity: 1,
+          overlap: 'queue',
+          isolation: { kind: 'default' },
+          inputs: {},
+        },
+        opened: {
+          workflow: 'sweep',
+          resource: 'opened',
+          resource_scope: 'repo',
+          capacity: 2,
+          overlap: 'queue',
+          isolation: { kind: 'worktree' },
+          event: { kind: 'issue.lifecycle', actions: ['opened'] },
+          inputs: { number: { event: 'subject.number' } },
+        },
+      },
+    });
+  });
+
+  it.each([
+    [timer('    inputs:\n      other: { binding: missing }\n'), "names unknown binding 'missing'"],
+    [
+      timer('    inputs:\n      n: { event: subject.number }\n'),
+      'only an event binding has an event',
+    ],
+    [timer('    event: { kind: issue.lifecycle }\n'), "must not set both 'schedule'"],
+    // A schedule key without its expression is a broken timer, never a fire-only binding.
+    [
+      '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule:\n',
+      "binding 'sweep' is invalid at 'schedule'",
+    ],
+    [
+      '  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule: {}\n',
+      "binding 'sweep' is invalid at 'schedule.interval_seconds'",
+    ],
+    [timer('    overlap_policy: skip\n'), "binding 'sweep' is invalid"],
+    ['  Bad_Id:\n    workflow: w\n', "binding 'Bad_Id' is not a valid id"],
+    [
+      '  ev:\n    workflow: w\n    resource: r\n    overlap: skip\n    event: { kind: k, repository: { host: h, path: o/r } }\n',
+      "must not name 'repository'",
+    ],
+    [
+      `${timer()}  ev:\n    workflow: w\n    resource: r\n    overlap: skip\n    event: { kind: k }\n  ref:\n    workflow: w\n    resource: x\n    overlap: skip\n    schedule: { interval_seconds: 5 }\n    inputs:\n      e: { binding: ev }\n`,
+      "names event binding 'ev'",
+    ],
+    [
+      `${timer()}  again:\n    workflow: w\n    resource: sweep\n    capacity: 2\n    overlap: skip\n    schedule: { interval_seconds: 5 }\n`,
+      "share resource 'sweep' but declare capacity 1 and 2",
+    ],
+  ])('refuses %p, naming the file and binding', (bindings, reason) => {
+    const parse = (): unknown =>
+      parsePackDeclaration(`bindings:\n${bindings}`, 'p/.pack/pack.yaml');
+    expect(parse).toThrow(PackSettingsError);
+    expect(parse).toThrow(reason);
+    expect(parse).toThrow('p/.pack/pack.yaml');
   });
 });
 

@@ -78,7 +78,6 @@ function resolveOutputRef(
   nodeId: string,
   field: string | undefined,
   nodeOutputs: ReadonlyMap<string, NodeOutput>,
-  exprSnippet: string,
   reference: string
 ): string {
   const nodeOutput = nodeOutputs.get(nodeId);
@@ -122,7 +121,6 @@ function resolveOutputRef(
     (resolution.value !== null && typeof resolution.value === 'object')
   ) {
     const actualType = Array.isArray(resolution.value) ? 'array' : 'object';
-    getLog().error({ nodeId, field, actualType, exprSnippet }, 'dag.condition_field_not_primitive');
     throw new Error(
       `Condition reference '${reference}' resolved to an ${actualType}. ` +
         "A 'when:' field must be a string, number, boolean, or null; emit a scalar routing field " +
@@ -179,18 +177,13 @@ export class InputRefError extends Error {
  * or array THROWS — under the no-silent-drop contract, comparing structured data
  * as a scalar fails loudly with diagnostic evidence rather than silently stringify-comparing.
  */
-function resolveInputRef(
-  name: string,
-  inputs: Record<string, JsonValue> | undefined,
-  exprSnippet: string
-): string {
+function resolveInputRef(name: string, inputs: Record<string, JsonValue> | undefined): string {
   // Canonical text (#2637): a typed input compares as its deterministic text —
   // `$INPUTS.flag == true` matches a boolean `true` via the unquoted-RHS grammar.
   if (inputs && Object.hasOwn(inputs, name)) {
     const value = inputs[name];
     if (Array.isArray(value) || (value !== null && typeof value === 'object')) {
       const actualType = Array.isArray(value) ? 'array' : 'object';
-      getLog().error({ input: name, actualType, exprSnippet }, 'dag.condition_field_not_primitive');
       throw new Error(
         `Condition reference '$INPUTS.${name}' resolved to an ${actualType}. ` +
           "A 'when:' input must be a string, number, boolean, or null; emit a scalar routing field " +
@@ -207,10 +200,9 @@ function resolveAtomRef(
   ref: WhenAtomRef,
   nodeOutputs: Map<string, NodeOutput>,
   inputs: Record<string, JsonValue> | undefined,
-  loopPrevOutputs: ReadonlyMap<string, NodeOutput> | undefined,
-  exprSnippet: string
+  loopPrevOutputs: ReadonlyMap<string, NodeOutput> | undefined
 ): string {
-  if (ref.kind === 'input') return resolveInputRef(ref.name, inputs, exprSnippet);
+  if (ref.kind === 'input') return resolveInputRef(ref.name, inputs);
   // No prior iteration is an ordinary first-iteration condition, not an unknown-node
   // authoring error. Once a prior body node exists, retain normal output-field checks.
   if (ref.kind === 'loop_prev' && !loopPrevOutputs?.has(ref.nodeId)) return '';
@@ -218,7 +210,6 @@ function resolveAtomRef(
     ref.nodeId,
     ref.field,
     ref.kind === 'loop_prev' ? (loopPrevOutputs ?? new Map()) : nodeOutputs,
-    exprSnippet,
     outputRefText(ref.nodeId, ref.field, ref.kind === 'loop_prev' ? 'prior' : 'current')
   );
 }
@@ -239,7 +230,7 @@ function evaluateAtom(
   // (typo / schemaless non-JSON / missing key), InputRefError for an undeclared
   // `$INPUTS.<name>`. Deliberately NOT caught here: under the no-silent-drop contract
   // it must propagate to fail the node, not fail-closed to a silent skip.
-  const actual = resolveAtomRef(ref, nodeOutputs, inputs, loopPrevOutputs, expr);
+  const actual = resolveAtomRef(ref, nodeOutputs, inputs, loopPrevOutputs);
 
   let result: boolean;
   if (operator === '==' || operator === '!=') {

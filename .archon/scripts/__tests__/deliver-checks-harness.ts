@@ -30,6 +30,13 @@ export function hostCli(): string[] {
   }
   return JSON.parse(value) as string[];
 }
+
+/** The host's `archon:script` preload, which the test preload wrote for this process. */
+export function scriptApiPreload(): string {
+  const file = process.env.ARCHON_SCRIPT_PRELOAD;
+  if (!file) throw new Error('ARCHON_SCRIPT_PRELOAD is not set; archon-script-preload.ts sets it for `bun test`');
+  return file;
+}
 export const PR = { repo: { host: 'ghe.example.com', path: 'example/repo' }, number: 42 };
 export const PR_URL = 'https://ghe.example.com/example/repo/pull/42';
 
@@ -244,6 +251,14 @@ function upsert(op, repo, onIssue, marker, body) {
 function answer(op, request) {
   switch (op) {
     case 'workitem.view': return view(request.ref);
+    case 'resolve': {
+      const web = request.web ? /^(.+)\\/(issues|pull)\\/([1-9][0-9]*)$/.exec(request.remote) : null;
+      const url = request.web && web === null ? null : /^https:\\/\\/([^/]+)\\/(.+?)(?:\\.git)?$/.exec(web?.[1] ?? request.remote);
+      return done(url === null
+        ? { kind: 'none', forge: 'none' }
+        : { kind: 'resolved', forge: 'fake', repo: { host: url[1], path: url[2] }, plugin: { name: 'fake', version: '1' },
+            ...(web ? { subject: { kind: web[2] === 'pull' ? 'pr' : 'issue', number: Number(web[3]) } } : {}) });
+    }
     case 'repo.labels.list': return done({ repo: request.repo, labels: [...labels].map(name => ({ name })) });
     case 'repo.label.ensure': return write(op, () => labels.add(request.name), () => ({}));
     case 'workitem.label.add': return write(op, () => issueLabels.push(request.name), () => ({}));
@@ -442,16 +457,11 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
       resolveArtifacts(options.preload ?? '')
   );
 
-  // The engine hands every exec node a typed-artifact listing; an empty one by default.
-  const listing = join(root, 'typed-artifacts.json');
-  writeFileSync(listing, JSON.stringify({ runId: 'run', artifactsByType: {}, errors: [] }));
-
   const env: NodeJS.ProcessEnv = {
     ...Object.fromEntries(Object.entries(process.env).filter(([key]) => !key.startsWith('INPUTS_'))),
     INPUTS_PR: JSON.stringify(forgePrRecord()),
     INPUTS_EXPECTED: '[]',
     ARTIFACTS_DIR: artifacts,
-    TYPED_ARTIFACTS_FILE: listing,
     ...Object.fromEntries(
       Object.entries(options.inputs ?? {}).map(([key, value]) => [key, resolveArtifacts(value)])
     ),
@@ -459,7 +469,7 @@ function runPackScriptIn(root: string, relative: string, options: ScriptOptions)
   Object.assign(env, forgeEnv(root, forge, { forge: forgeLog, requests: requestLog, reads: readsLog }));
 
   // Parent env files must not reintroduce workflow inputs omitted by the fixture.
-  const result = spawnSync(process.execPath, ['--no-env-file', '--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
+  const result = spawnSync(process.execPath, ['--no-env-file', '--preload', scriptApiPreload(), '--preload', preload, join(PACK, `${relative}.ts`), ...(options.args ?? []).map(resolveArtifacts)], {
     cwd: options.cwd ?? root,
     env,
     encoding: 'utf8',

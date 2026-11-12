@@ -5,12 +5,14 @@ const forgeOperationDescriptions = {
   resolve: 'Resolve an explicit remote through optional forge plugins',
   'checks.state': 'Observe checks for an explicit qualified pull request',
   'checks.commit': 'Observe checks on a commit or on the default branch head',
+  'checks.logs': "Read the end of one check unit's log",
   'workitem.view': 'Read a qualified work item',
   'workitem.create': 'Create an issue or recover its canonical marker',
   'workitem.labels.set': 'Set and verify the complete issue label set',
   'workitem.label.add': 'Add one label to an issue or pull request, keeping the rest',
   'workitem.label.remove': 'Remove one label from an issue or pull request, keeping the rest',
   'workitem.list': 'List open issues and pull requests that carry one label',
+  'workitem.search': 'Search issues and pull requests in a repository by text',
   'workitem.comment.upsert': 'Write the one marked comment on an issue or pull request',
   'workitem.close': 'Close an issue with a reason and verify the result',
   'workitem.edit-body': 'Replace an issue body and verify the result',
@@ -25,7 +27,7 @@ const forgeOperationDescriptions = {
   'pr.merge': 'Merge a pull request pinned to its approved head',
   'checks.rerun': 'Rerun selected failed checks at a revision',
   'pr.reviews': 'Read submitted reviews and root review comments',
-  'pr.threads': 'Read every review thread with its comments and resolution',
+  'pr.threads': 'Read every review thread with its comments, creation times and resolution',
   'pr.merge-state':
     'Read how far a pull request is behind the default branch and whether it merges',
   'pr.files': 'Read every file a pull request changes, with its patch',
@@ -73,6 +75,20 @@ export const forgeHelp: HelpGroup = {
         {
           spec: '--data <json>',
           description: 'JSON object with the forge host, for example {"host":"github.com"}',
+        },
+      ],
+    },
+    {
+      command: 'forge',
+      subcommand: 'check',
+      spec: 'forge check',
+      description:
+        'Check before a run spends that a plugin serves a host, supports the named\noperations and has a credential; runs no forge operation. Exits 1 with the reason',
+      scopedFlags: [
+        {
+          spec: '--data <json>',
+          description:
+            'JSON object with host and operations, for example\n{"host":"github.com","operations":["pr.view","pr.merge"]}',
         },
       ],
     },

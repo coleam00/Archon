@@ -13,13 +13,13 @@
  */
 
 import { BUILD_BRANCH_PREFIX } from './build.ts';
-import { invokeForge, parsePrRecord, type QualifiedPr, record, sameRepo } from './forge.ts';
-import { note } from './io.ts';
-import { prFromUrl } from './merge.ts';
+import { forge, type ForgeOperations } from 'archon:script';
+import { sameRepo } from './identity.ts';
+import { resolvePrUrl } from './pr.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */
-const MAX_RUNS = 20;
+export const MAX_RUNS = 20;
 
 /** One pull request's facts as the forge's `pr.view` reports them. */
 export interface PrFacts {
@@ -69,24 +69,22 @@ export function factoryPrRuns(items: readonly WorkItem[]): Map<string, string[]>
  * optional in the forge contract because a plugin that predates it omits it, so a
  * view without it refuses rather than counting the pull request with no times.
  */
-export function prFacts(url: string, view: Record<string, unknown> | null): PrFacts {
+export function prFacts(url: string, view: ForgeOperations['pr.view']['result']): PrFacts {
   if (view === null) throw new Error(`forge pr.view reported no pull request for ${url}`);
-  const pr = parsePrRecord(view.pr);
-  const times = record(view.timestamps);
+  const { pr, timestamps: times } = view;
   if (times === undefined) {
     throw new Error(
       `forge pr.view reported no timestamps for ${url}; PR metrics need a forge plugin whose pr.view reports them`
     );
   }
-  const time = (field: string): string | null => (typeof times[field] === 'string' ? (times[field] as string) : null);
-  const createdAt = time('created_at');
+  const createdAt = times.created_at;
   if (createdAt === null) throw new Error(`forge pr.view reported no creation time for ${url}`);
   return {
     url,
     state: pr.state === 'open' ? 'OPEN' : pr.state === 'merged' ? 'MERGED' : 'CLOSED',
     createdAt,
-    mergedAt: time('merged_at'),
-    closedAt: time('closed_at'),
+    mergedAt: times.merged_at,
+    closedAt: times.closed_at,
     headRefName: pr.head,
     isCrossRepository: pr.head_repo === null || !sameRepo(pr.head_repo, pr.repo),
   };
@@ -94,21 +92,28 @@ export function prFacts(url: string, view: Record<string, unknown> | null): PrFa
 
 /**
  * Read each pull request by number, so no list limit can drop an old one. A recorded
- * URL that is not a pull request URL is noted and left out.
+ * URL the forge says is not a pull request URL is noted and left out; a forge that
+ * cannot resolve one fails the read, so the cohort is never silently short.
  */
 export function readPrFacts(urls: Iterable<string>): PrFacts[] {
   const facts: PrFacts[] = [];
   for (const url of urls) {
-    let ref: QualifiedPr;
-    try {
-      ref = prFromUrl(url);
-    } catch (error) {
-      note(`PR metrics skip a round's URL: ${error instanceof Error ? error.message : String(error)}`);
+    const ref = resolvePrUrl(url);
+    if (ref === undefined) {
+      console.error(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
       continue;
     }
-    facts.push(prFacts(url, invokeForge('pr.view', { selector: { kind: 'number', ref } })));
+    facts.push(prFacts(url, forge('pr.view', { selector: { kind: 'number', ref } })));
   }
   return facts;
+}
+
+/** The time a window bound such as `since` names: an ISO date or time, or `<n>d` back from now. */
+export function sinceTime(since: string): number {
+  const days = /^(\d+)d$/.exec(since)?.[1];
+  const from = days === undefined ? Date.parse(since) : Date.now() - Number(days) * 86_400_000;
+  if (Number.isNaN(from)) throw new Error(`a window bound must be an ISO date or time, or a number of days such as 7d; received ${JSON.stringify(since)}`);
+  return from;
 }
 
 /** A pull request from a round's branch: a `build/` branch in the repository itself. */

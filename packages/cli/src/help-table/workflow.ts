@@ -35,6 +35,10 @@ export const workflowHelp: HelpGroup = {
       description: 'List recent runs (all statuses) for this project',
       scopedFlags: [
         {
+          spec: '--throughput',
+          description: 'Show effective output tok/s per run and model across listed runs',
+        },
+        {
           spec: '--verbose, -v',
           description: "With --json: add each run's per-node state and attention",
         },
@@ -45,6 +49,12 @@ export const workflowHelp: HelpGroup = {
       subcommand: 'get',
       spec: 'workflow get <run-id>',
       description: 'Show detail for a single run (any status)',
+      scopedFlags: [
+        {
+          spec: '--throughput',
+          description: 'Show effective output tok/s per recorded agent attempt and run',
+        },
+      ],
     },
     {
       command: 'workflow',
@@ -79,19 +89,42 @@ export const workflowHelp: HelpGroup = {
           description: 'Oldest pause first (default), or by a label',
         },
         {
-          spec: '--count-by project|label:<key>',
-          description: 'Count items per project or per label value',
+          spec: '--count-by project|label:<key>|answerer',
+          description: 'Count items per project or per label value; with --since also per answerer',
+        },
+        {
+          spec: '--since <7d|24h|2w|ISO>',
+          description:
+            'With --count-by: count the attention waits opened since then, answered or\n' +
+            'still open, by the labels each opened with, and how many carried a\n' +
+            'recommendation and were answered as recommended',
         },
         {
           spec: '--watch',
           description:
-            'Stream readable changes until stopped; the open set comes first\n' +
-            'A degraded warning means coverage may have gaps. Repair and replay:\n' +
+            'Stream what needs someone until stopped: open items first, then items that\n' +
+            'open, change or close, and runs that fail or lose their owner\n' +
+            'A degraded warning means coverage may have gaps:\n' +
             'https://archon.diy/getting-started/operate/#stream-the-queue',
         },
         {
+          spec: '--notices',
+          description:
+            'With --watch: also what happened to work nobody has to act on (a run\n' +
+            'completed, was cancelled or resumed, or emitted a notice)\n' +
+            'With --since and no --watch: list the notices runs emitted since then, one\n' +
+            'line each, or count them with --count-by project|label:<key>',
+        },
+        {
+          spec: '--protocol',
+          description:
+            'With --watch: the full sync protocol for programs (ready, bookmark,\n' +
+            'every run end and resume)',
+        },
+        {
           spec: '--after <cursor>',
-          description: 'With --watch: replay readable events after a cursor; gaps may remain',
+          description:
+            'With --watch --protocol: replay readable events after a cursor; gaps may remain',
         },
       ],
     },
@@ -170,6 +203,14 @@ export const workflowHelp: HelpGroup = {
       spec: 'workflow respond <run-id> <decision> [text]',
       description:
         "Resolve a paused gate with any of its declared decisions\n('approve'/'reject' are sugar for the dedicated commands)",
+      scopedFlags: [
+        {
+          spec: '--recommended',
+          description:
+            'In place of <decision> [text]: answer an attention wait with the option it\n' +
+            'recommends; needs --occurrence, takes --text, refused when it recommends none',
+        },
+      ],
     },
     {
       command: 'workflow',
@@ -181,6 +222,10 @@ export const workflowHelp: HelpGroup = {
           spec: '--choose <id>',
           description:
             'A declared option to choose; repeat for a multi_select (omit for a message form)',
+        },
+        {
+          spec: '--recommended',
+          description: 'In place of --choose: the option the wait recommends',
         },
         { spec: '--text <text>', description: 'Free text recorded with the answer' },
       ],
@@ -209,6 +254,16 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'notice',
+      spec: 'workflow notice <text>',
+      description:
+        'Inside a workflow node: say what the run did, for whoever watches attention\nwith --notices. Never pauses the run and cannot be answered',
+      scopedFlags: [
+        { spec: '--label <k=v>', description: 'A label to filter and count by; repeatable' },
+      ],
+    },
+    {
+      command: 'workflow',
       subcommand: 'event',
       spec: 'workflow event emit',
       description: 'Emit a workflow event into a run',
@@ -233,6 +288,57 @@ export const workflowHelp: HelpGroup = {
       spec: 'workflow test [<name>|<folder>|<path>]',
       description:
         'Run declared dry-run fixtures (fixtures/*.stubs.yaml) for a\nworkflow, a workflow folder or pack (by name or directory\npath); relative paths resolve from the invoking directory before the\nrepository root. With no target, runs every fixture. Never creates a\nrun or contacts a provider; exec-code fixtures execute in a\nscratch worktree of HEAD',
+    },
+    {
+      command: 'workflow',
+      subcommand: 'types',
+      spec: 'workflow types <name|folder|path>',
+      description:
+        "Generate TypeScript for each node's output_format: the node\noutput types and every enum's values. A pack (by name or\ndirectory path) writes <pack>/.shared/outputs.generated.ts; a single\nworkflow needs --out. --check exits 1 when the file is stale",
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write, relative to the invoking directory',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
+    },
+    {
+      command: 'script',
+      subcommand: 'types',
+      spec: 'script types',
+      description:
+        "Print the TypeScript declaration of the archon:script module a workflow\nscript imports, for an editor or tsc over a pack's scripts",
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write instead of stdout, relative to the invoking directory',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
+    },
+    {
+      command: 'script',
+      subcommand: 'preload',
+      spec: 'script preload',
+      description:
+        'Write the preload file that provides the archon:script module, to run or\ntest a workflow script outside a run: bun --preload <file> script.ts',
+      scopedFlags: [
+        {
+          spec: '--out <file>',
+          description: 'File to write, relative to the invoking directory (required)',
+        },
+        {
+          spec: '--check',
+          description: 'Write nothing; exit 1 naming the file when it is missing or stale',
+        },
+      ],
     },
   ],
   scopedOnly: [

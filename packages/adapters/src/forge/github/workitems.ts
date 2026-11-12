@@ -20,7 +20,7 @@ const labelSchema = z.object({
   color: z.string(),
   description: z.string().nullable(),
 });
-const issueSchema = z.object({
+export const issueSchema = z.object({
   number: z.number().int().positive(),
   repository_url: z.url(),
   labels: z.array(z.object({ name: z.string().min(1) })),
@@ -38,7 +38,11 @@ type Issue = z.infer<typeof issueSchema>;
  * GitHub's issues endpoint serves pull requests too, and only `pull_request`
  * distinguishes them.
  */
-function itemRecord(repo: RepoRef, item: Issue, number = item.number): ForgeSubjectRecord {
+export function itemRecord(
+  repo: RepoRef,
+  item: Pick<Issue, 'number' | 'repository_url' | 'html_url' | 'state' | 'pull_request'>,
+  number = item.number
+): ForgeSubjectRecord {
   const { root, path } = location(repo);
   if (
     item.number !== number ||
@@ -92,6 +96,63 @@ export async function readIssue(fetchImpl: Fetch, token: string, ref: PrRef): Pr
 function firstLine(body: string | null): string {
   return (body ?? '').split(/\r?\n/, 1)[0];
 }
+const searchSchema = z.object({
+  total_count: z.number().int(),
+  incomplete_results: z.boolean(),
+  items: z.array(issueSchema),
+});
+
+/** GitHub refuses a search query longer than 256 characters. */
+const SEARCH_TERM_CHARS = 200;
+
+/**
+ * The issues that may already carry `marker`, read in two bounded calls rather than by
+ * listing every issue the repository has ever had, which outgrows the plugin's time
+ * limit on a large repository. Search finds an issue of any age by the marker's words;
+ * its index lags new issues by up to a minute, so the newest hundred issues are read
+ * too, which covers an issue a lost create response left moments ago. Callers match
+ * the marker exactly against each body's first line.
+ */
+async function markedCandidates(
+  fetchImpl: Fetch,
+  token: string,
+  root: string,
+  path: string,
+  marker: string
+): Promise<Issue[]> {
+  // The marker's words as one quoted phrase: quotes dropped so the marker cannot add
+  // qualifiers, and cut to a length GitHub accepts. The exact match is the caller's.
+  // Whole words only: a cut inside a word changes the term search matches.
+  const words = marker
+    .replace(/<!--|-->|"/g, ' ')
+    .split(/\s+/)
+    .filter(word => word !== '')
+    .reduce((kept, word) => {
+      const next = kept === '' ? word : `${kept} ${word}`;
+      return next.length <= SEARCH_TERM_CHARS ? next : kept;
+    }, '');
+  const query = encodeURIComponent(`repo:${path} is:issue in:body "${words}"`);
+  const search = searchSchema.parse(
+    await githubRequest(fetchImpl, token, `${root}/search/issues?q=${query}&per_page=100`)
+  );
+  // A partial result cannot show that no issue carries the marker, or that only one does.
+  if (search.incomplete_results || search.total_count > search.items.length)
+    throw new Error(
+      `marker search returned ${String(search.items.length)} of ${String(search.total_count)} results${search.incomplete_results ? ', incomplete' : ''}`
+    );
+  const found = search.items;
+  const newest = z
+    .array(issueSchema)
+    .parse(
+      await githubRequest(
+        fetchImpl,
+        token,
+        `${root}/repos/${path}/issues?state=all&sort=created&direction=desc&per_page=100`
+      )
+    );
+  return [...found, ...newest];
+}
+
 export async function createWorkItem(
   request: Extract<ForgeMutationRequest, { op: 'workitem.create' }>,
   fetchImpl: Fetch,
@@ -99,15 +160,14 @@ export async function createWorkItem(
   submit: Submit
 ): Promise<ForgeResponse> {
   const { root, path } = location(request.repo);
-  const issues = await githubPages(
-    fetchImpl,
-    token,
-    `${root}/repos/${path}/issues?state=all`,
-    raw => z.array(issueSchema).parse(raw)
-  );
-  const matches = issues.filter(
-    item => item.pull_request === undefined && firstLine(item.body) === request.marker
-  );
+  const issues = await markedCandidates(fetchImpl, token, root, path, request.marker);
+  const matches = [
+    ...new Map(
+      issues
+        .filter(item => item.pull_request === undefined && firstLine(item.body) === request.marker)
+        .map(item => [item.number, item])
+    ).values(),
+  ];
   if (matches.length > 1)
     return refused(request, {
       kind: 'conflict',

@@ -9,21 +9,22 @@
  * Bound inputs (`with:` bindings, canonical text in env):
  * - INPUTS_OUTCOME: the outcome node's report, or "null" when a node failure kept it
  *   from running.
+ * - INPUTS_PULL_REQUESTS: every `pull-request` output of this run.
  */
 
-import { artifactsDir, emit, nullableJson } from '../../.shared/io.ts';
-import { failed, failedPublication } from '../../.shared/report.ts';
+import { artifactsDir, emit, input } from 'archon:script';
+import { nullableJson, typedOutputs } from '../../.shared/inputs.ts';
+import { FAILED_SUMMARY, failedPublication } from '../../.shared/report.ts';
 
 const options = {
-  listingFile: process.env.TYPED_ARTIFACTS_FILE,
-  outcomesFile: process.env.NODE_OUTCOMES_FILE,
+  pullRequests: typedOutputs(input('pull_requests')),
 };
 
-const outcome = nullableJson(process.env.INPUTS_OUTCOME);
+const outcome = nullableJson(input('outcome'));
 emit(
   outcome ?? {
     ready: false,
     ...failedPublication(artifactsDir(), options),
-    summary: failed(artifactsDir(), options),
+    summary: FAILED_SUMMARY,
   }
 );

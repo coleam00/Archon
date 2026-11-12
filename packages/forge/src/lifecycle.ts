@@ -173,6 +173,24 @@ export const workItemListRequestSchema = requestBase.extend({
   repo: repoRefSchema,
   label: text,
 });
+/** The most matches one `workitem.search` returns, and the count it returns when none is asked for. */
+export const WORKITEM_SEARCH_MAX_LIMIT = 100;
+export const WORKITEM_SEARCH_DEFAULT_LIMIT = 30;
+/**
+ * Issues and pull requests in one repository that match free text.
+ *
+ * How `text` matches is the forge's own search, not a query language this contract
+ * defines. `state` defaults to `open`; `kind` omitted searches both. The answer is
+ * bounded by `limit`, most recently updated first, and says when more matched.
+ */
+export const workItemSearchRequestSchema = requestBase.extend({
+  op: z.literal('workitem.search'),
+  repo: repoRefSchema,
+  text: z.string().trim().min(1),
+  kind: z.enum(['issue', 'pr']).optional(),
+  state: z.enum(['open', 'closed', 'any']).optional(),
+  limit: z.number().int().positive().max(WORKITEM_SEARCH_MAX_LIMIT).optional(),
+});
 export const repoLabelEnsureRequestSchema = requestBase.extend({
   op: z.literal('repo.label.ensure'),
   repo: repoRefSchema,
@@ -233,14 +251,24 @@ export const prThreadsRequestSchema = requestBase.extend({
   op: z.literal('pr.threads'),
   ref: prRefSchema,
 });
+/**
+ * `commit` is the commit the comment was made on, null when the forge does not record one.
+ * `createdAt` and `commit` are absent when a plugin older than these fields answers, so a
+ * released plugin binary keeps working; a reader that needs them treats absence as unknown.
+ */
 export const reviewThreadCommentSchema = z.object({
   id: text,
   author: sourceActorSchema.nullable(),
+  createdAt: z.iso.datetime({ offset: true }).optional(),
+  commit: gitObjectIdSchema.nullable().optional(),
   body: z.string(),
   url: z.url(),
 });
+/** A thread's `createdAt` and `commit` are those of the comment that opened it. */
 export const reviewThreadSchema = z.object({
   id: text,
+  createdAt: z.iso.datetime({ offset: true }).optional(),
+  commit: gitObjectIdSchema.nullable().optional(),
   resolved: z.boolean(),
   outdated: z.boolean(),
   path: z.string().nullable(),
@@ -361,6 +389,7 @@ export const lifecycleReadRequestSchemas = [
   prReviewsRequestSchema,
   prThreadsRequestSchema,
   workItemListRequestSchema,
+  workItemSearchRequestSchema,
   workItemCommentsRequestSchema,
   prMergeStateRequestSchema,
   prFilesRequestSchema,
@@ -438,6 +467,17 @@ export const workItemListSchema = z.object({
   label: text,
   items: z.array(subjectRecordSchema),
 });
+export const workItemSearchItemSchema = subjectRecordSchema.extend({
+  title: z.string(),
+  updatedAt: z.iso.datetime({ offset: true }),
+});
+/** `truncated` says more items matched than `items` holds; a merged pull request is `closed`. */
+export const workItemSearchSchema = z.object({
+  repo: repoRefSchema,
+  text,
+  items: z.array(workItemSearchItemSchema),
+  truncated: z.boolean(),
+});
 export const workItemCommentsSchema = z.object({
   workitem: subjectRecordSchema,
   comments: z.array(workItemCommentSchema),
@@ -502,6 +542,7 @@ export const lifecycleReadResultSchemas = [
   z.object({ op: prViewRequestSchema.shape.op, value: prViewResultSchema.nullable() }),
   z.object({ op: repoLabelsListRequestSchema.shape.op, value: repoLabelsListSchema }),
   z.object({ op: workItemListRequestSchema.shape.op, value: workItemListSchema }),
+  z.object({ op: workItemSearchRequestSchema.shape.op, value: workItemSearchSchema }),
   z.object({ op: workItemCommentsRequestSchema.shape.op, value: workItemCommentsSchema }),
   z.object({ op: prMergeStateRequestSchema.shape.op, value: prMergeStateSchema }),
   z.object({ op: prFilesRequestSchema.shape.op, value: prFilesSchema }),

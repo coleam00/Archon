@@ -9,6 +9,29 @@ import { attachmentUsage, isAttachmentVerb, publicAttachmentEntries } from '../a
 import { type CliRouteContext, fail, printUsageFor } from './context';
 import { loadRoute, usesDatabaseStore } from './route-loader';
 
+export async function runScript({
+  subcommand,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
+  if (subcommand !== 'types' && subcommand !== 'preload')
+    return await fail(
+      json,
+      'Usage: archon script types [--out <file>] [--check]\n       archon script preload --out <file> [--check]'
+    );
+  const { scriptTypesCommand, scriptPreloadCommand } = await loadRoute(
+    () => import('../commands/script-types'),
+    { providers: false }
+  );
+  const run = subcommand === 'types' ? scriptTypesCommand : scriptPreloadCommand;
+  return await run(cwd, {
+    json,
+    check: values.check === true,
+    out: typeof values.out === 'string' ? values.out : undefined,
+  });
+}
+
 export async function runForge({
   subcommand,
   values,
@@ -68,6 +91,31 @@ export async function runPlugin({
   });
 }
 
+export async function runPack({
+  subcommand,
+  positionals,
+  values,
+  cwd,
+  json,
+}: CliRouteContext): Promise<number> {
+  const { packCommand } = await loadRoute(() => import('../commands/pack'));
+  const text = (name: string): string | undefined => {
+    const value = values[name];
+    return typeof value === 'string' ? value : undefined;
+  };
+  await packCommand(subcommand, positionals.slice(2), {
+    cwd,
+    repo: text('repo'),
+    host: text('host'),
+    runAs: text('run-as'),
+    out: text('out'),
+    only: text('only'),
+    force: values.force === true,
+    json,
+  });
+  return 0;
+}
+
 export async function runState({
   subcommand,
   positionals,
@@ -95,6 +143,7 @@ export async function runState({
       ...(values.values === true ? { values: true } : {}),
       ...(values.lease === true ? { lease: true } : {}),
       ...(values['release-lease'] === true ? { releaseLease: true } : {}),
+      ...(values.held === true ? { held: true } : {}),
     },
     { storeKind }
   );

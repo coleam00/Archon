@@ -206,11 +206,11 @@ If merged cleanup frees space → proceed with creation. If not → block with f
 
 ### How cleanup decides a branch is merged
 
-`judgeBranchForRemoval()` in `services/cleanup/merge-verdict.ts` is the one decision for the scheduled sweep, `makeRoom()` and `--merged`. Merged against the configured base ref means either:
-- **git:** the branch ref exists and is merged by ancestry (`git branch --merged`) or patch equivalence (`git cherry`), and the worktree's HEAD also passes `git cherry <base> HEAD`; or
-- **PR:** `getPrState()` reports MERGED (or CLOSED with `--include-closed`), and the worktree's HEAD and the branch ref, where each exists, are at or behind the PR head commit (`isRevCoveredBy`, which fetches a PR head missing locally).
+`judgeBranchForRemoval()` in `services/cleanup/merge-verdict.ts` is the shared decision for the scheduled sweep, `makeRoom()` and `--merged`. It first checks base-branch ancestry and `git cherry` patch equivalence, requiring Git integration to cover both the worktree HEAD and local branch ref where they exist.
 
-Anything past the proving commit is unmerged work: run branch names get reused, and a detached HEAD can hold commits no ref protects. A failed `gh` lookup (`UNAVAILABLE`) or a git error keeps the worktree and reports it; it never counts as merged.
+If Git does not prove integration, cleanup looks up a PR by the local branch name, then discovers candidates through GitHub's commit-to-PR lookup for each existing local tip. This also finds PRs published under a different branch name. One **MERGED PR** must cover every existing local tip: each tip must equal or be an ancestor of that same PR head (`isRevCoveredBy` fetches a missing head). Manual `--include-closed` also accepts a closed but unmerged PR with the same coverage check; scheduled cleanup and `makeRoom()` do not opt in.
+
+A tip past the proving PR head stays: run branch names get reused, and a detached HEAD can hold commits no ref protects. A base inspection or candidate comparison error immediately stops judgment for that environment, retains the worktree, and is reported. Cleanup does not try PR evidence after a base inspection error or later candidates after a comparison error. A failed PR lookup (`UNAVAILABLE`) retains and reports it when Git has not already proved integration; it never counts as merged.
 
 ---
 

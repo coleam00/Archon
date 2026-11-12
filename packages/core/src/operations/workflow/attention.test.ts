@@ -174,6 +174,21 @@ describe('answering an attention wait', () => {
     );
   });
 
+  test('an answer records the name its answerer declared, and refuses a malformed one', async () => {
+    await setup();
+    const id = await paused('select');
+    const named = (declared: string) => ({ kind: 'operator', declared }) as const;
+    await expect(
+      operations.answerWorkflow(id, { choose: ['a'] }, named('two\nlines'), cli)
+    ).rejects.toThrow('The declared answerer name must be 1 to 64 characters on one line.');
+    expect(await storedWait(id)).not.toHaveProperty('answer');
+    await operations.answerWorkflow(id, { choose: ['a'] }, named('triage-agent'), cli);
+    expect(await storedWait(id)).toMatchObject({
+      answeredVia: 'cli',
+      answeredBy: { declared: 'triage-agent' },
+    });
+  });
+
   test('approve, reject and respond answer an attention wait as sugar; reject never cancels', async () => {
     await setup();
     const message = await paused('message');

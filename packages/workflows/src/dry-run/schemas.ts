@@ -69,6 +69,7 @@ export const dryRunTraceEntrySchema = z.discriminatedUnion('state', [
     state: z.literal('skipped'),
     reason: z.string(),
     cause: skipCauseSchema,
+    diagnostic: z.string().optional(),
   }),
   dryRunTraceBaseSchema.extend({
     state: z.literal('failed'),
