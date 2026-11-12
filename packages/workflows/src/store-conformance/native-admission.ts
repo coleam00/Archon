@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { awaitResourceStartAdmission } from '../resource-start-admission';
 import { resourceStartFixtures } from '../resource-start-conformance';
 import type { IWorkflowStore } from '../store';
@@ -14,6 +14,105 @@ export function describeNativeAdmissionConformance(getHarness: () => WorkflowSto
       store = harness.store;
     });
     const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    test.each(['local', 'foreign'] as const)(
+      'native child shares ancestor checkouts in %s resources on admission and drain',
+      async kind => {
+        const parent = start('queue', 'parent', 3, { cwd: '/shared' });
+        if (kind === 'foreign') parent.resource = 'parent-resource';
+        await store.createWorkflowRun(parent.launch.run);
+        await store.admitPendingResourceStart(parent);
+        await store.claimPendingWorkflowRun(parent.launch.run.id, '/shared');
+        const middle = await store.createWorkflowRun({
+          ...start().launch.run,
+          parent_run_id: parent.launch.run.id,
+        });
+        const child = start('queue', 'child', 3, { cwd: '/shared' });
+        await store.createWorkflowRun({ ...child.launch.run, parent_run_id: middle.id });
+        expect((await store.admitPendingResourceStart(child)).status).toBe('admitted');
+        const sibling = start('queue', 'sibling', 3, { cwd: '/shared' });
+        await store.createWorkflowRun({ ...sibling.launch.run, parent_run_id: middle.id });
+        expect(await store.admitPendingResourceStart(sibling)).toMatchObject({
+          status: 'queued',
+          blocker: { kind: 'run', id: child.launch.run.id },
+        });
+        await store.cancelWorkflowRun(child.launch.run.id);
+        expect(
+          await store.drainResourceStarts({ resource: 'resource', hostId: 'sibling' })
+        ).toMatchObject([{ runId: sibling.launch.run.id }]);
+        expect((await store.getWorkflowRun(parent.launch.run.id))?.status).toBe('running');
+      }
+    );
+    test.each(['cancelled', 'failed'] as const)(
+      'terminal %s native requests cannot block another host',
+      async status => {
+        const holder = start();
+        await store.admitResourceStart(holder);
+        const native = start('queue', 'dead-native');
+        await store.createWorkflowRun(native.launch.run);
+        await store.admitPendingResourceStart(native);
+        const next = start('queue', 'successor');
+        await store.admitResourceStart(next);
+        if (status === 'cancelled') await store.cancelWorkflowRun(native.launch.run.id);
+        else await store.failWorkflowRun(native.launch.run.id, 'explicit failure');
+        await store.cancelWorkflowRun(holder.launch.run.id);
+        expect(
+          await store.drainResourceStarts({ resource: 'resource', hostId: 'successor' })
+        ).toMatchObject([{ runId: next.launch.run.id }]);
+        expect((await store.getResourceStartRequest(native.launch.run.id))?.status).toBe(
+          'withdrawn'
+        );
+        expect((await store.getWorkflowRun(native.launch.run.id))?.status).toBe(status);
+      }
+    );
+    test('native children still count their parent resource holder', async () => {
+      const parent = start('queue', 'parent', 1, { cwd: '/shared' });
+      await store.admitResourceStart(parent);
+      const child = start('queue', 'child', 1, { cwd: '/shared' });
+      await store.createWorkflowRun({ ...child.launch.run, parent_run_id: parent.launch.run.id });
+      expect((await store.admitPendingResourceStart(child)).status).toBe('queued');
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'child' })).toEqual(
+        []
+      );
+      harness.resourceCaps.set('resource', 2);
+      expect(
+        await store.drainResourceStarts({ resource: 'resource', hostId: 'child' })
+      ).toMatchObject([{ runId: child.launch.run.id }]);
+      expect((await store.getWorkflowRun(parent.launch.run.id))?.status).toBe('pending');
+    });
+    test.each(['notice', 'drain', 'read', 'wait'] as const)(
+      'native waiter %s failure withdraws queued work',
+      async site => {
+        const holder = start();
+        await store.admitResourceStart(holder);
+        const native = start();
+        await store.createWorkflowRun(native.launch.run);
+        const fail = async () => {
+          throw new Error('waiter failed');
+        };
+        const fault =
+          site === 'drain'
+            ? spyOn(store, 'drainResourceStarts').mockImplementationOnce(fail)
+            : site === 'read'
+              ? spyOn(store, 'getResourceStartRequest').mockImplementationOnce(fail)
+              : undefined;
+        try {
+          await expect(
+            awaitResourceStartAdmission(store, { name: 'resource', capacity: 1 }, native.launch, {
+              ...(site === 'notice' ? { onWaiting: fail } : { wait: fail }),
+            })
+          ).rejects.toThrow('waiter failed');
+        } finally {
+          fault?.mockRestore();
+        }
+        expect((await store.getResourceStartRequest(native.launch.run.id))?.status).toBe(
+          'withdrawn'
+        );
+        await store.cancelWorkflowRun(holder.launch.run.id);
+        expect((await store.admitResourceStart(start('queue', 'successor'))).status).toBe(
+          'admitted'
+        );
+      }
+    );
     test('native pending starts attach once, retain provenance and claim only after admission', async () => {
       const holder = start();
       await store.admitResourceStart(holder);
@@ -201,34 +300,40 @@ export function describeNativeAdmissionConformance(getHarness: () => WorkflowSto
       expect((await store.getResourceStartRequest(native.launch.run.id))?.status).toBe('withdrawn');
       expect((await store.getWorkflowRun(native.launch.run.id))?.status).toBe('pending');
     });
-    test('native abort losing to admission leaves the admitted run owned and executable', async () => {
-      const holder = start();
-      await store.admitResourceStart(holder);
-      const native = start();
-      await store.createWorkflowRun(native.launch.run);
-      const controller = new AbortController();
-      expect(
-        (
-          await awaitResourceStartAdmission(
-            store,
-            { name: 'resource', capacity: 1 },
-            native.launch,
-            {
-              signal: controller.signal,
-              wait: async () => {
-                await store.cancelWorkflowRun(holder.launch.run.id);
-                await store.drainResourceStarts({
-                  resource: 'resource',
-                  hostId: `native:${native.launch.run.id}`,
-                });
-                controller.abort(new Error('stop waiting'));
-              },
-            }
-          )
-        ).status
-      ).toBe('admitted');
-      expect((await store.getResourceStartRequest(native.launch.run.id))?.status).toBe('admitted');
-      expect(await store.claimPendingWorkflowRun(native.launch.run.id)).not.toBeNull();
-    });
+    test.each(['abort', 'error'] as const)(
+      'native %s losing to admission leaves the admitted run owned and executable',
+      async failure => {
+        const holder = start();
+        await store.admitResourceStart(holder);
+        const native = start();
+        await store.createWorkflowRun(native.launch.run);
+        const controller = new AbortController();
+        expect(
+          (
+            await awaitResourceStartAdmission(
+              store,
+              { name: 'resource', capacity: 1 },
+              native.launch,
+              {
+                signal: controller.signal,
+                wait: async () => {
+                  await store.cancelWorkflowRun(holder.launch.run.id);
+                  await store.drainResourceStarts({
+                    resource: 'resource',
+                    hostId: `native:${native.launch.run.id}`,
+                  });
+                  if (failure === 'abort') controller.abort(new Error('stop waiting'));
+                  else throw new Error('poll failed after admission');
+                },
+              }
+            )
+          ).status
+        ).toBe('admitted');
+        expect((await store.getResourceStartRequest(native.launch.run.id))?.status).toBe(
+          'admitted'
+        );
+        expect(await store.claimPendingWorkflowRun(native.launch.run.id)).not.toBeNull();
+      }
+    );
   });
 }

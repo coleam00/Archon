@@ -172,7 +172,7 @@ export function createAdmissionTransaction(
     run: WorkflowRun,
     resource: string,
     local: boolean,
-    checkouts: ReadonlyMap<string, string>,
+    checkouts: ReadonlyMap<string, readonly string[]>,
     reusable: readonly ReusableCheckout[]
   ) {
     try {
@@ -203,7 +203,7 @@ export function createAdmissionTransaction(
     resource: string,
     raw: unknown,
     envelope: z.infer<typeof requestEnvelopeSchema> | null,
-    checkouts: ReadonlyMap<string, string>,
+    checkouts: ReadonlyMap<string, readonly string[]>,
     reusable: readonly ReusableCheckout[]
   ): boolean {
     if (!envelope && run.working_path) {
@@ -223,7 +223,7 @@ export function createAdmissionTransaction(
     run: WorkflowRun,
     resource: string,
     raw: unknown,
-    checkouts: ReadonlyMap<string, string>,
+    checkouts: ReadonlyMap<string, readonly string[]>,
     reusable: readonly ReusableCheckout[]
   ) {
     const envelope = raw === undefined ? null : requestEnvelopeSchema.parse(raw);
@@ -291,6 +291,14 @@ export function createAdmissionTransaction(
     for (const id of ids) {
       try {
         const row = queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id));
+        const run = await readSnapshot(root, id);
+        if (run && isTerminalRunStatus(run.status)) {
+          row.status = 'withdrawn';
+          documents[pathFor('requests', id)] = row;
+          const resourceSlot = await slot(resource);
+          resourceSlot.queue = resourceSlot.queue.filter(queuedId => queuedId !== id);
+          continue;
+        }
         queue.push({ ...row, capacity: await capacityFor(row) });
       } catch (error) {
         if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
@@ -345,6 +353,9 @@ export function createAdmissionTransaction(
       }
     }
     return {
+      runParents: new Map(
+        runs.flatMap(run => (run.parent_run_id ? [[run.id, run.parent_run_id] as const] : []))
+      ),
       capacity: resolveResourceCapacity(await currentCaps(), resource),
       reusableCheckouts: reusable,
       holders: row.holders,

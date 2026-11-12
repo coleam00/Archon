@@ -83,6 +83,15 @@ test('file host reads install resource overrides fresh for direct admission and 
   expect(
     (await host.deps.store.getResourceStartRequest(third.launch.run.id))?.declaredCapacity
   ).toBe(1);
+  await writeFile(join(home, 'config.yaml'), '{}');
+  const declared = start();
+  expect((await host.deps.store.admitResourceStart(declared)).status).toBe('queued');
+  await host.deps.store.withdrawQueuedResourceStart(declared.launch.run.id);
+  const defaults = { ...start(), capacity: undefined };
+  expect((await host.deps.store.admitResourceStart(defaults)).status).toBe('admitted');
+  expect(
+    (await host.deps.store.getResourceStartRequest(defaults.launch.run.id))?.declaredCapacity
+  ).toBeUndefined();
 });
 test('file isolation records conform to the isolation store row', () => {
   expectTypeOf<z.output<typeof isolationSchema>[number]>().toEqualTypeOf<IsolationEnvironmentRow>();

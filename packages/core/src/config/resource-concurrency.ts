@@ -13,10 +13,10 @@ export class ResourceConcurrencyConfigError extends Error {
   }
 }
 
+export const resourceConcurrencySchema = z.record(resourceNameSchema, resourceCapacitySchema);
+
 const configSchema = z.looseObject({
-  concurrency: z
-    .looseObject({ resources: z.record(resourceNameSchema, resourceCapacitySchema).nullish() })
-    .nullish(),
+  concurrency: z.looseObject({ resources: resourceConcurrencySchema.nullish() }).nullish(),
 });
 
 /** Install-only overrides, read fresh so config edits affect the next admission. */

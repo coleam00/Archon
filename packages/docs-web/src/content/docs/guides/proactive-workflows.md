@@ -71,7 +71,7 @@ This binding maps the issue number from the event and the repository from a lite
 }
 ```
 
-A run waiting at `review` is `paused`, and it gives its resource slot back while it waits, so unreviewed drafts do not block later issues. `capacity: 3` bounds how many investigations execute at once. When a draft is approved, its run continues ahead of queued issues once a slot frees. This needs a continuation host: `archon serve`, or `archon workflow wake --watch` beside the trigger host. See [resource, capacity, and overlap](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
+A run waiting at `review` is `paused`, and it gives its resource slot back while it waits, so unreviewed drafts do not block later issues. Each start uses the current install `concurrency.resources.<resource>` override, otherwise its declaration (`capacity: 3` here), otherwise 10. With no override, this start waits when three investigations already hold slots; other starts may declare different limits. When a draft is approved, its run continues ahead of queued issues once a slot frees. This needs a continuation host: `archon serve`, or `archon workflow wake --watch` beside the trigger host. See [resource, capacity, and overlap](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
 
 The run uses the provider configuration and credentials of `runAsUserId`. The `gh` CLI must be authenticated for that user on the execution host, because both agents and the `post` node call it.
 

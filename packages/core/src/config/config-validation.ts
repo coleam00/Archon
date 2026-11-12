@@ -1,3 +1,4 @@
+import { resourceConcurrencySchema } from './resource-concurrency';
 // Validators for config file content. Each refuses a value Archon cannot honour by
 // throwing InvalidConfigError, naming the file and the key.
 import { deprecatedQuotaPolicyWarning } from '@archon/workflows/schemas/run-config';
@@ -175,7 +176,7 @@ export function validateAttentionNoticesConfig(parsed: unknown, configPath: stri
   parsed.attentionNotices = result.data;
 }
 
-export function validateConversationConcurrencyConfig(parsed: unknown, configPath: string): void {
+export function validateConcurrencyConfig(parsed: unknown, configPath: string): void {
   if (!isConfigRecord(parsed) || parsed.concurrency == null) return;
   if (!isConfigRecord(parsed.concurrency)) {
     throw new InvalidConfigError(
@@ -184,6 +185,15 @@ export function validateConversationConcurrencyConfig(parsed: unknown, configPat
       "'concurrency' must be an object."
     );
   }
+  const resources = resourceConcurrencySchema.nullish().safeParse(parsed.concurrency.resources);
+  if (!resources.success)
+    throw new InvalidConfigError(
+      'Invalid resource concurrency config',
+      configPath,
+      resources.error.issues
+        .map(issue => `concurrency.resources.${issue.path.join('.')}: ${issue.message}`)
+        .join('; ')
+    );
   const limit = parsed.concurrency.maxConversations;
   if (limit === undefined) return;
   if (typeof limit !== 'number' || !Number.isInteger(limit) || limit <= 0) {
@@ -204,5 +214,5 @@ export function validateGlobalConfigBlocks(parsed: unknown, configPath: string):
   validateModelBindingConfig(parsed, configPath);
   validateStreamingConfig(parsed, configPath);
   validateAttentionNoticesConfig(parsed, configPath);
-  validateConversationConcurrencyConfig(parsed, configPath);
+  validateConcurrencyConfig(parsed, configPath);
 }

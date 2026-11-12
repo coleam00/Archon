@@ -1,3 +1,4 @@
+import { installResourceCapacityPolicy } from '../workflows/resource-capacity';
 import { expect, mock, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
@@ -56,7 +57,10 @@ export async function makeSqlConformanceHarness(
     [CONFORMANCE_CONVERSATION_ID]
   );
   const resourceCaps = new Map<string, number>();
-  const policy = { loadCaps: async () => new Map(resourceCaps) };
+  const policy = {
+    loadCaps: async () => new Map(resourceCaps),
+    readCapturedDeclaration: installResourceCapacityPolicy.readCapturedDeclaration,
+  };
   return {
     store: createWorkflowStore(policy),
     resourceCaps,

@@ -220,6 +220,17 @@ export async function resourceStartOccupancy(
       ORDER BY w.started_at, w.id`,
     [resource]
   );
+  const parents = await query<{ id: string; parent_run_id: string }>(
+    'SELECT id, parent_run_id FROM remote_agent_workflow_runs WHERE parent_run_id IS NOT NULL'
+  );
+  await query(
+    `UPDATE remote_agent_resource_start_requests SET status = 'withdrawn'
+      WHERE resource_key = $1 AND status = 'queued' AND EXISTS (
+        SELECT 1 FROM remote_agent_workflow_runs w
+         WHERE w.id = remote_agent_resource_start_requests.id AND w.status IN (${terminalList})
+      )`,
+    [resource]
+  );
   const queued = await query<Record<string, unknown>>(
     `SELECT id, host_id, resource_key, status, launch, declared_capacity, receipt_id, binding_id FROM remote_agent_resource_start_requests
       WHERE resource_key = $1 AND status = 'queued'
@@ -288,6 +299,7 @@ export async function resourceStartOccupancy(
   }
   return {
     capacity,
+    runParents: new Map(parents.rows.map(row => [String(row.id), String(row.parent_run_id)])),
     reusableCheckouts: reusable.rows,
     holders,
     waiters: capacityWaiters(liveRuns.filter(run => !holding.has(run.id))),

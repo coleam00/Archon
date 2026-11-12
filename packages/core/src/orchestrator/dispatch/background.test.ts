@@ -646,8 +646,8 @@ describe('dispatchBackgroundWorkflow', () => {
         });
         if (noticeFails) {
           await expect(execution).rejects.toThrow('notification unavailable');
-          expect((await store.getWorkflowRun(source.runId))?.status).toBe('pending');
-          expect((await store.getResourceStartRequest(source.runId))?.status).toBe('queued');
+          expect((await store.getWorkflowRun(source.runId))?.status).toBe('failed');
+          expect((await store.getResourceStartRequest(source.runId))?.status).toBe('withdrawn');
           expect(mockResolve).not.toHaveBeenCalled();
           expect(mockFailWorkflowRun).not.toHaveBeenCalled();
           expect(capturedSourceOwnerCalls).toContain('adopt');

@@ -319,9 +319,9 @@ Later changes:
   pack's declaration changes.
 - An installed schedule keeps the interval it was installed with. To change it, run
   `archon trigger schedule remove --config <file>` and install it again.
-- A resource keeps the capacity its first start declared; a start declaring another is
-  rejected as `resource_capacity_conflict`. To change a capacity, give the resource a
-  new name in every binding that shares it.
+- Each admission uses the current install `concurrency.resources.<resource>` override,
+  otherwise that start's declared capacity, otherwise 10. Editing the override affects
+  the next admission without ending existing holders; declarations may differ between starts.
 - To stop, remove the schedules and the webhook bindings, then
   `archon workflow status` and `archon workflow cancel <run-id>` for runs in flight.
 

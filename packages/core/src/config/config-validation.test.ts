@@ -7,6 +7,37 @@ import { archonHome, mockFsReadFile, mockFsWriteFile, useConfigTestEnv } from '.
 describe('config validation', () => {
   useConfigTestEnv();
 
+  test.each([0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'resource settings writer refuses invalid capacity %s',
+    async capacity => {
+      mockFsReadFile.mockResolvedValue('{}');
+      await expect(
+        updateGlobalConfig({ concurrency: { resources: { build: capacity } } })
+      ).rejects.toThrow('concurrency.resources.build');
+      expect(mockFsWriteFile).not.toHaveBeenCalled();
+    }
+  );
+  test('resource settings writer validates reserved names and accepts positive capacities', async () => {
+    mockFsReadFile.mockResolvedValue('{}');
+    await expect(
+      updateGlobalConfig({ concurrency: { resources: { 'provider:claude': 2 } } })
+    ).rejects.toThrow('concurrency.resources.provider:claude');
+    expect(mockFsWriteFile).not.toHaveBeenCalled();
+    await updateGlobalConfig({ concurrency: { resources: { build: 2 } } });
+    expect(mockFsWriteFile).toHaveBeenCalled();
+  });
+
+  test('global loading and unrelated settings edits refuse invalid resource values; repairs succeed', async () => {
+    mockFsReadFile.mockResolvedValue('concurrency:\n  resources: { build: 0 }\n');
+    await expect(loadGlobalConfig()).rejects.toThrow('concurrency.resources.build');
+    await expect(updateGlobalConfig({ botName: 'Archon' })).rejects.toThrow(
+      'concurrency.resources.build'
+    );
+    expect(mockFsWriteFile).not.toHaveBeenCalled();
+    await updateGlobalConfig({ concurrency: { resources: { build: 2 } } });
+    expect(mockFsWriteFile).toHaveBeenCalled();
+  });
+
   describe('assistants validation', () => {
     test('global config refuses to load an effort the provider would drop', async () => {
       mockFsReadFile.mockResolvedValue(`

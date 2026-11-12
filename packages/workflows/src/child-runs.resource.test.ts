@@ -12,10 +12,11 @@ import { runChildWorkflow } from './child-runs';
 import { admitNativeResourceStart } from './resource-start-admission';
 
 const track = trackTempRoots();
-test.each(['inherit', 'worktree', 'placement-fails', 'notice-fails'] as const)(
+test.each(['default', 'inherit', 'worktree', 'placement-fails', 'notice-fails'] as const)(
   'resource child admission preserves ownership: %s',
   async scenario => {
-    const isolation = scenario === 'inherit' ? 'inherit' : 'worktree';
+    const isolation =
+      scenario === 'default' ? undefined : scenario === 'inherit' ? 'inherit' : 'worktree';
     const root = track(await mkdtemp(join(tmpdir(), 'resource-child-')));
     const previousHome = process.env.ARCHON_HOME;
     process.env.ARCHON_HOME = join(root, 'home');
@@ -52,6 +53,7 @@ test.each(['inherit', 'worktree', 'placement-fails', 'notice-fails'] as const)(
         codebase_id: 'project',
         user_message: 'parent',
       });
+      await store.claimPendingWorkflowRun(parent.id, root);
       const { resolver, calls } = makeFakeResolver(join(root, 'child-checkout'));
       if (scenario === 'placement-fails')
         resolver.resolve = async () => {
@@ -99,8 +101,8 @@ test.each(['inherit', 'worktree', 'placement-fails', 'notice-fails'] as const)(
       expect((await store.getResourceStartRequest(outcome.childRunId))?.declaredCapacity).toBe(1);
       expect(calls).toHaveLength(scenario === 'worktree' ? 1 : 0);
       if (scenario === 'notice-fails') {
-        expect(run?.status).toBe('pending');
-        expect((await store.getResourceStartRequest(outcome.childRunId))?.status).toBe('queued');
+        expect(run?.status).toBe('failed');
+        expect((await store.getResourceStartRequest(outcome.childRunId))?.status).toBe('withdrawn');
         const source = run?.metadata.workflow_source;
         if (
           !source ||

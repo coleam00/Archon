@@ -1,3 +1,4 @@
+import { assertCapturedCapacityAdmission } from '../workflows/resource-capacity-test-fixture';
 // @archon-test-isolated
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
@@ -48,6 +49,14 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test('legacy captured source controls real store admission after reopen', async () => {
+    const harness = await makeHarness();
+    try {
+      await assertCapturedCapacityAdmission(harness);
+    } finally {
+      await harness.close();
+    }
+  });
   test('a claim waiting on native attachment refreshes the committed queue fence', async () => {
     const harness = await makeHarness();
     const { store, db } = harness;

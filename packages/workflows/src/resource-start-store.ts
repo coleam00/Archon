@@ -179,11 +179,11 @@ function checkoutKeys(
 export function heldCheckouts(
   live: Iterable<{ id: string; working_path?: string | null; launch?: PreparedWorkflowLaunch }>,
   reusable: readonly ReusableCheckout[] = []
-): Map<string, string> {
-  const held = new Map<string, string>();
+): Map<string, readonly string[]> {
+  const held = new Map<string, readonly string[]>();
   for (const run of live) {
     for (const key of checkoutKeys(run.launch, run.working_path, reusable))
-      if (!held.has(key)) held.set(key, run.id);
+      held.set(key, [...(held.get(key) ?? []), run.id]);
   }
   return held;
 }
@@ -210,8 +210,9 @@ export interface ResourceSlotOccupancy {
   /** Damage at the next queue position prevents admitting successors. */
   queueError?: Error;
   /** Checkouts requiring local serialization, including holders not provably foreign. */
-  heldCheckouts: ReadonlyMap<string, string>;
-  foreignHeldCheckouts: ReadonlyMap<string, string>;
+  heldCheckouts: ReadonlyMap<string, readonly string[]>;
+  foreignHeldCheckouts: ReadonlyMap<string, readonly string[]>;
+  runParents?: ReadonlyMap<string, string>;
   /** Oldest foreign holder whose missing or corrupt launch and absent path hide its checkout. */
   unknownForeignCheckoutHolder?: string;
   reusableCheckouts: readonly ReusableCheckout[];
@@ -220,16 +221,23 @@ export interface ResourceSlotOccupancy {
 function checkoutHolder(
   slot: Pick<
     ResourceSlotOccupancy,
-    'heldCheckouts' | 'foreignHeldCheckouts' | 'unknownForeignCheckoutHolder'
+    'heldCheckouts' | 'foreignHeldCheckouts' | 'unknownForeignCheckoutHolder' | 'runParents'
   >,
   launch: PreparedWorkflowLaunch
 ): string | undefined {
   const checkout = launchCheckout(launch);
   if (checkout === undefined) return undefined;
+  const ancestors = new Set<string>();
+  let parent = slot.runParents?.get(launch.run.id);
+  while (parent && !ancestors.has(parent)) {
+    ancestors.add(parent);
+    parent = slot.runParents?.get(parent);
+  }
+  const firstOther = (ids: readonly string[] | undefined) => ids?.find(id => !ancestors.has(id));
   return (
-    slot.heldCheckouts.get(checkout) ??
+    firstOther(slot.heldCheckouts.get(checkout)) ??
     (readAdmissionCheckoutGuard(launch)
-      ? (slot.foreignHeldCheckouts.get(checkout) ?? slot.unknownForeignCheckoutHolder)
+      ? (firstOther(slot.foreignHeldCheckouts.get(checkout)) ?? slot.unknownForeignCheckoutHolder)
       : undefined)
   );
 }
@@ -293,7 +301,7 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
     if (start.hostId !== hostId) break;
     admitted.push(start);
     for (const checkout of checkoutKeys(start.launch, undefined, slot.reusableCheckouts))
-      held.set(checkout, start.id);
+      held.set(checkout, [...(held.get(checkout) ?? []), start.id]);
   }
   return admitted;
 }

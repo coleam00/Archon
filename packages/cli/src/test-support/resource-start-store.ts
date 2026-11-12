@@ -83,10 +83,18 @@ export function createInMemoryResourceStartStore(
         (binding?.intent?.resource === request.resource ? binding.intent.capacity : undefined)
     );
   };
+  const withdrawTerminalQueuedStarts = async (resource: string): Promise<void> => {
+    for (const request of requests.values()) {
+      if (request.resource !== resource || request.status !== 'queued') continue;
+      const run = await getRun(request.id);
+      if (run && isTerminalRunStatus(run.status)) request.status = 'withdrawn';
+    }
+  };
   const occupancy = async (
     resource: string,
     pendingId?: string
   ): Promise<ResourceSlotOccupancy> => {
+    await withdrawTerminalQueuedStarts(resource);
     const holders: { id: string }[] = [];
     const candidates: WorkflowRun[] = [];
     const live: (WorkflowRun & { launch: PreparedWorkflowLaunch })[] = [];
@@ -100,6 +108,9 @@ export function createInMemoryResourceStartStore(
     }
     const reusable = await listReusableCheckouts();
     return {
+      runParents: new Map(
+        listRuns().flatMap(run => (run.parent_run_id ? [[run.id, run.parent_run_id] as const] : []))
+      ),
       capacity: resolveResourceCapacity(resourceCaps, resource),
       reusableCheckouts: reusable,
       holders,

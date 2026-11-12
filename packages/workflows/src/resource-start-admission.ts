@@ -49,7 +49,6 @@ export async function awaitResourceStartAdmission(
       await (options.wait?.(signal) ?? setTimeout(1000, undefined, { signal }));
     }
   } catch (error) {
-    if (!signal?.aborted) throw error;
     return withdrawOrReadAdmission(store, disposition.requestId, error);
   }
 }

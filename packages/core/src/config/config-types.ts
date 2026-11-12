@@ -1,3 +1,4 @@
+import type { resourceConcurrencySchema } from './resource-concurrency';
 import type { WorktreeCreateConfig } from '@archon/isolation';
 import type { WorkflowStoreKind } from '@archon/workflows/store';
 import type { ResolvedWorkflowPolicy } from '@archon/workflows/schemas/run-config';
@@ -199,7 +200,7 @@ export interface GlobalConfig {
      */
     providers?: Record<string, number>;
     /** Install-wide resource overrides, read fresh at each admission. */
-    resources?: Record<string, number>;
+    resources?: z.infer<typeof resourceConcurrencySchema>;
   };
 
   /**

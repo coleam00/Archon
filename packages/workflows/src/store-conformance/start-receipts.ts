@@ -97,7 +97,7 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
         launch: holder,
       });
       const input = acceptance();
-      input.bindings[0] = { ...binding, capacity: 2 };
+      input.bindings[0] = { ...binding, capacity: 1 };
       await store.acceptStartReceipt(input);
       const identity = {
         receiptId: input.receipt.id,
@@ -111,6 +111,9 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       await harness.clearDeclaredCapacity(prepared.run.id);
       harness.resourceCaps.clear();
       store = await harness.reopenStore();
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
+      expect((await store.getResourceStartRequest(prepared.run.id))?.status).toBe('queued');
+      await store.cancelWorkflowRun(holder.run.id);
       expect(
         await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
       ).toMatchObject([{ runId: prepared.run.id }]);

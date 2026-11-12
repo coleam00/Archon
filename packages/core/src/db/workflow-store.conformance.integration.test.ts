@@ -1,3 +1,4 @@
+import { assertCapturedCapacityAdmission } from '../workflows/resource-capacity-test-fixture';
 // @archon-test-isolated
 import { expect, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
@@ -29,6 +30,14 @@ const makeHarness = async () => {
   }
 };
 describeWorkflowStoreConformance('SQLite', makeHarness);
+test('legacy captured source controls real store admission after reopen', async () => {
+  const harness = await makeHarness();
+  try {
+    await assertCapturedCapacityAdmission(harness);
+  } finally {
+    await harness.close();
+  }
+});
 
 describeSqlStatusReadConformance(makeHarness);
 

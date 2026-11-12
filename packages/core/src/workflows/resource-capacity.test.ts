@@ -1,3 +1,9 @@
+import { z } from 'zod';
+import { assertCapturedCapacityAdmission } from './resource-capacity-test-fixture';
+import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { commit } from '@archon/workflows/file-store';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 import { expect, test } from 'bun:test';
 import { mkdtemp, mkdir, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -53,4 +59,26 @@ test('legacy declaration recovery reads the verified selected capture, not live 
     'altered'
   );
   await expect(read(prepared, 'build')).rejects.toThrow();
+});
+
+test('legacy captured source controls real file store admission after reopen', async () => {
+  const root = roots(await mkdtemp(join(tmpdir(), 'legacy-file-capacity-')));
+  const reopenStore = () =>
+    createFileWorkflowStore({
+      root,
+      resourceCapacityPolicy: {
+        readCapturedDeclaration: installResourceCapacityPolicy.readCapturedDeclaration,
+      },
+    });
+  await assertCapturedCapacityAdmission({
+    store: await reopenStore(),
+    reopenStore,
+    clearDeclaredCapacity: id =>
+      commit(root, [], async () => {
+        const path = `resource/requests/${createHash('sha256').update(id).digest('hex')}.json`;
+        const row = z.looseObject({}).parse(JSON.parse(await readFile(join(root, path), 'utf8')));
+        delete row.declaredCapacity;
+        return { result: undefined, changes: { documents: { [path]: row } } };
+      }),
+  });
 });
