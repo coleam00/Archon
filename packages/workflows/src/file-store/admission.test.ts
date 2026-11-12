@@ -271,8 +271,6 @@ test('receipt-linked requests validate their binding and inspection follows ever
   expect((await createAdmissionTransaction(root).occupancy('resource')).queueError).toBeInstanceOf(
     Error
   );
-  await writeFile(join(root, receiptPath), matching);
-  await unlink(damagedPath);
   expect(receipt).not.toHaveProperty('createdAt');
   expect(receipt?.bindings[0]).not.toHaveProperty('requestIds');
   expect(await store.getResourceStartRequest(first.launch.run.id)).not.toHaveProperty('position');
