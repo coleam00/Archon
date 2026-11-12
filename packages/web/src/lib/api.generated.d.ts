@@ -8572,6 +8572,7 @@ export interface components {
       };
       runningWorkflows: number;
       version?: string;
+      commit?: components['schemas']['AppCommit'];
       is_docker: boolean;
       is_wsl: boolean;
       wsl_distro?: string;
@@ -8588,6 +8589,12 @@ export interface components {
         appVersion: string;
         appliedAt: string | null;
       };
+    };
+    AppCommit: {
+      /** @description Short hash of the commit the running server was built or started from */
+      sha: string;
+      /** @description Committer date of that commit (ISO 8601). Null in a compiled binary, which embeds only the hash. */
+      committedAt: string | null;
     };
     UpdateCheckResponse: {
       updateAvailable: boolean;

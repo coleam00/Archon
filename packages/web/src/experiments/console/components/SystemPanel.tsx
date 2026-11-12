@@ -2,11 +2,12 @@ import { type ReactElement } from 'react';
 import * as skill from '../skills';
 import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
-import { useHealth } from '../lib/health';
+import { formatDateTime } from '../lib/format';
+import { useHealth, type HealthResponse } from '../lib/health';
 import { SettingsSection } from './SettingsSection';
 
 /**
- * Read-only system status: server/adapter/db/version, concurrency, running
+ * Read-only system status: server/adapter/db/version/commit, concurrency, running
  * workflows, active platform adapters, and the update-check.
  */
 export function SystemPanel(): ReactElement {
@@ -38,6 +39,7 @@ export function SystemPanel(): ReactElement {
         <Row label="adapter" value={health.adapter} />
         <Row label="database" value={config?.database ?? '—'} />
         <Row label="version" value={health.version ?? '—'} />
+        <Row label="commit" value={commitLabel(health.commit)} />
         <Row
           label="concurrency"
           value={`${health.concurrency.active} / ${health.concurrency.maxConcurrent} active`}
@@ -72,6 +74,13 @@ export function SystemPanel(): ReactElement {
       </div>
     </SettingsSection>
   );
+}
+
+/** A binary embeds only the hash, so its commit has no date. */
+function commitLabel(commit: HealthResponse['commit']): string {
+  if (commit === undefined) return '—';
+  if (commit.committedAt === null) return commit.sha;
+  return `${commit.sha} · ${formatDateTime(commit.committedAt)}`;
 }
 
 /**
