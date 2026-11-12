@@ -356,6 +356,58 @@ describe('formatSubprocessFailure', () => {
     expect(userMessage).not.toContain('[exit');
     expect(userMessage).toContain('diagnostic');
   });
+
+  it('returns exitCode as a number when code is numeric', () => {
+    const result = formatSubprocessFailure(
+      { message: 'Command failed: bash -c script\n', stderr: 'err', code: 2 },
+      "Bash node 'b1'"
+    );
+    expect(result.exitCode).toBe(2);
+  });
+
+  it('returns exitCode undefined when code is a string (spawn error)', () => {
+    const result = formatSubprocessFailure(
+      { message: 'spawn bash ENOENT', code: 'ENOENT' },
+      "Bash node 'b1'"
+    );
+    expect(result.exitCode).toBeUndefined();
+  });
+
+  it('captures stdout untrimmed as the failure output, separate from the diagnostic', () => {
+    const result = formatSubprocessFailure(
+      { message: 'Command failed: bash -c script\n', stdout: '  captured\noutput\n\n', code: 1 },
+      "Bash node 'b1'"
+    );
+    expect(result.capturedOutput).toEqual({ text: '  captured\noutput\n\n' });
+    // The error sentence still reads from the trimmed diagnostic.
+    expect(result.userMessage).toBe("Bash node 'b1' failed [exit 1]: captured\noutput");
+  });
+
+  it('keeps whitespace-only stdout, and reports none when stdout is empty or absent', () => {
+    const base = { message: 'Command failed: bash -c script\n', code: 1 };
+    expect(formatSubprocessFailure({ ...base, stdout: '\n' }, 'x').capturedOutput).toEqual({
+      text: '\n',
+    });
+    expect(formatSubprocessFailure({ ...base, stdout: '' }, 'x').capturedOutput).toBeUndefined();
+    expect(
+      formatSubprocessFailure({ ...base, stderr: 'only stderr' }, 'x').capturedOutput
+    ).toBeUndefined();
+  });
+
+  it('cuts over-budget stdout to its tail and marks the output truncated', () => {
+    const stdout = `HEAD${'x'.repeat(2996)}TAIL`;
+    const { capturedOutput } = formatSubprocessFailure(
+      { message: 'Command failed: bash -c script\n', stdout, stderr: 'noisy stderr', code: 1 },
+      "Bash node 'b1'"
+    );
+    // Stderr shares the diagnostic's budget but not the captured output's.
+    expect(capturedOutput?.text).toBe(stdout.slice(-2000));
+    expect(capturedOutput?.persisted).toEqual({
+      text: stdout.slice(-2000),
+      truncated: true,
+      originalBytes: 3004,
+    });
+  });
 });
 
 describe('getRetryDelayMs', () => {
