@@ -1,4 +1,9 @@
 import {
+  bindRunSlotReleaseStore,
+  publishRunSlotRelease,
+  subscribeRunSlotRelease,
+} from '@archon/workflows/run-slot-release';
+import {
   mockLogger,
   mockRunLiveOwnerClose,
   mockStartRunLiveOwner,
@@ -334,23 +339,31 @@ describe('workflowRunCommand — progress rendering', () => {
     }
   );
 
-  it.each([false, true])(
-    'releases foreground host images after execution (failure=%s)',
-    async fails => {
+  it.each(['safe', 'exception', 'warning'] as const)(
+    'releases foreground host images after execution (%s)',
+    async outcome => {
+      const fails = outcome === 'exception';
       setupWorkflowMocks();
       const { executeWorkflow } = require('@archon/workflows/executor');
       let settled = false;
       (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(async () => {
+        await publishRunSlotRelease(host.deps.store, 'test-run-id');
         settled = true;
         return { success: true, workflowRunId: 'test-run-id' };
       });
       const host = createTestWorkflowHost();
+      bindRunSlotReleaseStore(host.deps.store, () => host.deps.store);
       const failure = new Error('Docker denied image removal');
       const release = mock(async (_runId: string) => {
         expect(settled).toBe(true);
         if (fails) throw failure;
+        if (outcome === 'warning') return ['image inventory inconclusive'];
       });
       host.deps.releaseRunResources = release;
+      const drained: string[] = [];
+      const dispose = subscribeRunSlotRelease(host.deps.store, async ids => {
+        drained.push(...ids);
+      });
       mockFolderBackendDestroy.mockClear();
       const warning = spyOn(console, 'error').mockImplementation(() => {});
       try {
@@ -371,10 +384,12 @@ describe('workflowRunCommand — progress rendering', () => {
           await execution;
           expect(warning).not.toHaveBeenCalled();
         }
+        expect(drained).toEqual(outcome === 'safe' ? ['test-run-id'] : []);
         expect(release).toHaveBeenCalledTimes(1);
         expect(release).toHaveBeenCalledWith('test-run-id');
         expect(mockFolderBackendDestroy).not.toHaveBeenCalled();
       } finally {
+        dispose();
         warning.mockRestore();
       }
     }
