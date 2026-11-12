@@ -59,7 +59,7 @@ describe('chatCommand', () => {
     expect(createHost).toHaveBeenCalledWith(true);
     const context = mockHandleMessage.mock.calls[0][3];
     expect(context?.actor).toEqual({ kind: 'operator' });
-    expect(context?.workflowOperations).toBe(host.operations);
+    expect(context?.workflowOperations === host.operations).toBe(true);
     expect(context?.afterOwnedExecution).toBe(host.afterOwnedExecution);
   });
 
