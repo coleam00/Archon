@@ -278,7 +278,8 @@ nodes:
 This is useful for sandboxing — the AI can only interact through the MCP server
 and cannot touch the filesystem or run shell commands. Codex currently does not
 support Archon's `allowed_tools` / `denied_tools` restrictions, so this pattern
-is enforced for Claude nodes but not Codex nodes.
+is enforced for Claude nodes but not Codex nodes. On Copilot, `allowed_tools: []`
+also removes the MCP tools; use `allowed_tools: ["mcp:*"]` there instead.
 
 ## Connection Failure Handling
 
