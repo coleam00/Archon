@@ -1706,8 +1706,6 @@ test.each(['child', 'shared-checkout', 'independent-checkout', 'continuation-pri
     if (priority) {
       await store.completeWorkflowRun(second.run.id, { duration_ms: 1 });
     } else {
-      const paused = await store.getWorkflowRun(first.run.id);
-      if (!paused) throw new Error('Missing paused run');
       await releaseContinuablePauseSlot(host.deps, paused);
     }
     if (scenario === 'independent-checkout') expect(dispatched).toEqual([second.run.id]);
