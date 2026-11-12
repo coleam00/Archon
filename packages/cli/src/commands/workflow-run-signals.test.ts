@@ -81,6 +81,40 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     delete process.env.ARCHON_DETACHED_RUN_OWNER;
   });
 
+  it('drains once before a signal exits during terminal progress cleanup', async () => {
+    setupWorkflowMocks();
+    const before = process.listeners('SIGTERM');
+    const exited = Promise.withResolvers<void>();
+    let drainCount = 0;
+    let drainsAtExit = -1;
+    exitSpy.mockImplementationOnce((() => {
+      drainsAtExit = drainCount;
+      exited.resolve();
+    }) as never);
+    const { executeWorkflow } = require('@archon/workflows/executor');
+    (executeWorkflow as ReturnType<typeof mock>).mockImplementationOnce(
+      async (...args: Parameters<typeof import('@archon/workflows/executor').executeWorkflow>) => {
+        args[7]?.onExecutionClaimed?.(null);
+        return { success: true, workflowRunId: 'test-run-id' };
+      }
+    );
+    const host = createTestWorkflowHost();
+    host.afterOwnedExecution = async () => {
+      drainCount++;
+    };
+    host.engine.subscribe = async () => ({
+      close: async () => {
+        const [handler] = addedSigtermListeners(before);
+        expect(handler).toBeDefined();
+        handler();
+        await exited.promise;
+      },
+    });
+    await workflowRunCommand(host, '/test/path', 'plan', 'hello', {});
+    expect(drainsAtExit).toBe(1);
+    expect(drainCount).toBe(1);
+  });
+
   it('removes SIGTERM/SIGINT handlers once executeWorkflow settles (no leak, no stacking)', async () => {
     const sigtermBaseline = process.listenerCount('SIGTERM');
     const sigintBaseline = process.listenerCount('SIGINT');

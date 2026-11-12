@@ -98,7 +98,10 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
         return;
       }
-      if (input.isExecutionSettled?.()) return;
+      if (input.isExecutionSettled?.()) {
+        ownedSettlement = true;
+        return;
+      }
       const expectedExecutionClaim = input.getExecutionClaim();
       if (expectedExecutionClaim === undefined) return;
       cleanupAllowed = false;
