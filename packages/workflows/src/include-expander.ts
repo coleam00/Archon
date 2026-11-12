@@ -59,7 +59,11 @@ import {
 import { resolveWorkflow } from './graph-plan';
 import type { IncludeCommandContent } from './compiled-command';
 import { IncludeExpansionError } from './include/expansion-error';
-import { instantiateResolvedInclude, type ExpandedInclude } from './include/inline';
+import {
+  boundaryIdComponent,
+  instantiateResolvedInclude,
+  type ExpandedInclude,
+} from './include/inline';
 import type { ExecInputSource } from './exec-input-validation';
 import {
   applyOutputRefRename,
@@ -387,7 +391,7 @@ function expandIncludeDirective(
     child,
     expansion.commandContents,
     expansion.namedScripts,
-    `${declarationScope}${node.id}`
+    `${declarationScope}${boundaryIdComponent(node.id)}`
   );
   list.includesById.set(node.id, inlined);
   list.includeAliases.set(inlined.primarySink, node.id);
@@ -407,7 +411,7 @@ function expandLoopGroupBody(
     node.loop_group.nodes,
     workflowName,
     stack,
-    `${declarationScope}${node.id}.`
+    `${declarationScope}${boundaryIdComponent(node.id)}.`
   );
   list.includedRequirements.push(...body.includedRequirements);
   for (const [sink, alias] of body.includeAliases) list.includeAliases.set(sink, alias);

@@ -274,7 +274,10 @@ export function formatDryRunTrace(result: DryRunResult): string {
 }
 
 function formatDryRunReason(entry: DryRunTraceEntry): string {
-  if (entry.state === 'skipped') return ` — ${entry.reason} (${formatSkipCause(entry.cause)})`;
+  if (entry.state === 'skipped') {
+    const diagnostic = entry.diagnostic ? `\n  diagnostic: ${entry.diagnostic}` : '';
+    return ` — ${entry.reason} (${formatSkipCause(entry.cause)})${diagnostic}`;
+  }
   return entry.reason ? ` — ${entry.reason}` : '';
 }
 

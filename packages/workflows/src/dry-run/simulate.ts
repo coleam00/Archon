@@ -46,7 +46,8 @@ function isReached(
       ctx,
       skipReasonForCause(boundaryDecision.cause),
       boundaryDecision.cause,
-      iteration
+      iteration,
+      boundaryDecision.error instanceof Error ? boundaryDecision.error.message : undefined
     );
     return false;
   }

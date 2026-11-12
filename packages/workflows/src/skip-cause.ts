@@ -12,7 +12,7 @@ function formatCauseDetail(cause: SkipCause): string {
     case 'condition':
       return `condition: ${cause.expr}`;
     case 'condition_parse_error':
-      return `condition parse error: ${cause.expr}`;
+      return `${cause.boundary ? 'condition evaluation error' : 'condition parse error'}: ${cause.expr}`;
     case 'timeout':
       return 'timeout';
     case 'upstream_failed':

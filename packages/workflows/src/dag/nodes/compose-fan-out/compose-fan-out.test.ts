@@ -133,9 +133,7 @@ nodes:
     );
     expect(owners).toEqual(
       new Set(
-        buildInstanceSnapshots([1, 2]).map(
-          snapshot => `${composeScope()}__${snapshot.identity}__cycle.inc`
-        )
+        buildInstanceSnapshots([1, 2]).map(snapshot => `//fan/${snapshot.identity}__cycle.inc`)
       )
     );
     for (const event of skips)

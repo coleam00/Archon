@@ -333,7 +333,12 @@ export function instantiateResolvedInclude(
   // instance passes none: the load-time instantiation of the same block already checked
   // its named scripts' pack-setting reads.
   namedScripts: ReadonlyMap<string, ExecInputSource> = new Map(),
-  includeId = includeNode.id
+  includeId = boundaryIdComponent(includeNode.id)
 ): ExpandedInclude {
   return inlineInclude(includeNode, child, commandContents, namedScripts, includeId);
+}
+
+// URI encoding leaves "_" and "." intact, but those delimit include ancestry.
+export function boundaryIdComponent(id: string): string {
+  return encodeURIComponent(id).replaceAll('_', '%5F').replaceAll('.', '%2E');
 }

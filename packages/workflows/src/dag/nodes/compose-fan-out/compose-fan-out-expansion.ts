@@ -7,7 +7,7 @@ import type {
 } from '../../../schemas';
 import { type JsonValue } from '../../../output-ref';
 import type { IncludeCommandContent } from '../../../compiled-command';
-import { instantiateResolvedInclude } from '../../../include/inline';
+import { boundaryIdComponent, instantiateResolvedInclude } from '../../../include/inline';
 import { buildInstanceSnapshots, type FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { getLog } from '../../log';
 import { type RunLayersContext } from '../../run-context';
@@ -111,7 +111,7 @@ export function expandComposeInstance(
   inputs: Record<string, JsonValue>,
   definition: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent>,
-  includeId = `${node.id}__${identity}`
+  includeId = `${boundaryIdComponent(node.id)}/${boundaryIdComponent(identity)}`
 ): { nodes: DagNode[]; primarySink: string } | { error: string } {
   const directiveId = `${node.id}__${identity}`;
   const directive: IncludeDirective = {

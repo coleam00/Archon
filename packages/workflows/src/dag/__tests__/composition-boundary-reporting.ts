@@ -1,4 +1,5 @@
 import { expect, it, spyOn } from 'bun:test';
+import { runInputsMetadata } from '../../schemas';
 import { skipCauseSchema, nodeSkipReasonSchema } from '../../schemas/node-state';
 import { readComposedMeta } from '../../compiled-command';
 import { executeDagWorkflow } from '../../dag-executor';
@@ -193,8 +194,16 @@ export function registerBoundaryReportingTests(
           }))
         );
         expect(formatDryRunTrace(dry)).toContain(
-          `when_condition_parse_error (condition parse error: ${expr} [include 'cycle.inc', workflow 'body-block'])`
+          `when_condition_parse_error (condition evaluation error: ${expr} [include 'cycle.inc', workflow 'body-block'])`
         );
+        if (expr.includes('absent')) {
+          const failedEvaluation = dry.trace.find(e => e.state === 'skipped');
+          expect(failedEvaluation?.state === 'skipped' && failedEvaluation.diagnostic).toContain(
+            'absent'
+          );
+          expect(formatDryRunTrace(dry)).toContain('diagnostic:');
+          expect(formatDryRunTrace(dry)).not.toContain('condition parse error:');
+        }
         await run('boundary-error', true);
         expect(deliveredMessages(platform).filter(m => m.startsWith("Include '"))).toEqual([
           message,
@@ -211,6 +220,169 @@ export function registerBoundaryReportingTests(
       }
     });
   }
+
+  for (const source of ['output', 'input'] as const) {
+    for (const value of [{ ready: true }, ['go']]) {
+      it(`reports a structured ${source} ${Array.isArray(value) ? 'array' : 'object'} gate only once`, async () => {
+        const nodes = fixture.expandedGatedParentNodes('false-condition');
+        const expr = source === 'input' ? "$INPUTS.route == 'go'" : "$gate.output.route == 'go'";
+        for (const node of nodes) {
+          for (const boundary of readComposedMeta(node)?.boundaries ?? []) boundary.when = expr;
+        }
+        const workflow = resolveTestWorkflow({
+          name: 'structured-gate',
+          nodes,
+          inputs: { route: { default: value } },
+        });
+        const deps = createMockDeps();
+        const platform = createMockPlatform();
+        const errors = spyOn(getLog(), 'error');
+        try {
+          await executeDagWorkflow(
+            dagOptions({
+              deps,
+              platform,
+              cwd: fixture.testDir,
+              workflow,
+              workflowRun: {
+                ...makeWorkflowRun('structured-gate'),
+                metadata: runInputsMetadata({ route: value }),
+              },
+              priorCompletedNodes: new Map([
+                ['gate', { state: 'completed', output: JSON.stringify({ route: value }) }],
+              ]),
+            })
+          );
+          expect(
+            errors.mock.calls.filter(
+              call =>
+                call[1] === 'dag_node_skipped_condition_parse_error' ||
+                call[1] === 'dag.condition_field_not_primitive'
+            )
+          ).toHaveLength(1);
+          expect(deliveredMessages(platform).filter(m => m.startsWith("Include '"))).toHaveLength(
+            1
+          );
+          const report = errors.mock.calls.find(
+            call => call[1] === 'dag_node_skipped_condition_parse_error'
+          )?.[0];
+          expect(report).toHaveProperty(
+            'err',
+            expect.objectContaining({ message: expect.stringContaining('resolved to an') })
+          );
+          const ordinary = resolveTestWorkflow({
+            name: 'ordinary-structured-gate',
+            inputs: { route: { default: value } },
+            nodes: fixture.buildWf('ordinary-nodes', [
+              { id: 'gate', bash: 'echo unused' },
+              { id: 'gated', bash: 'exit 99', depends_on: ['gate'], when: expr },
+            ]).nodes,
+          });
+          errors.mockClear();
+          const ordinaryDeps = createMockDeps();
+          await executeDagWorkflow(
+            dagOptions({
+              deps: ordinaryDeps,
+              platform,
+              cwd: fixture.testDir,
+              workflow: ordinary,
+              workflowRun: {
+                ...makeWorkflowRun('ordinary-structured'),
+                metadata: runInputsMetadata({ route: value }),
+              },
+              priorCompletedNodes: new Map([
+                ['gate', { output: JSON.stringify({ route: value }) }],
+              ]),
+            })
+          );
+          expect(
+            fixture
+              .eventList(ordinaryDeps)
+              .find(e => e.event_type === 'node_failed' && e.step_name === 'gated')?.data?.error
+          ).toContain('resolved to an');
+          expect(
+            errors.mock.calls.some(
+              call => call[0] && typeof call[0] === 'object' && 'err' in call[0]
+            )
+          ).toBe(true);
+          const dry = await dryRunWorkflow({
+            workflow,
+            userMessage: '',
+            cwd: fixture.testDir,
+            stubs: { gate: JSON.stringify({ route: value }) },
+          });
+          expect(formatDryRunTrace(dry)).toContain(
+            `resolved to an ${Array.isArray(value) ? 'array' : 'object'}`
+          );
+          expect(formatDryRunTrace(dry)).toContain('condition evaluation error:');
+        } finally {
+          errors.mockRestore();
+        }
+      });
+    }
+  }
+
+  it('keeps colliding authored boundary names distinct through reporting and resume', async () => {
+    const leaf = fixture.buildWf('collision-leaf', [{ id: 'work', bash: 'exit 99' }]);
+    const otherLeaf = fixture.buildWf('other-leaf', [{ id: 'other', bash: 'exit 99' }]);
+    const middle = {
+      ...fixture.buildWf('collision-middle', [
+        {
+          id: 'inner',
+          include: 'collision-leaf',
+          when: "$INPUTS.route == 'go'",
+          with: { route: '$INPUTS.route' },
+        },
+      ]),
+      inputs: { route: { required: true } },
+    };
+    const parent = fixture.buildWf('collision-parent', [
+      { id: 'source', bash: 'printf go' },
+      {
+        id: 'outer__inner',
+        include: 'other-leaf',
+        depends_on: ['source'],
+        when: "$source.output == 'go'",
+      },
+      { id: 'outer', include: 'collision-middle', with: { route: '$source.output' } },
+    ]);
+    const expanded = expandWorkflowIncludes(
+      new Map([
+        ['other-leaf', otherLeaf],
+        ['collision-leaf', leaf],
+        ['collision-middle', middle],
+        ['collision-parent', parent],
+      ])
+    );
+    expect(expanded.errors).toEqual([]);
+    const workflow = expanded.workflows.get('collision-parent')!;
+    for (const node of workflow.nodes) {
+      for (const boundary of readComposedMeta(node)?.boundaries ?? [])
+        boundary.when = "$source.output = 'go'";
+    }
+    const deps = createMockDeps();
+    const platform = createMockPlatform();
+    const run = () =>
+      executeDagWorkflow(
+        dagOptions({
+          deps,
+          platform,
+          cwd: fixture.testDir,
+          workflow,
+          workflowRun: makeWorkflowRun('colliding-boundaries'),
+          priorCompletedNodes: new Map(),
+        })
+      );
+    await run();
+    expect(deliveredMessages(platform).filter(m => m.startsWith("Include '"))).toHaveLength(2);
+    const identities = fixture
+      .eventList(deps)
+      .filter(e => e.event_type === 'node_skipped')
+      .map(e => skipCauseSchema.parse(e.data?.cause).boundary?.includeId);
+    expect(new Set(identities)).toEqual(new Set(['outer%5F%5Finner', 'outer__inner']));
+    await run();
+    expect(deliveredMessages(platform).filter(m => m.startsWith("Include '"))).toHaveLength(2);
+  });
 
   it('reports separate includes with identical malformed expressions once each, including entries', async () => {
     const block = fixture.buildWf('peers', [

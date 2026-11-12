@@ -1,3 +1,4 @@
+import { boundaryIdComponent } from '../../../include/inline';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { attemptSpend } from '../../../run-budget';
 import { nodeInvocationKey } from '../../../node-record-reader';
@@ -429,13 +430,19 @@ export async function runComposeInstance(
 ): Promise<ComposeInstanceOutcome> {
   let expanded: { nodes: DagNode[]; primarySink: string } | { error: string };
   try {
+    const boundaryScope = [
+      boundaryIdComponent(scope.ctx.stepNamePrefix),
+      scope.ctx.loopGroupPath.map(frame => boundaryIdComponent(frame.groupId)).join('.'),
+      boundaryIdComponent(scope.node.id),
+      boundaryIdComponent(snapshot.identity),
+    ].join('/');
     expanded = expandComposeInstance(
       scope.node,
       snapshot.identity,
       snapshot.inputs,
       scope.definition,
       scope.commandContents,
-      `${scope.fanOutScopeName}__${snapshot.identity}`
+      boundaryScope
     );
   } catch (err) {
     expanded = { error: (err as Error).message };

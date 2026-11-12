@@ -53,7 +53,11 @@ describe('buildNodeSummaries', () => {
     try {
       for (const [index, cause] of causes.entries()) {
         expect(formatSkipCause(cause)).toBe(expected[index]!);
-        const rendered = `${expected[index]} [include 'cycle.review', workflow 'review-block']`;
+        const detail =
+          cause.kind === 'condition_parse_error'
+            ? 'condition evaluation error: $INPUTS.missing'
+            : expected[index];
+        const rendered = `${detail} [include 'cycle.review', workflow 'review-block']`;
         expect(formatSkipCause({ ...cause, boundary })).toBe(rendered);
         printVerboseNodes([
           event(`skip-${index}`, 'node_skipped', 'review__node', '2026-11-12T10:00:00Z', {
