@@ -508,3 +508,33 @@ test('admission watches apply project and label filters and checkpoint only acce
     }
   }
 });
+
+test('witness probing crosses empty nonterminal admission pages', async () => {
+  const { store, drop } = await fixture();
+  const after = await attentionFeedStart(store);
+  await drop('unreadable', crypto.randomUUID());
+  const page = await readAttentionFeed(store, after, 100);
+  const unreadable = page.deliveries.find(row => row.kind === 'admission');
+  if (!unreadable) throw new Error('no admission');
+  for (let i = 0; i < 35; i++) await drop(null);
+  const readable = await drop('readable');
+  const empty = await readAttentionFeed(store, unreadable.cursor, 100);
+  expect(empty.deliveries).toHaveLength(0);
+  expect(empty.caughtUp).toBe(false);
+  const tail = await readAttentionFeed(store, empty.next, 100);
+  expect(tail.caughtUp).toBe(true);
+  expect(tail.deliveries).toMatchObject([{ kind: 'admission', facts: { requestId: readable } }]);
+  const { hasReadableAttentionWitness } = await import('./attention-watch-witness');
+  const probed: string[] = [];
+  expect(
+    await hasReadableAttentionWitness(
+      store,
+      unreadable,
+      async candidate => {
+        if (candidate.kind === 'admission') probed.push(candidate.facts.requestId);
+      },
+      () => false
+    )
+  ).toBe(true);
+  expect(probed).toEqual([readable!]);
+});

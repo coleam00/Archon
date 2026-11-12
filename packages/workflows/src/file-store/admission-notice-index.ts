@@ -1,7 +1,13 @@
 import { readdir, rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { z } from 'zod';
-import { receiptSchema, requestSchema, pathFor, type Receipt } from './admission-documents';
+import {
+  receiptSchema,
+  requestSchema,
+  bindingSchema,
+  pathFor,
+  type Receipt,
+} from './admission-documents';
 import { documentPaths } from './admission-transaction';
 import { readJson, replaceJson, syncDirectory } from './commit';
 
@@ -11,8 +17,8 @@ export const admissionPositionSchema = z.tuple([sequenceSchema, requestSchema.sh
 export type AdmissionPosition = z.infer<typeof admissionPositionSchema>;
 const entrySchema = z.object({
   position: z.tuple(noticePositionItems),
-  receiptId: z.string(),
-  bindingId: z.string(),
+  receiptId: receiptSchema.shape.id,
+  bindingId: bindingSchema.shape.bindingId,
   receivedAt: z.number(),
 });
 export type AdmissionIndexEntry = z.infer<typeof entrySchema>;

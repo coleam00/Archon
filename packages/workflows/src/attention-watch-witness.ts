@@ -49,7 +49,6 @@ export async function hasReadableAttentionWitness(
   const probed = new Set([deliveryIdentity(delivery)]);
   while (!isClosed()) {
     const page = await readAttentionFeed(store, cursor, 100);
-    if (isClosed() || page.deliveries.length === 0) return false;
     for (const candidate of page.deliveries) {
       if (isClosed()) return false;
       const identity = deliveryIdentity(candidate);
@@ -57,6 +56,7 @@ export async function hasReadableAttentionWitness(
       probed.add(identity);
       if (await probe(candidate)) return !isClosed();
     }
+    if (page.caughtUp) return false;
     cursor = page.next;
   }
   return false;
