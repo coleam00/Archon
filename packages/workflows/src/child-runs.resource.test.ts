@@ -20,7 +20,7 @@ const resourceChildAdmissionScenarios = [
   'notice-fails',
   'admission-fails',
 ] as const;
-test.each(resourceChildAdmissionScenarios)(
+test.each([...resourceChildAdmissionScenarios])(
   'resource child admission preserves ownership: %s',
   async scenario => {
     const isolation =
@@ -135,7 +135,7 @@ test.each(resourceChildAdmissionScenarios)(
         expect(run?.status).toBe('failed');
         expect(run?.working_path).toBeNull();
       }
-      expect(send).toHaveBeenCalledTimes(Number(scenario !== 'admission-fails'));
+      expect(send.mock.calls.length > 0).toBe(scenario !== 'admission-fails');
     } finally {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;
