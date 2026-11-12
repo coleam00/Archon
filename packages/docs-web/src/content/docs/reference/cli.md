@@ -1130,7 +1130,7 @@ archon workflow attention --json --count-by label:class --since 30d
 archon workflow attention --json --count-by answerer --since 30d
 archon workflow attention <run-id> --json                          # one item
 archon workflow attention --watch --json --all                     # what needs someone, as it happens
-archon workflow attention --watch --json --label merge=pr          # one class of question
+archon workflow attention --watch --json --label stage=merge       # one queue's questions
 archon workflow attention --watch --notices --json                 # also runs that ended or resumed, and notices
 archon workflow attention --notices --since 24h --json             # the notices runs emitted in a window
 archon workflow attention --notices --since 24h --count-by label:kind

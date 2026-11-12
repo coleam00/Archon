@@ -11,7 +11,7 @@ description: |
   a conflict, a stale verdict or red the change caused goes back to the build queue,
   and the default branch's CI after a merge is the next sweep's first fact. A clear
   case acts on its own; anything unclear pauses as one attention item whose answer is
-  a declared choice.
+  a declared option.
 
   Use when: a trigger binding the operator installed starts it (see
   https://archon.diy/guides/sdlc-operations/#merge-queue).
@@ -107,7 +107,7 @@ nodes:
       properties:
         # One decision per pull request. Each action admits only what it can act on: a
         # return carries the brief the build queue's next round starts from, and an ask
-        # carries its question, with that brief whenever one of its choices returns.
+        # carries the wait's own fields, with that brief whenever one of its options returns.
         decisions:
           type: array
           items:
@@ -123,8 +123,8 @@ nodes:
                   reran: &reran { type: boolean }
                   reason: &reason { type: string, pattern: '\S' }
                   brief: { type: string }
-                  attention: { type: 'null' }
-                required: &decision [number, action, class, head, reran, reason, brief, attention]
+                  ask: { type: 'null' }
+                required: &decision [number, action, class, head, reran, reason, brief, ask]
               - type: object
                 additionalProperties: false
                 properties:
@@ -135,7 +135,7 @@ nodes:
                   reran: *reran
                   reason: *reason
                   brief: &brief { type: string, pattern: '\S' }
-                  attention: { type: 'null' }
+                  ask: { type: 'null' }
                 required: *decision
               - type: object
                 additionalProperties: false
@@ -147,38 +147,40 @@ nodes:
                   reran: *reran
                   reason: *reason
                   brief: *brief
-                  attention:
+                  # The wait's fields as the person reads them. Each option's value is
+                  # what the queue does when it is chosen.
+                  ask:
                     type: object
                     additionalProperties: false
                     properties:
-                      what: &what { type: string, pattern: '\S' }
-                      why: &why { type: string, pattern: '\S' }
-                      recommendation: &recommendation
-                        type: object
-                        additionalProperties: false
-                        properties:
-                          choice: { type: string }
-                          why: { type: string, pattern: '\S' }
-                          evidence: { type: string, pattern: '\S' }
-                          confidence: { type: string, enum: [low, medium, high] }
-                          would_change: { type: string, pattern: '\S' }
-                        required: [choice, why, evidence, confidence, would_change]
-                      choices:
+                      question: &question { type: string, pattern: '\S' }
+                      options:
                         type: array
                         minItems: 1
                         items:
                           type: object
                           additionalProperties: false
                           properties:
-                            id: &choice_id { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
-                            label: &choice_label { type: string, pattern: '\S' }
-                            does: &choice_does { type: string, pattern: '\S' }
-                            effect: { type: string, enum: [merge, return, park] }
-                            ruling: &ruling { type: string }
-                          required: &choice [id, label, does, effect, ruling]
-                      if_unanswered: &if_unanswered { type: string, pattern: '\S' }
-                      links: &links { type: array, items: { type: string } }
-                    required: &attention [what, why, recommendation, choices, if_unanswered, links]
+                            id: &option_id { type: string, pattern: '^[a-z0-9]+(-[a-z0-9]+)*$' }
+                            label: &option_label { type: string, pattern: '\S' }
+                            does: &option_does { type: string, pattern: '\S' }
+                            value:
+                              type: object
+                              additionalProperties: false
+                              properties:
+                                effect: { type: string, enum: [merge, return, park] }
+                                ruling: &ruling { type: string }
+                              required: &value [effect, ruling]
+                          required: &option [id, label, does, value]
+                      recommendation: &recommendation
+                        type: object
+                        additionalProperties: false
+                        properties:
+                          option: { type: string }
+                          why: { type: string, pattern: '\S' }
+                          confidence: { type: string, enum: [low, medium, high] }
+                        required: [option, why, confidence]
+                    required: &ask_fields [question, options, recommendation]
                 required: *decision
               # An ask with no brief offers no return.
               - type: object
@@ -191,62 +193,69 @@ nodes:
                   reran: *reran
                   reason: *reason
                   brief: { type: string }
-                  attention:
+                  ask:
                     type: object
                     additionalProperties: false
                     properties:
-                      what: *what
-                      why: *why
-                      recommendation: *recommendation
-                      choices:
+                      question: *question
+                      options:
                         type: array
                         minItems: 1
                         items:
                           type: object
                           additionalProperties: false
                           properties:
-                            id: *choice_id
-                            label: *choice_label
-                            does: *choice_does
-                            effect: { type: string, enum: [merge, park] }
-                            ruling: *ruling
-                          required: *choice
-                      if_unanswered: *if_unanswered
-                      links: *links
-                    required: *attention
+                            id: *option_id
+                            label: *option_label
+                            does: *option_does
+                            value:
+                              type: object
+                              additionalProperties: false
+                              properties:
+                                effect: { type: string, enum: [merge, park] }
+                                ruling: *ruling
+                              required: *value
+                          required: *option
+                      recommendation: *recommendation
+                    required: *ask_fields
                 required: *decision
-        # The default branch as the sweep found it; an attention item only when its red holds merges.
+        # The default branch as the sweep found it; an ask only when its red holds merges.
         base:
           type: object
           additionalProperties: false
           properties:
             summary: { type: string }
-            attention:
+            ask:
               type: [object, 'null']
               additionalProperties: false
               properties:
-                what: *what
-                why: *why
-                recommendation: *recommendation
-                choices:
+                question: *question
+                options:
                   type: array
                   minItems: 1
                   items:
                     type: object
                     additionalProperties: false
                     properties:
-                      id: *choice_id
-                      label: *choice_label
-                      does: *choice_does
-                      effect: { type: string, enum: [hold] }
-                      ruling: *ruling
-                    required: *choice
-                if_unanswered: *if_unanswered
-                links: *links
-              required: *attention
-          required: [summary, attention]
+                      id: *option_id
+                      label: *option_label
+                      does: *option_does
+                      value:
+                        type: object
+                        additionalProperties: false
+                        properties:
+                          effect: { type: string, enum: [hold] }
+                          ruling: *ruling
+                        required: *value
+                    required: *option
+                recommendation: *recommendation
+              required: *ask_fields
+          required: [summary, ask]
         summary: { type: string }
-      required: [decisions, base, summary]
+        # What the gate command printed when it could not run at all; empty when every
+        # gate call ran, refusals included. Non-empty fails the record node.
+        gate_error: { type: string }
+      required: [decisions, base, summary, gate_error]
 
   # Checks the decisions, reads back every pull request and records one decision per
   # item; raises at most one attention item. It also runs when no sweep was due.
@@ -261,15 +270,16 @@ nodes:
       items: { from: "$facts.output.items" }
       settled: { from: "$facts.output.settled" }
       base: { from: "$facts.output.base" }
+      ci: "$facts.output.ci"
       sweep: { from: "$sweep.output", if_skipped: null }
     output_format:
       type: object
       properties:
         merged: { type: array, items: { type: integer } }
         summary: { type: string }
-        # The attention message; empty when nothing is asked.
-        attention: { type: string }
-        # Each choice as a wait option; its value is the choice the answer returns.
+        # The raised ask's question, options and recommendation, as the sweep wrote
+        # them: empty, none and null when nothing is asked.
+        question: { type: string }
         options:
           type: array
           items:
@@ -280,12 +290,14 @@ nodes:
               does: { type: string }
               value: { type: object }
             required: [id, label, does, value]
-        # The wait's recommendation; null when nothing is asked.
         recommendation: { type: [object, 'null'] }
-        class: { type: string, enum: ['', pr, base] }
+        kind: { type: string, enum: ['', approve, base] }
+        # The ask's subject labels: the issue and pull request numbers, or empty.
+        item: { type: string }
+        pr: { type: string }
         # What the ruling node needs to act on the answer; null when nothing is asked.
         asked: { type: [object, 'null'] }
-      required: [merged, summary, attention, options, recommendation, class, asked]
+      required: [merged, summary, question, options, recommendation, kind, item, pr, asked]
 
   # An issue its merged pull request left open (`Refs #N`) goes back to intake, the
   # judge of whether the work is delivered. Writes nothing on the work item.
@@ -321,15 +333,18 @@ nodes:
   # other pull requests while this one waits.
   - id: ask
     depends_on: [record]
-    when: "$record.output.attention != ''"
+    when: "$record.output.question != ''"
     wait:
-      attention: "$record.output.attention"
+      attention: "$record.output.question"
       form: select
       options: "$record.output.options"
       other: true
       recommendation: "$record.output.recommendation"
       labels:
-        merge: "$record.output.class"
+        stage: merge
+        kind: "$record.output.kind"
+        item: "$record.output.item"
+        pr: "$record.output.pr"
 
   - id: ruling
     script: ruling
@@ -337,7 +352,7 @@ nodes:
     depends_on: [record, ask]
     with:
       asked: { from: "$record.output.asked" }
-      choice: { from: "$ask.output.value" }
+      decision: "$ask.output.decision"
       text: "$ask.output.text"
     output_format:
       type: object

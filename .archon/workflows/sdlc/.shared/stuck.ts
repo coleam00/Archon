@@ -8,7 +8,7 @@
  * them, so a person looks, instead of reporting an empty queue.
  */
 
-import { stateDocuments } from './state.ts';
+import { state } from 'archon:script';
 import { parseWorkItem } from './workitem.ts';
 
 export interface Stuck {
@@ -19,7 +19,7 @@ export interface Stuck {
 /** Reads only. `runId` is this run, whose own claims are never stuck. */
 export function stuckItems(runId: string): Stuck[] {
   const stuck: Stuck[] = [];
-  for (const stored of stateDocuments('work/')) {
+  for (const stored of state.listValues('work/')) {
     if (stored.value === null) continue;
     let claim: { readonly run_id: string } | null;
     try {

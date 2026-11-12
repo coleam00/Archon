@@ -20,8 +20,8 @@ describe('pack portability check', () => {
   });
 
   test("allows only the forge plugin's install id, in its own file", () => {
-    const line = "export const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';";
-    expect(findLeaks('.archon/workflows/sdlc/.shared/forge.ts', line)).toEqual([]);
+    const line = "const GITHUB_FORGE_PLUGIN = 'coleam00/Archon/plugins/forge-github';";
+    expect(findLeaks('.archon/workflows/sdlc/.shared/forge-check.ts', line)).toEqual([]);
     expect(findLeaks('.archon/workflows/sdlc/.shared/other.ts', line)).toHaveLength(1);
   });
 

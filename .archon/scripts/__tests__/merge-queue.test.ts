@@ -7,7 +7,7 @@ import { trackTempRoots } from './temp-roots';
 import type { BuildRecord } from '../../workflows/sdlc/.shared/build';
 import {
   gateRefusals,
-  type MergeAttention,
+  type MergeAsk,
   type MergeRecord,
   type MergeSettled,
   mergeWaits,
@@ -16,7 +16,7 @@ import {
   UNREADABLE,
 } from '../../workflows/sdlc/.shared/merge';
 import { REVIEW_MARKER, readReviewStamp, reviewCommentBody } from '../../workflows/sdlc/.shared/review-comment';
-import { stateGet, statePut } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import { newWorkItem, parseWorkItem, type TriageFacts, type WorkItem } from '../../workflows/sdlc/.shared/workitem';
 import { type TrackerComment, gitCheckout, hostCli, packScriptRunner, PR, PR_URL, type ScriptRun } from './deliver-checks-harness';
 
@@ -182,14 +182,14 @@ function seed(at: Install, doc: WorkItem): void {
   const name = `work/${String(doc.subject.number)}`;
   inProcess(at, () => {
     if (doc.claim !== null) process.env.WORKFLOW_ID = doc.claim.run_id;
-    const lease = doc.claim === null ? undefined : 'take';
-    expect(statePut(name, doc, stateGet(name).revision, lease)).toBe('ok');
+    const lease = doc.claim === null ? {} : { lease: 'take' as const };
+    expect(state.put(name, doc, { ifRevision: state.get(name).revision, ...lease }).ok).toBe(true);
   });
 }
 
 function stored(at: Install, number = SUBJECT.number): { revision: number; value: WorkItem | null } {
   return inProcess(at, () => {
-    const read = stateGet(`work/${String(number)}`);
+    const read = state.get(`work/${String(number)}`);
     return { revision: read.revision, value: read.value === null ? null : parseWorkItem(read.value) };
   });
 }
@@ -199,8 +199,10 @@ interface FakePr {
   readonly state?: 'OPEN' | 'MERGED' | 'CLOSED';
   readonly headRefOid?: string;
   /** CI at the head; `unknown` is a forge unit state that is neither green nor pending. */
-  readonly checks?: 'green' | 'red' | 'unknown';
+  readonly checks?: 'green' | 'pending' | 'red' | 'unknown';
   readonly threads?: number;
+  /** The default branch's head as the pull request's merge state reports it. */
+  readonly defaultRevision?: string;
   /** Fail every pull request read, or only the listed pull requests. */
   readonly unreadable?: boolean | readonly number[];
   /** The merge is accepted and the pull request stays open, as when the forge queues merges. */
@@ -260,7 +262,7 @@ const forgeOp = (op, request) => {
     const url = ${JSON.stringify(PR_URL.replace(/42$/, ''))} + ref.number;
     return out(true, { title: 'Fix the thing', body: '', pr: { schemaVersion: 1, repo: ref.repo, number: ref.number, url, head: 'feature', base: 'dev', is_draft: false, state: state(), head_repo: ref.repo, head_revision: forgePr.headRefOid, base_revision: null, maintainer_can_modify: null } });
   }
-  if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.mergeStateHead ?? forgePr.headRefOid, default_branch: 'dev', default_revision: ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
+  if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.mergeStateHead ?? forgePr.headRefOid, default_branch: 'dev', default_revision: forgePr.defaultRevision ?? ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
   if (op === 'checks.state') return out(true, { ref, revision: forgePr.checksRevision ?? forgePr.headRefOid, units: units(forgePr.checks) });
   if (op === 'pr.threads') return out(true, { ref, threads: Array.from({ length: forgePr.threads }, (_, index) => ({ id: 'thread-' + index, resolved: false, comments: [{ url: 'thread' }] })) });
   if (op === 'workitem.comments') return out(true, { comments: comments.filter(row => row.issue === undefined).map(row => ({
@@ -305,12 +307,6 @@ function run(
   });
 }
 
-/** The answer's value: the wait returns the chosen choice itself. */
-function choiceOf(asked: string, id: string): string {
-  const { attention } = JSON.parse(asked) as { attention: { choices: { id: string }[] } };
-  return JSON.stringify(attention.choices.find(choice => choice.id === id));
-}
-
 function ok(result: ScriptRun): Record<string, unknown> {
   expect({ code: result.code, stderr: result.stderr }).toEqual({ code: 0, stderr: '' });
   return JSON.parse(result.stdout) as Record<string, unknown>;
@@ -328,23 +324,20 @@ function merges(result: ScriptRun): string[] {
 
 const CLAIMED = { claim: { run_id: 'run-1', at: AT, requests: [] } };
 const ITEMS = JSON.stringify([{ item: SUBJECT, pr: PR, url: PR_URL, facts: FACTS, record: null }]);
-const BASE_GREEN = { summary: 'dev is green', attention: null };
+const BASE_GREEN = { summary: 'dev is green', ask: null };
 
-const ATTENTION: MergeAttention = {
-  what: 'PR 42 changes the SDLC pack; merge it?',
-  why: 'Merging changes every pack run; holding it leaves the fix out.',
-  recommendation: { choice: 'merge', why: 'reviewed Ready', evidence: 'the review report', confidence: 'medium', would_change: 'a failing bench' },
-  choices: [
-    { id: 'merge', label: 'Merge it', does: 'merges it once the gate passes at this head', effect: 'merge', ruling: '' },
-    { id: 'return', label: 'Rework it', does: 'sends it back to the build queue', effect: 'return', ruling: 'Keep the old prompt wording.' },
-    { id: 'park', label: 'Park it', does: 'stops working it', effect: 'park', ruling: '' },
+const QUESTION: MergeAsk = {
+  question: `PR 42 changes the SDLC pack; merge it?\n\nMerging changes every pack run; holding it leaves the fix out.\n\n${PR_URL}`,
+  options: [
+    { id: 'merge', label: 'Merge it', does: 'merges it once the gate passes at this head', value: { effect: 'merge', ruling: '' } },
+    { id: 'return', label: 'Rework it', does: 'sends it back to the build queue', value: { effect: 'return', ruling: 'Keep the old prompt wording.' } },
+    { id: 'park', label: 'Park it', does: 'stops working it', value: { effect: 'park', ruling: '' } },
   ],
-  if_unanswered: 'It waits; nothing else is blocked.',
-  links: [PR_URL],
+  recommendation: { option: 'merge', why: 'reviewed Ready', confidence: 'medium' },
 };
 
 function decision(overrides: Record<string, unknown>): Record<string, unknown> {
-  return { number: 42, action: 'merged', class: 'clear', head: HEAD, reran: false, reason: 'a small fix', brief: '', attention: null, ...overrides };
+  return { number: 42, action: 'merged', class: 'clear', head: HEAD, reran: false, reason: 'a small fix', brief: '', ask: null, ...overrides };
 }
 
 const FACTS_BASE_GREEN = { branch: 'dev', head: OLD, checks: { state: 'green', failing: [], pending: [] } };
@@ -358,7 +351,7 @@ function recordInputs(
     INPUTS_ITEMS: ITEMS,
     INPUTS_SETTLED: '[]',
     INPUTS_BASE: JSON.stringify(FACTS_BASE_GREEN),
-    INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept' }),
+    INPUTS_SWEEP: JSON.stringify({ decisions, base, summary: 'swept', gate_error: '' }),
   };
 }
 
@@ -370,10 +363,10 @@ const BOTH_ITEMS = JSON.stringify([
   { item: OTHER, pr: OTHER_PR, url: OTHER_URL, facts: { ...FACTS, pr: OTHER_PR, url: OTHER_URL }, record: null },
   ...JSON.parse(ITEMS),
 ]);
-const HOLD = { id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', effect: 'hold', ruling: '' };
+const HOLD = { id: 'hold', label: 'Hold merges', does: 'merges nothing until dev is green', value: { effect: 'hold', ruling: '' } };
 const BASE_RED = {
   summary: 'lint red on dev',
-  attention: { ...ATTENTION, what: 'dev is red since PR 43 merged', choices: [HOLD], recommendation: { ...ATTENTION.recommendation, choice: 'hold' } },
+  ask: { question: 'dev is red since PR 43 merged', options: [HOLD], recommendation: { ...QUESTION.recommendation, option: 'hold' } },
 };
 
 describe('the merge queue scripts', () => {
@@ -406,7 +399,8 @@ describe('the merge queue scripts', () => {
       expect(output.items.map(entry => entry.item)).toEqual([OTHER]);
       expect(output.settled[0]?.reason).toContain('HTTP 502');
       ok(run(at, 'record', {
-        ...recordInputs([decision({ number: OTHER_PR.number, action: 'wait', reason: 'CI pending' })]),
+        // Left undecided, so the next sweep reads it again whatever its facts.
+        ...recordInputs([]),
         INPUTS_ITEMS: JSON.stringify(output.items),
         INPUTS_SETTLED: JSON.stringify(output.settled),
       }));
@@ -451,6 +445,17 @@ describe('the merge queue scripts', () => {
     expect(doc.claim).toBeNull();
     expect(doc.facts.merge?.decisions).toHaveLength(4);
     expect(mergeWaits(doc)).toBe(true);
+  }, 60_000);
+
+  test('a gate the sweep could not run fails the record, after the wait is recorded and the claim released', () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const inputs = recordInputs([decision({ action: 'wait', reason: 'the gate could not run' })]);
+    const sweep = { ...(JSON.parse(inputs.INPUTS_SWEEP ?? '') as object), gate_error: "Cannot find package 'archon:script'" };
+    const failed = run(at, 'record', { ...inputs, INPUTS_SWEEP: JSON.stringify(sweep) });
+    expect(failed.code).not.toBe(0);
+    expect(failed.stderr).toContain("the merge gate could not run, so nothing was gated or merged: Cannot find package 'archon:script'");
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
   }, 60_000);
 
   test('a claimed merge the forge does not show fails the record after every other decision is written', () => {
@@ -555,13 +560,13 @@ describe('the merge queue scripts', () => {
   test('a merge the forge reads back is recorded and released at its head, whatever the sweep says', () => {
     const at = install();
     const merged = { state: 'MERGED' } as const;
-    const released = { merged: [42], attention: '', class: '', asked: null };
+    const released = { merged: [42], question: '', kind: '', asked: null };
     // Declared merged; declared at another head; merged by hand, declared wait; merged by hand under an ask.
     const cases = [
       [decision({}), BASE_GREEN],
       [decision({ head: OLD }), BASE_GREEN],
       [decision({ action: 'wait', reason: 'CI pending' }), BASE_GREEN],
-      [decision({ action: 'ask', attention: ATTENTION, brief: 'rework PR 42' }), BASE_GREEN],
+      [decision({ action: 'ask', ask: QUESTION, brief: 'rework PR 42' }), BASE_GREEN],
     ] as const;
     for (const [decided, base] of cases) {
       seed(at, item(BUILT, undefined, CLAIMED));
@@ -569,6 +574,15 @@ describe('the merge queue scripts', () => {
       expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'merged', decisions: [{ decision: 'merged (clear)', head: HEAD }] } } });
       expect(mergeWaits(stored(at).value as WorkItem)).toBe(false);
     }
+  }, 60_000);
+
+  test("an asked pull request keeps its claim, and the wait gets the sweep's question, options and recommendation unchanged, with its labels", () => {
+    const at = install();
+    seed(at, item(BUILT, undefined, CLAIMED));
+    const asked = { by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', ask: QUESTION };
+    const raised = ok(run(at, 'record', recordInputs([decision({ action: 'ask', class: 'unclear', ask: QUESTION, brief: 'rework PR 42' })])));
+    expect(raised).toEqual({ merged: [], summary: 'swept\nPR 42: ask', ...QUESTION, kind: 'approve', item: '7', pr: '42', asked });
+    expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
   test('a decision for a pull request the run did not claim is noted and skipped, and the rest is still recorded', () => {
@@ -580,7 +594,7 @@ describe('the merge queue scripts', () => {
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ reason: 'CI pending' }] } } });
   }, 60_000);
 
-  const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', attention: ATTENTION });
+  const ASKED = JSON.stringify({ by: 'pr', item: SUBJECT, pr: PR, head: HEAD, brief: 'rework PR 42', ask: QUESTION });
   const SELECTED = { INPUTS_MERGE_QUEUE_BINDING: '/bindings/merge-queue.json', INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json' };
   const fireOf = (calls: string): string[] | undefined =>
     readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
@@ -590,7 +604,7 @@ describe('the merge queue scripts', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'merge'), INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
+    expect(ok(run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_DECISION: 'merge', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls }))).toMatchObject({ decision: 'merge', section: '' });
     const doc = stored(at).value as WorkItem;
     expect(doc).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', approval: { head: HEAD } } } });
     expect(mergeWaits(doc)).toBe(true);
@@ -604,7 +618,7 @@ describe('the merge queue scripts', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_CHOICE: choiceOf(ASKED, 'return'), INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: ASKED, INPUTS_DECISION: 'return', INPUTS_TEXT: '', ...SELECTED, ARCHON_CALL_LOG: calls });
     const heading = ok(ruled).section as string;
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the merge queue's question on PR 42, \d{4}-\d{2}-\d{2}\)$/);
     // The returned round starts at once through the build queue's binding, for the item.
@@ -618,11 +632,11 @@ describe('the merge queue scripts', () => {
     expect(doc.facts.build?.brief).toContain(heading);
   }, 60_000);
 
-  test('an `other` answer, which returns no choice, parks a pull request the sweep wrote no brief for', () => {
+  test('an `other` answer, which names no option, parks a pull request the sweep wrote no brief for', () => {
     const at = install();
     seed(at, item(BUILT, merge('asking'), CLAIMED));
     const asked = JSON.stringify({ ...(JSON.parse(ASKED) as object), brief: '' });
-    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_CHOICE: '', INPUTS_TEXT: 'Wait for the release.', ...SELECTED });
+    const ruled = run(at, 'ruling', { INPUTS_ASKED: asked, INPUTS_DECISION: 'other', INPUTS_TEXT: 'Wait for the release.', ...SELECTED });
     expect(ok(ruled)).toMatchObject({ decision: 'park' });
     expect(ruled.bodies[0]).toContain("The maintainer's words: Wait for the release.");
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'parked' } } });
@@ -643,6 +657,98 @@ describe('the merge queue facts and gate', () => {
     expect(output.gate).toContain('gate.ts');
     expect(stored(at).value?.claim?.run_id).toBe('run-1');
     expect(ok(on(at, 'facts', {}, { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"running"}' }))).toMatchObject({ path: 'idle' });
+  }, 60_000);
+
+  test('a pull request that reads the same as at its last wait reaches no agent, and any change to what it waited on does', () => {
+    const at = install();
+    seed(at, item());
+    const pending = { checks: 'pending' } as const;
+    const first = ok(on(at, 'facts', { pr: pending })) as { path: string; items: unknown[]; base: unknown };
+    expect(first.path).toBe('sweep');
+    ok(run(at, 'record', {
+      ...recordInputs([decision({ action: 'wait', reason: 'CI pending' })]),
+      INPUTS_ITEMS: JSON.stringify(first.items),
+      INPUTS_BASE: JSON.stringify(first.base),
+    }));
+    const waited = stored(at).value as WorkItem;
+
+    const same = on(at, 'facts', { pr: pending });
+    expect(same.code).toBe(0);
+    expect(JSON.parse(same.stdout)).toMatchObject({ path: 'idle', items: [], settled: [] });
+    expect(same.stderr).toContain('1 pull request(s) read the same as at their last wait; not swept');
+    // Released with nothing recorded, so the next sweep reads it again.
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { decisions: waited.facts.merge?.decisions } } });
+
+    const partial = { ...REVIEWED, body: reviewCommentBody(HEAD, true, 'open', '# Review report') };
+    const changes: Record<string, [Parameters<typeof run>[3], Record<string, string>?]> = {
+      'checks settled': [{ pr: { checks: 'green' } }],
+      'a thread opened': [{ pr: { ...pending, threads: 1 } }],
+      'a new head': [{ pr: { ...pending, headRefOid: '4'.repeat(40) } }],
+      'the default branch moved': [{ pr: { ...pending, defaultRevision: '5'.repeat(40) } }],
+      'the review left part of the contract open': [{ pr: pending, comments: [partial] }],
+      'the project stopped trusting forge checks': [{ pr: pending }, { INPUTS_CI: 'none' }],
+    };
+    for (const [change, [options, inputs]] of Object.entries(changes)) {
+      seed(at, waited);
+      expect({ change, ...ok(on(at, 'facts', options, inputs)) }).toMatchObject({ change, path: 'sweep', items: [{ item: SUBJECT }] });
+    }
+  }, 60_000);
+
+  test('a wait the facts cannot end, a re-run of failed checks or a merge that did not complete, is decided again by the next sweep', () => {
+    const waits = {
+      'a re-run of failed checks': [{ checks: 'red' }, decision({ action: 'wait', reran: true, reason: 'reran the failed jobs' })],
+      'a merge that did not complete': [{}, decision({ action: 'wait', reason: 'the forge could not verify the merge' })],
+    } as const;
+    for (const [wait, [pr, declared]] of Object.entries(waits)) {
+      const at = install();
+      seed(at, item());
+      const first = ok(on(at, 'facts', { pr })) as { items: unknown[]; base: unknown };
+      ok(run(at, 'record', { ...recordInputs([declared]), INPUTS_ITEMS: JSON.stringify(first.items), INPUTS_BASE: JSON.stringify(first.base) }, { pr }));
+      expect({ wait, ...ok(on(at, 'facts', { pr })) }).toMatchObject({ wait, path: 'sweep', items: [{ item: SUBJECT }] });
+    }
+  }, 60_000);
+
+  test('a red default branch that reads the same as when it was raised reaches no agent, and a green or moved one does', () => {
+    const at = install();
+    seed(at, item());
+    const red = { baseChecks: 'red' } as const;
+    const first = ok(on(at, 'facts', { pr: red })) as { path: string; items: unknown[]; base: unknown };
+    expect(first.path).toBe('sweep');
+    // The branch's question takes the run's wait, so the pull request's own ask is held back.
+    const held = decision({ action: 'ask', class: 'unclear', ask: QUESTION, brief: 'rework PR 42' });
+    const raised = ok(run(at, 'record', { ...recordInputs([held], BASE_RED), INPUTS_ITEMS: JSON.stringify(first.items), INPUTS_BASE: JSON.stringify(first.base) }));
+    expect(raised).toMatchObject({ kind: 'base' });
+    const waiting = stored(at).value as WorkItem;
+
+    const same = on(at, 'facts', { pr: red });
+    expect(same.code).toBe(0);
+    expect(JSON.parse(same.stdout)).toMatchObject({ path: 'idle', items: [] });
+
+    for (const pr of [{}, { ...red, defaultRevision: '5'.repeat(40) }]) {
+      seed(at, waiting);
+      expect(ok(on(at, 'facts', { pr }))).toMatchObject({ path: 'sweep', items: [{ item: SUBJECT }] });
+    }
+
+    // With nothing waiting, a red default branch holds nothing back: no agent, no ask.
+    seed(at, item(BUILT, merge('merged')));
+    expect(ok(on(at, 'facts', { pr: red }))).toMatchObject({ path: 'idle', items: [], base: { checks: { state: 'red' } } });
+  }, 60_000);
+
+  // The command is quoted for a POSIX shell, which is what an agent runs it in; cmd.exe cannot parse it.
+  test.skipIf(process.platform === 'win32')('the gate command facts hands the sweep agent starts when run as the agent runs it, outside a script node', () => {
+    const at = install();
+    seed(at, item());
+    const facts = on(at, 'facts');
+    const { gate } = ok(facts) as { gate: string };
+    const ran = spawnSync(`${gate} --item 7 --pr ${PR_URL} --head ${HEAD}`, {
+      shell: true,
+      cwd: at.checkout,
+      encoding: 'utf8',
+      env: { ...process.env, ...at.env, ARCHON_CLI_COMMAND: JSON.stringify([process.execPath, FAKE_ARCHON]), ARTIFACTS_DIR: facts.artifacts, WORKFLOW_ID: 'run-1' },
+    });
+    // A plain subprocess has no forge stand-in, so the host's own forge answers the gate's
+    // first call: no plugin claims the test host, so its URL resolves to no pull request.
+    expect(ran.stderr).toBe(`merge-queue gate: "${PR_URL}" is not a pull request URL\n`);
   }, 60_000);
 
   test('a review comment from anyone but a listed maintainer is no verdict', () => {

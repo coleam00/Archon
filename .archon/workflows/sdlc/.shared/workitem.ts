@@ -5,8 +5,8 @@
  * The document is the item's state; its labels mirror it, and a label a person adds
  * is a request, never the state. Trust is decided once, by a script, from the
  * project's maintainer list, so no model and no workflow input can raise it. Every
- * event records a request on its item; a run then claims the best waiting item with
- * a conditional write, so two runs never work the same item, and releases the claim
+ * event records a request on its item; its run then claims that item, or the best
+ * waiting one when it does not wait, with a conditional write, so two runs never work the same item, and releases the claim
  * when it is done. A claim whose run the engine reports terminal is released by the
  * next pickup; any other answer leaves it held, because a live owner and an orphan
  * cannot be told apart here.
@@ -20,10 +20,11 @@
 import { createHash } from 'node:crypto';
 import { type BuildRecord, withReleasedRound } from './build.ts';
 import type { Closure } from './close.ts';
-import { record, type QualifiedPr } from './forge.ts';
+import { state, type StateLease, type StateWrite } from 'archon:script';
+import { type QualifiedPr } from './identity.ts';
+import { record } from './inputs.ts';
 import type { MergeRecord } from './merge.ts';
 import type { SplitRecord } from './split.ts';
-import { note } from './io.ts';
 import {
   type LabelVerdict,
   type PackLabel,
@@ -33,15 +34,6 @@ import {
   type WorkType,
   wantedLabels,
 } from './labels.ts';
-import {
-  claimEnded,
-  type Lease,
-  stateAppend,
-  stateDocuments,
-  stateGet,
-  statePut,
-  statePutClaimed,
-} from './state.ts';
 import { OUTPUT_ENUMS } from './outputs.generated.ts';
 
 export type Stage = 'new' | 'needs_maintainer' | Route | 'needs_contract' | 'blocked' | 'close';
@@ -101,6 +93,8 @@ export interface TriageFacts {
   readonly urgency: Field<string>;
   /** Overlapping issues, earlier attempts and merged changes triage opened; absent on older items. */
   readonly related?: readonly { readonly url: string; readonly relation: string }[];
+  /** What a BLOCKED verdict waits on, as triage declared it; absent on any other verdict and on older items. */
+  readonly blocked?: { readonly reason: string; readonly by: readonly string[] };
   readonly at: string;
   readonly run_id: string;
 }
@@ -573,29 +567,43 @@ export function applyDecision(
  */
 export function enqueue(subject: QualifiedPr, request: IntakeRequest): void {
   const name = workItemName(subject.number);
-  const stored = stateGet(name);
+  const stored = state.get(name);
   if (stored.value === null) {
     const created = { ...newWorkItem(subject, request.at), requests: [request] };
-    if (statePut(name, created, stored.revision) === 'ok') return;
+    if (state.put(name, created, { ifRevision: stored.revision }).ok) return;
   }
   const waiting = record(stored.value)?.requests;
   if (!decides(request) && Array.isArray(waiting) && waiting.some(entry => !decides(record(entry) ?? {}))) return;
-  stateAppend(name, '/requests', request);
+  const appended = state.patch(name, [{ op: 'append', path: '/requests', value: request }]);
+  if (!appended.ok) throw new Error(`archon state patch ${name} was refused: ${appended.conflict}`);
+}
+
+/**
+ * Whether the run holding a claim has ended without clearing it, as its lease reports.
+ * A claim with no lease of its run is never proven ended.
+ */
+export function claimEnded(claimRunId: string, stored: { readonly lease: StateLease | null }): boolean {
+  return stored.lease?.runId === claimRunId && !stored.lease.live;
+}
+
+/** A conditional replace of a claimed document; clearing its claim gives its lease back in the same write. */
+export function putClaimed(name: string, value: { readonly claim: unknown }, ifRevision: number): StateWrite {
+  return state.put(name, value, { ifRevision, ...(value.claim === null ? { lease: 'release' as const } : {}) });
 }
 
 export interface Read {
   readonly name: string;
   readonly revision: number;
   readonly doc: WorkItem;
-  readonly lease: Lease | null;
+  readonly lease: StateLease | null;
 }
 
-export function read(name: string, stored = stateGet(name)): Read | undefined {
+export function read(name: string, stored = state.get(name)): Read | undefined {
   if (stored.value === null) return undefined;
   try {
     return { name, revision: stored.revision, doc: parseWorkItem(stored.value), lease: stored.lease };
   } catch (error) {
-    note(`pickup skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`pickup skips ${name}: ${error instanceof Error ? error.message : String(error)}`);
     return undefined;
   }
 }
@@ -616,7 +624,7 @@ export function withPlainReports(doc: WorkItem): WorkItem {
 
 /** The item's stored document, or null when it has none. Reads only; claims nothing. */
 export function readWorkItem(number: number): WorkItem | null {
-  const stored = stateGet(workItemName(number));
+  const stored = state.get(workItemName(number));
   return stored.value === null ? null : parseWorkItem(stored.value);
 }
 
@@ -632,7 +640,7 @@ export function releaseIfTerminal(item: Read, at: string, runId: string, pickup:
   if (claim === null || claim.run_id === runId) return item;
   if (!claimEnded(claim.run_id, item)) {
     if (item.lease?.runId !== claim.run_id) {
-      note(`${pickup.stage} leaves ${item.name} claimed: run ${claim.run_id} holds no engine lease on it`);
+      console.error(`${pickup.stage} leaves ${item.name} claimed: run ${claim.run_id} holds no engine lease on it`);
     }
     return item;
   }
@@ -651,7 +659,7 @@ export function releaseIfTerminal(item: Read, at: string, runId: string, pickup:
       },
     ]),
   };
-  return statePut(item.name, doc, item.revision, 'release') === 'ok'
+  return state.put(item.name, doc, { ifRevision: item.revision, lease: 'release' }).ok
     ? { ...item, revision: item.revision + 1, doc, lease: null }
     : item;
 }
@@ -698,7 +706,7 @@ export function claimNext(
   runId: string,
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
-  const items = stateDocuments('work/')
+  const items = state.listValues('work/')
     .map(stored => read(stored.name, stored))
     .filter((item): item is Read => item !== undefined)
     .map(item => releaseIfTerminal(item, at, runId, pickup));
@@ -717,11 +725,11 @@ export function claimItem(
   pickup: Pickup = INTAKE_PICKUP
 ): WorkItem | null {
   const doc = claimed(candidate, at, runId, pickup);
-  if (statePut(candidate.name, doc, candidate.revision, 'take') === 'ok') return doc;
+  if (state.put(candidate.name, doc, { ifRevision: candidate.revision, lease: 'take' }).ok) return doc;
   const fresh = read(candidate.name);
   if (!claimable(fresh, pickup)) return null;
   const retried = claimed(fresh, at, runId, pickup);
-  return statePut(fresh.name, retried, fresh.revision, 'take') === 'ok' ? retried : null;
+  return state.put(fresh.name, retried, { ifRevision: fresh.revision, lease: 'take' }).ok ? retried : null;
 }
 
 /**
@@ -757,12 +765,12 @@ export function updateClaimed(
   const name = workItemName(subject.number);
   // Enqueues append to the document at any time, so a conflict is ordinary here.
   for (let attempt = 0; attempt < 3; attempt++) {
-    const stored = stateGet(name);
+    const stored = state.get(name);
     const doc = parseWorkItem(stored.value);
     if (doc.claim?.run_id !== runId) throw new Error(`${name} is no longer claimed by this run`);
     const changed = change(doc);
     const next = { ...changed, requests: queued(changed.requests) };
-    if (statePutClaimed(name, next, stored.revision) === 'ok') return next;
+    if (putClaimed(name, next, stored.revision).ok) return next;
   }
   throw new Error(`${name} kept changing: three conditional writes conflicted`);
 }

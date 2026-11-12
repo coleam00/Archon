@@ -11,9 +11,10 @@
  */
 
 import { launchDetached } from '../../.shared/launch.ts';
-import { emit, nullableJson, refuse, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId, state } from 'archon:script';
+import { runUser } from '../../.shared/host.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { ORDER_PREFIX, parseWorkOrder, type WorkOrder } from '../../.shared/order.ts';
-import { runUser, statePut } from '../../.shared/state.ts';
 import { readWorkItem } from '../../.shared/workitem.ts';
 
 interface Declared {
@@ -24,7 +25,7 @@ interface Declared {
 
 function main(): void {
   const runId = workflowRunId();
-  const declared = nullableJson(process.env.INPUTS_ORDER) as Declared | null;
+  const declared = nullableJson(input('order')) as Declared | null;
   // interpret's schema admits a null order beside any decision, the `order` decision included.
   if (declared === null) throw new Error('interpret decided a work order and declared none');
   const name = `${ORDER_PREFIX}${declared.id}`;
@@ -38,11 +39,11 @@ function main(): void {
     status: 'open',
     done_at: null,
   });
-  if (statePut(name, order, 0) === 'conflict') {
+  if (!state.put(name, order, { ifRevision: 0 }).ok) {
     throw new Error(`${name} already exists; name the order differently, or edit it at its current revision`);
   }
 
-  const repo = nullableJson(process.env.INPUTS_REPO) as { host: string; path: string };
+  const repo = nullableJson(input('repo')) as { host: string; path: string };
   const unseen = order.members.filter(number => readWorkItem(number) === null);
   const intake = unseen.map(number => {
     const run = launchDetached('archon-intake', { repo_host: repo.host, repo_path: repo.path, number: String(number) });

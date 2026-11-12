@@ -10,7 +10,7 @@ workflows. Each run does one step and stops only for a decision it cannot make:
 
 | Workflow | One run |
 |---|---|
-| `archon-intake` | Records an issue event and triages the best waiting issue. The verdict becomes the item's stage and a route label. |
+| `archon-intake` | Records an issue event and triages that issue, or the best waiting one when it does not wait. The verdict becomes the item's stage and a route label. |
 | `archon-build-queue` | Claims the best waiting triaged item, or the one `number` names, and takes it to a pull request whose review says Ready, one round per run. |
 | `archon-merge-queue` | Claims the items the build queue finished and merges what policy allows, one at a time, through a gate. |
 | `archon-discoveries` | Decides the out-of-scope findings finished runs recorded: file, track, drop or ask. |
@@ -84,14 +84,15 @@ archon workflow run archon-discoveries --detach
 
 The build queue also takes a message saying what to build, when `number` is empty:
 `archon workflow run archon-build-queue "build the retry fix from #123" --detach`. An
-agent resolves it to one issue to claim, a choice between issues (a `build: message`
-attention item), new work it files and hands to intake (the run builds nothing), or a
+agent resolves it to one issue to claim, a choice between issues (an attention
+item labelled `kind: pick`), new work it files and hands to intake (the run builds nothing), or a
 refusal with its reason.
 
 Optional inputs, with their defaults in each workflow's YAML:
 
 - `archon-intake`: `action` (`opened` by default; `edited`, `reopened`, or `added`
-  for a label), `label` and `label_actor` for a label event.
+  for a label), `label` and `label_actor` for a label event, and `build_queue_binding`
+  (the binding file a routed item's build-queue run is fired through).
 - `archon-build-queue`: `number` (the issue to build; empty claims the item the
   message names, or the first in order), `orders_only` (`true` claims only members of
   an open work order), `revisit_blocked` (`true`: a run that names no item also sends
@@ -168,8 +169,10 @@ A round ends one of three ways, recorded on the item:
   item's next round at once by firing the binding file `build_queue_binding` names,
   with the item's `number`. With no binding set, or when the fire is skipped or
   refused, the item waits for the next queue run and the run's summary says why.
-- `ask`: the run pauses as one attention item labelled `build: route`, `build: stop`
-  or `build: scope`.
+  That round's first review continues from the review the earlier round published:
+  it checks those findings and reads what changed since, not the whole pull request.
+- `ask`: the run pauses as one attention item labelled `stage: build` and `kind: route`,
+  `kind: stop` or `kind: scope`, with the issue number as `item`.
 
 An item the merge queue returns waits for a new build round, with the merge queue's
 brief. A re-triage after the queue's last decision starts the item over.
@@ -200,11 +203,13 @@ A pull request whose read fails twice in a row is parked with the read error unt
 the build queue readies the item again.
 
 A sweep merges a clear pull request on its own. An unclear one, such as a very large
-change, pauses as an attention item labelled `merge: pr` with the choices `merge`,
-`return`, `park` and `other`. A red default branch pauses as `merge: base` with the
+change, pauses as an attention item labelled `stage: merge` and `kind: approve` with the choices `merge`,
+`return`, `park` and `other`. A red default branch pauses as `kind: base` with the
 one choice `hold` (an `other` answer there holds too), and the gate refuses every merge until it is green. A run raises at
 most one attention item: the red default branch first, otherwise the first pull
-request the sweep asked about. A later sweep decides the rest again.
+request the sweep asked about. The next sweep decides the rest again and raises the
+next. The merge queue's schedule is short (5 minutes by default), and a sweep where
+nothing changed since an item's last wait runs no agent.
 
 A `merge` answer approves the pull request at the head it asked about, and a sweep
 the answer fires through `merge_queue_binding` merges it once the gate passes. The approval carries to a later head only when the sweep
@@ -218,7 +223,7 @@ back to the build queue, whose next round starts at once through
 Each pass decides the records of up to `limit` finished runs, oldest first. Repeat
 passes until one finds nothing queued: its `decide` node is skipped
 (`archon workflow get <run-id> --verbose --json`). Stop early when a pass pauses with a
-`discoveries: question` item, and answer it first.
+`stage: discoveries` item, and answer it first.
 
 Issues a pass files carry no labels. Run intake on each one to triage it.
 

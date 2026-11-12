@@ -34,9 +34,9 @@
 
 import { existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { artifactsDir, emit, note, refuse, text } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse } from 'archon:script';
+import { isObject } from '../../.shared/inputs.ts';
 import { FINDING_VALUES, type Finding, readFindings } from '../../.shared/review-item.ts';
-import { isObject } from '../../.shared/io.ts';
 
 /** The verifier nodes' numbers; each writes review/verify-<n>.json. */
 const VOTERS = [1, 2, 3] as const;
@@ -73,7 +73,7 @@ function isVote(value: unknown): value is Vote {
 function votesOf(dir: string, voter: number): readonly Vote[] {
   const file = join(dir, `verify-${String(voter)}.json`);
   if (!existsSync(file)) {
-    note(`settle-review: verifier ${String(voter)} wrote no votes; its absence upholds every finding.`);
+    console.error(`settle-review: verifier ${String(voter)} wrote no votes; its absence upholds every finding.`);
     return [];
   }
   try {
@@ -82,7 +82,7 @@ function votesOf(dir: string, voter: number): readonly Vote[] {
   } catch {
     // reported below
   }
-  note(`settle-review: ${file} is not a JSON array of votes; it upholds every finding.`);
+  console.error(`settle-review: ${file} is not a JSON array of votes; it upholds every finding.`);
   return [];
 }
 
@@ -97,14 +97,14 @@ function latestRoundCopy(dir: string): string | undefined {
 
 try {
   const verdict = {
-    ready: JSON.parse(text(process.env.INPUTS_READY)) as boolean,
-    action: text(process.env.INPUTS_ACTION),
-    findings_summary: text(process.env.INPUTS_SUMMARY),
-    report: JSON.parse(text(process.env.INPUTS_REPORT_POINTER)) as unknown,
-    discoveries: JSON.parse(text(process.env.INPUTS_DISCOVERIES)) as Discovery[],
-    contract_left: JSON.parse(text(process.env.INPUTS_CONTRACT_LEFT)) as unknown,
+    ready: JSON.parse(input('ready')) as boolean,
+    action: input('action'),
+    findings_summary: input('summary'),
+    report: JSON.parse(input('report_pointer')) as unknown,
+    discoveries: JSON.parse(input('discoveries')) as Discovery[],
+    contract_left: JSON.parse(input('contract_left')) as unknown,
   };
-  const gaps = JSON.parse(text(process.env.INPUTS_COVERAGE_GAPS)) as unknown[];
+  const gaps = JSON.parse(input('coverage_gaps')) as unknown[];
   // A Ready verdict ran no verifier and has nothing to settle.
   if (verdict.ready) {
     emit(verdict);

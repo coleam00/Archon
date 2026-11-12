@@ -7,21 +7,24 @@
  * or, when none did, the one triage routed the item to continue. The queue claims them
  * with intake's claim, so an item has one owner at a time across the three queues.
  *
- * Every read and the merge go through the forge contract (./forge.ts), using the
+ * Every read and the merge go through the forge contract (`forge` of `archon:script`), using the
  * operations in `MERGE_QUEUE_FORGE_OPERATIONS`.
  */
 
 import { itemPullRequest, type Validation } from './build.ts';
-import { invokeForge, record, type QualifiedPr } from './forge.ts';
+import { type QualifiedPr } from './identity.ts';
+import { record } from './inputs.ts';
+import { requireForge } from './forge-check.ts';
+import { forge } from 'archon:script';
 import { viewPr } from './pr.ts';
-import { type Attention, type DecisionEntry, withDecision } from './queue.ts';
-import { type ContractCoverage, readReviewStamp } from './review-comment.ts';
+import { type Ask, type DecisionEntry, withDecision } from './queue.ts';
+import { type ContractCoverage, type ReviewStamp, readReviewStamp } from './review-comment.ts';
 import type { Pickup, WorkItem } from './workitem.ts';
 
-/** What a merge choice does when a person picks it; archon-merge-queue.yaml declares the same enum. */
+/** What a merge option does when a person picks it; archon-merge-queue.yaml declares the same enum. */
 export const MERGE_EFFECTS = ['merge', 'return', 'park'] as const;
 export type MergeEffect = (typeof MERGE_EFFECTS)[number];
-export type MergeAttention = Attention<MergeEffect>;
+export type MergeAsk = Ask<MergeEffect>;
 
 /** What an `other` answer does with an asked pull request: a return when the sweep wrote a brief, a park otherwise. */
 export function otherEffect(brief: string): MergeEffect {
@@ -30,7 +33,7 @@ export function otherEffect(brief: string): MergeEffect {
 
 /** The one answer to a red default branch: the queue holds merges until it is green again. */
 export const BASE_EFFECTS = ['hold'] as const;
-export type BaseAttention = Attention<(typeof BASE_EFFECTS)[number]>;
+export type BaseAsk = Ask<(typeof BASE_EFFECTS)[number]>;
 
 /** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
 export type SweepAction = 'merged' | 'return' | 'ask' | 'wait';
@@ -38,7 +41,7 @@ export const POLICY_CLASSES = ['clear', 'unclear'] as const;
 export type PolicyClass = (typeof POLICY_CLASSES)[number];
 export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
 export type MergePath = (typeof MERGE_PATHS)[number];
-/** Which attention item a run raised: its class label, which the YAML also declares. */
+/** Which ask a run raised. */
 export type MergeAskedBy = 'pr' | 'base';
 /** What the record node asked, which the ruling node needs to act on the answer. */
 export type MergeAsked =
@@ -48,9 +51,9 @@ export type MergeAsked =
       readonly pr: QualifiedPr;
       readonly head: string;
       readonly brief: string;
-      readonly attention: MergeAttention;
+      readonly ask: MergeAsk;
     }
-  | { readonly by: Extract<MergeAskedBy, 'base'>; readonly attention: BaseAttention };
+  | { readonly by: Extract<MergeAskedBy, 'base'>; readonly ask: BaseAsk };
 export const MERGE_METHODS = ['squash', 'merge'] as const;
 /** The pack's `ci` setting; `.pack/pack.yaml` declares the same values. */
 export const CI_MODES = ['forge', 'none'] as const;
@@ -85,6 +88,8 @@ export type MergeStatus = 'waiting' | 'asking' | 'merged' | 'returned' | 'parked
 export interface MergeDecisionEntry extends DecisionEntry {
   readonly head: string | null;
   readonly reran: boolean;
+  /** On a `wait` the sweep declared: the facts it waited on (`waitedOn`). */
+  readonly waited_on?: string;
 }
 
 export interface MergeRecord {
@@ -217,6 +222,29 @@ export interface PrFacts {
   readonly verdict: Verdict;
 }
 
+/**
+ * The facts a `wait` can end on: the head, whether it is a draft, whether it merges,
+ * the state of its checks, its open threads, its verdict with its contract coverage, the
+ * default branch's head and check state, and the project's CI setting. While they read
+ * the same as when the sweep declared the wait, the agent would decide the same, so the
+ * item is not handed to it again.
+ */
+export function waitedOn(facts: PrFacts, base: BaseFacts | null, ci: CiMode): string {
+  return JSON.stringify([
+    ci,
+    facts.head_revision,
+    facts.is_draft,
+    facts.mergeable,
+    facts.checks.state,
+    [...facts.threads.urls].sort(),
+    facts.verdict.state,
+    facts.verdict.reviewed,
+    facts.verdict.contract,
+    facts.default_head,
+    base?.checks.state ?? null,
+  ]);
+}
+
 /** The forge operations the merge queue reads and merges through. */
 export const MERGE_QUEUE_FORGE_OPERATIONS = [
   'pr.view',
@@ -235,7 +263,7 @@ export const MERGE_QUEUE_FORGE_OPERATIONS = [
  * read would otherwise wait, then park.
  */
 export function requireMergeSource(repo: QualifiedPr['repo']): void {
-  invokeForge('check', { host: repo.host, operations: MERGE_QUEUE_FORGE_OPERATIONS });
+  requireForge(repo.host, MERGE_QUEUE_FORGE_OPERATIONS);
 }
 
 export interface BaseFacts {
@@ -246,7 +274,7 @@ export interface BaseFacts {
 
 /** The default branch, its head commit and the checks on it. */
 export function readBase(repo: QualifiedPr['repo']): BaseFacts {
-  const value = invokeForge('checks.commit', { repo, at: { kind: 'default_branch' } });
+  const value = forge('checks.commit', { repo, at: { kind: 'default_branch' } });
   if (typeof value?.branch !== 'string' || typeof value.revision !== 'string') {
     throw new Error(`${repo.path} reports no default branch`);
   }
@@ -261,28 +289,31 @@ interface Comment {
 }
 
 /**
- * The trusted review comment: the one marked comment a listed maintainer wrote. A
+ * The trusted review comments: each marked comment a listed maintainer wrote. A
  * marked comment anyone else wrote is ignored, so an outside commenter cannot forge a
- * verdict on a public repository.
+ * verdict on a public repository. More than one means none is canonical.
  */
-function trustedReview(comments: readonly Comment[], maintainers: ReadonlySet<string>): Verdict {
-  const reviews = comments.flatMap(comment => {
+function trustedReviews(comments: readonly Comment[], maintainers: ReadonlySet<string>) {
+  return comments.flatMap(comment => {
     const stamp = readReviewStamp(comment.body);
     const trusted = comment.author !== null && maintainers.has(comment.author.toLowerCase());
     return stamp !== null && trusted ? [{ stamp, url: comment.url }] : [];
   });
-  const [review, ...others] = reviews;
+}
+
+function trustedReview(comments: readonly Comment[], maintainers: ReadonlySet<string>): Verdict {
+  const [review, ...others] = trustedReviews(comments, maintainers);
   if (review === undefined) return { state: 'none', reviewed: null, url: null, contract: null };
   if (others.length > 0) return { state: 'duplicate', reviewed: null, url: null, contract: null };
   const state = review.stamp.ready === null ? 'unstamped' : review.stamp.ready ? 'ready' : 'not_ready';
   return { state, reviewed: review.stamp.reviewed, url: review.url, contract: review.stamp.contract };
 }
 
-/** The commit the pull request's trusted review comment names, or null when it has none. */
-export function reviewedHead(pr: QualifiedPr, maintainers: ReadonlySet<string>): string | null {
-  const verdict = trustedReview(readComments(pr), maintainers);
-  if (verdict.state === 'duplicate') throw new Error(`pull request ${String(pr.number)} has more than one trusted review comment`);
-  return verdict.reviewed;
+/** The pull request's trusted review comment as stamped, with its report, or null when it has none. */
+export function publishedReview(pr: QualifiedPr, maintainers: ReadonlySet<string>): ReviewStamp | null {
+  const [review, ...others] = trustedReviews(readComments(pr), maintainers);
+  if (others.length > 0) throw new Error(`pull request ${String(pr.number)} has more than one trusted review comment`);
+  return review?.stamp ?? null;
 }
 
 /**
@@ -306,7 +337,7 @@ function checksOf(units: unknown): Checks {
 
 /** How far `head` is behind the default branch and whether it merges, read at that head. */
 function readMergeState(ref: QualifiedPr, url: string, head: string) {
-  const value = invokeForge('pr.merge-state', { ref });
+  const value = forge('pr.merge-state', { ref });
   const mergeable = MERGEABLE.find(state => state === value?.mergeable);
   if (
     typeof value?.head_revision !== 'string' ||
@@ -329,7 +360,7 @@ function readMergeState(ref: QualifiedPr, url: string, head: string) {
 }
 
 function readThreads(ref: QualifiedPr): PrFacts['threads'] {
-  const threads = invokeForge('pr.threads', { ref })?.threads;
+  const threads = forge('pr.threads', { ref })?.threads;
   if (!Array.isArray(threads)) throw new Error('forge pr.threads returned no thread list');
   const unresolved = threads.map(record).filter(thread => {
     if (typeof thread?.resolved !== 'boolean') throw new Error('forge pr.threads returned a thread without its resolution');
@@ -345,7 +376,7 @@ function readThreads(ref: QualifiedPr): PrFacts['threads'] {
 }
 
 function readComments(ref: QualifiedPr): Comment[] {
-  const comments = invokeForge('workitem.comments', { subject: { kind: 'pr', ref } })?.comments;
+  const comments = forge('workitem.comments', { subject: { kind: 'pr', ref } })?.comments;
   if (!Array.isArray(comments)) throw new Error('forge workitem.comments returned no comment list');
   return comments.map(raw => {
     const comment = record(raw);
@@ -367,7 +398,7 @@ export function readPr(pr: QualifiedPr, maintainers: ReadonlySet<string>): PrFac
   const { url, head_revision: head } = view.pr;
   if (head === null) throw new Error(`${url} reports no head commit`);
   const mergeState = readMergeState(ref, url, head);
-  const checks = invokeForge('checks.state', { ref });
+  const checks = forge('checks.state', { ref });
   if (checks?.revision !== head) throw new Error(`the checks read for ${url} are not on its head`);
   return {
     pr,
@@ -448,7 +479,7 @@ export function gateRefusals(
  * nothing then shows the merge landed.
  */
 export function mergeAtHead(pr: QualifiedPr, head: string, method: MergeMethod): string {
-  const merged = invokeForge('pr.merge', { ref: { repo: pr.repo, number: pr.number }, method, conditions: { head } });
+  const merged = forge('pr.merge', { ref: { repo: pr.repo, number: pr.number }, method, conditions: { head } });
   const commit = record(merged?.landed)?.commit;
   if (typeof commit !== 'string') {
     throw new Error(`forge pr.merge applied the merge of ${pr.repo.path}#${String(pr.number)} at ${head} but named no landed commit`);

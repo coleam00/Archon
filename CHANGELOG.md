@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Breaking
 
+- The SDLC pack's attention items carry the labels `stage` (`build`, `merge`, `discoveries`), `kind` (`route`, `stop`, `scope`, `pick`, `approve`, `base`, `question`), `item` and `pr` in place of `build: <class>`, `merge: <class>` and `discoveries: question`. A watcher or count that filters on the old keys matches nothing asked after this change: `--label merge=pr` becomes `--label stage=merge`, and `--count-by label:build` becomes `--count-by label:kind`. Answer the pack's open questions before you upgrade: a run paused on the old shape cannot be answered by the new scripts.
+- The SDLC pack's deciding agents write a question's text, options and recommendation themselves, and the queue's scripts no longer check or rewrite them. A question the wait refuses (two options with one id, or a recommendation of an option that is not offered) fails its run after the item is recorded as asking; abandon the run and re-triage the item.
 - A state document claim is recorded as its own operation (`claim`) in the state log. Archon binaries older than this release cannot read a document revision written by `archon state claim` and exit 1; once a store holds a claim, use only this release or later on it. A source checkout and an installed release can share one Archon home, so after the first claim the older of the two fails on that document.
 - `archon workflow attention --watch` writes only what needs someone: an item that opens or changes, the close of an item it wrote, a run that failed, completed with a failed outcome or lost its owner, and a coverage warning. It no longer writes `ready`, `bookmark`, `resumed`, or a line for a run that completed with any other outcome or was cancelled. A program that reads those lines or resumes with `--after` must add `--protocol`, which is the previous stream unchanged; `--after` without `--protocol` is refused.
 - `GET /api/runs/attention/stream` takes `level=quiet|notices|protocol` in place of `needsSomeone`. `needsSomeone=true` is now `level=quiet`; without `level` the stream is still the full protocol.
@@ -39,6 +41,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The SDLC pack's forge preflights (delivery, the merge queue and the test-value metric) ask `archon forge check` for the plugin, its operations and its credential instead of comparing plugin metadata themselves. Delivery still makes one authenticated read. A missing operation is refused in the host's words (`plugin <name> does not support <operations>`).
+- The SDLC pack's scripts call the forge and the state store through `archon:script` instead of the pack's own clients. A failed forge operation is reported in the script API's words: the message no longer carries the credential source or the write's mutation record, and the plugin setup hint is added only by the forge preflights.
+- A merge-queue sweep whose gate command could not run now fails the run, naming what the gate printed, instead of recording a `wait` and completing.
 - The SDLC pack's queue questions use the wait's own `other` option. On build and pull-request items it does what the pack's own `other` choice did, and the answer must now carry text; a `merge: base` item now shows it too, and an `other` answer there holds like `hold`.
 
 ## [0.14.0] - 2026-11-07

@@ -9,13 +9,19 @@
  * the sweep. An unreadable pull request waits once, then parks on a consecutive failed
  * read with the reason, without stopping the rest of the batch. Successful reads reset
  * that sequence durably before the sweep, keeping the claim until record settles it.
- * A red default branch reaches the sweep even when no pull request waits. An unreadable
+ * A red default branch reaches the sweep only with a pull request it holds back: with
+ * nothing to decide there is nothing for it to block. An unreadable
  * base reaches record for independent bookkeeping before the run reports the failure.
+ *
+ * A pull request whose last decision stored the facts its wait can end on (`waitedOn`),
+ * and whose facts read the same now, is released without the sweep: the agent would
+ * decide the same. When that leaves nothing to decide, the run ends after its script nodes.
  */
 
 import { join } from 'node:path';
-import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { writeScriptApiPreload } from '../../.shared/host.ts';
+import { type QualifiedPr } from '../../.shared/identity.ts';
 import { latestValidation, type Validation } from '../../.shared/build.ts';
 import {
   itemPr,
@@ -31,6 +37,7 @@ import {
   readPr,
   requireMergeSource,
   UNREADABLE,
+  waitedOn,
   withMerge,
 } from '../../.shared/merge.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
@@ -117,25 +124,30 @@ function recordReadable(doc: WorkItem, facts: PrFacts, runId: string): WorkItem 
   }));
 }
 
+type Inspection = { base: ReturnType<typeof readBase>; error: '' } | { base: null; error: string };
+
+// The default branch is one of the facts a pull request is decided and waits on.
+function inspectBase(repo: QualifiedPr['repo']): Inspection {
+  try {
+    return { base: readBase(repo), error: '' };
+  } catch (error) {
+    return { base: null, error: `merge-queue facts: ${error instanceof Error ? error.message : String(error)}` };
+  }
+}
+
 function emitFacts(
-  repo: QualifiedPr['repo'],
+  inspection: Inspection,
   items: readonly Item[],
   settled: readonly MergeSettled[],
+  unchanged: number,
   gate: string,
   ci: CiMode
 ): void {
-  // The default branch is read on every run: a red one after the last merge needs the
-  // sweep's question even when no pull request waits.
-  let inspection: { base: ReturnType<typeof readBase>; error: '' } | { base: null; error: string };
-  try {
-    inspection = { base: readBase(repo), error: '' };
-  } catch (error) {
-    inspection = { base: null, error: `merge-queue facts: ${error instanceof Error ? error.message : String(error)}` };
-  }
   const { base } = inspection;
+  if (unchanged > 0) console.error(`${String(unchanged)} pull request(s) read the same as at their last wait; not swept`);
   const path = base === null
     ? 'record'
-    : items.length > 0 || base.checks.state === 'red'
+    : items.length > 0
       ? 'sweep'
       : settled.length > 0 ? 'record' : 'idle';
   emit({
@@ -150,16 +162,18 @@ function emitFacts(
 }
 
 function main(): void {
-  const limit = positive('limit', trimmed(process.env.INPUTS_LIMIT));
-  const method = parseMethod(trimmed(process.env.INPUTS_MERGE_METHOD));
-  const ci = parseCiMode(trimmed(process.env.INPUTS_CI));
+  const limit = positive('limit', input('limit').trim());
+  const method = parseMethod(input('merge_method').trim());
+  const ci = parseCiMode(input('ci').trim());
   const repo = workflowRepo();
   const runId = workflowRunId();
 
   requireMergeSource(repo);
   const snapshot = snapshotReader(readMaintainers(repo));
+  const inspection = inspectBase(repo);
   const items: Item[] = [];
   const settled: MergeSettled[] = [];
+  let unchanged = 0;
   for (const doc of claimAll(limit, runId, MERGE_PICKUP)) {
     let pr: QualifiedPr | null = null;
     let facts: PrFacts;
@@ -180,6 +194,11 @@ function main(): void {
       settled.push({ item: doc.subject, pr, status, decision: status, reason: `${facts.url} was ${facts.state} before this sweep` });
       continue;
     }
+    if (current.facts.merge?.decisions.at(-1)?.waited_on === waitedOn(facts, inspection.base, ci)) {
+      updateClaimed(doc.subject, runId, held => ({ ...held, claim: null }));
+      unchanged += 1;
+      continue;
+    }
     items.push({
       item: doc.subject,
       pr,
@@ -189,8 +208,11 @@ function main(): void {
       validation: latestValidation(current),
     });
   }
+  // The sweep agent runs the gate as a plain command, with no engine to give it `archon:script`.
   const gate = [
     process.execPath,
+    '--preload',
+    writeScriptApiPreload(join(artifactsDir(), 'merge-queue', 'archon-script.preload.ts')),
     join(import.meta.dir, 'gate.ts'),
     '--method',
     method,
@@ -199,7 +221,7 @@ function main(): void {
   ]
     .map(quoted)
     .join(' ');
-  emitFacts(repo, items, settled, gate, ci);
+  emitFacts(inspection, items, settled, unchanged, gate, ci);
 }
 
 try {
