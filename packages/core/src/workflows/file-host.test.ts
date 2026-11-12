@@ -32,6 +32,53 @@ afterEach(() => {
     else process.env[key] = value;
   }
 });
+test('file host reads install resource overrides fresh for direct admission and queued drain', async () => {
+  const home = roots(await mkdtemp(join(tmpdir(), 'file-host-resource-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const host = await createFileWorkflowHost(join(home, 'store'));
+  const codebase = await host.records.codebases.createCodebase({
+    name: 'project',
+    default_cwd: home,
+  });
+  const start = () => {
+    const id = crypto.randomUUID();
+    return {
+      resource: 'build',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue' as const,
+      launch: {
+        version: 2 as const,
+        run: {
+          id,
+          workflow_name: 'test',
+          codebase_id: codebase.id,
+          user_message: '',
+          metadata: {},
+        },
+        execution: {
+          cwd: join(home, id),
+          conversationId: 'test',
+          isolation: { kind: 'in-place' as const },
+        },
+      },
+    };
+  };
+  await writeFile(join(home, 'config.yaml'), 'concurrency:\n  resources: { build: 2 }\n');
+  for (let index = 0; index < 2; index++)
+    expect((await host.deps.store.admitResourceStart(start())).status).toBe('admitted');
+  const third = start();
+  expect((await host.deps.store.admitResourceStart(third)).status).toBe('queued');
+  await writeFile(join(home, 'config.yaml'), 'concurrency:\n  resources: { build: 3 }\n');
+  expect(
+    await host.deps.store.drainResourceStarts({ resource: 'build', hostId: 'host' })
+  ).toMatchObject([{ runId: third.launch.run.id }]);
+  expect(
+    (await host.deps.store.getResourceStartRequest(third.launch.run.id))?.declaredCapacity
+  ).toBe(1);
+});
 test('file isolation records conform to the isolation store row', () => {
   expectTypeOf<z.output<typeof isolationSchema>[number]>().toEqualTypeOf<IsolationEnvironmentRow>();
 });

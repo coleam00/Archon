@@ -47,6 +47,74 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       outcome: 'matched' as const,
       bindings: [binding] as [ResourceStartBindingIntent],
     });
+    test.each([
+      [undefined, 'resource', 2],
+      [{ name: 'resource', capacity: 3 }, 'resource', 2],
+      [{ name: 'resource', capacity: 1 }, 'resource', 1],
+      [{ name: 'other', capacity: 3 }, 'other', 3],
+      [{ name: 'other' }, 'other', undefined],
+    ] as const)(
+      'binding preparation retains the selected workflow resource %p',
+      async (workflowResource, resource, capacity) => {
+        const input = acceptance();
+        input.bindings[0] = { ...binding, capacity: 2 };
+        await store.acceptStartReceipt(input);
+        const identity = {
+          receiptId: input.receipt.id,
+          bindingId: binding.bindingId,
+          ownerId: 'owner',
+        };
+        await store.claimStartBindingPreparation(identity);
+        const prepared = launch();
+        expect(
+          (
+            await store.completeStartBindingPreparation({
+              ...identity,
+              workflowResource,
+              launch: prepared,
+            })
+          )?.status
+        ).toBe('admitted');
+        expect(await store.getResourceStartRequest(prepared.run.id)).toMatchObject({
+          resource,
+          declaredCapacity: capacity,
+        });
+        expect((await store.getStartReceipt(input.receipt.id))?.bindings[0]?.intent).toMatchObject({
+          resource: 'resource',
+          capacity: 2,
+        });
+      }
+    );
+    test('legacy queued requests recover their stored binding declaration', async () => {
+      harness.resourceCaps.set('resource', 1);
+      const prepared = launch();
+      const holder = launch();
+      await store.admitResourceStart({
+        resource: 'resource',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: holder,
+      });
+      const input = acceptance();
+      input.bindings[0] = { ...binding, capacity: 2 };
+      await store.acceptStartReceipt(input);
+      const identity = {
+        receiptId: input.receipt.id,
+        bindingId: binding.bindingId,
+        ownerId: 'owner',
+      };
+      await store.claimStartBindingPreparation(identity);
+      expect(
+        (await store.completeStartBindingPreparation({ ...identity, launch: prepared }))?.status
+      ).toBe('queued');
+      await harness.clearDeclaredCapacity(prepared.run.id);
+      harness.resourceCaps.clear();
+      store = await harness.reopenStore();
+      expect(
+        await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+      ).toMatchObject([{ runId: prepared.run.id }]);
+    });
     test('receipt deduplication compares verified content and preparation has one owner', async () => {
       const store = harness.store,
         input = acceptance();

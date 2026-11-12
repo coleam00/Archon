@@ -1,5 +1,4 @@
 import { resourceStartFixtures } from '../resource-start-conformance';
-import { ResourceSlotCapacityConflictError } from '../resource-start-store';
 import type { ResourceStartIntent } from '../schemas/resource-start';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import {
@@ -48,9 +47,129 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
         );
         expect(await harness.store.admitResourceStart(intent)).toEqual(decisions[index]);
       }
+    });
+    test('fresh overrides raise capacity, lower it without preemption, and never replace declarations', async () => {
+      const first = start('queue', 'host', 2);
+      const second = start('queue', 'host', 2);
+      expect((await store.admitResourceStart(first)).status).toBe('admitted');
+      expect((await store.admitResourceStart(second)).status).toBe('admitted');
+      const before = await Promise.all(
+        [first, second].map(intent => store.getWorkflowRun(intent.launch.run.id))
+      );
+      harness.resourceCaps.set('resource', 1);
+      const third = start('queue', 'host', 2);
+      expect((await store.admitResourceStart(third)).status).toBe('queued');
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
       expect(
-        await rejection(harness.store.admitResourceStart(start('queue', 'host', 2)))
-      ).toBeInstanceOf(ResourceSlotCapacityConflictError);
+        await Promise.all([first, second].map(intent => store.getWorkflowRun(intent.launch.run.id)))
+      ).toEqual(before);
+      harness.resourceCaps.set('resource', 3);
+      store = await harness.reopenStore();
+      expect(
+        await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+      ).toMatchObject([{ runId: third.launch.run.id }]);
+      expect((await store.getResourceStartRequest(third.launch.run.id))?.declaredCapacity).toBe(2);
+      harness.resourceCaps.delete('resource');
+      expect((await store.admitResourceStart(start('queue', 'host', 2))).status).toBe('queued');
+      expect((await store.admitResourceStart({ ...start(), resource: 'independent' })).status).toBe(
+        'admitted'
+      );
+    });
+    test('absent declarations default to ten per resource rather than historical slot capacity', async () => {
+      for (let index = 0; index < 10; index++) {
+        const intent = start();
+        delete intent.capacity;
+        expect((await store.admitResourceStart(intent)).status).toBe('admitted');
+        expect(
+          (await store.getResourceStartRequest(intent.launch.run.id))?.declaredCapacity
+        ).toBeUndefined();
+      }
+      const eleventh = start();
+      delete eleventh.capacity;
+      expect((await store.admitResourceStart(eleventh)).status).toBe('queued');
+      const other = { ...start(), resource: 'other' };
+      delete other.capacity;
+      expect((await store.admitResourceStart(other)).status).toBe('admitted');
+    });
+    test('drain uses each retained declaration and stops at a capacity blocked FIFO head', async () => {
+      harness.resourceCaps.set('resource', 1);
+      const holder = start();
+      await store.admitResourceStart(holder);
+      const low = start('queue', 'host', 1);
+      const high = start('queue', 'host', 3);
+      const last = start('queue', 'host', 1);
+      for (const intent of [low, high, last])
+        expect((await store.admitResourceStart(intent)).status).toBe('queued');
+      harness.resourceCaps.clear();
+      store = await harness.reopenStore();
+      expect(await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })).toEqual([]);
+      await store.cancelWorkflowRun(holder.launch.run.id);
+      expect(
+        await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+      ).toMatchObject([{ runId: low.launch.run.id }, { runId: high.launch.run.id }]);
+      expect((await store.getResourceStartRequest(last.launch.run.id))?.status).toBe('queued');
+    });
+    test('different starts use their own declarations and an invalid override refuses arbitration', async () => {
+      expect((await store.admitResourceStart(start('queue', 'host', 1))).status).toBe('admitted');
+      expect((await store.admitResourceStart(start('queue', 'host', 3))).status).toBe('admitted');
+      harness.resourceCaps.set('resource', 0);
+      const incoming = start();
+      await expect(store.admitResourceStart(incoming)).rejects.toThrow();
+      expect(await store.getResourceStartRequest(incoming.launch.run.id)).toBeNull();
+      await expect(
+        store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+      ).rejects.toThrow();
+    });
+    test('released paused and failed runs reacquire against current overrides and their declaration', async () => {
+      const first = start('queue', 'host', 2);
+      const second = start('queue', 'host', 2);
+      await store.admitResourceStart(first);
+      await store.admitResourceStart(second);
+      await store.claimPendingWorkflowRun(first.launch.run.id);
+      await store.failWorkflowRun(first.launch.run.id, 'failed');
+      harness.resourceCaps.set('resource', 1);
+      await expect(store.resumeWorkflowRun(first.launch.run.id)).rejects.toBeInstanceOf(
+        WorkflowResourceBusyError
+      );
+      harness.resourceCaps.clear();
+      expect((await store.resumeWorkflowRun(first.launch.run.id)).status).toBe('running');
+      await store.pauseWorkflowRunForWait(first.launch.run.id, wait, {
+        kind: 'started',
+        stepName: wait.nodeId,
+      });
+      const cursor = deadlineWaitCursor(wait);
+      await store.releasePausedRunSlot(first.launch.run.id, cursor);
+      harness.resourceCaps.set('resource', 1);
+      await expect(store.resumeWorkflowRun(first.launch.run.id, cursor)).rejects.toBeInstanceOf(
+        WorkflowResourceBusyError
+      );
+      harness.resourceCaps.set('resource', 3);
+      expect((await store.resumeWorkflowRun(first.launch.run.id, cursor)).status).toBe('running');
+    });
+    test('lowering capacity does not refuse a paused run that retains its holder', async () => {
+      const first = start('queue', 'host', 2);
+      const second = start('queue', 'host', 2);
+      await store.admitResourceStart(first);
+      await store.admitResourceStart(second);
+      await store.claimPendingWorkflowRun(first.launch.run.id);
+      await store.pauseWorkflowRunForWait(first.launch.run.id, wait, {
+        kind: 'started',
+        stepName: wait.nodeId,
+      });
+      const cursor = deadlineWaitCursor(wait);
+      harness.resourceCaps.set('resource', 1);
+      expect((await store.resumeWorkflowRun(first.launch.run.id, cursor)).status).toBe('running');
+      expect((await store.getWorkflowRun(second.launch.run.id))?.status).toBe('pending');
+    });
+    test('a legacy request with no retained evidence uses ten rather than a slot history', async () => {
+      const first = start();
+      await store.admitResourceStart(first);
+      await store.claimPendingWorkflowRun(first.launch.run.id);
+      await store.failWorkflowRun(first.launch.run.id, 'failed');
+      await store.admitResourceStart(start('queue', 'host', 2));
+      await harness.clearDeclaredCapacity(first.launch.run.id);
+      store = await harness.reopenStore();
+      expect((await store.resumeWorkflowRun(first.launch.run.id)).status).toBe('running');
     });
     for (const activity of ['null', 'stale'] as const) {
       test(`admitted running runs cannot resume with ${activity} activity`, async () => {

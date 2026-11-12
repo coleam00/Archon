@@ -1,3 +1,10 @@
+import type { WorkflowResource } from './schemas/workflow';
+export {
+  resolveResourceCapacity,
+  selectStartResource,
+  capturedResourceDeclaration,
+  type ResourceCapacityPolicy,
+} from './resource-capacity';
 import { createLogger } from '@archon/paths';
 import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
 import type { z } from 'zod';
@@ -21,19 +28,6 @@ import {
 import type { ResumeRefusal, WorkflowResumeCursor } from './store';
 
 export class SourceReceiptDigestConflictError extends Error {}
-
-export class ResourceSlotCapacityConflictError extends Error {
-  constructor(
-    public readonly resource: string,
-    public readonly configured: number,
-    public readonly requested: number
-  ) {
-    super(
-      `Resource '${resource}' has capacity ${String(configured)}; a request declared ${String(requested)}. Every binding for one resource must declare the same capacity.`
-    );
-    this.name = 'ResourceSlotCapacityConflictError';
-  }
-}
 
 export type StartBindingInspection = z.infer<typeof startBindingInspectionSchema> & {
   requestStatus: ResourceStartRequestInspection['status'] | null;
@@ -63,6 +57,7 @@ export interface ResourceStartRequestInspection {
   blocker: Extract<ResourceStartDisposition, { status: 'queued' }>['blocker'] | null;
   blockerRunStatus: WorkflowRunStatus | null;
   launch: PreparedWorkflowLaunch;
+  declaredCapacity?: number;
 }
 
 export function validateStartReceiptLimit(limit = 50): number {
@@ -192,6 +187,7 @@ export interface QueuedStart {
   id: string;
   hostId: string;
   launch: PreparedWorkflowLaunch;
+  capacity: number;
 }
 
 /**
@@ -283,12 +279,11 @@ export function resourceStartBlocker(
  * per host. A request admitted here holds its checkout for the rest of the drain.
  */
 export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): QueuedStart[] {
-  const free = slot.capacity - slot.holders.length - slot.waiters.length;
   const held = new Map(slot.heldCheckouts);
   const admitted: QueuedStart[] = [];
   for (const start of validQueuedStarts(slot)) {
-    if (admitted.length >= free) break;
     if (checkoutHolder({ ...slot, heldCheckouts: held }, start.launch) !== undefined) continue;
+    if (slot.holders.length + slot.waiters.length + admitted.length >= start.capacity) break;
     if (start.hostId !== hostId) break;
     admitted.push(start);
     for (const checkout of checkoutKeys(start.launch, undefined, slot.reusableCheckouts))
@@ -312,8 +307,8 @@ export function resourceResumeBlocker(
 ): ResourceBlocker | null {
   if (slot.queueError) throw slot.queueError;
   const others = slot.holders.filter(holder => holder.id !== run.id);
-  if (others[0] && others.length >= slot.capacity) return { kind: 'run', id: others[0].id };
   if (others.length < slot.holders.length) return null;
+  if (others[0] && others.length >= slot.capacity) return { kind: 'run', id: others[0].id };
   if (run.status === 'paused') {
     const own = readCapacityWait(run.metadata);
     const ahead = slot.waiters.filter(
@@ -405,6 +400,7 @@ export interface IResourceStartStore {
     bindingId: string;
     ownerId: string;
     launch: PreparedWorkflowLaunch;
+    workflowResource?: WorkflowResource;
   }): Promise<ResourceStartDisposition | null>;
   failStartBindingPreparation(input: {
     receiptId: string;

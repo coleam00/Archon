@@ -3,7 +3,7 @@ import { toBranchName } from '@archon/git';
 // @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -21,12 +21,7 @@ const {
   getStartReceipt,
   withdrawQueuedResourceStart,
 } = createWorkflowStore();
-import {
-  addResourceSlotHolder,
-  liveResourceSlotHolders,
-  lockResourceSlot,
-  ResourceSlotCapacityConflictError,
-} from './resource-slots';
+import { addResourceSlotHolder, liveResourceSlotHolders, lockResourceSlot } from './resource-slots';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import {
   claimPendingWorkflowRun,
@@ -1020,29 +1015,45 @@ describe('durable resource starts', () => {
     expect((await claimPendingWorkflowRun(third))?.status).toBe('running');
   });
 
-  test('a request that declares a different capacity for a resource fails without a row', async () => {
+  test('SQL admission and drain read install edits without freezing overrides into requests', async () => {
+    await writeFile(join(root, 'config.yaml'), 'concurrency:\n  resources: { build: 2 }\n');
+    const intent = () => ({
+      resource: 'build',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue' as const,
+      launch: launch(crypto.randomUUID()),
+    });
+    expect((await admitResourceStart(intent())).status).toBe('admitted');
+    expect((await admitResourceStart(intent())).status).toBe('admitted');
+    const third = intent();
+    expect((await admitResourceStart(third)).status).toBe('queued');
+    await writeFile(join(root, 'config.yaml'), 'concurrency:\n  resources: { build: 3 }\n');
+    expect(await drainResourceStarts({ resource: 'build', hostId: 'host' })).toMatchObject([
+      { runId: third.launch.run.id },
+    ]);
+    expect((await getResourceStartRequest(third.launch.run.id))?.declaredCapacity).toBe(1);
+  });
+  test('a request uses its own declaration rather than the first start capacity', async () => {
     const owner = crypto.randomUUID();
-    const conflicting = crypto.randomUUID();
+    const incoming = crypto.randomUUID();
     await admitResourceStart({
-      resource: 'fixed',
+      resource: 'variable',
       capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(owner),
     });
-    await expect(
-      admitResourceStart({
-        resource: 'fixed',
+    expect(
+      await admitResourceStart({
+        resource: 'variable',
         capacity: 3,
         hostId: 'host',
         overlap: 'queue',
-        launch: launch(conflicting),
+        launch: launch(incoming),
       })
-    ).rejects.toBeInstanceOf(ResourceSlotCapacityConflictError);
-    expect(await getResourceStartRequest(conflicting)).toBeNull();
-    expect(
-      (await getDatabase().query('SELECT capacity FROM remote_agent_resource_slots')).rows
-    ).toEqual([{ capacity: 1 }]);
+    ).toMatchObject({ status: 'admitted' });
+    expect((await getResourceStartRequest(incoming))?.declaredCapacity).toBe(3);
   });
 });
 

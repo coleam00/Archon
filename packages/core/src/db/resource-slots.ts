@@ -1,7 +1,11 @@
+import { requestDeclaredCapacity } from './resource-capacity';
+import {
+  resolveResourceCapacity,
+  type ResourceCapacityPolicy,
+} from '@archon/workflows/resource-start-store';
 import { z } from 'zod';
 import { activeWorkflowPathHolderCondition } from './workflow-run-reads';
 import {
-  ResourceSlotCapacityConflictError,
   capacityWaiters,
   heldCheckouts,
   type ReusableCheckout,
@@ -52,49 +56,16 @@ export type ResourceSlotHolder =
   | { kind: 'run'; id: string }
   | { kind: 'attempt'; id: string; owner: ProcessOwner };
 
-export { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
-
 const terminalList = TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ');
 
 /**
- * Create the slot if needed and take its lock for the rest of the transaction.
- * A `requestedCapacity` that differs from the stored one fails instead of picking one.
+ * Lock the slot and record the current capacity without removing holders.
+ * The stored number is diagnostic, never policy for a later admission.
  */
 export async function lockResourceSlot(
   query: TransactionQuery,
   resource: string,
-  requestedCapacity?: number
-): Promise<{ capacity: number }> {
-  await query(
-    `INSERT INTO remote_agent_resource_slots (resource_key, capacity) VALUES ($1, $2)
-       ON CONFLICT(resource_key) DO NOTHING`,
-    [resource, requestedCapacity ?? 1]
-  );
-  // A no-op write takes SQLite's writer lock and PostgreSQL's row lock before any read.
-  await query(
-    'UPDATE remote_agent_resource_slots SET resource_key = resource_key WHERE resource_key = $1',
-    [resource]
-  );
-  const slot = await query<{ capacity: number | string }>(
-    'SELECT capacity FROM remote_agent_resource_slots WHERE resource_key = $1',
-    [resource]
-  );
-  const capacity = Number(slot.rows[0]?.capacity ?? 1);
-  if (requestedCapacity !== undefined && requestedCapacity !== capacity) {
-    throw new ResourceSlotCapacityConflictError(resource, capacity, requestedCapacity);
-  }
-  return { capacity };
-}
-
-/**
- * Lock a slot whose capacity the operator configures (a provider cap), writing the
- * current configured capacity. The upsert takes the same locks as `lockResourceSlot`.
- * Lowering the capacity never removes a holder; it only blocks new admissions.
- */
-export async function lockConfiguredResourceSlot(
-  query: TransactionQuery,
-  resource: string,
-  capacity: number
+  capacity = 10
 ): Promise<void> {
   await query(
     `INSERT INTO remote_agent_resource_slots (resource_key, capacity) VALUES ($1, $2)
@@ -215,7 +186,9 @@ export async function removeResourceSlotHolder(
 export async function resourceStartOccupancy(
   query: TransactionQuery,
   resource: string,
-  capacity: number
+  capacity: number,
+  caps: ReadonlyMap<string, number> = new Map(),
+  policy: ResourceCapacityPolicy = {}
 ): Promise<ResourceSlotOccupancy> {
   const holders = await liveResourceSlotHolders(query, resource);
   const holding = new Set(holders.filter(holder => holder.kind === 'run').map(holder => holder.id));
@@ -248,7 +221,7 @@ export async function resourceStartOccupancy(
     [resource]
   );
   const queued = await query<Record<string, unknown>>(
-    `SELECT id, host_id, resource_key, status, launch FROM remote_agent_resource_start_requests
+    `SELECT id, host_id, resource_key, status, launch, declared_capacity, receipt_id, binding_id FROM remote_agent_resource_start_requests
       WHERE resource_key = $1 AND status = 'queued'
       ORDER BY queue_position${getDialect().rowLock()}`,
     [resource]
@@ -300,7 +273,9 @@ export async function resourceStartOccupancy(
   let queueError: Error | undefined;
   for (const row of queued.rows) {
     try {
-      queue.push(parseQueuedResourceStart(row, resource));
+      const start = parseQueuedResourceStart(row, resource);
+      const declared = await requestDeclaredCapacity(query, row, resource, start.launch, policy);
+      queue.push({ ...start, capacity: resolveResourceCapacity(caps, resource, declared) });
     } catch (error) {
       if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
       queueError = new Error(`Invalid queued request '${String(row.id)}'`, { cause: error });

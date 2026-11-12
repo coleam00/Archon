@@ -55,8 +55,19 @@ export async function makeSqlConformanceHarness(
     "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ($1, 'test', 'conformance')",
     [CONFORMANCE_CONVERSATION_ID]
   );
+  const resourceCaps = new Map<string, number>();
+  const policy = { loadCaps: async () => new Map(resourceCaps) };
   return {
-    store: createWorkflowStore(),
+    store: createWorkflowStore(policy),
+    resourceCaps,
+    reopenStore: async () => createWorkflowStore(policy),
+    clearDeclaredCapacity: async id => {
+      await db.query(
+        'UPDATE remote_agent_resource_start_requests SET declared_capacity = NULL WHERE id = $1',
+        [id]
+      );
+      await db.query('UPDATE remote_agent_resource_slots SET capacity = 1');
+    },
     backdate: async (id, dates): Promise<void> => {
       for (const field of ['started_at', 'last_activity_at'] as const) {
         const date = dates[field];

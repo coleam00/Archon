@@ -134,7 +134,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
 }
 
 type InMemoryWorkflowStore = IWorkflowStore &
-  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait'>;
+  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait' | 'clearDeclaredCapacity'>;
 
 /**
  * The file store's transaction view over in-memory maps. Every operation runs on a copy and
@@ -143,7 +143,8 @@ type InMemoryWorkflowStore = IWorkflowStore &
  */
 export function createInMemoryWorkflowStore(
   records: IWorkflowHostStore,
-  onTerminal: (id: string) => void = () => undefined
+  onTerminal: (id: string) => void = () => undefined,
+  resourceCaps: ReadonlyMap<string, number> = new Map()
 ): InMemoryWorkflowStore {
   let runs = new Map<string, WorkflowRun>();
   let events: WorkflowEventRow[] = [];
@@ -216,7 +217,8 @@ export function createInMemoryWorkflowStore(
           codebaseId: row.codebase_id,
           branch: row.workflow_id,
           workingPath: row.working_path,
-        }))
+        })),
+    resourceCaps
   );
   const admit =
     <Args extends unknown[], Result>(
@@ -226,6 +228,7 @@ export function createInMemoryWorkflowStore(
       serialize(() => operation(...args));
   return {
     ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
+    clearDeclaredCapacity: admission.clearDeclaredCapacity,
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
     drainResourceStarts: admit(admission.drainResourceStarts.bind(admission)),
     hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),

@@ -9,7 +9,8 @@ import {
   type ReusableCheckout,
   resourceResumeBlocker,
   resourceStartBlocker,
-  ResourceSlotCapacityConflictError,
+  selectStartResource,
+  resolveResourceCapacity,
   SourceReceiptDigestConflictError,
   type IResourceStartStore,
   type ResourceBlocker,
@@ -31,8 +32,10 @@ export function createInMemoryResourceStartStore(
   createRun: IWorkflowStore['createWorkflowRun'],
   getRun: IWorkflowStore['getWorkflowRun'],
   listRuns: () => WorkflowRun[],
-  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]>
+  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]>,
+  resourceCaps: ReadonlyMap<string, number> = new Map()
 ): IResourceStartStore & {
+  clearDeclaredCapacity(id: string): Promise<void>;
   /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
   /** Give back the slot of an admitted run; whether it held one. */
@@ -40,7 +43,6 @@ export function createInMemoryResourceStartStore(
 } {
   const requests = new Map<string, ResourceStartRequestInspection>();
   const receipts = new Map<string, StartReceiptInspection>();
-  const capacities = new Map<string, number>();
   // Holders are implicit: an admitted request whose run is live, unless it gave its slot back.
   const released = new Set<string>();
   const receiptForDelivery = (
@@ -65,6 +67,17 @@ export function createInMemoryResourceStartStore(
     blockerRunStatus:
       request.blocker?.kind === 'run' ? ((await getRun(request.blocker.id))?.status ?? null) : null,
   });
+  const capacity = (request: ResourceStartRequestInspection) => {
+    const binding = [...receipts.values()]
+      .flatMap(receipt => receipt.bindings)
+      .find(binding => binding.disposition?.requestId === request.id);
+    return resolveResourceCapacity(
+      resourceCaps,
+      request.resource,
+      request.declaredCapacity ??
+        (binding?.intent?.resource === request.resource ? binding.intent.capacity : undefined)
+    );
+  };
   const occupancy = async (resource: string): Promise<ResourceSlotOccupancy> => {
     const holders: { id: string }[] = [];
     const candidates: WorkflowRun[] = [];
@@ -79,13 +92,13 @@ export function createInMemoryResourceStartStore(
     }
     const reusable = await listReusableCheckouts();
     return {
-      capacity: capacities.get(resource) ?? 1,
+      capacity: resolveResourceCapacity(resourceCaps, resource),
       reusableCheckouts: reusable,
       holders,
       waiters: capacityWaiters(candidates),
-      queue: [...requests.values()].filter(
-        request => request.resource === resource && request.status === 'queued'
-      ),
+      queue: [...requests.values()]
+        .filter(request => request.resource === resource && request.status === 'queued')
+        .map(request => ({ ...request, capacity: capacity(request) })),
       heldCheckouts: heldCheckouts(live, reusable),
       foreignHeldCheckouts: heldCheckouts(
         listRuns()
@@ -106,19 +119,20 @@ export function createInMemoryResourceStartStore(
     };
   };
   const admit = async (intent: ResourceStartIntent): Promise<ResourceStartDisposition> => {
-    const capacity = capacities.get(intent.resource);
-    if (capacity !== undefined && capacity !== intent.capacity)
-      throw new ResourceSlotCapacityConflictError(intent.resource, capacity, intent.capacity);
     const previous = requests.get(intent.launch.run.id);
     if (previous) return decision(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
     const blocker = resourceStartBlocker(
-      { ...(await occupancy(intent.resource)), capacity: intent.capacity },
+      {
+        ...(await occupancy(intent.resource)),
+        capacity: resolveResourceCapacity(resourceCaps, intent.resource, intent.capacity),
+      },
       launch
     );
     const request: ResourceStartRequestInspection = {
       id: launch.run.id,
       resource: intent.resource,
+      declaredCapacity: intent.capacity,
       hostId: intent.hostId,
       overlap: intent.overlap,
       status: blocker ? (intent.overlap === 'skip' ? 'skipped' : 'queued') : 'admitted',
@@ -128,7 +142,6 @@ export function createInMemoryResourceStartStore(
       launch,
     };
     if (!blocker) await createRun(launch.run);
-    capacities.set(intent.resource, intent.capacity);
     requests.set(request.id, request);
     return decision(request);
   };
@@ -159,15 +172,22 @@ export function createInMemoryResourceStartStore(
     return copy;
   };
   return {
+    clearDeclaredCapacity: async id => {
+      const request = requests.get(id);
+      if (request) delete request.declaredCapacity;
+    },
     resume: async run => {
       const request = requests.get(run.id);
       if (request?.status !== 'admitted') return null;
       if (run.status !== 'failed' && run.status !== 'paused')
         throw new WorkflowNotResumableError(run.id, run.status);
-      const blocker = resourceResumeBlocker(await occupancy(request.resource), {
-        ...run,
-        status: run.status,
-      });
+      const blocker = resourceResumeBlocker(
+        { ...(await occupancy(request.resource)), capacity: capacity(request) },
+        {
+          ...run,
+          status: run.status,
+        }
+      );
       if (!blocker) released.delete(run.id);
       return blocker;
     },
@@ -306,7 +326,11 @@ export function createInMemoryResourceStartStore(
     ): ReturnType<IResourceStartStore['completeStartBindingPreparation']> => {
       const item = owned(input);
       if (!item?.intent) return null;
-      const result = await admit({ ...item.intent, launch: input.launch });
+      const result = await admit({
+        ...item.intent,
+        ...selectStartResource(item.intent, input.workflowResource),
+        launch: input.launch,
+      });
       item.status = 'complete';
       item.error = null;
       item.disposition = result;

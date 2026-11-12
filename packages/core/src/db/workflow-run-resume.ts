@@ -1,3 +1,10 @@
+import { requestDeclaredCapacity } from './resource-capacity';
+import { installResourceCapacityPolicy } from '../workflows/resource-capacity';
+import {
+  resolveResourceCapacity,
+  type ResourceCapacityPolicy,
+} from '@archon/workflows/resource-start-store';
+import { preparedWorkflowLaunchSchema } from '@archon/workflows/schemas/resource-start';
 /**
  * Resume of workflow runs: finding a resumable run, the resume compare-and-swap,
  * fan-out child recovery and paused-run slot release. Re-exported from the
@@ -177,14 +184,32 @@ async function claimResourceSlot(
   query: TransactionQuery,
   id: string,
   prior: PriorRunRow,
-  cursor: WorkflowResumeCursor | undefined
+  cursor: WorkflowResumeCursor | undefined,
+  policy: ResourceCapacityPolicy
 ): Promise<WorkflowResourceBusyError | undefined> {
   const resourceKey = prior.resource_key ?? undefined;
   const status = prior.status;
   if (resourceKey === undefined || (status !== 'failed' && status !== 'paused')) return undefined;
-  const { capacity } = await lockResourceSlot(query, resourceKey);
+  const caps = (await policy.loadCaps?.()) ?? new Map<string, number>();
+  await lockResourceSlot(query, resourceKey, resolveResourceCapacity(caps, resourceKey));
+  const requests = await query<{
+    declared_capacity: unknown;
+    receipt_id: unknown;
+    binding_id: unknown;
+    launch: unknown;
+  }>(
+    'SELECT declared_capacity, receipt_id, binding_id, launch FROM remote_agent_resource_start_requests WHERE id = $1',
+    [id]
+  );
+  const request = requests.rows[0];
+  if (!request) throw new Error(`Admitted resource request '${id}' disappeared`);
+  const launch = preparedWorkflowLaunchSchema.parse(
+    typeof request.launch === 'string' ? JSON.parse(request.launch) : request.launch
+  );
+  const declared = await requestDeclaredCapacity(query, request, resourceKey, launch, policy);
+  const capacity = resolveResourceCapacity(caps, resourceKey, declared);
   const metadata = normalizeMetadata(prior.metadata);
-  const occupancy = await resourceStartOccupancy(query, resourceKey, capacity);
+  const occupancy = await resourceStartOccupancy(query, resourceKey, capacity, caps, policy);
   const blocker = resourceResumeBlocker(occupancy, { id, status, metadata });
   if (!blocker) {
     await addResourceSlotHolder(query, resourceKey, { kind: 'run', id });
@@ -287,7 +312,8 @@ async function casResumeRun(
 
 export async function resumeWorkflowRun(
   id: string,
-  cursor?: WorkflowResumeCursor
+  cursor?: WorkflowResumeCursor,
+  policy: ResourceCapacityPolicy = installResourceCapacityPolicy
 ): Promise<WorkflowRun> {
   let updateResult:
     | { rowCount: 0 }
@@ -297,7 +323,7 @@ export async function resumeWorkflowRun(
     updateResult = await getDatabase().withTransaction(async query => {
       const prior = await lockPriorRun(query, id);
       if (!prior || !priorMatchesCursor(prior, cursor)) return { rowCount: 0 };
-      const busy = await claimResourceSlot(query, id, prior, cursor);
+      const busy = await claimResourceSlot(query, id, prior, cursor, policy);
       if (busy) return { busy };
       const admitted = await casResumeRun(query, id, prior);
       return admitted ? { admitted } : { rowCount: 0 };

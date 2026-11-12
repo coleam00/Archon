@@ -1,3 +1,4 @@
+import type { ResourceCapacityPolicy } from '../resource-capacity';
 import {
   queuedRequestSchema,
   requestSchema,
@@ -31,11 +32,12 @@ const log = createLogger('file-store.admission');
 
 export function createFileAdmissionStore(
   root: string,
-  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>
+  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>,
+  policy: ResourceCapacityPolicy = {}
 ): IResourceStartStore {
   const write: AdmissionWrite = call =>
     commit(root, [], async runs => {
-      const tx = createAdmissionTransaction(root, listReusableCheckouts);
+      const tx = createAdmissionTransaction(root, listReusableCheckouts, policy);
       const result = await call(tx, runs);
       return {
         result,
@@ -47,7 +49,7 @@ export function createFileAdmissionStore(
     });
   const query: AdmissionQuery = async call => {
     await recoverBeforeRead(root);
-    return call(createAdmissionTransaction(root, listReusableCheckouts));
+    return call(createAdmissionTransaction(root, listReusableCheckouts, policy));
   };
   async function queueCandidate<S extends z.ZodType>(
     path: string,
@@ -107,6 +109,7 @@ export function createFileAdmissionStore(
     return {
       id: row.id,
       resource: row.resource,
+      declaredCapacity: row.declaredCapacity,
       hostId: row.hostId,
       overlap: row.overlap,
       status: row.status,

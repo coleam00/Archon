@@ -14,11 +14,19 @@ describeWorkflowStoreConformance('in-memory CLI test store', async () => {
   records.codebases.getCodebase = async id =>
     id === CONFORMANCE_CODEBASE_ID ? { ...codebase, id } : getCodebase(id);
   const reports: string[] = [];
-  const store = createInMemoryWorkflowStore(records, id => {
-    reports.push(id);
-  });
+  const resourceCaps = new Map<string, number>();
+  const store = createInMemoryWorkflowStore(
+    records,
+    id => {
+      reports.push(id);
+    },
+    resourceCaps
+  );
   return {
     store,
+    resourceCaps,
+    reopenStore: async () => store,
+    clearDeclaredCapacity: store.clearDeclaredCapacity,
     backdate: store.backdate,
     seedPersistedWait: store.seedPersistedWait,
     terminalReports: () => [...reports],

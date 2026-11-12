@@ -155,6 +155,16 @@ const sqliteMigrations: readonly Migration[] = [
     apply: addStateRevisionColumns,
   },
   { kind: 'required', scope: 'schema', apply: alignEventArchiveColumns },
+  {
+    kind: 'required',
+    scope: 'schema',
+    apply: db => {
+      if (!columnNames(db, 'remote_agent_resource_start_requests').has('declared_capacity'))
+        db.run(
+          'ALTER TABLE remote_agent_resource_start_requests ADD COLUMN declared_capacity INTEGER CHECK (declared_capacity >= 1)'
+        );
+    },
+  },
 ];
 
 // Keep 'admin' for older writers and existing rows; new writers insert 'member'.

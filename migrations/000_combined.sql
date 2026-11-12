@@ -632,6 +632,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
   id UUID PRIMARY KEY,
   queue_position BIGSERIAL NOT NULL UNIQUE,
   resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
+  declared_capacity INTEGER CHECK (declared_capacity >= 1),
   host_id TEXT NOT NULL,
   overlap_policy VARCHAR(10) NOT NULL CHECK (overlap_policy IN ('skip', 'queue')),
   status VARCHAR(12) NOT NULL CHECK (status IN ('queued', 'admitted', 'skipped', 'withdrawn')),
@@ -644,6 +645,9 @@ CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
   admitted_at TIMESTAMP WITH TIME ZONE,
   FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
 );
+
+ALTER TABLE remote_agent_resource_start_requests
+  ADD COLUMN IF NOT EXISTS declared_capacity INTEGER CHECK (declared_capacity >= 1);
 
 -- Provider-attempt holders on the shared resource slot (#2816): owner process
 -- columns, and the holder-kind CHECK widened from ('run'). Unreleased dev databases

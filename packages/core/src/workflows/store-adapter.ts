@@ -1,3 +1,5 @@
+import { installResourceCapacityPolicy } from './resource-capacity';
+import type { ResourceCapacityPolicy } from '@archon/workflows/resource-start-store';
 import { createRunResourceRelease } from '../services/cleanup/run-verification-images';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
@@ -111,12 +113,15 @@ function collectOAuthCredentialValues(
   }
 }
 
-export function createWorkflowStore(): IWorkflowStore {
+export function createWorkflowStore(
+  resourceCapacityPolicy: ResourceCapacityPolicy = installResourceCapacityPolicy
+): IWorkflowStore {
   return {
     ...createSqlStateDocumentStore(getDatabase),
     setToolCallAttention: workflowDb.setToolCallAttention,
-    admitResourceStart: resourceStarts.admitResourceStart,
-    drainResourceStarts: resourceStarts.drainResourceStarts,
+    admitResourceStart: intent => resourceStarts.admitResourceStart(intent, resourceCapacityPolicy),
+    drainResourceStarts: options =>
+      resourceStarts.drainResourceStarts(options, resourceCapacityPolicy),
     hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
     acceptStartReceipt: resourceStarts.acceptStartReceipt,
     getStartReceipt: resourceStarts.getStartReceipt,
@@ -126,7 +131,8 @@ export function createWorkflowStore(): IWorkflowStore {
     listQueuedResourceStartsForHost: resourceStarts.listQueuedResourceStartsForHost,
     withdrawQueuedResourceStart: resourceStarts.withdrawQueuedResourceStart,
     claimStartBindingPreparation: resourceStarts.claimStartBindingPreparation,
-    completeStartBindingPreparation: resourceStarts.completeStartBindingPreparation,
+    completeStartBindingPreparation: input =>
+      resourceStarts.completeStartBindingPreparation(input, resourceCapacityPolicy),
     failStartBindingPreparation: resourceStarts.failStartBindingPreparation,
     resetStartBindingPreparation: resourceStarts.resetStartBindingPreparation,
     resolveApprovalGate: workflowDb.resolveApprovalGate,
@@ -190,7 +196,8 @@ export function createWorkflowStore(): IWorkflowStore {
     listAttentionWaitStarts,
     listWorkflowNoticeRows,
     signalWorkflowWait: workflowDb.signalWorkflowWait,
-    resumeWorkflowRun: workflowDb.resumeWorkflowRun,
+    resumeWorkflowRun: (id, cursor) =>
+      workflowDb.resumeWorkflowRun(id, cursor, resourceCapacityPolicy),
     releasePausedRunSlot: workflowDb.releasePausedRunSlot,
     recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
     updateWorkflowRun: workflowDb.updateWorkflowRun,

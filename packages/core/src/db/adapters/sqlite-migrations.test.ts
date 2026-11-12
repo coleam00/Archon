@@ -562,3 +562,47 @@ describe('idx_workflow_events_run_type', () => {
     expect(plan.map(row => row.detail).join('\n')).toContain('idx_workflow_events_run_type');
   });
 });
+
+test('shipped resource requests survive adding their nullable declaration without a backfill', async () => {
+  const path = await upgradeFixturePath();
+  const raw = new Database(path);
+  const ids = [crypto.randomUUID(), crypto.randomUUID()];
+  try {
+    raw.exec(
+      await Bun.file(join(import.meta.dir, '../fixtures/sqlite-vintages/v0.14.0.sql')).text()
+    );
+    raw.run("INSERT INTO remote_agent_resource_slots (resource_key, capacity) VALUES ('build', 1)");
+    for (const [index, id] of ids.entries()) {
+      const launch = JSON.stringify({
+        version: 2,
+        run: { id, workflow_name: 'test', codebase_id: 'project', user_message: '', metadata: {} },
+        execution: { cwd: `/test/${id}`, conversationId: 'test', isolation: { kind: 'in-place' } },
+      });
+      raw.run(
+        'INSERT INTO remote_agent_resource_start_requests (id, resource_key, host_id, overlap_policy, status, launch) VALUES (?, ?, ?, ?, ?, ?)',
+        [id, 'build', 'host', 'queue', index === 0 ? 'queued' : 'admitted', launch]
+      );
+    }
+  } finally {
+    raw.close();
+  }
+  const before = raw_query(
+    path,
+    'SELECT id, status, launch, queue_position FROM remote_agent_resource_start_requests ORDER BY queue_position'
+  );
+  const db = new SqliteAdapter(path);
+  try {
+    expect(
+      (
+        await db.query(
+          'SELECT id, status, launch, queue_position FROM remote_agent_resource_start_requests ORDER BY queue_position'
+        )
+      ).rows
+    ).toEqual(before);
+    expect(
+      (await db.query('SELECT declared_capacity FROM remote_agent_resource_start_requests')).rows
+    ).toEqual([{ declared_capacity: null }, { declared_capacity: null }]);
+  } finally {
+    await db.close();
+  }
+});

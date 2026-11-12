@@ -610,11 +610,11 @@ export class SqliteAdapter implements IDatabase {
       );
 
       ${resourceSlotHoldersTable('remote_agent_resource_slot_holders')}
-
       CREATE TABLE IF NOT EXISTS remote_agent_resource_start_requests (
         queue_position INTEGER PRIMARY KEY AUTOINCREMENT,
         id TEXT NOT NULL UNIQUE,
         resource_key TEXT NOT NULL REFERENCES remote_agent_resource_slots(resource_key),
+        declared_capacity INTEGER CHECK (declared_capacity >= 1),
         host_id TEXT NOT NULL,
         overlap_policy TEXT NOT NULL CHECK (overlap_policy IN ('skip', 'queue')),
         status TEXT NOT NULL CHECK (status IN ('queued', 'admitted', 'skipped', 'withdrawn')),

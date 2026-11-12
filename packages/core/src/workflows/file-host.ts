@@ -1,3 +1,4 @@
+import { installResourceCapacityPolicy } from './resource-capacity';
 import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { randomUUID } from 'node:crypto';
 import { join, resolve } from 'node:path';
@@ -331,6 +332,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   };
   const store = await createFileWorkflowStore({
     root,
+    resourceCapacityPolicy: installResourceCapacityPolicy,
     getCodebase: id => records.codebases.getCodebase(id),
     listReusableCheckouts: async () =>
       (await environments())

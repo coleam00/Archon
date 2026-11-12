@@ -1,3 +1,9 @@
+import { resourceCapacitySchema } from '../schemas/resource';
+import {
+  resolveResourceCapacity,
+  capturedResourceDeclaration,
+  type ResourceCapacityPolicy,
+} from '../resource-capacity';
 import {
   slotMembershipSchema,
   hasReadableSlotMembership,
@@ -26,7 +32,6 @@ import {
   type ResourceStartDisposition,
 } from '../schemas/resource-start';
 import {
-  ResourceSlotCapacityConflictError,
   capacityWaiters,
   heldCheckouts,
   type ReusableCheckout,
@@ -90,9 +95,13 @@ export interface AdmissionTransaction {
 
 export function createAdmissionTransaction(
   root: string,
-  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]> = async () => []
+  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]> = async () => [],
+  policy: ResourceCapacityPolicy = {}
 ): AdmissionTransaction {
   const documents: Record<string, unknown> = {};
+  let caps: Promise<ReadonlyMap<string, number>> | undefined;
+  const currentCaps = () =>
+    (caps ??= policy.loadCaps?.() ?? Promise.resolve(new Map<string, number>()));
   const slots = new Map<string, Slot>();
   const receipts = new Map<string, z.infer<typeof receiptSchema>>();
   async function read<S extends z.ZodType>(path: string, schema: S): Promise<z.output<S> | null> {
@@ -112,9 +121,8 @@ export function createAdmissionTransaction(
     const row =
       slots.get(resource) ??
       (await read(path, schema)) ??
-      schema.parse({ capacity: capacity ?? 1, holders: [], queue: [] });
-    if (capacity !== undefined && row.capacity !== capacity)
-      throw new ResourceSlotCapacityConflictError(resource, row.capacity, capacity);
+      schema.parse({ capacity: capacity ?? 10, holders: [], queue: [] });
+    if (capacity !== undefined) row.capacity = capacity;
     documents[path] = row;
     slots.set(resource, row);
     return row;
@@ -254,11 +262,26 @@ export function createAdmissionTransaction(
     return { kind: 'foreign' as const, run, unknown: !run.working_path };
   }
 
+  async function declaredCapacity(row: Request): Promise<number | undefined> {
+    if (row.declaredCapacity !== undefined)
+      return resourceCapacitySchema.parse(row.declaredCapacity);
+    for (const path of await documentPaths(root, 'receipts')) {
+      const receipt = await read(path, receiptSchema);
+      const binding = receipt?.bindings.find(binding => binding.requestIds.includes(row.id));
+      if (binding?.intent?.resource === row.resource && binding.intent.capacity !== undefined)
+        return binding.intent.capacity;
+    }
+    return capturedResourceDeclaration(policy, row.launch, row.resource);
+  }
+  async function capacityFor(row: Request): Promise<number> {
+    return resolveResourceCapacity(await currentCaps(), row.resource, await declaredCapacity(row));
+  }
   async function queuedStarts(resource: string, ids: string[]) {
     const queue: QueuedStart[] = [];
     for (const id of ids) {
       try {
-        queue.push(queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id)));
+        const row = queuedRequestSchema(id, pathFor('slots', resource)).parse(await request(id));
+        queue.push({ ...row, capacity: await capacityFor(row) });
       } catch (error) {
         if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;
         const queueError = new Error(`Queued resource request '${id}' is invalid`, {
@@ -311,7 +334,7 @@ export function createAdmissionTransaction(
       }
     }
     return {
-      capacity: row.capacity,
+      capacity: resolveResourceCapacity(await currentCaps(), resource),
       reusableCheckouts: reusable,
       holders: row.holders,
       waiters: capacityWaiters(
@@ -350,15 +373,20 @@ export function createAdmissionTransaction(
     intent: ResourceStartIntent,
     runs: Map<string, WorkflowRun>
   ): Promise<ResourceStartDisposition> {
-    const resource = await slot(intent.resource, intent.capacity);
+    const capacity = resolveResourceCapacity(await currentCaps(), intent.resource, intent.capacity);
+    const resource = await slot(intent.resource, capacity);
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker(await occupancy(intent.resource, launch), launch);
+    const blocker = resourceStartBlocker(
+      { ...(await occupancy(intent.resource, launch)), capacity },
+      launch
+    );
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     const row: Request = {
       id: intent.launch.run.id,
       resource: intent.resource,
+      declaredCapacity: intent.capacity,
       hostId: intent.hostId,
       overlap: intent.overlap,
       status: blocker && intent.overlap === 'skip' ? 'skipped' : 'queued',
@@ -409,10 +437,13 @@ export function createAdmissionTransaction(
     if (run.status !== 'failed' && run.status !== 'paused')
       throw new WorkflowNotResumableError(run.id, run.status);
     if (!resource.admitted.includes(run.id)) resource.admitted.push(run.id);
-    const blocker = resourceResumeBlocker(await occupancy(row.resource, row.launch), {
-      ...run,
-      status: run.status,
-    });
+    const blocker = resourceResumeBlocker(
+      { ...(await occupancy(row.resource, row.launch)), capacity: await capacityFor(row) },
+      {
+        ...run,
+        status: run.status,
+      }
+    );
     if (blocker) return blocker;
     if (!resource.holders.some(h => h.kind === 'run' && h.id === run.id))
       resource.holders.push({ kind: 'run', id: run.id });

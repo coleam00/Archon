@@ -1,3 +1,11 @@
+import type { WorkflowResource } from '@archon/workflows/schemas/workflow';
+import { resourceCapacitySchema } from '@archon/workflows/schemas/resource';
+import { installResourceCapacityPolicy } from '../workflows/resource-capacity';
+import {
+  selectStartResource,
+  resolveResourceCapacity,
+  type ResourceCapacityPolicy,
+} from '@archon/workflows/resource-start-store';
 import { z } from 'zod';
 import {
   SourceReceiptDigestConflictError,
@@ -96,10 +104,13 @@ function disposition(row: RequestRow): ResourceStartDisposition {
 
 async function admitResourceStartWithQuery(
   query: Query,
-  intent: ResourceStartIntent
+  intent: ResourceStartIntent,
+  policy: ResourceCapacityPolicy = installResourceCapacityPolicy
 ): Promise<ResourceStartDisposition> {
   await lockCheckoutReservations(query);
-  const { capacity } = await lockResourceSlot(query, intent.resource, intent.capacity);
+  const caps = (await policy.loadCaps?.()) ?? new Map<string, number>();
+  const capacity = resolveResourceCapacity(caps, intent.resource, intent.capacity);
+  await lockResourceSlot(query, intent.resource, capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
     [intent.launch.run.id]
@@ -108,14 +119,14 @@ async function admitResourceStartWithQuery(
 
   const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
   const blocker = resourceStartBlocker(
-    await resourceStartOccupancy(query, intent.resource, capacity),
+    await resourceStartOccupancy(query, intent.resource, capacity, caps, policy),
     launch
   );
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
-       (id, resource_key, host_id, overlap_policy, status, blocker_run_id, blocker_kind, launch, receipt_id, binding_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+       (id, resource_key, host_id, overlap_policy, status, blocker_run_id, blocker_kind, launch, receipt_id, binding_id, declared_capacity)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [
       intent.launch.run.id,
       intent.resource,
@@ -127,6 +138,7 @@ async function admitResourceStartWithQuery(
       JSON.stringify(intent.launch),
       intent.receipt?.receiptId ?? null,
       intent.receipt?.bindingId ?? null,
+      intent.capacity ?? null,
     ]
   );
   const row: RequestRow = {
@@ -143,20 +155,29 @@ async function admitResourceStartWithQuery(
 }
 
 export async function admitResourceStart(
-  intent: ResourceStartIntent
+  intent: ResourceStartIntent,
+  policy: ResourceCapacityPolicy = installResourceCapacityPolicy
 ): Promise<ResourceStartDisposition> {
-  return getDatabase().withTransaction(query => admitResourceStartWithQuery(query, intent));
+  return getDatabase().withTransaction(query => admitResourceStartWithQuery(query, intent, policy));
 }
 
 /** Admit this host's queued requests that can run while the slot has free capacity. */
-export async function drainResourceStarts(options: {
-  resource: string;
-  hostId: string;
-}): Promise<ResourceStartDisposition[]> {
+export async function drainResourceStarts(
+  options: {
+    resource: string;
+    hostId: string;
+  },
+  policy: ResourceCapacityPolicy = installResourceCapacityPolicy
+): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
     await lockCheckoutReservations(query);
-    const { capacity } = await lockResourceSlot(query, options.resource);
-    const slot = await resourceStartOccupancy(query, options.resource, capacity);
+    const caps = (await policy.loadCaps?.()) ?? new Map<string, number>();
+    await lockResourceSlot(
+      query,
+      options.resource,
+      resolveResourceCapacity(caps, options.resource)
+    );
+    const slot = await resourceStartOccupancy(query, options.resource, 10, caps, policy);
     const admitted: ResourceStartDisposition[] = [];
     for (const start of drainableStarts(slot, options.hostId))
       admitted.push(await admitExisting(query, options.resource, start));
@@ -429,6 +450,10 @@ function inspectRequest(row: RequestInspectionRow): ResourceStartRequestInspecti
   return {
     id: String(row.id),
     resource: String(row.resource_key),
+    declaredCapacity:
+      row.declared_capacity == null
+        ? undefined
+        : resourceCapacitySchema.parse(row.declared_capacity),
     hostId: String(row.host_id),
     overlap: row.overlap_policy as ResourceStartRequestInspection['overlap'],
     status: row.status as ResourceStartRequestInspection['status'],
@@ -520,12 +545,16 @@ export async function claimStartBindingPreparation(input: {
   return result.rowCount === 1;
 }
 
-export async function completeStartBindingPreparation(input: {
-  receiptId: string;
-  bindingId: string;
-  ownerId: string;
-  launch: PreparedWorkflowLaunch;
-}): Promise<ResourceStartDisposition | null> {
+export async function completeStartBindingPreparation(
+  input: {
+    receiptId: string;
+    bindingId: string;
+    ownerId: string;
+    launch: PreparedWorkflowLaunch;
+    workflowResource?: WorkflowResource;
+  },
+  policy: ResourceCapacityPolicy = installResourceCapacityPolicy
+): Promise<ResourceStartDisposition | null> {
   return getDatabase().withTransaction(async query => {
     // See withdrawQueuedResourceStart: acquire SQLite's writer lock before the read.
     if (getDatabase().dialect === 'sqlite') {
@@ -542,14 +571,17 @@ export async function completeStartBindingPreparation(input: {
     const rawIntent = binding.rows[0]?.intent;
     if (!rawIntent) return null;
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(rawIntent));
-    const disposition = await admitResourceStartWithQuery(query, {
-      resource: persisted.resource,
-      capacity: persisted.capacity,
-      hostId: persisted.hostId,
-      overlap: persisted.overlap,
-      launch: input.launch,
-      receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
-    });
+    const disposition = await admitResourceStartWithQuery(
+      query,
+      {
+        ...selectStartResource(persisted, input.workflowResource),
+        hostId: persisted.hostId,
+        overlap: persisted.overlap,
+        launch: input.launch,
+        receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
+      },
+      policy
+    );
     await query(
       `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete', preparation_error = NULL, updated_at = ${getDialect().now()}
         WHERE receipt_id = $1 AND binding_id = $2 AND preparation_owner = $3`,

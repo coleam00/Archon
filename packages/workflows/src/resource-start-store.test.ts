@@ -76,6 +76,7 @@ test('drains reserve local checkouts even for read-only admissions and respect t
     id,
     launch,
     hostId,
+    capacity: 3,
   });
   const occupied = {
     ...slot(),
@@ -93,7 +94,7 @@ test('drains reserve local checkouts even for read-only admissions and respect t
 
 test('failed resume ignores foreign-blocked promises but yields to runnable read-only ones', () => {
   const foreign = heldCheckouts([{ id: 'foreign', working_path: '/shared' }], []);
-  const queue = [{ id: 'queued', hostId: 'host', launch: launch() }];
+  const queue = [{ id: 'queued', hostId: 'host', capacity: 3, launch: launch() }];
   const failed = { id: 'failed', metadata: {}, status: 'failed' as const };
   expect(
     resourceResumeBlocker({ ...slot(), foreignHeldCheckouts: foreign, queue }, failed)
@@ -109,7 +110,12 @@ for (const guard of ['false', null]) {
     const malformed = launch();
     malformed.run.metadata.admission_checkout_guard = guard;
     const valid = launch();
-    const queue = [malformed, valid].map(launch => ({ id: launch.run.id, hostId: 'host', launch }));
+    const queue = [malformed, valid].map(launch => ({
+      id: launch.run.id,
+      hostId: 'host',
+      capacity: 3,
+      launch,
+    }));
     const logs: string[] = [];
     setLogSink(line => logs.push(line));
     try {
@@ -175,6 +181,7 @@ test('drains reserve registered aliases in both orders, including read-only and 
       const queue = [...ordered, independent, different].map(launch => ({
         id: launch.run.id,
         hostId: 'host',
+        capacity: 3,
         launch,
       }));
       expect(
@@ -215,6 +222,7 @@ test('unknown foreign checkout identity only blocks guarded shared checkouts', (
   const queue = [guarded, readOnly, branchless].map(launch => ({
     id: launch.run.id,
     hostId: 'host',
+    capacity: 3,
     launch,
   }));
   expect(drainableStarts({ ...occupied, queue }, 'host')).toEqual(queue.slice(1));

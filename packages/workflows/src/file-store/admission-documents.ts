@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
+import { resourceCapacitySchema } from '../schemas/resource';
 import { parseProcessOwner } from '@archon/paths/process-owner';
 import {
   preparedWorkflowLaunchSchema,
@@ -48,6 +49,7 @@ export const slotSchema = (source: string) =>
 export const requestSchema = z.object({
   id: z.string(),
   resource: z.string(),
+  declaredCapacity: resourceCapacitySchema.optional(),
   hostId: z.string(),
   overlap: resourceStartOverlapSchema,
   status: resourceStartRequestStatusSchema,

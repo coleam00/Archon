@@ -12,7 +12,7 @@ import { getDatabase } from './connection';
 import {
   addResourceSlotHolder,
   liveResourceSlotHolders,
-  lockConfiguredResourceSlot,
+  lockResourceSlot,
   removeResourceSlotHolder,
   resourceSlotHolderSource,
 } from './resource-slots';
@@ -40,7 +40,7 @@ export async function tryAdmitProviderAttempt(input: {
 }): Promise<{ admitted: boolean; live: number }> {
   const resource = providerResourceKey(input.provider);
   return getDatabase().withTransaction(async query => {
-    await lockConfiguredResourceSlot(query, resource, input.capacity);
+    await lockResourceSlot(query, resource, input.capacity);
     const live = (await liveResourceSlotHolders(query, resource)).length;
     if (live >= input.capacity) return { admitted: false, live };
     await addResourceSlotHolder(query, resource, {

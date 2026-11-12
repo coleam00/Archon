@@ -23,6 +23,9 @@ import { describeStartReceiptConformance } from './store-conformance/start-recei
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
+  resourceCaps: Map<string, number>;
+  reopenStore(): Promise<IWorkflowStore>;
+  clearDeclaredCapacity(id: string): Promise<void>;
   seedPersistedWait(runId: string, wait: Record<string, unknown>): Promise<void>;
   backdate(
     runId: string,

@@ -102,6 +102,15 @@ describe('parsePackDeclaration bindings', () => {
   const timer = (extra = ''): string =>
     `  sweep:\n    workflow: sweep\n    resource: sweep\n    overlap: skip\n    schedule: { interval_seconds: 60 }\n${extra}`;
 
+  it('preserves different declarations on the same resource', () => {
+    const pack = parsePackDeclaration(
+      `bindings:\n${timer()}  again:\n    workflow: w\n    resource: sweep\n    capacity: 2\n    overlap: skip\n`,
+      'pack.yaml'
+    );
+    expect(pack.bindings?.sweep?.capacity).toBeUndefined();
+    expect(pack.bindings?.again?.capacity).toBe(2);
+  });
+
   it('reads a timer, an event and a fire-only binding, applying the defaults', () => {
     const declared = parsePackDeclaration(
       `bindings:\n${timer('    inputs:\n      self: { binding: sweep }\n      host: { repo: host }\n      mode: fast\n      next: { binding: follow-up }\n')}  follow-up:\n    workflow: sweep\n    resource: follow-up\n    overlap: queue\n  opened:\n    workflow: sweep\n    resource: opened\n    capacity: 2\n    overlap: queue\n    isolation: { kind: worktree }\n    event: { kind: issue.lifecycle, actions: [opened] }\n    inputs:\n      number: { event: subject.number }\n`,
@@ -113,7 +122,6 @@ describe('parsePackDeclaration bindings', () => {
           workflow: 'sweep',
           resource: 'sweep',
           resource_scope: 'repo',
-          capacity: 1,
           overlap: 'skip',
           isolation: { kind: 'default' },
           schedule: { interval_seconds: 60 },
@@ -129,7 +137,6 @@ describe('parsePackDeclaration bindings', () => {
           workflow: 'sweep',
           resource: 'follow-up',
           resource_scope: 'repo',
-          capacity: 1,
           overlap: 'queue',
           isolation: { kind: 'default' },
           inputs: {},
@@ -173,10 +180,6 @@ describe('parsePackDeclaration bindings', () => {
     [
       `${timer()}  ev:\n    workflow: w\n    resource: r\n    overlap: skip\n    event: { kind: k }\n  ref:\n    workflow: w\n    resource: x\n    overlap: skip\n    schedule: { interval_seconds: 5 }\n    inputs:\n      e: { binding: ev }\n`,
       "names event binding 'ev'",
-    ],
-    [
-      `${timer()}  again:\n    workflow: w\n    resource: sweep\n    capacity: 2\n    overlap: skip\n    schedule: { interval_seconds: 5 }\n`,
-      "share resource 'sweep' but declare capacity 1 and 2",
     ],
   ])('refuses %p, naming the file and binding', (bindings, reason) => {
     const parse = (): unknown =>

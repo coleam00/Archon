@@ -131,12 +131,7 @@ export function requestingRun(
     : null;
 }
 
-/**
- * How many admitted holders a resource slot allows at once. It defaults to 1, so a
- * resource means "must not overlap" unless configured otherwise. Every binding that
- * names a resource must declare the same capacity; admission refuses a mismatch.
- */
-export const resourceSlotCapacitySchema = resourceCapacitySchema.default(1);
+export const resourceSlotCapacitySchema = resourceCapacitySchema.optional();
 
 export const resourceStartOverlapSchema = z.enum(['skip', 'queue']);
 export const startBindingPreparationStatusSchema = z.enum([

@@ -1,3 +1,4 @@
+import type { ResourceCapacityPolicy } from '../resource-capacity';
 import { createFileAdmissionStore } from './admission';
 import { createAdmissionTransaction } from './admission-transaction';
 import { type ReusableCheckout, resumeRefusal } from '../resource-start-store';
@@ -47,6 +48,7 @@ import {
 
 const log = createLogger('file-store');
 export interface FileWorkflowStoreOptions {
+  resourceCapacityPolicy?: ResourceCapacityPolicy;
   root: string;
   getCodebase?: IWorkflowStore['getCodebase'];
   getCodebaseEnvVars?: IWorkflowStore['getCodebaseEnvVars'];
@@ -117,7 +119,11 @@ export async function createFileWorkflowStore(
       const events = loadEvents ? await eventsFor([...runs.keys()]) : [];
       const prior = byRun(events);
       const priorIds = new Set(events.map(event => event.id));
-      const admission = createAdmissionTransaction(root, options.listReusableCheckouts);
+      const admission = createAdmissionTransaction(
+        root,
+        options.listReusableCheckouts,
+        options.resourceCapacityPolicy
+      );
       const result = await call(
         createTransactionView(runs, events, getCodebase, artifacts),
         admission
@@ -484,7 +490,11 @@ export async function createFileWorkflowStore(
           changes: { documents: { [path]: [...rows.filter(row => row !== prior), next] } },
         };
       }),
-    ...createFileAdmissionStore(root, options.listReusableCheckouts),
+    ...createFileAdmissionStore(
+      root,
+      options.listReusableCheckouts,
+      options.resourceCapacityPolicy
+    ),
     ...createFileStateDocumentStore(root),
   };
   return store;

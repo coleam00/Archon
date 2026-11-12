@@ -1,3 +1,4 @@
+import { selectStartResource } from '../resource-capacity';
 import {
   bindingSchema,
   deliveryPathFor,
@@ -213,6 +214,7 @@ export function createReceiptOperations(
         const result = await tx.admit(
           {
             ...item.intent,
+            ...selectStartResource(item.intent, input.workflowResource),
             launch: input.launch,
             receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
           },
