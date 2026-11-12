@@ -33,8 +33,13 @@ export interface LineRecord {
 
 /** The pull request's changed files, read through the forge. */
 export function readPrFiles(url: string): PrFile[] {
-  const pr = prFromUrl(url);
-  const files = forge('pr.files', { ref: { repo: pr.repo, number: pr.number } })?.files;
+  let files: unknown;
+  try {
+    const pr = prFromUrl(url);
+    files = forge('pr.files', { ref: { repo: pr.repo, number: pr.number } }).files;
+  } catch (error) {
+    throw new Error(`PR metrics could not read files for ${url}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
+  }
   if (!Array.isArray(files)) throw new Error(`forge pr.files returned no file list for ${url}`);
   return files.map(row => {
     const file = row as Record<string, unknown>;
