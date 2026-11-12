@@ -11,11 +11,7 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
-import {
-  collectCredentialValues,
-  redactCredentialValues,
-} from '@archon/paths/credential-redaction';
+import { redactedFailureReasons } from '../utils/trigger-diagnostics';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
   SourceReceiptDigestConflictError,
@@ -84,24 +80,6 @@ async function loadFireConfig(path: string): Promise<TriggerFireConfig> {
 async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerFireConfig): Promise<void> {
   if (!(await host.records.users.getUserById(config.binding.runAsUserId)))
     throw new Error('Trigger binding names an unknown run-as user.');
-}
-
-/**
- * Failure messages for the operator's terminal. The store keeps only
- * the failed stage because configuration and provider errors can carry credentials, so
- * the text is redacted with the same policy as subprocess output before it is shown.
- * Flattens the nested `AggregateError`s the drain builds, which carry no reason of their own.
- */
-function redactedFailureReasons(errors: readonly unknown[]): string {
-  const messages = (error: unknown): string[] =>
-    error instanceof AggregateError
-      ? error.errors.flatMap(messages)
-      : [error instanceof Error ? error.message : String(error)];
-  const credentials = collectCredentialValues(process.env);
-  return errors
-    .flatMap(messages)
-    .map(message => sanitizeCredentials(redactCredentialValues(message, credentials)))
-    .join('; ');
 }
 
 type TriggerOptions = {

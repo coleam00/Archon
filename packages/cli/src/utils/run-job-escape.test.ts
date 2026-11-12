@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { createServer } from 'node:net';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -15,6 +15,7 @@ import {
   RUN_JOB_ESCAPE_BUN_CONFIG_ARG,
   RUN_JOB_ESCAPE_ENV,
   serveRunJobEscape,
+  spawnTriggerOutsideRunJob,
   waitForRunJobEscapeBroker,
 } from './run-job-escape';
 
@@ -54,6 +55,94 @@ function brokerPipe(): string {
 describe('run job escape', () => {
   // The broker's Windows-only part is where it runs, which the Windows integration spec
   // covers. The relay itself is plain IPC, so it runs on every platform.
+  it('acknowledges a trigger spawn before execution ends and survives broker close', async () => {
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-trigger-escape-')));
+    const program = join(dir, 'cli.ts');
+    const release = join(dir, 'release');
+    const ready = join(dir, 'ready');
+    const done = join(dir, 'done');
+    const requestId = crypto.randomUUID();
+    writeFileSync(
+      program,
+      `
+      const fs = require('node:fs');
+      console.log(JSON.stringify({ args: process.argv.slice(2), marker: process.env.${RUN_JOB_ESCAPE_ENV} ?? null, detached: process.env.ARCHON_DETACHED_RUN_OWNER, value: process.env.ARCHON_RELAY_TEST }));
+      fs.writeFileSync(${JSON.stringify(ready)}, String(process.pid));
+      while (!fs.existsSync(${JSON.stringify(release)})) await Bun.sleep(10);
+      fs.writeFileSync(${JSON.stringify(done)}, 'done');
+    `
+    );
+    const pipe = brokerPipe();
+    const server = await serveRunJobEscape(pipe, [process.execPath, program]);
+    let pid: number | undefined;
+    try {
+      await spawnTriggerOutsideRunJob(pipe, {
+        requestId,
+        hostId: 'host',
+        cwd: dir,
+        archonHome: dir,
+        env: { ...process.env, [RUN_JOB_ESCAPE_ENV]: pipe, ARCHON_RELAY_TEST: 'preserved' },
+      });
+      await server.close();
+      const deadline = Date.now() + 5_000;
+      while (!existsSync(ready)) {
+        if (Date.now() > deadline) throw new Error('Spawned executor did not start');
+        await Bun.sleep(10);
+      }
+      pid = Number(readFileSync(ready, 'utf8'));
+      expect(existsSync(done)).toBe(false);
+      const log = JSON.parse(
+        readFileSync(join(dir, 'logs', `trigger-run-${requestId}.log`), 'utf8')
+      );
+      expect(log).toEqual({
+        args: ['trigger', 'execute', requestId, '--host', 'host'],
+        marker: null,
+        detached: '1',
+        value: 'preserved',
+      });
+      writeFileSync(release, '');
+      while (!existsSync(done)) {
+        if (Date.now() > deadline) throw new Error('Spawned executor did not finish');
+        await Bun.sleep(10);
+      }
+    } finally {
+      writeFileSync(release, '');
+      if (pid !== undefined) {
+        try {
+          process.kill(pid);
+        } catch {
+          /* Already exited. */
+        }
+      }
+      await server.close();
+    }
+  });
+
+  it('refuses invalid trigger launch identities and reports spawn failure', async () => {
+    const pipe = brokerPipe();
+    const program = stubProgram();
+    const server = await serveRunJobEscape(pipe, program);
+    const dir = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-trigger-refused-')));
+    const launch = {
+      requestId: crypto.randomUUID(),
+      hostId: 'host',
+      cwd: dir,
+      archonHome: dir,
+      env: {},
+    };
+    try {
+      await expect(
+        spawnTriggerOutsideRunJob(pipe, { ...launch, requestId: '../other' })
+      ).rejects.toThrow();
+      await expect(spawnTriggerOutsideRunJob(pipe, { ...launch, hostId: '' })).rejects.toThrow();
+      await expect(
+        spawnTriggerOutsideRunJob(pipe, { ...launch, cwd: join(dir, 'absent') })
+      ).rejects.toThrow('ENOENT');
+    } finally {
+      await server.close();
+    }
+  });
+
   it('relays the output and exit status of a command that runs without the escape marker', async () => {
     const pipe = brokerPipe();
     const program = stubProgram();
@@ -201,6 +290,7 @@ describe('run job escape', () => {
         '--detach',
       ],
       [...program, 'trigger', 'fire', '--detach'],
+      [...program, 'trigger', 'execute', crypto.randomUUID(), '--host', 'host'],
       ...['answer', 'cancel', 'abandon', 'wake', 'unknown'].map(action => [
         ...program,
         'workflow',

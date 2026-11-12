@@ -1,3 +1,4 @@
+import { redactedFailureReasons } from './trigger-diagnostics';
 import { join } from 'node:path';
 import { getArchonHome, createLogger } from '@archon/paths';
 import { loadStoreSelection } from '@archon/core/config/store-selection';
@@ -20,7 +21,9 @@ export async function createCliWorkflowHost(executesWorkflow = false): Promise<W
             'resource_start.completion_drain_failed'
           );
           process.stderr.write(
-            `Warning: queued work may need recovery: archon trigger drain --host ${hostId}\n`
+            `Warning: trigger host ${hostId} drain failed: ${redactedFailureReasons([err])}. ` +
+              `Retry queued or pending work with archon trigger drain --host ${hostId}; ` +
+              `for admitted requests, inspect ownership before retrying trigger execute.\n`
           );
         }
       });

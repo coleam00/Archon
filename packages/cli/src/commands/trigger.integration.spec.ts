@@ -1389,13 +1389,17 @@ nodes:
         if (cancel.exitCode !== 0) {
           throw new Error(`cancel failed: ${cancel.stderr || cancel.stdout}`);
         }
-        activeRuns.delete(first.id);
-        expect(runs()[0]?.status).toBe('cancelled');
+        expect(
+          runs().find(run => run.id === first.id)?.status,
+          JSON.stringify({ surface, runId: first.id, stdout: cancel.stdout, stderr: cancel.stderr })
+        ).toBe('cancelled');
         // Git Bash reports MSYS PIDs on Windows, so the PID check is POSIX-only; there the
         // cancel command's own confirmation that the owner's tree stopped is the proof.
         if (process.platform !== 'win32') {
           for (const pid of pids) expect(processAlive(pid)).toBe(false);
         }
+
+        activeRuns.delete(first.id);
 
         // The stopping controller drains after recording cancellation and cleanup.
         await waitFor(

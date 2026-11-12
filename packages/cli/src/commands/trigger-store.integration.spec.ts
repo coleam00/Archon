@@ -36,6 +36,8 @@ import {
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
 import { registerFolder } from '@archon/core/handlers/clone';
+import { spawnAdmitted } from '../triggers/resource-start-host';
+import { RUN_JOB_ESCAPE_ENV } from '../utils/run-job-escape';
 import { triggerCommand } from './trigger';
 import { workflowGetCommand } from './workflow-query';
 import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
@@ -852,6 +854,66 @@ test("fire does not blame its receipt for another binding's preparation failure"
   } finally {
     stderr.mockRestore();
     stdout.mockRestore();
+    restore();
+  }
+});
+
+test('an admitted dispatch failure requires ownership-checked execute, not another drain', async () => {
+  const fixture = await fireFixture(true);
+  const { project, configPath, restore } = fixture;
+  const deps = { ...fixture.host.deps, releaseRunResources: async () => {} };
+  const host = { ...fixture.host, deps, engine: new InProcessWorkflowEngine(deps) };
+  const previousBroker = process.env[RUN_JOB_ESCAPE_ENV];
+  process.env[RUN_JOB_ESCAPE_ENV] =
+    process.platform === 'win32'
+      ? `\\\\.\\pipe\\archon-missing-${randomUUID()}`
+      : join(project, 'missing-broker.sock');
+  try {
+    const error = await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath },
+      {
+        dispatch: (requestId, hostId) => spawnAdmitted(host, requestId, hostId),
+        env: NO_RUN,
+      }
+    ).catch((caught: unknown) => caught);
+    const [receipt] = await host.deps.store.listStartReceipts(1);
+    if (!receipt) throw new Error('Missing retained receipt');
+    const inspection = await host.deps.store.getStartReceipt(receipt.id);
+    const disposition = inspection?.bindings[0]?.disposition;
+    if (disposition?.status !== 'admitted') throw new Error('Request was not admitted');
+    expect(error).toBeInstanceOf(Error);
+    const message = (error as Error).message;
+    expect(message).toContain(`archon trigger inspect ${disposition.requestId}`);
+    expect(message).toContain(`archon workflow get ${disposition.runId}`);
+    expect(message).toContain(`trigger-run-${disposition.requestId}.log`);
+    expect(message).toContain(`archon trigger execute ${disposition.requestId} --host host`);
+    expect(message).toContain('verifying no executor owns the run');
+    expect(message).toContain('A drain cannot retry an admitted request');
+    expect((await host.deps.store.getWorkflowRun(disposition.runId))?.status).toBe('pending');
+    let dispatches = 0;
+    await drainResourceStartHost({
+      ...host,
+      hostId: 'host',
+      startAdmitted: async () => {
+        dispatches++;
+      },
+    });
+    expect(dispatches).toBe(0);
+    // No process was spawned, so this explicit execute has no competing owner.
+    const result = await startAdmittedResourceStart({
+      host,
+      requestId: disposition.requestId,
+      hostId: 'host',
+      createPlatform: () => new HeadlessPlatform(),
+    });
+    expect(result.success).toBe(true);
+    expect((await host.deps.store.getWorkflowRun(disposition.runId))?.status).toBe('completed');
+  } finally {
+    if (previousBroker === undefined) delete process.env[RUN_JOB_ESCAPE_ENV];
+    else process.env[RUN_JOB_ESCAPE_ENV] = previousBroker;
     restore();
   }
 });

@@ -1,11 +1,9 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { drainResourceStartHost } from '@archon/core/workflows/resource-start-host';
-import { spawn } from 'node:child_process';
-import { mkdir, open } from 'node:fs/promises';
-import { join } from 'node:path';
 import { getArchonHome } from '@archon/paths';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
-import { DETACHED_RUN_OWNER_ENV } from '../utils/detached-run-control';
+import { RUN_JOB_ESCAPE_ENV, spawnTriggerOutsideRunJob } from '../utils/run-job-escape';
+import { spawnTriggerProcess, triggerProcessLog } from '../utils/trigger-process';
 
 /** Hand one admitted request to a detached `trigger execute` process with its own log. */
 export async function spawnAdmitted(
@@ -15,29 +13,26 @@ export async function spawnAdmitted(
 ): Promise<void> {
   const request = await host.deps.store.getResourceStartRequest(requestId);
   if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
-  const [executable, ...prefix] = cliProgramArguments();
-  const logDirectory = join(getArchonHome(), 'logs');
-  await mkdir(logDirectory, { recursive: true });
-  const log = await open(join(logDirectory, `trigger-run-${requestId}.log`), 'a', 0o600);
+  const launch = {
+    requestId,
+    hostId,
+    cwd: request.launch.execution.cwd,
+    archonHome: getArchonHome(),
+    env: { ...process.env },
+  };
   try {
-    const child = spawn(
-      executable,
-      [...prefix, 'trigger', 'execute', requestId, '--host', hostId],
-      {
-        cwd: request.launch.execution.cwd,
-        detached: true,
-        stdio: ['ignore', log.fd, log.fd],
-        windowsHide: true,
-        env: { ...process.env, ARCHON_HOME: getArchonHome(), [DETACHED_RUN_OWNER_ENV]: '1' },
-      }
+    const brokerPipe = process.env[RUN_JOB_ESCAPE_ENV];
+    if (brokerPipe !== undefined) await spawnTriggerOutsideRunJob(brokerPipe, launch);
+    else await spawnTriggerProcess(cliProgramArguments(), launch);
+  } catch (error) {
+    throw new Error(
+      `Admitted request ${requestId} (run ${request.launch.run.id}, host ${hostId}) could not be dispatched: ${error instanceof Error ? error.message : String(error)}. ` +
+        `Inspect with archon trigger inspect ${requestId} and archon workflow get ${request.launch.run.id}; ` +
+        `check ownership and log ${triggerProcessLog(launch.archonHome, requestId)}. ` +
+        `Only after verifying no executor owns the run, retry: archon trigger execute ${requestId} --host ${hostId}. ` +
+        `A drain cannot retry an admitted request.`,
+      { cause: error }
     );
-    await new Promise<void>((resolveSpawn, reject) => {
-      child.once('error', reject);
-      child.once('spawn', resolveSpawn);
-    });
-    child.unref();
-  } finally {
-    await log.close();
   }
 }
 
