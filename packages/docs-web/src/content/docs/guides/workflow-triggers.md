@@ -221,7 +221,7 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 `capacity` sets how many runs can hold the resource at once. Admission reads it fresh for every start, drain and resume, from three sources, lowest first:
 
 1. An engine default of `1` for a start that declares no number, so by default runs for one resource never overlap.
-2. The capacity the start declares: a binding's `"capacity": 2`, or a pack binding's `capacity:`. Each start is checked against its own number, so bindings that share a resource do not need to agree. A drain or resume uses the number the last binding start declared.
+2. The capacity the start declares: a binding's `"capacity": 2`, a pack binding's `capacity:`, or, for a hand start, the workflow's `resource: { name: build, capacity: 2 }`. Each start is checked against its own number, so bindings that share a resource do not need to agree. A drain or resume uses the number the last binding start declared.
 3. The install config in `~/.archon/config.yaml`, which wins:
 
    ```yaml
@@ -291,6 +291,8 @@ nodes: [...]
 ```
 
 Every run of that workflow then takes a slot on the resource, however it starts: `archon workflow run`, a chat or API start, a `workflow:` sub-run, or a binding. A binding that starts it admits the run on the workflow's resource instead of the binding's own `resource`, so binding starts and hand starts count against one slot, and the binding's `capacity` is a declared capacity for the workflow's resource. The name is used as written: `concurrency.resources.build` in the install config is the number for every workflow that declares `resource: build`, across projects.
+
+To set the capacity that hand starts and sub-runs of the workflow declare, write `resource: { name: build, capacity: 3 }`. Without one they declare 1. The number applies to that start only; it does not change the number binding starts or drains use.
 
 A hand start of a full resource waits as a `pending` run and prints `Waiting for resource 'build'`, then starts when a slot frees. It waits behind runnable queued trigger requests but holds no queue position itself, so a waiting process that dies strands nothing. `archon workflow run --no-wait` refuses instead and names the resource. If admission fails while the start waits, for example because the install config became invalid, the run is cancelled with the reason; a run an operator cancels while it waits ends without a slot.
 

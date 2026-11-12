@@ -184,7 +184,7 @@ The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotice
 
 ## Resource capacity
 
-`concurrency.resources.<resource>: N` sets how many runs may hold a resource at once, for a workflow that declares `resource:` and for trigger bindings. It wins over the capacity a start declares (a binding's `capacity`), which wins over the engine default of 1. Admission re-reads it at every start, drain and resume, so a change applies to the next admission, and lowering it never ends a run that holds a slot. A value that is not a positive integer, or a config file that cannot be parsed, refuses resource admissions with an error naming the problem. See [Choose a resource, capacity, and overlap policy](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
+`concurrency.resources.<resource>: N` sets how many runs may hold a resource at once, for a workflow that declares `resource:` and for trigger bindings. It wins over the capacity a start declares (a binding's `capacity`, or a workflow's `resource: { name, capacity }` for a hand start), which wins over the engine default of 1. Admission re-reads it at every start, drain and resume, so a change applies to the next admission, and lowering it never ends a run that holds a slot. A value that is not a positive integer, or a config file that cannot be parsed, refuses resource admissions with an error naming the problem. See [Choose a resource, capacity, and overlap policy](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
 
 ## Run-scoped configuration
 

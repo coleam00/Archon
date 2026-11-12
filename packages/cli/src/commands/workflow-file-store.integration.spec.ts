@@ -885,6 +885,39 @@ test('a hand start waits while its resource is full and --no-wait refuses it', a
   expect(waited.output + waited.error).toContain("Waiting for resource 'build'");
   expect(readFileSync(join(f.project, 'quick-ran'), 'utf8')).toBe('ran\n');
 }, 60000);
+test('a hand start is checked against its own declared capacity, then the default 1', async () => {
+  const f = fixture('store: files\n');
+  // Runs in one checkout never overlap, so the later starts run in a second folder.
+  const other = join(f.home, '..', 'other');
+  mkdirSync(join(other, '.archon/workflows'), { recursive: true });
+  const workflow = (dir: string, name: string, resource: string, bash: string): void =>
+    writeFileSync(
+      join(dir, `.archon/workflows/${name}.yaml`),
+      `name: ${name}\ndescription: holds build\nresource: ${resource}\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
+    );
+  const pair = '{ name: build, capacity: 2 }';
+  workflow(
+    f.project,
+    'held',
+    pair,
+    'touch held-started; while [ ! -f release ]; do sleep 0.1; done'
+  );
+  workflow(other, 'second', pair, 'echo ran > second-ran');
+  workflow(other, 'plain', 'build', 'echo ran > plain-ran');
+  const run = (cwd: string, name: string) =>
+    cli(f, ['workflow', 'run', name, '--no-wait', '--folder', '--no-worktree'], f.env, '', cwd);
+  const held = run(f.project, 'held');
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+  const second = await run(other, 'second');
+  expect(second, second.output + second.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(other, 'second-ran'), 'utf8')).toBe('ran\n');
+  const plain = await run(other, 'plain');
+  expect(plain.code, plain.output + plain.error).not.toBe(0);
+  expect(plain.output + plain.error).toContain("Resource 'build' is full");
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+}, 60000);
 test('a broken capacity config ends a waiting hand start instead of leaving it pending', async () => {
   const config = 'store: files\nconcurrency:\n  resources:\n    build: 1\n';
   const f = fixture(config);

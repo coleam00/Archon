@@ -9,6 +9,7 @@ import type { ResourceBlocker } from './resource-start-store';
 import type { ResolvedWorkflow, WorkflowExecutionResult, WorkflowRun } from './schemas';
 import {
   ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
+  DEFAULT_RESOURCE_CAPACITY,
   type PreparedWorkflowLaunch,
 } from './schemas/resource-start';
 import { requireTerminalStatusWrite } from './terminal-status-write';
@@ -52,9 +53,9 @@ export async function holdWorkflowResource(
   workflowRun: WorkflowRun,
   noWait: boolean
 ): Promise<WorkflowExecutionResult | undefined> {
-  const { resource } = workflow;
-  if (resource === undefined || (await ancestorHoldsResource(deps, workflowRun, resource)))
-    return undefined;
+  if (workflow.resource === undefined) return undefined;
+  const { name: resource, capacity = DEFAULT_RESOURCE_CAPACITY } = workflow.resource;
+  if (await ancestorHoldsResource(deps, workflowRun, resource)) return undefined;
   const refuse = async (error: string): Promise<WorkflowExecutionResult> => {
     await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${error}`);
     await requireTerminalStatusWrite(
@@ -84,7 +85,7 @@ export async function holdWorkflowResource(
   for (;;) {
     let blocker: ResourceBlocker | null;
     try {
-      blocker = await deps.store.admitPendingRun({ resource, launch });
+      blocker = await deps.store.admitPendingRun({ resource, capacity, launch });
     } catch (error) {
       return endResourceWait(deps, workflowRun, resource, error, refuse);
     }

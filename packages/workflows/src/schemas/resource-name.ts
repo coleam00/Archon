@@ -21,3 +21,13 @@ export const resourceNameSchema = z
   .trim()
   .min(1)
   .refine(notProviderResource.check, notProviderResource.message);
+
+/**
+ * A workflow's `resource:`, as the loader normalizes it: `resource: build` is
+ * `{ name: 'build' }`. `capacity` is the number this workflow's hand starts declare;
+ * omitted, they declare the default.
+ */
+export const workflowResourceSchema = z
+  .object({ name: resourceNameSchema, capacity: z.number().int().min(1).optional() })
+  .strict();
+export type WorkflowResource = z.infer<typeof workflowResourceSchema>;

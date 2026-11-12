@@ -38,11 +38,13 @@ import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run'
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import {
   addResourceSlotHolder,
+  lockResourceSlot,
   lockResourceSlotForAdmission,
   resourceStartOccupancy,
   parseQueuedResourceStart,
   type TransactionQuery as Query,
 } from './resource-slots';
+import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 
@@ -196,13 +198,16 @@ export async function admitResourceStart(
 
 export async function admitPendingRun(input: {
   resource: string;
+  capacity: number;
   launch: PreparedWorkflowLaunch;
 }): Promise<ResourceBlocker | null> {
   const launch = preparedWorkflowLaunchSchema.parse(input.launch);
   const id = launch.run.id;
   return getDatabase().withTransaction(async query => {
     await lockCheckoutReservations(query);
-    const { capacity } = await lockResourceSlotForAdmission(query, input.resource);
+    // A hand start is checked against its own number and leaves the slot's recorded one.
+    await lockResourceSlot(query, input.resource);
+    const capacity = (await loadResourceCapacities()).get(input.resource) ?? input.capacity;
     const existing = await query<RequestRow>(
       'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
       [id]

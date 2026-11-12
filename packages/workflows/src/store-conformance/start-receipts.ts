@@ -86,7 +86,9 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       });
       const direct = launch();
       await store.createWorkflowRun(direct.run);
-      expect(await store.admitPendingRun({ resource: 'build', launch: direct })).toEqual({
+      expect(
+        await store.admitPendingRun({ resource: 'build', capacity: 1, launch: direct })
+      ).toEqual({
         kind: 'run',
         id: prepared.run.id,
       });

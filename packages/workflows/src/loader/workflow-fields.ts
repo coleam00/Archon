@@ -4,7 +4,11 @@ import { effortLevelSchema, betasSchema } from '../schemas/dag-node';
 import { INPUT_NAME_PATTERN, inputEnvKey } from '../schemas/node-bindings';
 import type { EffortLevel } from '../schemas/effort';
 import { modelRefSchema, type WorkflowModelRef } from '../schemas/model-binding';
-import { resourceNameSchema } from '../schemas/resource-name';
+import {
+  resourceNameSchema,
+  workflowResourceSchema,
+  type WorkflowResource,
+} from '../schemas/resource-name';
 import {
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
@@ -360,13 +364,20 @@ export function parseOutcomeField(raw: unknown, filename: string): ParsedField<s
   return { value: raw.trim() };
 }
 
-export function parseWorkflowResource(raw: unknown): ParsedField<string> {
+/** `resource: build` or `resource: { name: build, capacity: 3 }`, as one shape. */
+export function parseWorkflowResource(raw: unknown): ParsedField<WorkflowResource> {
   if (raw === undefined) return { value: undefined };
-  const parsed = resourceNameSchema.safeParse(raw);
-  if (!parsed.success)
+  const parsed =
+    typeof raw === 'string'
+      ? resourceNameSchema.transform(name => ({ name })).safeParse(raw)
+      : workflowResourceSchema.safeParse(raw);
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const at = issue?.path.length ? ` (${issue.path.join('.')})` : '';
     return {
-      error: `Invalid 'resource': ${parsed.error.issues[0]?.message ?? 'expected a non-empty resource name'}`,
+      error: `Invalid 'resource'${at}: ${issue?.message ?? 'expected a resource name or { name, capacity }'}`,
     };
+  }
   return { value: parsed.data };
 }
 

@@ -131,8 +131,8 @@ export function createFileAdmissionStore(
   }
   return {
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
-    admitPendingRun: ({ resource, launch }) =>
-      write(tx => tx.admitPending(resource, preparedWorkflowLaunchSchema.parse(launch))),
+    admitPendingRun: ({ resource, capacity, launch }) =>
+      write(tx => tx.admitPending(resource, capacity, preparedWorkflowLaunchSchema.parse(launch))),
     drainResourceStarts: options =>
       write(async (tx, runs) => {
         const admitted: ResourceStartDisposition[] = [];

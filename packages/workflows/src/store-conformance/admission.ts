@@ -144,7 +144,8 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
       const id = direct.run.id;
       // The pending row holds its own checkout; that must not block its admission.
       await store.createWorkflowRun({ ...direct.run, working_path: direct.execution.cwd });
-      const admit = () => store.admitPendingRun({ resource: 'resource', launch: direct });
+      const admit = () =>
+        store.admitPendingRun({ resource: 'resource', capacity: 1, launch: direct });
       expect(await admit()).toEqual({ kind: 'run', id: holder.launch.run.id });
       expect(await store.getResourceStartRequest(id)).toBeNull();
       await end(holder.launch.run.id);
@@ -159,6 +160,17 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
         status: 'queued',
         blocker: { kind: 'run', id },
       });
+    });
+    test("a direct start is checked against its own capacity, not the slot's recorded one", async () => {
+      const holder = start('queue', 'host', 1);
+      expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });
+      const direct = launch();
+      await store.createWorkflowRun({ ...direct.run, working_path: direct.execution.cwd });
+      expect(
+        await store.admitPendingRun({ resource: 'resource', capacity: 2, launch: direct })
+      ).toBeNull();
+      // The declaration is not recorded: a binding start still sees the slot's capacity 1.
+      expect(await store.admitResourceStart(start())).toMatchObject({ status: 'queued' });
     });
     test('a released paused run waits for capacity ahead of queued new starts', async () => {
       const a = await admitPaused(start());

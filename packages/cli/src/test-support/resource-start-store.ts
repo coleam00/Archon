@@ -187,7 +187,7 @@ export function createInMemoryResourceStartStore(
       return true;
     },
     admitResourceStart: admit,
-    admitPendingRun: async ({ resource, launch }) => {
+    admitPendingRun: async ({ resource, capacity, launch }) => {
       const id = launch.run.id;
       const previous = requests.get(id);
       if (previous?.status === 'admitted') return null;
@@ -196,7 +196,7 @@ export function createInMemoryResourceStartStore(
       const run = await getRun(id);
       if (run?.status !== 'pending')
         throw new Error(`Run '${id}' is ${run?.status ?? 'missing'}, not pending`);
-      const blocker = resourceStartBlocker(await occupancy(resource), launch);
+      const blocker = resourceStartBlocker({ ...(await occupancy(resource)), capacity }, launch);
       if (blocker) return blocker;
       requests.set(id, {
         id,

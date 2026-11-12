@@ -430,12 +430,15 @@ export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   /**
    * Admit an existing pending run that no binding started onto `resource` now, or return
-   * what blocks it. A refusal records nothing, so the caller waits by trying again and
-   * never holds a queue position a dead process could strand. A run that already has an
-   * admitted request holds its slot: the result is `null` and nothing changes.
+   * what blocks it. `capacity` is the number this start declares: the install config's
+   * number wins over it, and it is not recorded on the slot. A refusal records nothing,
+   * so the caller waits by trying again and never holds a queue position a dead process
+   * could strand. A run that already has an admitted request holds its slot: the result
+   * is `null` and nothing changes.
    */
   admitPendingRun(input: {
     resource: string;
+    capacity: number;
     launch: PreparedWorkflowLaunch;
   }): Promise<ResourceBlocker | null>;
   drainResourceStarts(options: {

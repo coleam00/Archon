@@ -86,7 +86,11 @@ export interface AdmissionTransaction {
     runs: Map<string, WorkflowRun>
   ): Promise<ResourceStartDisposition>;
   admitExisting(row: Request, runs: Map<string, WorkflowRun>): Promise<ResourceStartDisposition>;
-  admitPending(resource: string, launch: Request['launch']): Promise<ResourceBlocker | null>;
+  admitPending(
+    resource: string,
+    capacity: number,
+    launch: Request['launch']
+  ): Promise<ResourceBlocker | null>;
   binding(input: BindingIdentity): Promise<Binding | undefined>;
   owned(input: PreparationOwner): Promise<Binding | undefined>;
   canClaim(id: string): Promise<boolean>;
@@ -392,6 +396,7 @@ export function createAdmissionTransaction(
   }
   async function admitPending(
     resourceName: string,
+    declaredCapacity: number,
     launch: Request['launch']
   ): Promise<ResourceBlocker | null> {
     const id = launch.run.id;
@@ -402,7 +407,13 @@ export function createAdmissionTransaction(
     const run = await readSnapshot(root, id);
     if (run?.status !== 'pending')
       throw new Error(`Run '${id}' is ${run?.status ?? 'missing'}, not pending`);
-    const blocker = resourceStartBlocker(await occupancy(resourceName, launch), launch);
+    const blocker = resourceStartBlocker(
+      {
+        ...(await occupancy(resourceName, launch)),
+        capacity: (await resourceCapacity(resourceName)) ?? declaredCapacity,
+      },
+      launch
+    );
     if (blocker) return blocker;
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     documents[pathFor('requests', id)] = {
