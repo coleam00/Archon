@@ -424,10 +424,10 @@ export const mockIsolationDestroy = mock(
     })
 );
 
-const { VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } = await import(
-  '@archon/isolation'
-);
+const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } =
+  await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  generatedTaskBranch,
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
   })),
