@@ -4,6 +4,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
+import { attentionCoordinates } from '@archon/workflows/attention-feed';
 import { watchAttentionQueue, type AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { executionClaim, type IWorkflowStore } from '@archon/workflows/store';
 import { trackTempRoots, testTimeout } from '@archon/paths/test-utils';
@@ -247,7 +248,12 @@ test.each([1, 2])(
       },
       line => {
         lines.push(line);
-        if (line.type === 'bookmark' && line.cursor === head && !held && finished === 2)
+        if (
+          line.type === 'bookmark' &&
+          attentionCoordinates(line.cursor).workflow === head &&
+          !held &&
+          finished === 2
+        )
           caughtUp.resolve();
       },
       { scope: { kind: 'all' }, after, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
