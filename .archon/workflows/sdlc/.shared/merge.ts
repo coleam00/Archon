@@ -32,7 +32,6 @@ export function otherEffect(brief: string): MergeEffect {
 }
 
 /** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
-export type SweepAction = 'merged' | 'return' | 'ask' | 'wait';
 export const POLICY_CLASSES = ['clear', 'unclear'] as const;
 export type PolicyClass = (typeof POLICY_CLASSES)[number];
 export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
@@ -428,7 +427,9 @@ function ciRefusal(checks: Checks, head: string, ci: CiTrust): string | null {
  * The queue never pushes, so a verdict for another commit
  * means someone else pushed after the review. Pending CI on the default branch
  * does not hold a merge: the next sweep reads its result. Whether an open review thread
- * holds the merge is the sweep's judgment, from the thread facts it reads. The rest keep
+ * holds the merge is the sweep's judgment, from the thread facts it reads. Under the
+ * manual lane, or with a protected path changed, a maintainer's approval at `head` is
+ * required. The rest keep
  * the merge on an open, non-draft pull request into the default branch at exactly the
  * commit that was judged, and that commit either containing the default branch's head
  * or merging into it with no conflict.
@@ -437,7 +438,8 @@ export function gateRefusals(
   facts: PrFacts,
   head: string,
   base: { readonly head: string; readonly checks: Checks },
-  ci: CiTrust
+  ci: CiTrust,
+  lane: Lane
 ): string[] {
   const refusals: string[] = [];
   if (facts.state !== 'open') refusals.push(`it is ${facts.state}`);
@@ -459,7 +461,57 @@ export function gateRefusals(
   if (base.checks.state === 'red') {
     refusals.push(`the default branch ${facts.default_branch} is red at ${base.head} (${base.checks.failing.join(', ')})`);
   }
+  if (lane.approved !== head) {
+    if (lane.manual) refusals.push('the merge lane is manual and no maintainer approved it at this head');
+    else if (lane.protected.length > 0) {
+      refusals.push(`it changes protected paths (${lane.protected.join(', ')}) and no maintainer approved it at this head`);
+    }
+  }
   return refusals;
+}
+
+/**
+ * What decides whether a pull request may merge without a person: the `merge_lane`
+ * setting, the changed paths the `protected_paths` setting matches, and the head a
+ * maintainer approved, null when none did.
+ */
+export interface Lane {
+  readonly manual: boolean;
+  readonly protected: readonly string[];
+  readonly approved: string | null;
+}
+
+/** The pack's lane settings; `.pack/pack.yaml` declares the same values. */
+export const LANES = ['auto', 'manual'] as const;
+
+/** A lane setting as a run reads it; anything else refuses. */
+export function parseLane(name: string, value: string): (typeof LANES)[number] {
+  const lane = LANES.find(candidate => candidate === value);
+  if (lane === undefined) throw new Error(`the ${name} setting must be one of ${LANES.join(', ')}, not "${value}"`);
+  return lane;
+}
+
+/** A `list` setting's items. */
+export function listSetting(value: string): string[] {
+  return value.split(',').map(item => item.trim()).filter(item => item !== '');
+}
+
+/**
+ * The paths the pull request changes that a `protected_paths` glob matches; reads nothing
+ * when none is set. With `head`, the commit a gate is about to merge, a file list read at
+ * any other commit throws: it would say nothing about what merges.
+ */
+export function protectedChanges(pr: QualifiedPr, globs: readonly string[], head?: string): string[] {
+  if (globs.length === 0) return [];
+  const listed = forge('pr.files', { ref: { repo: pr.repo, number: pr.number } });
+  const files = listed?.files;
+  if (!Array.isArray(files)) throw new Error('forge pr.files returned no file list');
+  if (head !== undefined && listed?.head_revision !== head) {
+    throw new Error(`its changed files were read at ${String(listed?.head_revision)}, not ${head}`);
+  }
+  const matchers = globs.map(glob => new Bun.Glob(glob));
+  const paths = files.flatMap(file => [record(file)?.path, record(file)?.previous_path]).filter(path => typeof path === 'string');
+  return [...new Set(paths)].filter(path => matchers.some(matcher => matcher.match(path)));
 }
 
 /**
