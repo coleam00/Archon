@@ -90,9 +90,9 @@ export const workflowRunSchema = z.object({
    */
   checkout_baseline: checkoutObservationSchema.nullable(),
   /**
-   * When the latest resume started the run's current active phase. Null when the run
-   * was never resumed, or was resumed only by a build that reset `started_at` instead.
-   * Read through `activePhaseStartedAt`, never on its own.
+   * When the latest resume by a build that stamps this field happened. Null when no such
+   * build resumed the run. An older build's resume resets `started_at` instead and can leave
+   * this value behind it, so read the active-phase start through `activePhaseStartedAt`.
    */
   resumed_at: z.date().nullable(),
 });

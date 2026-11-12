@@ -791,6 +791,9 @@ started. Node execution records carry the same observation as `invocation.checko
 
 `Age` and `started_at` are measured from when the run was created, and a resume keeps them.
 JSON's `resumed_at` is when the latest resume began, or `null` when the run was never resumed.
+A resume by an Archon build from before `resumed_at` existed resets `started_at` instead and
+leaves `resumed_at` unchanged, so after a mixed-version resume `started_at` can be the later
+of the two.
 
 Pressing Ctrl-C on a foreground run stops it without losing it. The process that owns the
 run records why it stopped, and the run stays `failed`, which is the resumable status: it is

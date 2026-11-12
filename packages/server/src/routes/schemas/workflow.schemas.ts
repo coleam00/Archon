@@ -193,7 +193,7 @@ const ownerObservationSchema = runOwnerObservationSchema.nullable().openapi({
 
 const resumedAtSchema = z.string().nullable().openapi({
   description:
-    "When the latest resume started this run's current active phase; null if it was never resumed, or was resumed only by a build that reset `started_at` instead. `started_at` is when the run was created, and a resume never changes it.",
+    "When the latest resume recorded by a build that stamps this field started the run; null if no such build resumed it. `started_at` is when the run was created; builds that stamp `resumed_at` never change it, but an older build's resume resets `started_at` and can leave `resumed_at` behind it. The run's current active phase began at the later of the two.",
 });
 
 /** A workflow run record (wire shape with ISO string dates). */

@@ -5996,7 +5996,7 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
-      /** @description When the latest resume started this run's current active phase; null if it was never resumed, or was resumed only by a build that reset `started_at` instead. `started_at` is when the run was created, and a resume never changes it. */
+      /** @description When the latest resume recorded by a build that stamps this field started the run; null if no such build resumed it. `started_at` is when the run was created; builds that stamp `resumed_at` never change it, but an older build's resume resets `started_at` and can leave `resumed_at` behind it. The run's current active phase began at the later of the two. */
       resumed_at: string | null;
       codebase_name: string | null;
       platform_type: string | null;
@@ -7637,7 +7637,7 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
-      /** @description When the latest resume started this run's current active phase; null if it was never resumed, or was resumed only by a build that reset `started_at` instead. `started_at` is when the run was created, and a resume never changes it. */
+      /** @description When the latest resume recorded by a build that stamps this field started the run; null if no such build resumed it. `started_at` is when the run was created; builds that stamp `resumed_at` never change it, but an older build's resume resets `started_at` and can leave `resumed_at` behind it. The run's current active phase began at the later of the two. */
       resumed_at: string | null;
       attention: components['schemas']['RunAttention'] | (never | null);
     };
