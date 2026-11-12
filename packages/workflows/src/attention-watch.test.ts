@@ -489,15 +489,15 @@ describe('watchAttentionQueue', () => {
     feed.readWorkflowEventsAfter = async (cursor, { limit }) => {
       const offset = cursor === first ? 0 : events.findIndex(event => event.cursor === cursor) + 1;
       const page = events.slice(offset, offset + limit);
-      if (down && limit === 100 && page.length === 0) {
-        scans.push(probes);
-        probes = new Map();
-      }
       return { events: page, next: page.at(-1)?.cursor ?? cursor };
     };
     feed.getWorkflowRun = async id => {
       if (down) {
         probes.set(id, (probes.get(id) ?? 0) + 1);
+        if (id === c) {
+          scans.push(probes);
+          probes = new Map();
+        }
         throw new Error('store outage');
       }
       return store.getWorkflowRun(id);
