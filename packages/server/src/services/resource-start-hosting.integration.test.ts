@@ -1,3 +1,4 @@
+import * as archonPaths from '@archon/paths';
 import { isRunOwnerAnswering } from '@archon/core/services/run-live-owner';
 import { resumeWorkflowRunFromServer } from './workflow-resume-service';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/run-metadata';
@@ -1098,6 +1099,14 @@ async function admitWithoutStarting(): Promise<string> {
 }
 
 describe('owner-driven server drains', () => {
+  let bundledRoot: ReturnType<typeof spyOn<typeof archonPaths, 'getBundledWorkflowsPath'>>;
+  beforeEach(() => {
+    bundledRoot = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(
+      join(root, 'no-bundled-workflows')
+    );
+  });
+  afterEach(() => bundledRoot.mockRestore());
+
   test.each(['completed', 'failed', 'paused', 'cancelled', 'in-flight'] as const)(
     '%s execution advances eligible work without scheduler ticks',
     async ending => {
