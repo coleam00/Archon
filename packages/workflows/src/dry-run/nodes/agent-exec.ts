@@ -1,5 +1,3 @@
-import { collectCredentialValues } from '@archon/paths/credential-redaction';
-import { canonicalValueText } from '../../output-ref';
 import { readComposedBindings } from '../../compiled-command';
 import { inputEnvVars, resolveNodeBindings } from '../../dag/references';
 import { substituteLoopBodyText } from '../../dag/loop-scope';
@@ -73,13 +71,6 @@ async function resolveNodeText(
     nodeWith !== undefined
       ? resolveNodeBindings(node.id, nodeWith, bindingShellContext(ctx, outputs), ctx.inputs)
       : undefined;
-  ctx.onCredentials?.(
-    collectCredentialValues(
-      Object.fromEntries(
-        Object.entries(nodeBindings ?? {}).map(([name, value]) => [name, canonicalValueText(value)])
-      )
-    )
-  );
   const commandInputs =
     isAgentNode(node) && nodeBindings !== undefined
       ? { ...(ctx.inputs ?? {}), ...nodeBindings }

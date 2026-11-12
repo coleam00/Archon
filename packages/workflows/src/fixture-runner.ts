@@ -34,14 +34,15 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { createLogger, getArchonTempPath, isPathInside } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
-import { fixtureTraceRedactor } from './fixture-trace';
 import {
   RESERVED_FIXTURE_KEYS,
   dryRunStubsSchema,
   dryRunWorkflow,
-  formatDryRunTraceEntries,
+  formatDryRunTraceLine,
+  summarizeTraceEntry,
   type DryRunResult,
   type DryRunTraceEntry,
+  type DryRunTraceSummary,
   type DryRunStubs,
 } from './dry-run';
 import type { WorkflowWithSource } from './schemas/workflow';
@@ -295,8 +296,8 @@ export interface FixtureCheckResult {
    */
   readonly toleratedMissingStubs: readonly string[];
   readonly unusedStubs: readonly string[];
-  /** The dry run's per-node trace, kept only on a failed fixture so passing output stays short. */
-  readonly trace?: readonly DryRunTraceEntry[];
+  /** Each node's status, kept only on a failed fixture so passing output stays short. */
+  readonly trace?: readonly DryRunTraceSummary[];
 }
 
 export interface FixtureReport {
@@ -705,7 +706,6 @@ async function checkFixture(
     const execCode = parsed.execCode;
     const inputs = resolveTopLevelInputs(ws.workflow, parsed.declaration.inputs);
     const config = await resolveFixtureConfig(options, execCode);
-    const redaction = fixtureTraceRedactor(config);
     const run = (workspace: string): Promise<DryRunResult> =>
       dryRunWorkflow({
         workflow: ws.workflow,
@@ -714,8 +714,6 @@ async function checkFixture(
         stubs: parsed.stubs,
         ...(inputs ? { inputs } : {}),
         execCode,
-        onCredentials: redaction.collect,
-        formatDiagnostic: redaction.formatDiagnostic,
         execWorkspace: workspace,
         sourceRoots: captured,
         ...(config ? { config } : {}),
@@ -745,11 +743,15 @@ async function checkFixture(
       ...base,
       outcome: result.outcome,
       authoredOutcome: result.authoredOutcome,
+      nodeFailures: result.trace
+        .filter(entry => entry.state === 'failed')
+        .map(({ nodeId, reason }) => ({ nodeId, reason })),
       pass: failureReason === undefined,
+      ...(failureReason !== undefined ? { failureReason } : {}),
       missingStubs: result.missingStubs,
       toleratedMissingStubs: result.toleratedMissingStubs,
       unusedStubs: result.unusedStubs,
-      ...redaction.publish(result.trace, failureReason),
+      ...(failureReason !== undefined ? { trace: result.trace.map(summarizeTraceEntry) } : {}),
     };
   } catch (error) {
     return {
@@ -763,11 +765,9 @@ async function checkFixture(
   }
 }
 
-/** A failed fixture's trace already carries each failed node's reason, so it replaces those lines. */
-function fixtureNodeLines(r: FixtureCheckResult): string[] {
-  if (r.trace === undefined) return (r.nodeFailures ?? []).map(f => `    ${f.nodeId}: ${f.reason}`);
-  const entries = formatDryRunTraceEntries(r.trace).flatMap(text => text.split('\n'));
-  return ['    trace:', ...entries.map(line => `      ${line}`)];
+function traceLines(trace: readonly DryRunTraceSummary[] | undefined): string[] {
+  if (trace === undefined) return [];
+  return ['    trace:', ...trace.map(entry => `      ${formatDryRunTraceLine(entry)}`)];
 }
 
 export function formatFixtureReport(report: FixtureReport): string {
@@ -781,7 +781,8 @@ export function formatFixtureReport(report: FixtureReport): string {
       lines.push(`    Authored outcome: ${r.authoredOutcome ?? 'undeclared'}`);
     }
     if (r.failureReason) lines.push(`    ${r.failureReason}`);
-    lines.push(...fixtureNodeLines(r));
+    lines.push(...(r.nodeFailures ?? []).map(({ nodeId, reason }) => `    ${nodeId}: ${reason}`));
+    lines.push(...traceLines(r.trace));
     if (r.unusedStubs.length > 0) {
       lines.push(`    warning: unused stubs — ${r.unusedStubs.join(', ')}`);
     }

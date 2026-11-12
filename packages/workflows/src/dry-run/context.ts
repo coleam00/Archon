@@ -1,18 +1,15 @@
 /** The state one dry-run simulation threads through every node, and the helpers each node kind shares. */
-import type { DiagnosticTextFormatter } from '../diagnostic-text';
 import type { WorkflowConfig } from '../deps';
 import type { InteractionAdmission } from '../interaction-admission';
 import { join } from 'node:path';
 import {
   nodeTemplateReferences,
-  resolveValueTemplate,
   type ShellInputContext,
   type TextSurface,
 } from '../dag/references';
 import { type LoopBodyScope } from '../dag/loop-scope';
-import { resolveIncludeOutputAliases, readComposedMeta } from '../compiled-command';
-import { canonicalValueText, type JsonValue } from '../output-ref';
-import { collectCredentialValues } from '@archon/paths/credential-redaction';
+import { resolveIncludeOutputAliases } from '../compiled-command';
+import type { JsonValue } from '../output-ref';
 import type { NodeArtifactLoopFrame } from '../schemas/node-artifact';
 import type { RecordedTypedOutput } from '../typed-output-bindings';
 import { loadCommandPrompt } from '../load-command-prompt';
@@ -113,8 +110,6 @@ export interface DryRunContext
   artifactsDir: string;
   stateDir: string;
   logDir: string;
-  onCredentials?: (values: readonly string[]) => void;
-  formatDiagnostic?: DiagnosticTextFormatter;
   execCode: boolean;
   defaultStubs: boolean;
   pauseAtGates: boolean;
@@ -220,34 +215,6 @@ export function bindingShellContext(
   };
 }
 
-export function collectComposedCredentials(
-  node: DagNode,
-  outputs: Map<string, NodeOutput>,
-  ctx: DryRunContext
-): void {
-  if (!ctx.onCredentials) return;
-  const values = collectCredentialValues(
-    Object.fromEntries(
-      Object.entries(readComposedMeta(node)?.inputs ?? {}).map(([name, value]) => [
-        name,
-        canonicalValueText(value),
-      ])
-    )
-  );
-  ctx.onCredentials(values);
-  for (const value of values) {
-    let resolved: string;
-    try {
-      resolved = resolveValueTemplate(value, bindingShellContext(ctx, outputs), ctx.inputs);
-    } catch {
-      // An unavailable binding has no effective value to publish. Its use site still
-      // owns validation; credential collection must not fail an unused or skipped input.
-      continue;
-    }
-    if (resolved.length > 0) ctx.onCredentials([resolved]);
-  }
-}
-
 /**
  * Report which provider and model an AI-turn node will run on, and where each value came
  * from. Non-AI nodes (bash / script / approval / cancel / include / workflow) make no
@@ -338,8 +305,7 @@ export function stubFor(node: DagNode, ctx: DryRunContext): DryRunStubValue | un
     const authored = ctx.stubs[node.id];
     // The one place an authored stub enters a simulation, so the one place that can
     // hold its contract by construction rather than by each caller remembering to.
-    if (authored !== undefined)
-      assertAuthoredStubSatisfiesSchema(node, authored, ctx.formatDiagnostic);
+    if (authored !== undefined) assertAuthoredStubSatisfiesSchema(node, authored);
     return authored;
   }
   if (ctx.defaultStubs && !(isExecNode(node) && ctx.execCode)) {

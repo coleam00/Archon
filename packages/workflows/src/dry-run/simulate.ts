@@ -14,12 +14,7 @@ import {
   type GraphPlan,
   type NodeOutput,
 } from '../schemas';
-import {
-  collectComposedCredentials,
-  recordFailed,
-  recordSkipped,
-  type DryRunContext,
-} from './context';
+import { recordFailed, recordSkipped, type DryRunContext } from './context';
 import { simulateAgentOrExec } from './nodes/agent-exec';
 import { simulateGate } from './nodes/gate';
 import { simulateHalt } from './nodes/halt';
@@ -120,7 +115,6 @@ async function simulateNode(
   iteration?: number,
   execution?: NodeExecutionMetadata
 ): Promise<void> {
-  collectComposedCredentials(node, outputs, ctx);
   if (!isReached(node, outputs, ctx, iteration)) return;
   if (node.kind === 'gate' || node.kind === 'wait') {
     await ctx.interactionAdmission?.beforeInteraction();
