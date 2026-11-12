@@ -10,9 +10,7 @@
  * sweep wrote; `park` stops working it until renewed build readiness. A
  * choice's ruling and the person's words are written into the issue body as one dated
  * "Current scope" section first, as the build queue does, so a returned round reads
- * them as the contract. On a red default branch the only answer is `hold`: the queue
- * merges nothing while the branch is red, which every sweep reads from the forge, so
- * nothing is written. A `merge` then starts a sweep at once through the operator's
+ * them as the contract. A `merge` then starts a sweep at once through the operator's
  * merge-queue binding, and a `return` the item's next round through the build-queue
  * binding; if it does not start, the next queue run picks the item up as before.
  *
@@ -44,7 +42,7 @@ function continueNow(effect: string, item: QualifiedPr, runId: string): string {
 }
 
 /** Write the ruling into the issue body as a dated section; returns its heading, or ''. */
-function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, at: string): string {
+function writeRuling(asked: MergeAsked, ruling: string, at: string): string {
   if (ruling === '') return '';
   const heading = rulingHeading(at, `the merge queue's question on PR ${String(asked.pr.number)}`);
   appendSection(asked.item, heading, ruling);
@@ -55,15 +53,6 @@ function main(): void {
   const asked = nullableJson(input('asked')) as MergeAsked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
   const words = input('text').trim();
-  if (asked.by === 'base') {
-    emit({
-      decision: 'hold',
-      section: '',
-      summary: 'The queue holds merges while the default branch is red; every sweep reads that from the forge.',
-    });
-    return;
-  }
-
   const runId = workflowRunId();
   const choice = answeredChoice(asked.ask, input('decision').trim(), otherEffect(asked.brief));
   const { effect } = choice.value;

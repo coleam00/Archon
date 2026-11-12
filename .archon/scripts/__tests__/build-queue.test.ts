@@ -667,11 +667,38 @@ describe('the build queue scripts', () => {
       item: '7',
       pr: '42',
       asked: { ask: QUESTION, brief: 'continue PR 42 under the ruling', by: 'stop' },
+      healthy: true,
     });
     expect(stored(at).value).toMatchObject({
       claim: { run_id: 'run-1' },
       facts: { build: { status: 'asking', brief: '', decisions: [{ decision: 'ask stop' }] } },
     });
+  }, 60_000);
+
+  test('an asked item whose run was abandoned unanswered is never picked up again, and idle runs name it once per state', () => {
+    const at = install();
+    seed(at, triaged(CLAIMED));
+    ok(run(at, 'apply', applyInputs(ASK)));
+    // The wait refused the ask, the run failed and was abandoned: the next pickup frees its claim and takes nothing.
+    const later = { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"cancelled"}' };
+    expect(ok(run(at, 'facts', later))).toMatchObject({ path: 'idle', item: null });
+    expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'asking' } } });
+    const idle = ok(run(at, 'apply', { ...later, INPUTS_PATH: 'idle' }));
+    expect(idle).toMatchObject({ decision: 'idle', healthy: false, question: '' });
+    const named =
+      'work/7 (issue 7 is recorded asking (run run-1, ask stop: the plan asks to relax a constraint), but no run waits on that question; re-triage it to start it over)';
+    expect(idle.summary).toContain(named);
+    // Reported once: the next idle run finds the report on the item and is healthy.
+    expect(ok(run(at, 'apply', { ...later, INPUTS_PATH: 'idle' }))).toMatchObject({ healthy: true, summary: 'No item waits for the build queue.' });
+    // Another write to the item since the report, and it is still stuck: reported again.
+    const reported = stored(at);
+    const touched = { at: AT, stage: 'intake' as const, run_id: 'run-3', outcome: 'quiet', summary: 'a comment arrived' };
+    inProcess(at, () =>
+      expect(state.put('work/7', { ...reported.value, history: [...(reported.value?.history ?? []), touched] }, { ifRevision: reported.revision }).ok).toBe(true)
+    );
+    const again = ok(run(at, 'apply', { ...later, INPUTS_PATH: 'idle' }));
+    expect(again).toMatchObject({ healthy: false });
+    expect(again.summary).toContain(named);
   }, 60_000);
 
   const PUSH = { push: { repo: PR.repo, number: PR.number } };

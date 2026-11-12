@@ -9,15 +9,20 @@
  * request the sweep left undecided waits for the next sweep. A `return` hands the item
  * back to the build queue with its brief and starts its next round through the
  * build-queue binding. A run holds one wait, so it raises one ask, as the sweep wrote it: the
- * sweep's ask for a red default branch first, because it holds every merge, otherwise
- * the first pull request the sweep asked about, in its order. That item keeps its claim
- * while the run waits; every other claim is released, and an ask that was not raised
- * waits for the next sweep, which decides it again. A `wait` the sweep declared while
- * the pull request's checks were pending or the default branch was red stores the facts
- * it rests on (`waitedOn`), and so does an ask held back by a red default branch's
- * question, so the next sweep hands neither to the agent while they read the same. Any
- * other wait, such as a re-run of failed checks or a merge the forge did not complete,
- * stores nothing: the facts cannot show when it ends, so the next sweep decides it again.
+ * first pull request the sweep asked about, in its order. That item keeps its claim while
+ * the run waits; every other claim is released, and an ask that was not raised waits for
+ * the next sweep, which decides it again. A `wait` the sweep declared while the pull
+ * request's checks were pending or the default branch was red stores the facts it rests
+ * on (`waitedOn`), and so does an ask made while the default branch was red, so the next
+ * sweep hands neither to the agent while they read the same. Any other wait, such as a
+ * re-run of failed checks or a merge the forge did not complete, stores nothing: the
+ * facts cannot show when it ends, so the next sweep decides it again.
+ *
+ * A red default branch asks nobody: nothing merges, the summary carries the sweep's
+ * diagnosis, and `healthy` is false, which the workflow records as a failed outcome.
+ * It is reported once per change: the waits it holds back store what they rest on, so
+ * while the branch's head and check state read the same no sweep runs and the run is
+ * idle and healthy; a new head or check state is swept and reported again.
  *
  * A pull request that cannot be read back waits for the next sweep, and a work item
  * that cannot be written is reported and left for the next sweep; neither stops the
@@ -53,7 +58,7 @@ import {
   waitedOn,
   withMerge,
 } from '../../.shared/merge.ts';
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
+import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
 import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
 
@@ -116,10 +121,11 @@ function gateFailure(sweep: Sweep | null): string[] {
   return error === '' ? [] : [`the merge gate could not run, so nothing was gated or merged: ${error}`];
 }
 
-/** A red default branch the sweep did not raise would hold every merge in silence. */
-function unraisedRedBase(sweep: Sweep | null, base: Base | null): string | null {
-  if (sweep === null || base?.checks.state !== 'red' || sweep.base.ask !== null) return null;
-  return `the default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}), and the sweep did not raise it`;
+/** The sweep's diagnosis of a red default branch, for the summary of a run that ends failed on it; none otherwise. */
+function redBase(sweep: Sweep | null, base: Base | null): string[] {
+  if (base?.checks.state !== 'red') return [];
+  const found = sweep?.base.summary.trim() ?? '';
+  return [`The default branch ${base.branch} is red at ${base.head} (${base.checks.failing.join(', ')}); nothing merges until it is green.${found === '' ? '' : ` ${found}`}`];
 }
 
 interface Outcome {
@@ -230,17 +236,16 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
 
 /**
  * What a decision's wait rests on (`waitedOn`), or null. Only a decision the sweep itself
- * made, in a record that holds, is one the next sweep may skip: a `wait`, or an ask held
- * back because the red default branch's question took the run's wait. And only while the
+ * made, in a record that holds, is one the next sweep may skip: a `wait`, or an ask made
+ * while the default branch is red, when nothing merges whatever the answer. And only while the
  * facts show what it waits for: the pull request's checks pending under `ci: forge`, or
  * the default branch red. A wait on anything else ends without the facts changing.
  */
-function waitFacts(sweep: Sweep | null, base: Base | null, asked: MergeAsked | null, holds: boolean, ci: CiMode): (decision: Decision, facts: PrFacts | null) => string | null {
+function waitFacts(sweep: Sweep | null, base: Base | null, holds: boolean, ci: CiMode): (decision: Decision, facts: PrFacts | null) => string | null {
   const declared = new Set(holds ? sweep?.decisions.map(decision => decision.number) : []);
-  const baseAsked = asked?.by === 'base';
   return (decision, facts) => {
     if (base === null || facts === null || !declared.has(decision.number)) return null;
-    if (decision.action !== 'wait' && !(decision.action === 'ask' && baseAsked)) return null;
+    if (decision.action !== 'wait' && !(decision.action === 'ask' && base.checks.state === 'red')) return null;
     const visible = (ci === 'forge' && facts.checks.state === 'pending') || base.checks.state === 'red';
     return visible ? waitedOn(facts, base, ci) : null;
   };
@@ -264,11 +269,7 @@ const NO_ASK = { question: '', options: [], recommendation: null, kind: '', item
 
 /** The wait's fields for the raised ask, as the sweep wrote them, with its subject labels. */
 function raisedAsk(asked: MergeAsked) {
-  const subject =
-    asked.by === 'pr'
-      ? { kind: 'approve', item: String(asked.item.number), pr: String(asked.pr.number) }
-      : { kind: 'base', item: '', pr: '' };
-  return { ...asked.ask, ...subject, asked };
+  return { ...asked.ask, kind: 'approve', item: String(asked.item.number), pr: String(asked.pr.number), asked };
 }
 
 function main(): void {
@@ -283,7 +284,7 @@ function main(): void {
   if (path === 'idle') {
     emit({
       merged: [],
-      summary: idleSummary('No pull request waits for the merge queue.', stuckItems(workflowRunId())),
+      ...idleOutcome('No pull request waits for the merge queue.', stuckItems(workflowRunId(), 'merge')),
       ...NO_ASK,
     });
     return;
@@ -295,21 +296,17 @@ function main(): void {
   const base = nullableJson(input('base')) as Base | null;
   const itemOf = (number: number): Item => items.find(item => item.pr.number === number) as Item;
 
-  const baseAsk = sweep?.base.ask ?? null;
   const firstAsk = decisions.find(decision => decision.ask !== null);
   let asked: MergeAsked | null =
-    baseAsk !== null
-      ? { by: 'base', ask: baseAsk }
-      : firstAsk === undefined
-        ? null
-        : {
-            by: 'pr',
-            item: itemOf(firstAsk.number).item as QualifiedPr,
-            pr: itemOf(firstAsk.number).pr,
-            head: firstAsk.head,
-            brief: firstAsk.brief,
-            ask: firstAsk.ask as MergeAsk,
-          };
+    firstAsk === undefined
+      ? null
+      : {
+          item: itemOf(firstAsk.number).item as QualifiedPr,
+          pr: itemOf(firstAsk.number).pr,
+          head: firstAsk.head,
+          brief: firstAsk.brief,
+          ask: firstAsk.ask as MergeAsk,
+        };
 
   // Settlements are independent of the policy refresh and the sweep's decisions.
   recordSettled(writes, settled);
@@ -320,32 +317,28 @@ function main(): void {
     ...gateFailure(sweep),
     ...outcomes.flatMap(outcome => (outcome.contradiction === null ? [] : [outcome.contradiction])),
   ];
-  const silentRed = unraisedRedBase(sweep, base);
-  if (silentRed !== null) contradictions.push(silentRed);
-  // A failed record runs no ask node, so it raises nothing: a pull request's ask waits for
-  // the next sweep, and a red default branch is named in the failure instead.
-  if (asked?.by === 'base' && contradictions.length > 0) {
-    contradictions.push(`the default branch is red and was not raised (${sweep?.base.summary ?? ''})`);
-  }
-  // The asked pull request was merged or closed under the question: there is nothing to ask.
-  const askedPr = asked?.by === 'pr' ? asked.pr.number : null;
+  // A failed record runs no ask node, so it raises nothing: the ask waits for the next
+  // sweep. And the asked pull request merged or closed under the question: nothing to ask.
+  const askedPr = asked?.pr.number;
   if (contradictions.length > 0 || outcomes.some(({ decision, status }) => decision.number === askedPr && status !== 'waiting')) {
     asked = null;
   }
 
-  const waited = waitFacts(sweep, base, asked, contradictions.length === 0, ci);
+  const waited = waitFacts(sweep, base, contradictions.length === 0, ci);
   for (const outcome of outcomes) {
-    const raised = asked?.by === 'pr' && asked.pr.number === outcome.decision.number;
+    const raised = asked?.pr.number === outcome.decision.number;
     const item = itemOf(outcome.decision.number);
     if (!recordPr(writes, item, outcome, raised, waited(outcome.decision, item.facts)) && raised) asked = null;
   }
+  const red = redBase(sweep, base);
   if (contradictions.length > 0) {
-    throw new Error([...contradictions, ...writes.failed, 'every other decision is recorded'].join('; '));
+    throw new Error([...contradictions, ...red, ...writes.failed, 'every other decision is recorded'].join('; '));
   }
 
   emit({
     merged: outcomes.flatMap(({ decision, status }) => (status === 'merged' ? [decision.number] : [])),
-    summary: [sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
+    summary: [...red, sweep?.summary ?? '', ...writes.lines].filter(line => line !== '').join('\n'),
+    healthy: red.length === 0,
     ...(asked === null ? NO_ASK : raisedAsk(asked)),
   });
 }

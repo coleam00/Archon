@@ -55,6 +55,8 @@ inputs:
       next build-queue run takes the item.
 
 returns: outcome
+# False only when a run that claimed nothing found stored items no pickup can act on.
+outcome_field: healthy
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:
@@ -130,4 +132,5 @@ nodes:
         promoted: { type: boolean }
         labels: { type: array, items: { type: string } }
         summary: { type: string }
-      required: [path, item, stage, trust, promoted, labels, summary]
+        healthy: { type: boolean }
+      required: [path, item, stage, trust, promoted, labels, summary, healthy]

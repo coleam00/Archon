@@ -7,7 +7,8 @@ description: |
   trusted review verdict says Ready at the head, what the pack's ci setting trusts
   passes there (green checks, or a recorded validation), the head contains
   the default branch or merges into it cleanly, and the default branch's CI is not
-  red, and merges pinned to that head. The queue never pushes and never waits for CI:
+  red, and merges pinned to that head. A sweep that finds the default branch red
+  merges nothing and completes with a failed outcome that names the diagnosis. The queue never pushes and never waits for CI:
   a conflict, a stale verdict or red the change caused goes back to the build queue,
   and the default branch's CI after a merge is the next sweep's first fact. A clear
   case acts on its own; anything unclear pauses as one attention item whose answer is
@@ -65,6 +66,9 @@ inputs:
       are decided once that code is on the default branch. Empty starts no drain.
 
 returns: record
+# False when the default branch's CI is red, or when a run that claimed nothing found
+# stored items no pickup can act on: the run completes with a failed outcome.
+outcome_field: healthy
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:
@@ -219,38 +223,14 @@ nodes:
                       recommendation: *recommendation
                     required: *ask_fields
                 required: *decision
-        # The default branch as the sweep found it; an ask only when its red holds merges.
+        # The default branch as the sweep found it. When it is red: what each failing
+        # job points at, the pull requests merged since it was green, and the suspect.
         base:
           type: object
           additionalProperties: false
           properties:
             summary: { type: string }
-            ask:
-              type: [object, 'null']
-              additionalProperties: false
-              properties:
-                question: *question
-                options:
-                  type: array
-                  minItems: 1
-                  items:
-                    type: object
-                    additionalProperties: false
-                    properties:
-                      id: *option_id
-                      label: *option_label
-                      does: *option_does
-                      value:
-                        type: object
-                        additionalProperties: false
-                        properties:
-                          effect: { type: string, enum: [hold] }
-                          ruling: *ruling
-                        required: *value
-                    required: *option
-                recommendation: *recommendation
-              required: *ask_fields
-          required: [summary, ask]
+          required: [summary]
         summary: { type: string }
         # What the gate command printed when it could not run at all; empty when every
         # gate call ran, refusals included. Non-empty fails the record node.
@@ -291,13 +271,14 @@ nodes:
               value: { type: object }
             required: [id, label, does, value]
         recommendation: { type: [object, 'null'] }
-        kind: { type: string, enum: ['', approve, base] }
+        kind: { type: string, enum: ['', approve] }
         # The ask's subject labels: the issue and pull request numbers, or empty.
         item: { type: string }
         pr: { type: string }
         # What the ruling node needs to act on the answer; null when nothing is asked.
         asked: { type: [object, 'null'] }
-      required: [merged, summary, question, options, recommendation, kind, item, pr, asked]
+        healthy: { type: boolean }
+      required: [merged, summary, question, options, recommendation, kind, item, pr, asked, healthy]
 
   # An issue its merged pull request left open (`Refs #N`) goes back to intake, the
   # judge of whether the work is delivered. Writes nothing on the work item.
@@ -357,7 +338,7 @@ nodes:
     output_format:
       type: object
       properties:
-        decision: { type: string, enum: [merge, return, park, hold] }
+        decision: { type: string, enum: [merge, return, park] }
         section: { type: string }
         summary: { type: string }
       required: [decision, section, summary]

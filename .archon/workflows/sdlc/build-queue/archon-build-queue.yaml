@@ -71,6 +71,8 @@ inputs:
       follow-up; the next queue run picks the item up.
 
 returns: apply
+# False only when a run that claimed nothing found stored items no pickup can act on.
+outcome_field: healthy
 
 nodes:
   - id: start
@@ -460,7 +462,8 @@ nodes:
         # What the ruling node needs: the ask, the brief a continue option launches and
         # which decision asked; null when nothing is asked.
         asked: { type: [object, 'null'] }
-      required: [decision, summary, question, options, recommendation, class, item, pr, asked]
+        healthy: { type: boolean }
+      required: [decision, summary, question, options, recommendation, class, item, pr, asked, healthy]
 
   # A paused run gives its resource slot back, so the next scheduled run can work
   # another item while this one waits.

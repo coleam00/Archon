@@ -31,29 +31,20 @@ export function otherEffect(brief: string): MergeEffect {
   return brief.trim() === '' ? 'park' : 'return';
 }
 
-/** The one answer to a red default branch: the queue holds merges until it is green again. */
-export const BASE_EFFECTS = ['hold'] as const;
-export type BaseAsk = Ask<(typeof BASE_EFFECTS)[number]>;
-
 /** The sweep's decision on one pull request; archon-merge-queue.yaml declares the same enums. */
 export type SweepAction = 'merged' | 'return' | 'ask' | 'wait';
 export const POLICY_CLASSES = ['clear', 'unclear'] as const;
 export type PolicyClass = (typeof POLICY_CLASSES)[number];
 export const MERGE_PATHS = ['idle', 'record', 'sweep'] as const;
 export type MergePath = (typeof MERGE_PATHS)[number];
-/** Which ask a run raised. */
-export type MergeAskedBy = 'pr' | 'base';
 /** What the record node asked, which the ruling node needs to act on the answer. */
-export type MergeAsked =
-  | {
-      readonly by: Extract<MergeAskedBy, 'pr'>;
-      readonly item: QualifiedPr;
-      readonly pr: QualifiedPr;
-      readonly head: string;
-      readonly brief: string;
-      readonly ask: MergeAsk;
-    }
-  | { readonly by: Extract<MergeAskedBy, 'base'>; readonly ask: BaseAsk };
+export interface MergeAsked {
+  readonly item: QualifiedPr;
+  readonly pr: QualifiedPr;
+  readonly head: string;
+  readonly brief: string;
+  readonly ask: MergeAsk;
+}
 export const MERGE_METHODS = ['squash', 'merge'] as const;
 /** The pack's `ci` setting; `.pack/pack.yaml` declares the same values. */
 export const CI_MODES = ['forge', 'none'] as const;

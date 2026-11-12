@@ -21,7 +21,7 @@ import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
+import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { type LabelVerdict, isPackLabel, type PackLabel, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
@@ -135,7 +135,7 @@ function main(): void {
       trust: null,
       promoted: false,
       labels: [],
-      summary: idleSummary('No item waits for intake.', stuckItems(workflowRunId())),
+      ...idleOutcome('No item waits for intake.', stuckItems(workflowRunId(), 'intake')),
     });
     return;
   }
@@ -179,6 +179,7 @@ function main(): void {
     promoted: next.promoted !== null,
     labels,
     summary: summary(item, next, runId),
+    healthy: true,
   });
 }
 
