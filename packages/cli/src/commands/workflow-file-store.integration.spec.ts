@@ -918,38 +918,44 @@ test('a hand start is checked against its own declared capacity, then the defaul
   writeFileSync(join(f.project, 'release'), '');
   expect(await held).toMatchObject({ code: 0 });
 }, 60000);
-test('interrupting a hand start that waits for its resource leaves no pending run or request', async () => {
-  const f = fixture('store: files\n');
-  const workflow = (name: string, bash: string): void =>
-    writeFileSync(
-      join(f.project, `.archon/workflows/${name}.yaml`),
-      `name: ${name}\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
-    );
-  workflow('held', 'touch held-started; while [ ! -f release ]; do sleep 0.1; done');
-  workflow('quick', 'echo ran > quick-ran');
-  const args = (name: string) => ['workflow', 'run', name, '--folder', '--no-worktree'];
-  const held = cli(f, args('held'));
-  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+// Windows has no SIGINT or SIGTERM delivery to a child: kill() ends it at once, so no
+// handler can fail the pending run. There the wait ends like any abrupt kill.
+test.skipIf(process.platform === 'win32')(
+  'interrupting a hand start that waits for its resource leaves no pending run or request',
+  async () => {
+    const f = fixture('store: files\n');
+    const workflow = (name: string, bash: string): void =>
+      writeFileSync(
+        join(f.project, `.archon/workflows/${name}.yaml`),
+        `name: ${name}\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
+      );
+    workflow('held', 'touch held-started; while [ ! -f release ]; do sleep 0.1; done');
+    workflow('quick', 'echo ran > quick-ran');
+    const args = (name: string) => ['workflow', 'run', name, '--folder', '--no-worktree'];
+    const held = cli(f, args('held'));
+    while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
 
-  const waiting = f.scope.start([process.execPath, f.entry, ...args('quick')], f.project, f.env);
-  await Bun.sleep(3000);
-  waiting.child.kill('SIGINT');
-  const interrupted = await waiting.result;
-  expect(interrupted.code).not.toBe(0);
-  expect(interrupted.output + interrupted.error).toContain("Waiting for resource 'build'");
-  writeFileSync(join(f.project, 'release'), '');
-  expect(await held).toMatchObject({ code: 0 });
+    const waiting = f.scope.start([process.execPath, f.entry, ...args('quick')], f.project, f.env);
+    await Bun.sleep(3000);
+    waiting.child.kill('SIGINT');
+    const interrupted = await waiting.result;
+    expect(interrupted.code).not.toBe(0);
+    expect(interrupted.output + interrupted.error).toContain("Waiting for resource 'build'");
+    writeFileSync(join(f.project, 'release'), '');
+    expect(await held).toMatchObject({ code: 0 });
 
-  const runs: { id: string; workflow_name: string; status: string }[] = JSON.parse(
-    (await cli(f, ['workflow', 'runs', '--json'])).output
-  ).runs;
-  const quick = runs.find(run => run.workflow_name === 'quick');
-  expect(quick?.status).toBe('failed');
-  const request = await cli(f, ['trigger', 'inspect', quick?.id ?? 'missing']);
-  expect(request.code).not.toBe(0);
-  expect(request.output + request.error).toContain('Trigger receipt or request not found');
-  expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
-}, 60000);
+    const runs: { id: string; workflow_name: string; status: string }[] = JSON.parse(
+      (await cli(f, ['workflow', 'runs', '--json'])).output
+    ).runs;
+    const quick = runs.find(run => run.workflow_name === 'quick');
+    expect(quick?.status).toBe('failed');
+    const request = await cli(f, ['trigger', 'inspect', quick?.id ?? 'missing']);
+    expect(request.code).not.toBe(0);
+    expect(request.output + request.error).toContain('Trigger receipt or request not found');
+    expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
+  },
+  60000
+);
 test('a broken capacity config ends a waiting hand start instead of leaving it pending', async () => {
   const config = 'store: files\nconcurrency:\n  resources:\n    build: 1\n';
   const f = fixture(config);
