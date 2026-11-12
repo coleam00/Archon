@@ -559,12 +559,13 @@ async function releaseRunResources(
 ): Promise<Error | undefined> {
   try {
     const container = ownedContainer(launch.workspace);
-    const warnings = container
-      ? await launch.request.host.deps.releaseRunResources?.(runId, (id, envId) =>
-          container.backend.releaseVerificationImages(id, envId)
-        )
-      : await launch.request.host.deps.releaseRunResources?.(runId);
-    if (warnings?.length) deferRunSlotRelease();
+    if (container) {
+      await launch.request.host.deps.releaseRunResources?.(runId, (id, envId) =>
+        container.backend.releaseVerificationImages(id, envId)
+      );
+    } else {
+      await launch.request.host.deps.releaseRunResources?.(runId);
+    }
   } catch (err) {
     getLog().warn({ err, runId }, 'cli.resource_release_failed');
     const error = new Error(`Run ${runId} retained verification images: ${String(err)}`, {

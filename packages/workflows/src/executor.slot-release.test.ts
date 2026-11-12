@@ -88,47 +88,43 @@ test.each(['completed', 'failed'] as const)(
   }
 );
 
-test.each(['exception', 'warning'] as const)(
-  'resource cleanup %s suppresses a concurrent cancellation release held by the executor',
-  async outcome => {
-    const run = makeRun({ status: 'cancelled' });
-    const store = makeStore({
-      getWorkflowRun: mock(async () => run),
-      getWorkflowRunStatus: mock(async () => run.status),
-    });
-    const drained: string[] = [];
-    const dispose = subscribeRunSlotRelease(store, async ids => {
-      drained.push(...ids);
-    });
-    const closeOwner = holdRunSlotRelease(store, run.id);
-    const entered = Promise.withResolvers<void>();
-    const finish = Promise.withResolvers<void>();
-    mockExecuteDagWorkflow.mockImplementationOnce(async () => {
-      entered.resolve();
-      await finish.promise;
-      return undefined;
-    });
-    try {
-      const execution = startWorkflow({
-        deps: {
-          ...makeDeps(store),
-          releaseRunResources: async () => {
-            if (outcome === 'exception') throw new Error('container teardown failed');
-            return ['image inventory is inconclusive'];
-          },
+test('failed resource cleanup suppresses a concurrent cancellation release held by the executor', async () => {
+  const run = makeRun({ status: 'cancelled' });
+  const store = makeStore({
+    getWorkflowRun: mock(async () => run),
+    getWorkflowRunStatus: mock(async () => run.status),
+  });
+  const drained: string[] = [];
+  const dispose = subscribeRunSlotRelease(store, async ids => {
+    drained.push(...ids);
+  });
+  const closeOwner = holdRunSlotRelease(store, run.id);
+  const entered = Promise.withResolvers<void>();
+  const finish = Promise.withResolvers<void>();
+  mockExecuteDagWorkflow.mockImplementationOnce(async () => {
+    entered.resolve();
+    await finish.promise;
+    return undefined;
+  });
+  try {
+    const execution = startWorkflow({
+      deps: {
+        ...makeDeps(store),
+        releaseRunResources: async () => {
+          throw new Error('container teardown failed');
         },
-      });
-      await entered.promise;
-      await publishRunSlotRelease(store, run.id);
-      expect(drained).toEqual([]);
-      finish.resolve();
-      await execution;
-      await closeOwner();
-      expect(drained).toEqual([]);
-    } finally {
-      finish.resolve();
-      await closeOwner();
-      dispose();
-    }
+      },
+    });
+    await entered.promise;
+    await publishRunSlotRelease(store, run.id);
+    expect(drained).toEqual([]);
+    finish.resolve();
+    await execution;
+    await closeOwner();
+    expect(drained).toEqual([]);
+  } finally {
+    finish.resolve();
+    await closeOwner();
+    dispose();
   }
-);
+});

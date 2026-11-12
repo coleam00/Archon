@@ -95,7 +95,7 @@ test('committed releases resolve recorded ancestry and coalesce hosts; disposal 
   }
 });
 
-test.each(['safe', 'owner-warning', 'resource-warning', 'resource-error'] as const)(
+test.each(['safe', 'owner-warning', 'image-inventory-warning', 'resource-error'] as const)(
   'stopped-owner cancellation drains only after confirmed cleanup: %s',
   async ending => {
     const { createWorkflowOperations } = await import('../operations/workflow-operations');
@@ -151,7 +151,7 @@ test.each(['safe', 'owner-warning', 'resource-warning', 'resource-error'] as con
         expect(order).toEqual(['stop']);
         order.push('cleanup');
         if (ending === 'resource-error') throw new Error('image cleanup failed');
-        return ending === 'resource-warning' ? ['retained resource'] : [];
+        return ending === 'image-inventory-warning' ? ['retained image inventory'] : [];
       },
     });
     try {
@@ -159,7 +159,7 @@ test.each(['safe', 'owner-warning', 'resource-warning', 'resource-error'] as con
       expect(result.kind).toBe('stopped');
       expect((await store.getWorkflowRun(id))?.status).toBe('cancelled');
       expect(order).toEqual(
-        ending === 'safe'
+        ending === 'safe' || ending === 'image-inventory-warning'
           ? ['stop', 'cleanup', 'drain']
           : ending === 'owner-warning'
             ? ['stop']

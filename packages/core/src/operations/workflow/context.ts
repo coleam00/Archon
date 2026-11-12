@@ -107,9 +107,7 @@ export function createOperationContext(deps: WorkflowOperationsDeps): OperationC
 
 export async function releaseRunResources(ctx: OperationContext, runId: string): Promise<string[]> {
   try {
-    const warnings = (await ctx.releaseRunResources?.(runId)) ?? [];
-    if (warnings.length) deferRunSlotRelease();
-    return warnings;
+    return (await ctx.releaseRunResources?.(runId)) ?? [];
   } catch (err) {
     deferRunSlotRelease();
     getLog().warn({ err, runId }, 'operations.resource_release_failed');

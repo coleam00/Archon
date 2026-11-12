@@ -698,10 +698,9 @@ async function releaseResourcesOnExit(
   try {
     const run = await deps.store.getWorkflowRun(runId);
     if (run && isTerminalRunStatus(run.status)) {
-      const warnings = releaseVerificationImages
-        ? await deps.releaseRunResources(runId, releaseVerificationImages)
-        : await deps.releaseRunResources(runId);
-      if (warnings?.length) deferRunSlotRelease();
+      if (releaseVerificationImages)
+        await deps.releaseRunResources(runId, releaseVerificationImages);
+      else await deps.releaseRunResources(runId);
     }
   } catch (err) {
     deferRunSlotRelease();
