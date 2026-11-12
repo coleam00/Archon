@@ -187,7 +187,10 @@ const RED =
 
 test('a run that completes with a failed outcome says why on its watch line and in get', async () => {
   const fixture = makeFixture({ 'watch-red': RED });
-  const watch = startWatch(fixture, []);
+  // `ready` is the only line that says the watch has read its starting position; a run
+  // launched before it can end ahead of that position and never reach the stream.
+  const watch = startWatch(fixture);
+  await watch.next('ready', line => line.type === 'ready');
   const runId = await launchDetached(fixture, 'watch-red');
   expect(await watch.next('terminal', ofRun(runId, 'terminal'))).toMatchObject({
     status: 'completed',

@@ -638,6 +638,9 @@ describe('why a run that ended needs a look', () => {
       ['Item 12 is stuck.', 'It waits on a review.']
     );
     expect(terminalReason(returned({ green: false }))).toEqual([]);
+    expect(
+      terminalReason(returned({ 'why\n it\r\nfailed': 'lint', 'build  step': 'tsc' }))
+    ).toEqual(['why it failed: lint', 'build  step: tsc']);
   });
 
   it("a failed run gives its first failed node's error, or else the run's own", () => {
