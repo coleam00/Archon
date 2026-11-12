@@ -1,4 +1,8 @@
-import { WORKFLOW_NOTICE_LIMITS, WorkflowNoticeRefusedError } from '../workflow-notice';
+import {
+  workflowNoticeDataSchema,
+  WORKFLOW_NOTICE_LIMITS,
+  WorkflowNoticeRefusedError,
+} from '../workflow-notice';
 import { resourceStartFixtures } from '../resource-start-conformance';
 import { SourceReceiptDigestConflictError } from '../resource-start-store';
 import type {
@@ -49,12 +53,12 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       bindings: [binding] as [ResourceStartBindingIntent],
     });
     const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
-    async function skipFire(input: SourceReceiptAcceptance) {
-      input.bindings[0] = { ...binding, overlap: 'skip' };
+    async function skipFire(input: SourceReceiptAcceptance, fireBinding = binding) {
+      input.bindings[0] = { ...fireBinding, overlap: 'skip' };
       await store.acceptStartReceipt(input);
       const identity = {
         receiptId: input.receipt.id,
-        bindingId: binding.bindingId,
+        bindingId: fireBinding.bindingId,
         ownerId: 'owner',
       };
       expect(await store.claimStartBindingPreparation(identity)).toBe(true);
@@ -65,7 +69,13 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       return { identity, prepared, result };
     }
     test('skipped explicit fires notify their source run, including after it ends', async () => {
-      const holder = start();
+      const longSuffix = 'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength);
+      const fireBinding = {
+        ...binding,
+        bindingId: `binding\n${longSuffix}`,
+        resource: `resource\u007f${longSuffix}`,
+      };
+      const holder = { ...start(), resource: fireBinding.resource };
       await store.admitResourceStart(holder);
       for (const ended of [false, true]) {
         const source = await store.createWorkflowRun(launch().run);
@@ -73,27 +83,38 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
         if (ended) await store.completeWorkflowRun(source.id, { duration_ms: 1 });
         const before = await store.getWorkflowRun(source.id);
         const input = acceptance();
-        input.receipt.deliveryId = crypto.randomUUID();
+        input.receipt.deliveryId = `delivery\t${longSuffix}${crypto.randomUUID()}`;
         input.receipt.sourceActor = { source: 'archon-run', id: source.id };
-        await skipFire(input);
+        const { prepared } = await skipFire(input, fireBinding);
+        expect(await store.getStartReceipt(input.receipt.id)).toMatchObject({
+          deliveryId: input.receipt.deliveryId,
+          bindings: [
+            { bindingId: fireBinding.bindingId, intent: { resource: fireBinding.resource } },
+          ],
+        });
+        expect(await store.getResourceStartRequest(prepared.run.id)).toMatchObject({
+          status: 'skipped',
+          resource: fireBinding.resource,
+        });
         const events =
           (await store.listEventsForRuns([source.id], ['workflow_notice'])).get(source.id) ?? [];
         expect(events).toHaveLength(1);
-        expect(events[0]?.data).toMatchObject({
+        const notice = workflowNoticeDataSchema.parse(events[0]?.data);
+        expect(notice).toMatchObject({
           text: 'Trigger fire dropped, not queued (overlap=skip).',
           node: null,
           labels: {
-            binding: 'binding',
-            resource: 'resource',
+            binding: `binding\\u000a${'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength - 14)}…`,
+            resource: `resource\\u007f${'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength - 15)}…`,
             blocker_kind: 'run',
             blocker: holder.launch.run.id,
-            delivery: input.receipt.deliveryId,
+            delivery: `delivery\\u0009${'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength - 15)}…`,
             overlap: 'skip',
           },
         });
         expect(await store.getWorkflowRun(source.id)).toEqual(before);
       }
-      const queued = start();
+      const queued = { ...start(), resource: fireBinding.resource };
       await store.admitResourceStart(queued);
       await store.claimPendingWorkflowRun(holder.launch.run.id);
       await store.completeWorkflowRun(holder.launch.run.id, { duration_ms: 1 });
@@ -101,7 +122,7 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       const input = acceptance();
       input.receipt.deliveryId = crypto.randomUUID();
       input.receipt.sourceActor = { source: 'archon-run', id: source.id };
-      await skipFire(input);
+      await skipFire(input, fireBinding);
       expect(
         (await store.listEventsForRuns([source.id], ['workflow_notice'])).get(source.id)?.[0]?.data
       ).toMatchObject({ labels: { blocker_kind: 'request', blocker: queued.launch.run.id } });
@@ -114,11 +135,11 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       const limited = acceptance();
       limited.receipt.deliveryId = crypto.randomUUID();
       limited.receipt.sourceActor = input.receipt.sourceActor;
-      limited.bindings[0] = { ...binding, overlap: 'skip' };
+      limited.bindings[0] = { ...fireBinding, overlap: 'skip' };
       await store.acceptStartReceipt(limited);
       const identity = {
         receiptId: limited.receipt.id,
-        bindingId: binding.bindingId,
+        bindingId: fireBinding.bindingId,
         ownerId: 'owner',
       };
       await store.claimStartBindingPreparation(identity);
@@ -127,7 +148,12 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
         store.completeStartBindingPreparation({ ...identity, launch: prepared })
       ).rejects.toBeInstanceOf(WorkflowNoticeRefusedError);
       await expect(
-        store.admitResourceStart({ ...start('skip'), launch: prepared, receipt: identity })
+        store.admitResourceStart({
+          ...start('skip'),
+          resource: fireBinding.resource,
+          launch: prepared,
+          receipt: identity,
+        })
       ).rejects.toBeInstanceOf(WorkflowNoticeRefusedError);
       expect(await store.getResourceStartRequest(prepared.run.id)).toBeNull();
       expect(

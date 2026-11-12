@@ -356,11 +356,13 @@ With notices, one command answers each of the simple questions someone asks the 
 The labels in these commands are examples: a workflow chooses its own. For the second question to have an answer, a run says what it is about when it starts the work, for example `archon workflow notice "Building issue 12" --label kind=build --label issue=12`.
 
 - **Only a reader who asks receives them.** A notice is a `notice` line with `needs: "nothing"`, so the plain `--watch` never writes one; `--watch --notices` and `--protocol` do. `--label` selects notices the way it selects items.
-- **Labels are the workflow's own.** Archon does not interpret them. What deserves a notice, and which labels it carries, is the workflow's decision, like what deserves an ask.
+- **Node-emitted labels are the workflow's own.** Archon does not interpret them. What deserves a node-emitted notice, and which labels it carries, is the workflow's decision, like what deserves an ask.
 - **A live run carries its latest notice.** `archon workflow status` prints it as `Notice:` under the run, and `--json` gives each run a `notice` of `{ at, node, text, labels }`, or null when it emitted none. That is what the run is about now, with no second read.
 - **The window list is the recap.** `--notices --since` reads the recorded notices of the window, oldest first, and `--count-by` counts them per project or per label value. `--json` prints `{ ok, action: "attention", scope, since, notices }`, each notice with `at`, `runId`, `workflow`, `parentRunId`, `project`, `node`, `text` and `labels`.
 - **A notice is not a log.** The text is one line of at most 300 characters, with at most 16 labels, neither with control characters, and a run may emit 50. An emit past a bound exits 1 and says which. Details belong in an artifact; keep secrets out of the text, which every reader of the stream sees.
-- **Only a node of a running run can emit one.** The command reads the run and node from the environment Archon gives a node, as `archon state` does, and refuses anywhere else. A node of a [container run](/guides/container-isolation/) cannot: it has no host CLI to call, so `notice()` throws `HostCommandError` there.
+- **The notice command requires a node of a running run.** The command reads the run and node from the environment Archon gives a node, as `archon state` does, and refuses anywhere else. A node of a [container run](/guides/container-isolation/) cannot: it has no host CLI to call, so `notice()` throws `HostCommandError` there.
+
+The engine also records a notice when a `trigger fire` with a delivery ID and source run is skipped by resource admission. It belongs to the source run even after it ends, with `node: null` and engine-owned labels identifying the binding, resource and blocker (`kind=trigger_fire_skipped`). Scheduled skips and fires without a delivery ID or source run produce no notice. These notices share the same bounds and listing/watch paths; see [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy) for preparation failure behavior.
 
 ### The full protocol for programs
 
@@ -376,7 +378,7 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 | `terminal` | A run ended | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status`, `outcome`, `cause`, and `reason` on a launch failure or failed outcome |
 | `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused or stale-running run resumed and cleared a stored error | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status: "running"` |
 | `owner_lost` | A running run's owner process on this host is gone | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `observedStatus` |
-| `notice` | A node of a run [said what the run did](#notices-what-the-work-did) | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `at`, `node`, `text`, `labels` |
+| `notice` | A node or the engine [recorded a notice for a run](#notices-what-the-work-did) | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `at`, `node`, `text`, `labels` |
 | `ready` | Initial snapshot delivery finished; coverage may be degraded | `cursor` |
 | `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |
 | `degraded` | A snapshot item cannot be read or projected, or repeated failure to project a run; coverage may be incomplete. The stream keeps running | `cursor`, `reason: "run_unreadable"` |
