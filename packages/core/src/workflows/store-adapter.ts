@@ -1,3 +1,4 @@
+import * as admissionNotices from '../db/admission-notices';
 import { createRunResourceRelease } from '../services/cleanup/run-verification-images';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
@@ -120,6 +121,8 @@ export function createWorkflowStore(): IWorkflowStore {
     hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
     acceptStartReceipt: resourceStarts.acceptStartReceipt,
     getStartReceipt: resourceStarts.getStartReceipt,
+    getAdmissionNoticeHead: admissionNotices.getAdmissionNoticeHead,
+    readAdmissionNoticesAfter: admissionNotices.readAdmissionNoticesAfter,
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,
     getResourceStartRequest: resourceStarts.getResourceStartRequest,

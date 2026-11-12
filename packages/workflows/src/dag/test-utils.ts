@@ -1,4 +1,4 @@
-import { inMemoryEventRows } from '../test-utils';
+import { inMemoryEventRows, unexpectedStoreCall } from '../test-utils';
 import { afterEach, expect, mock, spyOn, type Mock } from 'bun:test';
 import { readFile } from 'fs/promises';
 import { join } from 'path';
@@ -203,12 +203,10 @@ export function createMockStore(): MockWorkflowStore {
     acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
       throw new Error('Unexpected acceptStartReceipt');
     }),
-    getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
-      throw new Error('Unexpected getStartReceipt');
-    }),
-    listStartReceipts: mock<IWorkflowStore['listStartReceipts']>(() => {
-      throw new Error('Unexpected listStartReceipts');
-    }),
+    getAdmissionNoticeHead: mock(unexpectedStoreCall('getAdmissionNoticeHead')),
+    readAdmissionNoticesAfter: mock(unexpectedStoreCall('readAdmissionNoticesAfter')),
+    getStartReceipt: mock(unexpectedStoreCall('getStartReceipt')),
+    listStartReceipts: mock(unexpectedStoreCall('listStartReceipts')),
     listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(() => {
       throw new Error('Unexpected listPendingStartBindings');
     }),

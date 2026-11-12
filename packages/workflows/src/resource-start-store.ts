@@ -1,3 +1,4 @@
+import type { AdmissionNoticeCursor, AdmissionNoticePage } from './admission-notice';
 import { createLogger } from '@archon/paths';
 import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
 import type { z } from 'zod';
@@ -365,6 +366,12 @@ export interface DamagedStartReceipt {
 export type PendingStartBindingInspection = StartBindingInspection | DamagedStartReceipt;
 
 export interface IResourceStartStore {
+  getAdmissionNoticeHead(): Promise<AdmissionNoticeCursor>;
+  /** Skipped requests with delivery ids, in commit order. Null starts at retained history. */
+  readAdmissionNoticesAfter(
+    after: AdmissionNoticeCursor | null,
+    options: { limit: number }
+  ): Promise<AdmissionNoticePage>;
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {
     resource: string;

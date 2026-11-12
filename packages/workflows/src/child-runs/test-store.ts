@@ -68,6 +68,12 @@ export class InMemoryStore implements IWorkflowStore {
   acceptStartReceipt: IWorkflowStore['acceptStartReceipt'] = async () => {
     throw new Error('Unexpected acceptStartReceipt');
   };
+  getAdmissionNoticeHead: IWorkflowStore['getAdmissionNoticeHead'] = async () => {
+    throw new Error('Unexpected getAdmissionNoticeHead');
+  };
+  readAdmissionNoticesAfter: IWorkflowStore['readAdmissionNoticesAfter'] = async () => {
+    throw new Error('Unexpected readAdmissionNoticesAfter');
+  };
   getStartReceipt: IWorkflowStore['getStartReceipt'] = async () => {
     throw new Error('Unexpected getStartReceipt');
   };

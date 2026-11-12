@@ -1,16 +1,15 @@
-/**
- * A notice: a short message a node of a run emits to say what the run did, for whoever
- * watches the attention stream. It asks nothing of its reader: it never pauses the run,
- * holds no slot and cannot be answered. Each one is a `workflow_notice` event of its run,
- * so it is durable, ordered with the run's other events and countable by label like an ask.
- * What is worth a notice is the workflow's decision; the engine never reads the labels.
- */
+/** Notices report work or dropped admission without asking for a response or holding a slot. */
 import { z } from 'zod';
+import type { AdmissionNoticeCursor, AdmissionNoticeFacts } from './admission-notice';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
+import type { WorkflowRun } from './schemas/workflow-run';
+import { requestingRun } from './schemas/resource-start';
 import {
   countAttentionQueue,
   isInAttentionScope,
   matchesAttentionLabels,
   projectRefSchema,
+  projectRef,
   runProject,
   type AttentionQueueCountBy,
   type AttentionQueueCounts,
@@ -21,7 +20,7 @@ import type { IWorkflowStore } from './store';
 
 /**
  * The bounds that keep notices from becoming a log: one short line of text, a handful of
- * short labels, and a ceiling per run. An emit past any of them is refused.
+ * short labels, and a ceiling per run for author emission. Admission is bounded by request.
  */
 export const WORKFLOW_NOTICE_LIMITS = {
   textLength: 300,
@@ -72,15 +71,24 @@ export const workflowNoticeDataSchema = z.object({
 });
 export type WorkflowNoticeData = z.infer<typeof workflowNoticeDataSchema>;
 
-/** A notice as a reader receives it: what was said, when, and by which run. */
-export const workflowNoticeSchema = workflowNoticeDataSchema.extend({
-  /** When the run emitted it. */
+/** Run attribution survives a deleted source; its workflow context may be unavailable. */
+const attributedNoticeSchema = workflowNoticeDataSchema.extend({
+  /** Author emission time, or the receipt time for a dropped explicit start. */
   at: z.string(),
   runId: z.string(),
-  workflow: z.string(),
+  workflow: z.string().nullable(),
   parentRunId: z.string().nullable(),
   project: projectRefSchema.nullable(),
 });
+export const workflowNoticeSchema = z.union([
+  attributedNoticeSchema,
+  attributedNoticeSchema.extend({
+    runId: z.null(),
+    workflow: z.null(),
+    parentRunId: z.null(),
+    node: z.null(),
+  }),
+]);
 export type WorkflowNotice = z.infer<typeof workflowNoticeSchema>;
 
 /** The emit was well formed and the engine did not record it. */
@@ -158,11 +166,31 @@ export async function latestWorkflowNotices(
 }
 
 type NoticeSource = {
-  store: Pick<IWorkflowStore, 'listWorkflowNoticeRows' | 'getWorkflowRunsByIds' | 'getCodebase'>;
+  store: Pick<
+    IWorkflowStore,
+    'listWorkflowNoticeRows' | 'getWorkflowRunsByIds' | 'getCodebase' | 'readAdmissionNoticesAfter'
+  >;
 };
 
+async function admissionFactsSince(
+  source: NoticeSource,
+  since?: Date
+): Promise<AdmissionNoticeFacts[]> {
+  const admissions: AdmissionNoticeFacts[] = [];
+  let after: AdmissionNoticeCursor | null = null;
+  for (;;) {
+    const page = await source.store.readAdmissionNoticesAfter(after, { limit: 100 });
+    for (const { facts } of page.notices)
+      if (since === undefined || Date.parse(facts.receivedAt) >= since.getTime())
+        admissions.push(facts);
+    if (page.caughtUp) break;
+    after = page.next;
+  }
+  return admissions;
+}
+
 /**
- * The notices emitted at or after `since` that `query` selects, oldest first. A row whose
+ * Authored and admission notices at or after `since` that `query` selects, oldest first. A row whose
  * data does not read as a notice is left out.
  */
 export async function listWorkflowNotices(
@@ -173,7 +201,16 @@ export async function listWorkflowNotices(
   const rows = (await source.store.listWorkflowNoticeRows()).filter(
     row => since === undefined || Date.parse(row.at) >= since.getTime()
   );
-  const runIds = [...new Set(rows.map(row => row.runId))];
+  const admissions = await admissionFactsSince(source, since);
+  const runIds = [
+    ...new Set([
+      ...rows.map(row => row.runId),
+      ...admissions.flatMap(facts => {
+        const origin = requestingRun(facts.sourceActor);
+        return origin === null ? [] : [origin.runId];
+      }),
+    ]),
+  ];
   const runs = new Map((await source.store.getWorkflowRunsByIds(runIds)).map(run => [run.id, run]));
   const codebases = new Map();
   const notices: WorkflowNotice[] = [];
@@ -196,7 +233,22 @@ export async function listWorkflowNotices(
       project,
     });
   }
-  return notices;
+  for (const facts of admissions) {
+    const origin = requestingRun(facts.sourceActor);
+    const notice = await admissionWorkflowNotice(
+      source,
+      facts,
+      origin === null ? null : (runs.get(origin.runId) ?? null),
+      codebases
+    );
+    if (
+      isInAttentionScope(notice.project, query.scope) &&
+      matchesAttentionLabels(notice, query.labels)
+    )
+      notices.push(notice);
+  }
+  // Stable sorting preserves authored event order and admission position order on ties.
+  return notices.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
 }
 
 /** `listWorkflowNotices` counted by project or by one label's value, as asks are counted. */
@@ -205,4 +257,50 @@ export async function countWorkflowNotices(
   query: AttentionQueueQuery & { since?: Date; countBy: AttentionQueueCountBy }
 ): Promise<AttentionQueueCounts> {
   return countAttentionQueue(await listWorkflowNotices(source, query), query);
+}
+
+function printable(value: string, limit: number): string {
+  const text = value.replace(/[\u0000-\u001f\u007f-\u009f]/gu, ' ');
+  return text.length <= limit ? text : `${text.slice(0, limit - 1)}…`;
+}
+
+export async function admissionWorkflowNotice(
+  source: { store: Pick<IWorkflowStore, 'getCodebase'> },
+  facts: AdmissionNoticeFacts,
+  run: WorkflowRun | null,
+  codebases = new Map<string, ReturnType<IWorkflowStore['getCodebase']>>()
+): Promise<WorkflowNotice> {
+  const origin = requestingRun(facts.sourceActor);
+  const label = (value: string) => printable(value, WORKFLOW_NOTICE_LIMITS.labelValueLength);
+  const data = workflowNoticeDataSchema.parse({
+    text: `Dropped start: binding ${printable(facts.bindingId, 70)}, resource ${printable(facts.resource, 70)}, overlap skip; blocked by ${facts.blocker.kind} ${facts.blocker.id}. Not queued.`,
+    labels: {
+      kind: 'admission-skipped',
+      binding: label(facts.bindingId),
+      resource: label(facts.resource),
+      overlap: 'skip',
+      blocker_kind: facts.blocker.kind,
+      blocker: label(facts.blocker.id),
+      delivery: label(facts.deliveryId),
+      request: facts.requestId,
+    },
+    node: origin?.nodePath ?? null,
+  });
+  let project: WorkflowNotice['project'];
+  if (run !== null) project = await runProject(source, run, codebases);
+  else {
+    const codebase = codebases.get(facts.codebaseId) ?? source.store.getCodebase(facts.codebaseId);
+    codebases.set(facts.codebaseId, codebase);
+    const record = await codebase;
+    project = projectRef(projectKeyForCodebase(record, facts.cwd), record);
+  }
+  const common = { ...data, at: facts.receivedAt, project };
+  return origin === null
+    ? { ...common, node: null, runId: null, workflow: null, parentRunId: null }
+    : {
+        ...common,
+        runId: origin.runId,
+        workflow: run?.workflow_name ?? null,
+        parentRunId: run?.parent_run_id ?? null,
+      };
 }

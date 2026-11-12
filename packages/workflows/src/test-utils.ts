@@ -145,3 +145,7 @@ export function inMemoryEventRows(events: readonly InMemoryStoreEvent[]): Workfl
     event_order: index,
   }));
 }
+
+export const unexpectedStoreCall = (name: string) => () => {
+  throw new Error(`Unexpected ${name}`);
+};

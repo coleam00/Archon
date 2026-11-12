@@ -81,7 +81,7 @@ async function updateFeedIndex(root: string, intent: Intent): Promise<void> {
   const value = await readJson(join(root, 'feed-index.json'));
   const index = value === undefined ? undefined : feedIndexSchema.parse(value);
   if (index?.seq === intent.seq) return;
-  if (index?.seq !== (await readHead(root))) {
+  if (index?.seq !== (await readFileStoreHead(root))) {
     await rebuildFeedIndex(root, intent.seq);
     return;
   }
@@ -333,7 +333,7 @@ async function apply(root: string, intent: Intent): Promise<void> {
   );
   await syncDirectory(root);
 }
-async function redo(root: string): Promise<void> {
+export async function recoverFileStoreLocked(root: string): Promise<void> {
   const pending = await readJson(join(root, 'intent.json'));
   if (pending === undefined) return;
   const intent = intentSchema.parse(pending);
@@ -345,17 +345,17 @@ export async function openFileStore(root: string): Promise<void> {
   await withFileStoreLock(root, async () => {
     const head = await readJson(join(root, 'head.json'));
     if (head !== undefined) headSchema.parse(head);
-    await redo(root);
+    await recoverFileStoreLocked(root);
     if (head === undefined && (await readJson(join(root, 'head.json'))) === undefined)
       await replaceJson(join(root, 'head.json'), { format: 1, seq: 0 });
     await mkdir(join(root, 'runs'), { recursive: true });
-    await readFeedIndex(root, await readHead(root));
+    await readFeedIndex(root, await readFileStoreHead(root));
     await syncDirectory(root);
   });
 }
 export async function recoverBeforeRead(root: string): Promise<void> {
   if ((await readJson(join(root, 'intent.json'))) !== undefined)
-    await withFileStoreLock(root, () => redo(root));
+    await withFileStoreLock(root, () => recoverFileStoreLocked(root));
 }
 /** The snapshot's run when it matches the last log line; undefined when missing or stale. */
 async function freshSnapshot(root: string, id: string): Promise<WorkflowRun | undefined> {
@@ -391,7 +391,7 @@ export async function readRun(root: string, id: string): Promise<WorkflowRun | n
   const fresh = await freshSnapshot(root, id);
   if (fresh) return fresh;
   return withFileStoreLock(root, async () => {
-    await redo(root);
+    await recoverFileStoreLocked(root);
     const state = await readRunState(root, id);
     const last = (await readLog(root, id)).lines.at(-1);
     if (last)
@@ -409,7 +409,7 @@ export async function commit<T>(
   decide: (runs: Map<string, WorkflowRun>) => Promise<{ result: T; changes: CommitChanges }>
 ): Promise<T> {
   return withFileStoreLock(root, async () => {
-    await redo(root);
+    await recoverFileStoreLocked(root);
     const rows =
       runIds === 'all'
         ? await listRunSnapshots(root)
@@ -502,29 +502,29 @@ function filePosition(cursor: WorkflowEventCursor): { seq: number; index: number
     throw new WorkflowEventCursorError();
   return { seq, index };
 }
-async function readHead(root: string): Promise<number> {
+export async function readFileStoreHead(root: string): Promise<number> {
   return headSchema.parse(await readJson(join(root, 'head.json'))).seq;
 }
 export function createFileEventFeed(root: string): IWorkflowEventFeed {
   return {
     getWorkflowEventHead: async (): Promise<WorkflowEventCursor> => {
       await recoverBeforeRead(root);
-      return fileCursor(await readHead(root), endOfCommit);
+      return fileCursor(await readFileStoreHead(root), endOfCommit);
     },
     readWorkflowEventsAfter: async (after, { limit, eventTypes }): Promise<WorkflowEventPage> => {
       const position = filePosition(after);
       if (!Number.isSafeInteger(limit) || limit <= 0)
         throw new RangeError('limit must be a positive integer');
       await recoverBeforeRead(root);
-      const head = await readHead(root);
+      const head = await readFileStoreHead(root);
       if (position.seq > head) throw new WorkflowEventCursorError();
       if (position.seq === head && position.index === endOfCommit)
         return { events: [], next: after };
       // A committed head must never outrun the log scan: writes/deletes and recovery
       // share this lock. Otherwise a paged scan could advance past an unseen commit.
       return withFileStoreLock(root, async () => {
-        await redo(root);
-        const head = await readHead(root);
+        await recoverFileStoreLocked(root);
+        const head = await readFileStoreHead(root);
         const deliveries: { seq: number; index: number; event: WorkflowEventRow }[] = [];
         const feedIndex = await readFeedIndex(root, head);
         const ids = Object.entries(feedIndex.runs)

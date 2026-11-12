@@ -8,6 +8,7 @@
  * process-global and irreversible). Call `resetExecutorMocks` in each file's `beforeEach`.
  */
 import { mock, type Mock } from 'bun:test';
+import { unexpectedStoreCall as unexpected } from '../test-utils';
 import { join, relative } from 'path';
 import * as realStorage from '@archon/paths/archon-paths';
 import { clearRegistry, providerRegistry } from '@archon/providers';
@@ -151,10 +152,6 @@ export function mocked<T extends (...args: never[]) => unknown>(fn: T): Mock<T> 
   return fn as unknown as Mock<T>;
 }
 
-const unexpected = (name: string) => () => {
-  throw new Error(`Unexpected ${name}`);
-};
-
 export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowStore {
   return {
     getWorkflowEventHead: mock(unexpected('event feed read')),
@@ -173,6 +170,8 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     hasStartReceiptForDelivery: mock(unexpected('hasStartReceiptForDelivery')),
     acceptStartReceipt: mock(unexpected('acceptStartReceipt')),
     getStartReceipt: mock(unexpected('getStartReceipt')),
+    getAdmissionNoticeHead: mock(unexpected('getAdmissionNoticeHead')),
+    readAdmissionNoticesAfter: mock(unexpected('readAdmissionNoticesAfter')),
     listStartReceipts: mock(unexpected('listStartReceipts')),
     listPendingStartBindings: mock(unexpected('listPendingStartBindings')),
     getResourceStartRequest: mock(unexpected('getResourceStartRequest')),

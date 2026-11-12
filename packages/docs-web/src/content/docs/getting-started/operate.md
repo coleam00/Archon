@@ -345,6 +345,10 @@ Each notice prints as one line: when, what, its labels.
 2026-11-11T14:02Z  Merged pull request 7 into dev  kind=merged pr=7
 ```
 
+The historical list also includes starts dropped by resource admission. A skipped request with a delivery ID produces one `kind=admission-skipped` notice, attributed to the firing run even after it ends, or to the binding's project when runless. Replaying the same delivery adds none. Scheduled ticks without a delivery ID stay silent. These notices are projected from retained requests, so old skipped deliveries appear after upgrading too.
+
+Admission notices carry `binding`, `resource`, `overlap`, `blocker_kind`, `blocker`, `delivery` and `request` labels. Long label values are clipped to 200 characters with an ellipsis; binding and resource names in text are clipped to 70. Control characters become spaces. The request UUID remains complete for inspection. Their `at` and `--since` window use receipt time, which can precede admission when preparation was delayed. A runless notice has null `runId`, `workflow`, `parentRunId` and `node`; a deleted source keeps its run ID with null workflow context.
+
 With notices, one command answers each of the simple questions someone asks the seat:
 
 | Question | Command |
@@ -356,10 +360,10 @@ With notices, one command answers each of the simple questions someone asks the 
 The labels in these commands are examples: a workflow chooses its own. For the second question to have an answer, a run says what it is about when it starts the work, for example `archon workflow notice "Building issue 12" --label kind=build --label issue=12`.
 
 - **Only a reader who asks receives them.** A notice is a `notice` line with `needs: "nothing"`, so the plain `--watch` never writes one; `--watch --notices` and `--protocol` do. `--label` selects notices the way it selects items.
-- **Labels are the workflow's own.** Archon does not interpret them. What deserves a notice, and which labels it carries, is the workflow's decision, like what deserves an ask.
-- **A live run carries its latest notice.** `archon workflow status` prints it as `Notice:` under the run, and `--json` gives each run a `notice` of `{ at, node, text, labels }`, or null when it emitted none. That is what the run is about now, with no second read.
+- **Author-emitted labels are the workflow's own.** Archon does not interpret them. What deserves a notice, and which labels it carries, is the workflow's decision, like what deserves an ask.
+- **A live run carries its latest author-emitted notice.** `archon workflow status` prints it as `Notice:` under the run, and `--json` gives each run a `notice` of `{ at, node, text, labels }`, or null when it emitted none. That is what the run is about now, with no second read.
 - **The window list is the recap.** `--notices --since` reads the recorded notices of the window, oldest first, and `--count-by` counts them per project or per label value. `--json` prints `{ ok, action: "attention", scope, since, notices }`, each notice with `at`, `runId`, `workflow`, `parentRunId`, `project`, `node`, `text` and `labels`.
-- **A notice is not a log.** The text is one line of at most 300 characters, with at most 16 labels, neither with control characters, and a run may emit 50. An emit past a bound exits 1 and says which. Details belong in an artifact; keep secrets out of the text, which every reader of the stream sees.
+- **A notice is not a log.** The text is one line of at most 300 characters, with at most 16 labels, neither with control characters, and a run may emit 50 author notices. Admission notices have a separate budget of one per skipped explicit request, so a run can have more than 50 total notices. An emit past a bound exits 1 and says which. Details belong in an artifact; keep secrets out of the text, which every reader of the stream sees.
 - **Only a node of a running run can emit one.** The command reads the run and node from the environment Archon gives a node, as `archon state` does, and refuses anywhere else. A node of a [container run](/guides/container-isolation/) cannot: it has no host CLI to call, so `notice()` throws `HostCommandError` there.
 
 ### The full protocol for programs

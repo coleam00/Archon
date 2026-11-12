@@ -1,3 +1,12 @@
+import {
+  emitWorkflowNotice,
+  listWorkflowNotices,
+  countWorkflowNotices,
+  workflowNoticeSchema,
+  WORKFLOW_NOTICE_LIMITS,
+} from '../workflow-notice';
+import { admissionNoticeCursor } from '../admission-notice';
+import { WorkflowEventCursorError } from '../store';
 import { resourceStartFixtures } from '../resource-start-conformance';
 import { SourceReceiptDigestConflictError } from '../resource-start-store';
 import type {
@@ -108,6 +117,193 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
         bindings: [{ status: 'complete', requestStatus: 'admitted', disposition: result }],
       });
       expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
+    });
+    test('admission notice reads retain skipped delivery facts and page by admission order', async () => {
+      const head = await store.getAdmissionNoticeHead();
+      const holder = launch();
+      await store.admitResourceStart({ ...binding, launch: holder });
+      const before = await store.getWorkflowRun(holder.run.id);
+      const source = await store.createWorkflowRun(launch().run);
+      await store.cancelWorkflowRun(source.id);
+      const expected: string[] = [];
+      let queuedId = '';
+      for (const [index, overlap, deliveryId] of [
+        [0, 'skip', 'delivery'],
+        [1, 'skip', null],
+        [2, 'queue', 'queued-delivery'],
+        [3, 'skip', 'another-delivery'],
+      ] as const) {
+        const input = acceptance();
+        input.receipt.deliveryId = deliveryId;
+        input.receipt.sourceActor = { source: 'archon-run', id: source.id, display: 'handoff' };
+        input.bindings = [{ ...binding, overlap }];
+        await store.acceptStartReceipt(input);
+        const identity = {
+          receiptId: input.receipt.id,
+          bindingId: binding.bindingId,
+          ownerId: 'owner',
+        };
+        await store.claimStartBindingPreparation(identity);
+        const prepared = launch();
+        const result = await store.completeStartBindingPreparation({
+          ...identity,
+          launch: prepared,
+        });
+        expect(result?.status).toBe(overlap === 'skip' ? 'skipped' : 'queued');
+        if (index === 2) queuedId = prepared.run.id;
+        if (index === 0 || index === 3) expected.push(prepared.run.id);
+        expect(await store.getWorkflowRun(prepared.run.id)).toBeNull();
+        if (deliveryId !== null) {
+          expect(
+            await store.acceptStartReceipt({
+              ...input,
+              receipt: { ...input.receipt, id: crypto.randomUUID() },
+            })
+          ).toEqual({ receiptId: input.receipt.id, replay: true });
+        }
+      }
+      const first = await store.readAdmissionNoticesAfter(head, { limit: 1 });
+      expect(first.notices).toHaveLength(1);
+      expect(first.caughtUp).toBe(false);
+      expect(first.notices[0]?.facts).toMatchObject({
+        requestId: expected[0],
+        bindingId: binding.bindingId,
+        resource: binding.resource,
+        overlap: 'skip',
+        blocker: { kind: 'run', id: holder.run.id },
+        deliveryId: 'delivery',
+        sourceActor: { source: 'archon-run', id: source.id, display: 'handoff' },
+        codebaseId: CONFORMANCE_CODEBASE_ID,
+      });
+      const second = await store.readAdmissionNoticesAfter(first.next, { limit: 1 });
+      expect(second.notices.map(row => row.facts.requestId)).toEqual([expected[1]]);
+      expect(second.caughtUp).toBe(true);
+      expect(second.notices[0]?.facts.blocker).toEqual({ kind: 'request', id: queuedId });
+      expect((await store.readAdmissionNoticesAfter(second.next, { limit: 1 })).notices).toEqual(
+        []
+      );
+      expect(
+        (await store.readAdmissionNoticesAfter(null, { limit: 10 })).notices.map(
+          row => row.facts.requestId
+        )
+      ).toEqual(expected);
+      expect(await store.getWorkflowRun(holder.run.id)).toEqual(before);
+    });
+    test('admission history preserves every signal without consuming the author notice budget', async () => {
+      const holder = launch();
+      await store.admitResourceStart({ ...binding, launch: holder });
+      const source = await store.createWorkflowRun(launch().run);
+      await store.claimPendingWorkflowRun(source.id);
+      const receivedAt = new Date(Date.now() - 60_000).toISOString();
+      const drops: string[] = [];
+      const fire = async (fromRun: boolean) => {
+        const input = acceptance();
+        input.receipt.deliveryId = crypto.randomUUID();
+        input.receipt.receivedAt = receivedAt;
+        input.receipt.sourceActor = fromRun
+          ? { source: 'archon-run', id: source.id, display: 'handoff' }
+          : null;
+        input.bindings = [{ ...binding, overlap: 'skip' }];
+        await store.acceptStartReceipt(input);
+        const identity = {
+          receiptId: input.receipt.id,
+          bindingId: binding.bindingId,
+          ownerId: 'owner',
+        };
+        await store.claimStartBindingPreparation(identity);
+        const prepared = launch();
+        expect(
+          await store.completeStartBindingPreparation({ ...identity, launch: prepared })
+        ).toMatchObject({ status: 'skipped' });
+        drops.push(prepared.run.id);
+      };
+      for (let index = 0; index < 51; index++) await fire(true);
+      for (let index = 0; index < WORKFLOW_NOTICE_LIMITS.perRun; index++)
+        await emitWorkflowNotice(store, {
+          runId: source.id,
+          node: 'work',
+          text: `Authored ${String(index)}`,
+          labels: { kind: 'authored' },
+        });
+      expect(
+        await rejection(
+          emitWorkflowNotice(store, { runId: source.id, node: null, text: 'Too many', labels: {} })
+        )
+      ).toMatchObject({ reason: 'run_limit' });
+      await store.completeWorkflowRun(source.id, { duration_ms: 1 });
+      await fire(true);
+      await fire(false);
+      const query = { scope: { kind: 'all' as const }, labels: {} };
+      const notices = await listWorkflowNotices({ store }, query);
+      expect(notices).toHaveLength(103);
+      for (const notice of notices)
+        expect(workflowNoticeSchema.safeParse(notice).success).toBe(true);
+      const admission = notices.filter(notice => notice.labels.kind === 'admission-skipped');
+      expect(admission.map(notice => notice.labels.request)).toEqual(drops);
+      expect(admission[0]).toMatchObject({
+        runId: source.id,
+        workflow: source.workflow_name,
+        node: 'handoff',
+        at: receivedAt,
+        labels: {
+          binding: binding.bindingId,
+          resource: binding.resource,
+          blocker: holder.run.id,
+          blocker_kind: 'run',
+          overlap: 'skip',
+        },
+      });
+      expect(admission[0]?.text).toContain('Dropped start');
+      expect(admission[0]?.text).toContain(holder.run.id);
+      expect(admission[0]?.text).toContain('Not queued');
+      expect(admission[51]?.runId).toBe(source.id);
+      expect(admission[52]).toMatchObject({
+        runId: null,
+        workflow: null,
+        parentRunId: null,
+        node: null,
+        project: { codebaseId: CONFORMANCE_CODEBASE_ID },
+      });
+      const project = admission[52]?.project;
+      if (project === null || project === undefined) throw new Error('Missing binding project');
+      expect(
+        await listWorkflowNotices(
+          { store },
+          { ...query, scope: { kind: 'project', project }, labels: { request: drops[52] } }
+        )
+      ).toHaveLength(1);
+      expect(
+        await listWorkflowNotices(
+          { store },
+          {
+            ...query,
+            labels: { kind: 'admission-skipped' },
+            since: new Date(Date.parse(receivedAt) + 1),
+          }
+        )
+      ).toEqual([]);
+      expect(
+        await countWorkflowNotices({ store }, { ...query, countBy: { by: 'label', key: 'kind' } })
+      ).toEqual({
+        by: 'label',
+        key: 'kind',
+        counts: [
+          { value: 'admission-skipped', count: 53 },
+          { value: 'authored', count: 50 },
+        ],
+      });
+      expect(await store.listWorkflowNoticeRows()).toHaveLength(50);
+      expect((await store.getWorkflowRun(source.id))?.status).toBe('completed');
+      expect((await store.getResourceStartRequest(holder.run.id))?.status).toBe('admitted');
+    });
+    test('admission reader rejects foreign cursors and invalid page sizes', async () => {
+      await expect(
+        store.readAdmissionNoticesAfter(admissionNoticeCursor('other-store:1'), { limit: 1 })
+      ).rejects.toBeInstanceOf(WorkflowEventCursorError);
+      for (const limit of [0, -1, 1.5])
+        await expect(store.readAdmissionNoticesAfter(null, { limit })).rejects.toBeInstanceOf(
+          RangeError
+        );
     });
     test('delivery lookup answers only for the recorded source and delivery', async () => {
       const input = acceptance();

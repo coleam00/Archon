@@ -1,10 +1,16 @@
 // @archon-test-isolated
-import { expect, test } from 'bun:test';
+import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
-import { describeWorkflowStoreConformance } from '@archon/workflows/store-conformance';
+import {
+  describeWorkflowStoreConformance,
+  resourceStartFixtures,
+  CONFORMANCE_CODEBASE_ID,
+  CONFORMANCE_CONVERSATION_ID,
+} from '@archon/workflows/store-conformance';
+import type { QueryResult } from './adapters/types';
 import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
@@ -81,3 +87,70 @@ test.each(['nested-workflow', null])(
     }
   }
 );
+
+test('admission pages do not advance beyond the head captured before a concurrent commit', async () => {
+  const harness = await makeHarness();
+  const { db, store } = harness;
+  try {
+    const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    await store.admitResourceStart(start());
+    const dropped = start('skip');
+    const receiptId = crypto.randomUUID();
+    await store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: 'source',
+        deliveryId: 'delivery',
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          resource: dropped.resource,
+          capacity: 1,
+          hostId: 'host',
+          overlap: 'skip',
+          bindingId: 'binding',
+          bindingRevision: null,
+          runAsUserId: 'operator',
+          launch: {
+            cwd: '/conformance',
+            workflowName: 'test',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+      ],
+    });
+    let inserted = false;
+    const query = db.query.bind(db);
+    const reads = spyOn(db, 'query').mockImplementation(
+      async <T>(sql: string, params?: unknown[]): Promise<QueryResult<T>> => {
+        const result = await query<T>(sql, params);
+        if (!inserted && sql.includes('MAX(queue_position)')) {
+          inserted = true;
+          await store.admitResourceStart({
+            ...dropped,
+            receipt: { receiptId, bindingId: 'binding' },
+          });
+        }
+        return result;
+      }
+    );
+    try {
+      const first = await store.readAdmissionNoticesAfter(null, { limit: 1 });
+      expect(inserted).toBe(true);
+      expect(first.notices).toEqual([]);
+      expect(first.caughtUp).toBe(true);
+      const second = await store.readAdmissionNoticesAfter(first.next, { limit: 1 });
+      expect(second.notices.map(row => row.facts.requestId)).toEqual([dropped.launch.run.id]);
+    } finally {
+      reads.mockRestore();
+    }
+  } finally {
+    await harness.close();
+  }
+});

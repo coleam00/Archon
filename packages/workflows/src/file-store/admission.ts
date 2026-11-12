@@ -1,3 +1,4 @@
+import { createFileAdmissionNoticeReader } from './admission-notices';
 import {
   queuedRequestSchema,
   requestSchema,
@@ -176,5 +177,6 @@ export function createFileAdmissionStore(
         return row.launch;
       }),
     ...createReceiptOperations(root, write, query),
+    ...createFileAdmissionNoticeReader(root),
   };
 }

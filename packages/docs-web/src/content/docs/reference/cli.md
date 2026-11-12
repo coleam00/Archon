@@ -1199,11 +1199,15 @@ happened to work: a run that completed, was cancelled or resumed, a usage-limit 
 opening or closing, and each [`workflow notice`](#workflow-notice) a run emits. It leaves
 out `ready` and `bookmark`. It cannot be combined with `--protocol`.
 
-**`--notices --since <7d|24h|2w|ISO>`**, without `--watch`, lists the notices runs emitted
+**`--notices --since <7d|24h|2w|ISO>`**, without `--watch`, lists author-emitted notices and dropped explicit-start notices
 in the window, oldest first, one line each: time, text, labels. Scope and
 `--label` apply as for the list. `--count-by project|label:<key>` counts them instead.
 `--json` prints `{ ok, action: "attention", scope, since, notices }`. A run id, `--sort`
-and `--count-by answerer` are refused.
+and `--count-by answerer` are refused. Dropped starts have `kind=admission-skipped` and
+binding, resource, overlap, blocker kind/ID, delivery and request labels. They use the
+receipt time for `--since`. They keep source-run attribution after completion; runless
+notices belong to the binding project and have null run context. Each skipped request
+contributes at most one notice, separately from the author's 50-notice ceiling.
 
 **`--protocol`**, with `--watch`, writes the full sync protocol, for a program that keeps its
 own copy of the open set: one `attention` line per open

@@ -222,7 +222,13 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 The `overlap` setting controls a request that arrives while the resource is full:
 
-- `skip` records the blocking run and retains no promise to execute later.
+- `skip` records the blocking run or request and retains no promise to execute later.
+  When the receipt has a delivery ID, the dropped start appears in
+  `archon workflow attention --notices --since 24h --json` with `kind=admission-skipped`.
+  It belongs to the requesting run, even after that run ends, or to the binding's project
+  for a runless fire. Replaying a delivery produces no duplicate. Scheduled ticks without
+  delivery IDs produce no notice. Admission notices do not consume the author's
+  50-notice budget; each is bounded by its skipped request.
 - `queue` retains the prepared request in durable FIFO order.
 
 A queued request also blocks newer requests for the same resource, so a new arrival never passes older queued work, except work held back because another run holds its checkout (below). Different resources can run concurrently. Pending and running root runs hold their resource; a run releases it when it completes, fails, or is cancelled.

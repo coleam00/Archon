@@ -1,3 +1,8 @@
+import {
+  admissionNoticeCursor,
+  admissionNoticeFactsSchema,
+  validateAdmissionNoticeLimit,
+} from '@archon/workflows/admission-notice';
 import { holdsWorkflowPath } from '@archon/workflows/workflow-path-lock';
 import {
   validateStartReceiptLimit,
@@ -18,7 +23,11 @@ import {
   type StartReceiptInspection,
   type StartBindingInspection,
 } from '@archon/workflows/resource-start-store';
-import { WorkflowNotResumableError, type IWorkflowStore } from '@archon/workflows/store';
+import {
+  WorkflowEventCursorError,
+  WorkflowNotResumableError,
+  type IWorkflowStore,
+} from '@archon/workflows/store';
 import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   preparedWorkflowLaunchSchema,
@@ -40,6 +49,8 @@ export function createInMemoryResourceStartStore(
 } {
   const requests = new Map<string, ResourceStartRequestInspection>();
   const receipts = new Map<string, StartReceiptInspection>();
+  const positions = new Map<string, { ordinal: number; receipt: ResourceStartIntent['receipt'] }>();
+  const cursor = (ordinal: number) => admissionNoticeCursor(`memory-admission:${String(ordinal)}`);
   const capacities = new Map<string, number>();
   // Holders are implicit: an admitted request whose run is live, unless it gave its slot back.
   const released = new Set<string>();
@@ -130,6 +141,7 @@ export function createInMemoryResourceStartStore(
     if (!blocker) await createRun(launch.run);
     capacities.set(intent.resource, intent.capacity);
     requests.set(request.id, request);
+    positions.set(request.id, { ordinal: positions.size + 1, receipt: intent.receipt });
     return decision(request);
   };
   const binding = (input: {
@@ -175,6 +187,44 @@ export function createInMemoryResourceStartStore(
       if (requests.get(id)?.status !== 'admitted' || released.has(id)) return false;
       released.add(id);
       return true;
+    },
+    getAdmissionNoticeHead: async () => cursor(positions.size),
+    readAdmissionNoticesAfter: async (after, { limit }) => {
+      validateAdmissionNoticeLimit(limit);
+      const match = after === null ? null : /^memory-admission:(0|[1-9][0-9]*)$/.exec(after);
+      const lower = after === null ? 0 : Number(match?.[1]);
+      const upper = positions.size;
+      if (!Number.isSafeInteger(lower) || lower > upper) throw new WorkflowEventCursorError();
+      const rows = [];
+      for (const [id, position] of positions) {
+        if (position.ordinal <= lower || position.ordinal > upper || !position.receipt) continue;
+        const request = requests.get(id);
+        const receipt = receipts.get(position.receipt.receiptId);
+        if (request?.status !== 'skipped' || receipt?.deliveryId == null) continue;
+        rows.push({
+          cursor: cursor(position.ordinal),
+          facts: admissionNoticeFactsSchema.parse({
+            requestId: request.id,
+            receiptId: receipt.id,
+            bindingId: position.receipt.bindingId,
+            resource: request.resource,
+            overlap: request.overlap,
+            blocker: request.blocker,
+            deliveryId: receipt.deliveryId,
+            receivedAt: receipt.receivedAt,
+            sourceActor: receipt.sourceActor,
+            codebaseId: request.launch.run.codebase_id,
+            cwd: request.launch.execution.cwd,
+          }),
+        });
+      }
+      const caughtUp = rows.length <= limit;
+      const notices = rows.slice(0, limit);
+      return {
+        notices: structuredClone(notices),
+        next: caughtUp ? cursor(upper) : notices[notices.length - 1].cursor,
+        caughtUp,
+      };
     },
     admitResourceStart: admit,
     drainResourceStarts: async ({
@@ -306,7 +356,11 @@ export function createInMemoryResourceStartStore(
     ): ReturnType<IResourceStartStore['completeStartBindingPreparation']> => {
       const item = owned(input);
       if (!item?.intent) return null;
-      const result = await admit({ ...item.intent, launch: input.launch });
+      const result = await admit({
+        ...item.intent,
+        launch: input.launch,
+        receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
+      });
       item.status = 'complete';
       item.error = null;
       item.disposition = result;

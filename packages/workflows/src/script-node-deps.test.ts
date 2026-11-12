@@ -107,6 +107,12 @@ function createMockStore(): IWorkflowStore {
     acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
       throw new Error('Unexpected acceptStartReceipt');
     }),
+    getAdmissionNoticeHead: mock<IWorkflowStore['getAdmissionNoticeHead']>(() => {
+      throw new Error('Unexpected getAdmissionNoticeHead');
+    }),
+    readAdmissionNoticesAfter: mock<IWorkflowStore['readAdmissionNoticesAfter']>(() => {
+      throw new Error('Unexpected readAdmissionNoticesAfter');
+    }),
     getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
       throw new Error('Unexpected getStartReceipt');
     }),

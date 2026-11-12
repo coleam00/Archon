@@ -22,6 +22,7 @@
     "./attention-queue": "./src/attention-queue.ts",
     "./attention-watch": "./src/attention-watch.ts",
     "./attention-needs": "./src/attention-needs.ts",
+    "./admission-notice": "./src/admission-notice.ts",
     "./workflow-notice": "./src/workflow-notice.ts",
     "./end-turn-request": "./src/end-turn-request.ts",
     "./run-attention-resolution": "./src/run-attention-resolution.ts",
