@@ -177,7 +177,8 @@ test('a pending pack-settings refusal advances an eligible queue before any exec
   registerBuiltinProviders();
   const { setPlatformPolicies } = await import('../platforms/registry');
   setPlatformPolicies([]);
-  const { makeTestResolvedWorkflow } = await import('@archon/workflows/test-utils');
+  const { makeTestWorkflow } = await import('@archon/workflows/test-utils');
+  const { resolveWorkflow } = await import('@archon/workflows/graph-plan');
   const { HeadlessPlatform } = await import('./headless-platform');
   const root = roots(await mkdtemp(join(tmpdir(), 'preclaim-release-')));
   const host = await createFileWorkflowHost(root);
@@ -218,14 +219,14 @@ test('a pending pack-settings refusal advances an eligible queue before any exec
         platform: new HeadlessPlatform(),
         conversationId: 'test',
         cwd: root,
-        workflow: {
-          ...makeTestResolvedWorkflow({ name: 'refused', nodes: [] }),
+        workflow: resolveWorkflow({
+          ...makeTestWorkflow({ name: 'refused', nodes: [] }),
           pack: {
             key: 'required',
             source: 'project',
             settings: { required_setting: { type: 'string', required: true } },
           },
-        },
+        }),
         userMessage: '',
         options: {
           preCreatedRun: run,
