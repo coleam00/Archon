@@ -524,6 +524,27 @@ describe('review threads and issue bodies', () => {
     expect(JSON.stringify(result.audit)).toContain(contentDigest('private thread body'));
   });
 
+  test('a thread and each comment say when they were created, so a late comment is visible', async () => {
+    const result = await dispatch({ operationId: 'threads', op: 'pr.threads', ref });
+    if (!result.response.ok || result.response.result.op !== 'pr.threads')
+      throw new Error(JSON.stringify(result.response));
+    const [thread] = result.response.result.value.threads;
+    expect(thread).toMatchObject({ createdAt: '2026-11-11T09:00:00Z', commit: 'a'.repeat(40) });
+    const reviewedAt = Date.parse('2026-11-11T10:00:00Z');
+    expect(
+      thread?.comments.filter(comment => Date.parse(comment.createdAt) > reviewedAt).map(c => c.id)
+    ).toEqual(['c2']);
+    expect(thread?.comments.map(comment => comment.commit)).toEqual(['a'.repeat(40), null]);
+  });
+
+  test('a thread comment without a creation time is an invalid response', async () => {
+    const result = await dispatch(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      'untimed-comment'
+    );
+    expect(result.response).toMatchObject({ ok: false, error: { kind: 'invalid_response' } });
+  });
+
   test.each([reply, resolve, editIssue])(
     'an applied $op that answers the request is accepted',
     async request => {

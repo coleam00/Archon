@@ -354,11 +354,30 @@ else {
           threads: [
             {
               id: 'thread-1',
+              createdAt: '2026-11-11T09:00:00Z',
+              commit: 'a'.repeat(40),
               resolved: false,
               outdated: false,
               path: 'src/a.ts',
               line: 3,
-              comments: [{ id: 'c1', author: null, body: 'private thread body', url: pr.url }],
+              comments: [
+                {
+                  id: 'c1',
+                  author: null,
+                  createdAt: '2026-11-11T09:00:00Z',
+                  commit: 'a'.repeat(40),
+                  body: 'private thread body',
+                  url: pr.url,
+                },
+                {
+                  id: 'c2',
+                  author: null,
+                  createdAt: mode === 'untimed-comment' ? undefined : '2026-11-11T13:00:00+02:00',
+                  commit: null,
+                  body: 'a later reply',
+                  url: pr.url,
+                },
+              ],
             },
           ],
         },

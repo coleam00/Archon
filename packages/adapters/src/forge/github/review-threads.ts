@@ -22,6 +22,8 @@ const graphqlActorSchema = z
 const threadCommentNodeSchema = z.object({
   id: z.string().min(1),
   author: graphqlActorSchema,
+  createdAt: z.string(),
+  originalCommit: z.object({ oid: z.string().min(1) }).nullable(),
   body: z.string(),
   url: z.url(),
 });
@@ -38,7 +40,7 @@ const threadNodeSchema = z.object({
   line: z.number().int().nullable(),
   comments: commentConnectionSchema,
 });
-const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{login ... on User{databaseId} ... on Bot{databaseId}} body url}`;
+const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{login ... on User{databaseId} ... on Bot{databaseId}} createdAt originalCommit{oid} body url}`;
 
 function threadActor(host: string, author: z.infer<typeof graphqlActorSchema>): SourceActor | null {
   return author
@@ -140,8 +142,16 @@ export async function handleGithubPrThreads(
             )),
           ]
         : node.comments.nodes;
+      const opening = comments[0];
+      if (!opening)
+        return failure(request.operationId, {
+          kind: 'invalid_response',
+          message: `GitHub returned review thread ${node.id} without its opening comment`,
+        });
       threads.push({
         id: node.id,
+        createdAt: opening.createdAt,
+        commit: opening.originalCommit?.oid ?? null,
         resolved: node.isResolved,
         outdated: node.isOutdated,
         path: node.path,
@@ -149,6 +159,8 @@ export async function handleGithubPrThreads(
         comments: comments.map(comment => ({
           id: comment.id,
           author: threadActor(request.ref.repo.host, comment.author),
+          createdAt: comment.createdAt,
+          commit: comment.originalCommit?.oid ?? null,
           body: comment.body,
           url: comment.url,
         })),

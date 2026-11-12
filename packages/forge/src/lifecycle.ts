@@ -251,14 +251,20 @@ export const prThreadsRequestSchema = requestBase.extend({
   op: z.literal('pr.threads'),
   ref: prRefSchema,
 });
+/** `commit` is the commit the comment was made on, null when the forge does not record one. */
 export const reviewThreadCommentSchema = z.object({
   id: text,
   author: sourceActorSchema.nullable(),
+  createdAt: z.iso.datetime({ offset: true }),
+  commit: gitObjectIdSchema.nullable(),
   body: z.string(),
   url: z.url(),
 });
+/** A thread's `createdAt` and `commit` are those of the comment that opened it. */
 export const reviewThreadSchema = z.object({
   id: text,
+  createdAt: z.iso.datetime({ offset: true }),
+  commit: gitObjectIdSchema.nullable(),
   resolved: z.boolean(),
   outdated: z.boolean(),
   path: z.string().nullable(),
