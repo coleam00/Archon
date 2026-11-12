@@ -1,4 +1,7 @@
-import { admitNativeResourceStart } from '@archon/workflows/resource-start-store';
+import {
+  admitNativeResourceStart,
+  readResourceStartAfterFailure,
+} from '@archon/workflows/resource-start-store';
 import { continuationInheritsEstate } from '@archon/workflows/schemas/workflow-run';
 import type { ResolvedRunContinuation } from '../../operations/workflow-continuation';
 import { createLogger } from '@archon/paths';
@@ -273,7 +276,8 @@ async function dispatchBackgroundWorkflowOwned(
       if (
         !executionSubmitted &&
         (!workflow.resource ||
-          (await workflowDeps.store.getResourceStartRequest(preCreatedRun.id))?.status !== 'queued')
+          (await readResourceStartAfterFailure(workflowDeps.store, preCreatedRun.id, error))
+            ?.status !== 'queued')
       )
         await requireTerminalStatusWrite(
           workflowDeps.store.failWorkflowRun(preCreatedRun.id, toError(error).message, {

@@ -675,9 +675,9 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   );
 
-  test.each([false, true])(
-    'resource admission precedes background checkout (worktree=%s) and returns a pending run',
-    async worktree => {
+  test.each([{ worktree: false }, { worktree: true }, { worktree: false, cleanupFails: true }])(
+    'resource admission precedes background checkout and returns a pending run %j',
+    async ({ worktree, cleanupFails }) => {
       const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
       const { admitNativeResourceStart } = await import('@archon/workflows/resource-start-store');
       const root = track(await mkdtemp(join(tmpdir(), 'background-resource-')));
@@ -709,6 +709,11 @@ describe('dispatchBackgroundWorkflow', () => {
         waiting = resolve;
         rejected = reject;
       });
+      let failed!: (message: string) => void;
+      const failure = new Promise<string>(resolve => {
+        failed = resolve;
+      });
+      const faults: Array<{ mockRestore(): void }> = [];
       let submitted!: () => void;
       const execution = new Promise<void>(resolve => {
         submitted = resolve;
@@ -719,8 +724,24 @@ describe('dispatchBackgroundWorkflow', () => {
       });
       const send = platform.sendMessage;
       send.mockImplementation(async (_conversation, message) => {
-        if (message.startsWith('Waiting for resource')) waiting();
-        if (message.includes('could not start:')) rejected(new Error(message));
+        if (message.startsWith('Waiting for resource')) {
+          waiting();
+          if (cleanupFails) {
+            faults.push(
+              spyOn(store, 'withdrawQueuedResourceStart').mockRejectedValue(
+                new Error('withdraw unavailable')
+              ),
+              spyOn(store, 'getResourceStartRequest').mockRejectedValue(
+                new Error('state read unavailable')
+              )
+            );
+            throw new Error('notification unavailable');
+          }
+        }
+        if (message.includes('could not start:')) {
+          if (cleanupFails) failed(message);
+          else rejected(new Error(message));
+        }
       });
       try {
         await dispatchBackgroundWorkflow(
@@ -731,6 +752,29 @@ describe('dispatchBackgroundWorkflow', () => {
           })
         );
         await queued;
+        if (cleanupFails) {
+          const message = await failure;
+          expect(message).toContain(runId);
+          expect(message).toContain('uncertain');
+          expect(message).toContain('notification unavailable');
+          expect(message).toContain('withdraw unavailable');
+          expect(message).toContain('state read unavailable');
+          const logged = mockLogger.error.mock.calls.find(
+            call => call[1] === 'background_resource_launch_failed'
+          );
+          expect(logged).toBeDefined();
+          const details = logged?.[0];
+          if (typeof details !== 'object' || details === null || !('err' in details))
+            throw new Error('Missing launch error');
+          expect(details.err).toBeInstanceOf(AggregateError);
+          for (const fault of faults) fault.mockRestore();
+          expect((await store.getResourceStartRequest(runId))?.status).toBe('queued');
+          expect((await store.getWorkflowRun(runId))?.status).toBe('pending');
+          expect(mockResolve).not.toHaveBeenCalled();
+          expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+          expect(mockCloseRunLiveOwner).toHaveBeenCalled();
+          return;
+        }
         expect((await store.getWorkflowRun(runId))?.status).toBe('pending');
         expect((await store.getWorkflowRun(runId))?.working_path).toBeNull();
         expect((await store.getResourceStartRequest(runId))?.status).toBe('queued');
@@ -747,6 +791,7 @@ describe('dispatchBackgroundWorkflow', () => {
         expect(opts?.preparedSource?.runId).toBe(runId);
         await flushBackgroundExecution();
       } finally {
+        for (const fault of faults) fault.mockRestore();
         send.mockReset();
         factory.mockRestore();
         (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);

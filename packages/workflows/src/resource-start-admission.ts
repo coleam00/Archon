@@ -58,12 +58,41 @@ async function withdrawOrReadAdmission(
   requestId: string,
   error: unknown
 ): Promise<Extract<ResourceStartDisposition, { status: 'admitted' }>> {
-  if (!(await store.withdrawQueuedResourceStart(requestId))) {
-    const request = await store.getResourceStartRequest(requestId);
-    if (request?.status === 'admitted')
-      return { status: 'admitted', requestId: request.id, runId: request.id };
+  try {
+    if (!(await store.withdrawQueuedResourceStart(requestId))) {
+      const request = await store.getResourceStartRequest(requestId);
+      if (request?.status === 'admitted')
+        return { status: 'admitted', requestId: request.id, runId: request.id };
+    }
+  } catch (cleanupError) {
+    throw uncertainResourceStartError(requestId, error, cleanupError);
   }
   throw error;
+}
+
+export async function readResourceStartAfterFailure(
+  store: IResourceStartStore,
+  requestId: string,
+  error: unknown
+): ReturnType<IResourceStartStore['getResourceStartRequest']> {
+  try {
+    return await store.getResourceStartRequest(requestId);
+  } catch (cleanupError) {
+    throw uncertainResourceStartError(requestId, error, cleanupError);
+  }
+}
+
+function uncertainResourceStartError(
+  requestId: string,
+  error: unknown,
+  cleanupError: unknown
+): AggregateError {
+  const message = (value: unknown): string =>
+    value instanceof Error ? value.message : String(value);
+  return new AggregateError(
+    [error, cleanupError],
+    `Resource start '${requestId}' state is uncertain after cleanup failed. Original failure: ${message(error)}. Cleanup failure: ${message(cleanupError)}. Inspect the retained request before recovery.`
+  );
 }
 
 /** Preserve native execution ownership while the shared store arbitrates the start. */

@@ -1,4 +1,7 @@
-import { admitNativeResourceStart } from './resource-start-admission';
+import {
+  admitNativeResourceStart,
+  readResourceStartAfterFailure,
+} from './resource-start-admission';
 import { ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { existsSync } from 'fs';
@@ -275,7 +278,7 @@ async function startResourceChild(
     if (
       childRun &&
       !submitted &&
-      (await deps.store.getResourceStartRequest(childRun.id))?.status !== 'queued'
+      (await readResourceStartAfterFailure(deps.store, childRun.id, error))?.status !== 'queued'
     ) {
       await requireTerminalStatusWrite(
         deps.store.failWorkflowRun(childRun.id, (error as Error).message, {

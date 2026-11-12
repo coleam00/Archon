@@ -113,6 +113,59 @@ export function describeNativeAdmissionConformance(getHarness: () => WorkflowSto
         );
       }
     );
+    test.each(['withdraw', 'admission-read'] as const)(
+      'native waiter preserves uncertain state and both errors when %s cleanup fails',
+      async site => {
+        const holder = start();
+        await store.admitResourceStart(holder);
+        const native = start();
+        await store.createWorkflowRun(native.launch.run);
+        const original = new Error('notification unavailable');
+        const cleanup = new Error('cleanup unavailable');
+        const withdraw = spyOn(store, 'withdrawQueuedResourceStart');
+        const read = spyOn(store, 'getResourceStartRequest');
+        if (site === 'withdraw') withdraw.mockRejectedValueOnce(cleanup);
+        else read.mockRejectedValueOnce(cleanup);
+        try {
+          let caught: unknown;
+          try {
+            await awaitResourceStartAdmission(
+              store,
+              { name: 'resource', capacity: 1 },
+              native.launch,
+              {
+                onWaiting: async () => {
+                  if (site === 'admission-read') {
+                    await store.cancelWorkflowRun(holder.launch.run.id);
+                    await store.drainResourceStarts({
+                      resource: 'resource',
+                      hostId: `native:${native.launch.run.id}`,
+                    });
+                  }
+                  throw original;
+                },
+              }
+            );
+          } catch (error) {
+            caught = error;
+          }
+          expect(caught).toBeInstanceOf(AggregateError);
+          if (!(caught instanceof AggregateError)) throw caught;
+          expect(caught.errors).toEqual([original, cleanup]);
+          expect(caught.message).toContain(native.launch.run.id);
+          expect(caught.message).toContain('uncertain');
+          expect(caught.message).toContain(original.message);
+          expect(caught.message).toContain(cleanup.message);
+        } finally {
+          withdraw.mockRestore();
+          read.mockRestore();
+        }
+        expect((await store.getResourceStartRequest(native.launch.run.id))?.status).toBe(
+          site === 'withdraw' ? 'queued' : 'admitted'
+        );
+        expect((await store.getWorkflowRun(native.launch.run.id))?.status).toBe('pending');
+      }
+    );
     test('native pending starts attach once, retain provenance and claim only after admission', async () => {
       const holder = start();
       await store.admitResourceStart(holder);

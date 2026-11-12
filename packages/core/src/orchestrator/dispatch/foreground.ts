@@ -1,5 +1,8 @@
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
-import { admitNativeResourceStart } from '@archon/workflows/resource-start-store';
+import {
+  admitNativeResourceStart,
+  readResourceStartAfterFailure,
+} from '@archon/workflows/resource-start-store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -159,7 +162,7 @@ async function canFailSetupRun(
 ): Promise<boolean> {
   if (error instanceof TerminalStatusWriteError) return false;
   if (!workflow.resource) return true;
-  return (await deps.store.getResourceStartRequest(run.id))?.status !== 'queued';
+  return (await readResourceStartAfterFailure(deps.store, run.id, error))?.status !== 'queued';
 }
 
 async function admitForegroundResource(

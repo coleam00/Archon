@@ -1,4 +1,7 @@
-import { admitNativeResourceStart } from '@archon/workflows/resource-start-store';
+import {
+  admitNativeResourceStart,
+  readResourceStartAfterFailure,
+} from '@archon/workflows/resource-start-store';
 import { retainSetupRunSource } from '@archon/core/workflows/worktree-setup';
 import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { registerWorkflowPreparationTermination } from '../utils/owned-run-termination';
@@ -58,7 +61,8 @@ export async function admitForegroundResource(
     lease.setupRun = run;
     termination.signal.throwIfAborted();
   } catch (error) {
-    const retained = await host.deps.store.getResourceStartRequest(run.id);
+    lease.setupRun = undefined;
+    const retained = await readResourceStartAfterFailure(host.deps.store, run.id, error);
     lease.setupRun = retained?.status === 'queued' ? undefined : run;
     throw error;
   } finally {
