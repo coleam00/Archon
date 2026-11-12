@@ -705,7 +705,7 @@ async function checkFixture(
     const execCode = parsed.execCode;
     const inputs = resolveTopLevelInputs(ws.workflow, parsed.declaration.inputs);
     const config = await resolveFixtureConfig(options, execCode);
-    const redaction = fixtureTraceRedactor(config);
+    const redaction = fixtureTraceRedactor(config, inputs);
     const run = (workspace: string): Promise<DryRunResult> =>
       dryRunWorkflow({
         workflow: ws.workflow,

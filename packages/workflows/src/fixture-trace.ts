@@ -6,20 +6,25 @@ import type { WorkflowConfig } from './deps';
 import type { DryRunTraceEntry } from './dry-run';
 import { shellQuote } from './dag/shell-quote';
 
-export function fixtureTraceRedactor(config: WorkflowConfig | undefined) {
-  const credentials = new Set(
-    collectCredentialValues(
+export function fixtureTraceRedactor(
+  config: WorkflowConfig | undefined,
+  inputs?: Record<string, string>
+) {
+  const credentials = new Set([
+    ...collectCredentialValues(
       { ...process.env, ...config?.envVars },
       config?.protectedEnvKeys,
       config?.protectedCredentialValues
-    )
-  );
+    ),
+    ...collectCredentialValues(inputs ?? {}),
+  ]);
   const redact = (text: string): string => {
-    // A credential can sit inside a larger quoted output, without its own outer quotes.
-    const representations = [...credentials].flatMap(value => [
-      value,
-      shellQuote(value).slice(1, -1),
-    ]);
+    // Canonical JSON can be shell-interpolated, then JSON-quoted again in diagnostics.
+    const jsonInterior = (value: string): string => JSON.stringify(value).slice(1, -1);
+    const representations = [...credentials]
+      .flatMap(value => [value, jsonInterior(value)])
+      .flatMap(value => [value, shellQuote(value).slice(1, -1)])
+      .flatMap(value => [value, jsonInterior(value)]);
     return redactCredentialValues(
       text,
       representations.sort((a, b) => b.length - a.length)

@@ -464,6 +464,108 @@ describe('runFixtures', () => {
     expect(JSON.parse(JSON.stringify(report)).results[0].trace).toEqual(result.trace);
   });
 
+  it('redacts credential inputs in stub-only prompt traces', async () => {
+    const secret = 'synthetic-input-secret';
+    const { cwd } = writeTempProject({
+      workflowYaml: [
+        'name: test-wf',
+        'description: prompt inputs',
+        'inputs:',
+        '  token:',
+        '    required: true',
+        'nodes:',
+        '  - id: answer',
+        '    prompt: $INPUTS.token',
+      ].join('\n'),
+      body: [
+        'fixture:',
+        '  expect: completed',
+        '  inputs:',
+        `    token: ${secret}`,
+        '  resolved-text-contains:',
+        '    answer: missing',
+        'answer: done',
+      ].join('\n'),
+    });
+    const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+    expect(report.results[0].outcome).toBe('completed');
+    expect(report.results[0].pass).toBe(false);
+    expect(report.results[0].trace?.[0].resolvedText).toBe('[REDACTED]');
+    for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+      expect(output).not.toContain(secret);
+    }
+  });
+
+  it.each(['parsed-string', 'object', 'array'] as const)(
+    'redacts %s structured stubs and shell references in and outside loops',
+    async shape => {
+      const secret = `synthetic-'"\\\n-stub-secret`;
+      const value = shape === 'array' ? [secret] : { nested: { token: secret } };
+      const stub = shape === 'parsed-string' ? JSON.stringify(value) : value;
+      const references = (source: string): string =>
+        `$${source}.output${shape === 'array' ? '' : ` $${source}.output.nested`}`;
+      const nodes = (source: string, consumer: string, previous = false): string[] => [
+        `  - id: ${source}`,
+        '    prompt: produce',
+        `    output_format: ${JSON.stringify({ type: shape === 'array' ? 'array' : 'object' })}`,
+        `  - id: ${consumer}`,
+        `    depends_on: [${source}]`,
+        `    bash: printf '%s' ${references(source)}${previous ? ` ${references(`LOOP_PREV.${source}`)}` : ''}`,
+      ];
+      const { cwd } = writeTempProject({
+        workflowYaml: [
+          'name: test-wf',
+          'description: structured stub credentials',
+          'nodes:',
+          ...nodes('source', 'consumer'),
+          '  - id: rounds',
+          '    loop_group:',
+          '      until: DONE',
+          '      max_iterations: 2',
+          '      nodes:',
+          ...nodes('inner_source', 'inner_consumer', true).map(line => `      ${line}`),
+        ].join('\n'),
+        body: [
+          'fixture:',
+          '  expect: completed',
+          '  resolved-text-contains:',
+          '    consumer: missing',
+          `source: ${JSON.stringify(stub)}`,
+          'consumer: done',
+          `inner_source: ${JSON.stringify(stub)}`,
+          'inner_consumer: done',
+        ].join('\n'),
+      });
+      const previous = process.env.ARCHON_FIXTURE_STUB_SECRET;
+      process.env.ARCHON_FIXTURE_STUB_SECRET = secret;
+      try {
+        const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
+        const result = report.results[0];
+        expect(result.outcome).toBe('failed');
+        expect(result.pass).toBe(false);
+        const consumers = result.trace?.filter(entry =>
+          ['consumer', 'inner_consumer'].includes(entry.nodeId)
+        );
+        expect(consumers).toHaveLength(3);
+        expect(
+          consumers
+            ?.find(entry => entry.nodeId === 'inner_consumer' && entry.iteration === 2)
+            ?.resolvedText?.split('[REDACTED]').length
+        ).toBe(shape === 'array' ? 3 : 5);
+        for (const entry of consumers ?? []) {
+          expect(entry.resolvedText).toContain('[REDACTED]');
+          expect(entry.resolvedText).not.toContain('stub-secret');
+        }
+        for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+          expect(output).not.toContain('stub-secret');
+        }
+      } finally {
+        if (previous === undefined) delete process.env.ARCHON_FIXTURE_STUB_SECRET;
+        else process.env.ARCHON_FIXTURE_STUB_SECRET = previous;
+      }
+    }
+  );
+
   it('keeps a passing fixture free of the trace', async () => {
     const { cwd } = writeTempProject({ body: STUB_FIXTURE });
     const report = await runFixtures({ workflows: workflowsOnDisk(cwd, ['test-wf']), cwd });
@@ -2172,5 +2274,143 @@ describe('runFixtures exec-code isolation (#2851)', () => {
     );
     expect(report.results[0].failureReason).not.toContain('not inside a git repository');
     expect(existsSync(join(cwd, 'leak.txt'))).toBe(false);
+  });
+
+  describe('JSON credential publication', () => {
+    it.each([
+      'synthetic-"quote-credential',
+      'synthetic-\\backslash-credential',
+      'synthetic-\nnewline-credential',
+      'synthetic-\ttab-credential',
+    ])('protects JSON-escaped assertion diagnostic: %j', async secret => {
+      const { cwd } = writeTempProject({
+        workflowYaml: [
+          'name: test-wf',
+          'description: JSON diagnostic probe',
+          'nodes:',
+          '  - id: code',
+          '    bash: printf "%s" "$ACCOUNT"',
+        ].join('\n'),
+        body: [
+          'fixture:',
+          '  expect: completed',
+          '  resolved-text-contains:',
+          '    code: ' + JSON.stringify(secret + ' missing'),
+          'exec-code: true',
+        ].join('\n'),
+      });
+      callerFrom(trackedOnlyRepo, cwd);
+      const report = await runFixtures({
+        workflows: workflowsOnDisk(cwd, ['test-wf']),
+        cwd,
+        resolveExecConfig: async () => ({
+          assistant: undefined,
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+          envVars: { ACCOUNT: secret },
+          protectedEnvKeys: ['ACCOUNT'],
+        }),
+      });
+      expect(report.results[0].outcome).toBe('completed');
+      expect(report.results[0].pass).toBe(false);
+      expect(report.results[0].trace?.[0].output).toBe('[REDACTED]');
+      const escaped = JSON.stringify(secret).slice(1, -1);
+      expect(formatFixtureReport(report)).not.toContain(escaped);
+      expect(report.results[0].failureReason).not.toContain(escaped);
+      expect(JSON.stringify(report)).not.toContain(JSON.stringify(escaped).slice(1, -1));
+    });
+
+    it('protects JSON-escaped credentials in structured failure previews', async () => {
+      const secret = 'synthetic-"quote-credential';
+      const { cwd } = writeTempProject({
+        workflowYaml: [
+          'name: test-wf',
+          'description: canonical output probe',
+          'nodes:',
+          '  - id: code',
+          '    runtime: bun',
+          '    script: |',
+          '      process.stdout.write(JSON.stringify({ token: process.env.ACCOUNT }));',
+          '    output_format:',
+          '      type: object',
+          '      properties:',
+          '        token:',
+          '          type: number',
+          '      required: [token]',
+          '      additionalProperties: false',
+          '  - id: consumer',
+          '    depends_on: [code]',
+          '    bash: exit 7',
+        ].join('\n'),
+        body: 'fixture:\n  expect: completed\nexec-code: true',
+      });
+      callerFrom(trackedOnlyRepo, cwd);
+      const report = await runFixtures({
+        workflows: workflowsOnDisk(cwd, ['test-wf']),
+        cwd,
+        resolveExecConfig: async () => ({
+          assistant: undefined,
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+          envVars: { ACCOUNT: secret },
+          protectedEnvKeys: ['ACCOUNT'],
+        }),
+      });
+      expect(report.results[0].pass).toBe(false);
+      const output = report.results[0].nodeFailures?.find(entry => entry.nodeId === 'code')?.reason;
+      expect(output).toContain('stdout began');
+      const twiceEscaped = JSON.stringify(JSON.stringify(secret).slice(1, -1)).slice(1, -1);
+      expect(output).not.toContain(twiceEscaped);
+      expect(output).toContain('[REDACTED]');
+      for (const published of [formatFixtureReport(report), JSON.stringify(report)]) {
+        expect(published).not.toContain('quote-credential');
+      }
+    });
+    it('protects JSON-escaped credentials in canonical structured stdout', async () => {
+      const secret = 'synthetic-"quote-credential';
+      const { cwd } = writeTempProject({
+        workflowYaml: [
+          'name: test-wf',
+          'description: canonical output probe',
+          'nodes:',
+          '  - id: code',
+          '    runtime: bun',
+          '    script: |',
+          '      process.stdout.write(JSON.stringify({ token: process.env.ACCOUNT }));',
+          '    output_format:',
+          '      type: object',
+          '      properties:',
+          '        token:',
+          '          type: string',
+          '      required: [token]',
+          '      additionalProperties: false',
+          '  - id: consumer',
+          '    depends_on: [code]',
+          '    bash: |',
+          '      [ $code.output = "$EXPECTED_OUTPUT" ] || exit 9',
+          '      exit 7',
+        ].join('\n'),
+        body: 'fixture:\n  expect: completed\nexec-code: true',
+      });
+      callerFrom(trackedOnlyRepo, cwd);
+      const report = await runFixtures({
+        workflows: workflowsOnDisk(cwd, ['test-wf']),
+        cwd,
+        resolveExecConfig: async () => ({
+          assistant: undefined,
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+          envVars: { ACCOUNT: secret, EXPECTED_OUTPUT: JSON.stringify({ token: secret }) },
+          protectedEnvKeys: ['ACCOUNT'],
+        }),
+      });
+      expect(report.results[0].pass).toBe(false);
+      expect(report.results[0].nodeFailures?.[0].reason).toContain('[exit 7]');
+      const output = report.results[0].trace?.find(entry => entry.nodeId === 'code')?.output;
+      expect(JSON.parse(output ?? 'null')).toEqual({ token: '[REDACTED]' });
+      for (const published of [formatFixtureReport(report), JSON.stringify(report)]) {
+        expect(published).not.toContain('quote-credential');
+      }
+    });
   });
 });
