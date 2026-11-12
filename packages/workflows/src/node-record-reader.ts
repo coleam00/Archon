@@ -80,6 +80,7 @@ function failedLifecycle(
     ? {
         status: 'failed',
         error: data.error,
+        ...(data.exit_code !== undefined ? { exitCode: data.exit_code } : {}),
         ...(data.retryable === false ? { retryable: false } : {}),
         ...(data.failure_kind !== undefined ? { failureKind: data.failure_kind } : {}),
         ...(data.provider_failure !== undefined ? { providerFailure: data.provider_failure } : {}),

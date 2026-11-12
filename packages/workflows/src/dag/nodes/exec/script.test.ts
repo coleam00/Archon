@@ -3,6 +3,7 @@ import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { chmod, mkdir, writeFile, readFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
+import { recordNodeProcessTrees } from '../../../subprocess';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
@@ -1302,6 +1303,51 @@ describe('executeDagWorkflow -- script nodes', () => {
           event => event.event_type === 'node_skipped' && event.step_name === 'slow-script'
         )
       ).toBe(false);
+    },
+    testTimeout(10000)
+  );
+
+  it(
+    'omits the exit code of a timed-out script that handles SIGTERM and exits with one',
+    async () => {
+      const mockDeps = createMockDeps();
+      const scriptNode: ExecNode = {
+        id: 'slow-script',
+        kind: 'exec',
+        script:
+          'process.on("SIGTERM", () => process.exit(3)); await new Promise(r => setTimeout(r, 30000))',
+        runtime: 'bun',
+        timeout: 500,
+      };
+
+      // The recorder is what a real run installs; it routes the node through the owned
+      // process group, whose rejection keeps the numeric exit status of a timed-out child.
+      const trees = recordNodeProcessTrees();
+      try {
+        await executeDagWorkflow(
+          dagOptions({
+            deps: mockDeps,
+            platform: createMockPlatform(),
+            conversationId: 'conv-timeout-exit',
+            cwd: testDir,
+            workflow: { name: 'script-timeout-exit-test', nodes: [scriptNode] },
+            workflowRun: makeWorkflowRun('script-timeout-exit-run-id', {
+              workflow_name: 'script-timeout-exit-test',
+              conversation_id: 'conv-timeout-exit',
+              user_message: 'timeout test',
+            }),
+          })
+        );
+      } finally {
+        trees.release();
+      }
+
+      const failed = persistedEvents(mockDeps.store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'slow-script'
+      );
+      // The process exited with 3, but the node failed because it ran out of time.
+      expect(failed?.data?.failure_kind).toBe('timeout');
+      expect(failed?.data).not.toHaveProperty('exit_code');
     },
     testTimeout(10000)
   );

@@ -375,6 +375,8 @@ async function recordScriptFailure(
     'dag_node_failed'
   );
 
+  const failureKind = scriptFailureKind(err, contractFailure, isTimeout);
+
   return recordNodeState(
     { store: ctx.deps.store, logDir: ctx.logDir },
     finishNodeExecution(
@@ -382,11 +384,13 @@ async function recordScriptFailure(
       {
         status: 'failed',
         error: errorMsg,
-        exitCode: formatted.exitCode,
-        failureKind: scriptFailureKind(err, contractFailure, isTimeout),
+        // A killed process can still exit with a number (a SIGTERM trap); that status
+        // describes the kill, not a failure of the command.
+        exitCode: failureKind === 'exec_failed' ? formatted.exitCode : undefined,
+        failureKind,
         ...(contractFailure ? { retryable: false as const } : {}),
       },
-      formatted.stdoutTail !== undefined ? { output: { text: formatted.stdoutTail } } : {}
+      formatted.capturedOutput ? { output: formatted.capturedOutput } : {}
     )
   );
 }

@@ -909,8 +909,9 @@ does not load spill files. Human output keeps the short preview. Failed nodes in
 `error` (or `Unknown error` when none was recorded). Failed `bash:` and `script:` nodes
 also include `exitCode` (the numeric process exit code, absent for spawn failures,
 timeouts, and cancellations) and, when the subprocess wrote to stdout before failing,
-the same `output`, `outputTruncated`, and `outputPreview` fields that completed nodes
-carry. A node a resume reset for re-running (`always_run`, or a stale cached success)
+`output`, `outputTruncated`, and `outputPreview`. Unlike a completed node, a failed
+node keeps only the last 2,000 characters of stdout, exactly as written, and
+`outputTruncated: true` means earlier text was dropped. A node a resume reset for re-running (`always_run`, or a stale cached success)
 reads `pending` until its new attempt starts, matching `terminal_record.nodes`.
 Nodes whose provider reported a session include `sessionIds`: the full
 session id of each attempt and loop iteration, in order. Human `--verbose` output prints

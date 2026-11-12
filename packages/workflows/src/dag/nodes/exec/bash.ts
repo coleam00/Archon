@@ -251,6 +251,14 @@ async function recordBashFailure(
     'dag_node_failed'
   );
 
+  const failureKind = contractFailure
+    ? 'output_contract'
+    : err.cancelled
+      ? 'cancelled'
+      : isTimeout
+        ? 'timeout'
+        : 'exec_failed';
+
   return recordNodeState(
     { store: ctx.deps.store, logDir: ctx.logDir },
     finishNodeExecution(
@@ -258,17 +266,13 @@ async function recordBashFailure(
       {
         status: 'failed',
         error: errorMsg,
-        exitCode: formatted.exitCode,
-        failureKind: contractFailure
-          ? 'output_contract'
-          : err.cancelled
-            ? 'cancelled'
-            : isTimeout
-              ? 'timeout'
-              : 'exec_failed',
+        // A killed process can still exit with a number (a SIGTERM trap); that status
+        // describes the kill, not a failure of the command.
+        exitCode: failureKind === 'exec_failed' ? formatted.exitCode : undefined,
+        failureKind,
         ...(contractFailure ? { retryable: false as const } : {}),
       },
-      formatted.stdoutTail !== undefined ? { output: { text: formatted.stdoutTail } } : {}
+      formatted.capturedOutput ? { output: formatted.capturedOutput } : {}
     )
   );
 }

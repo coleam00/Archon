@@ -438,37 +438,27 @@ describe('buildNodeSummaries session ids', () => {
 });
 
 describe('buildNodeSummaries - failed bash/script node structured fields', () => {
-  it('exposes exitCode on a failed node when exit_code is recorded', () => {
-    const summaries = buildNodeSummaries([
+  function failedNode(data: Record<string, unknown>) {
+    return buildNodeSummaries([
       event('f-start', 'node_started', 'check', '2026-11-12T10:00:00.000Z'),
       event('f-failed', 'node_failed', 'check', '2026-11-12T10:00:01.000Z', {
-        error: "Bash node 'check' failed [exit 1]: line1\nline2",
-        exit_code: 1,
+        type: 'bash',
+        error: "Bash node 'check' failed",
+        ...data,
       }),
-    ]);
-    expect(summaries[0]).toMatchObject({ state: 'failed', error: expect.any(String), exitCode: 1 });
+    ])[0];
+  }
+
+  it('exposes exitCode on a failed node when exit_code is recorded', () => {
+    expect(failedNode({ exit_code: 1 })).toMatchObject({ state: 'failed', exitCode: 1 });
   });
 
   it('omits exitCode when exit_code is absent (spawn failure, timeout, cancel)', () => {
-    const summaries = buildNodeSummaries([
-      event('f-start', 'node_started', 'check', '2026-11-12T10:00:00.000Z'),
-      event('f-failed', 'node_failed', 'check', '2026-11-12T10:00:01.000Z', {
-        error: "Bash node 'check' cancelled",
-      }),
-    ]);
-    expect(summaries[0]).not.toHaveProperty('exitCode');
+    expect(failedNode({})).not.toHaveProperty('exitCode');
   });
 
   it('exposes captured stdout on a failed node when node_output is recorded', () => {
-    const summaries = buildNodeSummaries([
-      event('f-start', 'node_started', 'check', '2026-11-12T10:00:00.000Z'),
-      event('f-failed', 'node_failed', 'check', '2026-11-12T10:00:01.000Z', {
-        error: "Bash node 'check' failed [exit 1]: line1",
-        exit_code: 1,
-        node_output: 'line1',
-      }),
-    ]);
-    expect(summaries[0]).toMatchObject({
+    expect(failedNode({ exit_code: 1, node_output: 'line1' })).toMatchObject({
       state: 'failed',
       exitCode: 1,
       output: 'line1',
@@ -477,17 +467,29 @@ describe('buildNodeSummaries - failed bash/script node structured fields', () =>
     });
   });
 
-  it('omits output fields on a failed node when no stdout was captured', () => {
-    const summaries = buildNodeSummaries([
-      event('f-start', 'node_started', 'check', '2026-11-12T10:00:00.000Z'),
-      event('f-failed', 'node_failed', 'check', '2026-11-12T10:00:01.000Z', {
-        error: "Bash node 'check' failed [exit 1]: no output",
-        exit_code: 1,
-      }),
-    ]);
-    expect(summaries[0]).not.toHaveProperty('output');
-    expect(summaries[0]).not.toHaveProperty('outputPreview');
-    expect(summaries[0]).not.toHaveProperty('outputTruncated');
+  it('reports a truncated stdout tail as truncated', () => {
+    expect(
+      failedNode({ exit_code: 1, node_output: 'tail', node_output_truncated: true })
+    ).toMatchObject({ output: 'tail', outputTruncated: true });
+  });
+
+  it('omits output fields when no stdout was captured', () => {
+    // `''` is what config failures and older binaries persist for "no stdout".
+    for (const node of [
+      failedNode({ exit_code: 1 }),
+      failedNode({ exit_code: 1, node_output: '' }),
+    ]) {
+      expect(node).not.toHaveProperty('output');
+      expect(node).not.toHaveProperty('outputPreview');
+      expect(node).not.toHaveProperty('outputTruncated');
+    }
+  });
+
+  it('leaves non-exec failures unchanged, even when they kept partial output', () => {
+    const summary = failedNode({ type: 'agent', node_output: 'partial agent text' });
+    expect(summary).toMatchObject({ state: 'failed' });
+    expect(summary).not.toHaveProperty('output');
+    expect(summary).not.toHaveProperty('exitCode');
   });
 });
 

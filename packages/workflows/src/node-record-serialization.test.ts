@@ -16,7 +16,11 @@ import {
   serializeDeferredNodeUsage,
   serializeNodeTranscript,
 } from './node-record-serialization';
-import { nodeExecutionMetadataSchema, type NodeExecutionRecord } from './schemas/node-execution';
+import {
+  executionLifecycleSchema,
+  nodeExecutionMetadataSchema,
+  type NodeExecutionRecord,
+} from './schemas/node-execution';
 import { NODE_LIFECYCLE_EVENT_TYPES } from './store';
 
 const record = (): NodeExecutionRecord => ({
@@ -98,6 +102,25 @@ describe('node record serializers', () => {
       expect(readNodeRecordEvent(durable)?.metadata?.lifecycle).toEqual(lifecycle);
     }
   );
+
+  it('reads back every field the writer emits for a failed lifecycle', () => {
+    const lifecycle: Extract<NodeExecutionRecord['lifecycle'], { status: 'failed' }> = {
+      status: 'failed',
+      error: 'body failed',
+      exitCode: 2,
+      retryable: false,
+      failureKind: 'exec_failed',
+      providerFailure: { class: 'rate_limited', evidence: 'slow down' },
+    };
+    // A field added to the failed variant but not populated above fails here, not in review.
+    const failedShape = executionLifecycleSchema.options.find(
+      option => option.shape.status.value === 'failed'
+    );
+    expect(Object.keys(lifecycle).sort()).toEqual(Object.keys(failedShape?.shape ?? {}).sort());
+    const durable = serializeNodeStateRecord({ ...record(), lifecycle });
+    const restored = readNodeRecordEvent({ ...durable, data: JSON.stringify(durable.data) });
+    expect(restored?.metadata?.lifecycle).toEqual(lifecycle);
+  });
 
   it('preserves persisted lifecycle selection order', () => {
     expect(NODE_LIFECYCLE_EVENT_TYPES).toEqual([

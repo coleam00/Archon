@@ -1,6 +1,7 @@
 import { formatDuration } from '@archon/paths/duration';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
+  isExecNodeRecord,
   readNodeRecordData,
   readNodeRecordEvent,
   type ReadNodeRecordEvent,
@@ -239,6 +240,21 @@ function nextNodeSummary(
   return record.eventType satisfies never;
 }
 
+/**
+ * What a failed bash or script node adds to its summary: the process's exit code and the
+ * stdout it wrote. Other failures (agent, composite) stay out of scope, and an empty
+ * `node_output` is a failure that never captured stdout — config failures and rows older
+ * binaries wrote persist `''` — so it reads as absent.
+ */
+function execFailureFields(
+  data: ReadNodeRecordEvent['data']
+): Pick<NodeSummary, 'exitCode' | 'output' | 'outputTruncated' | 'outputPreview'> {
+  return {
+    ...(data.exit_code !== undefined ? { exitCode: data.exit_code } : {}),
+    ...(data.node_output ? outputFields(data) : {}),
+  };
+}
+
 function failedNodeSummary(
   nodeId: string,
   record: ReadNodeRecordEvent,
@@ -253,8 +269,7 @@ function failedNodeSummary(
     startedAt: existing?.startedAt,
     durationMs: nodeDurationMs(record, createdAt, startTime),
     error: data.error ?? 'Unknown error',
-    ...(data.exit_code !== undefined ? { exitCode: data.exit_code } : {}),
-    ...outputFields(data),
+    ...(isExecNodeRecord(record) ? execFailureFields(data) : {}),
     ...(data.blocked_on_child_run_id === undefined
       ? {}
       : { blockedOnChildRunId: data.blocked_on_child_run_id }),

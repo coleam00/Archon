@@ -4838,6 +4838,7 @@ export interface components {
                 resetAt?: string;
                 evidence: string;
               };
+              exitCode?: number;
             }
           | {
               /** @enum {string} */
@@ -6390,6 +6391,7 @@ export interface components {
                   resetAt?: string;
                   evidence: string;
                 };
+                exitCode?: number;
               }
             | {
                 /** @enum {string} */
