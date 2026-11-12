@@ -328,6 +328,46 @@ describe('collectPiConfig', () => {
     await expect(collectPiConfig()).rejects.toBeInstanceOf(SetupExit);
   });
 
+  it('still asks before replacing a saved model when another config block fails validation', async () => {
+    // loadGlobalConfig refuses `tiers.bad`; the saved model must still get the question.
+    writeFileSync(
+      join(home, 'config.yaml'),
+      'assistants:\n  pi:\n    model: openai/gpt-4o\ntiers:\n  bad: 3\n'
+    );
+    const warning = spyOn(prompts.log, 'warning').mockImplementation(() => undefined);
+    spies.push(warning);
+    spies.push(spyOn(prompts, 'password').mockResolvedValue(''));
+    const select = answerAll('xai', 'keep', 'piLogin');
+
+    expect(await collectPiConfig()).toEqual({
+      model: 'openai/gpt-4o',
+      apiKeyEnvVar: 'OPENAI_API_KEY',
+      piLogin: true,
+    });
+    expect(select.mock.calls[1]?.[0]).toMatchObject({
+      message: expect.stringContaining('already sets the Pi model to openai/gpt-4o'),
+    });
+    expect(warning).toHaveBeenCalledWith(expect.stringContaining('tiers.bad'));
+  });
+
+  it('skips the credential question when the kept model has no key variable', async () => {
+    saveModel('amazon-bedrock/anthropic.claude-sonnet-4');
+    answerAll('xai', 'keep');
+    const password = spyOn(prompts, 'password').mockResolvedValue('');
+    spies.push(password);
+    const info = spyOn(prompts.log, 'info').mockImplementation(() => undefined);
+    spies.push(info);
+
+    expect(await collectPiConfig()).toEqual({
+      model: 'amazon-bedrock/anthropic.claude-sonnet-4',
+      piLogin: false,
+    });
+    expect(password).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith(
+      expect.stringContaining('Pi has no API key variable for amazon-bedrock')
+    );
+  });
+
   // Answers the backend question with xAI, then the auth question with `auth`.
   // Any further select rejects, so a new question fails the test instead of
   // opening a real prompt.

@@ -275,11 +275,12 @@ async function resolvePiModel(chosen: string, chosenLabel: string): Promise<stri
     const model = (await loadGlobalConfig(true, { readOnly: true })).assistants?.pi?.model;
     saved = typeof model === 'string' ? model.trim() : undefined;
   } catch (error) {
-    // Runs cannot load this file either; the model write reports it again if it cannot parse it.
+    // The loader also refuses blocks unrelated to Pi, and the model write edits the raw YAML
+    // without asking, so read the saved model from the raw YAML to keep asking before replacing it.
     log.warning(
-      `Could not read ${configPath} (${(error as Error).message}), so setup could not check its saved Pi model.`
+      `Could not load ${configPath} (${(error as Error).message}). Setup reads its saved Pi model from the file as written.`
     );
-    return chosen;
+    saved = readRawPiModel(configPath);
   }
   if (!saved || saved === chosen) return chosen;
 
@@ -303,6 +304,23 @@ async function resolvePiModel(chosen: string, chosenLabel: string): Promise<stri
   });
   if (isCancel(choice)) cancelSetup();
   return choice === 'keep' ? saved : chosen;
+}
+
+/**
+ * `assistants.pi.model` read the way `writeHomePiModelConfig` reads it. Undefined when the
+ * file cannot be read or parsed, which is safe because the writer then leaves it alone.
+ */
+function readRawPiModel(configPath: string): string | undefined {
+  let content: string;
+  try {
+    content = readFileSync(configPath, 'utf-8');
+  } catch {
+    return undefined;
+  }
+  const doc = parseDocument(content);
+  if (doc.errors.length > 0) return undefined;
+  const model = doc.getIn(['assistants', 'pi', 'model']);
+  return typeof model === 'string' ? model.trim() : undefined;
 }
 
 /**
