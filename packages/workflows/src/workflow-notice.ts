@@ -1,9 +1,8 @@
 /**
- * A notice: a short message a node of a run emits to say what the run did, for whoever
+ * A notice: a short message about a run, emitted by a node or engine admission, for whoever
  * watches the attention stream. It asks nothing of its reader: it never pauses the run,
  * holds no slot and cannot be answered. Each one is a `workflow_notice` event of its run,
  * so it is durable, ordered with the run's other events and countable by label like an ask.
- * What is worth a notice is the workflow's decision; the engine never reads the labels.
  */
 import { z } from 'zod';
 import {
@@ -94,6 +93,15 @@ export class WorkflowNoticeRefusedError extends Error {
   }
 }
 
+export function assertWorkflowNoticeLimit(runId: string, emittedCount: number): void {
+  const limit = WORKFLOW_NOTICE_LIMITS.perRun;
+  if (emittedCount >= limit)
+    throw new WorkflowNoticeRefusedError(
+      'run_limit',
+      `Run ${runId} has emitted ${String(limit)} notices, the most one run may. A notice says what a run did; details belong in an artifact.`
+    );
+}
+
 /**
  * Record a notice for a running run; `count` is how many the run has emitted with it.
  * Throws `WorkflowNoticeRefusedError` for text or labels outside the bounds, and when the
@@ -115,11 +123,7 @@ export async function emitWorkflowNotice(
   const data = parsed.data;
   const limit = WORKFLOW_NOTICE_LIMITS.perRun;
   const emitted = (await store.listEventsForRuns([runId], ['workflow_notice'])).get(runId) ?? [];
-  if (emitted.length >= limit)
-    throw new WorkflowNoticeRefusedError(
-      'run_limit',
-      `Run ${runId} has emitted ${String(limit)} notices, the most one run may. A notice says what a run did; details belong in an artifact.`
-    );
+  assertWorkflowNoticeLimit(runId, emitted.length);
   const { persisted } = await store.persistWorkflowEventIfRunning({
     workflow_run_id: runId,
     event_type: 'workflow_notice',

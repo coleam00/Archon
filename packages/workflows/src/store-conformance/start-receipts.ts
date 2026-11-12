@@ -1,3 +1,4 @@
+import { WORKFLOW_NOTICE_LIMITS, WorkflowNoticeRefusedError } from '../workflow-notice';
 import { resourceStartFixtures } from '../resource-start-conformance';
 import { SourceReceiptDigestConflictError } from '../resource-start-store';
 import type {
@@ -46,6 +47,128 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       },
       outcome: 'matched' as const,
       bindings: [binding] as [ResourceStartBindingIntent],
+    });
+    const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    async function skipFire(input: SourceReceiptAcceptance) {
+      input.bindings[0] = { ...binding, overlap: 'skip' };
+      await store.acceptStartReceipt(input);
+      const identity = {
+        receiptId: input.receipt.id,
+        bindingId: binding.bindingId,
+        ownerId: 'owner',
+      };
+      expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+      const prepared = launch();
+      const result = await store.completeStartBindingPreparation({ ...identity, launch: prepared });
+      if (result?.status !== 'skipped') throw new Error('Expected skipped admission');
+      expect(await store.getWorkflowRun(prepared.run.id)).toBeNull();
+      return { identity, prepared, result };
+    }
+    test('skipped explicit fires notify their source run, including after it ends', async () => {
+      const holder = start();
+      await store.admitResourceStart(holder);
+      for (const ended of [false, true]) {
+        const source = await store.createWorkflowRun(launch().run);
+        await store.claimPendingWorkflowRun(source.id);
+        if (ended) await store.completeWorkflowRun(source.id, { duration_ms: 1 });
+        const before = await store.getWorkflowRun(source.id);
+        const input = acceptance();
+        input.receipt.deliveryId = crypto.randomUUID();
+        input.receipt.sourceActor = { source: 'archon-run', id: source.id };
+        await skipFire(input);
+        const events =
+          (await store.listEventsForRuns([source.id], ['workflow_notice'])).get(source.id) ?? [];
+        expect(events).toHaveLength(1);
+        expect(events[0]?.data).toMatchObject({
+          text: 'Trigger fire dropped, not queued (overlap=skip).',
+          node: null,
+          labels: {
+            binding: 'binding',
+            resource: 'resource',
+            blocker_kind: 'run',
+            blocker: holder.launch.run.id,
+            delivery: input.receipt.deliveryId,
+            overlap: 'skip',
+          },
+        });
+        expect(await store.getWorkflowRun(source.id)).toEqual(before);
+      }
+      const queued = start();
+      await store.admitResourceStart(queued);
+      await store.claimPendingWorkflowRun(holder.launch.run.id);
+      await store.completeWorkflowRun(holder.launch.run.id, { duration_ms: 1 });
+      const source = await store.createWorkflowRun(launch().run);
+      const input = acceptance();
+      input.receipt.deliveryId = crypto.randomUUID();
+      input.receipt.sourceActor = { source: 'archon-run', id: source.id };
+      await skipFire(input);
+      expect(
+        (await store.listEventsForRuns([source.id], ['workflow_notice'])).get(source.id)?.[0]?.data
+      ).toMatchObject({ labels: { blocker_kind: 'request', blocker: queued.launch.run.id } });
+      for (let i = 1; i < WORKFLOW_NOTICE_LIMITS.perRun; i++)
+        await store.persistWorkflowEvent({
+          workflow_run_id: source.id,
+          event_type: 'workflow_notice',
+          data: { text: 'Existing notice', node: null, labels: {} },
+        });
+      const limited = acceptance();
+      limited.receipt.deliveryId = crypto.randomUUID();
+      limited.receipt.sourceActor = input.receipt.sourceActor;
+      limited.bindings[0] = { ...binding, overlap: 'skip' };
+      await store.acceptStartReceipt(limited);
+      const identity = {
+        receiptId: limited.receipt.id,
+        bindingId: binding.bindingId,
+        ownerId: 'owner',
+      };
+      await store.claimStartBindingPreparation(identity);
+      const prepared = launch();
+      await expect(
+        store.completeStartBindingPreparation({ ...identity, launch: prepared })
+      ).rejects.toBeInstanceOf(WorkflowNoticeRefusedError);
+      await expect(
+        store.admitResourceStart({ ...start('skip'), launch: prepared, receipt: identity })
+      ).rejects.toBeInstanceOf(WorkflowNoticeRefusedError);
+      expect(await store.getResourceStartRequest(prepared.run.id)).toBeNull();
+      expect(
+        (await store.listWorkflowNoticeRows()).filter(row => row.runId === source.id)
+      ).toHaveLength(WORKFLOW_NOTICE_LIMITS.perRun);
+      expect((await store.getStartReceipt(limited.receipt.id))?.bindings[0]?.status).toBe(
+        'preparing'
+      );
+    });
+    test('scheduled skips and runless explicit fires produce no notice', async () => {
+      await store.admitResourceStart(start());
+      const source = await store.createWorkflowRun(launch().run);
+      for (const scheduled of [true, false]) {
+        const input = acceptance();
+        input.receipt.deliveryId = scheduled ? null : 'manual';
+        input.receipt.sourceActor = scheduled ? { source: 'archon-run', id: source.id } : null;
+        await skipFire(input);
+      }
+      expect(await store.listWorkflowNoticeRows()).toEqual([]);
+    });
+    test('delivery replay and repeated request admission add no second skipped-fire notice', async () => {
+      await store.admitResourceStart(start());
+      const source = await store.createWorkflowRun(launch().run);
+      const input = acceptance();
+      input.receipt.sourceActor = { source: 'archon-run', id: source.id };
+      const { identity, prepared, result } = await skipFire(input);
+      expect(
+        await store.acceptStartReceipt({
+          ...input,
+          receipt: { ...input.receipt, id: crypto.randomUUID() },
+        })
+      ).toEqual({ receiptId: input.receipt.id, replay: true });
+      expect(
+        await store.completeStartBindingPreparation({ ...identity, launch: prepared })
+      ).toBeNull();
+      expect(
+        await store.admitResourceStart({ ...start('skip'), launch: prepared, receipt: identity })
+      ).toEqual(result);
+      expect(
+        (await store.listEventsForRuns([source.id], ['workflow_notice'])).get(source.id)
+      ).toHaveLength(1);
     });
     test('receipt deduplication compares verified content and preparation has one owner', async () => {
       const store = harness.store,

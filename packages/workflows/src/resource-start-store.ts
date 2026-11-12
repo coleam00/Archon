@@ -1,3 +1,5 @@
+import { requestingRun } from './schemas/resource-start';
+import { workflowNoticeDataSchema, WORKFLOW_NOTICE_LIMITS } from './workflow-notice';
 import { createLogger } from '@archon/paths';
 import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
 import type { z } from 'zod';
@@ -19,6 +21,40 @@ import {
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
 import type { ResumeRefusal, WorkflowResumeCursor } from './store';
+
+export function skippedFireNotice(
+  receipt: Pick<SourceReceiptInput, 'deliveryId' | 'sourceActor'>,
+  binding: Pick<ResourceStartIntent, 'resource' | 'overlap'> & { bindingId: string },
+  disposition: ResourceStartDisposition
+) {
+  const source = requestingRun(receipt.sourceActor);
+  if (receipt.deliveryId === null || source === null || disposition.status !== 'skipped')
+    return null;
+  const label = (value: string): string => {
+    const printable = value.replace(
+      /[\u0000-\u001f\u007f-\u009f]/gu,
+      char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+    );
+    const max = WORKFLOW_NOTICE_LIMITS.labelValueLength;
+    return printable.length > max ? `${printable.slice(0, max - 1)}…` : printable;
+  };
+  return {
+    runId: source.runId,
+    data: workflowNoticeDataSchema.parse({
+      text: 'Trigger fire dropped, not queued (overlap=skip).',
+      node: null,
+      labels: {
+        kind: 'trigger_fire_skipped',
+        binding: label(binding.bindingId),
+        resource: label(binding.resource),
+        overlap: binding.overlap,
+        blocker_kind: disposition.blocker.kind,
+        blocker: label(disposition.blocker.id),
+        delivery: label(receipt.deliveryId),
+      },
+    }),
+  };
+}
 
 export class SourceReceiptDigestConflictError extends Error {}
 

@@ -1,6 +1,7 @@
 import { holdsWorkflowPath } from '@archon/workflows/workflow-path-lock';
 import {
   validateStartReceiptLimit,
+  skippedFireNotice,
   compareStartReceipts,
   capacityWaiters,
   drainableStarts,
@@ -31,7 +32,8 @@ export function createInMemoryResourceStartStore(
   createRun: IWorkflowStore['createWorkflowRun'],
   getRun: IWorkflowStore['getWorkflowRun'],
   listRuns: () => WorkflowRun[],
-  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]>
+  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]>,
+  recordNotice: (notice: NonNullable<ReturnType<typeof skippedFireNotice>>) => Promise<void>
 ): IResourceStartStore & {
   /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
@@ -128,6 +130,16 @@ export function createInMemoryResourceStartStore(
       launch,
     };
     if (!blocker) await createRun(launch.run);
+    if (intent.receipt && request.status === 'skipped') {
+      const receipt = receipts.get(intent.receipt.receiptId);
+      if (!receipt) throw new Error('Resource start receipt missing');
+      const notice = skippedFireNotice(
+        receipt,
+        { ...intent, bindingId: intent.receipt.bindingId },
+        decision(request)
+      );
+      if (notice) await recordNotice(notice);
+    }
     capacities.set(intent.resource, intent.capacity);
     requests.set(request.id, request);
     return decision(request);
@@ -306,7 +318,11 @@ export function createInMemoryResourceStartStore(
     ): ReturnType<IResourceStartStore['completeStartBindingPreparation']> => {
       const item = owned(input);
       if (!item?.intent) return null;
-      const result = await admit({ ...item.intent, launch: input.launch });
+      const result = await admit({
+        ...item.intent,
+        launch: input.launch,
+        receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
+      });
       item.status = 'complete';
       item.error = null;
       item.disposition = result;

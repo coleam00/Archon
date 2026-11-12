@@ -1,3 +1,5 @@
+import { assertWorkflowNoticeLimit } from '../workflow-notice';
+import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   slotMembershipSchema,
   hasReadableSlotMembership,
@@ -28,6 +30,7 @@ import {
 import {
   ResourceSlotCapacityConflictError,
   capacityWaiters,
+  skippedFireNotice,
   heldCheckouts,
   type ReusableCheckout,
   resourceResumeBlocker,
@@ -38,7 +41,7 @@ import {
   compareCodeUnits,
 } from '../resource-start-store';
 import { WorkflowNotResumableError } from '../store';
-import { isRunArchived, listRunSnapshots, readJson, readSnapshot } from './commit';
+import { isRunArchived, listRunSnapshots, readJson, readSnapshot, readRunState } from './commit';
 import { createTransactionView } from './transaction-view';
 
 const log = createLogger('file-store.admission');
@@ -67,6 +70,7 @@ interface BindingIdentity {
 }
 type PreparationOwner = BindingIdentity & { ownerId: string };
 export interface AdmissionTransaction {
+  events: WorkflowEventRow[];
   documents: Record<string, unknown>;
   changedDocuments(): Promise<Record<string, unknown>>;
   read<S extends z.ZodType>(path: string, schema: S): Promise<z.output<S> | null>;
@@ -93,6 +97,7 @@ export function createAdmissionTransaction(
   listReusableCheckouts: () => Promise<readonly ReusableCheckout[]> = async () => []
 ): AdmissionTransaction {
   const documents: Record<string, unknown> = {};
+  const events: WorkflowEventRow[] = [];
   const slots = new Map<string, Slot>();
   const receipts = new Map<string, z.infer<typeof receiptSchema>>();
   async function read<S extends z.ZodType>(path: string, schema: S): Promise<z.output<S> | null> {
@@ -374,7 +379,42 @@ export function createAdmissionTransaction(
     }
     if (!blocker) return admitExisting(row, runs);
     if (row.status === 'queued') resource.queue.push(row.id);
+    await recordSkippedFireNotice(intent, row, runs);
     return disposition(row);
+  }
+  async function recordSkippedFireNotice(
+    intent: ResourceStartIntent,
+    row: Request,
+    runs: Map<string, WorkflowRun>
+  ): Promise<void> {
+    if (row.status !== 'skipped' || !intent.receipt) return;
+    const owner = await receipt(intent.receipt.receiptId);
+    if (!owner) throw new Error('Resource start receipt missing');
+    const notice = skippedFireNotice(
+      owner,
+      { ...intent, bindingId: intent.receipt.bindingId },
+      disposition(row)
+    );
+    if (notice) {
+      const state = await readRunState(root, notice.runId);
+      if (!state) throw new Error(`Run missing: ${notice.runId}`);
+      runs.set(notice.runId, state.run);
+      const history = [
+        ...state.events,
+        ...events.filter(event => event.workflow_run_id === notice.runId),
+      ];
+      assertWorkflowNoticeLimit(
+        notice.runId,
+        history.filter(event => event.event_type === 'workflow_notice').length
+      );
+      const view = createTransactionView(runs, history, async () => null, new Map());
+      await view.persistWorkflowEvent({
+        workflow_run_id: notice.runId,
+        event_type: 'workflow_notice',
+        data: notice.data,
+      });
+      events.push(...history.slice(-1));
+    }
   }
   async function binding(input: BindingIdentity): Promise<Binding | undefined> {
     const row = await receipt(input.receiptId);
@@ -437,6 +477,7 @@ export function createAdmissionTransaction(
     return changed;
   }
   return {
+    events,
     documents,
     changedDocuments,
     read,
