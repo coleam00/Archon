@@ -32,6 +32,7 @@ const slot = (): ResourceSlotOccupancy => ({
   holders: [],
   waiters: [],
   queue: [],
+  runParents: new Map(),
   heldCheckouts: new Map(),
   foreignHeldCheckouts: new Map(),
 });

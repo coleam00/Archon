@@ -212,7 +212,7 @@ export interface ResourceSlotOccupancy {
   /** Checkouts requiring local serialization, including holders not provably foreign. */
   heldCheckouts: ReadonlyMap<string, readonly string[]>;
   foreignHeldCheckouts: ReadonlyMap<string, readonly string[]>;
-  runParents?: ReadonlyMap<string, string>;
+  runParents: ReadonlyMap<string, string>;
   /** Oldest foreign holder whose missing or corrupt launch and absent path hide its checkout. */
   unknownForeignCheckoutHolder?: string;
   reusableCheckouts: readonly ReusableCheckout[];
@@ -228,10 +228,10 @@ function checkoutHolder(
   const checkout = launchCheckout(launch);
   if (checkout === undefined) return undefined;
   const ancestors = new Set<string>();
-  let parent = slot.runParents?.get(launch.run.id);
+  let parent = slot.runParents.get(launch.run.id);
   while (parent && !ancestors.has(parent)) {
     ancestors.add(parent);
-    parent = slot.runParents?.get(parent);
+    parent = slot.runParents.get(parent);
   }
   const firstOther = (ids: readonly string[] | undefined) => ids?.find(id => !ancestors.has(id));
   return (
