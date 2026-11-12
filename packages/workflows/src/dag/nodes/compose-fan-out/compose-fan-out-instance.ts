@@ -348,6 +348,15 @@ async function recordInstanceTerminal(
   return outcome;
 }
 
+function skipOriginOutput(
+  output: NodeOutput | undefined,
+  nodeOutputs: ReadonlyMap<string, NodeOutput>
+): NodeOutput | undefined {
+  return output?.state === 'skipped' && output.cause.kind === 'upstream_skipped'
+    ? nodeOutputs.get(output.cause.origin)
+    : output;
+}
+
 /** Reduce a finished body run to the instance outcome, storing its terminal record. */
 async function settleInstance(
   instance: InstanceRun,
@@ -393,12 +402,13 @@ async function settleInstance(
   // deterministic instance finishes through a sibling's pause and reaches its sink.
   // Surface any remaining incompleteness rather than treating absent output as success.
   const terminal = instanceCtx.nodeOutputs.get(primarySink);
+  const blocked = skipOriginOutput(terminal, instanceCtx.nodeOutputs);
   if (
-    terminal?.state === 'skipped' &&
-    terminal.cause.kind === 'condition_parse_error' &&
-    terminal.cause.boundary !== undefined
+    blocked?.state === 'skipped' &&
+    blocked.cause.kind === 'condition_parse_error' &&
+    blocked.cause.boundary !== undefined
   ) {
-    const error = formatSkipCause(terminal.cause);
+    const error = formatSkipCause(blocked.cause);
     return recordInstanceTerminal(
       instance,
       { status: 'failed', output: '', error, ...instanceUsage },

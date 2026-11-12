@@ -1,3 +1,4 @@
+import { formatIncludeBoundaryId } from '../skip-cause';
 import type { DagNode, SkipCause } from '../schemas';
 import { readNodeRecordEvent } from '../node-record-reader';
 import { finishNodeExecution } from '../node-execution';
@@ -78,7 +79,7 @@ export async function skipNode(
     await safeSendMessage(
       ctx.platform,
       ctx.conversationId,
-      `Include '${decodeURIComponent(cause.boundary.includeId)}' (workflow '${cause.boundary.workflow}'): cannot evaluate when: "${cause.expr}" at node '${ctx.stepNamePrefix + node.id}' — node skipped (fail-closed).`,
+      `Include '${formatIncludeBoundaryId(cause.boundary.includeId)}' (workflow '${cause.boundary.workflow}'): cannot evaluate when: "${cause.expr}" at node '${ctx.stepNamePrefix + node.id}' — node skipped (fail-closed).`,
       { workflowId: ctx.workflowRun.id, nodeName: node.id }
     );
   }

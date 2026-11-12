@@ -494,7 +494,7 @@ export function registerBoundaryReportingTests(
       );
     await run();
     expect(deliveredMessages(platform).filter(m => m.startsWith("Include '"))).toHaveLength(2);
-    expect(deliveredMessages(platform).some(m => m.startsWith("Include 'outer__inner'"))).toBe(
+    expect(deliveredMessages(platform).some(m => m.startsWith(`Include '["outer__inner"]'`))).toBe(
       true
     );
     expect(deliveredMessages(platform).some(m => m.includes('outer%5F%5Finner'))).toBe(false);
@@ -504,7 +504,7 @@ export function registerBoundaryReportingTests(
       cwd: fixture.testDir,
       stubs: { source: 'go' },
     });
-    expect(formatDryRunTrace(dry)).toContain("[include 'outer__inner', workflow 'other-leaf']");
+    expect(formatDryRunTrace(dry)).toContain(`[include '["outer__inner"]', workflow 'other-leaf']`);
     expect(formatDryRunTrace(dry)).not.toContain('outer%5F%5Finner');
     const identities = fixture
       .eventList(deps)
@@ -513,6 +513,56 @@ export function registerBoundaryReportingTests(
     expect(new Set(identities)).toEqual(new Set(['outer%5F%5Finner', 'outer__inner']));
     await run();
     expect(deliveredMessages(platform).filter(m => m.startsWith("Include '"))).toHaveLength(2);
+  });
+
+  it('distinguishes authored dots from nested loop scopes in notifications and dry runs', async () => {
+    const leaf = fixture.buildWf('leaf', [{ id: 'work', bash: 'exit 99' }]);
+    const review = { id: 'review', include: 'leaf', when: "$INPUTS.route == 'run'" };
+    const group = (id: string, nodes: object[]) => ({
+      id,
+      loop_group: { until_bash: 'true', max_iterations: 1, nodes },
+    });
+    const parent = {
+      ...fixture.buildWf('scoped-parent', [
+        group('one.two', [review]),
+        group('one', [group('two', [review])]),
+      ]),
+      inputs: { route: { default: {} } },
+    };
+    const expanded = expandWorkflowIncludes(
+      new Map([
+        ['leaf', leaf],
+        ['scoped-parent', parent],
+      ])
+    );
+    expect(expanded.errors).toEqual([]);
+    const workflow = expanded.workflows.get('scoped-parent')!;
+    const deps = createMockDeps();
+    const platform = createMockPlatform();
+    await executeDagWorkflow(
+      dagOptions({
+        deps,
+        platform,
+        cwd: fixture.testDir,
+        workflow,
+        workflowRun: {
+          ...makeWorkflowRun('scope-display'),
+          metadata: runInputsMetadata({ route: {} }),
+        },
+      })
+    );
+    const messages = deliveredMessages(platform).filter(m => m.startsWith("Include '"));
+    expect(messages).toHaveLength(2);
+    expect(messages.some(m => m.startsWith(`Include '["one.two"].review'`))).toBe(true);
+    expect(messages.some(m => m.startsWith("Include 'one.two.review'"))).toBe(true);
+    const identities = fixture
+      .eventList(deps)
+      .filter(e => e.event_type === 'node_skipped')
+      .map(e => skipCauseSchema.parse(e.data?.cause).boundary?.includeId);
+    expect(new Set(identities)).toEqual(new Set(['one%2Etwo.review', 'one.two.review']));
+    const dry = await dryRunWorkflow({ workflow, userMessage: '', cwd: fixture.testDir });
+    expect(formatDryRunTrace(dry)).toContain(`[include '["one.two"].review', workflow 'leaf']`);
+    expect(formatDryRunTrace(dry)).toContain("[include 'one.two.review', workflow 'leaf']");
   });
 
   it('reports separate includes with identical malformed expressions once each, including entries', async () => {

@@ -57,7 +57,7 @@ describe('buildNodeSummaries', () => {
           cause.kind === 'condition_parse_error'
             ? 'condition evaluation error: $INPUTS.missing'
             : expected[index];
-        const rendered = `${detail} [include 'cycle.review_qa', workflow 'review-block']`;
+        const rendered = `${detail} [include 'cycle.["review_qa"]', workflow 'review-block']`;
         expect(formatSkipCause({ ...cause, boundary })).toBe(rendered);
         printVerboseNodes([
           event(`skip-${index}`, 'node_skipped', 'review__node', '2026-11-12T10:00:00Z', {

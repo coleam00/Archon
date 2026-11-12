@@ -158,13 +158,14 @@ nodes:
     expect(warnings()).toHaveLength(2);
   });
 
-  for (const join of ['all_success', 'all_done'] as const) {
-    it(`settles a boundary evaluation error at the primary sink as failed (${join})`, async () => {
-      await writeBlock(
-        'name: error-leaf\ndescription: leaf\nnodes:\n  - id: work\n    bash: exit 99',
-        'error-leaf'
-      );
-      await writeBlock(`name: compose-blk
+  for (const downstream of [0, 1, 2]) {
+    for (const join of ['all_success', 'all_done'] as const) {
+      it(`settles a boundary evaluation error at the primary sink as failed (${join}, downstream: ${downstream})`, async () => {
+        await writeBlock(
+          'name: error-leaf\ndescription: leaf\nnodes:\n  - id: work\n    bash: exit 99',
+          'error-leaf'
+        );
+        await writeBlock(`name: compose-blk
 description: block
 mutates_checkout: false
 nodes:
@@ -174,46 +175,71 @@ nodes:
     include: error-leaf
     depends_on: [source]
     when: "$source.output.route == 'go'"
-`);
-      const deps = createMockDeps();
-      const platform = createMockPlatform();
-      const options = dagOptions({
-        deps,
-        platform,
-        cwd: testDir,
-        workflowRun: makeWorkflowRun(`sink-boundary-${join}`),
-        workflow: {
-          name: 'sink-boundary',
-          nodes: [
-            {
-              id: 'fan',
-              kind: 'compose_fan_out',
-              include: 'compose-blk',
-              fan_out: { items: '[1]', as: 'item', join, max_parallel: 1 },
-            },
-          ],
-        },
+${downstream === 2 ? '  - id: bridge\n    bash: exit 99\n    depends_on: [review_qa]\n' : ''}
+${
+  downstream > 0
+    ? `  - id: result
+    bash: exit 99
+    depends_on: [${downstream === 2 ? 'bridge' : 'review_qa'}]
+`
+    : ''
+}`);
+        const deps = createMockDeps();
+        const platform = createMockPlatform();
+        const options = dagOptions({
+          deps,
+          platform,
+          cwd: testDir,
+          workflowRun: makeWorkflowRun(`sink-boundary-${join}`),
+          workflow: {
+            name: 'sink-boundary',
+            nodes: [
+              {
+                id: 'fan',
+                kind: 'compose_fan_out',
+                include: 'compose-blk',
+                fan_out: { items: '[1,2]', as: 'item', join, max_parallel: 2 },
+              },
+            ],
+          },
+        });
+        await executeDagWorkflow(options);
+        const events = eventsOf(deps.store);
+        if (downstream) {
+          expect(
+            events.find(
+              e =>
+                e.event_type === 'node_skipped' &&
+                e.step_name.endsWith(`fan__${buildInstanceSnapshots([1])[0].identity}__result`)
+            )?.data.cause
+          ).toMatchObject({
+            kind: 'upstream_skipped',
+            origin: `fan__${buildInstanceSnapshots([1])[0].identity}__review_qa__work`,
+          });
+        }
+        const failures = events.filter(
+          e => e.event_type === 'node_failed' && e.data.type === 'compose_fan_out_instance'
+        );
+        expect(failures).toHaveLength(2);
+        for (const snapshot of buildInstanceSnapshots([1, 2])) {
+          const failure = failures.find(e => e.step_name.endsWith(`__${snapshot.identity}`));
+          expect(failure?.data.error).toContain('condition evaluation error: $');
+          expect(failure?.data.error).toContain("source.output.route == 'go'");
+          expect(failure?.data.error).toContain(`//fan/${snapshot.identity}__["review_qa"]`);
+          expect(failure?.data.error).not.toContain('automatic replay is unsafe');
+        }
+        const fan = events.find(
+          e =>
+            e.step_name === 'fan' &&
+            e.event_type === (join === 'all_done' ? 'node_completed' : 'node_failed')
+        );
+        expect(fan).toBeDefined();
+        expect(JSON.stringify(fan?.data)).toContain('condition evaluation error');
+        const warnings = deliveredMessages(platform).filter(m => m.startsWith("Include '"));
+        expect(warnings).toHaveLength(2);
+        for (const warning of warnings) expect(warning).toContain('review_qa');
       });
-      await executeDagWorkflow(options);
-      const events = eventsOf(deps.store);
-      const failure = events.find(
-        e => e.event_type === 'node_failed' && e.data.type === 'compose_fan_out_instance'
-      );
-      expect(failure?.data.error).toContain('condition evaluation error: $');
-      expect(failure?.data.error).toContain("source.output.route == 'go'");
-      expect(failure?.data.error).toContain('review_qa');
-      expect(failure?.data.error).not.toContain('automatic replay is unsafe');
-      const fan = events.find(
-        e =>
-          e.step_name === 'fan' &&
-          e.event_type === (join === 'all_done' ? 'node_completed' : 'node_failed')
-      );
-      expect(fan).toBeDefined();
-      expect(JSON.stringify(fan?.data)).toContain('condition evaluation error');
-      const warnings = deliveredMessages(platform).filter(m => m.startsWith("Include '"));
-      expect(warnings).toHaveLength(1);
-      expect(warnings[0]).toContain('review_qa');
-    });
+    }
   }
 
   for (const scenario of ['parallel sibling', 'usage read failure', 'usage write failure']) {
