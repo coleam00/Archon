@@ -33,9 +33,15 @@ export function createServerResourceStartHost(
   hostId: string,
   host: WorkflowHost
 ): ServerResourceStartHost {
-  const dispose = subscribeResourceStartReleases(host, async recordedHostId => {
-    if (recordedHostId === hostId) await requestDrain();
-  });
+  const dispose = subscribeResourceStartReleases(
+    host,
+    async (recordedHostId, excludedResources) => {
+      if (recordedHostId !== hostId) return;
+      // A cleanup-constrained release must not merge into an unrestricted scheduler pass.
+      if (excludedResources.length) await drain(excludedResources);
+      else await requestDrain();
+    }
+  );
   const startAdmitted = async (requestId: string): Promise<void> => {
     // Not awaited: a run can take hours and must not hold the drain or a webhook ACK.
     void startAdmittedResourceStart({
@@ -86,14 +92,18 @@ export function createServerResourceStartHost(
   const pass = async (): Promise<void> => {
     do {
       again = false;
-      try {
-        await drainResourceStartHost({ ...host, hostId, startAdmitted });
-      } catch (error) {
-        log.error({ err: error as Error, hostId }, 'resource_start.drain_failed');
-      }
+      await drain();
     } while (again);
     running = undefined;
   };
+
+  async function drain(excludedResources: readonly string[] = []): Promise<void> {
+    try {
+      await drainResourceStartHost({ ...host, hostId, startAdmitted }, excludedResources);
+    } catch (error) {
+      log.error({ err: error as Error, hostId }, 'resource_start.drain_failed');
+    }
+  }
 
   function requestDrain(): Promise<void> {
     if (running) {

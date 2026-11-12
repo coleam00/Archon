@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { generateKeyPairSync } from 'node:crypto';
 import { mkdir, mkdtemp, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';

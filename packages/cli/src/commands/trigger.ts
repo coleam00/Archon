@@ -123,18 +123,20 @@ async function skippedStarts(host: WorkflowHost, receiptId: string) {
   }));
 }
 
+async function receiptSkipDetails(host: WorkflowHost, receiptId: string) {
+  try {
+    return { skippedStarts: await skippedStarts(host, receiptId) };
+  } catch (error) {
+    return { skippedStarts: null, detailError: redactedFailureReasons([error]) };
+  }
+}
+
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
   const receipts = await host.deps.store.listStartReceipts(
     options.limit === undefined ? undefined : Number(options.limit)
   );
   const enriched = await Promise.all(
-    receipts.map(async receipt => {
-      try {
-        return { ...receipt, skippedStarts: await skippedStarts(host, receipt.id) };
-      } catch (error) {
-        return { ...receipt, skippedStarts: null, detailError: redactedFailureReasons([error]) };
-      }
-    })
+    receipts.map(async receipt => ({ ...receipt, ...(await receiptSkipDetails(host, receipt.id)) }))
   );
   await writeJsonLine(enriched);
 }
@@ -336,7 +338,7 @@ async function triggerInspect(host: WorkflowHost, args: string[]): Promise<void>
   if (!('launch' in value)) {
     await writeJsonLine({
       ...value,
-      skippedStarts: await skippedStarts(host, value.id),
+      ...(await receiptSkipDetails(host, value.id)),
       bindings: await Promise.all(
         value.bindings.map(async binding => ({
           ...binding,

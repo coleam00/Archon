@@ -29,12 +29,20 @@ export async function createCliWorkflowHost(executesWorkflow = false): Promise<W
   );
   stopReleaseSubscription = subscribeResourceStartReleases(
     host,
-    async hostId => {
+    async (hostId, excludedResources) => {
       try {
         const { drainHost, spawnAdmitted } = await import('../triggers/resource-start-host');
-        await drainHost(host, hostId, (requestId, id) => spawnAdmitted(host, requestId, id));
+        await drainHost(
+          host,
+          hostId,
+          (requestId, id) => spawnAdmitted(host, requestId, id),
+          excludedResources
+        );
       } catch (err) {
-        createLogger('cli.trigger').error({ err, hostId }, 'resource_start.release_drain_failed');
+        createLogger('cli.trigger').error(
+          { error: redactedFailureReasons([err]), hostId },
+          'resource_start.release_drain_failed'
+        );
         process.stderr.write(
           `Warning: trigger host ${hostId} drain failed: ${redactedFailureReasons([err])}. ` +
             `Retry queued or pending work with archon trigger drain --host ${hostId}; ` +
@@ -44,7 +52,7 @@ export async function createCliWorkflowHost(executesWorkflow = false): Promise<W
     },
     runId => {
       process.stderr.write(
-        `Warning: could not resolve the trigger host for run ${runId}; inspect with archon trigger inspect ${runId}.\n`
+        `Warning: could not resolve the trigger host for run ${runId}; inspect with archon workflow get ${runId}.\n`
       );
     }
   );

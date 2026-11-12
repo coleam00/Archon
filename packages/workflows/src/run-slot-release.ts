@@ -3,12 +3,13 @@ import { createLogger } from '@archon/paths';
 
 // SQL adapters share their connection; file adapters share their canonical root.
 type Source = object | string;
-type Listener = (runIds: readonly string[]) => Promise<void>;
+type Listener = (runIds: readonly string[], deferredRunIds: readonly string[]) => Promise<void>;
 interface Hold {
   closed: boolean;
   count: number;
   pending: boolean;
   unsafe: boolean;
+  deferredRunIds: Set<string>;
 }
 interface CleanupRun {
   store: object;
@@ -51,7 +52,7 @@ export function subscribeRunSlotRelease(store: object, listener: Listener): () =
   listeners.set(source, subscribers);
   return () => {
     subscribers.delete(listener);
-    if (!subscribers.size) listeners.delete(source);
+    if (!subscribers.size && listeners.get(source) === subscribers) listeners.delete(source);
   };
 }
 
@@ -61,12 +62,16 @@ function add(pending: Map<Source, Set<string>>, source: Source, runId: string): 
   pending.set(source, ids);
 }
 
-async function dispatch(source: Source, runIds: readonly string[]): Promise<void> {
+async function dispatch(
+  source: Source,
+  runIds: readonly string[],
+  deferredRunIds: readonly string[] = []
+): Promise<void> {
   // Successor execution must not inherit the predecessor's cleanup scope.
   await scopes.run(undefined, async () => {
     for (const listener of listeners.get(source) ?? []) {
       try {
-        await listener(runIds);
+        await listener(runIds, deferredRunIds);
       } catch (err) {
         createLogger('run-slot-release').error({ err, runIds }, 'run_slot_release.dispatch_failed');
       }
@@ -74,19 +79,24 @@ async function dispatch(source: Source, runIds: readonly string[]): Promise<void
   });
 }
 
-async function deliver(source: Source, runIds: Iterable<string>): Promise<void> {
+async function deliver(
+  source: Source,
+  runIds: Iterable<string>,
+  deferredRunIds: readonly string[] = []
+): Promise<void> {
   const ready: string[] = [];
   for (const id of runIds) {
     const hold = holds.get(source)?.get(id);
-    if (hold) hold.pending = true;
-    else ready.push(id);
+    if (hold) {
+      hold.pending = true;
+      for (const deferredId of deferredRunIds) hold.deferredRunIds.add(deferredId);
+    } else ready.push(id);
   }
-  if (ready.length) await dispatch(source, ready);
+  if (ready.length) await dispatch(source, ready, deferredRunIds);
 }
 
 /** Publish only after a won terminal write or pause-slot release has committed. */
 export async function publishRunSlotRelease(source: Source, runId: string): Promise<void> {
-  if (!listeners.has(source)) return;
   const scope = activeScope(scopes.getStore());
   const hold = holds.get(source)?.get(runId);
   if (hold) {
@@ -150,16 +160,26 @@ export async function withRunSlotReleaseScope<T>(
         for (const id of ids) add(parent.pending, source, id);
       for (const hold of scope.holds) parent.holds.add(hold);
     } else {
-      for (const [source, ids] of scope.pending) await deliver(source, ids);
+      for (const [source, ids] of scope.pending)
+        await deliver(source, ids, [...(scope.deferred.get(source) ?? [])]);
     }
   }
 }
 
 function discardDeferredReleases(scope: Scope, parent: Scope | undefined): void {
   for (const [source, ids] of scope.deferred) {
+    preserveDeferredForHolds(scope, source, ids);
     for (const id of ids) {
       scope.pending.get(source)?.delete(id);
       if (parent) add(parent.deferred, source, id);
+    }
+  }
+}
+
+function preserveDeferredForHolds(scope: Scope, source: Source, ids: Set<string>): void {
+  for (const hold of holds.get(source)?.values() ?? []) {
+    if (scope.holds.has(hold)) {
+      for (const id of ids) hold.deferredRunIds.add(id);
     }
   }
 }
@@ -168,7 +188,13 @@ function discardDeferredReleases(scope: Scope, parent: Scope | undefined): void 
 export function holdRunSlotRelease(store: object, runId: string): () => Promise<void> {
   const source = sourceOf(store);
   const runs = holds.get(source) ?? new Map<string, Hold>();
-  const hold = runs.get(runId) ?? { closed: false, count: 0, pending: false, unsafe: false };
+  const hold = runs.get(runId) ?? {
+    closed: false,
+    count: 0,
+    pending: false,
+    unsafe: false,
+    deferredRunIds: new Set<string>(),
+  };
   hold.count++;
   runs.set(runId, hold);
   holds.set(source, runs);
@@ -187,8 +213,10 @@ export function holdRunSlotRelease(store: object, runId: string): () => Promise<
     }
     // A closing owner may itself still be inside an operation's cleanup scope.
     const scope = activeScope(scopes.getStore());
-    if (scope) add(scope.pending, source, runId);
-    else await dispatch(source, [runId]);
+    if (scope) {
+      add(scope.pending, source, runId);
+      for (const id of hold.deferredRunIds) add(scope.deferred, source, id);
+    } else await dispatch(source, [runId], [...hold.deferredRunIds]);
   };
 }
 
@@ -207,8 +235,9 @@ export async function finishForcedRunSlotCleanup(store: object, runId: string): 
   // Consume only this run's committed releases after its forced cleanup succeeds.
   for (let scope = activeScope(scopes.getStore()); scope; scope = activeScope(scope.parent)) {
     unsafe ||= scope.unsafe || (scope.deferred.get(source)?.has(runId) ?? false);
+    for (const id of scope.deferred.get(source) ?? []) hold.deferredRunIds.add(id);
     pending = (scope.pending.get(source)?.delete(runId) ?? false) || pending;
     if (!scope.pending.get(source)?.size) scope.pending.delete(source);
   }
-  if (pending && !unsafe) await dispatch(source, [runId]);
+  if (pending && !unsafe) await dispatch(source, [runId], [...hold.deferredRunIds]);
 }

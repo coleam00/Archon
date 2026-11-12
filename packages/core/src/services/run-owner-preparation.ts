@@ -23,15 +23,19 @@ export const PREPARATION_HEADER = 'preparing\n';
 export const PREPARATION_TIMEOUT_MS = TERMINATION_GRACE_MS + TERMINATION_CONFIRM_MS;
 
 export async function writeOwnerPreparation(
-  socket: Socket,
+  socket: Pick<Socket, 'write'>,
   preparation: RunOwnerTerminationPreparation
 ): Promise<void> {
   socket.write(PREPARATION_HEADER);
   for (const group of preparation.groups) socket.write(`${JSON.stringify({ group })}\n`);
-  for (const warning of await preparation.ready) {
+  const [warnings, advisories] = await Promise.all([
+    preparation.ready,
+    preparation.advisories ?? [],
+  ]);
+  for (const warning of warnings) {
     socket.write(`${JSON.stringify({ warning })}\n`);
   }
-  for (const advisory of (await preparation.advisories) ?? []) {
+  for (const advisory of advisories) {
     socket.write(`${JSON.stringify({ advisory })}\n`);
   }
   socket.write(TERMINATE_READY);

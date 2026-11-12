@@ -1,4 +1,8 @@
-import { subscribeRunSlotRelease } from '@archon/workflows/run-slot-release';
+import {
+  deferRunSlotRelease,
+  withRunSlotReleaseScope,
+  subscribeRunSlotRelease,
+} from '@archon/workflows/run-slot-release';
 import * as archonPaths from '@archon/paths';
 import { isRunOwnerAnswering } from '@archon/core/services/run-live-owner';
 import { resumeWorkflowRunFromServer } from './workflow-resume-service';
@@ -1121,6 +1125,49 @@ describe('owner-driven server drains', () => {
     );
   });
   afterEach(() => bundledRoot.mockRestore());
+
+  test('a safe batch release does not drain an unsafe sibling resource on the configured host', async () => {
+    const { deliver, host, engine } = await fixture(false);
+    await deliver('unsafe', 'queue');
+    const unsafeId = await admitWithoutStarting();
+    const store = host.workflowHost.deps.store;
+    const unsafe = await store.getResourceStartRequest(unsafeId);
+    if (!unsafe) throw new Error('missing admission');
+    const safeId = randomUUID();
+    const successorId = randomUUID();
+    await store.admitResourceStart({
+      resource: 'independent',
+      capacity: 1,
+      hostId: HOST_ID,
+      overlap: 'queue',
+      launch: {
+        ...unsafe.launch,
+        run: { ...unsafe.launch.run, id: safeId },
+        execution: { ...unsafe.launch.execution, cwd: join(root, 'safe') },
+      },
+    });
+    expect(
+      (
+        await store.admitResourceStart({
+          resource: unsafe.resource,
+          capacity: 1,
+          hostId: HOST_ID,
+          overlap: 'queue',
+          launch: { ...unsafe.launch, run: { ...unsafe.launch.run, id: successorId } },
+        })
+      ).status
+    ).toBe('queued');
+    await withRunSlotReleaseScope(async () => {
+      await store.cancelWorkflowRun(unsafeId);
+      await store.cancelWorkflowRun(safeId);
+      await withRunSlotReleaseScope(async () => deferRunSlotRelease(), {
+        store,
+        runId: unsafeId,
+      });
+    });
+    expect((await store.getResourceStartRequest(successorId))?.status).toBe('queued');
+    expect(engine.submitted).toEqual([]);
+  });
 
   test.each(['completed', 'failed', 'paused', 'cancelled', 'in-flight'] as const)(
     '%s execution advances eligible work without scheduler ticks',

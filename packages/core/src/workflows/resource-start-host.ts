@@ -399,7 +399,10 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
  * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run concurrently with other hosts and processes: preparation and
  * admission are claimed atomically by the store.
  */
-export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
+export async function drainResourceStartHost(
+  host: ResourceStartHost,
+  excludedResources: readonly string[] = []
+): Promise<void> {
   const failures: ResourceStartDrainFailure[] = [];
   const start = async (requestId: string, receiptId?: string): Promise<void> => {
     try {
@@ -414,7 +417,7 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
       failures.push({ error: binding.error });
       continue;
     }
-    if (!binding.intent) continue;
+    if (!binding.intent || excludedResources.includes(binding.intent.resource)) continue;
     const identity = {
       receiptId: binding.receiptId,
       bindingId: binding.bindingId,
@@ -460,7 +463,10 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
       }
     }
   };
-  for (const resource of queuedDrainResources(queued, failures)) await drain(resource);
+  for (const resource of queuedDrainResources(queued, failures).filter(
+    resource => !excludedResources.includes(resource)
+  ))
+    await drain(resource);
 
   if (failures.length > 0) {
     throw new ResourceStartDrainError(failures);

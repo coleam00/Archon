@@ -3,10 +3,12 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { withRunSlotReleaseScope } from '@archon/workflows/run-slot-release';
+import { deferRunSlotRelease, withRunSlotReleaseScope } from '@archon/workflows/run-slot-release';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
+import type { WorkflowHost } from './host-store';
 import { createFileWorkflowHost } from './file-host';
 import { subscribeResourceStartReleases } from './resource-start-completion';
+import { drainResourceStartHost } from './resource-start-host';
 
 const roots = trackTempRoots();
 test('committed releases resolve recorded ancestry and coalesce hosts; disposal stops delivery', async () => {
@@ -82,6 +84,39 @@ test('committed releases resolve recorded ancestry and coalesce hosts; disposal 
       expect(hosts).toEqual(['recorded-host', 'recorded-host']);
     } finally {
       lookup.mockRestore();
+    }
+    const rootFailureChild = await store.createWorkflowRun({
+      workflow_name: 'root-lookup-failure',
+      user_message: '',
+      parent_run_id: launch.run.id,
+    });
+    const nextHealthy = await store.createWorkflowRun({
+      workflow_name: 'healthy-after-lookup-failure',
+      user_message: '',
+      parent_run_id: launch.run.id,
+    });
+    const readRequest = store.getResourceStartRequest.bind(store);
+    let failed = false;
+    const rootLookup = spyOn(store, 'getResourceStartRequest').mockImplementation(async id => {
+      if (id === launch.run.id && !failed) {
+        failed = true;
+        throw new Error('root admission unreadable');
+      }
+      return readRequest(id);
+    });
+    try {
+      await withRunSlotReleaseScope(async () => {
+        await store.cancelWorkflowRun(rootFailureChild.id);
+        await store.cancelWorkflowRun(nextHealthy.id);
+        await withRunSlotReleaseScope(async () => deferRunSlotRelease(), {
+          store,
+          runId: rootFailureChild.id,
+        });
+      });
+      expect(lookupFailures).toEqual([bad.id, launch.run.id]);
+      expect(hosts).toEqual(['recorded-host', 'recorded-host']);
+    } finally {
+      rootLookup.mockRestore();
     }
     dispose();
     const next = await store.createWorkflowRun({
@@ -270,78 +305,20 @@ test('a pending pack-settings refusal advances an eligible queue before any exec
   }
 });
 
-test.each(['owner', 'container', 'resource', 'shared-checkout'] as const)(
-  'reset defers only affected releases after %s cleanup refuses',
-  async failure => {
-    const { hostname } = await import('node:os');
+test.each(
+  (['owner', 'container', 'resource', 'shared-checkout'] as const).flatMap(failure =>
+    (['separate', 'shared', 'shared-resource'] as const).map(hosts => [failure, hosts] as const)
+  )
+)(
+  'reset defers only affected releases after %s cleanup refuses on %s hosts',
+  async (failure, hosts) => {
     const { DetachedRunOwnerUnavailableError } = await import('../services/run-owner-stop');
     const { createWorkflowOperations } = await import('../operations/workflow-operations');
     const host = await createFileWorkflowHost(
       roots(await mkdtemp(join(tmpdir(), 'reset-release-')))
     );
     const store = host.deps.store;
-    const proof = { envId: 'unsafe-env', creationId: crypto.randomUUID() };
-    const runs = [];
-    for (const name of ['unsafe', 'safe']) {
-      const launch: PreparedWorkflowLaunch = {
-        version: 2,
-        run: {
-          id: crypto.randomUUID(),
-          workflow_name: 'test',
-          codebase_id: 'project',
-          user_message: '',
-          origin: { conversationId: 'reset' },
-          metadata: {
-            owned_worktree:
-              name === 'unsafe' || failure === 'shared-checkout'
-                ? proof
-                : { envId: 'safe-env', creationId: crypto.randomUUID() },
-            execution_owner: {
-              host: hostname(),
-              pid: process.pid,
-              ...(process.getuid ? { uid: process.getuid() } : {}),
-            },
-            ...(failure === 'container' && name === 'unsafe'
-              ? { isolation: 'container', isolation_env_id: 'container' }
-              : {}),
-          },
-        },
-        execution: {
-          cwd: `/project/${name}`,
-          conversationId: 'reset',
-          isolation: { kind: 'in-place' as const },
-        },
-      };
-      await store.admitResourceStart({
-        resource: name,
-        capacity: 1,
-        hostId: name,
-        overlap: 'queue',
-        launch,
-      });
-      await store.claimPendingWorkflowRun(launch.run.id);
-      await store.pauseWorkflowRun(launch.run.id, {
-        nodeId: 'review',
-        pauseId: 'pause',
-        message: 'Choose',
-      });
-      const next = {
-        ...launch,
-        run: { ...launch.run, id: crypto.randomUUID(), origin: undefined, metadata: {} },
-      };
-      expect(
-        (
-          await store.admitResourceStart({
-            resource: name,
-            capacity: 1,
-            hostId: name,
-            overlap: 'queue',
-            launch: next,
-          })
-        ).status
-      ).toBe('queued');
-      runs.push({ id: launch.run.id, nextId: next.run.id, name });
-    }
+    const { runs, pendingReceiptId } = await resetFixture(host, failure, hosts);
     const unsafe = runs[0];
     const safe = runs[1];
     const cleaned: string[] = [];
@@ -369,10 +346,13 @@ test.each(['owner', 'container', 'resource', 'shared-checkout'] as const)(
       },
     });
     const drained: string[] = [];
-    const dispose = subscribeResourceStartReleases(host, async hostId => {
+    const dispose = subscribeResourceStartReleases(host, async (hostId, excludedResources) => {
       drained.push(hostId);
       expect((await store.getWorkflowRun(safe.id))?.status).toBe('cancelled');
-      await store.drainResourceStarts({ hostId, resource: hostId });
+      await drainResourceStartHost(
+        { ...host, hostId, startAdmitted: async () => {} },
+        excludedResources
+      );
     });
     try {
       const result = await operations.abandonResumableRunsForConversation('reset', {
@@ -380,10 +360,13 @@ test.each(['owner', 'container', 'resource', 'shared-checkout'] as const)(
       });
       expect(result.abandoned).toBe(2);
       expect(result.cleanupWarnings?.length).toBeGreaterThan(0);
-      expect(drained).toEqual(failure === 'shared-checkout' ? [] : ['safe']);
+      expect(drained).toEqual(
+        failure === 'shared-checkout' ? [] : [hosts === 'separate' ? 'safe' : 'shared']
+      );
       expect((await store.getResourceStartRequest(unsafe.nextId))?.status).toBe('queued');
+      expect((await store.getStartReceipt(pendingReceiptId))?.bindings[0]?.status).toBe('pending');
       expect((await store.getResourceStartRequest(safe.nextId))?.status).toBe(
-        failure === 'shared-checkout' ? 'queued' : 'admitted'
+        failure === 'shared-checkout' || hosts === 'shared-resource' ? 'queued' : 'admitted'
       );
       if (failure === 'shared-checkout') expect(cleaned).toEqual([]);
       else expect(cleaned).toContain(safe.id);
@@ -392,3 +375,106 @@ test.each(['owner', 'container', 'resource', 'shared-checkout'] as const)(
     }
   }
 );
+
+async function resetFixture(
+  host: WorkflowHost,
+  failure: 'owner' | 'container' | 'resource' | 'shared-checkout',
+  hosts: 'separate' | 'shared' | 'shared-resource'
+) {
+  const { hostname } = await import('node:os');
+  const store = host.deps.store;
+  const proof = { envId: 'unsafe-env', creationId: crypto.randomUUID() };
+  const slot = (name: string) => ({
+    resource: hosts === 'shared-resource' ? 'common' : name,
+    capacity: hosts === 'shared-resource' ? 2 : 1,
+    hostId: hosts === 'separate' ? name : 'shared',
+  });
+  const runs = [];
+  for (const name of ['unsafe', 'safe']) {
+    const launch: PreparedWorkflowLaunch = {
+      version: 2,
+      run: {
+        id: crypto.randomUUID(),
+        workflow_name: 'test',
+        codebase_id: 'project',
+        user_message: '',
+        origin: { conversationId: 'reset' },
+        metadata: {
+          owned_worktree:
+            name === 'unsafe' || failure === 'shared-checkout'
+              ? proof
+              : { envId: 'safe-env', creationId: crypto.randomUUID() },
+          execution_owner: {
+            host: hostname(),
+            pid: process.pid,
+            ...(process.getuid ? { uid: process.getuid() } : {}),
+          },
+          ...(failure === 'container' && name === 'unsafe'
+            ? { isolation: 'container', isolation_env_id: 'container' }
+            : {}),
+        },
+      },
+      execution: {
+        cwd: `/project/${name}`,
+        conversationId: 'reset',
+        isolation: { kind: 'in-place' as const },
+      },
+    };
+    await store.admitResourceStart({
+      ...slot(name),
+      overlap: 'queue',
+      launch,
+    });
+    await store.claimPendingWorkflowRun(launch.run.id);
+    await store.pauseWorkflowRun(launch.run.id, {
+      nodeId: 'review',
+      pauseId: 'pause',
+      message: 'Choose',
+    });
+    runs.push({ id: launch.run.id, nextId: crypto.randomUUID(), name, launch });
+  }
+  for (const run of runs) {
+    expect(
+      (
+        await store.admitResourceStart({
+          ...slot(run.name),
+          overlap: 'queue',
+          launch: {
+            ...run.launch,
+            run: { ...run.launch.run, id: run.nextId, origin: undefined, metadata: {} },
+          },
+        })
+      ).status
+    ).toBe('queued');
+  }
+  const pendingReceiptId = crypto.randomUUID();
+  await store.acceptStartReceipt({
+    receipt: {
+      id: pendingReceiptId,
+      sourceInstanceId: 'reset-test',
+      deliveryId: null,
+      contentDigest: 'digest',
+      receivedAt: '2026-11-12T00:00:00.000Z',
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'unsafe',
+        bindingRevision: null,
+        ...slot('unsafe'),
+        runAsUserId: 'operator',
+        overlap: 'queue',
+        launch: {
+          cwd: '/pending',
+          workflowName: 'test',
+          inputs: {},
+          isolation: { kind: 'in-place' },
+        },
+      },
+    ],
+  });
+
+  return { runs, pendingReceiptId };
+}

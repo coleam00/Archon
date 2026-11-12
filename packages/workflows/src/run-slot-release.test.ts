@@ -281,3 +281,54 @@ test('per-run cleanup deferral preserves independent releases and store identiti
     second.dispose();
   }
 });
+
+test.each(['ordinary', 'forced'] as const)(
+  'held %s delivery retains unsafe sibling exclusions',
+  async ending => {
+    const c = channel();
+    const batches: { ids: readonly string[]; deferred: readonly string[] }[] = [];
+    const dispose = subscribeRunSlotRelease(c.store, async (ids, deferred) => {
+      batches.push({ ids, deferred });
+    });
+    const close = holdRunSlotRelease(c.store, 'safe');
+    try {
+      await withRunSlotReleaseScope(async () => {
+        await publishRunSlotRelease(c.source, 'safe');
+        await publishRunSlotRelease(c.source, 'unsafe');
+        await withRunSlotReleaseScope(async () => deferRunSlotRelease(), {
+          store: c.store,
+          runId: 'unsafe',
+        });
+      });
+      expect(batches).toEqual([]);
+      if (ending === 'forced') await finishForcedRunSlotCleanup(c.store, 'safe');
+      else await close();
+      expect(batches).toEqual([{ ids: ['safe'], deferred: ['unsafe'] }]);
+    } finally {
+      await close();
+      dispose();
+      c.dispose();
+    }
+  }
+);
+
+test('a committed held release survives composition replacing its subscriber', async () => {
+  const source = {};
+  const store = bindRunSlotReleaseStore({}, () => source);
+  const old = subscribeRunSlotRelease(store, async () => {});
+  const close = holdRunSlotRelease(store, 'run');
+  old();
+  await publishRunSlotRelease(source, 'run');
+  const received: string[][] = [];
+  const dispose = subscribeRunSlotRelease(store, async ids => {
+    received.push([...ids]);
+  });
+  try {
+    old();
+    await close();
+    expect(received).toEqual([['run']]);
+  } finally {
+    await close();
+    dispose();
+  }
+});

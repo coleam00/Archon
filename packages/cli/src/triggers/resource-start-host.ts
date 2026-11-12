@@ -39,11 +39,15 @@ export async function spawnAdmitted(
 export function drainHost(
   host: WorkflowHost,
   hostId: string,
-  dispatch: (requestId: string, hostId: string) => Promise<void>
+  dispatch: (requestId: string, hostId: string) => Promise<void>,
+  excludedResources: readonly string[] = []
 ): Promise<void> {
-  return drainResourceStartHost({
-    ...host,
-    hostId,
-    startAdmitted: requestId => dispatch(requestId, hostId),
-  });
+  return drainResourceStartHost(
+    {
+      ...host,
+      hostId,
+      startAdmitted: requestId => dispatch(requestId, hostId),
+    },
+    excludedResources
+  );
 }

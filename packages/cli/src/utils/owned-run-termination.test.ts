@@ -552,3 +552,80 @@ for (const scope of ['run', 'descendant', 'container', 'agent'] as const) {
     }
   );
 }
+
+posixOnly.each(
+  (['run', 'events', 'children'] as const).flatMap(lookup =>
+    (['root', 'child'] as const).map(scope => [lookup, scope] as const)
+  )
+)(
+  'history %s failure in %s reaches preparation failure without an unhandled rejection',
+  async (lookup, scope) => {
+    const { writeOwnerPreparation } = await import('@archon/core/services/run-owner-preparation');
+    const store = createInMemoryWorkflowStore(createInMemoryWorkflowHostStore());
+    const root = await store.createWorkflowRun({ workflow_name: 'root', user_message: '' });
+    const child = await store.createWorkflowRun({
+      workflow_name: 'child',
+      user_message: '',
+      parent_run_id: root.id,
+    });
+    const target = scope === 'root' ? root.id : child.id;
+    const failure = new Error('history unavailable');
+    const readRun = store.getWorkflowRun.bind(store);
+    const readEvents = store.listWorkflowEvents.bind(store);
+    const readChildren = store.findChildRuns.bind(store);
+    const runSpy = spyOn(store, 'getWorkflowRun').mockImplementation(async id => {
+      if (lookup === 'run' && id === target) throw failure;
+      return readRun(id);
+    });
+    const eventsSpy = spyOn(store, 'listWorkflowEvents').mockImplementation(async id => {
+      if (lookup === 'events' && id === target) throw failure;
+      return readEvents(id);
+    });
+    const childrenSpy = spyOn(store, 'findChildRuns').mockImplementation(async id => {
+      if (lookup === 'children' && id === target) throw failure;
+      return readChildren(id);
+    });
+    let prepare:
+      | import('@archon/core/services/run-owner-preparation').PrepareRunOwnerTermination
+      | undefined;
+    const unregister = registerOwnedRunTermination({
+      store,
+      runId: root.id,
+      getExecutionClaim: () => null,
+      logModule: 'test',
+      detachedProcessOwner: true,
+      liveOwner: {
+        close: async () => {},
+        isStopRequested: () => false,
+        registerTerminationPreparation: callback => {
+          prepare = callback;
+          return () => {};
+        },
+      },
+    });
+    const output = Promise.withResolvers<string[]>();
+    let prepared: ReturnType<NonNullable<typeof prepare>> | undefined;
+    try {
+      if (!prepare) throw new Error('missing preparation');
+      prepared = prepare();
+      const outcome = writeOwnerPreparation(
+        { write: () => true },
+        { ...prepared, ready: output.promise }
+      ).then(
+        () => undefined,
+        error => error
+      );
+      await Bun.sleep(20);
+      output.resolve([]);
+      expect(await outcome).toBe(failure);
+      expect((await readRun(root.id))?.status).toBe('pending');
+    } finally {
+      output.resolve([]);
+      prepared?.release();
+      unregister();
+      runSpy.mockRestore();
+      eventsSpy.mockRestore();
+      childrenSpy.mockRestore();
+    }
+  }
+);

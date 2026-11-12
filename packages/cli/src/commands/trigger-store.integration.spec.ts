@@ -1600,6 +1600,10 @@ for (const storage of ['files', 'sql'] as const) {
           }
         );
         try {
+          const detailError =
+            failure === 'missing'
+              ? `Trigger receipt ${empty.receipt.id} not found.`
+              : 'receipt unreadable: [REDACTED]';
           output.length = 0;
           await triggerCommand(host, 'list', [], { limit: '2' });
           expect(output.join('')).not.toContain(secret);
@@ -1607,13 +1611,19 @@ for (const storage of ['files', 'sql'] as const) {
             {
               ...summaries[0],
               skippedStarts: null,
-              detailError:
-                failure === 'missing'
-                  ? `Trigger receipt ${empty.receipt.id} not found.`
-                  : 'receipt unreadable: [REDACTED]',
+              detailError,
             },
             { ...summaries[1], skippedStarts: expected },
           ]);
+          output.length = 0;
+          await triggerCommand(host, 'inspect', [empty.receipt.id], {});
+          expect(output.join('')).not.toContain(secret);
+          expect(JSON.parse(output.join(''))).toMatchObject({
+            id: empty.receipt.id,
+            skippedStarts: null,
+            bindings: expect.any(Array),
+            detailError,
+          });
         } finally {
           failedRead.mockRestore();
         }

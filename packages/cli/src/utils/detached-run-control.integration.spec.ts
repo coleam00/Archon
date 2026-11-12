@@ -560,6 +560,8 @@ describe('detached run control integration', () => {
           const ownedChild = await requestDetachedRunStop(childRunId);
           expect(ownedChild.pid).toBe(child.pid);
           if (mode === 'nested-trigger') {
+            child.release();
+            ownedChild.release();
             writeFileSync(join(dir, 'finish-child'), '');
             await waitFor(
               async () =>
