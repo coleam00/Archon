@@ -1,6 +1,6 @@
 import { formatAbandonResult } from './workflow-abandon-output';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { WorkflowResourceBusyError } from '@archon/workflows/store';
+import { WorkflowNotResumableError, WorkflowResourceBusyError } from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   CancelRefusedError,
@@ -304,10 +304,25 @@ function cliOriginForRun(run: WorkflowRun, occurrence: string | undefined): Gate
     : { via: 'cli', expectedGate: expectedGateForOccurrence(run, occurrence) };
 }
 
+function isCompletedAnswerContinuation(error: unknown, runId: string): boolean {
+  const MAX_CAUSE_DEPTH = 5;
+  for (let current: unknown = error, depth = 0; current instanceof Error; depth += 1) {
+    if (
+      current instanceof WorkflowNotResumableError &&
+      current.runId === runId &&
+      current.currentStatus === 'completed'
+    ) {
+      return true;
+    }
+    if (depth >= MAX_CAUSE_DEPTH) return false;
+    current = current.cause;
+  }
+  return false;
+}
+
 /**
- * Continue a run in this process right after this process recorded its answer, the way
- * the CLI's answering commands do outside `--json`. A continuation host may claim the
- * answer first; `workflowRunCommand` reports that and returns.
+ * A continuation host may claim this answer first. `workflowRunCommand` reports an
+ * active owner; only this answer boundary treats an already-completed refusal as handled.
  */
 async function continueAnsweredRun(
   host: WorkflowHost,
@@ -320,7 +335,6 @@ async function continueAnsweredRun(
   action: 'approve' | 'reject' | 'respond' | 'answer',
   failure: { failurePrefix: string; recorded: string }
 ): Promise<void> {
-  // Look up the original platform conversation ID to keep all messages in one thread
   let platformConversationId: string | undefined;
   try {
     const originalConversation = result.conversationId
@@ -358,6 +372,14 @@ async function continueAnsweredRun(
       discoveryCwd,
     });
   } catch (error) {
+    if (isCompletedAnswerContinuation(error, resolvedId)) {
+      getLog().info(
+        { runId: resolvedId, workflowName: result.workflowName },
+        `cli.workflow_${action}_already_continued`
+      );
+      console.log(`Run ${resolvedId} has already continued in another process and is completed.`);
+      return;
+    }
     if (
       error instanceof Error &&
       error.cause instanceof WorkflowResourceBusyError &&
@@ -541,8 +563,6 @@ export async function workflowApproveCommand(
     )
   );
 
-  // CLI auto-resumes after approval, as chat does since #2565. `--json` (handled
-  // above) is the one surface that records the decision without continuing.
   if (!result.workingPath) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -647,10 +667,6 @@ export async function workflowRejectCommand(
     return 0;
   }
 
-  // Not cancelled = a legacy on_reject rework, a #2707 step-1 new-mode
-  // resolution, or a container write-back reject (discard the overlay). All
-  // three auto-resume; the resume drives the rework / continuation / the
-  // overlay discard + completion.
   if (!result.workingPath) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +

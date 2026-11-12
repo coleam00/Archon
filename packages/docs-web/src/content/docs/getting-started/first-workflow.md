@@ -310,7 +310,7 @@ archon workflow artifacts <run-id> plan.md      # print the plan
 archon workflow approve <run-id> "Keep the flag handling in cli.ts"
 ```
 
-Approving continues the run in your terminal until it finishes. To stop it instead, run `archon workflow reject <run-id> "Too broad"`. The answer's text reaches the next node as `$approve-plan.output.text`. Afterwards, `archon workflow get <run-id>` shows each node's status, and the commits are on `feat/version-flag`.
+Approving continues the run in your terminal if the command wins the continuation claim. A running `archon serve` or `archon workflow wake` on the same database may claim it first and continue it there instead; only one host executes each continuation. To stop it instead, run `archon workflow reject <run-id> "Too broad"`. The answer's text reaches the next node as `$approve-plan.output.text`. Afterwards, `archon workflow get <run-id>` shows each node's status, and the commits are on `feat/version-flag`.
 
 ## Where to go next
 
