@@ -493,11 +493,9 @@ describe('watchAttentionQueue', () => {
     };
     feed.getWorkflowRun = async id => {
       if (down) {
+        if (id === a && probes.has(c)) probes = new Map();
         probes.set(id, (probes.get(id) ?? 0) + 1);
-        if (id === c) {
-          scans.push(probes);
-          probes = new Map();
-        }
+        if (id === c) scans.push(probes);
         throw new Error('store outage');
       }
       return store.getWorkflowRun(id);
