@@ -27,7 +27,7 @@ const forgeOperationDescriptions = {
   'pr.merge': 'Merge a pull request pinned to its approved head',
   'checks.rerun': 'Rerun selected failed checks at a revision',
   'pr.reviews': 'Read submitted reviews and root review comments',
-  'pr.threads': 'Read every review thread with its comments and resolution',
+  'pr.threads': 'Read every review thread with its comments, creation times and resolution',
   'pr.merge-state':
     'Read how far a pull request is behind the default branch and whether it merges',
   'pr.files': 'Read every file a pull request changes, with its patch',

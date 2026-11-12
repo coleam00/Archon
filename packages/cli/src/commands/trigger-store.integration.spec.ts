@@ -1056,7 +1056,8 @@ test('a queued start that fails is attributed to the receipt that requested it',
   });
   const holder = launch(codebase.id);
   const queued = launch(codebase.id);
-  queued.run.metadata = { resource_start: { receiptId: 'receipt-of-queued', bindingId: 'b' } };
+  const receiptId = randomUUID();
+  queued.run.metadata = { resource_start: { receiptId, bindingId: 'b' } };
   const intent = (prepared: PreparedWorkflowLaunch): ResourceStartIntent => ({
     resource: 'one',
     capacity: 1,
@@ -1081,9 +1082,7 @@ test('a queued start that fails is attributed to the receipt that requested it',
   );
 
   expect(error).toBeInstanceOf(ResourceStartDrainError);
-  expect((error as ResourceStartDrainError).failures).toMatchObject([
-    { receiptId: 'receipt-of-queued' },
-  ]);
+  expect((error as ResourceStartDrainError).failures).toMatchObject([{ receiptId }]);
 });
 
 test('preparation preserves both failures when rejection cannot be persisted', async () => {

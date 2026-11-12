@@ -42,9 +42,11 @@ function fakeGitHub(answer: (call: Call) => unknown): { fetch: typeof fetch; cal
   return { fetch: fetchImpl, calls };
 }
 
-const comment = (id: string, body: string) => ({
+const comment = (id: string, body: string, createdAt = '2026-11-11T10:00:00Z') => ({
   id,
   author: { login: 'reviewer', databaseId: 42 },
+  createdAt,
+  originalCommit: { oid: `${id}-commit` },
   body,
   url: `https://github.com/archon/test/pull/7#discussion_${id}`,
 });
@@ -130,6 +132,48 @@ describe('pr.threads', () => {
     });
     expect(threads[1]).toMatchObject({ resolved: true, comments: [{ author: null }] });
     expect(github.calls.filter(call => call.query?.includes('reviewThreads'))).toHaveLength(2);
+  });
+
+  test('every thread and comment carries when it was created and on which commit', async () => {
+    const github = fakeGitHub(() => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                thread('t1', [
+                  comment('c1', 'before', '2026-11-11T09:00:00Z'),
+                  { ...comment('c2', 'after', '2026-11-11T11:00:00Z'), originalCommit: null },
+                ]),
+              ],
+            },
+          },
+        },
+      },
+    }));
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      { token: 'token', fetch: github.fetch }
+    );
+    expect(response).toMatchObject({
+      ok: true,
+      result: {
+        value: {
+          threads: [
+            {
+              id: 't1',
+              createdAt: '2026-11-11T09:00:00Z',
+              commit: 'c1-commit',
+              comments: [
+                { id: 'c1', createdAt: '2026-11-11T09:00:00Z', commit: 'c1-commit' },
+                { id: 'c2', createdAt: '2026-11-11T11:00:00Z', commit: null },
+              ],
+            },
+          ],
+        },
+      },
+    });
   });
 
   test('a read that GitHub answers 502 is repeated, and one it refuses is not', async () => {

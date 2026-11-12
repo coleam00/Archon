@@ -3,12 +3,11 @@ import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schem
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
-  ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
   SourceReceiptInput,
   SourceReceiptAcceptance,
-  startBindingPreparationStatusSchema,
+  startBindingInspectionSchema,
   resourceStartRequestStatusSchema,
 } from './schemas/resource-start';
 import {
@@ -36,18 +35,10 @@ export class ResourceSlotCapacityConflictError extends Error {
   }
 }
 
-export interface StartBindingInspection {
-  receiptId: string;
-  bindingId: string;
-  bindingRevision: string | null;
-  hostId: string | null;
-  status: z.infer<typeof startBindingPreparationStatusSchema>;
-  ownerId: string | null;
-  error: string | null;
-  intent: ResourceStartBindingIntent | null;
+export type StartBindingInspection = z.infer<typeof startBindingInspectionSchema> & {
   requestStatus: ResourceStartRequestInspection['status'] | null;
   disposition: ResourceStartDisposition | null;
-}
+};
 
 export interface StartReceiptInspection {
   id: string;
