@@ -32,7 +32,7 @@ import { GIT_OPERATION_TIMEOUT_MS, getForkReviewBranch, getLog } from './shared'
  * For fork PRs: Use synthetic pr-N-review branch
  *
  * Thread identifiers are hashed via shortHash() (8 hex chars).
- * Task identifiers are slugified via slugify() (lowercase, max 50 chars).
+ * Task identifiers use a lowercase slug with a digest when it exceeds 50 chars.
  */
 export function generateBranchName(request: IsolationRequest): string {
   switch (request.workflowType) {
@@ -61,7 +61,12 @@ export function generateBranchName(request: IsolationRequest): string {
 }
 
 export function generatedTaskBranch(identifier: string): string {
-  return `archon/task-${slugify(identifier)}`;
+  const slug = slugify(identifier);
+  const suffix =
+    slug.length > 50
+      ? `${slug.substring(0, 33)}-${createHash('sha256').update(identifier).digest('hex').substring(0, 16)}`
+      : slug;
+  return `archon/task-${suffix}`;
 }
 
 /**
@@ -77,7 +82,9 @@ export function isGeneratedTaskBranch(env: {
   return (
     env.workflow_type === 'task' &&
     env.branch_name !== env.workflow_id &&
-    env.branch_name === generatedTaskBranch(env.workflow_id)
+    (env.branch_name === generatedTaskBranch(env.workflow_id) ||
+      // Existing records retain the branch spelling used before long slugs gained a digest.
+      env.branch_name === `archon/task-${slugify(env.workflow_id).substring(0, 50)}`)
   );
 }
 
@@ -96,8 +103,7 @@ function slugify(input: string): string {
   return input
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-|-$/g, '')
-    .substring(0, 50);
+    .replace(/^-|-$/g, '');
 }
 
 async function localBranchExists(repoPath: string, branchName: string): Promise<boolean> {

@@ -318,113 +318,171 @@ nodes:
   }, 40_000);
 });
 
+function createWorktreeFixture(workflows: { name: string; bash: string }[]): {
+  repo: string;
+  home: string;
+  git: (...args: string[]) => string;
+} {
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-detached-worktree-')));
+  cleanupPaths.push(root);
+  const home = join(root, 'home');
+  const repo = join(root, 'repo');
+  const origin = join(root, 'origin.git');
+  mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+  function git(...args: string[]): string {
+    const result = Bun.spawnSync(['git', '-C', repo, ...args]);
+    if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+    return result.stdout.toString().trim();
+  }
+  git('init', '-q', '--initial-branch=main');
+  git('init', '-q', '--bare', origin);
+  git('config', 'user.name', 'Test');
+  git('config', 'user.email', 'test@example.com');
+  git('remote', 'add', 'origin', origin);
+  writeFileSync(join(repo, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: main\n');
+  for (const { name, bash } of workflows) {
+    writeFileSync(
+      join(repo, '.archon', 'workflows', `${name}.yaml`),
+      `name: ${name}
+description: Detached worktree ownership
+nodes:
+  - id: publish
+    bash: ${JSON.stringify(bash)}
+`
+    );
+  }
+  git('add', '.');
+  git('commit', '-qm', 'fixture');
+  git('push', '-q', 'origin', 'main');
+  return { repo, home, git };
+}
+
+async function completeDetachedWorktreeRun(
+  fixture: { repo: string; home: string },
+  name: string,
+  branch?: string
+) {
+  const launcher = Bun.spawn(
+    [
+      process.execPath,
+      resolve(import.meta.dir, '..', 'cli.ts'),
+      'workflow',
+      'run',
+      name,
+      '--detach',
+      '--json',
+      ...(branch ? ['--branch', branch] : []),
+    ],
+    {
+      cwd: fixture.repo,
+      env: {
+        ...process.env,
+        ARCHON_HOME: fixture.home,
+        DATABASE_URL: '',
+        ARCHON_TELEMETRY_DISABLED: '1',
+      },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    }
+  );
+  const [code, stdout, stderr] = await Promise.all([
+    launcher.exited,
+    new Response(launcher.stdout).text(),
+    new Response(launcher.stderr).text(),
+  ]);
+  expect(code, stderr + stdout).toBe(0);
+  const ack: {
+    ok: boolean;
+    detached: boolean;
+    runId: string;
+    branch: string;
+    logPath: string;
+  } = JSON.parse(stdout);
+  expect(ack.ok).toBe(true);
+  expect(ack.detached).toBe(true);
+  expect(typeof ack.runId).toBe('string');
+  activeRunIds.add(ack.runId);
+  const databasePath = join(fixture.home, 'archon.db');
+  const run = await waitForDetachedRun(() => {
+    const row = readRunById(databasePath, ack.runId);
+    if (row?.status === 'failed') throw new Error(readFileSync(ack.logPath, 'utf8'));
+    return row?.status === 'completed' ? row : undefined;
+  });
+  await waitForDetachedRun(async () =>
+    (await canConnectToRunLiveOwner(runLiveOwnerPath(run.id))) ? undefined : true
+  );
+  activeRunIds.delete(run.id);
+  return { ack, run, databasePath };
+}
+
+function readWorktreeEnvironments(databasePath: string) {
+  const database = openReadOnly(databasePath);
+  try {
+    return database
+      .query<{ branch_name: string; working_path: string; status: string }, []>(
+        'SELECT branch_name, working_path, status FROM remote_agent_isolation_environments'
+      )
+      .all();
+  } finally {
+    database.close();
+  }
+}
+
 describe('detached run worktree ownership', () => {
   test.each([undefined, 'operator-branch'])(
     'completes a clean pushed isolated run with branch %s',
     async branch => {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-detached-worktree-')));
-      cleanupPaths.push(root);
-      const home = join(root, 'home');
-      const repo = join(root, 'repo');
-      const origin = join(root, 'origin.git');
-      mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
-      function git(...args: string[]): string {
-        const result = Bun.spawnSync(['git', '-C', repo, ...args]);
-        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
-        return result.stdout.toString().trim();
-      }
-      git('init', '-q', '--initial-branch=main');
-      git('init', '-q', '--bare', origin);
-      git('config', 'user.name', 'Test');
-      git('config', 'user.email', 'test@example.com');
-      git('remote', 'add', 'origin', origin);
-      writeFileSync(join(repo, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: main\n');
-      writeFileSync(
-        join(repo, '.archon', 'workflows', 'release.yaml'),
-        `name: release
-description: Detached worktree release
-nodes:
-  - id: publish
-    bash: git push origin HEAD
-`
+      const fixture = createWorktreeFixture([{ name: 'release', bash: 'git push origin HEAD' }]);
+      const { ack, run, databasePath } = await completeDetachedWorktreeRun(
+        fixture,
+        'release',
+        branch
       );
-      git('add', '.');
-      git('commit', '-qm', 'fixture');
-      git('push', '-q', 'origin', 'main');
-      const launcher = Bun.spawn(
-        [
-          process.execPath,
-          resolve(import.meta.dir, '..', 'cli.ts'),
-          'workflow',
-          'run',
-          'release',
-          '--detach',
-          '--json',
-          ...(branch ? ['--branch', branch] : []),
-        ],
-        {
-          cwd: repo,
-          env: {
-            ...process.env,
-            ARCHON_HOME: home,
-            DATABASE_URL: '',
-            ARCHON_TELEMETRY_DISABLED: '1',
-          },
-          stdout: 'pipe',
-          stderr: 'pipe',
-        }
+      const environments = readWorktreeEnvironments(databasePath);
+      expect(environments).toHaveLength(1);
+      const env = environments[0];
+      expect(run.working_path).toBe(env.working_path);
+      expect(ack.branch).toBe(env.branch_name);
+      expect(fixture.git('ls-remote', 'origin', `refs/heads/${ack.branch}`)).not.toBe('');
+      expect(env.status).toBe(branch ? 'active' : 'destroyed');
+      expect(existsSync(env.working_path)).toBe(branch !== undefined);
+      expect(fixture.git('worktree', 'list', '--porcelain').split('worktree ')).toHaveLength(
+        branch ? 3 : 2
       );
-      const [code, stdout, stderr] = await Promise.all([
-        launcher.exited,
-        new Response(launcher.stdout).text(),
-        new Response(launcher.stderr).text(),
-      ]);
-      expect(code, stderr + stdout).toBe(0);
-      const ack: {
-        ok: boolean;
-        detached: boolean;
-        runId: string;
-        branch: string;
-        logPath: string;
-      } = JSON.parse(stdout);
-      expect(ack.ok).toBe(true);
-      expect(ack.detached).toBe(true);
-      expect(typeof ack.runId).toBe('string');
-      activeRunIds.add(ack.runId);
-      const databasePath = join(home, 'archon.db');
-      const run = await waitForDetachedRun(() => {
-        const row = readRunById(databasePath, ack.runId);
-        if (row?.status === 'failed') throw new Error(readFileSync(ack.logPath, 'utf8'));
-        return row?.status === 'completed' ? row : undefined;
-      });
-      await waitForDetachedRun(async () =>
-        (await canConnectToRunLiveOwner(runLiveOwnerPath(run.id))) ? undefined : true
-      );
-      activeRunIds.delete(run.id);
-      const database = openReadOnly(databasePath);
-      try {
-        const environments = database
-          .query<{ branch_name: string; working_path: string; status: string }, []>(
-            'SELECT branch_name, working_path, status FROM remote_agent_isolation_environments'
-          )
-          .all();
-        expect(environments).toHaveLength(1);
-        const env = environments[0];
-        expect(run.working_path).toBe(env.working_path);
-        expect(ack.branch).toBe(env.branch_name);
-        expect(git('ls-remote', 'origin', `refs/heads/${ack.branch}`)).not.toBe('');
-        expect(env.status).toBe(branch ? 'active' : 'destroyed');
-        expect(existsSync(env.working_path)).toBe(branch !== undefined);
-        expect(git('worktree', 'list', '--porcelain').split('worktree ')).toHaveLength(
-          branch ? 3 : 2
-        );
-        expect(env.branch_name).toMatch(
-          branch ? /^operator-branch$/ : /^archon\/task-release-\d+$/
-        );
-      } finally {
-        database.close();
-      }
+      expect(env.branch_name).toMatch(branch ? /^operator-branch$/ : /^archon\/task-release-\d+$/);
     },
     30_000
   );
+
+  test('long workflow names never inherit a previous detached checkout', async () => {
+    const name = 'long-workflow-name-'.repeat(4);
+    const otherName = `${name}other`;
+    const bash = 'set -e\ntest ! -e inherited.txt\ngit push origin HEAD\ntouch inherited.txt';
+    const fixture = createWorktreeFixture([
+      { name, bash },
+      { name: otherName, bash },
+    ]);
+    const paths = new Set<string>();
+    for (const workflow of [name, name, otherName]) {
+      const { ack, run, databasePath } = await completeDetachedWorktreeRun(fixture, workflow);
+      const environments = readWorktreeEnvironments(databasePath);
+      const env = environments.find(env => env.working_path === run.working_path);
+      if (!env) throw new Error('Missing isolation record');
+      expect(paths.has(env.working_path)).toBe(false);
+      paths.add(env.working_path);
+      expect(environments).toHaveLength(paths.size);
+      expect(ack.branch).toBe(env.branch_name);
+      expect(fixture.git('ls-remote', 'origin', `refs/heads/${ack.branch}`)).not.toBe('');
+      expect(env.status).toBe('active');
+      expect(existsSync(env.working_path)).toBe(true);
+      const events = readTerminalEvents(databasePath, run.id, 'workflow_completed');
+      expect(events).toHaveLength(1);
+      const record = terminalRecordSchema.parse(JSON.parse(events[0].data).terminal_record);
+      expect(record.worktree_disposition).toEqual({
+        disposition: 'retained',
+        reason: 'uncommitted_changes',
+      });
+    }
+    expect(fixture.git('worktree', 'list', '--porcelain').split('worktree ')).toHaveLength(5);
+  }, 30_000);
 });
