@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import { updateAdmissionNoticeIndex } from './admission-notice-index';
 import {
   WorkflowEventCursorError,
   type WorkflowEventCursor,
@@ -139,7 +140,7 @@ export async function readJson(path: string): Promise<unknown> {
     throw error;
   }
 }
-async function syncDirectory(path: string): Promise<void> {
+export async function syncDirectory(path: string): Promise<void> {
   // Windows does not support opening a directory for fsync through node:fs.
   if (process.platform === 'win32') return;
   const handle = await open(path, 'r');
@@ -326,6 +327,12 @@ async function apply(root: string, intent: Intent): Promise<void> {
     );
   }
   if (intent.deleteRuns.length) await syncDirectory(join(root, 'runs'));
+  await updateAdmissionNoticeIndex(
+    root,
+    await readFileStoreHead(root),
+    intent.seq,
+    intent.documents
+  );
   await updateFeedIndex(root, intent);
   await replaceJson(join(root, 'head.json'), { format: 1, seq: intent.seq });
   await retryFileStoreHandles('unlink', join(root, 'intent.json'), () =>

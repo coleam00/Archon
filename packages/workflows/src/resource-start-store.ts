@@ -367,10 +367,13 @@ export type PendingStartBindingInspection = StartBindingInspection | DamagedStar
 
 export interface IResourceStartStore {
   getAdmissionNoticeHead(): Promise<AdmissionNoticeCursor>;
-  /** Skipped requests with delivery ids, in commit order. Null starts at retained history. */
+  /**
+   * Skipped explicit requests in commit order; `since` selects receipt time, not commit time.
+   * Null starts at retained history. Empty pages may advance over bounded scan positions.
+   */
   readAdmissionNoticesAfter(
     after: AdmissionNoticeCursor | null,
-    options: { limit: number }
+    options: { limit: number; since?: Date }
   ): Promise<AdmissionNoticePage>;
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {

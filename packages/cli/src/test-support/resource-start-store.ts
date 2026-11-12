@@ -189,7 +189,7 @@ export function createInMemoryResourceStartStore(
       return true;
     },
     getAdmissionNoticeHead: async () => cursor(positions.size),
-    readAdmissionNoticesAfter: async (after, { limit }) => {
+    readAdmissionNoticesAfter: async (after, { limit, since }) => {
       validateAdmissionNoticeLimit(limit);
       const match = after === null ? null : /^memory-admission:(0|[1-9][0-9]*)$/.exec(after);
       const lower = after === null ? 0 : Number(match?.[1]);
@@ -201,6 +201,7 @@ export function createInMemoryResourceStartStore(
         const request = requests.get(id);
         const receipt = receipts.get(position.receipt.receiptId);
         if (request?.status !== 'skipped' || receipt?.deliveryId == null) continue;
+        if (since !== undefined && Date.parse(receipt.receivedAt) < since.getTime()) continue;
         rows.push({
           cursor: cursor(position.ordinal),
           facts: admissionNoticeFactsSchema.parse({

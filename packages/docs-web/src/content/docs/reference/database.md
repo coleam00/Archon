@@ -33,6 +33,7 @@ and isolation records without creating `archon.db`. It stores records under
 head.json                format version and commit sequence
 intent.json              pending commit, present during writes or crash recovery
 feed-index.json          derived latest event commit per run, rebuilt from logs when missing
+admission-notice-index/   disposable skipped-fire pointers by commit and receipt day
 runs/<id>/log.jsonl       append-only run records, events and event retractions
 runs/<id>/run.json        derived snapshot, rebuilt when missing or behind the log
 archived-runs/<id>/log.jsonl  retained feed log after run deletion
@@ -61,6 +62,14 @@ current-state directory. The event feed reads its derived index to find changed
 runs, then reads their live or archived logs. Writers update the index
 under the same lock before publishing the head; a missing or stale index is rebuilt
 from the logs.
+
+Admission notice readers use a disposable index of skipped explicit requests. Writers
+update it under the commit lock; a missing or stale index is rebuilt once from retained
+receipts and requests. Incremental reads visit bounded commit ranges and read only the
+selected notices' source documents. History queries select receipt days and timestamps
+before reading those documents, so delayed preparation retains the original receipt time.
+Polling at the current head reads no receipt or request documents and takes no writer lock
+unless a pending intent requires recovery.
 
 Use a local filesystem that supports hard links. Network filesystems are unsupported.
 The lock records its host, PID and process instance. Archon breaks it only when its owner

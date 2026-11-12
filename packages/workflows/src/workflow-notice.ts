@@ -179,10 +179,8 @@ async function admissionFactsSince(
   const admissions: AdmissionNoticeFacts[] = [];
   let after: AdmissionNoticeCursor | null = null;
   for (;;) {
-    const page = await source.store.readAdmissionNoticesAfter(after, { limit: 100 });
-    for (const { facts } of page.notices)
-      if (since === undefined || Date.parse(facts.receivedAt) >= since.getTime())
-        admissions.push(facts);
+    const page = await source.store.readAdmissionNoticesAfter(after, { limit: 100, since });
+    for (const { facts } of page.notices) admissions.push(facts);
     if (page.caughtUp) break;
     after = page.next;
   }

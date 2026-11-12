@@ -5,6 +5,7 @@ import {
   type AdmissionNoticeCursor,
   type AdmissionNoticePage,
 } from '@archon/workflows/admission-notice';
+import type { IResourceStartStore } from '@archon/workflows/resource-start-store';
 import { WorkflowEventCursorError } from '@archon/workflows/store';
 import { preparedWorkflowLaunchSchema } from '@archon/workflows/schemas/resource-start';
 import { getDatabase } from './connection';
@@ -28,13 +29,20 @@ function storedJson(value: unknown): unknown {
 
 export async function readAdmissionNoticesAfter(
   after: AdmissionNoticeCursor | null,
-  { limit }: { limit: number }
+  { limit, since }: Parameters<IResourceStartStore['readAdmissionNoticesAfter']>[1]
 ): Promise<AdmissionNoticePage> {
   validateAdmissionNoticeLimit(limit);
   const lower = after === null ? '0' : position(after);
   const head = await getAdmissionNoticeHead();
   const upper = position(head);
   if (BigInt(lower) > BigInt(upper)) throw new WorkflowEventCursorError();
+  // SQLite stores UTC timestamps with variable fractional precision. Compare at
+  // Date's millisecond precision, as file and memory history readers do.
+  const receivedAt =
+    getDatabase().dialect === 'sqlite'
+      ? `(CASE WHEN length(s.received_at) = 17 THEN substr(s.received_at, 1, 16) || ':00' ELSE substr(s.received_at, 1, 19) END) || '.' ||
+       (CASE WHEN instr(s.received_at, '.') = 0 THEN '000' ELSE substr(substr(s.received_at, 21, length(s.received_at) - 21) || '000', 1, 3) END)`
+      : 's.received_at';
   // Admission serializes writers before allocating queue_position. A committed maximum
   // therefore cannot skip an earlier, still-uncommitted request.
   const result = await getDatabase().query<{
@@ -58,8 +66,20 @@ export async function readAdmissionNoticesAfter(
        JOIN remote_agent_start_receipts s ON s.id = r.receipt_id
       WHERE r.queue_position > $1 AND r.queue_position <= $2
         AND r.status = 'skipped' AND s.delivery_id IS NOT NULL
+        ${since === undefined ? '' : `AND (${receivedAt}) >= $4`}
       ORDER BY r.queue_position LIMIT $3`,
-    [lower, upper, limit + 1]
+    [
+      lower,
+      upper,
+      limit + 1,
+      ...(since === undefined
+        ? []
+        : [
+            getDatabase().dialect === 'sqlite'
+              ? since.toISOString().slice(0, -1)
+              : since.toISOString(),
+          ]),
+    ]
   );
   const caughtUp = result.rows.length <= limit;
   const notices = result.rows.slice(0, limit).map(row => {

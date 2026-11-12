@@ -189,6 +189,52 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       ).toEqual(expected);
       expect(await store.getWorkflowRun(holder.run.id)).toEqual(before);
     });
+    test('history selects receipt time while retaining admission order and inclusive boundaries', async () => {
+      await store.admitResourceStart({ ...binding, launch: launch() });
+      const ids: string[] = [];
+      for (const [index, receivedAt] of [
+        '2026-01-03T00:00:00.000Z',
+        '2025-12-31T23:59:59.999Z',
+        '2026-01-02T00:00:00Z',
+        '2026-01-02T00:00:00.000123Z',
+        '2026-01-02T00:00Z',
+      ].entries()) {
+        const input = acceptance();
+        input.receipt.deliveryId = `delivery-${String(index)}`;
+        input.receipt.receivedAt = receivedAt;
+        input.bindings = [{ ...binding, overlap: 'skip' }];
+        await store.acceptStartReceipt(input);
+        const identity = {
+          receiptId: input.receipt.id,
+          bindingId: binding.bindingId,
+          ownerId: 'owner',
+        };
+        await store.claimStartBindingPreparation(identity);
+        const prepared = launch();
+        await store.completeStartBindingPreparation({ ...identity, launch: prepared });
+        ids.push(prepared.run.id);
+      }
+      const since = new Date('2026-01-02T00:00:00.000Z');
+      const first = await store.readAdmissionNoticesAfter(null, { limit: 1, since });
+      expect(first.notices.map(row => row.facts.requestId)).toEqual([ids[0]]);
+      expect(first.caughtUp).toBe(false);
+      const second = await store.readAdmissionNoticesAfter(first.next, { limit: 10, since });
+      expect(second.notices.map(row => row.facts.requestId)).toEqual(ids.slice(2));
+      expect(second.caughtUp).toBe(true);
+      expect(
+        (await store.readAdmissionNoticesAfter(second.next, { limit: 1, since })).notices
+      ).toEqual([]);
+      const notices = await listWorkflowNotices(
+        { store },
+        { scope: { kind: 'all' }, labels: {}, since }
+      );
+      expect(notices.map(notice => notice.labels.request)).toEqual([...ids.slice(2), ids[0]]);
+      expect(
+        (await store.readAdmissionNoticesAfter(null, { limit: 10 })).notices.map(
+          row => row.facts.requestId
+        )
+      ).toEqual(ids);
+    });
     test('admission history preserves every signal without consuming the author notice budget', async () => {
       const holder = launch();
       await store.admitResourceStart({ ...binding, launch: holder });
