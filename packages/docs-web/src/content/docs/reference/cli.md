@@ -758,8 +758,8 @@ These are audit facts. They never name who answered, and nothing routes on them.
 - **Reason** is why a run that ended needs a look, in up to two short lines: for a failed
   outcome, what the `returns:` node said (its first lines, or its text fields as `key: text`);
   for a failed run, the first line of its first failed node's error. `workflow get` prints
-  it as `Reason:` under the status and carries it as `reason` in `--json`. The full value
-  stays in `terminal_record`.
+  it as `Reason:` under the status and carries it as `reason` in `--json`; both are omitted
+  when the record holds no reason text. The full value stays in `terminal_record`.
 
 The axes may disagree without either being rewritten: `completed` with authored outcome `failed`
 means execution finished normally but the workflow judged the work unsuccessful; `failed` or

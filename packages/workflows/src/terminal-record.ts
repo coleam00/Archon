@@ -406,7 +406,8 @@ function returnedText(value: unknown): string[] {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return [];
   return Object.entries(value).flatMap(([key, field]) => {
     const line = typeof field === 'string' ? firstLine(field) : undefined;
-    return line === undefined ? [] : [`${key}: ${line}`];
+    // A key is authored text too: one with a line break must not make the entry span lines.
+    return line === undefined ? [] : [`${key.replace(/\s+/g, ' ').trim()}: ${line}`];
   });
 }
 
