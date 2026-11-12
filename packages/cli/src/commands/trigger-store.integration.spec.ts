@@ -1305,3 +1305,58 @@ test('a fire from inside a run records that run, and the started run and its req
     restore();
   }
 });
+
+test('launch diagnostics retain all lines in both inspect forms and workflow get', async () => {
+  const { host, configPath, restore } = await fireFixture(true);
+  const output: string[] = [];
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: unknown,
+    callback?: () => void
+  ) => {
+    output.push(String(chunk));
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  const diagnostic = 'delivery preparation failed\nsecond diagnostic line';
+  try {
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath },
+      { dispatch: noDispatch, env: NO_RUN }
+    );
+    const [receipt] = await host.deps.store.listStartReceipts();
+    const binding = (await host.deps.store.getStartReceipt(receipt.id))?.bindings[0];
+    if (binding?.disposition?.status !== 'admitted') throw new Error('Expected admission');
+    const { runId } = binding.disposition;
+    await expect(
+      startAdmittedResourceStart({
+        host,
+        hostId: 'host',
+        requestId: binding.disposition.requestId,
+        createPlatform: () => {
+          throw new Error(diagnostic);
+        },
+      })
+    ).rejects.toThrow(diagnostic);
+    for (const id of [receipt.id, binding.disposition.requestId]) {
+      output.length = 0;
+      await triggerCommand(host, 'inspect', [id], {});
+      const inspected = JSON.parse(output.join(''));
+      expect(id === receipt.id ? inspected.bindings[0].run : inspected.run).toMatchObject({
+        id: runId,
+        status: 'failed',
+        error: diagnostic,
+      });
+    }
+    output.length = 0;
+    await workflowGetCommand(host, runId, true);
+    const got = JSON.parse(output.join(''));
+    expect(got.metadata.error).toBe(diagnostic);
+    expect(got.terminal_record.error).toBe(diagnostic);
+  } finally {
+    stdout.mockRestore();
+    restore();
+  }
+});

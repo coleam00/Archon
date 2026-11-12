@@ -57,7 +57,13 @@ function makeFixture(workflows: Record<string, string>): Fixture {
 function spawnCli(fixture: Fixture, args: string[]): Bun.Subprocess<'ignore', 'pipe', 'pipe'> {
   return Bun.spawn([process.execPath, CLI_PATH, ...args], {
     cwd: fixture.projectRoot,
-    env: { ...process.env, ARCHON_HOME: fixture.archonHome },
+    env: {
+      ...process.env,
+      ARCHON_HOME: fixture.archonHome,
+      DATABASE_URL: '',
+      WORKFLOW_ID: '',
+      ARCHON_NODE_EXECUTION: '',
+    },
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',
@@ -184,6 +190,80 @@ const RED =
   '  - id: verdict\n    bash: |\n      echo \'{"green": false, "summary": "main is red: lint fails on dev"}\'\n' +
   '    output_format:\n      type: object\n      properties:\n        green: { type: boolean }\n        summary: { type: string }\n' +
   '      required: [green, summary]\n';
+
+test('a launch failure reaches protocol and text watchers without diagnostics', async () => {
+  const fixture = makeFixture({
+    'launch-proof':
+      'name: launch-proof\ndescription: Launch failure.\nnodes:\n  - id: one\n    bash: echo unreachable\n',
+  });
+  expect(await Bun.spawn(['git', 'init', '-q'], { cwd: fixture.projectRoot }).exited).toBe(0);
+  const who = await runCli(fixture, ['trigger', 'whoami']);
+  expect(who.exitCode).toBe(0);
+  const { runAsUserId } = JSON.parse(who.stdout);
+  const config = join(fixture.projectRoot, 'trigger.json');
+  writeFileSync(
+    config,
+    JSON.stringify({
+      version: 1,
+      sourceInstanceId: 'launch-test',
+      binding: {
+        bindingId: 'launch-test',
+        bindingRevision: null,
+        hostId: 'launch-test',
+        runAsUserId,
+        resource: 'launch-test',
+        overlap: 'queue',
+        launch: {
+          cwd: fixture.projectRoot,
+          workflowName: 'launch-proof',
+          inputs: {},
+          isolation: { kind: 'default' },
+        },
+      },
+    })
+  );
+  const watch = startWatch(fixture);
+  await watch.next('ready', line => line.type === 'ready');
+  const textChild = spawnCli(fixture, ['workflow', 'attention', '--watch', '--protocol', '--all']);
+  watchers.add(textChild);
+  let text = '';
+  const reader = textChild.stdout.getReader();
+  const decoder = new TextDecoder();
+  const readUntil = async (expected: string): Promise<void> => {
+    while (!text.includes(expected)) {
+      const next = await reader.read();
+      if (next.done) throw new Error(`Watch ended: ${text}`);
+      text += decoder.decode(next.value, { stream: true });
+    }
+  };
+  try {
+    await readUntil('Ctrl-C stops.');
+    const fire = await runCli(fixture, ['trigger', 'fire', '--config', config]);
+    expect(fire.exitCode).toBe(0);
+    const terminal = await watch.next('launch failure', line => line.type === 'terminal', 10_000);
+    expect(terminal).toMatchObject({
+      status: 'failed',
+      cause: null,
+      reason: ['launch failed before the first node'],
+    });
+    const runId = terminal.runId as string;
+    await readUntil('launch failed before the first node');
+    expect(text).toContain(runId);
+    const detail = JSON.parse((await runCli(fixture, ['workflow', 'get', runId, '--json'])).stdout);
+    expect(detail.metadata.error).toContain('no git remote');
+    for (const output of [text, JSON.stringify(watch.lines)]) {
+      expect(output).not.toContain('no git remote');
+      expect(output).not.toContain('Could not create isolated workspace');
+      expect(output).not.toContain(fixture.projectRoot);
+    }
+  } finally {
+    await watch.stop();
+    textChild.kill('SIGKILL');
+    await textChild.exited;
+    watchers.delete(textChild);
+    reader.releaseLock();
+  }
+}, 30_000);
 
 test('a run that completes with a failed outcome says why on its watch line and in get', async () => {
   const fixture = makeFixture({ 'watch-red': RED });

@@ -759,7 +759,8 @@ These are audit facts. They never name who answered, and nothing routes on them.
   nullable `outcome` field beside `status`.
 - **Reason** is why a run that ended needs a look, in up to two short lines: for a failed
   outcome, what the `returns:` node said (its first lines, or its text fields as `key: text`);
-  for a failed run, the first line of its first failed node's error. `workflow get` prints
+  for a failed run, the first line of its first failed node's error, falling back to the
+  run's own error when no failed-node error is available, including launch failures. `workflow get` prints
   it as `Reason:` under the status and carries it as `reason` in `--json`; both are omitted
   when the record holds no reason text. The full value stays in `terminal_record`.
 
@@ -1211,8 +1212,13 @@ paused run (an unreadable row or a readable parent whose descendant cannot be re
 then `ready`, then follows changes any process commits, as
 `attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
 Every run line carries the run's `workflow` and `parentRunId`, so a consumer can keep
-top-level runs or one parent's children, and a failed `terminal` line carries `cause`, the
-failed node and its recorded error class ([fields](/getting-started/operate/#the-full-protocol-for-programs)).
+top-level runs or one parent's children. A failed `terminal` line carries `cause` with the
+failed node and its recorded error class when available; `cause` is null for failures
+outside a node, including launch failures, and for runs without terminal records. A recorded
+`launch_failed` event carries `reason: ["launch failed before the first node"]` and the
+run ID, without error text. Read the full error with `archon workflow get <run-id>` or
+`archon trigger inspect <receipt-or-request-id>`
+([fields](/getting-started/operate/#the-full-protocol-for-programs)).
 Repeated run-projection failures send an identifier-free `degraded` line with
 `reason: "run_unreadable"` and the last handled `cursor`, without exiting. Independent
 readable deliveries can continue while unreadable deliveries are omitted. Store-wide
