@@ -1703,6 +1703,97 @@ describe('runFixtures exec-code isolation (#2851)', () => {
     }
   );
 
+  it.each([
+    ['bash', 'node'],
+    ['bash', 'assertion'],
+    ['script', 'node'],
+    ['script', 'assertion'],
+  ] as const)(
+    'redacts successful %s stdout and resolved text when a fixture fails its %s',
+    async (kind, failure) => {
+      const inherited = 'synthetic-inherited-trace-secret';
+      const configured = 'synthetic-configured-trace-secret';
+      const explicit = 'synthetic-explicit-trace-secret';
+      const rawOutput = `${inherited} ${configured} ${explicit}`;
+      const previous = process.env.ARCHON_FIXTURE_TRACE_SECRET;
+      process.env.ARCHON_FIXTURE_TRACE_SECRET = inherited;
+      try {
+        const { cwd } = writeTempProject({
+          workflowYaml: [
+            'name: test-wf',
+            'description: successful credential output in a failed fixture',
+            'nodes:',
+            '  - id: code',
+            ...(kind === 'bash'
+              ? [
+                  '    bash: |',
+                  `      printf "%s %s %s" "$ARCHON_FIXTURE_TRACE_SECRET" "$ARCHON_FIXTURE_ACCOUNT" "${explicit}"`,
+                ]
+              : [
+                  '    runtime: bun',
+                  '    script: |',
+                  `      process.stdout.write([process.env.ARCHON_FIXTURE_TRACE_SECRET, process.env.ARCHON_FIXTURE_ACCOUNT, "${explicit}"].join(" "));`,
+                ]),
+            '  - id: consumer',
+            '    depends_on: [code]',
+            '    bash: |',
+            `      [ $code.output = '${rawOutput}' ] || exit 9`,
+            failure === 'node' ? '      exit 7' : '      printf verified',
+          ].join('\n'),
+          body: [
+            'fixture:',
+            '  expect: completed',
+            ...(failure === 'assertion'
+              ? ['  resolved-text-contains:', '    consumer: "[REDACTED]"']
+              : []),
+            'exec-code: true',
+          ].join('\n'),
+        });
+        callerFrom(trackedOnlyRepo, cwd);
+        const report = await runFixtures({
+          workflows: workflowsOnDisk(cwd, ['test-wf']),
+          cwd,
+          resolveExecConfig: async () =>
+            applyRunEnvironment(
+              {
+                assistant: undefined,
+                assistants: { claude: {}, codex: {} },
+                commands: {},
+                protectedCredentialValues: [explicit],
+              },
+              { ARCHON_FIXTURE_ACCOUNT: configured }
+            ),
+        });
+        const result = report.results[0];
+        expect(result.pass).toBe(false);
+        expect(result.outcome).toBe(failure === 'node' ? 'failed' : 'completed');
+        if (failure === 'node') {
+          expect(result.nodeFailures?.[0].reason).toContain('[exit 7]');
+        } else {
+          expect(result.failureReason).toBe(
+            'expected node \'consumer\' resolved text to contain "[REDACTED]"'
+          );
+        }
+        expect(result.trace?.find(entry => entry.nodeId === 'code')).toMatchObject({
+          state: 'completed',
+          output: '[REDACTED] [REDACTED] [REDACTED]',
+        });
+        expect(result.trace?.find(entry => entry.nodeId === 'consumer')?.resolvedText).toContain(
+          "[ '[REDACTED] [REDACTED] [REDACTED]' = '[REDACTED] [REDACTED] [REDACTED]' ]"
+        );
+        for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+          for (const secret of [inherited, configured, explicit]) {
+            expect(output).not.toContain(secret);
+          }
+          expect(output).toContain('[REDACTED]');
+        }
+      } finally {
+        if (previous === undefined) delete process.env.ARCHON_FIXTURE_TRACE_SECRET;
+        else process.env.ARCHON_FIXTURE_TRACE_SECRET = previous;
+      }
+    }
+  );
+
   it('keeps executed writes out of the caller checkout (#2851)', async () => {
     const { cwd } = writeTempProject({
       workflowName: 'writer-wf',
