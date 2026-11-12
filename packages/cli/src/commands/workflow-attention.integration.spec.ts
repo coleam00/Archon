@@ -1,3 +1,4 @@
+import { getLog } from './workflow-shared';
 import * as chatScope from '../workflow-scope';
 import { afterEach, expect, spyOn, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, realpathSync } from 'node:fs';
@@ -263,7 +264,7 @@ test('the queue scopes by project the way archon state names it, across a rename
       all: true,
       labels: [],
       countBy: 'label:ci',
-      since: '1h',
+      since: '40m',
     })
   );
   expect(started.json).toMatchObject({
@@ -570,7 +571,7 @@ test('--recommended answers as the declared answerer, and the notices watch says
       json: true,
       labels: [],
       countBy: 'label:merge',
-      since: '1h',
+      since: '40m',
     })
   );
   expect(counted.json).toMatchObject({
@@ -1283,7 +1284,7 @@ test('a notice is recorded only from a node of a running run, reaches the notice
         json: true,
         labels: [],
         notices: true,
-        since: '1h',
+        since: '40m',
         ...opts,
       })
     );
@@ -1325,3 +1326,36 @@ test('a notice is recorded only from a node of a running run, reaches the notice
   await store.completeWorkflowRun(other, { duration_ms: 1 });
   expect(await notice(node(other))).toMatchObject({ code: 1, json: { reason: 'run_not_running' } });
 });
+
+for (const mode of [{ notices: true }, { countBy: 'project' }]) {
+  test.each([false, true])(
+    `invalid --since in ${JSON.stringify(mode)} is a quiet usage error (json=%s)`,
+    async json => {
+      const host = createHost();
+      const log = spyOn(getLog(), 'error');
+      const invoke = () =>
+        workflowAttentionCommand(host, process.cwd(), undefined, {
+          labels: [],
+          all: true,
+          since: '40x',
+          json,
+          ...mode,
+        });
+      try {
+        if (json) {
+          expect(await captured(invoke)).toMatchObject({
+            code: 1,
+            json: { ok: false, error: expect.stringContaining('since must be a duration') },
+          });
+        } else {
+          await expect(invoke()).rejects.toThrow(
+            'Failed to read the attention queue: since must be a duration'
+          );
+        }
+        expect(log).not.toHaveBeenCalled();
+      } finally {
+        log.mockRestore();
+      }
+    }
+  );
+}

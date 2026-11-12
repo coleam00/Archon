@@ -3300,7 +3300,7 @@ export interface paths {
     get: {
       parameters: {
         query?: {
-          /** @description Window start: a duration before `until` (`24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days. */
+          /** @description Window start: a duration before `until` (`40m`, `24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days. */
           since?: string;
           /** @description Exclusive window end: an ISO date or time. Defaults to now. */
           until?: string;

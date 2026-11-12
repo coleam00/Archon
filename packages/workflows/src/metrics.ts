@@ -82,7 +82,7 @@ const SEEN_NODE_LIMIT = 50;
 
 const DAY_MS = 86_400_000;
 export const DEFAULT_METRICS_WINDOW_DAYS = 30;
-const DURATION_UNIT_MS = { h: 3_600_000, d: DAY_MS, w: 7 * DAY_MS } as const;
+const DURATION_UNIT_MS = { m: 60_000, h: 3_600_000, d: DAY_MS, w: 7 * DAY_MS } as const;
 const instantSchema = z.union([z.iso.date(), z.iso.datetime({ offset: true })]);
 
 const INSTANT_FORMS =
@@ -97,7 +97,7 @@ function parseInstant(field: string, value: string, forms = INSTANT_FORMS): Date
 
 /**
  * Resolve a window from the CLI's and API's shared syntax. `since` is a duration
- * (`24h`, `7d`, `2w`) counted back from `until`, or an ISO date or time; `until`
+ * (`40m`, `24h`, `7d`, `2w`) counted back from `until`, or an ISO date or time; `until`
  * defaults to `now` and `since` to {@link DEFAULT_METRICS_WINDOW_DAYS} days before it.
  * A date without a time is UTC midnight.
  */
@@ -125,9 +125,13 @@ export function resolveMetricsSplit(input: { compare?: string; byModel?: string 
 
 function resolveSince(since: string | undefined, until: Date): Date {
   if (since === undefined) return new Date(until.getTime() - DEFAULT_METRICS_WINDOW_DAYS * DAY_MS);
-  const duration = /^(\d+)([hdw])$/.exec(since);
+  const duration = /^(\d+)([mhdw])$/.exec(since);
   if (duration === null) {
-    return parseInstant('since', since, `a duration such as 24h, 7d or 2w, or ${INSTANT_FORMS}`);
+    return parseInstant(
+      'since',
+      since,
+      `a duration such as 40m, 24h, 7d or 2w, or ${INSTANT_FORMS}`
+    );
   }
   const unit = duration[2] as keyof typeof DURATION_UNIT_MS;
   const start = new Date(until.getTime() - Number(duration[1]) * DURATION_UNIT_MS[unit]);
