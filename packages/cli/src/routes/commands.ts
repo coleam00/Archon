@@ -178,12 +178,11 @@ export async function runTrigger({
   positionals,
   values,
 }: CliRouteContext): Promise<number> {
-  const { triggerCommand } = await loadRoute(() => import('../commands/trigger'), {
+  const { triggerCommand, spawnAdmitted } = await loadRoute(() => import('../commands/trigger'), {
     database: await usesDatabaseStore(),
   });
   const { createCliWorkflowHost } = await import('../utils/workflow-host');
   const host = await createCliWorkflowHost(true);
-  const { spawnAdmitted } = await import('../triggers/resource-start-host');
   await triggerCommand(
     host,
     subcommand,

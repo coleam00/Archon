@@ -1,4 +1,3 @@
-import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -231,131 +230,6 @@ nodes:
 }
 
 describe('trigger CLI durable execution', () => {
-  test.each(['complete', 'fail', 'pause'] as const)(
-    'owner %s drains the queued hand-off without another command',
-    async ending => {
-      const fixture = await heldTriggerRun(`completion-${ending}`);
-      const release = join(fixture.projectRoot, 'release');
-      const configPath = join(fixture.projectRoot, '..', 'trigger.json');
-      const config = triggerFireConfigSchema.parse(JSON.parse(readFileSync(configPath, 'utf8')));
-      config.binding.overlap = 'skip';
-      writeFileSync(configPath, JSON.stringify(config));
-      fixture.writeWorkflow(
-        `echo ready > ready; while [ ! -f '${release}' ]; do sleep 0.025; done; ${ending === 'fail' ? 'exit 1' : 'echo finished'}`,
-        ending === 'pause'
-          ? '  - id: review\n    depends_on: [hold]\n    approval:\n      message: Review?'
-          : ''
-      );
-      await fixture.fire();
-      const first = await waitFor(() => {
-        const run = fixture.runs()[0];
-        return run?.status === 'running' && existsSync(join(fixture.projectRoot, 'ready'))
-          ? run
-          : undefined;
-      }, 'holding execution');
-      activeRuns.add(first.id);
-      config.sourceInstanceId += '-handoff';
-      config.binding.bindingId += '-handoff';
-      config.binding.overlap = 'queue';
-      delete config.schedule;
-      writeFileSync(configPath, JSON.stringify(config));
-      const successorRoot = join(fixture.projectRoot, '..', 'successor');
-      mkdirSync(join(successorRoot, '.archon', 'workflows'), { recursive: true });
-      expect(await Bun.spawn(['git', 'init', '-q'], { cwd: successorRoot }).exited).toBe(0);
-      writeFileSync(
-        join(successorRoot, '.archon', 'workflows', 'successor.yaml'),
-        'name: successor\ndescription: Successor\nmutates_checkout: false\nnodes:\n  - id: record\n    bash: echo successor >> successor-count\n'
-      );
-      config.binding.launch.cwd = successorRoot;
-      config.binding.launch.workflowName = 'successor';
-      writeFileSync(configPath, JSON.stringify(config));
-      await fixture.fire();
-      expect(fixture.requests().map(row => row.status)).toEqual(['admitted', 'queued']);
-      writeFileSync(release, '');
-      await waitFor(
-        () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
-        'owner-driven successor'
-      );
-      expect(fixture.runs()[0]?.status).toBe(
-        ending === 'complete' ? 'completed' : ending === 'fail' ? 'failed' : 'paused'
-      );
-      expect(fixture.runs()).toHaveLength(2);
-      expect(readFileSync(join(successorRoot, 'successor-count'), 'utf8')).toBe('successor\n');
-      activeRuns.delete(first.id);
-    },
-    30_000
-  );
-
-  test.each(['complete', 'wait'] as const)(
-    'a resumed owner drains at %s before its command exits or waits',
-    async ending => {
-      const fixture = await heldTriggerRun(`resumed-${ending}`);
-      const release = join(fixture.projectRoot, 'release');
-      const count = join(fixture.projectRoot, 'successor-count');
-      fixture.writeWorkflow(
-        'echo initial',
-        [
-          '  - id: review',
-          '    depends_on: [hold]',
-          '    approval:',
-          '      message: Continue?',
-          '  - id: resumed',
-          '    depends_on: [review]',
-          '    bash: |',
-          `      echo "$PPID $$" > '${fixture.pidFile}'; while [ ! -f '${release}' ]; do sleep 0.025; done`,
-          ...(ending === 'wait'
-            ? [
-                '  - id: later',
-                '    depends_on: [resumed]',
-                '    wait:',
-                '      duration_ms: 3600000',
-              ]
-            : []),
-        ].join('\n')
-      );
-      await fixture.fire();
-      const first = await waitFor(() => {
-        const run = fixture.runs()[0];
-        return run?.status === 'paused' ? run : undefined;
-      }, 'initial approval pause');
-      await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
-        'workflow',
-        'approve',
-        first.id,
-        '--detach',
-      ]);
-      const [ownerPid] = await recordedPids(fixture.pidFile);
-      activeRuns.add(first.id);
-      try {
-        const successorRoot = join(fixture.projectRoot, '..', 'successor');
-        mkdirSync(join(successorRoot, '.archon', 'workflows'), { recursive: true });
-        expect(await Bun.spawn(['git', 'init', '-q'], { cwd: successorRoot }).exited).toBe(0);
-        writeFileSync(
-          join(successorRoot, '.archon', 'workflows', 'successor.yaml'),
-          `name: successor\ndescription: Successor\nnodes:\n  - id: record\n    bash: echo successor >> '${count}'\n`
-        );
-        const configPath = join(fixture.projectRoot, '..', 'trigger.json');
-        const config = triggerFireConfigSchema.parse(JSON.parse(readFileSync(configPath, 'utf8')));
-        config.binding.launch.cwd = successorRoot;
-        config.binding.launch.workflowName = 'successor';
-        writeFileSync(configPath, JSON.stringify(config));
-        await fixture.fire();
-        expect(fixture.requests()[1]?.status).toBe('queued');
-        writeFileSync(release, '');
-        await waitFor(
-          () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
-          'successor from resumed owner'
-        );
-        expect(fixture.runs()[0]?.status).toBe(ending === 'wait' ? 'paused' : 'completed');
-        expect(readFileSync(count, 'utf8')).toBe('successor\n');
-      } finally {
-        if (ending === 'wait') killAll([ownerPid]);
-      }
-      activeRuns.delete(first.id);
-    },
-    30_000
-  );
-
   test('a killed launch records no failure and continues to hold its slot', async () => {
     const fixture = await heldTriggerRun('killed-preparation');
     const ready = join(fixture.projectRoot, 'ready.json');
@@ -1249,8 +1123,6 @@ nodes:
         );
         sleepPid = nodePid;
 
-        writeWorkflow('echo done');
-        await runCli(cliPath, projectRoot, archonHome, fire);
         process.kill(ownerPid, 'SIGTERM');
         const failed = await waitFor(() => {
           const run = runs()[0];
@@ -1269,15 +1141,13 @@ nodes:
         }, 'signalled owner to exit');
         activeRuns.delete(first.id);
 
-        // The signal owner drains the queued request before exiting.
+        // With the run terminal, the capacity-1 slot admits the next start at once.
+        writeWorkflow('echo done');
+        await runCli(cliPath, projectRoot, archonHome, fire);
         await waitFor(
           () => (runs()[1]?.status === 'completed' ? true : undefined),
           'next start to run'
-        ).catch(error => {
-          throw new Error(
-            `${String(error)}\n${readFileSync(join(archonHome, 'logs', `trigger-run-${first.id}.log`), 'utf8')}`
-          );
-        });
+        );
         expect(
           readRows<RequestRow>(
             databasePath,
@@ -1297,137 +1167,126 @@ nodes:
     45_000
   );
 
-  test.each(['workflow', 'chat'] as const)(
-    '%s cancel stops a run executing in a detached trigger execute process',
-    async surface => {
-      const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-cancel-')));
-      tempRoots.push(root);
-      const archonHome = join(root, 'home');
-      const projectRoot = join(root, 'project');
-      const workflowPath = join(projectRoot, '.archon', 'workflows', 'cancel-proof.yaml');
-      mkdirSync(join(projectRoot, '.archon', 'workflows'), { recursive: true });
-      expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
-      const pidFile = join(root, 'owner.pid');
-      const writeWorkflow = (body: string): void => {
-        writeFileSync(
-          workflowPath,
-          `name: cancel-proof\ndescription: Cancel proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
-        );
-      };
-      // A bash node's parent is the `trigger execute` process that owns the run.
-      writeWorkflow(stagedPidWriter(pidFile));
-
-      const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
-      const databasePath = join(archonHome, 'archon.db');
-      const userId = crypto.randomUUID();
-      const configPath = join(root, 'trigger.json');
+  test('workflow cancel stops a run executing in a detached trigger execute process', async () => {
+    const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-trigger-cancel-')));
+    tempRoots.push(root);
+    const archonHome = join(root, 'home');
+    const projectRoot = join(root, 'project');
+    const workflowPath = join(projectRoot, '.archon', 'workflows', 'cancel-proof.yaml');
+    mkdirSync(join(projectRoot, '.archon', 'workflows'), { recursive: true });
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
+    const pidFile = join(root, 'owner.pid');
+    const writeWorkflow = (body: string): void => {
       writeFileSync(
-        configPath,
-        JSON.stringify({
-          version: 1,
-          sourceInstanceId: 'cancel-timer',
-          binding: {
-            bindingId: 'cancel-proof',
-            bindingRevision: null,
-            hostId: 'cancel-host',
-            runAsUserId: userId,
-            resource: 'cancel:resource',
-            overlap: 'queue',
-            launch: {
-              cwd: projectRoot,
-              workflowName: 'cancel-proof',
-              inputs: {},
-              isolation: { kind: 'in-place' },
-            },
-          },
-          schedule: { intervalSeconds: 60, runAtLoad: false },
-        })
+        workflowPath,
+        `name: cancel-proof\ndescription: Cancel proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
       );
-      const fire = ['trigger', 'fire', '--config', configPath];
-      expect((await runCli(cliPath, projectRoot, archonHome, fire, false)).exitCode).not.toBe(0);
-      const database = new Database(databasePath);
-      try {
-        database
-          .query('INSERT INTO remote_agent_users (id, display_name) VALUES (?, ?)')
-          .run(userId, 'Cancel actor');
-      } finally {
-        database.close();
+    };
+    // A bash node's parent is the `trigger execute` process that owns the run.
+    writeWorkflow(stagedPidWriter(pidFile));
+
+    const cliPath = resolve(import.meta.dir, '..', 'cli.ts');
+    const databasePath = join(archonHome, 'archon.db');
+    const userId = crypto.randomUUID();
+    const configPath = join(root, 'trigger.json');
+    writeFileSync(
+      configPath,
+      JSON.stringify({
+        version: 1,
+        sourceInstanceId: 'cancel-timer',
+        binding: {
+          bindingId: 'cancel-proof',
+          bindingRevision: null,
+          hostId: 'cancel-host',
+          runAsUserId: userId,
+          resource: 'cancel:resource',
+          overlap: 'queue',
+          launch: {
+            cwd: projectRoot,
+            workflowName: 'cancel-proof',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+        },
+        schedule: { intervalSeconds: 60, runAtLoad: false },
+      })
+    );
+    const fire = ['trigger', 'fire', '--config', configPath];
+    expect((await runCli(cliPath, projectRoot, archonHome, fire, false)).exitCode).not.toBe(0);
+    const database = new Database(databasePath);
+    try {
+      database
+        .query('INSERT INTO remote_agent_users (id, display_name) VALUES (?, ?)')
+        .run(userId, 'Cancel actor');
+    } finally {
+      database.close();
+    }
+    const runs = (): RunRow[] =>
+      readRows<RunRow>(
+        databasePath,
+        'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs ORDER BY started_at'
+      );
+    const requests = (): RequestRow[] =>
+      readRows<RequestRow>(
+        databasePath,
+        'SELECT id,status,launch FROM remote_agent_resource_start_requests ORDER BY queue_position'
+      );
+
+    let pids: number[] = [];
+    try {
+      await runCli(cliPath, projectRoot, archonHome, fire);
+      const first = await waitFor(() => {
+        const run = runs()[0];
+        return run?.status === 'running' ? run : undefined;
+      }, 'trigger execution to start');
+      activeRuns.add(first.id);
+      pids = await publishPidsAfterConsumerWaits(pidFile, recordedPids(pidFile));
+
+      // The next start captures its own source at intake and waits behind the slot.
+      writeWorkflow('echo done');
+      await runCli(cliPath, projectRoot, archonHome, fire);
+      await waitFor(
+        () => (requests()[1]?.status === 'queued' ? true : undefined),
+        'second start to queue behind the running one'
+      );
+
+      const cancel = await runCli(
+        cliPath,
+        projectRoot,
+        archonHome,
+        ['workflow', 'cancel', first.id],
+        false
+      );
+      if (cancel.exitCode !== 0) {
+        throw new Error(`cancel failed: ${cancel.stderr || cancel.stdout}`);
       }
-      const runs = (): RunRow[] =>
-        readRows<RunRow>(
-          databasePath,
-          'SELECT id,status,metadata,output_root FROM remote_agent_workflow_runs ORDER BY started_at'
-        );
-      const requests = (): RequestRow[] =>
-        readRows<RequestRow>(
-          databasePath,
-          'SELECT id,status,launch FROM remote_agent_resource_start_requests ORDER BY queue_position'
-        );
+      activeRuns.delete(first.id);
+      expect(runs()[0]?.status).toBe('cancelled');
+      // Git Bash reports MSYS PIDs on Windows, so the PID check is POSIX-only; there the
+      // cancel command's own confirmation that the owner's tree stopped is the proof.
+      if (process.platform !== 'win32') {
+        for (const pid of pids) expect(processAlive(pid)).toBe(false);
+      }
 
-      let pids: number[] = [];
-      try {
-        await runCli(cliPath, projectRoot, archonHome, fire);
-        const first = await waitFor(() => {
-          const run = runs()[0];
-          return run?.status === 'running' ? run : undefined;
-        }, 'trigger execution to start');
-        activeRuns.add(first.id);
-        pids = await publishPidsAfterConsumerWaits(pidFile, recordedPids(pidFile));
-
-        // The next start captures its own source at intake and waits behind the slot.
-        writeWorkflow('echo done');
-        await runCli(cliPath, projectRoot, archonHome, fire);
-        await waitFor(
-          () => (requests()[1]?.status === 'queued' ? true : undefined),
-          'second start to queue behind the running one'
-        );
-
-        const cancel = await runCli(
-          cliPath,
-          projectRoot,
-          archonHome,
-          surface === 'chat'
-            ? ['chat', `/workflow cancel ${first.id}`]
-            : ['workflow', 'cancel', first.id],
-          false
-        );
-        if (cancel.exitCode !== 0) {
-          throw new Error(`cancel failed: ${cancel.stderr || cancel.stdout}`);
-        }
-        expect(
-          runs().find(run => run.id === first.id)?.status,
-          JSON.stringify({ surface, runId: first.id, stdout: cancel.stdout, stderr: cancel.stderr })
-        ).toBe('cancelled');
-        // Git Bash reports MSYS PIDs on Windows, so the PID check is POSIX-only; there the
-        // cancel command's own confirmation that the owner's tree stopped is the proof.
-        if (process.platform !== 'win32') {
-          for (const pid of pids) expect(processAlive(pid)).toBe(false);
-        }
-
-        activeRuns.delete(first.id);
-
-        if (process.platform !== 'win32') {
-          expect(cancel.stdout + cancel.stderr).toContain(COMPLETED_HOST_COMMAND_WARNING);
-        }
-        await waitFor(
-          () => (runs()[1]?.status === 'completed' ? true : undefined),
-          'queued start to run after the cancel'
-        );
-        expect(requests().map(row => row.status)).toEqual(['admitted', 'admitted']);
-      } finally {
-        if (process.platform !== 'win32') {
-          for (const pid of pids.filter(pid => pid > 0)) {
-            try {
-              process.kill(pid, 'SIGKILL');
-            } catch {
-              // Already gone.
-            }
+      // The cancelled run released the capacity-1 slot, so a drain admits the queue.
+      await runCli(cliPath, projectRoot, archonHome, ['trigger', 'drain', '--host', 'cancel-host']);
+      await waitFor(
+        () => (runs()[1]?.status === 'completed' ? true : undefined),
+        'queued start to run after the cancel'
+      );
+      expect(requests().map(row => row.status)).toEqual(['admitted', 'admitted']);
+    } finally {
+      if (process.platform !== 'win32') {
+        for (const pid of pids.filter(pid => pid > 0)) {
+          try {
+            process.kill(pid, 'SIGKILL');
+          } catch {
+            // Already gone.
           }
         }
       }
-    },
-    45_000
-  );
+    }
+  }, 45_000);
 
   /**
    * A trigger binding on a capacity-1 resource whose run holds its node in `sleep`, in a
@@ -1444,7 +1303,7 @@ nodes:
     cliPath: string;
     hostId: string;
     pidFile: string;
-    writeWorkflow: (body: string, tail?: string) => void;
+    writeWorkflow: (body: string) => void;
     fire: () => Promise<void>;
     runs: () => RunRow[];
     requests: () => RequestRow[];
@@ -1457,10 +1316,10 @@ nodes:
     mkdirSync(join(projectRoot, '.archon', 'workflows'), { recursive: true });
     expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
     const pidFile = join(root, 'owner.pid');
-    const writeWorkflow = (body: string, tail = ''): void => {
+    const writeWorkflow = (body: string): void => {
       writeFileSync(
         workflowPath,
-        `name: ${label}-proof\ndescription: ${label} proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n${tail}\n`
+        `name: ${label}-proof\ndescription: ${label} proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
       );
     };
     writeWorkflow(`${holdPrefix}echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
@@ -1761,22 +1620,10 @@ nodes:
         pids = await recordedPids(fixture.pidFile);
         const [ownerPid] = pids;
 
-        fixture.writeWorkflow('echo successor');
-        await fixture.fire();
-        expect(fixture.requests().map(row => row.status)).toEqual(['admitted', 'queued']);
         process.kill(ownerPid, 'SIGKILL');
         await waitFor(() => (processAlive(ownerPid) ? undefined : true), 'owner to die');
         // Nothing settled the row: SIGKILL gives the owner no chance to.
         expect(fixture.runs()[0]?.status).toBe('running');
-        await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
-          'trigger',
-          'drain',
-          '--host',
-          fixture.hostId,
-        ]);
-        expect(fixture.requests().map(row => row.status)).toEqual(['admitted', 'queued']);
-        expect(fixture.runs()).toHaveLength(1);
-        killAll(pids);
 
         const abandon = await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
           'workflow',
@@ -1793,11 +1640,6 @@ nodes:
         expect(abandon.stdout).toMatch(/Last activity: \d{4}-\d{2}-\d{2}T/);
         expect(abandon.stdout).not.toContain('another host');
         expect(fixture.runs()[0]?.status).toBe('cancelled');
-        expect(fixture.requests()[1]?.status).toBe('admitted');
-        await waitFor(
-          () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
-          'successor after the explicit abandonment releases the slot'
-        );
       } finally {
         killAll(pids);
       }
@@ -1814,28 +1656,3 @@ function processAlive(pid: number): boolean {
     return false;
   }
 }
-
-test('published two-binding examples share capacity and separate scheduled ticks from hand-offs', () => {
-  const guide = readFileSync(
-    resolve(import.meta.dir, '../../../docs-web/src/content/docs/guides/workflow-triggers.md'),
-    'utf8'
-  );
-  const section = guide
-    .split('## Drop scheduled ticks and keep hand-offs')[1]
-    ?.split('## Choose a resource')[0];
-  if (!section) throw new Error('Two-binding guide section missing');
-  const configs = [...section.matchAll(/```json\n([\s\S]*?)```/g)].map(match =>
-    triggerFireConfigSchema.parse(JSON.parse(match[1]))
-  );
-  expect(configs).toHaveLength(2);
-  const [tick, followUp] = configs;
-  expect(tick.schedule).toBeDefined();
-  expect(tick.binding.overlap).toBe('skip');
-  expect(followUp.schedule).toBeUndefined();
-  expect(followUp.binding.overlap).toBe('queue');
-  expect(followUp.binding.resource).toBe(tick.binding.resource);
-  expect(followUp.binding.capacity).toBe(tick.binding.capacity);
-  expect(followUp.binding.hostId).toBe(tick.binding.hostId);
-  expect(followUp.binding.bindingId).not.toBe(tick.binding.bindingId);
-  expect(followUp.sourceInstanceId).not.toBe(tick.sourceInstanceId);
-});

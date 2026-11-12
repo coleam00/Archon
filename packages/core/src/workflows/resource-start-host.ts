@@ -1,4 +1,3 @@
-import { withRunSlotReleaseScope } from '@archon/workflows/run-slot-release';
 import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
@@ -399,10 +398,7 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
  * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run concurrently with other hosts and processes: preparation and
  * admission are claimed atomically by the store.
  */
-export async function drainResourceStartHost(
-  host: ResourceStartHost,
-  excludedResources: readonly string[] = []
-): Promise<void> {
+export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
   const failures: ResourceStartDrainFailure[] = [];
   const start = async (requestId: string, receiptId?: string): Promise<void> => {
     try {
@@ -417,7 +413,7 @@ export async function drainResourceStartHost(
       failures.push({ error: binding.error });
       continue;
     }
-    if (!binding.intent || excludedResources.includes(binding.intent.resource)) continue;
+    if (!binding.intent) continue;
     const identity = {
       receiptId: binding.receiptId,
       bindingId: binding.bindingId,
@@ -463,10 +459,7 @@ export async function drainResourceStartHost(
       }
     }
   };
-  for (const resource of queuedDrainResources(queued, failures).filter(
-    resource => !excludedResources.includes(resource)
-  ))
-    await drain(resource);
+  for (const resource of queuedDrainResources(queued, failures)) await drain(resource);
 
   if (failures.length > 0) {
     throw new ResourceStartDrainError(failures);
@@ -609,20 +602,13 @@ export interface StartAdmittedResourceStartInput {
  * Owned preparation errors fail only a still-pending run. Submission belongs to the
  * engine: a rejection there does not establish that execution never started.
  */
-export function startAdmittedResourceStart(
-  input: StartAdmittedResourceStartInput
-): Promise<WorkflowExecutionResult> {
-  return withRunSlotReleaseScope(() => executeAdmittedResourceStart(input));
-}
-
-async function executeAdmittedResourceStart(
+export async function startAdmittedResourceStart(
   input: StartAdmittedResourceStartInput
 ): Promise<WorkflowExecutionResult> {
   const { host } = input;
   const { launch, run } = await loadAdmittedResourceStart(input);
   const liveOwner = await startRunLiveOwner(run.id, {
     detachedProcessPid: input.detachedProcessPid,
-    store: host.deps.store,
   });
   let ownedExecutionClaim: string | null | undefined;
   let releaseGuard: (() => void) | undefined;
@@ -651,15 +637,11 @@ async function executeAdmittedResourceStart(
         return { success: false, workflowRunId: run.id, error: message };
       throw error;
     }
-    const result = await host.engine.submit(submission);
-    if ('handedOff' in result) {
-      ownedExecutionClaim = undefined;
-    }
-    return result;
+    return await host.engine.submit(submission);
   } finally {
     releaseGuard?.();
     await liveOwner.close().catch((error: unknown) => {
-      log.error({ err: error, runId: run.id }, 'resource_start.live_owner_close_failed');
+      log.error({ err: error as Error, runId: run.id }, 'resource_start.live_owner_close_failed');
     });
   }
 }

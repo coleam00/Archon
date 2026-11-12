@@ -1,4 +1,3 @@
-export { describeRunSlotReleaseConformance } from './store-conformance/slot-release';
 export { resourceStartFixtures } from './resource-start-conformance';
 export { CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID } from './store-conformance/fixtures';
 export {

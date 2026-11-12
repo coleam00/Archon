@@ -1,11 +1,10 @@
-import { publishRunSlotRelease } from '@archon/workflows/run-slot-release';
 import { createLogger, isTelemetryDisabled } from '@archon/paths';
 import {
   reportRunTerminalTelemetry,
   RUN_TELEMETRY_EVENT_TYPES,
   type RunTelemetryEvent,
 } from '@archon/workflows/run-terminal-telemetry';
-import { getDatabase, pool } from './connection';
+import { pool } from './connection';
 import { getDagResumeSnapshot } from './workflow-events';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 
@@ -16,19 +15,15 @@ function getLog(): ReturnType<typeof createLogger> {
 }
 
 /**
- * Publish a run's committed slot release and anonymous terminal telemetry. SQL
- * terminal writers call it once, after their transaction commits
+ * Report a run's committed terminal transition to anonymous telemetry. Every
+ * terminal writer in this module calls it once, after its transaction commits
  * and only when its status CAS won — so each transition is reported exactly
  * once, never before the write, whichever caller ended the run.
  *
- * Delivery failures are logged; the committed status remains authoritative.
+ * Best-effort: the status write is authoritative. A failure here is logged and
+ * reports nothing for that run; it never fails the caller.
  */
-export async function afterRunTerminalCommit(runId: string): Promise<void> {
-  await publishRunSlotRelease(getDatabase(), runId);
-  await reportRunTerminal(runId);
-}
-
-async function reportRunTerminal(runId: string): Promise<void> {
+export async function reportRunTerminal(runId: string): Promise<void> {
   if (isTelemetryDisabled()) return;
   try {
     const runResult = await pool.query<WorkflowRunRow>(

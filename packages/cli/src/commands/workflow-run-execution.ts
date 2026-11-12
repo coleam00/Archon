@@ -1,4 +1,3 @@
-import { deferRunSlotRelease } from '@archon/workflows/run-slot-release';
 import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { disposeWorkflowSource } from '@archon/workflows/run-source';
 import {
@@ -146,23 +145,11 @@ export async function executeOwnedRun(
       : undefined;
     execution.result = await driveRun(launch, lease, onExecutionClaimed, prepareExecution);
   } catch (error) {
-    if (error instanceof WorkflowExecutionHandoffError) {
-      execution.containerPreserved = true;
-      ownedExecutionClaim = undefined;
-    }
+    if (error instanceof WorkflowExecutionHandoffError) execution.containerPreserved = true;
     throw error;
   } finally {
     try {
-      resourceCleanupError = await settleRun(
-        launch,
-        execution,
-        ownedRunId,
-        deregisterTermination
-      ).catch(error => {
-        deferRunSlotRelease();
-        return Promise.reject(error);
-      });
-      if (resourceCleanupError) deferRunSlotRelease();
+      resourceCleanupError = await settleRun(launch, execution, ownedRunId, deregisterTermination);
     } finally {
       preparationTermination?.dispose();
     }
@@ -201,9 +188,8 @@ async function teardownOnSignal(
   if (container && !execution.containerPreserved) {
     try {
       await container.backend.destroy(container.envId);
-      if (runId && (await releaseRunResources(launch, runId))) deferRunSlotRelease();
+      if (runId) await releaseRunResources(launch, runId);
     } catch (destroyErr) {
-      deferRunSlotRelease();
       console.error(
         `\nWARNING: could not remove the isolation container on ${signal}: ` +
           `${(destroyErr as Error).message}. Remove it manually: ` +
@@ -212,7 +198,7 @@ async function teardownOnSignal(
     }
   }
   if (runId && !container && !execution.containerPreserved)
-    if (await releaseRunResources(launch, runId)) deferRunSlotRelease();
+    await releaseRunResources(launch, runId);
   // Reclaim the staged capture for the same reason: the ownership `finally` —
   // whose whole premise is "whichever way we leave" — never runs. Ctrl-C during
   // isolation resolution or worktree creation would otherwise strand a complete

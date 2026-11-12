@@ -95,9 +95,7 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
     setupWorkflowMocks();
     await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'plan', 'hello', {});
     expect(duringRunSigterm).toBe(sigtermBaseline + 1);
-    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('test-run-id', {
-      store: expect.any(Object),
-    });
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('test-run-id', {});
     expect(process.listenerCount('SIGTERM')).toBe(sigtermBaseline);
     expect(process.listenerCount('SIGINT')).toBe(sigintBaseline);
 
@@ -228,7 +226,6 @@ describe('workflowRunCommand — signal cleanup guard (#1123)', () => {
 
     expect(mockStartRunLiveOwner).toHaveBeenCalledWith('test-run-id', {
       detachedProcessPid: process.pid,
-      store: expect.any(Object),
     });
     expect(runReadsAtSignalTime).toBe(0);
     expect(failureWritesAtSignalTime).toBe(0);

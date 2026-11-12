@@ -250,8 +250,7 @@ export async function handleMessage(
       actor,
       workflowsWithSource,
       caps,
-      requestOptions,
-      context.workflowOperations
+      requestOptions
     );
 
     const turn = await runChatTurn(
@@ -545,15 +544,7 @@ async function handleDeterministicCommand(
   }
 
   await deliverCommandResult(
-    await (context.workflowOperations
-      ? commandHandler.handleCommand(
-          conversation,
-          message,
-          actor,
-          platform,
-          context.workflowOperations
-        )
-      : commandHandler.handleCommand(conversation, message, actor, platform))
+    await commandHandler.handleCommand(conversation, message, actor, platform)
   );
   return true;
 }
@@ -683,8 +674,7 @@ function attachNativeTools(
   actor: HandleMessageContext['actor'],
   workflowsWithSource: readonly WorkflowWithSource[],
   caps: ChatTurnRequest['caps'],
-  requestOptions: SendQueryOptions,
-  operations?: HandleMessageContext['workflowOperations']
+  requestOptions: SendQueryOptions
 ): {
   gateResolution: { resolved: ResolvedGate | null };
   pendingLaunch: { launch: ChatLaunch | null };
@@ -721,7 +711,7 @@ function attachNativeTools(
       tools.push(
         buildManageRunTool({
           actor,
-          operations: operations ?? createSqlWorkflowOperations(),
+          operations: createSqlWorkflowOperations(),
           codebaseId: conversation.codebase_id,
           surface: platform,
           // One continuation per turn: the resume runs in this conversation and

@@ -1,4 +1,3 @@
-import { deferRunSlotRelease, withRunSlotReleaseScope } from '@archon/workflows/run-slot-release';
 /**
  * Shared workflow business logic — approve, reject, status, resume, abandon.
  *
@@ -148,40 +147,29 @@ export interface WorkflowOperations {
 
 export function createWorkflowOperations(deps: WorkflowOperationsDeps): WorkflowOperations {
   const ctx = createOperationContext(deps);
-  function cleanup<T>(body: () => Promise<T>): Promise<T> {
-    return withRunSlotReleaseScope(async () => {
-      try {
-        return await body();
-      } catch (error) {
-        deferRunSlotRelease();
-        throw error;
-      }
-    });
-  }
   return {
     listWorkflowRuns: options => deps.store.listWorkflowRuns(options),
     findWorkflowRunsByIdPrefix: (prefix, codebaseId) =>
       deps.store.findWorkflowRunsByIdPrefix(prefix, codebaseId),
     getWorkflowStatus: options => getWorkflowStatus(ctx, options),
     assertRunActionAllowed: ctx.assertMayAct,
-    signalWorkflowWait: (runId, request, actor) =>
-      cleanup(() => signalWorkflowWait(ctx, runId, request, actor)),
-    deleteWorkflowRun: (runId, actor) => cleanup(() => deleteWorkflowRun(ctx, runId, actor)),
-    resumeWorkflow: (runId, actor) => cleanup(() => resumeWorkflow(ctx, runId, actor)),
-    abandonWorkflow: (runId, actor) => cleanup(() => abandonWorkflow(ctx, runId, actor)),
-    cancelWorkflow: (runId, actor) => cleanup(() => cancelWorkflow(ctx, runId, actor)),
+    signalWorkflowWait: (runId, request, actor) => signalWorkflowWait(ctx, runId, request, actor),
+    deleteWorkflowRun: (runId, actor) => deleteWorkflowRun(ctx, runId, actor),
+    resumeWorkflow: (runId, actor) => resumeWorkflow(ctx, runId, actor),
+    abandonWorkflow: (runId, actor) => abandonWorkflow(ctx, runId, actor),
+    cancelWorkflow: (runId, actor) => cancelWorkflow(ctx, runId, actor),
     abandonResumableRunsForConversation: (conversationId, actor) =>
-      cleanup(() => abandonResumableRunsForConversation(ctx, conversationId, actor)),
+      abandonResumableRunsForConversation(ctx, conversationId, actor),
     approveWorkflow: (runId, comment, actor, origin) =>
-      cleanup(() => approveWorkflow(ctx, runId, comment, actor, origin)),
+      approveWorkflow(ctx, runId, comment, actor, origin),
     rejectWorkflow: (runId, reason, actor, origin) =>
-      cleanup(() => rejectWorkflow(ctx, runId, reason, actor, origin)),
+      rejectWorkflow(ctx, runId, reason, actor, origin),
     respondToWorkflow: (runId, decision, text, actor, origin) =>
-      cleanup(() => respondToWorkflow(ctx, runId, decision, text, actor, origin)),
+      respondToWorkflow(ctx, runId, decision, text, actor, origin),
     answerWorkflow: (runId, request, actor, origin) =>
-      cleanup(() => answerWorkflow(ctx, runId, request, actor, origin)),
+      answerWorkflow(ctx, runId, request, actor, origin),
     labelAttentionWait: (runId, request, actor, via) =>
-      cleanup(() => labelAttentionWait(ctx, runId, request, actor, via)),
-    resetWorkflowNodeSessions: filter => cleanup(() => resetWorkflowNodeSessions(ctx, filter)),
+      labelAttentionWait(ctx, runId, request, actor, via),
+    resetWorkflowNodeSessions: filter => resetWorkflowNodeSessions(ctx, filter),
   };
 }

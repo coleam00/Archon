@@ -8,7 +8,6 @@ import { BUNDLED_IS_BINARY } from '@archon/paths';
 import { cliArgOptions } from '../args';
 import type { runDetachedControlCommand } from '../commands/workflow-detach';
 import { withDrainedExit } from './exit-with-drain';
-import type { TriggerProcessLaunch } from './trigger-process';
 import { writeStderr, writeStdout } from './stdout';
 
 /*
@@ -23,8 +22,8 @@ import { writeStderr, writeStdout } from './stdout';
  * running it. The broker runs it outside the job and relays its output and exit status, so
  * the detached owner it launches starts outside the launching run's job and claims its own.
  *
- * Only the CLI's own detached workflow and admitted trigger launches use the broker.
- * Other processes in the run that ask Windows for breakaway are still refused by the job.
+ * Only the CLI's own `--detach` launches go through the broker. Any other process in the
+ * run that asks Windows for breakaway is still refused by the job.
  */
 
 /** In a Windows run owner and its descendants: the pipe of the owner's broker. */
@@ -99,7 +98,7 @@ function parseInvocation(line: string, program: readonly [string, ...string[]]):
 }
 
 /** Run one relayed invocation and stream its output and exit status back. */
-function runRelayedInvocation(
+function runInvocation(
   socket: Socket,
   line: string,
   program: readonly [string, ...string[]]
@@ -149,30 +148,6 @@ function runRelayedInvocation(
   });
 }
 
-async function runInvocation(
-  socket: Socket,
-  line: string,
-  program: readonly [string, ...string[]]
-): Promise<void> {
-  try {
-    const request: unknown = JSON.parse(line);
-    if (typeof request === 'object' && request !== null && 'kind' in request) {
-      if (request.kind !== 'spawn-trigger' || !('launch' in request)) {
-        throw new Error('Unsupported run job broker operation');
-      }
-      const { triggerProcessLaunchSchema, spawnTriggerProcess } = await import('./trigger-process');
-      await spawnTriggerProcess(program, triggerProcessLaunchSchema.parse(request.launch));
-      sendFrame(socket, { exit: 0 });
-      socket.end();
-      return;
-    }
-    runRelayedInvocation(socket, line, program);
-  } catch (error) {
-    sendFrame(socket, { error: error instanceof Error ? error.message : String(error) });
-    socket.end();
-  }
-}
-
 export interface RunJobEscapeServer {
   /** Stop accepting invocations and resolve once every accepted one has finished. */
   close(): Promise<void>;
@@ -193,7 +168,7 @@ export function acceptRelayConnection(
   onLines(socket, line => {
     if (received) return;
     received = true;
-    void runInvocation(socket, line, program);
+    runInvocation(socket, line, program);
   });
 }
 
@@ -362,37 +337,16 @@ export async function relayOutsideRunJob(
   invocation: EscapedInvocation,
   output: RelayOutput = { stdout: writeStdout, stderr: writeStderr }
 ): Promise<number> {
-  return exchangeWithBroker(pipe, invocation, output);
-}
-
-/** Acknowledge spawn only; the successor's workflow may outlive this connection and owner. */
-export async function spawnTriggerOutsideRunJob(
-  pipe: string,
-  launch: TriggerProcessLaunch
-): Promise<void> {
-  await exchangeWithBroker(
-    pipe,
-    { kind: 'spawn-trigger', launch },
-    {
-      stdout: writeStdout,
-      stderr: writeStderr,
-    }
-  );
-}
-
-async function exchangeWithBroker(
-  pipe: string,
-  request: EscapedInvocation | { kind: 'spawn-trigger'; launch: TriggerProcessLaunch },
-  output: RelayOutput
-): Promise<number> {
   const socket = createConnection(pipe);
   let written = Promise.resolve();
   const exit = await new Promise<number>((resolveExit, reject) => {
     let result: { exit: number } | { error: string } | undefined;
     const unrelayed = (detail: string): Error =>
-      new Error(`Could not launch outside the run's Windows job object: ${detail}`);
+      new Error(
+        `Could not run this --detach launch outside the run's Windows job object: ${detail}`
+      );
     socket.once('connect', () => {
-      socket.write(`${JSON.stringify(request)}\n`);
+      socket.write(`${JSON.stringify(invocation)}\n`);
     });
     onLines(socket, line => {
       const frame = JSON.parse(line) as BrokerFrame;

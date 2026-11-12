@@ -1,4 +1,3 @@
-import { deferRunSlotRelease, withRunSlotReleaseScope } from '@archon/workflows/run-slot-release';
 import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
@@ -95,15 +94,11 @@ export async function abandonWorkflow(
   const result = await recordAbandonment(
     ctx,
     run,
-    owner.kind === 'stopped' ? owner.cleanupWarnings : undefined,
-    owner.kind === 'stopped' ? owner.advisories : undefined
+    owner.kind === 'stopped' ? owner.cleanupWarnings : undefined
   );
   const { warnings, releasedWorktrees } = await releaseAbandonedWorktrees(ctx, run, result, owner);
   // An output holder the stop left running may still write scratch.
-  if (
-    result.cancelled &&
-    !(owner.kind === 'stopped' && (owner.cleanupWarnings?.length || owner.advisories?.length))
-  ) {
+  if (result.cancelled && !(owner.kind === 'stopped' && owner.cleanupWarnings?.length)) {
     await releaseRunScratch(run);
     warnings.push(...(await releaseRunResources(ctx, run.id)));
   }
@@ -121,21 +116,17 @@ export async function abandonWorkflow(
 async function recordAbandonment(
   ctx: OperationContext,
   run: WorkflowRun,
-  stopWarnings: string[] = [],
-  advisories: string[] = []
+  stopWarnings: string[] = []
 ): Promise<AbandonAttemptResult> {
   // A cancelled run reaches here only with creation proof: the retry finishes a
   // worktree release that an earlier abandonment reported as failed.
   if (run.status === 'cancelled') {
-    const persistenceWarnings = await persistCleanupWarnings(ctx, run, [
-      ...stopWarnings,
-      ...advisories,
-    ]);
+    const persistenceWarnings = await persistCleanupWarnings(ctx, run, stopWarnings);
     const tree = await collectAbandonmentTree(ctx, run);
     return {
       run,
       cancelled: false,
-      cleanupWarnings: [...stopWarnings, ...advisories, ...persistenceWarnings],
+      cleanupWarnings: [...stopWarnings, ...persistenceWarnings],
       cancelledDescendants: tree.runs.filter(
         row => row.id !== run.id && row.status === 'cancelled'
       ),
@@ -143,7 +134,7 @@ async function recordAbandonment(
       blockedParentRunId: null,
     };
   }
-  const result = await cancelRunAndCleanup(ctx, run, stopWarnings, advisories);
+  const result = await cancelRunAndCleanup(ctx, run, stopWarnings);
   if (!result.cancelled)
     throw new AbandonRefusedError(
       `Run ${run.id} changed before abandonment; no worktree was released. Inspect its current status.`
@@ -170,7 +161,6 @@ async function releaseAbandonedWorktrees(
     run,
     owner
   );
-  if (ownerChecks.some(check => !check.releaseSafe)) deferRunSlotRelease();
   const retainRoot =
     result.cascadeFailures > 0 || ownerChecks.some(check => check.run.id !== run.id && !check.safe);
   const rootProof = readOwnedWorktree(run.metadata);
@@ -222,7 +212,6 @@ export async function collectAbandonmentTree(
 
 interface WorktreeOwnerCheck {
   safe: boolean;
-  retainCheckout?: boolean;
   warnings: string[];
 }
 
@@ -255,7 +244,6 @@ async function checkWorktreeOwner(
   if (root?.id === row.id)
     return {
       safe: !(rootOutcome?.kind === 'stopped' && rootOutcome.cleanupWarnings?.length),
-      retainCheckout: rootOutcome?.kind === 'stopped' && Boolean(rootOutcome.advisories?.length),
       warnings: [],
     };
   return checkOwnerStopForRelease(ctx, row);
@@ -281,13 +269,9 @@ async function checkOwnerStopForRelease(
     return { safe: false, warnings: [`Retained checkout for run ${row.id}: ${outcome.message}`] };
   if (isSubrun(row) && outcome.kind === 'no_owner_answered')
     return retainUnresolvedSubrunCheckout(row, row);
-  const warnings =
-    outcome.kind === 'stopped'
-      ? [...(outcome.cleanupWarnings ?? []), ...(outcome.advisories ?? [])]
-      : [];
+  const warnings = outcome.kind === 'stopped' ? (outcome.cleanupWarnings ?? []) : [];
   return {
-    safe: outcome.kind !== 'stopped' || !outcome.cleanupWarnings?.length,
-    retainCheckout: outcome.kind === 'stopped' && Boolean(outcome.advisories?.length),
+    safe: warnings.length === 0,
     warnings,
   };
 }
@@ -379,24 +363,18 @@ export async function abandonResumableRunsForConversation(
   const releasedWorktrees: ReleasedWorktree[] = [];
   const ownerChecks = await checkBatchWorktreeOwners(ctx, runs);
   for (const { run, ...ownerCheck } of ownerChecks) {
-    await withRunSlotReleaseScope(
-      async () => {
-        if (!ownerCheck.releaseSafe) deferRunSlotRelease();
-        cleanupWarnings.push(...(await persistCleanupWarnings(ctx, run, ownerCheck.warnings)));
-        cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));
-        cleanupWarnings.push(...ownerCheck.warnings);
-        if (ownerCheck.safe) {
-          const release = await releaseRunWorktree(ctx, run);
-          cleanupWarnings.push(...release.warnings);
-          if (release.released) releasedWorktrees.push(release.released);
-          await releaseRunScratch(run);
-          cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
-        }
-        const blocked = await findParentBlockedOn(ctx, run);
-        if (blockedParentRunId === null) blockedParentRunId = blocked;
-      },
-      { store: ctx.store, runId: run.id }
-    );
+    cleanupWarnings.push(...(await persistCleanupWarnings(ctx, run, ownerCheck.warnings)));
+    cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));
+    cleanupWarnings.push(...ownerCheck.warnings);
+    if (ownerCheck.safe) {
+      const release = await releaseRunWorktree(ctx, run);
+      cleanupWarnings.push(...release.warnings);
+      if (release.released) releasedWorktrees.push(release.released);
+      await releaseRunScratch(run);
+      cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
+    }
+    const blocked = await findParentBlockedOn(ctx, run);
+    if (blockedParentRunId === null) blockedParentRunId = blocked;
   }
   if (runs.length > 0) {
     getLog().info(
@@ -437,8 +415,7 @@ async function checkBatchWorktreeOwners(
       : [check];
     return {
       run,
-      safe: sharedChecks.every(other => other.safe && !other.retainCheckout),
-      releaseSafe: sharedChecks.every(other => other.safe),
+      safe: sharedChecks.every(other => other.safe),
       warnings: [...new Set(sharedChecks.flatMap(other => other.warnings))],
     };
   });

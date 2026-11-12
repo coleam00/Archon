@@ -1,11 +1,3 @@
-import {
-  deferRunSlotRelease,
-  withRunSlotReleaseScope,
-  subscribeRunSlotRelease,
-} from '@archon/workflows/run-slot-release';
-import * as archonPaths from '@archon/paths';
-import { isRunOwnerAnswering } from '@archon/core/services/run-live-owner';
-import { resumeWorkflowRunFromServer } from './workflow-resume-service';
 import { readWorkflowSourceState } from '@archon/workflows/schemas/run-metadata';
 import { resolveProjectPaths } from '@archon/workflows/run-paths';
 import { listWorkflowEvents } from '@archon/core/db/workflow-events';
@@ -20,8 +12,8 @@ import { getWorkflowRun, pauseWorkflowRun, resumeWorkflowRun } from '@archon/cor
 import { execFileAsync } from '@archon/git';
 /**
  * The server hosting resource starts against a real SQLite database, a real workflow
- * checkout and a real source-plugin module. Intake tests record engine submissions;
- * owner-driven tests execute bash workflows through the real engine.
+ * checkout and a real source-plugin module. Only the engine is recorded: it claims the
+ * pending run exactly as the executor does, so the claim fence stays the real one.
  */
 import { afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { mkdir, mkdtemp, realpath, writeFile, readFile } from 'node:fs/promises';
@@ -43,17 +35,7 @@ import type { IWorkflowEngine, WorkflowEngineSubmitInput } from '@archon/workflo
 import { RESOURCE_START_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { registerWebhookSourceRoutes } from '../routes/webhooks';
-import { createServerResourceStartHost as createHost } from './resource-start-hosting';
-const hosted = new Map<string, ReturnType<typeof createHost>>();
-function createServerResourceStartHost(
-  ...args: Parameters<typeof createHost>
-): ReturnType<typeof createHost> {
-  hosted.get(args[0])?.dispose();
-  const host = createHost(...args);
-  hosted.set(args[0], host);
-  return host;
-}
-const releaseObservers: (() => void)[] = [];
+import { createServerResourceStartHost } from './resource-start-hosting';
 import { loadWebhookSourcePlugins } from './webhook-source-plugins';
 import {
   startWorkflowContinuationScheduler,
@@ -287,9 +269,6 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
-  for (const host of hosted.values()) host.dispose();
-  hosted.clear();
-  for (const dispose of releaseObservers.splice(0)) dispose();
   stopWorkflowContinuationScheduler();
   await closeDatabase();
   if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
@@ -301,8 +280,7 @@ afterEach(async () => {
 
 describe('server resource-start host', () => {
   test('a version-1 queued launch delivers output and metadata to its real conversation', async () => {
-    const { deliver, host: intake } = await fixture(false);
-    intake.dispose();
+    const { deliver } = await fixture(false);
     expect((await deliver('blocker', 'queue')).status).toBe(200);
     const blockerId = await admitWithoutStarting();
     const sqlHost = createSqlWorkflowHost();
@@ -908,9 +886,7 @@ describe('server resource-start host', () => {
       const events = await listWorkflowEvents(requestId);
       expect(events.filter(event => event.event_type === 'node_started')).toEqual([]);
       expect(events.filter(event => event.event_type === 'workflow_failed')).toHaveLength(1);
-      await until(async () =>
-        (await bindingOf('second')).disposition?.status === 'admitted' ? true : undefined
-      );
+      await admitWithoutStarting();
       expect((await bindingOf('second')).disposition?.status).toBe('admitted');
     }
   );
@@ -1116,292 +1092,3 @@ async function admitWithoutStarting(): Promise<string> {
   if (!requestId) throw new Error('nothing was admitted');
   return requestId;
 }
-
-describe('owner-driven server drains', () => {
-  let bundledRoot: ReturnType<typeof spyOn<typeof archonPaths, 'getBundledWorkflowsPath'>>;
-  beforeEach(() => {
-    bundledRoot = spyOn(archonPaths, 'getBundledWorkflowsPath').mockReturnValue(
-      join(root, 'no-bundled-workflows')
-    );
-  });
-  afterEach(() => bundledRoot.mockRestore());
-
-  test.each(['batch', 'later'] as const)(
-    'a safe %s release does not drain an unsafe resource on the configured host',
-    async timing => {
-      const { deliver, host, engine } = await fixture(false);
-      await deliver('unsafe', 'queue');
-      const unsafeId = await admitWithoutStarting();
-      const store = host.workflowHost.deps.store;
-      const unsafe = await store.getResourceStartRequest(unsafeId);
-      if (!unsafe) throw new Error('missing admission');
-      const safeId = randomUUID();
-      const successorId = randomUUID();
-      await store.admitResourceStart({
-        resource: 'independent',
-        capacity: 1,
-        hostId: HOST_ID,
-        overlap: 'queue',
-        launch: {
-          ...unsafe.launch,
-          run: { ...unsafe.launch.run, id: safeId },
-          execution: { ...unsafe.launch.execution, cwd: join(root, 'safe') },
-        },
-      });
-      expect(
-        (
-          await store.admitResourceStart({
-            resource: unsafe.resource,
-            capacity: 1,
-            hostId: HOST_ID,
-            overlap: 'queue',
-            launch: { ...unsafe.launch, run: { ...unsafe.launch.run, id: successorId } },
-          })
-        ).status
-      ).toBe('queued');
-      await withRunSlotReleaseScope(async () => {
-        await store.cancelWorkflowRun(unsafeId);
-        if (timing === 'batch') await store.cancelWorkflowRun(safeId);
-        await withRunSlotReleaseScope(async () => deferRunSlotRelease(), {
-          store,
-          runId: unsafeId,
-        });
-      });
-      if (timing === 'later') await store.cancelWorkflowRun(safeId);
-      expect((await store.getResourceStartRequest(successorId))?.status).toBe('queued');
-      expect(engine.submitted).toEqual([]);
-    }
-  );
-
-  test.each(['completed', 'failed', 'paused', 'cancelled', 'in-flight'] as const)(
-    '%s execution advances eligible work without scheduler ticks',
-    async ending => {
-      const { deliver } = await fixture(
-        false,
-        ending === 'paused' ? { kind: 'worktree' } : { kind: 'in-place' }
-      );
-      const release = join(root, 'release');
-      const ready = join(root, 'ready');
-      await writeFile(
-        join(root, 'project/.archon/workflows/hosted.yaml'),
-        [
-          'name: hosted',
-          'description: Held execution',
-          'nodes:',
-          '  - id: hold',
-          `    bash: touch "${ready}"; while [ ! -f "${release}" ]; do sleep 0.025; done; ${ending === 'failed' ? 'exit 1' : 'echo done'}`,
-          ...(ending === 'paused'
-            ? [
-                '  - id: review',
-                '    depends_on: [hold]',
-                '    approval:',
-                '      message: Review?',
-              ]
-            : []),
-          '',
-        ].join('\n')
-      );
-      const settled = new Set<string>();
-      const host = createServerResourceStartHost(HOST_ID, createSqlWorkflowHost());
-      releaseObservers.push(
-        subscribeRunSlotRelease(host.workflowHost.deps.store, async ids => {
-          for (const id of ids) expect(await isRunOwnerAnswering(id)).toBe(false);
-          for (const id of ids) settled.add(id);
-        })
-      );
-      await deliver('held', 'queue');
-      await host.requestDrain();
-      const first = (await bindingOf('held')).disposition!.requestId;
-      let inFlight: Promise<void> | undefined;
-      let unblock: (() => void) | undefined;
-      let drain: ReturnType<typeof spyOn> | undefined;
-      try {
-        await until(async () => ((await Bun.file(ready).exists()) ? true : undefined));
-        await deliver('successor', 'queue');
-        await host.requestDrain();
-        expect((await bindingOf('successor')).disposition?.status).toBe('queued');
-        if (ending === 'in-flight') {
-          const store = host.workflowHost.deps.store;
-          const original = store.drainResourceStarts.bind(store);
-          const blocked = Promise.withResolvers<void>();
-          const entered = Promise.withResolvers<void>();
-          unblock = () => blocked.resolve();
-          drain = spyOn(store, 'drainResourceStarts').mockImplementationOnce(async input => {
-            const result = await original(input);
-            expect(result).toEqual([]);
-            entered.resolve();
-            await blocked.promise;
-            return result;
-          });
-          inFlight = host.requestDrain();
-          await entered.promise;
-        }
-        if (ending === 'cancelled') {
-          expect(
-            await host.workflowHost.operations.cancelWorkflow(first, { kind: 'operator' })
-          ).toMatchObject({ kind: 'cooperative', cancelled: true });
-          expect(settled.has(first)).toBe(false);
-        }
-        await writeFile(release, '');
-        await until(async () =>
-          (await getWorkflowRun(first))?.status === (ending === 'in-flight' ? 'completed' : ending)
-            ? true
-            : undefined
-        );
-        if (inFlight) {
-          await until(async () => (!(await isRunOwnerAnswering(first)) ? true : undefined));
-          unblock?.();
-          await inFlight;
-        }
-        const second = await until(async () => {
-          const receipt = await bindingOf('successor');
-          return receipt.disposition?.status === 'admitted'
-            ? receipt.disposition.requestId
-            : undefined;
-        });
-        await until(() => (settled.has(first) && settled.has(second) ? true : undefined));
-        expect((await getWorkflowRun(second))?.status).toBe(
-          ending === 'paused' ? 'paused' : ending === 'failed' ? 'failed' : 'completed'
-        );
-        expect(settled.size).toBe(2);
-        if (ending === 'paused') {
-          expect((await getWorkflowRun(first))?.working_path).not.toBe(
-            (await getWorkflowRun(second))?.working_path
-          );
-        }
-      } finally {
-        await writeFile(release, '');
-        unblock?.();
-        await inFlight;
-        drain?.mockRestore();
-        // Let the exact owned execution finish before removing its scratch database.
-        await until(async () => (!(await isRunOwnerAnswering(first)) ? true : undefined));
-      }
-    },
-    30_000
-  );
-
-  test.each(['root', 'child'] as const)(
-    'resumed %s settlement drains retained checkout work without a tick',
-    async resumed => {
-      const { deliver } = await fixture(false);
-      await writeFile(
-        join(root, 'project/.archon/workflows/hosted.yaml'),
-        'name: hosted\ndescription: Gate then finish\nnodes:\n  - id: review\n' +
-          (resumed === 'child'
-            ? '    workflow: gated\n'
-            : '    approval:\n      message: Review?\n') +
-          '  - id: after\n    depends_on: [review]\n    bash: echo finished >> after-count\n'
-      );
-      if (resumed === 'child')
-        await writeFile(
-          join(root, 'project/.archon/workflows/gated.yaml'),
-          'name: gated\ndescription: Child gate\nnodes:\n  - id: review\n    approval:\n      message: Review child?\n  - id: done\n    depends_on: [review]\n    bash: echo child\n'
-        );
-      const settled: string[] = [];
-      const host = createServerResourceStartHost(HOST_ID, createSqlWorkflowHost());
-      releaseObservers.push(
-        subscribeRunSlotRelease(host.workflowHost.deps.store, async ids => {
-          for (const id of ids) expect(await isRunOwnerAnswering(id)).toBe(false);
-          settled.push(...ids);
-        })
-      );
-      await deliver('pausing', 'queue');
-      await host.requestDrain();
-      const first = (await bindingOf('pausing')).disposition!.requestId;
-      await until(async () =>
-        (await getWorkflowRun(first))?.status === 'paused' && !(await isRunOwnerAnswering(first))
-          ? true
-          : undefined
-      );
-      await deliver('waiting', 'queue');
-      await host.requestDrain();
-      expect((await bindingOf('waiting')).disposition?.status).toBe('queued');
-      const resumedId =
-        resumed === 'child'
-          ? (await host.workflowHost.deps.store.findChildRuns(first))[0]!.id
-          : first;
-      await host.workflowHost.operations.approveWorkflow(
-        resumedId,
-        'approved',
-        { kind: 'operator' },
-        { via: 'web' }
-      );
-      const run = await getWorkflowRun(resumedId);
-      if (!run) throw new Error('Missing paused run');
-      expect(await resumeWorkflowRunFromServer(host.workflowHost, run)).toEqual({
-        kind: 'resumed',
-      });
-      const second = await until(async () => {
-        const binding = await bindingOf('waiting');
-        return binding.disposition?.status === 'admitted'
-          ? binding.disposition.requestId
-          : undefined;
-      });
-      await until(async () =>
-        (await getWorkflowRun(second))?.status === 'paused' && !(await isRunOwnerAnswering(second))
-          ? true
-          : undefined
-      );
-      expect(settled.filter(id => id === resumedId)).toHaveLength(resumed === 'child' ? 1 : 2);
-      expect((await getWorkflowRun(first))?.status).toBe('completed');
-      expect((await getWorkflowRun(second))?.status).toBe('paused');
-      expect(await readFile(join(root, 'project/after-count'), 'utf8')).toBe('finished\n');
-    }
-  );
-
-  test('a failed completion drain preserves the terminal run and remains explicitly retryable', async () => {
-    const { deliver, engine, host } = await fixture(false);
-    await deliver('first', 'queue');
-    await host.requestDrain();
-    const first = await until(() => engine.claimed[0]);
-    await deliver('second', 'queue');
-    await host.requestDrain();
-    const fail = spyOn(
-      host.workflowHost.deps.store,
-      'listPendingStartBindings'
-    ).mockRejectedValueOnce(new Error('store unavailable'));
-    const logged = captureLogLines();
-    try {
-      await host.workflowHost.deps.store.completeWorkflowRun(first, { duration_ms: 1 });
-      expect((await getWorkflowRun(first))?.status).toBe('completed');
-      expect((await bindingOf('second')).disposition?.status).toBe('queued');
-      expect(logged.lines).toContainEqual(
-        expect.objectContaining({ msg: 'resource_start.drain_failed', hostId: HOST_ID })
-      );
-    } finally {
-      fail.mockRestore();
-      logged.restore();
-    }
-    await host.requestDrain();
-    await until(() => (engine.claimed.length === 2 ? true : undefined));
-    expect(new Set(engine.claimed).size).toBe(2);
-  });
-
-  test('foreign-host and ordinary committed releases cannot drain this host', async () => {
-    const { engine, deliver, host } = await fixture(false);
-    await deliver('first', 'queue');
-    await host.requestDrain();
-    const first = await until(() => engine.claimed[0]);
-    await deliver('second', 'queue');
-    await host.requestDrain();
-    host.dispose();
-    const foreign = createServerResourceStartHost('other-host', createSqlWorkflowHost());
-    const pass = spyOn(foreign.workflowHost.deps.store, 'listPendingStartBindings');
-    try {
-      await host.workflowHost.deps.store.completeWorkflowRun(first, { duration_ms: 1 });
-      const ordinary = await host.workflowHost.deps.store.createWorkflowRun({
-        workflow_name: 'ordinary',
-        user_message: '',
-      });
-      await host.workflowHost.deps.store.cancelWorkflowRun(ordinary.id);
-      expect(pass).not.toHaveBeenCalled();
-      expect((await bindingOf('second')).disposition?.status).toBe('queued');
-      await Promise.all([host.requestDrain(), host.requestDrain()]);
-      await until(() => (engine.claimed.length === 2 ? true : undefined));
-      expect(new Set(engine.claimed).size).toBe(2);
-    } finally {
-      pass.mockRestore();
-    }
-  });
-});

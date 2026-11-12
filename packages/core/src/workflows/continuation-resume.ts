@@ -119,7 +119,7 @@ export async function resumeRunContinuation(
   const source = await resolveRunWorkflow(host.deps, run, project.sourceCwd, context.platform);
   if (!source.ok)
     return { kind: 'unavailable', reason: source.message, sourceError: source.sourceError };
-  return resumeWithLiveOwner(host, {
+  return resumeWithLiveOwner(host.engine, {
     platform: context.platform,
     conversationId: context.conversationId,
     cwd: run.working_path,
@@ -133,23 +133,24 @@ export async function resumeRunContinuation(
 }
 
 async function resumeWithLiveOwner(
-  host: { deps: WorkflowDeps; engine: IWorkflowEngine },
+  engine: IWorkflowEngine,
   input: WorkflowResumeInput
 ): Promise<ContinuationAdmission> {
   try {
-    const owner = await startRunLiveOwner(input.run.id, { store: host.deps.store });
-    const close = (): Promise<void> =>
-      owner.close().catch((error: unknown) => {
+    const owner = await startRunLiveOwner(input.run.id);
+    let closing: Promise<void> | undefined;
+    const close = (): Promise<void> => {
+      closing ??= owner.close().catch((error: unknown) => {
         log.error({ err: error, runId: input.run.id }, 'workflow_continuation_owner_close_failed');
       });
+      return closing;
+    };
     let accepted = false;
     try {
-      const admission = await host.engine.resume(input);
+      const admission = await engine.resume(input);
       if (!admission.accepted) return { kind: 'not-accepted' };
       accepted = true;
-      const settled = admission.settled.finally(async () => {
-        await close();
-      });
+      const settled = admission.settled.finally(close);
       // Hosts may attach their settlement handler after other admissions finish.
       void settled.catch(() => undefined);
       return { kind: 'accepted', run: input.run, settled };

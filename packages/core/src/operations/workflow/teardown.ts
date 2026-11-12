@@ -1,4 +1,3 @@
-import { deferRunSlotRelease } from '@archon/workflows/run-slot-release';
 import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
@@ -28,7 +27,7 @@ export const MAX_CASCADE_RUNS = 500;
  * recorded facts travel with the result for every surface to show.
  */
 export type AbandonOwnerOutcome =
-  | { kind: 'stopped'; pid: number; cleanupWarnings?: string[]; advisories?: string[] }
+  | { kind: 'stopped'; pid: number; cleanupWarnings?: string[] }
   | {
       kind: 'no_owner_answered';
       /** The connection error that showed nothing answered. */
@@ -51,7 +50,6 @@ export function describeAbandonOwner(outcome: AbandonOwnerOutcome): string[] {
     return [
       `Stopped the run's live owner process (pid ${String(outcome.pid)}) first.`,
       ...(outcome.cleanupWarnings ?? []),
-      ...(outcome.advisories ?? []),
     ];
   }
   const lines = [
@@ -297,7 +295,6 @@ export async function reclaimCancelledRunContainer(
       ctx.hostStore.isolation
     );
   } catch (err) {
-    deferRunSlotRelease();
     getLog().warn({ err, runId: run.id }, 'operations.workflow_abandon_container_reclaim_failed');
     return [
       `Could not reclaim container environment ${run.metadata[ISOLATION_ENV_ID_METADATA_KEY]} for run ${run.id}; resources may remain allocated. Inspect the managed containers before retrying cleanup.`,
@@ -309,12 +306,11 @@ export async function reclaimCancelledRunContainer(
 export async function cancelRunAndCleanup(
   ctx: OperationContext,
   run: WorkflowRun,
-  stopWarnings: string[] = [],
-  advisories: string[] = []
+  stopWarnings: string[] = []
 ): Promise<AbandonAttemptResult> {
   let cancelled: boolean;
   try {
-    ({ cancelled } = await cancelByOperator(ctx, run.id, [...stopWarnings, ...advisories]));
+    ({ cancelled } = await cancelByOperator(ctx, run.id, stopWarnings));
   } catch (error) {
     const err = error as Error;
     getLog().error(
@@ -332,13 +328,12 @@ export async function cancelRunAndCleanup(
     cascadeFailures = cascade.failures;
     cancelledDescendants = cascade.cancelledDescendants;
     // An output holder the stop left running may still write a descendant's scratch.
-    if (!stopWarnings.length && !advisories.length)
+    if (!stopWarnings.length)
       for (const child of cascade.cancelledRuns) {
         await releaseRunScratch(child);
         imageWarnings.push(...(await releaseRunResources(ctx, child.id)));
       }
   }
-  if (cascadeFailures || stopWarnings.length) deferRunSlotRelease();
   const blockedParentRunId = cancelled ? await findParentBlockedOn(ctx, run) : null;
 
   // Reclaim only when our cancel won the CAS. A miss means another lifecycle
@@ -346,7 +341,6 @@ export async function cancelRunAndCleanup(
   const cleanupWarnings = [
     ...imageWarnings,
     ...stopWarnings,
-    ...advisories,
     ...(cancelled ? await reclaimCancelledRunContainer(ctx, run) : []),
   ];
   return {
@@ -387,12 +381,11 @@ export async function stopLiveOwner(
     return { kind: 'not_stopped', message: ownerNotStoppedMessage(run.id, error) };
   }
   try {
-    const { warnings, advisories } = await target.stop();
+    const warnings = (await target.stop()).warnings;
     return {
       kind: 'stopped',
       pid: target.pid,
       ...(warnings.length ? { cleanupWarnings: warnings } : {}),
-      ...(advisories?.length ? { advisories } : {}),
     };
   } catch (error) {
     return {
@@ -419,10 +412,9 @@ export function cancelByOperator(
 export async function recordAbandoned(
   ctx: OperationContext,
   run: WorkflowRun,
-  stopWarnings: string[] = [],
-  advisories: string[] = []
+  stopWarnings: string[] = []
 ): Promise<AbandonWorkflowResult> {
-  const result = await cancelRunAndCleanup(ctx, run, stopWarnings, advisories);
+  const result = await cancelRunAndCleanup(ctx, run, stopWarnings);
   return {
     run: result.run,
     cancelled: result.cancelled,

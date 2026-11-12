@@ -7,7 +7,6 @@ import { resourceStartFixtures } from '@archon/workflows/store-conformance';
 import { executionClaim } from '@archon/workflows/store';
 import {
   describeWorkflowStoreConformance,
-  describeRunSlotReleaseConformance,
   CONFORMANCE_CONVERSATION_ID,
   CONFORMANCE_CODEBASE_ID,
 } from '@archon/workflows/store-conformance';
@@ -49,7 +48,6 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
-  describeRunSlotReleaseConformance('PostgreSQL', makeHarness);
   test('foreign slot membership blocks guarded starts after its request is lost', async () => {
     const harness = await makeHarness();
     try {

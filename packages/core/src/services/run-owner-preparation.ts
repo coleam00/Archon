@@ -6,13 +6,11 @@ import { TERMINATION_CONFIRM_MS, TERMINATION_GRACE_MS } from './run-stop-bounds'
 export interface RunOwnerPreparedStop {
   groups: ProcessGroupStop[];
   warnings: string[];
-  advisories?: string[];
 }
 
 export interface RunOwnerTerminationPreparation {
   groups: ProcessGroupStop[];
   ready: Promise<string[]>;
-  advisories?: Promise<string[]> | string[];
   release(): void;
 }
 
@@ -23,20 +21,13 @@ export const PREPARATION_HEADER = 'preparing\n';
 export const PREPARATION_TIMEOUT_MS = TERMINATION_GRACE_MS + TERMINATION_CONFIRM_MS;
 
 export async function writeOwnerPreparation(
-  socket: Pick<Socket, 'write'>,
+  socket: Socket,
   preparation: RunOwnerTerminationPreparation
 ): Promise<void> {
   socket.write(PREPARATION_HEADER);
   for (const group of preparation.groups) socket.write(`${JSON.stringify({ group })}\n`);
-  const [warnings, advisories] = await Promise.all([
-    preparation.ready,
-    preparation.advisories ?? [],
-  ]);
-  for (const warning of warnings) {
+  for (const warning of await preparation.ready) {
     socket.write(`${JSON.stringify({ warning })}\n`);
-  }
-  for (const advisory of advisories) {
-    socket.write(`${JSON.stringify({ advisory })}\n`);
   }
   socket.write(TERMINATE_READY);
 }
@@ -54,13 +45,11 @@ export const processGroupStopSchema = z.discriminatedUnion('leaderReaped', [
 ]);
 const preparationFrame = z.union([
   z.strictObject({ warning: z.string() }),
-  z.strictObject({ advisory: z.string() }),
   z.strictObject({ group: processGroupStopSchema }),
 ]);
 
 export function readPreparationFrame(frame: string, report: RunOwnerPreparedStop): void {
   const value = preparationFrame.parse(JSON.parse(frame));
   if ('warning' in value) report.warnings.push(value.warning);
-  else if ('advisory' in value) (report.advisories ??= []).push(value.advisory);
   else report.groups.push(value.group);
 }

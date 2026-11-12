@@ -88,7 +88,7 @@ describe('workflowRunCommand — resume with nothing completed (#3154)', () => {
     mockStartRunLiveOwner.mockClear();
     mockRunLiveOwnerClose.mockClear();
     (hydrateResumableRun as ReturnType<typeof mock>).mockImplementationOnce(async () => {
-      expect(mockStartRunLiveOwner).toHaveBeenCalledWith('run-dead', { store: expect.any(Object) });
+      expect(mockStartRunLiveOwner).toHaveBeenCalledWith('run-dead', {});
       return null;
     });
 

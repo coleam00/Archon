@@ -29,18 +29,11 @@ mock.module('@archon/core', () => ({
   handleMessage: mockHandleMessage,
 }));
 
-const host = {
-  operations: {},
-};
-const createHost = mock(async () => host);
-mock.module('../utils/workflow-host', () => ({ createCliWorkflowHost: createHost }));
-
 import { chatCommand } from './chat';
 import { CLIAdapter } from '../adapters/cli-adapter';
 
 describe('chatCommand', () => {
   beforeEach(() => {
-    createHost.mockClear();
     mockHandleMessage.mockReset();
     mockHandleMessage.mockResolvedValue(undefined);
   });
@@ -55,10 +48,6 @@ describe('chatCommand', () => {
     expect(adapter).toBeInstanceOf(CLIAdapter);
     expect(conversationId).toMatch(/^cli-chat-\d+-[a-f0-9]{32}$/);
     expect(message).toBe('Hello, agent!');
-    expect(createHost).toHaveBeenCalledWith(true);
-    const context = mockHandleMessage.mock.calls[0][3];
-    expect(context?.actor).toEqual({ kind: 'operator' });
-    expect(context?.workflowOperations === host.operations).toBe(true);
   });
 
   test('should use batch streaming mode for the CLIAdapter', async () => {

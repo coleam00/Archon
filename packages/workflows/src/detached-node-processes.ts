@@ -11,7 +11,6 @@ interface RecordedCommand {
 export interface PreparedNodeTermination {
   groups: ProcessGroupStop[];
   ready: Promise<string[]>;
-  advisories: string[];
   release(): void;
 }
 
@@ -79,7 +78,6 @@ export class DetachedNodeProcesses {
     });
     const result: PreparedNodeTermination = {
       groups: this.signalCommands(),
-      advisories: this.hasStartedCommands ? [COMPLETED_HOST_COMMAND_WARNING] : [],
       ready: Promise.all(
         [...this.commands.values()].map(command => this.waitForOutput(command.child))
       ).then(closed => {
@@ -88,6 +86,9 @@ export class DetachedNodeProcesses {
           : [
               "Some process outside the run's process group still holds the node's output; it was not signalled. Find it with lsof on the run's checkout before reusing or removing the checkout.",
             ];
+        if (this.hasStartedCommands) {
+          warnings.push(COMPLETED_HOST_COMMAND_WARNING);
+        }
         return warnings;
       }),
       release: () => {

@@ -1,9 +1,3 @@
-import {
-  holdRunSlotRelease,
-  publishRunSlotRelease,
-  subscribeRunSlotRelease,
-} from '@archon/workflows/run-slot-release';
-import * as subprocess from '@archon/workflows/subprocess';
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -404,87 +398,6 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   );
 }
 
-test.each([
-  'owned',
-  'settled',
-  'stop-requested',
-  'settled-stop-requested',
-  'no-claim',
-  'lost-claim',
-  'failed-write',
-  'unregistered-winner',
-  'tree-failure',
-  'teardown-failure',
-] as const)('signal cleanup delivers only confirmed releases (%s)', async state => {
-  const order: string[] = [];
-  const exited = Promise.withResolvers<void>();
-  const exit = spyOn(process, 'exit').mockImplementation((() => exited.resolve()) as never);
-  const trees =
-    state === 'tree-failure'
-      ? spyOn(subprocess, 'recordNodeProcessTrees').mockReturnValue({
-          end: async () => {
-            throw new Error('surviving tree');
-          },
-          release: () => {},
-        })
-      : undefined;
-  const store = {
-    getWorkflowRun: async () => null,
-    listWorkflowEvents: async () => [],
-    findChildRuns: async () => [],
-    failWorkflowRun: async () => {
-      order.push('fail');
-      if (state === 'failed-write') throw new Error('store unavailable');
-      const failed = state !== 'lost-claim';
-      if (failed) await publishRunSlotRelease(store, 'signal-completion');
-      if (state === 'unregistered-winner') deregister();
-      return { failed };
-    },
-  };
-  const dispose = subscribeRunSlotRelease(store, async () => {
-    order.push('drain');
-  });
-  const closeEngine = holdRunSlotRelease(store, 'signal-completion');
-  if (state === 'settled' || state === 'settled-stop-requested')
-    await publishRunSlotRelease(store, 'signal-completion');
-  const before = process.listeners('SIGTERM');
-  const deregister = registerOwnedRunTermination({
-    store,
-    runId: 'signal-completion',
-    isExecutionSettled: () => state === 'settled' || state === 'settled-stop-requested',
-    getExecutionClaim: () => (state === 'no-claim' ? undefined : null),
-    logModule: 'test',
-    liveOwner: {
-      close: async () => {
-        order.push('close');
-      },
-      isStopRequested: () => state === 'stop-requested' || state === 'settled-stop-requested',
-      registerTerminationPreparation: () => () => undefined,
-    },
-    detachedProcessOwner: false,
-    teardown: async () => {
-      order.push('teardown');
-      if (state === 'teardown-failure') throw new Error('container remains');
-    },
-  });
-  try {
-    const handler = process.listeners('SIGTERM').find(listener => !before.includes(listener));
-    handler?.('SIGTERM');
-    handler?.('SIGTERM');
-    await exited.promise;
-    if (state === 'owned' || state === 'unregistered-winner')
-      expect(order).toEqual(['fail', 'teardown', 'close', 'drain']);
-    else if (state === 'settled') expect(order).toEqual(['teardown', 'close', 'drain']);
-    else expect(order).not.toContain('drain');
-  } finally {
-    dispose();
-    deregister();
-    await closeEngine();
-    trees?.mockRestore();
-    exit.mockRestore();
-  }
-});
-
 for (const scope of ['run', 'descendant', 'container', 'agent'] as const) {
   posixOnly.each(['sh', 'bun', 'uv'] as const)(
     `a fresh detached owner classifies persisted %s history in ${scope} without targeting old groups`,
@@ -536,8 +449,7 @@ for (const scope of ['run', 'descendant', 'container', 'agent'] as const) {
         try {
           const prepared = await lease.commit();
           expect(prepared?.groups).toEqual([]);
-          expect(prepared?.warnings).toEqual([]);
-          expect(prepared?.advisories ?? []).toEqual(
+          expect(prepared?.warnings).toEqual(
             scope === 'container' || scope === 'agent'
               ? []
               : [expect.stringContaining('may have left untracked background work')]
@@ -552,80 +464,3 @@ for (const scope of ['run', 'descendant', 'container', 'agent'] as const) {
     }
   );
 }
-
-posixOnly.each(
-  (['run', 'events', 'children'] as const).flatMap(lookup =>
-    (['root', 'child'] as const).map(scope => [lookup, scope] as const)
-  )
-)(
-  'history %s failure in %s reaches preparation failure without an unhandled rejection',
-  async (lookup, scope) => {
-    const { writeOwnerPreparation } = await import('@archon/core/services/run-owner-preparation');
-    const store = createInMemoryWorkflowStore(createInMemoryWorkflowHostStore());
-    const root = await store.createWorkflowRun({ workflow_name: 'root', user_message: '' });
-    const child = await store.createWorkflowRun({
-      workflow_name: 'child',
-      user_message: '',
-      parent_run_id: root.id,
-    });
-    const target = scope === 'root' ? root.id : child.id;
-    const failure = new Error('history unavailable');
-    const readRun = store.getWorkflowRun.bind(store);
-    const readEvents = store.listWorkflowEvents.bind(store);
-    const readChildren = store.findChildRuns.bind(store);
-    const runSpy = spyOn(store, 'getWorkflowRun').mockImplementation(async id => {
-      if (lookup === 'run' && id === target) throw failure;
-      return readRun(id);
-    });
-    const eventsSpy = spyOn(store, 'listWorkflowEvents').mockImplementation(async id => {
-      if (lookup === 'events' && id === target) throw failure;
-      return readEvents(id);
-    });
-    const childrenSpy = spyOn(store, 'findChildRuns').mockImplementation(async id => {
-      if (lookup === 'children' && id === target) throw failure;
-      return readChildren(id);
-    });
-    let prepare:
-      | import('@archon/core/services/run-owner-preparation').PrepareRunOwnerTermination
-      | undefined;
-    const unregister = registerOwnedRunTermination({
-      store,
-      runId: root.id,
-      getExecutionClaim: () => null,
-      logModule: 'test',
-      detachedProcessOwner: true,
-      liveOwner: {
-        close: async () => {},
-        isStopRequested: () => false,
-        registerTerminationPreparation: callback => {
-          prepare = callback;
-          return () => {};
-        },
-      },
-    });
-    const output = Promise.withResolvers<string[]>();
-    let prepared: ReturnType<NonNullable<typeof prepare>> | undefined;
-    try {
-      if (!prepare) throw new Error('missing preparation');
-      prepared = prepare();
-      const outcome = writeOwnerPreparation(
-        { write: () => true },
-        { ...prepared, ready: output.promise }
-      ).then(
-        () => undefined,
-        error => error
-      );
-      await Bun.sleep(20);
-      output.resolve([]);
-      expect(await outcome).toBe(failure);
-      expect((await readRun(root.id))?.status).toBe('pending');
-    } finally {
-      output.resolve([]);
-      prepared?.release();
-      unregister();
-      runSpy.mockRestore();
-      eventsSpy.mockRestore();
-      childrenSpy.mockRestore();
-    }
-  }
-);

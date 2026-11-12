@@ -1,4 +1,3 @@
-import type { WorkflowHost } from '@archon/core/workflows/host-store';
 /**
  * Remote Coding Agent - Main Entry Point
  * Multi-platform AI coding assistant (Telegram, Discord, GitHub, Gitea, chat plugins)
@@ -75,7 +74,6 @@ import {
   loadConfig,
   logConfig,
   getPort,
-  initializeWorkflowGitHubAppAuth,
   isPerUserGitHubEnabled,
   isPerUserProviderKeysEnabled,
   getDatabaseType,
@@ -206,8 +204,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     workflowPlatforms: new Map([[web.adapter.getPlatformType(), web.adapter]]),
     activePlatforms: ['Web'],
   };
-  const githubAppAuthProvider = initializeWorkflowGitHubAppAuth();
-  const resourceStarts = await createResourceStarts();
   const adapterContext: PlatformAdapterContext = {
     lockManager,
     botName: config.botName,
@@ -229,6 +225,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
+  const resourceStarts = await createResourceStarts();
   registerServerRoutes(app, {
     webAdapter: web.adapter,
     lockManager,
@@ -241,7 +238,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   });
 
   const hostname = process.env.HOST || '0.0.0.0';
-  assertInternalEndpointBind(hostname, githubAppAuthProvider);
+  assertInternalEndpointBind(hostname, adapters.githubAppAuthProvider);
   warnWebAuthHeaderTrust(hostname);
 
   const server = Bun.serve({
@@ -262,7 +259,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Web background runs execute against a hidden worker conversation but deliver
   // to their visible parent; other runs use their owning conversation directly.
   startWorkflowContinuationScheduler(
-    resourceStarts.workflowHost,
+    createSqlWorkflowHost(),
     run => workflowResumeTargetForRun(run, registry.workflowPlatforms),
     resourceStarts.requestDrain
   );
@@ -511,14 +508,11 @@ async function startChatHosting(
 }
 
 async function createResourceStarts(): Promise<{
-  workflowHost: WorkflowHost;
   webhookSources: Awaited<ReturnType<typeof loadWebhookSourcePlugins>> | undefined;
   hostId: string | undefined;
   requestDrain: (() => void) | undefined;
 }> {
-  const hostId = process.env.ARCHON_TRIGGER_HOST?.trim();
-  const host = hostId ? createServerResourceStartHost(hostId, createSqlWorkflowHost()) : undefined;
-  const workflowHost = host?.workflowHost ?? createSqlWorkflowHost();
+  const workflowHost = createSqlWorkflowHost();
   const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
   const webhookSources = webhookSourcesConfigPath
     ? await loadWebhookSourcePlugins(webhookSourcesConfigPath, {
@@ -528,8 +522,11 @@ async function createResourceStarts(): Promise<{
           workflowHost.deps.store.hasStartReceiptForDelivery(sourceInstanceId, deliveryId),
       })
     : undefined;
+  // Explicit only: bindings choose their execution host, so the server never guesses one.
+  const hostId = process.env.ARCHON_TRIGGER_HOST?.trim();
+  const host = hostId ? createServerResourceStartHost(hostId, workflowHost) : undefined;
   const requestDrain = host ? (): void => void host.requestDrain() : undefined;
-  return { workflowHost, webhookSources, hostId, requestDrain };
+  return { webhookSources, hostId, requestDrain };
 }
 
 const isLoopbackHost = (hostname: string): boolean =>

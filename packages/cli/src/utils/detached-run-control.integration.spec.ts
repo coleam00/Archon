@@ -65,9 +65,9 @@ const WMI_WARM_UP_TIMEOUT_MS = 90_000;
  */
 const RACING_STOP_TEST_TIMEOUT_MS = 90_000;
 
-async function waitFor(check: () => boolean | Promise<boolean>, timeoutMs: number): Promise<void> {
+async function waitFor(check: () => boolean, timeoutMs: number): Promise<void> {
   const deadline = Date.now() + timeoutMs;
-  while (!(await check())) {
+  while (!check()) {
     if (Date.now() >= deadline) throw new Error('Timed out waiting for fixture');
     await new Promise<void>(resolve => setTimeout(resolve, 25));
   }
@@ -194,7 +194,7 @@ function stubOwner(pid: number, windowsJob?: string): Server {
  * ready. Its fixture directory's name is on the command line of every process in its tree.
  */
 async function startWindowsRunOwner(
-  mode: 'orphan' | 'spawner' | 'nested' | 'nested-approve' | 'nested-trigger'
+  mode: 'orphan' | 'spawner' | 'nested' | 'nested-approve'
 ): Promise<{
   runId: string;
   dir: string;
@@ -209,21 +209,13 @@ async function startWindowsRunOwner(
   const fixturePath = join(import.meta.dir, 'fixtures', 'windows-run-owner.ts');
   const owner = spawn(process.execPath, [fixturePath, runId, dir, mode], {
     detached: true,
-    stdio: ['ignore', 'ignore', 'pipe'],
+    stdio: 'ignore',
   });
   if (owner.pid === undefined) throw new Error('Failed to spawn the Windows run owner fixture');
-  let stderr = '';
-  owner.stderr.on('data', (chunk: Buffer) => {
-    stderr += chunk.toString();
-  });
   owner.unref();
   // A nested launch starts two owners and the job broker of each, so it gets a wider window.
   await waitFor(
-    () => {
-      if (owner.exitCode !== null)
-        throw new Error(`Owner fixture exited ${String(owner.exitCode)}: ${stderr}`);
-      return existsSync(join(dir, 'ready'));
-    },
+    () => existsSync(join(dir, 'ready')),
     mode.startsWith('nested') ? NESTED_LAUNCH_DEADLINE_MS : FIXTURE_STATE_DEADLINE_MS
   );
   return { runId, dir, marker: basename(dir), store };
@@ -266,20 +258,6 @@ async function killWindowsProcessesNaming(
     } catch {
       // Already gone: the test's own assertion reports a survivor.
     }
-  }
-}
-
-async function cleanupNestedOwners(
-  marker: string,
-  survivors: number[] | undefined,
-  runIds: readonly string[]
-): Promise<void> {
-  if (process.platform === 'win32') {
-    await killWindowsProcessesNaming(marker, survivors);
-    return;
-  }
-  for (const id of runIds) {
-    if (await isRunOwnerAnswering(id)) await (await requestDetachedRunStop(id)).stop();
   }
 }
 
@@ -520,15 +498,15 @@ describe('detached run control integration', () => {
     RACING_STOP_TEST_TIMEOUT_MS
   );
 
-  for (const mode of ['nested', 'nested-approve', 'nested-trigger'] as const) {
+  for (const mode of ['nested', 'nested-approve'] as const) {
     it(
-      `leaves a ${mode} run running and owned when its launcher is cancelled`,
+      `leaves a Windows ${mode} run running and owned when its launcher is cancelled`,
       async () => {
         // The launching run's job object holds every process the run starts, so a detached
         // owner launched from a node would die with it. `--detach` goes through the job
         // broker instead, so the child owner starts outside the job, and stopping it stays
         // the operator's call.
-        if (process.platform !== 'win32' && mode !== 'nested-trigger') return;
+        if (process.platform !== 'win32') return;
 
         const { runId, dir, marker, store } = await startWindowsRunOwner(mode);
         const childRunId = readFileSync(join(dir, 'child-run-id'), 'utf8');
@@ -546,44 +524,19 @@ describe('detached run control integration', () => {
           if (parent.kind !== 'stopped') throw new Error('Parent was not stopped');
           expect((await store.getWorkflowRun(runId))?.status).toBe('cancelled');
 
-          if (process.platform === 'win32') {
-            const remaining = await windowsProcessesNaming(marker);
-            expect(remaining).toContain(childPid);
-            expect(remaining).toContain(child.pid);
-            expect(remaining).not.toContain(parent.pid);
-          } else {
-            expect(processExists(childPid)).toBe(true);
-            expect(processExists(child.pid)).toBe(true);
-            expect(processExists(parent.pid)).toBe(false);
-          }
+          const remaining = await windowsProcessesNaming(marker);
+          expect(remaining).toContain(childPid);
+          expect(remaining).toContain(child.pid);
+          expect(remaining).not.toContain(parent.pid);
           expect((await childStore.getWorkflowRun(childRunId))?.status).toBe('running');
           const ownedChild = await requestDetachedRunStop(childRunId);
           expect(ownedChild.pid).toBe(child.pid);
-          if (mode === 'nested-trigger') {
-            child.release();
-            ownedChild.release();
-            writeFileSync(join(dir, 'finish-child'), '');
-            await waitFor(
-              async () =>
-                (await childStore.getWorkflowRun(childRunId))?.status === 'completed' &&
-                !(await isRunOwnerAnswering(childRunId)),
-              NESTED_LAUNCH_DEADLINE_MS
-            );
-          } else await child.stop();
+          await child.stop();
 
-          if (process.platform === 'win32') {
-            await waitFor(async () => {
-              survivors = await windowsProcessesNaming(marker);
-              return survivors.length === 0;
-            }, NESTED_LAUNCH_DEADLINE_MS);
-            expect(survivors).toEqual([]);
-          } else {
-            await waitFor(() => !processExists(child.pid), NESTED_LAUNCH_DEADLINE_MS);
-            expect(processExists(childPid)).toBe(false);
-            expect(processExists(child.pid)).toBe(false);
-          }
+          survivors = await windowsProcessesNaming(marker);
+          expect(survivors).toEqual([]);
         } finally {
-          await cleanupNestedOwners(marker, survivors, [runId, childRunId]);
+          await killWindowsProcessesNaming(marker, survivors);
         }
       },
       RACING_STOP_TEST_TIMEOUT_MS

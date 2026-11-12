@@ -504,6 +504,7 @@
       "@archon/core",
       "@archon/core/config/store-selection",
       "@archon/core/workflows/sql-host",
+      "@archon/core/workflows/store-adapter",
       "@archon/git",
       "@archon/paths",
       "@archon/paths/cli-command",
@@ -2665,6 +2666,7 @@
     ],
     "packages/core/src/workflows/store-adapter.ts": [
       "completedRunWorktreeDeps",
+      "createWorkflowDeps",
       "createWorkflowStore",
       "initializeWorkflowGitHubAppAuth",
       "registerGitHubAppAuthProvider"

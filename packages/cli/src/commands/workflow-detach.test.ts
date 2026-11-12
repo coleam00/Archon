@@ -1135,7 +1135,6 @@ describe('workflowRunCommand — detached child adopts the pre-created run (#287
     // The live-owner endpoint is keyed on the run this process owns, and only a
     // detached child exposes active stop.
     expect(mockStartRunLiveOwner).toHaveBeenCalledWith('run-precreated', {
-      store: expect.any(Object),
       detachedProcessPid: process.pid,
     });
   });

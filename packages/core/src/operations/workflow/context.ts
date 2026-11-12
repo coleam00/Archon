@@ -1,4 +1,3 @@
-import { deferRunSlotRelease } from '@archon/workflows/run-slot-release';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -109,7 +108,6 @@ export async function releaseRunResources(ctx: OperationContext, runId: string):
   try {
     return (await ctx.releaseRunResources?.(runId)) ?? [];
   } catch (err) {
-    deferRunSlotRelease();
     getLog().warn({ err, runId }, 'operations.resource_release_failed');
     return [`Run ${runId} retained verification images: ${String(err)}`];
   }

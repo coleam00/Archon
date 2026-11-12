@@ -44,7 +44,7 @@ export async function continueForegroundResume(
   // falls through to a fresh run on another owner's worktree.
   const deps = createWorkflowDeps();
   const engine = new InProcessWorkflowEngine(deps);
-  const resumeOwner = await startRunLiveOwner(resumableRun.id, { store: deps.store });
+  const resumeOwner = await startRunLiveOwner(resumableRun.id);
   let resumeOwnerClosed = false;
   try {
     const admission = await admitResume(scope, input, deps, engine);
@@ -249,8 +249,7 @@ async function startFreshInResumedWorktree(
   if (!captured) return; // capture failed, message already sent
   const workflow = captured.workflow;
   const freshAiConfiguration = await input.prepareLaunchAiConfiguration(workflow);
-  const deps = createWorkflowDeps();
-  await assertRunCredentials(deps, freshAiConfiguration, { cwd: scope.runCwd });
+  await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration, { cwd: scope.runCwd });
   await platform.sendMessage(
     conversationId,
     `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
@@ -259,7 +258,7 @@ async function startFreshInResumedWorktree(
   // executor adopts for us there (see #2690). `captured.preparedSource` proves
   // the helper has already run `owner.hold`, which is the only thing the wrap
   // needs to know to reclaim if the rename fails.
-  await withRunLiveOwner(captured.preparedSource.runId, { store: deps.store }, async () => {
+  await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
     await engine.submit({
       platform,
       conversationId,

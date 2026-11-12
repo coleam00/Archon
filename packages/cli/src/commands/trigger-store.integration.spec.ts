@@ -1,6 +1,3 @@
-import { subscribeResourceStartReleases } from '@archon/core/workflows/resource-start-completion';
-import { releaseContinuablePauseSlot } from '@archon/workflows/parent-resume';
-import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, readFile, realpath, stat, unlink } from 'node:fs/promises';
@@ -36,8 +33,6 @@ import {
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
 import { registerFolder } from '@archon/core/handlers/clone';
-import { spawnAdmitted } from '../triggers/resource-start-host';
-import { RUN_JOB_ESCAPE_ENV } from '../utils/run-job-escape';
 import { triggerCommand } from './trigger';
 import { workflowGetCommand } from './workflow-query';
 import { createFileWorkflowHost } from '@archon/core/workflows/file-host';
@@ -385,13 +380,7 @@ test('receipt preparation and real engine execution use supplied ports without S
     join(project, '.archon/workflows/portable.yaml'),
     'name: portable\ndescription: Portable trigger\nworktree:\n  enabled: false\nnodes:\n  - id: result\n    bash: echo executed >> count; echo done\n'
   );
-  const host = await createFileWorkflowHost(join(root, 'state'));
-  host.deps.releaseRunResources = async () => [];
-  const notifications: string[] = [];
-  const dispose = subscribeResourceStartReleases(host, async hostId => {
-    expect(hostId).toBe('host');
-    notifications.push(hostId);
-  });
+  const host = hostForTest();
   // Register through the production owner so default_cwd is the canonical path the
   // binding's cwd resolves to (macOS /var -> /private/var, Windows RUNNER~1 short names).
   await registerFolder(host.records.codebases, project, 'portable');
@@ -473,8 +462,6 @@ test('receipt preparation and real engine execution use supplied ports without S
     expect(
       results.filter(result => result.status === 'fulfilled' && result.value.success)
     ).toHaveLength(1);
-    expect(notifications).toEqual(['host']);
-    expect(notifications).toEqual(['host']);
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\n');
     expect(await host.deps.store.getWorkflowRun(id)).toMatchObject({
       status: 'completed',
@@ -524,7 +511,6 @@ test('receipt preparation and real engine execution use supplied ports without S
       createPlatform: () => new HeadlessPlatform(),
     });
     expect(delayed.success).toBe(false);
-    expect(notifications).toEqual(['host']);
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\n');
     expect(
       (await host.deps.store.listWorkflowEvents(delayedId)).filter(
@@ -562,7 +548,6 @@ test('receipt preparation and real engine execution use supplied ports without S
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\nexecuted\nexecuted\n');
     expect(accesses).toBe(0);
   } finally {
-    dispose();
     for (const trap of traps) trap.mockRestore();
     stdout.mockRestore();
     if (previousHome === undefined) delete process.env.ARCHON_HOME;
@@ -849,66 +834,6 @@ test("fire does not blame its receipt for another binding's preparation failure"
   } finally {
     stderr.mockRestore();
     stdout.mockRestore();
-    restore();
-  }
-});
-
-test('an admitted dispatch failure requires ownership-checked execute, not another drain', async () => {
-  const fixture = await fireFixture(true);
-  const { project, configPath, restore } = fixture;
-  const deps = { ...fixture.host.deps, releaseRunResources: async () => {} };
-  const host = { ...fixture.host, deps, engine: new InProcessWorkflowEngine(deps) };
-  const previousBroker = process.env[RUN_JOB_ESCAPE_ENV];
-  process.env[RUN_JOB_ESCAPE_ENV] =
-    process.platform === 'win32'
-      ? `\\\\.\\pipe\\archon-missing-${randomUUID()}`
-      : join(project, 'missing-broker.sock');
-  try {
-    const error = await triggerCommand(
-      host,
-      'fire',
-      [],
-      { config: configPath },
-      {
-        dispatch: (requestId, hostId) => spawnAdmitted(host, requestId, hostId),
-        env: NO_RUN,
-      }
-    ).catch((caught: unknown) => caught);
-    const [receipt] = await host.deps.store.listStartReceipts(1);
-    if (!receipt) throw new Error('Missing retained receipt');
-    const inspection = await host.deps.store.getStartReceipt(receipt.id);
-    const disposition = inspection?.bindings[0]?.disposition;
-    if (disposition?.status !== 'admitted') throw new Error('Request was not admitted');
-    expect(error).toBeInstanceOf(Error);
-    const message = (error as Error).message;
-    expect(message).toContain(`archon trigger inspect ${disposition.requestId}`);
-    expect(message).toContain(`archon workflow get ${disposition.runId}`);
-    expect(message).toContain(`trigger-run-${disposition.requestId}.log`);
-    expect(message).toContain(`archon trigger execute ${disposition.requestId} --host host`);
-    expect(message).toContain('verifying no executor owns the run');
-    expect(message).toContain('A drain cannot retry an admitted request');
-    expect((await host.deps.store.getWorkflowRun(disposition.runId))?.status).toBe('pending');
-    let dispatches = 0;
-    await drainResourceStartHost({
-      ...host,
-      hostId: 'host',
-      startAdmitted: async () => {
-        dispatches++;
-      },
-    });
-    expect(dispatches).toBe(0);
-    // No process was spawned, so this explicit execute has no competing owner.
-    const result = await startAdmittedResourceStart({
-      host,
-      requestId: disposition.requestId,
-      hostId: 'host',
-      createPlatform: () => new HeadlessPlatform(),
-    });
-    expect(result.success).toBe(true);
-    expect((await host.deps.store.getWorkflowRun(disposition.runId))?.status).toBe('completed');
-  } finally {
-    if (previousBroker === undefined) delete process.env[RUN_JOB_ESCAPE_ENV];
-    else process.env[RUN_JOB_ESCAPE_ENV] = previousBroker;
     restore();
   }
 });
@@ -1637,100 +1562,3 @@ for (const storage of ['files', 'sql'] as const) {
     }
   });
 }
-
-test.each(['child', 'shared-checkout', 'independent-checkout', 'continuation-priority'] as const)(
-  'owner drain preserves file-store eligibility: %s',
-  async scenario => {
-    const root = tempRoots(await mkdtemp(join(tmpdir(), 'trigger-eligibility-')));
-    const host = await createFileWorkflowHost(root);
-    const store = host.deps.store;
-    const codebase = await host.records.codebases.createCodebase({
-      name: 'portable',
-      default_cwd: '/portable',
-    });
-    const prepared = (cwd: string): PreparedWorkflowLaunch => {
-      const value = launch(codebase.id);
-      value.execution.cwd = cwd;
-      return value;
-    };
-    const first = prepared('/portable/first');
-    const second = prepared(
-      scenario === 'shared-checkout' ? '/portable/first' : '/portable/second'
-    );
-    const intent = (value: PreparedWorkflowLaunch): ResourceStartIntent => ({
-      resource: 'eligible',
-      capacity: 1,
-      hostId: 'host',
-      overlap: 'queue',
-      launch: value,
-    });
-    expect((await store.admitResourceStart(intent(first))).status).toBe('admitted');
-    await store.claimPendingWorkflowRun(first.run.id, first.execution.cwd);
-    const priority = scenario === 'continuation-priority';
-    if (!priority) expect((await store.admitResourceStart(intent(second))).status).toBe('queued');
-    await store.pauseWorkflowRun(
-      first.run.id,
-      scenario === 'child'
-        ? {
-            type: 'child_workflow',
-            nodeId: 'child',
-            message: '',
-            pauseId: 'p1',
-            childRunId: 'child-run',
-          }
-        : { type: 'approval', nodeId: 'review', message: 'Review?', pauseId: 'p1' }
-    );
-    const paused = await store.getWorkflowRun(first.run.id);
-    if (!paused) throw new Error('Expected paused holder');
-    if (priority) await releaseContinuablePauseSlot(host.deps, paused);
-    if (priority) {
-      expect((await store.admitResourceStart(intent(second))).status).toBe('admitted');
-      await store.claimPendingWorkflowRun(second.run.id, second.execution.cwd);
-      await host.operations.approveWorkflow(
-        first.run.id,
-        'approved',
-        { kind: 'operator' },
-        { via: 'cli' }
-      );
-      await expect(store.resumeWorkflowRun(first.run.id)).rejects.toBeInstanceOf(
-        WorkflowResourceBusyError
-      );
-      expect((await store.getWorkflowRun(first.run.id))?.metadata.capacity_wait).toBeDefined();
-    }
-    const third = prepared('/portable/third');
-    if (priority) {
-      expect((await store.admitResourceStart(intent(third))).status).toBe('queued');
-    }
-    const dispatched: string[] = [];
-    const dispose = subscribeResourceStartReleases(host, async hostId => {
-      await drainResourceStartHost({
-        ...host,
-        hostId,
-        startAdmitted: async id => {
-          dispatched.push(id);
-        },
-      });
-    });
-    // Releasing a second holder tests continuation priority; a successful explicit
-    // pause release tests checkout retention without changing its owner.
-    if (priority) {
-      await store.completeWorkflowRun(second.run.id, { duration_ms: 1 });
-    } else {
-      await releaseContinuablePauseSlot(host.deps, paused);
-    }
-    if (scenario === 'independent-checkout') expect(dispatched).toEqual([second.run.id]);
-    else {
-      expect(dispatched).toEqual([]);
-      expect(
-        (await store.getResourceStartRequest(priority ? third.run.id : second.run.id))?.status
-      ).toBe('queued');
-    }
-    expect((await store.getWorkflowRun(first.run.id))?.status).toBe('paused');
-    if (priority) {
-      expect(await store.resumeWorkflowRun(first.run.id)).toMatchObject({ status: 'running' });
-      await store.completeWorkflowRun(first.run.id, { duration_ms: 1 });
-      expect(dispatched).toEqual([third.run.id]);
-    }
-    dispose();
-  }
-);

@@ -1,4 +1,3 @@
-import { bindRunSlotReleaseStore } from '@archon/workflows/run-slot-release';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import { createRunResourceRelease } from '../services/cleanup/run-verification-images';
 import { createLogger } from '@archon/paths';
@@ -46,7 +45,7 @@ export function createSqlWorkflowOperations(
 ): WorkflowOperations {
   return createWorkflowOperations({
     getUserRole: async userId => (await hostStore.users.getUserById(userId))?.role,
-    store: bindRunSlotReleaseStore({ ...store, deleteWorkflowRun }, connection.getDatabase),
+    store: { ...store, deleteWorkflowRun },
     hostStore,
     releaseRunResources: effects.releaseRunResources,
     requestDetachedRunStop,

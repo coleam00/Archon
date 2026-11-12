@@ -1,6 +1,6 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, renameSync, writeFileSync } from 'node:fs';
-import { basename, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { isRunOwnerAnswering, startRunLiveOwner } from '@archon/core/services/run-live-owner';
 import { claimDetachedRunProcessOwner } from '../detached-run-control';
@@ -15,20 +15,10 @@ import { claimDetachedRunProcessOwner } from '../detached-run-control';
  * - `nested`: start a process, as a node would, that launches a real CLI workflow with
  *   `--detach` through the job broker. Its run id is saved in `<dir>/child-run-id`.
  * - `nested-approve`: pause that run at an approval, then continue with `approve --detach`.
- * - `nested-trigger`: launch an admitted trigger executor from inside the parent's job.
  */
 
 const [runId, dir, mode] = process.argv.slice(2);
-const modes = [
-  'orphan',
-  'spawner',
-  'nested',
-  'nested-approve',
-  'nested-trigger',
-  'relay-trigger',
-  'relay',
-  'relay-approve',
-];
+const modes = ['orphan', 'spawner', 'nested', 'nested-approve', 'relay', 'relay-approve'];
 if (!runId || !dir || !mode || !modes.includes(mode)) {
   throw new Error(`Usage: windows-run-owner.ts <run-id> <dir> <${modes.join('|')}>`);
 }
@@ -81,71 +71,7 @@ async function runCli(args: string[]): Promise<string> {
   return ack.runId;
 }
 
-if (mode === 'relay-trigger') {
-  const home = join(dir, 'home');
-  process.env.ARCHON_HOME = home;
-  process.env.DATABASE_URL = '';
-  const { createFileWorkflowHost } = await import('@archon/core/workflows/file-host');
-  const host = await createFileWorkflowHost(join(home, 'store'));
-  const { registerFolder } = await import('@archon/core/handlers/clone');
-  await registerFolder(host.records.codebases, dir, 'nested-trigger');
-  const user = await host.records.users.findOrCreateUserByPlatformIdentity('cli', 'operator');
-  if (!user) throw new Error('Missing trigger fixture operator');
-  const config = join(dir, 'trigger.json');
-  writeFileSync(
-    config,
-    JSON.stringify({
-      version: 1,
-      sourceInstanceId: 'nested-trigger',
-      binding: {
-        bindingId: 'nested-trigger',
-        bindingRevision: null,
-        hostId: `nested-host-${basename(dir)}`,
-        runAsUserId: user.id,
-        resource: 'nested-trigger',
-        overlap: 'queue',
-        launch: {
-          cwd: dir,
-          workflowName: 'nested-child',
-          inputs: {},
-          isolation: { kind: 'in-place' },
-        },
-      },
-      schedule: { intervalSeconds: 60, runAtLoad: false },
-    })
-  );
-  const child = Bun.spawn(
-    [
-      process.execPath,
-      resolve(import.meta.dir, '..', '..', 'cli.ts'),
-      'trigger',
-      'fire',
-      '--config',
-      config,
-    ],
-    {
-      cwd: dir,
-      env: {
-        ...process.env,
-        WORKFLOW_ID: '',
-        ARCHON_NODE_EXECUTION: '',
-        ARCHON_TELEMETRY_DISABLED: '1',
-      },
-      stdout: 'pipe',
-      stderr: 'pipe',
-    }
-  );
-  const [exit, stdout, stderr] = await Promise.all([
-    child.exited,
-    new Response(child.stdout).text(),
-    new Response(child.stderr).text(),
-  ]);
-  if (exit !== 0) throw new Error(`Trigger launch failed: ${stdout} ${stderr}`);
-  const { runs } = await host.deps.store.listWorkflowRuns();
-  if (runs.length !== 1 || !runs[0]) throw new Error('Trigger did not create exactly one run');
-  writeFileSync(join(dir, 'child-run-id'), runs[0].id);
-  process.exit(0);
-} else if (mode === 'relay' || mode === 'relay-approve') {
+if (mode === 'relay' || mode === 'relay-approve') {
   const childRunId = await runCli(['run', 'nested-child', '--folder']);
   if (mode === 'relay-approve') {
     const store = await createFileWorkflowStore({ root: join(dir, 'home', 'store') });
@@ -196,17 +122,13 @@ if (mode === 'relay-trigger') {
     mkdirSync(kidsDir);
     loop();
     writeReady();
-  } else if (mode === 'nested' || mode === 'nested-approve' || mode === 'nested-trigger') {
+  } else if (mode === 'nested' || mode === 'nested-approve') {
     const workflows = join(dir, '.archon', 'workflows');
     mkdirSync(workflows, { recursive: true });
     mkdirSync(join(dir, 'home'));
     writeFileSync(join(dir, 'home', 'config.yaml'), 'store: files\n');
     const readyPath = join(dir, 'child-ready');
-    const finish =
-      mode === 'nested-trigger'
-        ? `while (!require('node:fs').existsSync(${JSON.stringify(join(dir, 'finish-child'))})) await Bun.sleep(10);`
-        : 'setInterval(() => {}, 1000);';
-    const script = `import { writeFileSync, renameSync } from 'node:fs'; writeFileSync(${JSON.stringify(`${readyPath}.tmp`)}, String(process.pid)); renameSync(${JSON.stringify(`${readyPath}.tmp`)}, ${JSON.stringify(readyPath)}); ${finish}`;
+    const script = `import { writeFileSync, renameSync } from 'node:fs'; writeFileSync(${JSON.stringify(`${readyPath}.tmp`)}, String(process.pid)); renameSync(${JSON.stringify(`${readyPath}.tmp`)}, ${JSON.stringify(readyPath)}); setInterval(() => {}, 1000);`;
     // The survivor query needs the directory on argv; inline source travels over stdin.
     const scripts = join(dir, '.archon', 'scripts');
     mkdirSync(scripts, { recursive: true });
@@ -225,18 +147,9 @@ ${mode === 'nested-approve' ? '    depends_on: [review]\n' : ''}    runtime: bun
     );
     const relay = spawn(
       process.execPath,
-      [
-        import.meta.path,
-        runId,
-        dir,
-        mode === 'nested-trigger'
-          ? 'relay-trigger'
-          : mode === 'nested-approve'
-            ? 'relay-approve'
-            : 'relay',
-      ],
+      [import.meta.path, runId, dir, mode === 'nested-approve' ? 'relay-approve' : 'relay'],
       {
-        stdio: ['ignore', 'ignore', 'inherit'],
+        stdio: 'ignore',
       }
     );
     relay.on('error', error => {
