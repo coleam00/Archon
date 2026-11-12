@@ -677,7 +677,7 @@ test('reviews paginate submissions and root diff comments, retaining author and 
     id: 1,
     html_url: 'https://github.com/a/b/pull/7#review-1',
     body: 'private body',
-    user: { id: 2, login: 'reviewer' },
+    user: { id: 2, login: 'reviewer', type: 'User' },
     commit_id: 'headsha',
     state: 'COMMENTED',
     submitted_at: '2026-10-06T10:00:00Z',
@@ -704,24 +704,36 @@ test('reviews paginate submissions and root diff comments, retaining author and 
           { ...item, state: undefined },
           { ...item, id: 2, in_reply_to_id: 1 },
           { ...item, id: 3, user: null, commit_id: null, created_at: null },
+          { ...item, id: 4, user: { id: 3, login: 'ci[bot]', type: 'Bot' } },
+          { ...item, id: 5, user: { id: 4, login: 'acme', type: 'Organization' } },
+          { ...item, id: 6, user: { id: 5, login: 'old' } },
+          { ...item, id: 7, user: { id: 6, login: 'ghost', type: 'Mannequin' } },
         ]);
       },
     }
   );
   expect(response).toMatchObject({ ok: true, result: { op: 'pr.reviews' } });
   if (!response.ok || response.result.op !== 'pr.reviews') throw new Error('expected reviews');
-  expect(response.result.value.items).toHaveLength(103);
-  expect(response.result.value.items.at(-2)).toMatchObject({
+  expect(response.result.value.items).toHaveLength(107);
+  const items = response.result.value.items;
+  expect(items.at(-6)).toMatchObject({
     kind: 'review_comment',
-    author: { host: repo.host, id: '2', login: 'reviewer' },
+    author: { host: repo.host, id: '2', login: 'reviewer', type: 'user' },
     commit: 'headsha',
     state: null,
   });
-  expect(response.result.value.items.at(-1)).toMatchObject({
+  expect(items.at(-5)).toMatchObject({
     author: null,
     commit: null,
     createdAt: null,
   });
+  expect(items.slice(-4).map(entry => entry.author?.type)).toEqual([
+    'bot',
+    'organization',
+    null,
+    null,
+  ]);
+  expect(forgeResponseSchema.safeParse(response).success).toBe(true);
   expect(calls.some(url => url.endsWith('page=2'))).toBe(true);
 });
 

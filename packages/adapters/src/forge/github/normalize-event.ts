@@ -7,6 +7,7 @@ import {
   type ForgeEvent,
   type ForgeEventEnvelope,
 } from '@archon/forge';
+import { accountType } from './actor';
 
 type PrLifecycleAction = Extract<ForgeEvent, { kind: 'pr.lifecycle' }>['action'];
 
@@ -53,6 +54,7 @@ const repositorySchema = z.object({ full_name: z.string().min(1) });
 const senderSchema = z.object({
   id: z.union([z.string().min(1), z.number().int()]),
   login: z.string().min(1).nullable().optional(),
+  type: z.string().optional(),
 });
 const baseSchema = z.object({
   action: z.string().min(1),
@@ -140,7 +142,14 @@ function actor(
   sender: z.infer<typeof senderSchema> | undefined,
   host: string
 ): SourceActor | undefined {
-  return sender ? { host, id: String(sender.id), login: sender.login ?? null } : undefined;
+  return sender
+    ? {
+        host,
+        id: String(sender.id),
+        login: sender.login ?? null,
+        type: accountType(sender.type),
+      }
+    : undefined;
 }
 
 export function checkPhase(status: string): 'pending' | 'running' | 'completed' | 'unknown' {

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import type { ForgeRequest } from '@archon/forge/operations';
+import { forgeResponseSchema, type ForgeRequest } from '@archon/forge/operations';
 import { handleGithubOperation } from './operations';
 
 const repo = { host: 'github.com', path: 'archon/test' };
@@ -43,7 +43,7 @@ const issue = (pull: boolean) => ({
   state: 'open',
   ...(pull ? { pull_request: {} } : {}),
 });
-const restComment = (id: number, user: { id: number; login: string } | null) => ({
+const restComment = (id: number, user: { id: number; login: string; type?: string } | null) => ({
   id,
   html_url: `https://github.com/archon/test/pull/7#issuecomment-${String(id)}`,
   issue_url: `${API}/issues/7`,
@@ -57,7 +57,7 @@ describe('workitem.comments', () => {
       if (url === `${API}/issues/7`) return issue(true);
       if (url.endsWith('page=1'))
         return Array.from({ length: 100 }, (_, index) =>
-          restComment(index + 1, { id: 42, login: 'maintainer' })
+          restComment(index + 1, { id: 42, login: 'maintainer', type: 'User' })
         );
       return [restComment(101, null)];
     });
@@ -72,11 +72,36 @@ describe('workitem.comments', () => {
     expect(comments).toHaveLength(101);
     expect(comments[0]).toEqual({
       id: '1',
-      author: { host: 'github.com', id: '42', login: 'maintainer' },
+      author: { host: 'github.com', id: '42', login: 'maintainer', type: 'user' },
       url: 'https://github.com/archon/test/pull/7#issuecomment-1',
       body: 'comment 1',
     });
     expect(comments[100]?.author).toBeNull();
+  });
+
+  test('maps the REST account type, and a missing or unknown one stays null', async () => {
+    const github = fakeGitHub(({ url }) => {
+      if (url === `${API}/issues/7`) return issue(true);
+      return [
+        restComment(1, { id: 1, login: 'ci[bot]', type: 'Bot' }),
+        restComment(2, { id: 2, login: 'acme', type: 'Organization' }),
+        restComment(3, { id: 3, login: 'old' }),
+        restComment(4, { id: 4, login: 'ghost', type: 'Mannequin' }),
+      ];
+    });
+    const response = await run(
+      { operationId: 'c', op: 'workitem.comments', subject: { kind: 'pr', ref } },
+      github
+    );
+    if (!response.ok || response.result.op !== 'workitem.comments')
+      throw new Error(JSON.stringify(response));
+    expect(response.result.value.comments.map(item => item.author?.type)).toEqual([
+      'bot',
+      'organization',
+      null,
+      null,
+    ]);
+    expect(forgeResponseSchema.safeParse(response).success).toBe(true);
   });
 
   test('refuses an issue asked for as a pull request before reading its comments', async () => {

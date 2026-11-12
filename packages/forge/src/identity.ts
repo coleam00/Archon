@@ -42,9 +42,18 @@ export type ForgeSubjectRef = z.infer<typeof forgeSubjectRefSchema>;
 
 export const gitObjectIdSchema = nonEmpty;
 
+export const sourceActorAccountTypeSchema = z.enum(['user', 'bot', 'organization']);
+export type SourceActorAccountType = z.infer<typeof sourceActorAccountTypeSchema>;
+
+/**
+ * `type` is the forge account's kind. Null means the forge does not say or the kind is none of
+ * these. It is absent from records written before it existed, so a reader treats absence as
+ * unknown.
+ */
 export const sourceActorSchema = z.object({
   host: nonEmpty,
   id: nonEmpty,
   login: nonEmpty.nullable(),
+  type: sourceActorAccountTypeSchema.nullable().optional(),
 });
 export type SourceActor = z.infer<typeof sourceActorSchema>;

@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { forgeResponseSchema } from '@archon/forge/operations';
 import { handleGithubOperation } from './operations';
 
 const repo = { host: 'github.com', path: 'archon/test' };
@@ -42,9 +43,14 @@ function fakeGitHub(answer: (call: Call) => unknown): { fetch: typeof fetch; cal
   return { fetch: fetchImpl, calls };
 }
 
-const comment = (id: string, body: string, createdAt = '2026-11-11T10:00:00Z') => ({
+const comment = (
+  id: string,
+  body: string,
+  createdAt = '2026-11-11T10:00:00Z',
+  author: unknown = { __typename: 'User', login: 'reviewer', databaseId: 42 }
+) => ({
   id,
-  author: { login: 'reviewer', databaseId: 42 },
+  author,
   createdAt,
   originalCommit: { oid: `${id}-commit` },
   body,
@@ -129,9 +135,48 @@ describe('pr.threads', () => {
       host: 'github.com',
       id: '42',
       login: 'reviewer',
+      type: 'user',
     });
     expect(threads[1]).toMatchObject({ resolved: true, comments: [{ author: null }] });
     expect(github.calls.filter(call => call.query?.includes('reviewThreads'))).toHaveLength(2);
+  });
+
+  test('each comment author carries its GraphQL account type, a missing one as null', async () => {
+    const github = fakeGitHub(() => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                thread('t1', [
+                  comment('c1', 'a', undefined, {
+                    __typename: 'User',
+                    login: 'dev',
+                    databaseId: 1,
+                  }),
+                  comment('c2', 'b', undefined, { __typename: 'Bot', login: 'ci', databaseId: 2 }),
+                  comment('c3', 'c', undefined, { __typename: 'Organization', login: 'acme' }),
+                  comment('c4', 'd', undefined, { login: 'untyped', databaseId: 4 }),
+                  comment('c5', 'e', undefined, { __typename: 'Mannequin', login: 'm' }),
+                ]),
+              ],
+            },
+          },
+        },
+      },
+    }));
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      { token: 'token', fetch: github.fetch }
+    );
+    if (!response.ok || response.result.op !== 'pr.threads')
+      throw new Error(JSON.stringify(response));
+    const authors = response.result.value.threads[0]?.comments.map(item => item.author);
+    expect(authors?.map(item => item?.type)).toEqual(['user', 'bot', 'organization', null, null]);
+    expect(authors?.[1]).toEqual({ host: 'github.com', id: '2', login: 'ci', type: 'bot' });
+    expect(forgeResponseSchema.safeParse(response).success).toBe(true);
+    expect(github.calls[0]?.query).toContain('author{__typename login');
   });
 
   test('every thread and comment carries when it was created and on which commit', async () => {
