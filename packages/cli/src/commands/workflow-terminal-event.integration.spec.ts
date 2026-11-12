@@ -1,7 +1,14 @@
 import { terminalRecordSchema } from '@archon/workflows/schemas/terminal-record';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { canonicalizeProjectPath } from '@archon/paths';
@@ -309,4 +316,115 @@ nodes:
       expect(result.terminal_record).toEqual(record);
     }
   }, 40_000);
+});
+
+describe('detached run worktree ownership', () => {
+  test.each([undefined, 'operator-branch'])(
+    'completes a clean pushed isolated run with branch %s',
+    async branch => {
+      const root = realpathSync(mkdtempSync(join(tmpdir(), 'archon-detached-worktree-')));
+      cleanupPaths.push(root);
+      const home = join(root, 'home');
+      const repo = join(root, 'repo');
+      const origin = join(root, 'origin.git');
+      mkdirSync(join(repo, '.archon', 'workflows'), { recursive: true });
+      function git(...args: string[]): string {
+        const result = Bun.spawnSync(['git', '-C', repo, ...args]);
+        if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+        return result.stdout.toString().trim();
+      }
+      git('init', '-q', '--initial-branch=main');
+      git('init', '-q', '--bare', origin);
+      git('config', 'user.name', 'Test');
+      git('config', 'user.email', 'test@example.com');
+      git('remote', 'add', 'origin', origin);
+      writeFileSync(join(repo, '.archon', 'config.yaml'), 'worktree:\n  baseBranch: main\n');
+      writeFileSync(
+        join(repo, '.archon', 'workflows', 'release.yaml'),
+        `name: release
+description: Detached worktree release
+nodes:
+  - id: publish
+    bash: git push origin HEAD
+`
+      );
+      git('add', '.');
+      git('commit', '-qm', 'fixture');
+      git('push', '-q', 'origin', 'main');
+      const launcher = Bun.spawn(
+        [
+          process.execPath,
+          resolve(import.meta.dir, '..', 'cli.ts'),
+          'workflow',
+          'run',
+          'release',
+          '--detach',
+          '--json',
+          ...(branch ? ['--branch', branch] : []),
+        ],
+        {
+          cwd: repo,
+          env: {
+            ...process.env,
+            ARCHON_HOME: home,
+            DATABASE_URL: '',
+            ARCHON_TELEMETRY_DISABLED: '1',
+          },
+          stdout: 'pipe',
+          stderr: 'pipe',
+        }
+      );
+      const [code, stdout, stderr] = await Promise.all([
+        launcher.exited,
+        new Response(launcher.stdout).text(),
+        new Response(launcher.stderr).text(),
+      ]);
+      expect(code, stderr + stdout).toBe(0);
+      const ack: {
+        ok: boolean;
+        detached: boolean;
+        runId: string;
+        branch: string;
+        logPath: string;
+      } = JSON.parse(stdout);
+      expect(ack.ok).toBe(true);
+      expect(ack.detached).toBe(true);
+      expect(typeof ack.runId).toBe('string');
+      activeRunIds.add(ack.runId);
+      const databasePath = join(home, 'archon.db');
+      const run = await waitForDetachedRun(() => {
+        const row = readRunById(databasePath, ack.runId);
+        if (row?.status === 'failed') throw new Error(readFileSync(ack.logPath, 'utf8'));
+        return row?.status === 'completed' ? row : undefined;
+      });
+      await waitForDetachedRun(async () =>
+        (await canConnectToRunLiveOwner(runLiveOwnerPath(run.id))) ? undefined : true
+      );
+      activeRunIds.delete(run.id);
+      const database = openReadOnly(databasePath);
+      try {
+        const environments = database
+          .query<{ branch_name: string; working_path: string; status: string }, []>(
+            'SELECT branch_name, working_path, status FROM remote_agent_isolation_environments'
+          )
+          .all();
+        expect(environments).toHaveLength(1);
+        const env = environments[0];
+        expect(run.working_path).toBe(env.working_path);
+        expect(ack.branch).toBe(env.branch_name);
+        expect(git('ls-remote', 'origin', `refs/heads/${ack.branch}`)).not.toBe('');
+        expect(env.status).toBe(branch ? 'active' : 'destroyed');
+        expect(existsSync(env.working_path)).toBe(branch !== undefined);
+        expect(git('worktree', 'list', '--porcelain').split('worktree ')).toHaveLength(
+          branch ? 3 : 2
+        );
+        expect(env.branch_name).toMatch(
+          branch ? /^operator-branch$/ : /^archon\/task-release-\d+$/
+        );
+      } finally {
+        database.close();
+      }
+    },
+    30_000
+  );
 });

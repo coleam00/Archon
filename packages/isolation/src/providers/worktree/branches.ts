@@ -60,7 +60,7 @@ export function generateBranchName(request: IsolationRequest): string {
   }
 }
 
-function generatedTaskBranch(identifier: string): string {
+export function generatedTaskBranch(identifier: string): string {
   return `archon/task-${slugify(identifier)}`;
 }
 

@@ -156,14 +156,15 @@ describe('workflowRunCommand — detach', () => {
         expect(spawnCmd).not.toContain('--project');
       }
       expect(spawnCmd).not.toContain('--detach');
-      expect(spawnCmd).toContain('--branch');
+      expect(spawnCmd).not.toContain('--branch');
+      expect(spawnCmd).toContain('--internal-detached-worktree-identifier');
       expect(spawnCmd).not.toContain('--conversation-id');
       expect(spawnCmd).toContain('--cwd');
       const cwdIdx = spawnCmd.indexOf('--cwd');
       expect(spawnCmd[cwdIdx + 1]).toBe('/test/path');
       expect(spawnOptions?.cwd).toBe('/test/path');
-      // Generated branch is `assist-<timestamp>`
-      const branchIdx = spawnCmd.indexOf('--branch');
+      // Generated identity is carried separately from an explicit branch.
+      const branchIdx = spawnCmd.indexOf('--internal-detached-worktree-identifier');
       expect(spawnCmd[branchIdx + 1]).toMatch(/^assist-\d+$/);
       // executeWorkflow must NOT run in the detaching parent
       const execAfter = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
@@ -533,6 +534,7 @@ describe('workflowRunCommand — detach', () => {
 
     expect(spawnCmd).not.toContain('--detach');
     expect(spawnCmd).not.toContain('--branch'); // folder project → no worktree branch
+    expect(spawnCmd).not.toContain('--internal-detached-worktree-identifier');
     expect(spawnCmd).not.toContain('--conversation-id');
   });
 

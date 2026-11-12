@@ -186,6 +186,9 @@ function buildRunOptions(
     configFromRun: values['config-from-run'] as string | undefined,
     detachedRunConfig,
     detachedRunId: values['internal-detached-run-id'] as string | undefined,
+    detachedWorktreeIdentifier: values['internal-detached-worktree-identifier'] as
+      | string
+      | undefined,
   };
 }
 
