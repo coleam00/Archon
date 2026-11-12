@@ -2334,7 +2334,7 @@ bindings:
   sweep:                              # the binding id: lowercase letters, digits, hyphens
     workflow: review-sweep            # a workflow of this pack
     resource: sweep                   # last segment of the resource name
-    capacity: 1                       # optional; omitted, the engine default of 10 applies
+    capacity: 1                       # optional, default 1
     overlap: skip                     # skip | queue
     isolation: { kind: worktree }     # optional, default { kind: default }
     schedule: { interval_seconds: 1800 }
@@ -2370,9 +2370,7 @@ resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings th
 same `resource` share its slots. With `resource_scope: host` it is
 `<pack>:<host id>:<resource>`, for work that spans every repository on the host. When the
 bound workflow declares a top-level `resource:`, its runs hold that resource instead, and the
-binding's `capacity` applies to it. An omitted `capacity` declares no number; it used to mean
-`1`, and now the engine default of 10 applies unless another source gives one. Binding files
-already generated carry their capacity explicitly and are unaffected.
+binding's `capacity` applies to it. An omitted `capacity` means 1.
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`

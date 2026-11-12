@@ -1,8 +1,16 @@
 import { z } from 'zod';
 import { jsonValueSchema } from '../output-ref';
 import { workflowRunOriginSchema } from './workflow-run';
-import { notProviderResource, resourceNameSchema } from './resource-name';
-export { PROVIDER_RESOURCE_PREFIX, resourceNameSchema } from './resource-name';
+import {
+  DEFAULT_RESOURCE_CAPACITY,
+  notProviderResource,
+  resourceNameSchema,
+} from './resource-name';
+export {
+  DEFAULT_RESOURCE_CAPACITY,
+  PROVIDER_RESOURCE_PREFIX,
+  resourceNameSchema,
+} from './resource-name';
 
 const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
 const preparedIsolationSchema = z.discriminatedUnion('kind', [
@@ -133,10 +141,14 @@ export function requestingRun(
 
 /**
  * How many admitted holders a resource slot allows at once, as a pack or binding declares
- * it. Optional: admission resolves the number it uses (`recordedResourceCapacity`, then the
- * install config).
+ * it. It defaults to 1, so a resource means "must not overlap" unless configured
+ * otherwise. The install config's `concurrency.resources.<resource>` wins at admission.
  */
-export const resourceSlotCapacitySchema = z.number().int().min(1).optional();
+export const resourceSlotCapacitySchema = z
+  .number()
+  .int()
+  .min(1)
+  .default(DEFAULT_RESOURCE_CAPACITY);
 
 export const resourceStartOverlapSchema = z.enum(['skip', 'queue']);
 export const startBindingPreparationStatusSchema = z.enum([

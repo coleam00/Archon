@@ -12,6 +12,9 @@ export const notProviderResource = {
   message: `Resource names starting with '${PROVIDER_RESOURCE_PREFIX}' are reserved for provider admission`,
 };
 
+/** The capacity of a resource that no start, binding or install config gave a number. */
+export const DEFAULT_RESOURCE_CAPACITY = 1;
+
 /** A resource name a binding or a workflow's `resource:` names. */
 export const resourceNameSchema = z
   .string()

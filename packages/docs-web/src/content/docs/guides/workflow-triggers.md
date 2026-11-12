@@ -220,8 +220,8 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 `capacity` sets how many runs can hold the resource at once. Admission reads it fresh for every start, drain and resume, from three sources, lowest first:
 
-1. An engine default of `10` for a resource no source gives a number. The default is per resource, not a total across resources.
-2. The capacity a binding declares, such as `"capacity": 2`, or a pack binding's `capacity:`. The last declared value is the resource's: bindings that share a resource do not need to agree.
+1. An engine default of `1` for a start that declares no number, so by default runs for one resource never overlap.
+2. The capacity the start declares: a binding's `"capacity": 2`, or a pack binding's `capacity:`. Each start is checked against its own number, so bindings that share a resource do not need to agree. A drain or resume uses the number the last binding start declared.
 3. The install config in `~/.archon/config.yaml`, which wins:
 
    ```yaml

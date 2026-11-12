@@ -22,7 +22,10 @@ const {
   withdrawQueuedResourceStart,
 } = createWorkflowStore();
 import { addResourceSlotHolder, liveResourceSlotHolders, lockResourceSlot } from './resource-slots';
-import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
+import {
+  resourceStartIntentSchema,
+  type PreparedWorkflowLaunch,
+} from '@archon/workflows/schemas/resource-start';
 import {
   claimPendingWorkflowRun,
   getWorkflowRun,
@@ -1015,23 +1018,26 @@ describe('durable resource starts', () => {
     expect((await claimPendingWorkflowRun(third))?.status).toBe('running');
   });
 
-  test('the install config beats a declared capacity, which beats the default of 10', async () => {
+  test('the install config beats a declared capacity, which beats the default of 1', async () => {
     const decide = async (resource: string, count: number, capacity?: number) => {
       const statuses: string[] = [];
       for (let index = 0; index < count; index++) {
-        const decision = await admitResourceStart({
-          resource,
-          ...(capacity === undefined ? {} : { capacity }),
-          hostId: 'host',
-          overlap: 'skip',
-          launch: launch(crypto.randomUUID()),
-        });
+        // Parsed as a binding's intent is, so an omitted capacity takes the schema default.
+        const decision = await admitResourceStart(
+          resourceStartIntentSchema.parse({
+            resource,
+            ...(capacity === undefined ? {} : { capacity }),
+            hostId: 'host',
+            overlap: 'skip',
+            launch: launch(crypto.randomUUID()),
+          })
+        );
         statuses.push(decision.status);
       }
       return statuses;
     };
     const admitted = (count: number) => Array<string>(count).fill('admitted');
-    expect(await decide('undeclared', 11)).toEqual([...admitted(10), 'skipped']);
+    expect(await decide('undeclared', 2)).toEqual(['admitted', 'skipped']);
     expect(await decide('declared', 3, 2)).toEqual([...admitted(2), 'skipped']);
     await writeFile(join(root, 'config.yaml'), 'concurrency:\n  resources:\n    declared: 3\n');
     expect(await decide('declared', 2, 2)).toEqual(['admitted', 'skipped']);
@@ -1042,6 +1048,7 @@ describe('durable resource starts', () => {
     const id = crypto.randomUUID();
     await admitResourceStart({
       resource: 'paused-release',
+      capacity: 1,
       hostId: 'host',
       overlap: 'queue',
       launch: launch(id),

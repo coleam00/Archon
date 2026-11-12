@@ -1,7 +1,11 @@
 import { requestingRun } from './schemas/resource-start';
 import { workflowNoticeDataSchema, WORKFLOW_NOTICE_LIMITS } from './workflow-notice';
 import { createLogger } from '@archon/paths';
-import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
+import {
+  AdmissionCheckoutGuardError,
+  DEFAULT_RESOURCE_CAPACITY,
+  readAdmissionCheckoutGuard,
+} from './schemas/resource-start';
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
@@ -65,9 +69,6 @@ export function skippedFireNotice(
 }
 
 export class SourceReceiptDigestConflictError extends Error {}
-
-/** The capacity of a resource that no start, pack, binding or install config gave a number. */
-export const DEFAULT_RESOURCE_CAPACITY = 10;
 
 /**
  * What a slot records as its capacity after a start: the capacity the start declares, or
