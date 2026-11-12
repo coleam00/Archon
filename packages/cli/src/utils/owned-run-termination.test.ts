@@ -398,6 +398,56 @@ for (const signal of ['SIGINT', 'SIGTERM'] as const) {
   );
 }
 
+test.each(['owned', 'stop-requested', 'no-claim', 'lost-claim', 'failed-write'] as const)(
+  'signal completion notification follows owned teardown and close (%s)',
+  async state => {
+    const order: string[] = [];
+    const exited = Promise.withResolvers<void>();
+    const exit = spyOn(process, 'exit').mockImplementation((() => exited.resolve()) as never);
+    const before = process.listeners('SIGTERM');
+    const deregister = registerOwnedRunTermination({
+      store: {
+        getWorkflowRun: async () => null,
+        listWorkflowEvents: async () => [],
+        findChildRuns: async () => [],
+        failWorkflowRun: async () => {
+          order.push('fail');
+          if (state === 'failed-write') throw new Error('store unavailable');
+          return { failed: state !== 'lost-claim' };
+        },
+      },
+      runId: 'signal-completion',
+      getExecutionClaim: () => (state === 'no-claim' ? undefined : null),
+      logModule: 'test',
+      liveOwner: {
+        close: async () => {
+          order.push('close');
+        },
+        isStopRequested: () => state === 'stop-requested',
+        registerTerminationPreparation: () => () => undefined,
+      },
+      detachedProcessOwner: false,
+      teardown: async () => {
+        order.push('teardown');
+      },
+      afterOwnedExecution: async () => {
+        order.push('drain');
+      },
+    });
+    try {
+      const handler = process.listeners('SIGTERM').find(listener => !before.includes(listener));
+      handler?.('SIGTERM');
+      handler?.('SIGTERM');
+      await exited.promise;
+      if (state === 'owned') expect(order).toEqual(['fail', 'teardown', 'close', 'drain']);
+      else expect(order).not.toContain('drain');
+    } finally {
+      deregister();
+      exit.mockRestore();
+    }
+  }
+);
+
 for (const scope of ['run', 'descendant', 'container', 'agent'] as const) {
   posixOnly.each(['sh', 'bun', 'uv'] as const)(
     `a fresh detached owner classifies persisted %s history in ${scope} without targeting old groups`,

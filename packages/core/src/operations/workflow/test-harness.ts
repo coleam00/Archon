@@ -58,6 +58,8 @@ export const mockDeleteWorkflowNodeSessions = mock<IWorkflowStore['deleteWorkflo
   () => Promise.resolve({ deleted: 0 })
 );
 
+export const mockAfterStoppedRun = mock(async (_runId: string) => undefined);
+
 export const mockReleaseRunResources = mock<(runId: string) => Promise<void>>(
   async () => undefined
 );
@@ -176,6 +178,7 @@ export const {
   reclaimRunWorktree: async () => ({ warnings: [] }),
   reclaimContainerEnv: mockReclaimContainerEnv,
   releaseRunResources: mockReleaseRunResources,
+  afterStoppedRun: mockAfterStoppedRun,
 });
 
 // ---------------------------------------------------------------------------

@@ -230,6 +230,131 @@ nodes:
 }
 
 describe('trigger CLI durable execution', () => {
+  test.each(['complete', 'fail', 'pause'] as const)(
+    'owner %s drains the queued hand-off without another command',
+    async ending => {
+      const fixture = await heldTriggerRun(`completion-${ending}`);
+      const release = join(fixture.projectRoot, 'release');
+      const configPath = join(fixture.projectRoot, '..', 'trigger.json');
+      const config = triggerFireConfigSchema.parse(JSON.parse(readFileSync(configPath, 'utf8')));
+      config.binding.overlap = 'skip';
+      writeFileSync(configPath, JSON.stringify(config));
+      fixture.writeWorkflow(
+        `echo ready > ready; while [ ! -f '${release}' ]; do sleep 0.025; done; ${ending === 'fail' ? 'exit 1' : 'echo finished'}`,
+        ending === 'pause'
+          ? '  - id: review\n    depends_on: [hold]\n    approval:\n      message: Review?'
+          : ''
+      );
+      await fixture.fire();
+      const first = await waitFor(() => {
+        const run = fixture.runs()[0];
+        return run?.status === 'running' && existsSync(join(fixture.projectRoot, 'ready'))
+          ? run
+          : undefined;
+      }, 'holding execution');
+      activeRuns.add(first.id);
+      config.sourceInstanceId += '-handoff';
+      config.binding.bindingId += '-handoff';
+      config.binding.overlap = 'queue';
+      delete config.schedule;
+      writeFileSync(configPath, JSON.stringify(config));
+      const successorRoot = join(fixture.projectRoot, '..', 'successor');
+      mkdirSync(join(successorRoot, '.archon', 'workflows'), { recursive: true });
+      expect(await Bun.spawn(['git', 'init', '-q'], { cwd: successorRoot }).exited).toBe(0);
+      writeFileSync(
+        join(successorRoot, '.archon', 'workflows', 'successor.yaml'),
+        'name: successor\ndescription: Successor\nmutates_checkout: false\nnodes:\n  - id: record\n    bash: echo successor >> successor-count\n'
+      );
+      config.binding.launch.cwd = successorRoot;
+      config.binding.launch.workflowName = 'successor';
+      writeFileSync(configPath, JSON.stringify(config));
+      await fixture.fire();
+      expect(fixture.requests().map(row => row.status)).toEqual(['admitted', 'queued']);
+      writeFileSync(release, '');
+      await waitFor(
+        () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
+        'owner-driven successor'
+      );
+      expect(fixture.runs()[0]?.status).toBe(
+        ending === 'complete' ? 'completed' : ending === 'fail' ? 'failed' : 'paused'
+      );
+      expect(fixture.runs()).toHaveLength(2);
+      expect(readFileSync(join(successorRoot, 'successor-count'), 'utf8')).toBe('successor\n');
+      activeRuns.delete(first.id);
+    },
+    30_000
+  );
+
+  test.each(['complete', 'wait'] as const)(
+    'a resumed owner drains at %s before its command exits or waits',
+    async ending => {
+      const fixture = await heldTriggerRun(`resumed-${ending}`);
+      const release = join(fixture.projectRoot, 'release');
+      const count = join(fixture.projectRoot, 'successor-count');
+      fixture.writeWorkflow(
+        'echo initial',
+        [
+          '  - id: review',
+          '    depends_on: [hold]',
+          '    approval:',
+          '      message: Continue?',
+          '  - id: resumed',
+          '    depends_on: [review]',
+          '    bash: |',
+          `      echo "$PPID $$" > '${fixture.pidFile}'; while [ ! -f '${release}' ]; do sleep 0.025; done`,
+          ...(ending === 'wait'
+            ? [
+                '  - id: later',
+                '    depends_on: [resumed]',
+                '    wait:',
+                '      duration_ms: 3600000',
+              ]
+            : []),
+        ].join('\n')
+      );
+      await fixture.fire();
+      const first = await waitFor(() => {
+        const run = fixture.runs()[0];
+        return run?.status === 'paused' ? run : undefined;
+      }, 'initial approval pause');
+      await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+        'workflow',
+        'approve',
+        first.id,
+        '--detach',
+      ]);
+      const [ownerPid] = await recordedPids(fixture.pidFile);
+      activeRuns.add(first.id);
+      try {
+        const successorRoot = join(fixture.projectRoot, '..', 'successor');
+        mkdirSync(join(successorRoot, '.archon', 'workflows'), { recursive: true });
+        expect(await Bun.spawn(['git', 'init', '-q'], { cwd: successorRoot }).exited).toBe(0);
+        writeFileSync(
+          join(successorRoot, '.archon', 'workflows', 'successor.yaml'),
+          `name: successor\ndescription: Successor\nnodes:\n  - id: record\n    bash: echo successor >> '${count}'\n`
+        );
+        const configPath = join(fixture.projectRoot, '..', 'trigger.json');
+        const config = triggerFireConfigSchema.parse(JSON.parse(readFileSync(configPath, 'utf8')));
+        config.binding.launch.cwd = successorRoot;
+        config.binding.launch.workflowName = 'successor';
+        writeFileSync(configPath, JSON.stringify(config));
+        await fixture.fire();
+        expect(fixture.requests()[1]?.status).toBe('queued');
+        writeFileSync(release, '');
+        await waitFor(
+          () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
+          'successor from resumed owner'
+        );
+        expect(fixture.runs()[0]?.status).toBe(ending === 'wait' ? 'paused' : 'completed');
+        expect(readFileSync(count, 'utf8')).toBe('successor\n');
+      } finally {
+        if (ending === 'wait') killAll([ownerPid]);
+      }
+      activeRuns.delete(first.id);
+    },
+    30_000
+  );
+
   test('a killed launch records no failure and continues to hold its slot', async () => {
     const fixture = await heldTriggerRun('killed-preparation');
     const ready = join(fixture.projectRoot, 'ready.json');
@@ -1123,6 +1248,8 @@ nodes:
         );
         sleepPid = nodePid;
 
+        writeWorkflow('echo done');
+        await runCli(cliPath, projectRoot, archonHome, fire);
         process.kill(ownerPid, 'SIGTERM');
         const failed = await waitFor(() => {
           const run = runs()[0];
@@ -1141,9 +1268,7 @@ nodes:
         }, 'signalled owner to exit');
         activeRuns.delete(first.id);
 
-        // With the run terminal, the capacity-1 slot admits the next start at once.
-        writeWorkflow('echo done');
-        await runCli(cliPath, projectRoot, archonHome, fire);
+        // The signal owner drains the queued request before exiting.
         await waitFor(
           () => (runs()[1]?.status === 'completed' ? true : undefined),
           'next start to run'
@@ -1268,8 +1393,7 @@ nodes:
         for (const pid of pids) expect(processAlive(pid)).toBe(false);
       }
 
-      // The cancelled run released the capacity-1 slot, so a drain admits the queue.
-      await runCli(cliPath, projectRoot, archonHome, ['trigger', 'drain', '--host', 'cancel-host']);
+      // The stopping controller drains after recording cancellation and cleanup.
       await waitFor(
         () => (runs()[1]?.status === 'completed' ? true : undefined),
         'queued start to run after the cancel'
@@ -1303,7 +1427,7 @@ nodes:
     cliPath: string;
     hostId: string;
     pidFile: string;
-    writeWorkflow: (body: string) => void;
+    writeWorkflow: (body: string, tail?: string) => void;
     fire: () => Promise<void>;
     runs: () => RunRow[];
     requests: () => RequestRow[];
@@ -1316,10 +1440,10 @@ nodes:
     mkdirSync(join(projectRoot, '.archon', 'workflows'), { recursive: true });
     expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
     const pidFile = join(root, 'owner.pid');
-    const writeWorkflow = (body: string): void => {
+    const writeWorkflow = (body: string, tail = ''): void => {
       writeFileSync(
         workflowPath,
-        `name: ${label}-proof\ndescription: ${label} proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n`
+        `name: ${label}-proof\ndescription: ${label} proof.\nmutates_checkout: false\nnodes:\n  - id: hold\n    bash: |\n      ${body}\n${tail}\n`
       );
     };
     writeWorkflow(`${holdPrefix}echo "$PPID $$" > '${pidFile}'; exec sleep 60`);
@@ -1620,10 +1744,22 @@ nodes:
         pids = await recordedPids(fixture.pidFile);
         const [ownerPid] = pids;
 
+        fixture.writeWorkflow('echo successor');
+        await fixture.fire();
+        expect(fixture.requests().map(row => row.status)).toEqual(['admitted', 'queued']);
         process.kill(ownerPid, 'SIGKILL');
         await waitFor(() => (processAlive(ownerPid) ? undefined : true), 'owner to die');
         // Nothing settled the row: SIGKILL gives the owner no chance to.
         expect(fixture.runs()[0]?.status).toBe('running');
+        await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+          'trigger',
+          'drain',
+          '--host',
+          fixture.hostId,
+        ]);
+        expect(fixture.requests().map(row => row.status)).toEqual(['admitted', 'queued']);
+        expect(fixture.runs()).toHaveLength(1);
+        killAll(pids);
 
         const abandon = await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
           'workflow',
@@ -1640,6 +1776,17 @@ nodes:
         expect(abandon.stdout).toMatch(/Last activity: \d{4}-\d{2}-\d{2}T/);
         expect(abandon.stdout).not.toContain('another host');
         expect(fixture.runs()[0]?.status).toBe('cancelled');
+        expect(fixture.requests()[1]?.status).toBe('queued');
+        await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+          'trigger',
+          'drain',
+          '--host',
+          fixture.hostId,
+        ]);
+        await waitFor(
+          () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
+          'successor after explicit abandonment and drain'
+        );
       } finally {
         killAll(pids);
       }

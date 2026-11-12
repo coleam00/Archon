@@ -1,3 +1,4 @@
+import { notifyOwnedExecutionSettled } from '../../workflows/resource-start-completion';
 import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
@@ -136,6 +137,7 @@ export async function cancelWorkflow(
     await releaseRunScratch(run);
     cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
   }
+  await notifyOwnedExecutionSettled({ afterOwnedExecution: ctx.afterStoppedRun }, run.id);
   return {
     kind: 'stopped',
     pid: owner.pid,

@@ -33,6 +33,7 @@ export interface OwnedRunTerminationInput {
    * `finally`. Report its own failures; a rejection is dropped.
    */
   teardown?: (signal: TerminationSignal) => Promise<void>;
+  afterOwnedExecution?: () => Promise<void>;
 }
 
 /**
@@ -87,6 +88,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
     if (!registered || terminating) return;
     terminating = true;
     let cleanupAllowed = true;
+    let ownedSettlement = false;
     log.info({ runId, signal }, 'workflow.process_terminating');
     (async (): Promise<void> => {
       if (liveOwner.isStopRequested()) {
@@ -110,6 +112,7 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         }
       );
       cleanupAllowed = failed;
+      ownedSettlement = failed;
     })()
       .catch((err: unknown) => {
         const e = err as Error;
@@ -141,7 +144,10 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         // A detached cancel already rang the handoff frame and must keep its lease
         // open while the controller terminates this process tree. Every other
         // graceful signal rings ordinary attention before the forced exit.
-        if (!liveOwner.isStopRequested()) await liveOwner.close();
+        if (!liveOwner.isStopRequested()) {
+          await liveOwner.close();
+          if (ownedSettlement) await input.afterOwnedExecution?.();
+        }
       })
       .catch((error: unknown) => {
         log.error({ err: error as Error, runId }, 'workflow.live_owner_close_failed');

@@ -1,3 +1,4 @@
+import { notifyOwnedExecutionSettled } from './resource-start-completion';
 import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
@@ -27,7 +28,10 @@ import { resolve } from 'node:path';
 import { toBranchName, toRepoPath } from '@archon/git';
 import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
 import { createLogger, canonicalizeProjectPath } from '@archon/paths';
-import type { WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
+import {
+  WorkflowExecutionHandoffError,
+  type WorkflowEngineSubmitInput,
+} from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
   finalizeWorkflowSource,
@@ -584,6 +588,7 @@ export interface StartAdmittedResourceStartInput {
   guardOwnedRun?: (owned: {
     runId: string;
     liveOwner: RunLiveOwner;
+    afterOwnedExecution: () => Promise<void>;
     getExecutionClaim: () => string | null | undefined;
   }) => () => void;
   /**
@@ -612,16 +617,24 @@ export async function startAdmittedResourceStart(
   });
   let ownedExecutionClaim: string | null | undefined;
   let releaseGuard: (() => void) | undefined;
+  let ownsSettlement = false;
+  let completion: Promise<void> | undefined;
+  const afterOwnedExecution = (): Promise<void> => {
+    completion ??= liveOwner.close().then(() => notifyOwnedExecutionSettled(host, run.id));
+    return completion;
+  };
   try {
     releaseGuard = input.guardOwnedRun?.({
       runId: run.id,
       liveOwner,
+      afterOwnedExecution,
       getExecutionClaim: () => ownedExecutionClaim,
     });
     let submission: WorkflowEngineSubmitInput;
     try {
       submission = await prepareAdmittedResourceSubmission(input, { launch, run }, claim => {
         ownedExecutionClaim = claim;
+        ownsSettlement = true;
       });
     } catch (error) {
       if (error instanceof TerminalStatusWriteError || liveOwner.isStopRequested()) throw error;
@@ -633,15 +646,26 @@ export async function startAdmittedResourceStart(
         }),
         { workflowRunId: run.id, site: 'resource_start.launch_failed', failure: error }
       );
+      ownsSettlement = failed;
       if (failed && error instanceof WorkflowCredentialPreflightError)
         return { success: false, workflowRunId: run.id, error: message };
       throw error;
     }
-    return await host.engine.submit(submission);
+    const result = await host.engine.submit(submission);
+    if ('handedOff' in result) {
+      ownsSettlement = false;
+      ownedExecutionClaim = undefined;
+    }
+    return result;
+  } catch (error) {
+    if (error instanceof WorkflowExecutionHandoffError) ownsSettlement = false;
+    throw error;
   } finally {
     releaseGuard?.();
-    await liveOwner.close().catch((error: unknown) => {
-      log.error({ err: error as Error, runId: run.id }, 'resource_start.live_owner_close_failed');
+    const closing =
+      ownsSettlement && !liveOwner.isStopRequested() ? afterOwnedExecution() : liveOwner.close();
+    await closing.catch((error: unknown) => {
+      log.error({ err: error, runId: run.id }, 'resource_start.live_owner_close_failed');
     });
   }
 }

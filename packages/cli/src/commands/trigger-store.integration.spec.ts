@@ -381,6 +381,12 @@ test('receipt preparation and real engine execution use supplied ports without S
     'name: portable\ndescription: Portable trigger\nworktree:\n  enabled: false\nnodes:\n  - id: result\n    bash: echo executed >> count; echo done\n'
   );
   const host = hostForTest();
+  const notifications: string[] = [];
+  host.afterOwnedExecution = async runId => {
+    const { isRunOwnedByThisProcess } = await import('@archon/core/services/run-live-owner');
+    expect(isRunOwnedByThisProcess(runId)).toBe(false);
+    notifications.push(runId);
+  };
   // Register through the production owner so default_cwd is the canonical path the
   // binding's cwd resolves to (macOS /var -> /private/var, Windows RUNNER~1 short names).
   await registerFolder(host.records.codebases, project, 'portable');
@@ -446,11 +452,16 @@ test('receipt preparation and real engine execution use supplied ports without S
     expect(prepared?.launch.version).toBe(2);
     await triggerCommand(host, 'inspect', [id], {});
     await triggerCommand(host, 'list', [], {});
+    let completion: (() => Promise<void>) | undefined;
     const execute = (): ReturnType<typeof startAdmittedResourceStart> =>
       startAdmittedResourceStart({
         host,
         hostId: 'host',
         requestId: id,
+        guardOwnedRun: owned => {
+          completion = owned.afterOwnedExecution;
+          return () => undefined;
+        },
         createPlatform: ({ runId, origin, conversationId }) => {
           expect(runId).toBe(id);
           expect(origin).toEqual({ userId: user.id });
@@ -462,6 +473,9 @@ test('receipt preparation and real engine execution use supplied ports without S
     expect(
       results.filter(result => result.status === 'fulfilled' && result.value.success)
     ).toHaveLength(1);
+    expect(notifications).toEqual([id]);
+    await completion?.();
+    expect(notifications).toEqual([id]);
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\n');
     expect(await host.deps.store.getWorkflowRun(id)).toMatchObject({
       status: 'completed',
@@ -511,6 +525,7 @@ test('receipt preparation and real engine execution use supplied ports without S
       createPlatform: () => new HeadlessPlatform(),
     });
     expect(delayed.success).toBe(false);
+    expect(notifications).toEqual([id]);
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\n');
     expect(
       (await host.deps.store.listWorkflowEvents(delayedId)).filter(

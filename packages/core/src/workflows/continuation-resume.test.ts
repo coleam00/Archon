@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import { beforeEach, expect, mock, test } from 'bun:test';
 import { getArchonWorkspacesPath } from '@archon/paths';
+import { WorkflowExecutionHandoffError } from '@archon/workflows/engine-port';
 import type { IWorkflowEngine, WorkflowResumeInput } from '@archon/workflows/engine-port';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -98,4 +99,88 @@ test('an engine refusal closes its live owner before returning not-accepted', as
   expect(admission).toEqual({ kind: 'not-accepted' });
   expect(close).toHaveBeenCalledTimes(1);
   expect(closed).toBe(true);
+});
+
+for (const result of ['completed', 'rejected', 'handed-off', 'superseded', 'refused'] as const) {
+  test(`continuation ${result} notifies only its owned settlement after owner close`, async () => {
+    const { host, resume } = headlessHost(pausedRun);
+    const order: string[] = [];
+    close.mockImplementationOnce(async () => {
+      order.push('close');
+    });
+    const effect = mock(async (runId: string) => {
+      expect(runId).toBe(pausedRun.id);
+      order.push('drain');
+    });
+    const settlement = Promise.withResolvers<Awaited<ReturnType<IWorkflowEngine['submit']>>>();
+    resume.mockResolvedValueOnce(
+      result === 'refused'
+        ? { accepted: false, reason: 'nothing-to-resume' }
+        : { accepted: true, runId: pausedRun.id, settled: settlement.promise }
+    );
+    const admission = await resumeRunContinuation(
+      { ...host, afterOwnedExecution: effect },
+      pausedRun.id,
+      headlessContext
+    );
+    if (admission.kind === 'accepted') {
+      expect(order).toEqual([]);
+      if (result === 'superseded')
+        settlement.reject(
+          new WorkflowExecutionHandoffError(pausedRun.id, new Error('successor owns execution'))
+        );
+      else if (result === 'rejected') settlement.reject(new Error('execution failure'));
+      else
+        settlement.resolve(
+          result === 'handed-off'
+            ? {
+                success: true,
+                handedOff: true,
+                workflowRunId: pausedRun.id,
+                observedStatus: 'running',
+              }
+            : { success: true, workflowRunId: pausedRun.id }
+        );
+      if (result === 'superseded')
+        await expect(admission.settled).rejects.toBeInstanceOf(WorkflowExecutionHandoffError);
+      else if (result === 'rejected')
+        await expect(admission.settled).rejects.toThrow('execution failure');
+      else await admission.settled;
+    }
+    expect(order).toEqual(
+      result === 'refused' || result === 'handed-off' || result === 'superseded'
+        ? ['close']
+        : ['close', 'drain']
+    );
+  });
+}
+
+test('a failed host drain preserves the accepted execution result', async () => {
+  const { host } = headlessHost(pausedRun);
+  const admission = await resumeRunContinuation(
+    {
+      ...host,
+      afterOwnedExecution: async () => {
+        throw new Error('dispatch failed');
+      },
+    },
+    pausedRun.id,
+    headlessContext
+  );
+  if (admission.kind !== 'accepted') throw new Error('Expected admission');
+  expect(await admission.settled).toEqual({ success: true, workflowRunId: pausedRun.id });
+});
+
+test('a failed owner close reports the error without draining or replacing execution', async () => {
+  const { host } = headlessHost(pausedRun);
+  close.mockRejectedValueOnce(new Error('owner close failed'));
+  const effect = mock(async () => undefined);
+  const admission = await resumeRunContinuation(
+    { ...host, afterOwnedExecution: effect },
+    pausedRun.id,
+    headlessContext
+  );
+  if (admission.kind !== 'accepted') throw new Error('Expected admission');
+  expect(await admission.settled).toMatchObject({ success: true });
+  expect(effect).not.toHaveBeenCalled();
 });

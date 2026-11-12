@@ -1,3 +1,4 @@
+import { notifyOwnedExecutionSettled } from '@archon/core/workflows/resource-start-completion';
 import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { disposeWorkflowSource } from '@archon/workflows/run-source';
 import {
@@ -76,6 +77,11 @@ export async function executeOwnedRun(
     progress: undefined,
     containerPreserved: false,
   };
+  let completion: Promise<void> | undefined;
+  const afterOwnedExecution = (): Promise<void> => {
+    completion ??= lease.close().then(() => notifyOwnedExecutionSettled(host, ownedRunId));
+    return completion;
+  };
   let ownedExecutionClaim: string | null | undefined;
   const onExecutionClaimed: OnExecutionClaimed = claim => {
     ownedExecutionClaim = claim;
@@ -88,6 +94,7 @@ export async function executeOwnedRun(
       getExecutionClaim: () => ownedExecutionClaim,
       isExecutionSettled: () => execution.result !== undefined,
       logModule: 'cli.workflow',
+      afterOwnedExecution,
       liveOwner: {
         isStopRequested: () => lease.isStopRequested(),
         close: () => lease.close(),
@@ -145,13 +152,22 @@ export async function executeOwnedRun(
       : undefined;
     execution.result = await driveRun(launch, lease, onExecutionClaimed, prepareExecution);
   } catch (error) {
-    if (error instanceof WorkflowExecutionHandoffError) execution.containerPreserved = true;
+    if (error instanceof WorkflowExecutionHandoffError) {
+      execution.containerPreserved = true;
+      ownedExecutionClaim = undefined;
+    }
     throw error;
   } finally {
     try {
       resourceCleanupError = await settleRun(launch, execution, ownedRunId, deregisterTermination);
     } finally {
       preparationTermination?.dispose();
+      if (
+        !lease.isStopRequested() &&
+        ownedExecutionClaim !== undefined &&
+        !(execution.result && 'handedOff' in execution.result)
+      )
+        await afterOwnedExecution();
     }
   }
   const { result } = execution;

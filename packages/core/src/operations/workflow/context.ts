@@ -1,3 +1,4 @@
+import type { WorkflowHost } from '../../workflows/host-store';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -52,6 +53,7 @@ export interface WorkflowOperationsDeps {
   reclaimContainerEnv: (envId: string, store: IIsolationStore) => Promise<void>;
   reclaimRunWorktree: typeof ReclaimRunWorktree;
   releaseRunResources?: WorkflowDeps['releaseRunResources'];
+  afterStoppedRun?: WorkflowHost['afterOwnedExecution'];
 }
 
 /** The supplied effects plus the lookup and authorization every operation starts with. */

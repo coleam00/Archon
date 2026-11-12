@@ -1,14 +1,13 @@
+import { drainHost } from '../triggers/resource-start-host';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
-import { spawn } from 'node:child_process';
-import { mkdir, open, readFile, rm } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { readFile, rm } from 'node:fs/promises';
+import { isAbsolute, resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
-  drainResourceStartHost,
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
@@ -82,40 +81,6 @@ async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerFireConfi
     throw new Error('Trigger binding names an unknown run-as user.');
 }
 
-/** Hand one admitted request to a detached `trigger execute` process with its own log. */
-export async function spawnAdmitted(
-  host: WorkflowHost,
-  requestId: string,
-  hostId: string
-): Promise<void> {
-  const request = await host.deps.store.getResourceStartRequest(requestId);
-  if (request?.status !== 'admitted') throw new Error('The admitted start request is unavailable.');
-  const [executable, ...prefix] = cliProgramArguments();
-  const logDirectory = join(getArchonHome(), 'logs');
-  await mkdir(logDirectory, { recursive: true });
-  const log = await open(join(logDirectory, `trigger-run-${requestId}.log`), 'a', 0o600);
-  try {
-    const child = spawn(
-      executable,
-      [...prefix, 'trigger', 'execute', requestId, '--host', hostId],
-      {
-        cwd: request.launch.execution.cwd,
-        detached: true,
-        stdio: ['ignore', log.fd, log.fd],
-        windowsHide: true,
-        env: { ...process.env, ARCHON_HOME: getArchonHome(), [DETACHED_RUN_OWNER_ENV]: '1' },
-      }
-    );
-    await new Promise<void>((resolveSpawn, reject) => {
-      child.once('error', reject);
-      child.once('spawn', resolveSpawn);
-    });
-    child.unref();
-  } finally {
-    await log.close();
-  }
-}
-
 /**
  * The messages behind drain failures, for the operator's terminal. The store keeps only
  * the failed stage because configuration and provider errors can carry credentials, so
@@ -132,18 +97,6 @@ function drainFailureReasons(errors: readonly unknown[]): string {
     .flatMap(messages)
     .map(message => sanitizeCredentials(redactCredentialValues(message, credentials)))
     .join('; ');
-}
-
-function drainHost(
-  host: WorkflowHost,
-  hostId: string,
-  dispatch: (requestId: string, hostId: string) => Promise<void>
-): Promise<void> {
-  return drainResourceStartHost({
-    ...host,
-    hostId,
-    startAdmitted: requestId => dispatch(requestId, hostId),
-  });
 }
 
 type TriggerOptions = {

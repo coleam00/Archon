@@ -74,7 +74,10 @@ const fileUserSchema = userRowSchema.extend({
   platform: identityPlatformSchema,
   platform_user_id: z.string(),
 });
-export async function createFileWorkflowHost(root: string): Promise<WorkflowHost> {
+export async function createFileWorkflowHost(
+  root: string,
+  effects: Pick<WorkflowHost, 'afterOwnedExecution'> = {}
+): Promise<WorkflowHost> {
   await assertFileStoreConfiguration();
   async function users(): Promise<z.infer<typeof fileUserSchema>[]> {
     return z.array(fileUserSchema).parse((await readJson(join(root, 'host/users.json'))) ?? []);
@@ -381,6 +384,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
     })),
   };
   return {
+    ...effects,
     records,
     deps,
     engine: new InProcessWorkflowEngine(deps, {
@@ -389,6 +393,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
     }),
     operations: createWorkflowOperations({
       releaseRunResources: deps.releaseRunResources,
+      afterStoppedRun: effects.afterOwnedExecution,
       store,
       hostStore: records,
       getUserRole: async () => undefined,
