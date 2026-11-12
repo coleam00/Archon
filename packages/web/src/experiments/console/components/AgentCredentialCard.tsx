@@ -21,9 +21,9 @@ import { SubscriptionLoginFlow } from './SubscriptionLoginFlow';
 import { INPUT_CLASS } from './SettingsFormPrimitives';
 
 const GHOST_BUTTON =
-  'shrink-0 rounded border border-border px-2.5 py-1 text-[11px] text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40';
+  'shrink-0 rounded border border-border px-2.5 py-1 text-console-11 text-text-secondary transition-colors hover:border-border-bright hover:text-text-primary disabled:opacity-40';
 const BRAND_BUTTON =
-  'brand-bar shrink-0 rounded px-3 py-1 text-[11px] font-medium text-white transition-all hover:brightness-110 disabled:opacity-40';
+  'brand-bar shrink-0 rounded px-3 py-1 text-console-11 font-medium text-white transition-all hover:brightness-110 disabled:opacity-40';
 
 const DOT_CLASS: Record<AgentReadinessState, string> = {
   ready: 'bg-success',
@@ -139,7 +139,7 @@ export function AgentCredentialCard({
       {inlineRows.length > 0 ? (
         <div className="flex flex-col gap-2">{inlineRows.map(row)}</div>
       ) : isMultiBackend ? (
-        <p className="text-[12px] text-text-tertiary">No backends connected yet.</p>
+        <p className="text-console-12 text-text-tertiary">No backends connected yet.</p>
       ) : null}
 
       {groups && connectEnabled ? (
@@ -160,18 +160,18 @@ export function AgentCredentialCard({
           {groups.ambient.map(cred => (
             <div
               key={cred.vendor}
-              className="flex items-center justify-between gap-3 px-1 text-[11.5px]"
+              className="flex items-center justify-between gap-3 px-1 text-console-12"
             >
               <span className="text-text-secondary">
                 {cred.displayName}{' '}
-                <span className="font-mono text-[10px] text-text-tertiary">{cred.vendor}</span>
+                <span className="font-mono text-console-10 text-text-tertiary">{cred.vendor}</span>
               </span>
               {cred.ambientConfigured === true ? (
-                <span className="font-mono text-[10.5px] text-success">
+                <span className="font-mono text-console-11 text-success">
                   configured via {ambientSource(cred.vendor)}
                 </span>
               ) : (
-                <span className="font-mono text-[10.5px] text-text-tertiary">not detected</span>
+                <span className="font-mono text-console-11 text-text-tertiary">not detected</span>
               )}
             </div>
           ))}
@@ -184,15 +184,15 @@ export function AgentCredentialCard({
     <div className="flex flex-col gap-2.5 rounded-xl border border-border bg-surface-elevated p-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="flex items-baseline gap-2">
-          <span className="text-[13.5px] font-bold text-text-primary">{agent.displayName}</span>
-          <span className="font-mono text-[10.5px] text-text-tertiary">{agent.id}</span>
+          <span className="text-console-14 font-bold text-text-primary">{agent.displayName}</span>
+          <span className="font-mono text-console-11 text-text-tertiary">{agent.id}</span>
         </span>
         <span
-          className={`flex items-center gap-1.5 font-mono text-[11px] ${READINESS_TEXT[readiness.state]}`}
+          className={`flex items-center gap-1.5 font-mono text-console-11 ${READINESS_TEXT[readiness.state]}`}
         >
           <span
             aria-hidden
-            className={`h-[7px] w-[7px] rounded-full ${DOT_CLASS[readiness.state]}`}
+            className={`h-1.75 w-1.75 rounded-full ${DOT_CLASS[readiness.state]}`}
           />
           {readiness.detail}
         </span>
@@ -200,7 +200,7 @@ export function AgentCredentialCard({
 
       {agent.catalog === 'dynamic' ? <OpencodeBackends /> : renderStaticCredentials()}
 
-      {message !== null ? <p className="font-mono text-[11px] text-error">{message}</p> : null}
+      {message !== null ? <p className="font-mono text-console-11 text-error">{message}</p> : null}
     </div>
   );
 }
@@ -230,7 +230,7 @@ function CredentialRow(props: CredentialRowProps): ReactElement {
   const { cred, label, modelCount, keyFormOpen, loginOpen, onCloseKeyForm, onCloseLogin } = props;
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-border bg-surface-inset px-3 py-2 text-[12px]">
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded border border-border bg-surface-inset px-3 py-2 text-console-12">
         <CredentialIdentity cred={cred} label={label} modelCount={modelCount} />
         <CredentialActions {...props} />
       </div>
@@ -255,23 +255,23 @@ function CredentialIdentity({
   return (
     <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
       <span className="font-medium text-text-primary">{cred.displayName}</span>
-      <span className="font-mono text-[10px] text-text-tertiary">{cred.vendor}</span>
+      <span className="font-mono text-console-10 text-text-tertiary">{cred.vendor}</span>
       {unconsumedNote !== null ? (
-        <span className="font-mono text-[10.5px] text-text-tertiary">{unconsumedNote}</span>
+        <span className="font-mono text-console-11 text-text-tertiary">{unconsumedNote}</span>
       ) : cred.connected === 'api_key' ? (
-        <span className="font-mono text-[10.5px] text-success">
+        <span className="font-mono text-console-11 text-success">
           API key connected{label ? ` · ${label}` : ''}
         </span>
       ) : cred.connected === 'oauth' ? (
-        <span className="font-mono text-[10.5px] text-success">subscription connected</span>
+        <span className="font-mono text-console-11 text-success">subscription connected</span>
       ) : null}
       {cred.installEnv ? (
-        <span className="rounded-full border border-border px-2 py-px font-mono text-[10px] text-text-tertiary">
+        <span className="rounded-full border border-border px-2 py-px font-mono text-console-10 text-text-tertiary">
           using install env
         </span>
       ) : null}
       {modelCount !== undefined ? (
-        <span className="font-mono text-[10px] text-text-tertiary">
+        <span className="font-mono text-console-10 text-text-tertiary">
           {modelCount} model{modelCount === 1 ? '' : 's'}
         </span>
       ) : null}
@@ -390,11 +390,15 @@ function KeyConnectForm({
             setLabel(e.target.value);
           }}
           placeholder="Label (optional)"
-          className={`${INPUT_CLASS} sm:max-w-[160px]`}
+          className={`${INPUT_CLASS} sm:max-w-40`}
         />
       </div>
       <div className="flex items-center justify-between gap-3">
-        {error !== null ? <p className="font-mono text-[11px] text-error">{error}</p> : <span />}
+        {error !== null ? (
+          <p className="font-mono text-console-11 text-error">{error}</p>
+        ) : (
+          <span />
+        )}
         <button
           type="button"
           onClick={() => void save()}
@@ -451,14 +455,14 @@ function BackendPicker({
                   setQuery('');
                   onPick(c.vendor);
                 }}
-                className="flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-[12px] transition-colors hover:bg-surface-hover"
+                className="flex w-full items-baseline justify-between gap-3 px-3 py-2 text-left text-console-12 transition-colors hover:bg-surface-hover"
               >
                 <span className="flex min-w-0 items-baseline gap-2">
                   <span className="text-text-primary">{c.displayName}</span>
-                  <span className="font-mono text-[10px] text-text-tertiary">{c.vendor}</span>
+                  <span className="font-mono text-console-10 text-text-tertiary">{c.vendor}</span>
                 </span>
                 {count !== undefined ? (
-                  <span className="shrink-0 font-mono text-[10px] text-text-tertiary">
+                  <span className="shrink-0 font-mono text-console-10 text-text-tertiary">
                     {count} model{count === 1 ? '' : 's'}
                   </span>
                 ) : null}
@@ -468,7 +472,7 @@ function BackendPicker({
         </div>
       ) : null}
       {searching && matches.length === 0 ? (
-        <p className="px-1 font-mono text-[11px] text-text-tertiary">No backend matches.</p>
+        <p className="px-1 font-mono text-console-11 text-text-tertiary">No backend matches.</p>
       ) : null}
     </div>
   );
@@ -515,7 +519,7 @@ function OpencodeBackends(): ReactElement {
   };
 
   return (
-    <div className="flex flex-col gap-2 text-[12px]">
+    <div className="flex flex-col gap-2 text-console-12">
       <p className="text-text-tertiary">
         Backends and connection state come from the embedded OpenCode runtime. Connections are
         install-wide, not per-user.
@@ -528,14 +532,14 @@ function OpencodeBackends(): ReactElement {
       ) : null}
 
       {phase === 'loading' ? (
-        <p className="font-mono text-[11px] text-text-tertiary">
+        <p className="font-mono text-console-11 text-text-tertiary">
           Loading backends… (starting the OpenCode runtime can take a moment)
         </p>
       ) : null}
 
       {phase === 'error' ? (
         <div className="flex flex-wrap items-center gap-3">
-          <p className="font-mono text-[11px] text-error">{error}</p>
+          <p className="font-mono text-console-11 text-error">{error}</p>
           <button type="button" onClick={() => void load()} className={GHOST_BUTTON}>
             Retry
           </button>
@@ -552,12 +556,12 @@ function OpencodeBackends(): ReactElement {
               >
                 <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5">
                   <span className="font-medium text-text-primary">{p.name}</span>
-                  <span className="font-mono text-[10px] text-text-tertiary">{p.id}</span>
+                  <span className="font-mono text-console-10 text-text-tertiary">{p.id}</span>
                   {p.connected ? (
-                    <span className="font-mono text-[10.5px] text-success">connected</span>
+                    <span className="font-mono text-console-11 text-success">connected</span>
                   ) : null}
                 </span>
-                <span className="flex shrink-0 items-baseline gap-2 font-mono text-[10px] text-text-tertiary">
+                <span className="flex shrink-0 items-baseline gap-2 font-mono text-console-10 text-text-tertiary">
                   <span>
                     {p.modelCount} model{p.modelCount === 1 ? '' : 's'}
                   </span>

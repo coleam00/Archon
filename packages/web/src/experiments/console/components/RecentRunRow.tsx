@@ -61,9 +61,9 @@ export function RecentRunRow({
   };
 
   const renderStatus = (): ReactElement => (
-    <span className="flex shrink-0 items-center gap-[9px]">
+    <span className="flex shrink-0 items-center gap-2.25">
       {run.status === 'failed' ? (
-        <span aria-hidden className={`text-[12px] leading-none ${statusTextClass.failed}`}>
+        <span aria-hidden className={`text-console-12 leading-none ${statusTextClass.failed}`}>
           {glyph}
         </span>
       ) : (
@@ -77,7 +77,7 @@ export function RecentRunRow({
         />
       )}
       <span
-        className={`font-mono text-[11px] font-semibold uppercase tracking-[0.05em] ${statusTextClass[run.status]}`}
+        className={`font-mono text-console-11 font-semibold uppercase tracking-wider ${statusTextClass[run.status]}`}
       >
         {run.status}
       </span>
@@ -87,13 +87,13 @@ export function RecentRunRow({
 
   const renderRunSummary = (): ReactElement => (
     <>
-      <span className="flex min-w-0 flex-1 basis-[18rem] items-baseline gap-2.5">
-        <span className="max-w-[60%] shrink-0 truncate font-mono text-[13px] font-bold text-text-primary">
+      <span className="flex min-w-0 flex-1 basis-72 items-baseline gap-2.5">
+        <span className="max-w-[60%] shrink-0 truncate font-mono text-console-13 font-bold text-text-primary">
           {run.workflow}
         </span>
         {run.parentRunId ? (
           <span
-            className="shrink-0 rounded-[5px] border border-border/60 px-1.5 py-px font-mono text-[10px] font-semibold uppercase tracking-[0.04em] text-text-tertiary"
+            className="shrink-0 rounded-sm border border-border/60 px-1.5 py-px font-mono text-console-10 font-semibold uppercase tracking-wider text-text-tertiary"
             title={`Sub-run of ${shortRunId(run.parentRunId)}`}
           >
             ↳ child
@@ -101,7 +101,7 @@ export function RecentRunRow({
         ) : null}
         {run.userMessage !== '' ? (
           <span
-            className="min-w-0 truncate text-[12.5px] text-text-tertiary"
+            className="min-w-0 truncate text-console-13 text-text-tertiary"
             title={run.userMessage}
           >
             {run.userMessage}
@@ -110,15 +110,15 @@ export function RecentRunRow({
       </span>
 
       {showProject ? (
-        <span className="max-w-[140px] truncate text-[12px] text-text-secondary">
+        <span className="max-w-35 truncate text-console-12 text-text-secondary">
           {run.projectName ?? ''}
         </span>
       ) : null}
 
-      <span className="text-right font-mono text-[12px] text-text-tertiary">
+      <span className="text-right font-mono text-console-12 text-text-tertiary">
         {shortRunId(run.id)}
       </span>
-      <span className="whitespace-nowrap text-right font-mono text-[12px] tabular-nums text-text-secondary">
+      <span className="whitespace-nowrap text-right font-mono text-console-12 tabular-nums text-text-secondary">
         {elapsed}
         <RelativeRunStart
           className="ml-2 whitespace-nowrap text-text-tertiary"
@@ -126,7 +126,7 @@ export function RecentRunRow({
         />
       </span>
       <span
-        className="text-right font-mono text-[12px] tabular-nums text-text-primary"
+        className="text-right font-mono text-console-12 tabular-nums text-text-primary"
         title={typeof run.costUsd === 'number' ? 'Reported agent cost; may be partial' : undefined}
       >
         {typeof run.costUsd === 'number'
@@ -155,7 +155,7 @@ export function RecentRunRow({
             }
           : undefined
       }
-      className={`group flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/40 px-[18px] py-[13px] transition-colors last:border-b-0 hover:bg-surface-hover ${
+      className={`group flex flex-wrap items-center gap-x-3 gap-y-2 border-b border-border/40 px-4.5 py-3.25 transition-colors last:border-b-0 hover:bg-surface-hover ${
         selected ? 'bg-surface-hover ring-2 ring-inset ring-accent-bright/40' : ''
       } ${canOpen ? 'cursor-pointer' : ''}`}
     >
@@ -180,7 +180,7 @@ export function RecentRunRow({
               aria-label="Rerun"
               className="rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
             >
-              <span aria-hidden className="text-[12px] leading-none">
+              <span aria-hidden className="text-console-12 leading-none">
                 ↻
               </span>
             </button>
@@ -196,7 +196,7 @@ export function RecentRunRow({
               aria-label="Open in IDE"
               className="rounded p-1 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
             >
-              <span aria-hidden className="font-mono text-[12px] leading-none">
+              <span aria-hidden className="font-mono text-console-12 leading-none">
                 ↗
               </span>
             </button>
@@ -210,12 +210,12 @@ export function RecentRunRow({
           }}
           title={`Copy CLI command: archon workflow get ${shortRunId(run.id)}`}
           aria-label="Copy CLI command"
-          className="inline-flex items-center gap-1.5 rounded-[7px] border bg-surface-elevated px-2.5 py-[5px] font-mono text-[11px] font-semibold text-text-secondary transition-colors hover:border-accent-bright/50 hover:text-text-primary"
+          className="inline-flex items-center gap-1.5 rounded-md border bg-surface-elevated px-2.5 py-1.25 font-mono text-console-11 font-semibold text-text-secondary transition-colors hover:border-accent-bright/50 hover:text-text-primary"
           // Inline because the console scope's wildcard border-color rule
           // repaints Tailwind border utilities (see theme.css).
           style={{ borderColor: 'var(--border-bright)' }}
         >
-          <span aria-hidden className="text-[10px] leading-none">
+          <span aria-hidden className="text-console-10 leading-none">
             ❯_
           </span>
           CLI

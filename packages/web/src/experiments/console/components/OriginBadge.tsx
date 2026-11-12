@@ -31,7 +31,7 @@ export function OriginBadge({ origin }: { origin: RunOrigin }): ReactElement {
   const icon = ORIGIN_ICON[origin];
   return (
     <span
-      className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-[10px] text-text-secondary"
+      className="inline-flex items-center gap-1 rounded border border-border px-1.5 py-0.5 font-mono text-console-10 text-text-secondary"
       title={`Origin: ${ORIGIN_LABEL[origin]}`}
     >
       {icon}

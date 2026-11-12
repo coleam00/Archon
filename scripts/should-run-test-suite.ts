@@ -23,6 +23,8 @@ const EMPTY_GIT_SHA = '0000000000000000000000000000000000000000';
  *   - The docs manifest is copied by the Docker dependency layer.
  *   - The variables reference contains Docker commands checked by
  *     `docker-verification-label.test.ts` against the cleanup ownership label.
+ *   - The brand guide holds the console token table that `check-console-tokens.ts` (`lint`)
+ *     compares against the theme in `packages/web/src/index.css`.
  *   - Directory-qualified tracked Markdown paths named by tests are checked against this gate by
  *     `markdownTestInputs` in `should-run-test-suite.test.ts`.
  */
@@ -41,6 +43,7 @@ const BUILD_INPUTS = [
   'packages/docs-web/src/content/docs/getting-started/operate.md',
   'packages/docs-web/src/content/docs/guides/workflow-triggers.md',
   'packages/docs-web/src/content/docs/reference/provider-capabilities.md',
+  'packages/docs-web/src/content/docs/brand/index.md',
   'packages/docs-web/package.json',
 ];
 

@@ -60,7 +60,7 @@ function FanOutQualifier({ outcome }: { outcome: NodeRun['fanOutOutcome'] }): Re
     .slice(0, FAN_OUT_SLOT_DISPLAY_LIMIT);
   const more = unfinished - shown.length;
   return (
-    <details className="ml-[68px] font-mono text-[11px] text-warning">
+    <details className="ml-17 font-mono text-console-11 text-warning">
       <summary className="cursor-pointer">
         {`${String(unfinished)} of ${String(tally.total)} children did not complete (${counts.join(', ')})`}
       </summary>
@@ -177,17 +177,19 @@ export function NodeDivider({
   return (
     <div
       id={`node-transition-${nodeId}`}
-      className="flex flex-col gap-1 border-b border-border/60 py-[11px]"
+      className="flex flex-col gap-1 border-b border-border/60 py-2.75"
     >
       <div className="flex items-center gap-4">
         <time
           dateTime={timestamp}
           title={wallClock}
-          className="w-14 shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary"
+          className="w-14 shrink-0 font-mono text-console-12 tabular-nums text-text-tertiary"
         >
           {displayed}
         </time>
-        <span className="font-mono text-[13px] font-semibold text-text-primary">{nodeName}</span>
+        <span className="font-mono text-console-13 font-semibold text-text-primary">
+          {nodeName}
+        </span>
         {/* Dashed leader line (design v3 .log-line). */}
         <div
           className="h-px flex-1"
@@ -197,7 +199,7 @@ export function NodeDivider({
           }}
           aria-hidden
         />
-        <span className={`font-mono text-[11.5px] ${STATUS_COLOR[status]}`}>
+        <span className={`font-mono text-console-12 ${STATUS_COLOR[status]}`}>
           {STATUS_LABEL[status]}
           {dur}
           {cost}
@@ -212,13 +214,13 @@ export function NodeDivider({
         </span>
       </div>
       {hasStopDetail ? (
-        <div className="ml-[68px] flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-text-tertiary">
+        <div className="ml-17 flex flex-wrap items-baseline gap-x-2 font-mono text-console-10 text-text-tertiary">
           <span>stop</span>
           <span className="text-text-secondary">{stopReason}</span>
         </div>
       ) : null}
       {hasSkipDetail ? (
-        <div className="ml-[68px] flex flex-wrap items-baseline gap-x-2 font-mono text-[10px] text-text-tertiary">
+        <div className="ml-17 flex flex-wrap items-baseline gap-x-2 font-mono text-console-10 text-text-tertiary">
           <span>reason</span>
           <span className="text-text-secondary">{skipReason}</span>
           {skipExpr !== null && skipExpr !== undefined && skipExpr.length > 0 ? (

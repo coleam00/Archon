@@ -151,7 +151,7 @@ export function BuilderContextMenu({
             onClick={(): void => {
               runItem(entry);
             }}
-            className={`flex w-full items-center justify-between gap-6 px-3 py-1.5 text-left text-[12.5px] transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            className={`flex w-full items-center justify-between gap-6 px-3 py-1.5 text-left text-console-13 transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
               entry.danger === true
                 ? 'text-[var(--error)] hover:bg-surface-hover'
                 : 'text-text-secondary hover:bg-surface-hover hover:text-text-primary'
@@ -159,7 +159,7 @@ export function BuilderContextMenu({
           >
             <span>{entry.label}</span>
             {entry.hint !== undefined ? (
-              <span className="font-mono text-[10.5px] text-text-tertiary">{entry.hint}</span>
+              <span className="font-mono text-console-11 text-text-tertiary">{entry.hint}</span>
             ) : null}
           </button>
         );
@@ -199,7 +199,7 @@ function Submenu({ entry, open, onOpen, onCloseAll }: SubmenuProps): ReactElemen
         role="menuitem"
         aria-haspopup="menu"
         aria-expanded={open}
-        className="flex w-full items-center justify-between gap-6 px-3 py-1.5 text-left text-[12.5px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+        className="flex w-full items-center justify-between gap-6 px-3 py-1.5 text-left text-console-13 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
       >
         <span>{entry.label}</span>
         <span aria-hidden className="text-text-tertiary">
@@ -210,7 +210,7 @@ function Submenu({ entry, open, onOpen, onCloseAll }: SubmenuProps): ReactElemen
         <div
           ref={panelRef}
           role="menu"
-          className="absolute top-[-5px] rounded-lg border border-border bg-surface-elevated py-1 shadow-xl"
+          className="absolute -top-1.25 rounded-lg border border-border bg-surface-elevated py-1 shadow-xl"
           style={{
             minWidth: MENU_MIN_WIDTH,
             [flip ? 'right' : 'left']: '100%',
@@ -227,7 +227,7 @@ function Submenu({ entry, open, onOpen, onCloseAll }: SubmenuProps): ReactElemen
                 item.onSelect();
                 onCloseAll();
               }}
-              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-[12.5px] text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
+              className="flex w-full items-center gap-2.5 px-3 py-1.5 text-left text-console-13 text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:cursor-not-allowed disabled:opacity-40"
             >
               {item.label}
             </button>

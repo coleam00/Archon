@@ -353,7 +353,7 @@ export function BuilderPage({
           />
         </div>
 
-        <div className="flex w-[340px] shrink-0 flex-col border-l border-border bg-surface">
+        <div className="flex w-85 shrink-0 flex-col border-l border-border bg-surface">
           <div className="flex border-b border-border">
             {(['inspect', 'yaml'] as const).map(tab => (
               <button
@@ -362,7 +362,7 @@ export function BuilderPage({
                 onClick={(): void => {
                   setRightTab(tab);
                 }}
-                className={`relative px-3 py-1.5 font-mono text-[10.5px] font-bold uppercase tracking-[0.12em] transition-colors ${
+                className={`relative px-3 py-1.5 font-mono text-console-11 font-bold uppercase tracking-console-label transition-colors ${
                   rightTab === tab
                     ? 'text-text-primary'
                     : 'text-text-tertiary hover:text-text-secondary'
@@ -372,7 +372,7 @@ export function BuilderPage({
                 {rightTab === tab ? (
                   <span
                     aria-hidden
-                    className="brand-bar absolute inset-x-2 bottom-0 h-[2px] rounded-t"
+                    className="brand-bar absolute inset-x-2 bottom-0 h-0.5 rounded-t"
                   />
                 ) : null}
               </button>

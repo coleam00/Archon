@@ -206,14 +206,14 @@ export function RunGraphPanel({
 
   if (error !== undefined) {
     return (
-      <div className="p-6 font-mono text-[12px] text-error">
+      <div className="p-6 font-mono text-console-12 text-error">
         Could not load graph: {error.message}
       </div>
     );
   }
 
   if (laid === null) {
-    return <div className="p-6 text-[12px] text-text-tertiary">Loading graph…</div>;
+    return <div className="p-6 text-console-12 text-text-tertiary">Loading graph…</div>;
   }
 
   const { nodes, edges, width, height } = laid;
@@ -294,19 +294,19 @@ function GraphNode({ node, live, selected, onClick }: GraphNodeProps): ReactElem
       onClick={onClick}
       aria-pressed={selected}
       title={`${node.id} · ${node.kind} · ${node.status}`}
-      className={`absolute flex items-center gap-2.5 overflow-hidden rounded-[9px] border px-3.5 text-left transition-colors hover:brightness-110 ${
+      className={`absolute flex items-center gap-2.5 overflow-hidden rounded-lg border px-3.5 text-left transition-colors hover:brightness-110 ${
         running && live ? 'animate-pulse' : ''
       } ${dimmed && !selected ? 'opacity-60' : ''} ${selected ? 'ring-2 ring-accent-bright ring-offset-2 ring-offset-surface' : ''}`}
       style={style}
     >
       <span
         aria-hidden
-        className={`shrink-0 font-mono text-[15px] font-bold leading-none ${statusGlyphClass(node.status)}`}
+        className={`shrink-0 font-mono text-console-15 font-bold leading-none ${statusGlyphClass(node.status)}`}
       >
         {kindGlyph(node.kind)}
       </span>
       <span
-        className={`min-w-0 flex-1 truncate font-mono text-[13px] font-semibold ${
+        className={`min-w-0 flex-1 truncate font-mono text-console-13 font-semibold ${
           failed ? 'text-error' : dimmed ? 'text-text-secondary' : 'text-text-primary'
         }`}
       >

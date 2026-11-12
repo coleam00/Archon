@@ -83,7 +83,7 @@ function useAttentionActions(runId: string): AttentionActions {
 }
 
 function cardClassName(isLive: boolean, selected: boolean, canOpen: boolean): string {
-  return `group relative overflow-hidden rounded-[12px] border transition-colors hover:bg-surface-hover ${
+  return `group relative overflow-hidden rounded-console-12 border transition-colors hover:bg-surface-hover ${
     isLive ? 'bg-warning/[0.04]' : 'bg-surface'
   } ${selected ? 'ring-2 ring-accent-bright/40' : ''} ${
     canOpen ? 'cursor-pointer focus-visible:outline-none' : ''
@@ -123,7 +123,7 @@ function OpenInIdeButton({
       aria-label="Open in IDE"
       className="rounded p-1 text-text-tertiary opacity-0 transition-all hover:bg-surface-hover hover:text-text-primary group-hover:opacity-100"
     >
-      <span aria-hidden className="font-mono text-[12px] leading-none">
+      <span aria-hidden className="font-mono text-console-12 leading-none">
         ↗
       </span>
     </button>
@@ -149,32 +149,32 @@ function RunCardHeader({
     <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
       <StatusDot run={run} isLive={isLive} />
       <span
-        className={`shrink-0 text-[10px] font-semibold uppercase tracking-[0.12em] ${statusTextClass[run.status]}`}
+        className={`shrink-0 text-console-10 font-semibold uppercase tracking-console-label ${statusTextClass[run.status]}`}
       >
         {runStatusLabel(run)}
       </span>
       <RunOutcomeBadge outcome={run.outcome} />
       <span className="mx-1 h-3 w-px shrink-0 bg-border" aria-hidden />
       <span className="text-sm font-medium text-text-primary">{run.workflow}</span>
-      <span className="font-mono text-[11px] text-text-tertiary">{shortRunId(run.id)}</span>
+      <span className="font-mono text-console-11 text-text-tertiary">{shortRunId(run.id)}</span>
       {showProject && run.projectName !== null ? (
-        <span className="truncate text-[11px] text-text-secondary">· {run.projectName}</span>
+        <span className="truncate text-console-11 text-text-secondary">· {run.projectName}</span>
       ) : null}
       <div className="ml-auto flex items-center gap-2">
         <OriginBadge origin={run.origin} />
         {typeof run.costUsd === 'number' ? (
           <span
-            className="font-mono text-[11px] tabular-nums text-text-secondary"
+            className="font-mono text-console-11 tabular-nums text-text-secondary"
             title="Reported agent cost; may be partial"
           >
             {`Reported cost ${formatCost(run.costUsd)} (may be partial)`}
           </span>
         ) : null}
-        <span className="font-mono text-[11px] tabular-nums text-text-tertiary">
+        <span className="font-mono text-console-11 tabular-nums text-text-tertiary">
           {runElapsedLabel(run, elapsed)}
         </span>
         <RelativeRunStart
-          className="whitespace-nowrap font-mono text-[11px] text-text-tertiary"
+          className="whitespace-nowrap font-mono text-console-11 text-text-tertiary"
           startedAt={run.startedAt}
         />
         {ideWorkingPath !== null ? (
@@ -193,7 +193,7 @@ function RunDetailGrid({ run, isLive }: { run: Run; isLive: boolean }): ReactEle
   const running = run.status === 'running';
   if (run.userMessage === '' && !running) return null;
   return (
-    <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-[12px]">
+    <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 text-console-12">
       {run.userMessage !== '' ? (
         <>
           <span className="font-mono text-text-tertiary">input</span>
@@ -225,7 +225,7 @@ function RunDetailGrid({ run, isLive }: { run: Run; isLive: boolean }): ReactEle
 
 function PromotedWaitPointer({ run }: { run: Run }): ReactElement {
   return (
-    <div className="mt-2 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px] text-warning">
+    <div className="mt-2 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-console-12 text-warning">
       {run.attention?.kind === 'usage_limit'
         ? 'Waiting on a provider limit — see the banner at the top.'
         : 'Waiting for your input — see the banner at the top.'}
@@ -317,7 +317,7 @@ function WaitPanel({
   actions: AttentionActions;
 }): ReactElement {
   return (
-    <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-[12px]">
+    <div className="mt-2 grid grid-cols-[auto_1fr] gap-x-3 gap-y-0.5 rounded border border-warning/25 bg-warning/[0.05] px-3 py-2 text-console-12">
       <span className="font-mono text-text-tertiary">node</span>
       <span className="font-mono text-text-primary">{wait.nodeId}</span>
       {wait.kind === 'event' && wait.event !== undefined ? (
@@ -346,7 +346,7 @@ function GateResolvedHint({
   gateResolved: NonNullable<Run['gateResolved']>;
 }): ReactElement {
   return (
-    <div className="mt-2 flex items-center gap-2 rounded border border-border bg-surface-hover/40 px-3 py-2 text-[12px] text-text-secondary">
+    <div className="mt-2 flex items-center gap-2 rounded border border-border bg-surface-hover/40 px-3 py-2 text-console-12 text-text-secondary">
       <span aria-hidden className="inline-block animate-pulse leading-none">
         ▸
       </span>

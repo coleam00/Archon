@@ -54,12 +54,12 @@ export function EnvVarsDialog({
         onMouseDown={e => {
           e.stopPropagation();
         }}
-        className="relative w-full max-w-[560px] overflow-hidden rounded-2xl border bg-surface-elevated p-[22px] text-text-primary shadow-[0_30px_80px_-24px_rgba(0,0,0,0.8)]"
+        className="relative w-full max-w-140 overflow-hidden rounded-2xl border bg-surface-elevated p-5.5 text-text-primary shadow-[0_30px_80px_-24px_rgba(0,0,0,0.8)]"
         // Inline because the console scope's wildcard border-color rule
         // repaints Tailwind border utilities (see theme.css).
         style={{ borderColor: 'var(--border-bright)' }}
       >
-        <span aria-hidden className="brand-bar absolute left-0 right-0 top-0 h-[2px] opacity-90" />
+        <span aria-hidden className="brand-bar absolute left-0 right-0 top-0 h-0.5 opacity-90" />
         <EnvVarsBody projectId={projectId} projectName={projectName} onClose={onClose} />
       </div>
     </div>
@@ -146,38 +146,38 @@ function EnvVarsBody({ projectId, projectName, onClose }: BodyProps): ReactEleme
 
   return (
     <>
-      <header className="mb-[18px] flex items-start justify-between gap-4">
+      <header className="mb-4.5 flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-[18px] font-extrabold tracking-[-0.3px] text-text-primary">
+          <h2 className="text-console-18 font-extrabold tracking-console-tight text-text-primary">
             Environment variables
           </h2>
-          <p className="mt-1 text-[13px] leading-relaxed text-text-tertiary">
+          <p className="mt-1 text-console-13 leading-relaxed text-text-tertiary">
             Injected into project-scoped execution (Claude, Codex, bash, scripts). Values are stored
             server-side; the UI only ever sees the names.
           </p>
         </div>
-        <span className="shrink-0 truncate pt-1 font-mono text-[12px] text-text-tertiary">
+        <span className="shrink-0 truncate pt-1 font-mono text-console-12 text-text-tertiary">
           {projectName}
         </span>
       </header>
 
       {loading ? (
-        <p className="font-mono text-[11px] text-text-tertiary">Loading…</p>
+        <p className="font-mono text-console-11 text-text-tertiary">Loading…</p>
       ) : error !== undefined ? (
-        <p className="font-mono text-[11px] text-error">{error.message}</p>
+        <p className="font-mono text-console-11 text-error">{error.message}</p>
       ) : (
         <ul
-          className="mb-3 max-h-[40vh] divide-y divide-border overflow-y-auto rounded-[11px] border bg-surface"
+          className="mb-3 max-h-[40vh] divide-y divide-border overflow-y-auto rounded-console-12 border bg-surface"
           style={{ borderColor: 'var(--border)' }}
         >
           {(keys ?? []).length === 0 ? (
-            <li className="px-[22px] py-[22px] text-center font-mono text-[13px] text-text-tertiary">
+            <li className="px-5.5 py-5.5 text-center font-mono text-console-13 text-text-tertiary">
               No variables yet.
             </li>
           ) : (
             (keys ?? []).map(key => (
               <li key={key} className="flex items-center justify-between gap-2 p-2 pl-3">
-                <span className="truncate font-mono text-[13px] tracking-[0.03em] text-text-primary">
+                <span className="truncate font-mono text-console-13 tracking-wide text-text-primary">
                   {key}
                 </span>
                 <button
@@ -186,7 +186,7 @@ function EnvVarsBody({ projectId, projectName, onClose }: BodyProps): ReactEleme
                   disabled={busyKey === key}
                   title={`Remove ${key}`}
                   aria-label={`Remove ${key}`}
-                  className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-lg border text-text-tertiary transition-colors hover:border-error/40 hover:bg-error/10 hover:text-error disabled:opacity-40"
+                  className="flex h-8.5 w-8.5 shrink-0 items-center justify-center rounded-lg border text-text-tertiary transition-colors hover:border-error/40 hover:bg-error/10 hover:text-error disabled:opacity-40"
                   style={{ borderColor: 'var(--border)' }}
                 >
                   <svg
@@ -216,10 +216,10 @@ function EnvVarsBody({ projectId, projectName, onClose }: BodyProps): ReactEleme
           onSubmit={e => {
             void upsert(e);
           }}
-          className="mb-3 rounded-[11px] border bg-surface p-2"
+          className="mb-3 rounded-console-12 border bg-surface p-2"
           style={{ borderColor: 'var(--border)' }}
         >
-          <div className="flex items-center gap-[9px]">
+          <div className="flex items-center gap-2.25">
             <input
               value={newKey}
               onChange={e => {
@@ -230,7 +230,7 @@ function EnvVarsBody({ projectId, projectName, onClose }: BodyProps): ReactEleme
               placeholder="NAME"
               autoFocus
               spellCheck={false}
-              className="w-[40%] rounded-lg border bg-surface-elevated px-[11px] py-[9px] font-mono text-[13px] tracking-[0.03em] text-text-primary placeholder:tracking-normal placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]"
+              className="w-[40%] rounded-lg border bg-surface-elevated px-2.75 py-2.25 font-mono text-console-13 tracking-wide text-text-primary placeholder:tracking-normal placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]"
               style={{ borderColor: 'var(--border-bright)' }}
             />
             <input
@@ -243,12 +243,14 @@ function EnvVarsBody({ projectId, projectName, onClose }: BodyProps): ReactEleme
               onKeyDown={onAddKeyKey}
               placeholder="value (encrypted at rest)"
               spellCheck={false}
-              className="min-w-0 flex-1 rounded-lg border bg-surface-elevated px-[11px] py-[9px] font-mono text-[13px] text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]"
+              className="min-w-0 flex-1 rounded-lg border bg-surface-elevated px-2.75 py-2.25 font-mono text-console-13 text-text-primary placeholder:text-text-tertiary focus:border-accent-bright/50 focus:outline-none focus:shadow-[0_0_0_3px_color-mix(in_oklch,var(--brand-magenta),transparent_92%)]"
               style={{ borderColor: 'var(--border-bright)' }}
             />
           </div>
           <div className="mt-2 flex items-center justify-between gap-2 px-0.5">
-            <span className="font-mono text-[10px] text-text-tertiary">↵ save · esc cancel</span>
+            <span className="font-mono text-console-10 text-text-tertiary">
+              ↵ save · esc cancel
+            </span>
             <div className="flex items-center gap-2">
               <button
                 type="button"
@@ -258,14 +260,14 @@ function EnvVarsBody({ projectId, projectName, onClose }: BodyProps): ReactEleme
                   setNewValue('');
                   setActionError(null);
                 }}
-                className="rounded-lg px-3 py-1.5 text-[12px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+                className="rounded-lg px-3 py-1.5 text-console-12 font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={busyKey !== null || newKey.trim().length === 0 || newValue.length === 0}
-                className="brand-bar rounded-lg px-3.5 py-1.5 text-[12px] font-bold text-white transition-all hover:brightness-110 disabled:opacity-40"
+                className="brand-bar rounded-lg px-3.5 py-1.5 text-console-12 font-bold text-white transition-all hover:brightness-110 disabled:opacity-40"
               >
                 {busyKey === newKey.trim() ? 'Saving…' : 'Save'}
               </button>
@@ -278,7 +280,7 @@ function EnvVarsBody({ projectId, projectName, onClose }: BodyProps): ReactEleme
           onClick={() => {
             setAdding(true);
           }}
-          className="mb-3 flex w-full items-center justify-center gap-2 rounded-[11px] border border-dashed border-border bg-surface px-3 py-3 text-[13px] font-semibold text-text-secondary transition-colors hover:border-accent-bright/50 hover:bg-surface-hover hover:text-text-primary"
+          className="mb-3 flex w-full items-center justify-center gap-2 rounded-console-12 border border-dashed border-border bg-surface px-3 py-3 text-console-13 font-semibold text-text-secondary transition-colors hover:border-accent-bright/50 hover:bg-surface-hover hover:text-text-primary"
         >
           <span aria-hidden className="text-accent-bright">
             +
@@ -288,14 +290,14 @@ function EnvVarsBody({ projectId, projectName, onClose }: BodyProps): ReactEleme
       )}
 
       {actionError !== null ? (
-        <p className="mb-2 font-mono text-[11px] text-error">{actionError}</p>
+        <p className="mb-2 font-mono text-console-11 text-error">{actionError}</p>
       ) : null}
 
-      <div className="mt-[22px] flex justify-end">
+      <div className="mt-5.5 flex justify-end">
         <button
           type="button"
           onClick={onClose}
-          className="rounded-[10px] border bg-transparent px-[18px] py-2.5 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+          className="rounded-lg border bg-transparent px-4.5 py-2.5 text-console-13 font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
           style={{ borderColor: 'var(--border-bright)' }}
         >
           Close
