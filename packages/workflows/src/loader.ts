@@ -34,6 +34,7 @@ import {
   parseMutatesCheckout,
   parseOptionalField,
   parseOutcomeField,
+  parseWorkflowResource,
   parseRequires,
   parseReturns,
   parseRunBudget,
@@ -226,6 +227,7 @@ interface WorkflowFields {
   readonly webSearchMode: WorkflowDefinition['webSearchMode'];
   readonly persistSessions: boolean;
   readonly mutatesCheckout: ReturnType<typeof parseMutatesCheckout>;
+  readonly resource: WorkflowDefinition['resource'];
   readonly effort: ReturnType<typeof resolveEffort>;
   readonly fallbackModel: ReturnType<typeof parseFallbackModel>;
   readonly betas: ReturnType<typeof parseBetas>;
@@ -296,6 +298,8 @@ function parseWorkflowFields(
   const deprecated = parseDeprecation(raw.deprecated);
   if ('error' in deprecated) return deprecated.error;
   const mutatesCheckout = parseMutatesCheckout(raw.mutates_checkout, filename);
+  const resource = parseWorkflowResource(raw.resource);
+  if ('error' in resource) return resource.error;
   const tags = parseTags(raw.tags, filename);
   const requires = parseRequires(raw.requires, filename);
   const inputs = parseInputs(raw.inputs, filename);
@@ -324,6 +328,7 @@ function parseWorkflowFields(
     webSearchMode,
     persistSessions,
     mutatesCheckout,
+    resource: resource.value,
     effort,
     fallbackModel: parseFallbackModel(raw.fallbackModel, filename),
     betas: parseBetas(raw.betas, filename),
@@ -366,6 +371,7 @@ function buildWorkflowDefinition(
 function executionSettings(fields: WorkflowFields): Partial<WorkflowDefinition> {
   return {
     ...(fields.mutatesCheckout !== undefined ? { mutates_checkout: fields.mutatesCheckout } : {}),
+    ...(fields.resource !== undefined ? { resource: fields.resource } : {}),
     ...(fields.effort !== undefined ? { effort: fields.effort } : {}),
     ...(fields.fallbackModel !== undefined ? { fallbackModel: fields.fallbackModel } : {}),
     ...(fields.betas !== undefined ? { betas: fields.betas } : {}),

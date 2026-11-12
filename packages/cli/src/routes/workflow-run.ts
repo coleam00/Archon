@@ -172,6 +172,7 @@ function buildRunOptions(
     // conversation). Pass the same id on each run to opt into cross-run resume.
     conversationId: values['conversation-id'] as string | undefined,
     detach: values.detach as boolean | undefined,
+    noWait: values['no-wait'] as boolean | undefined,
     json,
     dryRun: values['dry-run'] as boolean | undefined,
     stubsPath: values.stubs as string | undefined,

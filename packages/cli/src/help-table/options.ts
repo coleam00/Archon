@@ -211,6 +211,12 @@ export const orderedFlags: FlagHelp[] = [
     ],
   },
   {
+    spec: '--no-wait',
+    description:
+      "For 'workflow run': refuse, naming the resource, instead of waiting when the workflow's\nresource is full",
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--all',
     description: "For 'workflow status/runs': list across all projects (ignore cwd scope)",
     owners: [

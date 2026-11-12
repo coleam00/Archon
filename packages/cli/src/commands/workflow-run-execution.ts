@@ -313,6 +313,7 @@ function commonRunOptions(
     container: containerRunCtx,
     resolveChildIsolation,
     onExecutionClaimed,
+    noWait: request.options.noWait,
   };
 }
 

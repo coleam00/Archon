@@ -68,6 +68,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `worktree.enabled` | `false` always runs in the live checkout, and `--branch` or `--from` is an error. `true` always uses a worktree, and `--no-worktree` is an error. Omit it to let the caller decide; the default is a worktree. |
 | `container` | `enabled` and `write_back` (`approve` or `auto`) for container runs of folder projects. |
 | `mutates_checkout` | `false` asserts that runs of this workflow never write to their checkout, so the engine skips the path lock and several runs can share one checkout. Default `true`. See [Running sub-runs side by side](#running-sub-runs-side-by-side). |
+| `resource` | The resource every top-level run of this workflow holds a slot on, however it starts. A start waits while the resource is full; `archon workflow run --no-wait` refuses instead. Included workflows and sub-runs share the parent's slot. See [Workflows that declare a resource](/guides/workflow-triggers/#workflows-that-declare-a-resource). |
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
@@ -2371,8 +2372,8 @@ same `resource` share its slots. With `resource_scope: host` it is
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
-input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an event
-binding, and bindings sharing a resource must declare the same capacity. An `event:` selector
+input must name a declared timer or fire-only binding, and an `{ event: <field> }` input belongs to an
+event binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 ## Launching a Separate Governed Run with `workflow:`

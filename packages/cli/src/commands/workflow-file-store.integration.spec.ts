@@ -856,6 +856,58 @@ test('pause, approve in another process, and resume without any SQL connection',
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
 }, 60000);
+test('a hand start waits while its resource is full and --no-wait refuses it', async () => {
+  const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
+  const workflow = (name: string, bash: string): void =>
+    writeFileSync(
+      join(f.project, `.archon/workflows/${name}.yaml`),
+      `name: ${name}\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
+    );
+  workflow('held', 'touch held-started; while [ ! -f release ]; do sleep 0.1; done');
+  workflow('quick', 'echo ran > quick-ran');
+  const run = (...args: string[]) =>
+    cli(f, ['workflow', 'run', ...args, '--folder', '--no-worktree']);
+  const held = run('held');
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+  const refused = await run('quick', '--no-wait');
+  expect(refused.code, refused.output + refused.error).not.toBe(0);
+  expect(refused.output + refused.error).toContain("Resource 'build' is full");
+  expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
+
+  const waiting = run('quick');
+  await Bun.sleep(3000);
+  expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+  const waited = await waiting;
+  expect(waited, waited.output + waited.error).toMatchObject({ code: 0 });
+  expect(waited.output + waited.error).toContain("Waiting for resource 'build'");
+  expect(readFileSync(join(f.project, 'quick-ran'), 'utf8')).toBe('ran\n');
+}, 60000);
+test('a workflow that includes or runs another declaring its resource holds one slot', async () => {
+  const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
+  writeFileSync(
+    join(f.project, '.archon/workflows/block.yaml'),
+    'name: block\ndescription: included\nresource: build\nnodes:\n  - id: inner\n    bash: echo inner > inner-ran\n'
+  );
+  writeFileSync(
+    join(f.project, '.archon/workflows/outer.yaml'),
+    'name: outer\ndescription: includes block\nresource: build\nworktree:\n  enabled: false\nnodes:\n  - id: blk\n    include: block\n  - id: sub\n    depends_on: [blk]\n    workflow: block\n'
+  );
+  // The include and the sub-run both run inside the parent's slot. At capacity 1 a
+  // second slot would refuse under --no-wait.
+  const result = await cli(f, [
+    'workflow',
+    'run',
+    'outer',
+    '--no-wait',
+    '--folder',
+    '--no-worktree',
+  ]);
+  expect(result, result.output + result.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(f.project, 'inner-ran'), 'utf8')).toBe('inner\n');
+}, 60000);
 test('detached JSON resume returns a refusal status to the process', async () => {
   const f = fixture();
   const started = await cli(f, ['workflow', 'run', 'portable', '--folder', '--no-worktree']);

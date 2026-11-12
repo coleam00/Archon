@@ -4,6 +4,7 @@ import { effortLevelSchema, betasSchema } from '../schemas/dag-node';
 import { INPUT_NAME_PATTERN, inputEnvKey } from '../schemas/node-bindings';
 import type { EffortLevel } from '../schemas/effort';
 import { modelRefSchema, type WorkflowModelRef } from '../schemas/model-binding';
+import { resourceNameSchema } from '../schemas/resource-name';
 import {
   workflowRequirementSchema,
   workflowEvidencePolicySchema,
@@ -357,6 +358,16 @@ export function parseOutcomeField(raw: unknown, filename: string): ParsedField<s
     };
   }
   return { value: raw.trim() };
+}
+
+export function parseWorkflowResource(raw: unknown): ParsedField<string> {
+  if (raw === undefined) return { value: undefined };
+  const parsed = resourceNameSchema.safeParse(raw);
+  if (!parsed.success)
+    return {
+      error: `Invalid 'resource': ${parsed.error.issues[0]?.message ?? 'expected a non-empty resource name'}`,
+    };
+  return { value: parsed.data };
 }
 
 /**

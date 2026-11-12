@@ -213,7 +213,7 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
-const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
+const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout', 'resource']);
 
 /**
  * What remains of the included file's workflow-level configuration after the collapse is

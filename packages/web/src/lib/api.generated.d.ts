@@ -5430,6 +5430,7 @@ export interface components {
         max_spend_usd?: number;
       };
       mutates_checkout?: boolean;
+      resource?: string;
       persist_sessions?: boolean;
       tags?: string[];
       requires?: 'github'[];
