@@ -198,6 +198,8 @@ export interface GlobalConfig {
      * Read fresh and strictly at every attempt by `loadProviderConcurrencyCaps`.
      */
     providers?: Record<string, number>;
+    /** Install-wide resource overrides, read fresh at each admission. */
+    resources?: Record<string, number>;
   };
 
   /**

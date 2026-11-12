@@ -38,7 +38,7 @@ function getLog(): ReturnType<typeof createLogger> {
  *
  * Absent on purpose:
  *   - Run-owned fields (`worktree`, `container`, `evidence_policy`, `budget`,
- *     `mutates_checkout`) — decisions belonging to whoever started the run, not to the
+ *     `mutates_checkout`, `resource`) — decisions belonging to whoever started the run, not to the
  *     file that happens to hold a node. These stay workflow-level and are warned about
  *     when a composed workflow declares them.
  *   - `webSearchMode` — node-affecting in spirit but the ONE workflow-level field with
@@ -213,7 +213,7 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
 ]);
 
 /** Isolation/concurrency-safety fields — a silent drop of these is the most dangerous. */
-const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout']);
+const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout', 'resource']);
 
 /**
  * What remains of the included file's workflow-level configuration after the collapse is

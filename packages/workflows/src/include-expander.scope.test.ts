@@ -102,3 +102,25 @@ describe('include-free workflow scope', () => {
     expect(plain.provider).toBe('pi');
   });
 });
+
+describe('workflow resource ownership during inclusion', () => {
+  test('keeps only the composing run resource, including when the child declares the same one', () => {
+    for (const parentResource of [undefined, { name: 'build', capacity: 2 }, { name: 'other' }]) {
+      const child: WorkflowDefinition = {
+        ...wf('resource-block', [{ id: 'body', bash: 'echo child' }]),
+        resource: { name: 'build', capacity: 1 },
+      };
+      const parent: WorkflowDefinition = {
+        ...wf('resource-parent', [{ id: 'included', include: child.name }]),
+        ...(parentResource ? { resource: parentResource } : {}),
+      };
+      const { workflows, errors } = expandWorkflowIncludes(mapOf(child, parent));
+      expect(errors).toHaveLength(0);
+      const expanded = workflows.get(parent.name)!;
+      expect(expanded.resource).toEqual(parentResource);
+      expect(expanded.nodes).toHaveLength(1);
+      expect(expanded.nodes[0]).not.toHaveProperty('resource');
+      expect(workflows.get(child.name)?.resource).toEqual({ name: 'build', capacity: 1 });
+    }
+  });
+});

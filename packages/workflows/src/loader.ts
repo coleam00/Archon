@@ -37,6 +37,7 @@ import {
   parseRequires,
   parseReturns,
   parseRunBudget,
+  parseWorkflowResource,
   parseTags,
   parseWorktreePolicy,
   resolveEffort,
@@ -234,6 +235,7 @@ interface WorkflowFields {
   readonly container: ReturnType<typeof parseContainerPolicy>;
   readonly evidencePolicy: WorkflowDefinition['evidence_policy'];
   readonly budget: WorkflowDefinition['budget'];
+  readonly resource: WorkflowDefinition['resource'];
   readonly tags: ReturnType<typeof parseTags>;
   readonly requires: ReturnType<typeof parseRequires>;
   readonly inputs: WorkflowDefinition['inputs'];
@@ -291,6 +293,8 @@ function parseWorkflowFields(
   const container = parseContainerPolicy(raw.container, filename);
   const evidencePolicy = parseEvidencePolicy(raw.evidence_policy);
   if ('error' in evidencePolicy) return evidencePolicy.error;
+  const resource = parseWorkflowResource(raw.resource);
+  if ('error' in resource) return resource.error;
   const budget = parseRunBudget(raw.budget);
   if ('error' in budget) return budget.error;
   const deprecated = parseDeprecation(raw.deprecated);
@@ -332,6 +336,7 @@ function parseWorkflowFields(
     container,
     evidencePolicy: evidencePolicy.value,
     budget: budget.value,
+    resource: resource.value,
     tags,
     requires,
     inputs: inputs.value,
@@ -380,6 +385,7 @@ function runPolicies(fields: WorkflowFields): Partial<WorkflowDefinition> {
     ...(fields.container ? { container: fields.container } : {}),
     ...(fields.evidencePolicy !== undefined ? { evidence_policy: fields.evidencePolicy } : {}),
     ...(fields.budget !== undefined ? { budget: fields.budget } : {}),
+    ...(fields.resource !== undefined ? { resource: fields.resource } : {}),
     ...(fields.tags !== undefined ? { tags: fields.tags } : {}),
     ...(fields.requires !== undefined ? { requires: fields.requires } : {}),
     ...(fields.inputs !== undefined ? { inputs: fields.inputs } : {}),

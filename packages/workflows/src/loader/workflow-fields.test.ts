@@ -289,6 +289,7 @@ describe('workflow-level field parity (#2457)', () => {
       yaml: 'returns: only\noutcome_field: green',
       present: w => w.outcome_field === 'green',
     },
+    resource: { yaml: 'resource: build', present: w => w.resource?.name === 'build' },
     deprecated: {
       yaml: 'deprecated:\n  message: Switch instead.',
       present: w => w.deprecated?.message === 'Switch instead.',
@@ -961,5 +962,46 @@ describe('deprecated marker (#2781)', () => {
     expect(result.workflow).toBeNull();
     expect(result.error?.errorType).toBe('validation_error');
     expect(result.error?.error).toContain('Invalid deprecated');
+  });
+});
+
+describe('workflow resource declaration', () => {
+  const withResource = (field: string): string =>
+    `name: limited\ndescription: resource policy\n${field}\nnodes:\n  - id: run\n    bash: echo ok\n`;
+
+  it('normalizes a bare name and preserves an explicit capacity', () => {
+    for (const [field, resource] of [
+      ['resource: build', { name: 'build' }],
+      ['resource: { name: build, capacity: 2 }', { name: 'build', capacity: 2 }],
+      ["resource: '  custom:lane  '", { name: 'custom:lane' }],
+    ] as const) {
+      const result = parseWorkflow(withResource(field), 'resource.yaml');
+      expect(result.error).toBeNull();
+      expect(result.workflow?.resource).toEqual(resource);
+      expect(result.warnings).toEqual([]);
+    }
+    expect(parseWorkflow(withResource(''), 'plain.yaml').workflow?.resource).toBeUndefined();
+  });
+
+  it('rejects malformed declarations instead of silently removing admission', () => {
+    for (const field of [
+      'resource:',
+      'resource: false',
+      'resource: []',
+      "resource: ''",
+      "resource: '  '",
+      'resource: provider:claude',
+      'resource: { capacity: 2 }',
+      'resource: { name: build, capacity: 0 }',
+      'resource: { name: build, capacity: 1.5 }',
+      'resource: { name: build, capacity: "2" }',
+      'resource: { name: build, capcity: 2 }',
+      'resource: { name: provider:claude }',
+    ]) {
+      const result = parseWorkflow(withResource(field), 'invalid-resource.yaml');
+      expect(result.workflow).toBeNull();
+      expect(result.error?.errorType).toBe('validation_error');
+      expect(result.error?.error).toContain('Invalid resource');
+    }
   });
 });

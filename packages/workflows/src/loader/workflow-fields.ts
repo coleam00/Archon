@@ -12,6 +12,7 @@ import {
   workflowInputSpecSchema,
   workflowContainerPolicySchema,
   workflowWorktreePolicySchema,
+  workflowResourceSchema,
 } from '../schemas/workflow';
 import type {
   WorkflowRequirement,
@@ -135,6 +136,19 @@ export function parseEvidencePolicy(raw: unknown): ParsedField<WorkflowEvidenceP
     };
   }
   return { value: parsedEvidence.data };
+}
+
+export function parseWorkflowResource(
+  raw: unknown
+): ParsedField<z.infer<typeof workflowResourceSchema>> {
+  if (raw === undefined) return { value: undefined };
+  const parsed = workflowResourceSchema.safeParse(typeof raw === 'string' ? { name: raw } : raw);
+  if (!parsed.success) {
+    return {
+      error: `Invalid resource: expected a resource name or { name, capacity?: positive integer } (${parsed.error.issues[0]?.message ?? 'invalid value'}).`,
+    };
+  }
+  return { value: parsed.data };
 }
 
 /**

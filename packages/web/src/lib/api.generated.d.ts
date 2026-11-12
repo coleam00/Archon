@@ -5413,6 +5413,10 @@ export interface components {
       } & {
         [key: string]: unknown;
       };
+      resource?: {
+        name: string;
+        capacity?: number;
+      };
       worktree?: {
         enabled?: boolean;
       };

@@ -75,7 +75,7 @@ const keyClassifications = {
   },
   concurrency: {
     kind: 'unavailable',
-    reason: 'conversation concurrency is process-scoped and has no per-run consumer',
+    reason: 'conversation and admission concurrency are install policy, not per-run configuration',
   },
   recommendedWorkflows: {
     kind: 'unavailable',

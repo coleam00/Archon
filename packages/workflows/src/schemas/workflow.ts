@@ -18,6 +18,7 @@ import { jsonValueSchema } from '../output-ref';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
 import { modelRefSchema, type WorkflowModelRef } from './model-binding';
 import type { WorkflowPack } from './pack-settings';
+import { resourceCapacitySchema, resourceNameSchema } from './resource';
 
 // ---------------------------------------------------------------------------
 // Shared enum schemas
@@ -200,6 +201,14 @@ export type WorkflowDeprecation = z.infer<typeof workflowDeprecationSchema>;
 // WorkflowBase — common fields shared by all workflow types
 // ---------------------------------------------------------------------------
 
+export const workflowResourceSchema = z
+  .object({
+    name: z.string().trim().pipe(resourceNameSchema),
+    capacity: resourceCapacitySchema.optional(),
+  })
+  .strict();
+export type WorkflowResource = z.infer<typeof workflowResourceSchema>;
+
 export const workflowBaseSchema = z.object({
   name: z.string().min(1),
   description: z.string().min(1),
@@ -211,6 +220,7 @@ export const workflowBaseSchema = z.object({
   fallbackModel: z.string().min(1).optional(),
   betas: betasSchema.optional(),
   sandbox: sandboxSettingsSchema.optional(),
+  resource: workflowResourceSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
   container: workflowContainerPolicySchema.optional(),
   evidence_policy: workflowEvidencePolicySchema.optional(),
