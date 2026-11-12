@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { buildInstanceSnapshots } from '../../../fan-out-identity';
 import { readNodeRecordEvent } from '../../../node-record-reader';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { ParentStatusReadError } from '../../../parent-status-read';
@@ -20,6 +21,7 @@ import {
   mockGetAgentProviderDag,
   createMockDeps,
   createMockPlatform,
+  deliveredMessages,
   persistedEvents,
   minimalConfig,
   dagOptions,
@@ -63,6 +65,99 @@ describe('executeDagWorkflow -- composed fan-out (include + fan_out, #2512)', ()
 
   afterEach(async () => {
     await removeTempTree(testDir);
+  });
+
+  it('reports each instance boundary once across its loop iterations and on resume', async () => {
+    await writeBlock(
+      `name: error-leaf
+description: leaf
+nodes:
+  - id: entry
+    bash: exit 99
+  - id: tail
+    bash: exit 99
+    depends_on: [entry]
+    trigger_rule: all_done
+`,
+      'error-leaf'
+    );
+    await writeBlock(`name: compose-blk
+description: block
+mutates_checkout: false
+nodes:
+  - id: cycle
+    loop_group:
+      max_iterations: 2
+      until: DONE
+      on_exhausted: complete
+      nodes:
+        - id: source
+          bash: printf '%s' '{"route":{}}'
+        - id: inc
+          include: error-leaf
+          depends_on: [source]
+          when: "$source.output.route == 'go'"
+        - id: finish
+          bash: echo continue
+          depends_on: [inc]
+          trigger_rule: all_done
+`);
+    const deps = createMockDeps();
+    const platform = createMockPlatform();
+    const options = dagOptions({
+      deps,
+      platform,
+      cwd: testDir,
+      workflowRun: makeWorkflowRun('fan-boundary-errors'),
+      workflow: {
+        name: 'fan-boundary-errors',
+        nodes: [
+          {
+            id: 'fan',
+            kind: 'compose_fan_out',
+            include: 'compose-blk',
+            fan_out: { items: '[1,2]', as: 'item', max_parallel: 2, join: 'all_done' },
+          },
+        ],
+      },
+    });
+    await executeDagWorkflow(options);
+    const skips = eventsOf(deps.store).filter(e => e.event_type === 'node_skipped');
+    expect(skips).toHaveLength(8);
+    const owners = new Set(
+      skips.map(
+        e =>
+          readNodeRecordEvent({ workflow_run_id: options.workflowRun.id, ...e })?.data.cause
+            ?.boundary?.includeId
+      )
+    );
+    expect(owners).toEqual(
+      new Set(
+        buildInstanceSnapshots([1, 2]).map(
+          snapshot => `${composeScope()}__${snapshot.identity}__cycle.inc`
+        )
+      )
+    );
+    for (const event of skips)
+      expect(event.data).toMatchObject({
+        reason: 'when_condition_parse_error',
+        cause: {
+          kind: 'condition_parse_error',
+          expr: "$source.output.route == 'go'",
+          boundary: { workflow: 'error-leaf' },
+        },
+      });
+    const warnings = () =>
+      deliveredMessages(platform).filter(message => message.startsWith("Include '"));
+    expect(warnings()).toHaveLength(2);
+    for (const owner of owners)
+      expect(
+        warnings().filter(message =>
+          message.startsWith(`Include '${owner}' (workflow 'error-leaf'):`)
+        )
+      ).toHaveLength(1);
+    await executeDagWorkflow(options);
+    expect(warnings()).toHaveLength(2);
   });
 
   for (const scenario of ['parallel sibling', 'usage read failure', 'usage write failure']) {

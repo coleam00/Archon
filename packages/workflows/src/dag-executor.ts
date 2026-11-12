@@ -8,6 +8,7 @@
  * (`dag/run-terminal`).
  */
 
+import { readReportedBoundaryErrors } from './dag/skip-node';
 import { createProviderLimitDeadlineResolver } from './executor-shared';
 import { serializeRunUsage } from './schemas/run-usage';
 import { readInterruptedRunUsage } from './dag/interrupted-usage';
@@ -505,6 +506,7 @@ async function createRunContext(
       ? createRunBudgetLedger(workflow.budget, resumeSnapshot.budget)
       : undefined;
   return {
+    reportedBoundaryErrors: await readReportedBoundaryErrors(deps.store, workflowRun.id),
     containerPause: execContext.kind === 'container' && containerCtx ? {} : undefined,
     providerLimitDeadline: createProviderLimitDeadlineResolver(),
     toolAttention: createRunToolCallAttention({ store: deps.store, runId: workflowRun.id }),

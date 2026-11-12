@@ -212,6 +212,7 @@ function instanceRunContext(
     priorCompletedNodes: threaded.priorNodes,
     claimedWorkPausePolicy: 'finish_through_parent_pause',
     lastSequentialSession: undefined,
+    reportedBoundaryErrors: ctx.reportedBoundaryErrors,
     warnedProviderConflicts: ctx.warnedProviderConflicts,
     totalCostUsd: undefined,
     totalTokens: undefined,

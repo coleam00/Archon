@@ -1,4 +1,5 @@
 /** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
+import { formatSkipCause } from './skip-cause';
 import { createLogger, getArchonTempPath } from '@archon/paths';
 import { validateStructuredOutput } from './structured-output';
 import { randomUUID } from 'node:crypto';
@@ -21,7 +22,12 @@ import {
   type WorkflowRunOutcome,
 } from './schemas';
 import type { DryRunContext } from './dry-run/context';
-import { dryRunResultSchema, type DryRunResult, type DryRunResolution } from './dry-run/schemas';
+import {
+  dryRunResultSchema,
+  type DryRunResult,
+  type DryRunResolution,
+  type DryRunTraceEntry,
+} from './dry-run/schemas';
 import { isRecord, type DryRunStubs } from './dry-run/stubs';
 import { simulateNodes } from './dry-run/simulate';
 
@@ -246,7 +252,7 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
 export function formatDryRunTrace(result: DryRunResult): string {
   const lines = [`Dry-run: ${result.workflow}`, ''];
   for (const entry of result.trace) {
-    const suffix = entry.reason ? ` — ${entry.reason}` : '';
+    const suffix = formatDryRunReason(entry);
     const iteration = entry.iteration ? ` [iteration ${String(entry.iteration)}]` : '';
     lines.push(
       `${entry.state.toUpperCase().padEnd(9)} ${entry.nodeId} (${entry.nodeType})${iteration}${suffix}`
@@ -265,6 +271,11 @@ export function formatDryRunTrace(result: DryRunResult): string {
   if (result.unusedStubs.length > 0) lines.push(`Unused stubs: ${result.unusedStubs.join(', ')}`);
   if (result.summary) lines.push(`Summary: ${result.summary}`);
   return lines.join('\n');
+}
+
+function formatDryRunReason(entry: DryRunTraceEntry): string {
+  if (entry.state === 'skipped') return ` — ${entry.reason} (${formatSkipCause(entry.cause)})`;
+  return entry.reason ? ` — ${entry.reason}` : '';
 }
 
 function formatDryRunResolution(resolution: DryRunResolution): string[] {

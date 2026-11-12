@@ -85,6 +85,10 @@ describe('executeDagWorkflow -- when condition parse errors (fail-closed)', () =
     const skippedEvent = (mockDeps.store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls
       .map((call: unknown[]) => call[0] as { event_type: string; data?: Record<string, unknown> })
       .find(event => event.event_type === 'node_skipped');
+    expect(skippedEvent?.data?.cause).toEqual({
+      kind: 'condition_parse_error',
+      expr: "$unconditional.output = 'yes'",
+    });
     expect(skippedEvent?.data).toMatchObject({
       reason: 'when_condition_parse_error',
       expr: "$unconditional.output = 'yes'",

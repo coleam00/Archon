@@ -301,6 +301,7 @@ test('resumed completion preserves enclosing previous-output scopes', async () =
         layers: [],
         nodeOutputs: new Map(),
         lastSequentialSession: undefined,
+        reportedBoundaryErrors: new Set(),
         warnedProviderConflicts: new Set(),
         totalCostUsd: undefined,
         totalTokens: undefined,

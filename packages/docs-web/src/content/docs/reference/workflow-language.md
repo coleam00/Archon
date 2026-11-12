@@ -315,6 +315,8 @@ nodes:
     effort: low      # Per-node override — ignores workflow-level effort
 ```
 
+A skip caused by an include's gate retains the include identity and the condition expression or upstream origin in its cause. False include conditions use `when_condition`; unevaluable conditions use `when_condition_parse_error` and fail closed. Real runs report an unevaluable gate once per include boundary for the run, including across loop iterations and resume. Dry-run traces print the same skip reason and cause details.
+
 ### `trigger_rule` Values
 
 | Value | Behavior |
