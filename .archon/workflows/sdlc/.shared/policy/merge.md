@@ -8,7 +8,7 @@ The queue merges on its own when the case is clear, and asks a maintainer when i
 not. The gate is not policy: no pull request merges unless its trusted review verdict
 says Ready for its head, what the project's CI setting trusts passes there (green CI,
 or under `ci: none` a passing validation recorded at that head) and the default
-branch's CI is not red, whatever this document says. The queue never pushes, so a verdict for another commit
+branch's CI is not red, whatever this document says. Nor are the project's `merge_lane` and `protected_paths` settings: under the manual lane, and for a pull request that changes a protected path, the gate merges only what a maintainer approved at its head, so each such pull request is asked about. The queue never pushes, so a verdict for another commit
 means someone pushed after the review, and the pull request goes back to be reviewed.
 An open review thread holds the merge only when it raises a defect in what the pull
 request changes. A thread on code the pull request doesn't change or make reachable,

@@ -2,8 +2,8 @@ name: archon-merge-queue
 description: |
   The merge queue: merges the pull requests the build queue finished, and stops only
   for decisions that belong to a person. Each run claims every waiting item with
-  intake's claim, up to limit. One sweep agent decides each pull request and merges
-  what policy allows, one at a time, through a gate script that refuses unless the
+  intake's claim, up to limit. One sweep agent decides each pull request, and a script
+  merges what it declared, one at a time, through a gate that refuses unless the
   trusted review verdict says Ready at the head, what the pack's ci setting trusts
   passes there (green checks, or a recorded validation), the head contains
   the default branch or merges into it cleanly, and the default branch's CI is not
@@ -90,11 +90,11 @@ nodes:
         items: { type: array, items: { type: object } }
         # Claimed items settled without the sweep: merged or closed already, or no pull request.
         settled: { type: array, items: { type: object } }
-        # The gate command the sweep runs to merge.
-        gate: { type: string }
+        # The pack's merge_lane setting: under manual, nothing merges without an approval at its head.
+        lane: { type: string }
         # The pack's ci setting: what the gate trusts at a head besides the verdict.
         ci: { type: string }
-      required: [path, base, base_error, items, settled, gate, ci]
+      required: [path, base, base_error, items, settled, lane, ci]
 
   - id: sweep
     command: sweep
@@ -104,7 +104,7 @@ nodes:
     with:
       base: { from: "$facts.output.base" }
       items: { from: "$facts.output.items" }
-      gate: "$facts.output.gate"
+      lane: "$facts.output.lane"
       ci: "$facts.output.ci"
     output_format:
       type: object
@@ -120,7 +120,7 @@ nodes:
                 additionalProperties: false
                 properties:
                   number: &number { type: integer, minimum: 1 }
-                  action: { type: string, enum: [merged, wait] }
+                  action: { type: string, enum: [merge, wait] }
                   class: &class { type: string, enum: [clear, unclear] }
                   # The head the decision is about.
                   head: &head { type: string, pattern: '^[0-9a-f]{7,64}$' }
@@ -232,17 +232,39 @@ nodes:
             summary: { type: string }
           required: [summary]
         summary: { type: string }
-        # What the gate command printed when it could not run at all; empty when every
-        # gate call ran, refusals included. Non-empty fails the record node.
-        gate_error: { type: string }
-      required: [decisions, base, summary, gate_error]
+      required: [decisions, base, summary]
+
+  # The one place a pull request merges: gates each one the sweep declared `merge`, read
+  # fresh, and merges it pinned to the declared head.
+  - id: merge
+    script: merge
+    runtime: bun
+    depends_on: [facts, sweep]
+    with:
+      items: { from: "$facts.output.items" }
+      sweep: { from: "$sweep.output" }
+    output_format:
+      type: object
+      properties:
+        gated:
+          type: array
+          items:
+            type: object
+            properties:
+              number: { type: integer }
+              head: { type: string }
+              # Why the gate refused or the merge did not land; empty when it merged.
+              refusals: { type: array, items: { type: string } }
+              merge_commit: { type: [string, 'null'] }
+            required: [number, head, refusals, merge_commit]
+      required: [gated]
 
   # Checks the decisions, reads back every pull request and records one decision per
   # item; raises at most one attention item. It also runs when no sweep was due.
   - id: record
     script: record
     runtime: bun
-    depends_on: [facts, sweep]
+    depends_on: [facts, sweep, merge]
     trigger_rule: none_failed_min_one_success
     with:
       path: "$facts.output.path"
@@ -252,6 +274,7 @@ nodes:
       base: { from: "$facts.output.base" }
       ci: "$facts.output.ci"
       sweep: { from: "$sweep.output", if_skipped: null }
+      gated: { from: "$merge.output.gated", if_skipped: [] }
     output_format:
       type: object
       properties:

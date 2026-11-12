@@ -21,6 +21,7 @@ import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
+import { announce } from '../../.shared/queue.ts';
 import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { type LabelVerdict, isPackLabel, type PackLabel, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
@@ -125,6 +126,17 @@ function summary(item: QualifiedPr, next: WorkItem, runId: string): string {
   return `${stage}; ${nextPickup(input('build_queue_binding'), key)}`;
 }
 
+/** Say what intake did when it closed the issue or left it where no run can start. */
+function announceOutcome(item: QualifiedPr, next: WorkItem, triage: TriageResult | null, closed: boolean): void {
+  if (triage === null) return;
+  const number = String(item.number);
+  const labels = { stage: 'intake', item: number };
+  if (closed) announce(`Issue ${number} closed; ${triage.summary}`, { ...labels, kind: 'closed' });
+  else if (next.stage === 'blocked' || next.stage === 'needs_contract') {
+    announce(`Issue ${number}: no run can start; ${triage.summary}`, { ...labels, kind: 'blocked' });
+  }
+}
+
 function main(): void {
   const path = input('path').trim();
   if (path === 'idle') {
@@ -170,6 +182,7 @@ function main(): void {
   // Clearing the claim is what marks this run's requests honored; a run that stops
   // before it leaves them for the next pickup to queue again.
   updateClaimed(item, runId, doc => ({ ...doc, claim: null }));
+  announceOutcome(item, next, judged, close !== null && close.refused === null);
 
   emit({
     path: decision.path,

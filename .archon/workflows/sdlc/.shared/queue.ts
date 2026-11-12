@@ -12,6 +12,8 @@
  * declares it.
  */
 
+import { notice } from 'archon:script';
+
 /** One answer the person can give, as the wait takes it. */
 export interface AskOption<Effect extends string> {
   /** The id the answer carries: kebab-case, unique within the ask. */
@@ -74,6 +76,20 @@ export function answeredChoice<Effect extends string>(ask: Ask<Effect>, decision
   if (option !== undefined) return option;
   if (decision !== OTHER) throw new Error(`the answer "${decision}" is none of the asked options`);
   return { id: OTHER, label: 'Something else', does: 'Do what the answer text says.', value: { effect, ruling: '' } };
+}
+
+/**
+ * Say on the attention stream what a queue just did, after the write that did it. The
+ * text is cut to the engine's one line of 300 characters. A notice the host refuses is
+ * reported on stderr and never fails the run: the write it reports already holds.
+ */
+export function announce(text: string, labels: Readonly<Record<string, string>>): void {
+  const line = text.replace(/\s+/g, ' ').trim();
+  try {
+    notice(line.length <= 300 ? line : `${line.slice(0, 299)}…`, labels);
+  } catch (error) {
+    console.error(`notice not emitted (${error instanceof Error ? error.message : String(error)}): ${line}`);
+  }
 }
 
 /** The heading of the dated section a ruling is written under. */

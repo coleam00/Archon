@@ -373,13 +373,13 @@ export interface WorkflowOutputs {
       readonly base_error: string;
       readonly items: ReadonlyArray<Readonly<Record<string, unknown>>>;
       readonly settled: ReadonlyArray<Readonly<Record<string, unknown>>>;
-      readonly gate: string;
+      readonly lane: string;
       readonly ci: string;
     };
     sweep: {
       readonly decisions: ReadonlyArray<{
         readonly number: number;
-        readonly action: 'merged' | 'wait';
+        readonly action: 'merge' | 'wait';
         readonly class: 'clear' | 'unclear';
         readonly head: string;
         readonly reran: boolean;
@@ -450,7 +450,14 @@ export interface WorkflowOutputs {
         readonly summary: string;
       };
       readonly summary: string;
-      readonly gate_error: string;
+    };
+    merge: {
+      readonly gated: ReadonlyArray<{
+        readonly number: number;
+        readonly head: string;
+        readonly refusals: ReadonlyArray<string>;
+        readonly merge_commit: string | null;
+      }>;
     };
     record: {
       readonly merged: ReadonlyArray<number>;
@@ -924,7 +931,7 @@ export const OUTPUT_ENUMS = {
       path: ['idle', 'record', 'sweep'],
     },
     sweep: {
-      'decisions[].anyOf[0].action': ['merged', 'wait'],
+      'decisions[].anyOf[0].action': ['merge', 'wait'],
       'decisions[].anyOf[0].class': ['clear', 'unclear'],
       'decisions[].anyOf[1].action': ['return'],
       'decisions[].anyOf[1].class': ['clear', 'unclear'],
