@@ -244,8 +244,9 @@ export async function getActiveWorkflowRunByPath(
   self?: Parameters<IWorkflowStore['getActiveWorkflowRunByPath']>[1]
 ): Promise<WorkflowRun | null> {
   const isPostgres = getDatabaseType() === 'postgresql';
+  // The caller's Date loses PostgreSQL microseconds; compare and order at that same precision.
   const priority = isPostgres
-    ? 'GREATEST(started_at, COALESCE(active_phase_started_at, started_at))'
+    ? "date_trunc('milliseconds', GREATEST(started_at, COALESCE(active_phase_started_at, started_at)))"
     : 'MAX(julianday(started_at), julianday(COALESCE(active_phase_started_at, started_at)))';
   // Build params + clauses dynamically. Self exclusion + tiebreaker travel
   // together — the tiebreaker references both ids and timestamps.

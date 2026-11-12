@@ -28,6 +28,7 @@ import type { IWorkflowStore } from './store';
 import { TerminalStatusWriteError } from './terminal-status-write';
 import { WorkflowStatusReadError } from './workflow-status-read';
 import { keepAwake } from './utils/keep-awake';
+import { createFileWorkflowStore, commit } from './file-store';
 
 /** How a run claims its row and its checkout: the path lock, row stamps and the checkout baseline. */
 
@@ -121,6 +122,48 @@ describe('concurrent-run guard', () => {
     });
     expect(getActiveSpy).not.toHaveBeenCalled();
     expect(result.workflowRunId).toBe('run-123');
+  });
+
+  it('rejects a resumed old run before executing while a real store holds its checkout', async () => {
+    const root = await mkdtemp(join(tmpdir(), 'resumed-checkout-admission-'));
+    try {
+      const store = await createFileWorkflowStore({ root });
+      const old = await store.createWorkflowRun({
+        workflow_name: 'old',
+        user_message: '',
+        working_path: '/tmp',
+      });
+      await store.claimPendingWorkflowRun(old.id);
+      await store.failWorkflowRun(old.id, 'retry');
+      const holder = await store.createWorkflowRun({
+        workflow_name: 'holder',
+        user_message: '',
+        working_path: '/tmp',
+      });
+      await store.claimPendingWorkflowRun(holder.id);
+      const creation = new Date(Date.now() - 4 * 3600_000);
+      await commit(root, [old.id, holder.id], async runs => {
+        const prior = runs.get(old.id);
+        const current = runs.get(holder.id);
+        if (!prior || !current) throw new Error('Missing checkout fixtures');
+        prior.started_at = creation;
+        current.started_at = new Date(creation.getTime() + 3600_000);
+        return { result: undefined, changes: { runs: [{ run: prior }, { run: current }] } };
+      });
+      const resumed = await store.resumeWorkflowRun(old.id);
+      expect(resumed.started_at).toEqual(creation);
+      const platform = makePlatform();
+      const result = await startWorkflow({ store, platform, options: resumeOf(resumed) });
+      expect(result.success).toBe(false);
+      if (result.success) throw new Error('Expected checkout-lock rejection');
+      expect(result.error).toContain('already active');
+      expect(sentMessages(platform).join('\n')).toContain(holder.id.slice(0, 8));
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      expect((await store.getWorkflowRun(old.id))?.status).toBe('cancelled');
+      expect((await store.getWorkflowRun(holder.id))?.status).toBe('running');
+    } finally {
+      await removeTempTree(root);
+    }
   });
 
   it.each(['fresh', 'resume'] as const)(

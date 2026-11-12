@@ -93,6 +93,7 @@ mock.module('@archon/paths', () => ({
   ),
   captureWorkflowInvoked: mockCaptureWorkflowInvoked,
   captureWorkflowTerminal: mockCaptureWorkflowTerminal,
+  isTelemetryDisabled: () => true,
 }));
 
 export const mockGetDefaultBranch = mock(async () => 'main');

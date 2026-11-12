@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { resourceStartFixtures } from '@archon/workflows/store-conformance';
 import { executionClaim } from '@archon/workflows/store';
+import { workflowPathPriorityTime } from '@archon/workflows/workflow-path-lock';
 import {
   describeWorkflowStoreConformance,
   CONFORMANCE_CONVERSATION_ID,
@@ -48,6 +49,75 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test.each(['initial', 'resumed', 'recovered', 'legacy-writer'] as const)(
+    '%s path priorities within a millisecond have one shared winner',
+    async mode => {
+      const harness = await makeHarness();
+      try {
+        const { db, store } = harness;
+        const path = '/submillisecond-priority';
+        const runs = await Promise.all(
+          [0, 1].map(() =>
+            store.createWorkflowRun({
+              workflow_name: 'priority',
+              user_message: '',
+              working_path: path,
+            })
+          )
+        );
+        runs.sort((a, b) => (a.id < b.id ? -1 : 1));
+        const [holder, contender] = runs;
+        if (!holder || !contender) throw new Error('Missing priority fixtures');
+        const activate = async (id: string) => {
+          await store.claimPendingWorkflowRun(id);
+          if (mode === 'resumed') {
+            await store.failWorkflowRun(id, 'retry');
+            await store.resumeWorkflowRun(id);
+          } else if (mode === 'recovered') {
+            await store.cancelFanOutRun(id, 'fan_out_orphan');
+            await store.recoverCancelledFanOutRun(id);
+          }
+        };
+        const setPriority = async (id: string, fraction: string) => {
+          const priority = `2021-01-01T00:00:00.${fraction}Z`;
+          const phaseOwnsPriority = mode === 'resumed' || mode === 'recovered';
+          await db.query(
+            'UPDATE remote_agent_workflow_runs SET started_at = $2, active_phase_started_at = $3 WHERE id = $1',
+            [
+              id,
+              phaseOwnsPriority ? '2020-01-01T00:00:00Z' : priority,
+              phaseOwnsPriority
+                ? priority
+                : mode === 'legacy-writer'
+                  ? '2020-01-01T00:00:00Z'
+                  : null,
+            ]
+          );
+        };
+        await activate(holder.id);
+        await activate(contender.id);
+        for (const [firstFraction, secondFraction] of [
+          ['123100', '123900'],
+          ['123900', '123100'],
+        ] as const) {
+          await setPriority(holder.id, firstFraction);
+          await setPriority(contender.id, secondFraction);
+          expect((await store.getActiveWorkflowRunByPath(path))?.id).toBe(holder.id);
+          for (const run of runs) {
+            const hydrated = await store.getWorkflowRun(run.id);
+            if (!hydrated) throw new Error('Missing priority fixture');
+            const blocker = await store.getActiveWorkflowRunByPath(path, {
+              id: run.id,
+              startedAt: workflowPathPriorityTime(hydrated),
+            });
+            expect(blocker?.id ?? null).toBe(run.id === holder.id ? null : holder.id);
+          }
+        }
+      } finally {
+        await harness.close();
+      }
+    }
+  );
   test('a pre-phase schema upgrades legacy rows and accepts old-style inserts', async () => {
     const harness = await makeHarness();
     try {
