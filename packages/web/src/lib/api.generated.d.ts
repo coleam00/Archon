@@ -7335,6 +7335,7 @@ export interface components {
               | 'config'
               | null;
           } | null;
+          reason?: string[];
         }
       | {
           /** @enum {string} */

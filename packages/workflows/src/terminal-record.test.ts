@@ -9,6 +9,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { writeNodeArtifact } from './artifacts-index';
 import { observeArtifactManifest } from './terminal-artifact-manifest';
 import {
+  terminalReason,
   buildNodeOutcomes,
   buildRunNodeStates,
   buildTerminalRecord,
@@ -596,5 +597,70 @@ describe('node outcomes observation', () => {
       state,
       ...(eventType === 'node_failed' ? { error: 'boom' } : {}),
     });
+  });
+});
+
+describe('why a run that ended needs a look', () => {
+  const record = (
+    fields: Partial<Parameters<typeof terminalReason>[0] & object>
+  ): Parameters<typeof terminalReason>[0] => ({
+    run_id: 'run-1',
+    status: 'completed',
+    outcome: null,
+    error: null,
+    first_failed_node: null,
+    nodes: [],
+    returns: { availability: 'unavailable', node_id: null, reason: 'not_declared' },
+    artifacts: { root: null, files: [], limitations: [] } as unknown as ArtifactManifest,
+    ...fields,
+  });
+  const returned = (value: unknown) =>
+    record({
+      outcome: 'failed',
+      returns: { availability: 'available', node_id: 'verdict', value },
+    });
+
+  it('a failed outcome gives what its returns node said, as a bounded excerpt', () => {
+    expect(
+      terminalReason(
+        returned({
+          green: false,
+          summary: '\nmain is red: lint fails on dev since 4b58832.\nSecond line, not shown.',
+          next: 'x'.repeat(400),
+          detail: 'a third text field, past the two-line bound',
+        })
+      )
+    ).toEqual([
+      'summary: main is red: lint fails on dev since 4b58832.',
+      `next: ${'x'.repeat(193)}…`,
+    ]);
+    expect(terminalReason(returned('\nItem 12 is stuck.\n\nIt waits on a review.\nMore.'))).toEqual(
+      ['Item 12 is stuck.', 'It waits on a review.']
+    );
+    expect(terminalReason(returned({ green: false }))).toEqual([]);
+  });
+
+  it("a failed run gives its first failed node's error, or else the run's own", () => {
+    const failed = record({
+      status: 'failed',
+      error: 'run stopped',
+      first_failed_node: 'build',
+      nodes: [{ node_id: 'build', state: 'failed', error: 'exit 2: tsc failed\nstack…' }],
+    });
+    expect(terminalReason(failed)).toEqual(['exit 2: tsc failed']);
+    expect(terminalReason({ ...failed!, nodes: [] })).toEqual(['run stopped']);
+  });
+
+  it('a run that needs no look, and a run with no record, give none', () => {
+    expect(terminalReason(record({}))).toEqual([]);
+    expect(
+      terminalReason(
+        record({
+          outcome: 'succeeded',
+          returns: { availability: 'available', node_id: 'verdict', value: 'All good.' },
+        })
+      )
+    ).toEqual([]);
+    expect(terminalReason(null)).toEqual([]);
   });
 });

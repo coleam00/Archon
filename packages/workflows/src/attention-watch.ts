@@ -59,7 +59,12 @@ import {
   type WorkflowEventPage,
 } from './store';
 import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
-import { firstFailedNodeEvent, getTerminalRecord, recordedFailureKind } from './terminal-record';
+import {
+  firstFailedNodeEvent,
+  getTerminalRecord,
+  recordedFailureKind,
+  failedOutcomeReason,
+} from './terminal-record';
 import { workflowNoticeDataSchema } from './workflow-notice';
 
 function getLog(): ReturnType<typeof createLogger> {
@@ -135,6 +140,11 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
      * for any other status and when the record names no failed node or there is no record.
      */
     cause: z.object({ node: z.string(), errorClass: nodeFailureKindSchema.nullable() }).nullable(),
+    /**
+     * Why a run completed with a failed outcome (`failedOutcomeReason`); absent otherwise.
+     * A failed run's error text never rides the stream: `cause` names where it failed.
+     */
+    reason: z.array(z.string()).min(1).optional(),
   }),
   z.object({ type: z.literal('resumed'), ...lineBase, status: z.literal('running') }),
   /** What a node of the run said the run did (`workflow notice`); `at` is when it said it. */
@@ -287,10 +297,14 @@ function itemContext(
 function terminalFacts(
   event: WorkflowEventRow,
   status: RunTerminalStatus
-): { outcome: 'succeeded' | 'failed' | null; firstFailedNode: string | null } {
+): { outcome: 'succeeded' | 'failed' | null; firstFailedNode: string | null; reason: string[] } {
   try {
     const record = getTerminalRecord(status, [event]);
-    return { outcome: record?.outcome ?? null, firstFailedNode: record?.first_failed_node ?? null };
+    return {
+      outcome: record?.outcome ?? null,
+      firstFailedNode: record?.first_failed_node ?? null,
+      reason: failedOutcomeReason(record),
+    };
   } catch (error) {
     // A malformed record must not stall the stream on one row; the line still reports
     // the status, and `workflow get` remains the full read.
@@ -298,7 +312,7 @@ function terminalFacts(
       { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
       'workflow.attention_watch_terminal_record_unreadable'
     );
-    return { outcome: null, firstFailedNode: null };
+    return { outcome: null, firstFailedNode: null, reason: [] };
   }
 }
 
@@ -673,13 +687,14 @@ export async function watchAttentionQueue(
     const { event } = delivery;
     const status = terminalRunStatusForEventType(event.event_type);
     if (status !== undefined) {
-      const { outcome, firstFailedNode } = terminalFacts(event, status);
+      const { outcome, firstFailedNode, reason } = terminalFacts(event, status);
       await emit({
         type: 'terminal',
         ...lifecycleFields(delivery, view),
         status,
         outcome,
         cause: status === 'failed' ? await failureCause(event, firstFailedNode) : null,
+        ...(reason.length > 0 ? { reason } : {}),
       });
     }
     if (event.event_type === 'workflow_resumed')

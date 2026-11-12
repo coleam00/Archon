@@ -755,6 +755,11 @@ These are audit facts. They never name who answered, and nothing routes on them.
 - **Authored outcome** (`succeeded` or `failed`) is the workflow's declared verdict from
   `outcome_field`. Human output labels it separately when present. JSON always carries it as the
   nullable `outcome` field beside `status`.
+- **Reason** is why a run that ended needs a look, in up to two short lines: for a failed
+  outcome, what the `returns:` node said (its first lines, or its text fields as `key: text`);
+  for a failed run, the first line of its first failed node's error. `workflow get` prints
+  it as `Reason:` under the status and carries it as `reason` in `--json`. The full value
+  stays in `terminal_record`.
 
 The axes may disagree without either being rewritten: `completed` with authored outcome `failed`
 means execution finished normally but the workflow judged the work unsuccessful; `failed` or
@@ -1179,7 +1184,7 @@ to watch one queue or class of question. With `--json` each line is one compact 
 object. Without it each line is text a reader can act on: an ask is a short block with its
 labels, the question's first line, the recommendation and its reason, each option with what
 it does, and the commands that answer that occurrence, including the `--recommended` form
-when a recommendation exists; a failed run, a lost owner and an unreadable item name the
+when a recommendation exists; a failed run, a lost owner and an unreadable item name the run and the reason a failed outcome gave, and the
 command that shows more; the close of an ask is one line. The list prints the same blocks,
 and `workflow attention <run-id>` prints the whole message. Read the watch unfiltered: a
 filter in the pipe can hold lines until the watch ends. Scope and `--label` work as for the list;

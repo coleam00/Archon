@@ -192,7 +192,7 @@ export function attentionStreamText(
     case 'unmatched':
       return [`Run ${line.runId} no longer matches the label filter.${runContextText(line)}`];
     case 'terminal':
-      return [terminalText(line)];
+      return [terminalText(line), ...(line.reason ?? []).map(reason => `  ${reason}`)];
     case 'resumed':
       return [`Run ${line.runId} resumed (${line.status}).${runContextText(line)}`];
     case 'notice':

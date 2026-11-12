@@ -168,7 +168,7 @@ JSON line only when someone has to act. That is the default: without `--protocol
 there are no heartbeat or sync lines, so every line is worth a turn. Each `attention` line is an item that needs
 attention, carrying the same item the list returns, so treat it as a wake and answer by
 its `runId` and `occurrence`. `resolved` means an item you were sent no longer needs
-you, and `terminal` means a run failed or completed with `outcome: "failed"`. The items already open come first, so a
+you, and `terminal` means a run failed or completed with `outcome: "failed"`; a failed outcome carries `reason`, the run's own short account of why, and `archon workflow get <run-id>` prints a `Reason:` line for either. The items already open come first, so a
 restarted watch needs no cursor. Exit `4` means the store cannot read the stream's
 position: start it again.
 
