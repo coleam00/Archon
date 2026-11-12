@@ -568,9 +568,10 @@ describe('dispatchBackgroundWorkflow', () => {
     { worktree: true, folder: true, reuse: false },
     { worktree: true, folder: false, reuse: true },
     { worktree: false, folder: false, reuse: false, noticeFails: true },
+    { worktree: false, folder: false, reuse: false, noticeFails: true, closeFails: true },
   ])(
     'resource admission precedes foreground checkout %j',
-    async ({ worktree, folder, reuse, noticeFails }) => {
+    async ({ worktree, folder, reuse, noticeFails, closeFails }) => {
       const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
       const { admitNativeResourceStart } = await import('@archon/workflows/resource-start-store');
       const { dispatchForeground } = await import('./foreground');
@@ -608,12 +609,24 @@ describe('dispatchBackgroundWorkflow', () => {
         workflow,
         '/workspace'
       );
+      const faults: Array<{ mockRestore(): void }> = [];
       const send = platform.sendMessage;
       send.mockImplementation(async (_conversation, message) => {
         if (!message.startsWith('Waiting for resource')) return;
         expect((await store.getWorkflowRun(source.runId))?.working_path).toBeNull();
         expect(mockResolve).not.toHaveBeenCalled();
         expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+        if (closeFails) {
+          mockCloseRunLiveOwner.mockRejectedValueOnce(new Error('owner close unavailable'));
+          faults.push(
+            spyOn(store, 'withdrawQueuedResourceStart').mockRejectedValue(
+              new Error('withdraw unavailable')
+            ),
+            spyOn(store, 'getResourceStartRequest').mockRejectedValue(
+              new Error('state read unavailable')
+            )
+          );
+        }
         if (noticeFails) throw new Error('notification unavailable');
         await store.cancelWorkflowRun(holder.id);
       });
@@ -645,6 +658,23 @@ describe('dispatchBackgroundWorkflow', () => {
           });
         });
         if (noticeFails) {
+          if (closeFails) {
+            const error = await execution.catch(error => error);
+            expect(error).toBeInstanceOf(AggregateError);
+            for (const text of [
+              source.runId,
+              'uncertain',
+              'notification unavailable',
+              'withdraw unavailable',
+              'state read unavailable',
+              'owner close unavailable',
+            ])
+              expect(error.message).toContain(text);
+            for (const fault of faults) fault.mockRestore();
+            expect((await store.getWorkflowRun(source.runId))?.status).toBe('pending');
+            expect((await store.getResourceStartRequest(source.runId))?.status).toBe('queued');
+            return;
+          }
           await expect(execution).rejects.toThrow('notification unavailable');
           expect((await store.getWorkflowRun(source.runId))?.status).toBe('failed');
           expect((await store.getResourceStartRequest(source.runId))?.status).toBe('withdrawn');
@@ -668,6 +698,7 @@ describe('dispatchBackgroundWorkflow', () => {
             branch: 'issue-42',
           });
       } finally {
+        for (const fault of faults) fault.mockRestore();
         send.mockReset();
         factory.mockRestore();
         (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
@@ -675,9 +706,14 @@ describe('dispatchBackgroundWorkflow', () => {
     }
   );
 
-  test.each([{ worktree: false }, { worktree: true }, { worktree: false, cleanupFails: true }])(
+  test.each([
+    { worktree: false },
+    { worktree: true },
+    { worktree: false, cleanupFails: true },
+    { worktree: false, cleanupFails: true, closeFails: true },
+  ])(
     'resource admission precedes background checkout and returns a pending run %j',
-    async ({ worktree, cleanupFails }) => {
+    async ({ worktree, cleanupFails, closeFails }) => {
       const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
       const { admitNativeResourceStart } = await import('@archon/workflows/resource-start-store');
       const root = track(await mkdtemp(join(tmpdir(), 'background-resource-')));
@@ -718,15 +754,18 @@ describe('dispatchBackgroundWorkflow', () => {
       const execution = new Promise<void>(resolve => {
         submitted = resolve;
       });
-      mockExecuteWorkflow.mockImplementationOnce(async () => {
-        submitted();
-        return { success: true, paused: true, workflowRunId: runId };
-      });
+      if (!cleanupFails)
+        mockExecuteWorkflow.mockImplementationOnce(async () => {
+          submitted();
+          return { success: true, paused: true, workflowRunId: runId };
+        });
       const send = platform.sendMessage;
       send.mockImplementation(async (_conversation, message) => {
         if (message.startsWith('Waiting for resource')) {
           waiting();
           if (cleanupFails) {
+            if (closeFails)
+              mockCloseRunLiveOwner.mockRejectedValueOnce(new Error('owner close unavailable'));
             faults.push(
               spyOn(store, 'withdrawQueuedResourceStart').mockRejectedValue(
                 new Error('withdraw unavailable')
@@ -759,6 +798,7 @@ describe('dispatchBackgroundWorkflow', () => {
           expect(message).toContain('notification unavailable');
           expect(message).toContain('withdraw unavailable');
           expect(message).toContain('state read unavailable');
+          if (closeFails) expect(message).toContain('owner close unavailable');
           const logged = mockLogger.error.mock.calls.find(
             call => call[1] === 'background_resource_launch_failed'
           );

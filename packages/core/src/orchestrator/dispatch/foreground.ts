@@ -1,3 +1,4 @@
+import { withRunLiveOwnerCleanup } from '../../services/run-live-owner-cleanup';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import {
   admitNativeResourceStart,
@@ -55,103 +56,109 @@ export async function dispatchForeground(
   let setupRun: WorkflowRun | undefined;
   let setupOwner: Awaited<ReturnType<typeof startRunLiveOwner>> | undefined;
   let foregroundSubmitted = false;
-  try {
-    if (
-      !willContinueExistingRun &&
-      (workflow.resource || workflow.worktree?.enabled !== false) &&
-      freshCaptured &&
-      preparedAiConfiguration
-    ) {
-      setupOwner = await startRunLiveOwner(freshCaptured.preparedSource.runId);
-      setupRun = await createSetupRun(
-        setupDeps,
-        scope,
-        launch,
-        freshCaptured,
-        preparedAiConfiguration
-      );
-      freshCaptured = {
-        ...freshCaptured,
-        preparedSource: await retainSetupRunSource(
+  return withRunLiveOwnerCleanup(
+    async () => {
+      await setupOwner?.close();
+    },
+    async () => {
+      try {
+        if (
+          !willContinueExistingRun &&
+          (workflow.resource || workflow.worktree?.enabled !== false) &&
+          freshCaptured &&
+          preparedAiConfiguration
+        ) {
+          setupOwner = await startRunLiveOwner(freshCaptured.preparedSource.runId);
+          setupRun = await createSetupRun(
+            setupDeps,
+            scope,
+            launch,
+            freshCaptured,
+            preparedAiConfiguration
+          );
+          freshCaptured = {
+            ...freshCaptured,
+            preparedSource: await retainSetupRunSource(
+              setupDeps,
+              setupRun,
+              freshCaptured.preparedSource,
+              scope.owner,
+              scope.codebase.default_cwd,
+              scope.codebase.id
+            ),
+          };
+        }
+        await admitForegroundResource(scope, launch, setupDeps, setupRun);
+        const isolation = await resolveForegroundIsolation(scope, {
+          workflow,
+          willContinueExistingRun,
+          resumableRun,
+          adoptedEnvironment: launch.adoptedEnvironment,
+          adoptionLane,
           setupDeps,
           setupRun,
-          freshCaptured.preparedSource,
-          scope.owner,
-          scope.codebase.default_cwd,
-          scope.codebase.id
-        ),
-      };
-    }
-    await admitForegroundResource(scope, launch, setupDeps, setupRun);
-    const isolation = await resolveForegroundIsolation(scope, {
-      workflow,
-      willContinueExistingRun,
-      resumableRun,
-      adoptedEnvironment: launch.adoptedEnvironment,
-      adoptionLane,
-      setupDeps,
-      setupRun,
-      preparedAiConfiguration,
-    });
-    if (isolation === undefined) return;
-    const { cwd, cutFromCommit, ownedWorktree } = isolation;
+          preparedAiConfiguration,
+        });
+        if (isolation === undefined) return;
+        const { cwd, cutFromCommit, ownedWorktree } = isolation;
 
-    if (adoptionLane?.kind === 'checkout-branch' && freshCaptured) {
-      freshCaptured = {
-        ...freshCaptured,
-        preparedSource: { ...freshCaptured.preparedSource, origin: cwd },
-      };
-      if (setupRun) await recordSetupRunSource(setupDeps, setupRun, freshCaptured.preparedSource);
-    }
+        if (adoptionLane?.kind === 'checkout-branch' && freshCaptured) {
+          freshCaptured = {
+            ...freshCaptured,
+            preparedSource: { ...freshCaptured.preparedSource, origin: cwd },
+          };
+          if (setupRun)
+            await recordSetupRunSource(setupDeps, setupRun, freshCaptured.preparedSource);
+        }
 
-    // `resumableRun` was resolved above the signature gate (see `detectContinuation`):
-    // resume detection runs for ALL platforms, so a prior run for this workflow in a
-    // resumable state (paused — including approved-awaiting-resume, but excluding an
-    // attention wait unless explicitly resumed — or failed) in this conversation+
-    // codebase is continued rather than dispatched fresh. This ensures chat platforms
-    // (slack, telegram, discord, github) resume after approval gates just like web does.
-    if (resumableRun?.working_path) {
-      await continueForegroundResume(scope, {
-        workflow,
-        resumableRun,
-        resumableWorkingPath: resumableRun.working_path,
-        resolvedInputs: launch.resolvedInputs,
-        deferredInputError: launch.deferredInputError,
-        prepareLaunchAiConfiguration: launch.prepareLaunchAiConfiguration,
-      });
-    } else {
-      await submitFreshForeground(scope, {
-        workflow,
-        freshCaptured,
-        cwd,
-        cutFromCommit,
-        ownedWorktree,
-        preparedAiConfiguration,
-        setupRun,
-        setupOwner,
-        resolvedInputs: launch.resolvedInputs,
-        onSubmitted: () => {
-          foregroundSubmitted = true;
-        },
-      });
+        // `resumableRun` was resolved above the signature gate (see `detectContinuation`):
+        // resume detection runs for ALL platforms, so a prior run for this workflow in a
+        // resumable state (paused — including approved-awaiting-resume, but excluding an
+        // attention wait unless explicitly resumed — or failed) in this conversation+
+        // codebase is continued rather than dispatched fresh. This ensures chat platforms
+        // (slack, telegram, discord, github) resume after approval gates just like web does.
+        if (resumableRun?.working_path) {
+          await continueForegroundResume(scope, {
+            workflow,
+            resumableRun,
+            resumableWorkingPath: resumableRun.working_path,
+            resolvedInputs: launch.resolvedInputs,
+            deferredInputError: launch.deferredInputError,
+            prepareLaunchAiConfiguration: launch.prepareLaunchAiConfiguration,
+          });
+        } else {
+          await submitFreshForeground(scope, {
+            workflow,
+            freshCaptured,
+            cwd,
+            cutFromCommit,
+            ownedWorktree,
+            preparedAiConfiguration,
+            setupRun,
+            setupOwner,
+            resolvedInputs: launch.resolvedInputs,
+            onSubmitted: () => {
+              foregroundSubmitted = true;
+            },
+          });
+        }
+      } catch (error) {
+        if (
+          setupRun &&
+          !foregroundSubmitted &&
+          (await canFailSetupRun(setupDeps, workflow, setupRun, error))
+        )
+          await requireTerminalStatusWrite(
+            setupDeps.store.failWorkflowRun(setupRun.id, toError(error).message, {
+              exitReason: 'launch_failed',
+              pendingOnly: true,
+            }),
+            { workflowRunId: setupRun.id, site: 'foreground.preparation_failed' }
+          );
+        throw error;
+      }
     }
-  } catch (error) {
-    if (
-      setupRun &&
-      !foregroundSubmitted &&
-      (await canFailSetupRun(setupDeps, workflow, setupRun, error))
-    )
-      await requireTerminalStatusWrite(
-        setupDeps.store.failWorkflowRun(setupRun.id, toError(error).message, {
-          exitReason: 'launch_failed',
-          pendingOnly: true,
-        }),
-        { workflowRunId: setupRun.id, site: 'foreground.preparation_failed' }
-      );
-    throw error;
-  } finally {
-    await setupOwner?.close();
-  }
+  );
 }
 
 async function canFailSetupRun(

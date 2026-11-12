@@ -1,3 +1,4 @@
+import { withRunLiveOwnerCleanup } from '@archon/core/services/run-live-owner-cleanup';
 import { OwnedRunLease } from '../utils/owned-run-lease';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { withCapturedSource } from '@archon/workflows/run-source';
@@ -55,21 +56,24 @@ async function runWorkflowWithOwnedSource(
 
   const launch = await prepareForegroundLaunch(request, admission);
   const lease = new OwnedRunLease(request.detachedProcessOwner);
-  try {
-    await admitForegroundResource(launch, lease);
-    if (!admission.isContinuation && options.noWait && admission.preCreatedRun)
-      request.notifyResumeAccepted?.(admission.preCreatedRun.id);
-    if (!defersContainerResume(launch)) {
-      await provisionWorkspace(launch, lease);
-      await recordConversationLaunch(launch);
+  return withRunLiveOwnerCleanup(
+    () => lease.close(),
+    async () => {
+      try {
+        await admitForegroundResource(launch, lease);
+        if (!admission.isContinuation && options.noWait && admission.preCreatedRun)
+          request.notifyResumeAccepted?.(admission.preCreatedRun.id);
+        if (!defersContainerResume(launch)) {
+          await provisionWorkspace(launch, lease);
+          await recordConversationLaunch(launch);
+        }
+        return await executeOwnedRun(launch, lease);
+      } catch (error) {
+        await lease.failUnsubmittedSetupRun(host, error);
+        throw error;
+      }
     }
-    return await executeOwnedRun(launch, lease);
-  } catch (error) {
-    await lease.failUnsubmittedSetupRun(host, error);
-    throw error;
-  } finally {
-    await lease.close();
-  }
+  );
 }
 
 /**

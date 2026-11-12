@@ -1,4 +1,9 @@
-import { mockLogger, createTestWorkflowHost } from '../test-support/workflow-command-harness';
+import {
+  mockRunLiveOwnerClose,
+  mockDiscoverWorkflowsWithConfig,
+  mockLogger,
+  createTestWorkflowHost,
+} from '../test-support/workflow-command-harness';
 
 import { providerRegistry } from '@archon/providers';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
@@ -19,6 +24,83 @@ describe('workflowRunCommand', () => {
   afterEach(() => {
     consoleSpy.mockRestore();
   });
+
+  it.each([false, true])(
+    'retains an uncertain foreground resource run when owner close fails: %s',
+    async closeFails => {
+      const host = createTestWorkflowHost();
+      const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
+      const { mkdtemp } = await import('node:fs/promises');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const { removeTempTree } = await import('@archon/paths/test-utils');
+      const root = await mkdtemp(join(tmpdir(), 'cli-resource-failure-'));
+      const sourceModule = await import('@archon/workflows/run-source');
+      const mockPrepareWorkflowSource = sourceModule.prepareWorkflowSource as ReturnType<
+        typeof mock<typeof sourceModule.prepareWorkflowSource>
+      >;
+      const source = await mockPrepareWorkflowSource(host.deps, { sourceRoot: '/test/path' });
+      const runId = crypto.randomUUID();
+      mockPrepareWorkflowSource.mockResolvedValueOnce({ ...source, runId });
+      const store = await createFileWorkflowStore({ root });
+      host.deps.store = store;
+      const codebases = await import('@archon/core/db/codebases');
+      const codebase = spyOn(codebases, 'findCodebaseByDefaultCwd').mockResolvedValueOnce({
+        id: 'cb-1',
+        name: 'test',
+        default_cwd: '/test/path',
+        repository_url: null,
+        default_branch: null,
+        ai_assistant_type: 'claude',
+        kind: 'repo',
+        commands: {},
+        created_at: new Date(),
+        updated_at: new Date(),
+      });
+      mockDiscoverWorkflowsWithConfig.mockResolvedValueOnce({
+        workflows: [
+          makeTestWorkflowWithSource({
+            name: 'plan',
+            resource: { name: 'build', capacity: 1 },
+            worktree: { enabled: false },
+          }),
+        ],
+        errors: [],
+      });
+      const admit = store.admitPendingResourceStart.bind(store);
+      const admission = spyOn(store, 'admitPendingResourceStart').mockImplementation(async args => {
+        await admit(args);
+        throw new Error('admission unavailable');
+      });
+      const read = spyOn(store, 'getResourceStartRequest').mockRejectedValue(
+        new Error('state read unavailable')
+      );
+      const fail = spyOn(store, 'failWorkflowRun');
+      if (closeFails)
+        mockRunLiveOwnerClose.mockRejectedValueOnce(new Error('owner close unavailable'));
+      try {
+        const error: unknown = await workflowRunCommand(host, '/test/path', 'plan', 'hello', {
+          noWorktree: true,
+        }).catch(error => error);
+        expect(error).toBeInstanceOf(AggregateError);
+        if (!(error instanceof AggregateError)) throw error;
+        for (const text of [runId, 'uncertain', 'admission unavailable', 'state read unavailable'])
+          expect(error.message).toContain(text);
+        if (closeFails) expect(error.message).toContain('owner close unavailable');
+        expect(admission).toHaveBeenCalledTimes(1);
+        expect(fail).not.toHaveBeenCalled();
+        expect((await store.getWorkflowRun(runId))?.status).toBe('pending');
+        read.mockRestore();
+        expect((await store.getResourceStartRequest(runId))?.status).toBe('admitted');
+      } finally {
+        admission.mockRestore();
+        read.mockRestore();
+        fail.mockRestore();
+        codebase.mockRestore();
+        await removeTempTree(root);
+      }
+    }
+  );
 
   it('should throw error when no workflows found', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');

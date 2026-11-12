@@ -1,3 +1,4 @@
+import { withRunLiveOwnerCleanup } from '../../services/run-live-owner-cleanup';
 import {
   admitNativeResourceStart,
   readResourceStartAfterFailure,
@@ -230,66 +231,71 @@ async function dispatchBackgroundWorkflowOwned(
   }
   const launch = async (): Promise<void> => {
     let executionSubmitted = false;
-    try {
-      await admitBackgroundResource(
-        workflowDeps,
-        workflow,
-        preCreatedRun,
-        ctx,
-        estate,
-        workerPlatformId
-      );
-      const checkout = await resolveWorkerCheckout({
-        ctx,
-        workflow,
-        estate,
-        workflowDeps,
-        preCreatedRun,
-        preparedAiConfiguration,
-        workerPlatformId,
-        workerConv,
-      });
+    return withRunLiveOwnerCleanup(
+      async () => {
+        if (!executionSubmitted) await closeRunLiveOwner();
+      },
+      async () => {
+        try {
+          await admitBackgroundResource(
+            workflowDeps,
+            workflow,
+            preCreatedRun,
+            ctx,
+            estate,
+            workerPlatformId
+          );
+          const checkout = await resolveWorkerCheckout({
+            ctx,
+            workflow,
+            estate,
+            workflowDeps,
+            preCreatedRun,
+            preparedAiConfiguration,
+            workerPlatformId,
+            workerConv,
+          });
 
-      if (ctx.adoptionLane?.kind === 'checkout-branch') {
-        preparedSource = { ...preparedSource, origin: checkout.cwd };
-        await recordSetupRunSource(workflowDeps, preCreatedRun, preparedSource);
+          if (ctx.adoptionLane?.kind === 'checkout-branch') {
+            preparedSource = { ...preparedSource, origin: checkout.cwd };
+            await recordSetupRunSource(workflowDeps, preCreatedRun, preparedSource);
+          }
+
+          await announceDispatch(ctx, workflow, workerPlatformId);
+
+          const backgroundExecution = runInBackground({
+            ctx,
+            workflow,
+            engine,
+            workerPlatformId,
+            workerConv,
+            preCreatedRun,
+            preparedSource,
+            preparedAiConfiguration,
+            checkout,
+            isolationContext,
+            closeRunLiveOwner,
+          });
+          executionSubmitted = true;
+          void backgroundExecution;
+        } catch (error) {
+          if (
+            !executionSubmitted &&
+            (!workflow.resource ||
+              (await readResourceStartAfterFailure(workflowDeps.store, preCreatedRun.id, error))
+                ?.status !== 'queued')
+          )
+            await requireTerminalStatusWrite(
+              workflowDeps.store.failWorkflowRun(preCreatedRun.id, toError(error).message, {
+                exitReason: 'launch_failed',
+                pendingOnly: true,
+              }),
+              { workflowRunId: preCreatedRun.id, site: 'background.worktree_setup_failed' }
+            );
+          throw error;
+        }
       }
-
-      await announceDispatch(ctx, workflow, workerPlatformId);
-
-      const backgroundExecution = runInBackground({
-        ctx,
-        workflow,
-        engine,
-        workerPlatformId,
-        workerConv,
-        preCreatedRun,
-        preparedSource,
-        preparedAiConfiguration,
-        checkout,
-        isolationContext,
-        closeRunLiveOwner,
-      });
-      executionSubmitted = true;
-      void backgroundExecution;
-    } catch (error) {
-      if (
-        !executionSubmitted &&
-        (!workflow.resource ||
-          (await readResourceStartAfterFailure(workflowDeps.store, preCreatedRun.id, error))
-            ?.status !== 'queued')
-      )
-        await requireTerminalStatusWrite(
-          workflowDeps.store.failWorkflowRun(preCreatedRun.id, toError(error).message, {
-            exitReason: 'launch_failed',
-            pendingOnly: true,
-          }),
-          { workflowRunId: preCreatedRun.id, site: 'background.worktree_setup_failed' }
-        );
-      throw error;
-    } finally {
-      if (!executionSubmitted) await closeRunLiveOwner();
-    }
+    );
   };
   if (workflow.resource) {
     // A waiting worker must not hold the dispatch call or its conversation lock.
