@@ -315,7 +315,7 @@ nodes:
     effort: low      # Per-node override — ignores workflow-level effort
 ```
 
-A skip caused by an include's gate retains the include identity and the condition expression or upstream origin in its cause. False include conditions use `when_condition`; unevaluable conditions use `when_condition_parse_error` and fail closed. Real runs report an unevaluable gate once per include boundary for the run, including across loop iterations and resume. Dry-run traces print the same skip reason and cause details.
+A skip caused by an include's gate retains the include identity and the condition expression or upstream origin in its cause. False include conditions use `when_condition`. A reference-resolution error fails the entry node with the include name and reference diagnostic; descendants are skipped with `when_condition_parse_error`. A syntax error skips the entire block with `when_condition_parse_error`. Real runs report these diagnostic skips once per include boundary for the run, including across loop iterations and resume. Dry-run traces show the same entry failures, skip reasons and cause details.
 
 Diagnostic delivery is best-effort. Skip persistence and platform notification are separate operations: if the process stops after storing a skip but before reporting it, resume retains the recorded cause but does not resend the diagnostic.
 
