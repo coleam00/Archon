@@ -65,7 +65,10 @@ limits.
   default, the project's line wins.
 - The pack installs no trigger bindings. Nothing runs on its own until the operator
   adds one. `archon pack bindings sdlc` writes the recommended binding per queue; until
-  then, launch by hand.
+  then, launch by hand. The bindings allow five build-queue runs at once, two intake
+  runs and one merge sweep. A resource keeps the capacity its first start declared, so
+  an install whose `build` resource already exists stays at its old capacity until the
+  operator renames the resource in the binding file.
 
 ## Inputs
 

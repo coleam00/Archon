@@ -268,6 +268,9 @@ recommends under `bindings:` in `.pack/pack.yaml`:
   schedule. Intake also starts the build queue for an item it routed, by firing the
   `build-queue` file. The merge queue's schedule is short, and a sweep where nothing
   changed runs no agent.
+- Up to five build-queue runs work at once, two intake runs and one merge sweep. A
+  build round is the heavy stage; lower the `build-queue` capacity for a machine with
+  fewer than about 11 cores.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
 - `worktree-cleanup` removes merged worktrees, for an install that runs no server.
 

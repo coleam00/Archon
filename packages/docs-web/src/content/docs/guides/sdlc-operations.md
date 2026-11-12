@@ -105,7 +105,7 @@ A claim that carries no lease of its run is held, and an idle pass names it. Aba
 - **Inputs.** `label_actor` is the one input that can create a promotion, never trust. Only the binding, or someone with access to the install, can supply it.
 - **Handoff.** A run that leaves its item waiting for the build queue fires the binding its `build_queue_binding` input names, keyed by the item and the run. The fire names no item: the run it starts takes the waiting item that sorts first, under that binding's own `orders_only`. A fire that finds every slot busy is skipped, and the item waits for the next scheduled run.
 
-Two bindings in the GitHub source plugin's configuration start intake: `intake-issues` on an issue opened, edited or reopened, and `intake-labels` on `archon-triage` added. They share one resource with `overlap: queue`, so runs queue instead of overlapping. The label binding's predicate names that label only to save runs: intake ignores any other label, and the pack's own route-label writes start no intake run. A binding file written before this change still lists the route labels; write it again with `archon pack bindings sdlc --only intake-labels`.
+Two bindings in the GitHub source plugin's configuration start intake: `intake-issues` on an issue opened, edited or reopened, and `intake-labels` on `archon-triage` added. They share one resource with capacity 2 and `overlap: queue`, so at most two intake runs work at once and the rest queue. Intake searches the forge for related work, and seven runs at once hit the forge's search errors. The label binding's predicate names that label only to save runs: intake ignores any other label, and the pack's own route-label writes start no intake run. A binding file written before this change still lists the route labels; write it again with `archon pack bindings sdlc --only intake-labels`.
 
 ## Build queue
 
@@ -164,6 +164,8 @@ The work item's `facts.build` holds the item's status, which says who owns it: t
 ### Its binding
 
 A schedule keeps items moving, because a run works one item and a continuation waits for the next run when no binding is set. Each run changes its checkout, so every run needs its own worktree: the `build-queue` binding launches in a worktree, with `overlap: skip`.
+
+The binding's capacity is 5. A build round is the pack's heavy stage: an agent builds, validates and reviews in its own worktree. Five rounds at once fit an 11-core machine (load 5 to 9), while at two, follow-up rounds were dropped for want of a free slot and items waited for the next scheduled run. Lower it for a smaller machine. A resource keeps the capacity its first start declared, so an install whose `build` resource already exists keeps its old capacity even after the binding file is written again: a start declaring another is refused as `resource_capacity_conflict`. To use the new capacity, give the resource a new name in the `build-queue` binding file.
 
 The binding's `build_queue_binding` input names the binding's own file, so a run's follow-up rounds start through the same binding. One run of the queue holds a slot of the resource while it fires its follow-up, so the follow-up needs a free slot. Under `overlap: skip`, a follow-up fired while every slot is busy is dropped, and the item waits for the next scheduled run. Without the input, every follow-up waits for the next scheduled run.
 
@@ -297,7 +299,7 @@ An answer's ruling and your words are written into the issue body as a dated "Cu
 
 ### Its binding
 
-A run never changes its checkout, and the claim keeps two runs off the same item, so the `merge-queue` binding runs in the launch checkout. It is scheduled every 5 minutes with `overlap: skip`: a tick that finds a sweep running is skipped.
+A run never changes its checkout, and the claim keeps two runs off the same item, so the `merge-queue` binding runs in the launch checkout. It declares no capacity, so it has one slot, and is scheduled every 5 minutes with `overlap: skip`: a tick that finds a sweep running is skipped. One sweep claims every waiting item and merges each clear one, so a second slot would add no throughput, and two sweeps at once could merge pull requests that conflict with each other.
 
 The short schedule is the one thing that starts the merge queue. It is how a ready pull request is picked up, and how one with pending checks gets merged soon after they finish, since the forge delivers no event for checks settling at a head.
 

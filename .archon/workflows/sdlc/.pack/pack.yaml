@@ -78,7 +78,7 @@ bindings:
   build-queue:
     workflow: archon-build-queue
     resource: build
-    capacity: 2
+    capacity: 5
     overlap: skip
     isolation: { kind: worktree }
     schedule: { interval_seconds: 1800 }
