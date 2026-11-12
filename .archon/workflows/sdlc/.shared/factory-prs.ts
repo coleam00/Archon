@@ -98,12 +98,18 @@ export function prFacts(url: string, view: ForgeOperations['pr.view']['result'])
 export function readPrFacts(urls: Iterable<string>): PrFacts[] {
   const facts: PrFacts[] = [];
   for (const url of urls) {
-    const ref = resolvePrUrl(url);
-    if (ref === undefined) {
-      console.error(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
-      continue;
+    let view: ForgeOperations['pr.view']['result'];
+    try {
+      const ref = resolvePrUrl(url);
+      if (ref === undefined) {
+        console.error(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
+        continue;
+      }
+      view = forge('pr.view', { selector: { kind: 'number', ref } });
+    } catch (error) {
+      throw new Error(`PR metrics could not read ${url}: ${error instanceof Error ? error.message : String(error)}`, { cause: error });
     }
-    facts.push(prFacts(url, forge('pr.view', { selector: { kind: 'number', ref } })));
+    facts.push(prFacts(url, view));
   }
   return facts;
 }

@@ -22,7 +22,7 @@ export function ArtifactItem({ event }: ArtifactItemProps): ReactElement {
             href={href}
             target="_blank"
             rel="noreferrer"
-            className="rounded border border-border px-2 py-0.5 font-mono text-[10px] uppercase tracking-widest text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
+            className="rounded border border-border px-2 py-0.5 font-mono text-console-10 uppercase tracking-widest text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary"
             onClick={e => {
               e.stopPropagation();
             }}
@@ -33,9 +33,11 @@ export function ArtifactItem({ event }: ArtifactItemProps): ReactElement {
       }
     >
       <div className="flex flex-col gap-0.5">
-        <span className="font-mono text-[13px] text-text-primary">{label}</span>
+        <span className="font-mono text-console-13 text-text-primary">{label}</span>
         {event.path !== null ? (
-          <span className="truncate font-mono text-[11px] text-text-tertiary">{event.path}</span>
+          <span className="truncate font-mono text-console-11 text-text-tertiary">
+            {event.path}
+          </span>
         ) : null}
       </div>
     </StreamCard>

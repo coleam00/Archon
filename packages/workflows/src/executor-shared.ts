@@ -5,7 +5,7 @@
 import { escapeRegExp } from '@archon/paths/regexp';
 import type { ExecNode, DagNode, NodeOutput, WorkflowExecutionResult } from './schemas';
 import type { ProviderFailure } from '@archon/provider-contract';
-import type { NodeFailureKind } from './schemas/node-execution';
+import type { ExecutionOutput, NodeFailureKind } from './schemas/node-execution';
 import { transitiveDepsLookup } from './depends-on';
 import type { hostSpawnFailure, RawSubprocessRejection } from './subprocess';
 
@@ -311,7 +311,7 @@ export function formatSubprocessFailure(
     >
   >,
   label: string
-): { userMessage: string; logFields: Record<string, unknown> } {
+): SubprocessFailure {
   const stderr = (err.stderr ?? '').trim();
   const stdout = (err.stdout ?? '').trim();
   const rawMessage = (err.message ?? '').trim();
@@ -341,15 +341,47 @@ export function formatSubprocessFailure(
         ? ` [error ${errorCode}]`
         : '';
 
+  const exitCode = typeof err.code === 'number' ? err.code : undefined;
   return {
     userMessage: `${label} failed${codeSuffix}: ${truncated}`,
     logFields: {
-      exitCode: typeof err.code === 'number' ? err.code : undefined,
+      exitCode,
       errorCode,
       killed: err.killed === true,
       stderrTail,
       stdoutTail,
     },
+    exitCode,
+    capturedOutput: capturedStdout(err.stdout ?? ''),
+  };
+}
+
+/**
+ * A subprocess failure, split by consumer: `userMessage` and `logFields` are diagnostics
+ * (trimmed, one budget shared by both streams); `exitCode` and `capturedOutput` are the
+ * structured values a failed exec node persists.
+ */
+interface SubprocessFailure {
+  userMessage: string;
+  logFields: Record<string, unknown>;
+  /** The process's numeric exit status. Absent when it never produced one (spawn error). */
+  exitCode: number | undefined;
+  /** Stdout as the node's output, or undefined when the process wrote none. */
+  capturedOutput: ExecutionOutput | undefined;
+}
+
+/**
+ * Stdout kept as the failed node's output: untrimmed, so what a consumer reads is what
+ * the process wrote, and cut to its last `SUBPROCESS_ERROR_MAX_CHARS` characters. A cut
+ * is reported through `persisted.truncated`, because the head is gone.
+ */
+function capturedStdout(stdout: string): ExecutionOutput | undefined {
+  if (stdout.length === 0) return undefined;
+  if (stdout.length <= SUBPROCESS_ERROR_MAX_CHARS) return { text: stdout };
+  const tail = stdout.slice(-SUBPROCESS_ERROR_MAX_CHARS);
+  return {
+    text: tail,
+    persisted: { text: tail, truncated: true, originalBytes: Buffer.byteLength(stdout, 'utf8') },
   };
 }
 

@@ -11,6 +11,9 @@ interface AddProjectDialogProps {
 
 type Mode = 'url' | 'path';
 
+// console-token-exception w-[calc(50%-4px)] -- Segment indicator subtracts its local inset from half the control.
+const SEGMENT_WIDTH = 'w-[calc(50%-4px)]';
+
 function GitHubIcon({ size = 15 }: { size?: number }): ReactElement {
   return (
     <svg width={size} height={size} viewBox="0 0 24 24" fill="currentColor" aria-hidden>
@@ -179,21 +182,21 @@ export function AddProjectDialog({
         onMouseDown={e => {
           e.stopPropagation();
         }}
-        className="relative w-full max-w-[520px] overflow-hidden rounded-2xl border bg-surface-elevated p-[22px] text-text-primary shadow-[0_30px_80px_-24px_rgba(0,0,0,0.8)]"
+        className="relative w-full max-w-130 overflow-hidden rounded-2xl border bg-surface-elevated p-5.5 text-text-primary shadow-[0_30px_80px_-24px_rgba(0,0,0,0.8)]"
         // Inline because the console scope's wildcard border-color rule
         // repaints Tailwind border utilities (see theme.css).
         style={{ borderColor: 'var(--border-bright)' }}
       >
         {/* Brand gradient top accent */}
-        <span aria-hidden className="brand-bar absolute left-0 right-0 top-0 h-[2px] opacity-90" />
+        <span aria-hidden className="brand-bar absolute left-0 right-0 top-0 h-0.5 opacity-90" />
 
         {/* Header */}
-        <div className="mb-[18px] flex items-start justify-between gap-4">
+        <div className="mb-4.5 flex items-start justify-between gap-4">
           <div>
-            <h2 className="text-[18px] font-extrabold tracking-[-0.3px] text-text-primary">
+            <h2 className="text-console-18 font-extrabold tracking-console-tight text-text-primary">
               Add project
             </h2>
-            <p className="mt-1 text-[13px] text-text-tertiary">
+            <p className="mt-1 text-console-13 text-text-tertiary">
               Connect a repository or a local folder as a workspace.
             </p>
           </div>
@@ -204,7 +207,7 @@ export function AddProjectDialog({
             aria-label="Close"
             className="rounded-lg p-1.5 text-text-tertiary transition-colors hover:bg-surface-hover hover:text-text-primary"
           >
-            <span aria-hidden className="block text-[14px] leading-none">
+            <span aria-hidden className="block text-console-14 leading-none">
               ✕
             </span>
           </button>
@@ -212,12 +215,12 @@ export function AddProjectDialog({
 
         {/* Segmented control with sliding indicator */}
         <div
-          className="relative mb-5 grid grid-cols-2 rounded-[11px] border bg-surface p-1"
+          className="relative mb-5 grid grid-cols-2 rounded-console-12 border bg-surface p-1"
           style={{ borderColor: 'var(--border)' }}
         >
           <span
             aria-hidden
-            className="absolute bottom-1 left-1 top-1 w-[calc(50%-4px)] rounded-lg border bg-surface-hover transition-transform duration-200 ease-out"
+            className={`absolute bottom-1 left-1 top-1 ${SEGMENT_WIDTH} rounded-lg border bg-surface-hover transition-transform duration-200 ease-out`}
             style={{
               borderColor: 'var(--border-bright)',
               transform: isGit ? 'translateX(0)' : 'translateX(100%)',
@@ -232,7 +235,7 @@ export function AddProjectDialog({
                 setFolder(false);
               }}
               aria-pressed={mode === m}
-              className={`relative z-[1] flex items-center justify-center gap-2 rounded-lg px-3 py-[9px] text-[13px] font-semibold transition-colors ${
+              className={`relative z-[1] flex items-center justify-center gap-2 rounded-lg px-3 py-2.25 text-console-13 font-semibold transition-colors ${
                 mode === m ? 'text-text-primary' : 'text-text-secondary hover:text-text-primary'
               }`}
             >
@@ -245,11 +248,11 @@ export function AddProjectDialog({
         </div>
 
         {/* Field */}
-        <label className="mb-[9px] block font-mono text-[11px] font-semibold uppercase tracking-[0.09em] text-text-tertiary">
+        <label className="mb-2.25 block font-mono text-console-11 font-semibold uppercase tracking-widest text-text-tertiary">
           {isGit ? 'Repository URL' : 'Local folder path'}
         </label>
         <div
-          className="flex h-[46px] items-center gap-2.5 rounded-[11px] border bg-surface px-3.5 transition-all focus-within:shadow-[0_0_0_4px_color-mix(in_oklch,var(--brand-magenta),transparent_91%)]"
+          className="flex h-11.5 items-center gap-2.5 rounded-console-12 border bg-surface px-3.5 transition-all focus-within:shadow-[0_0_0_4px_color-mix(in_oklch,var(--brand-magenta),transparent_91%)]"
           style={{ borderColor: 'var(--border-bright)' }}
         >
           <span aria-hidden className="flex text-text-tertiary">
@@ -266,16 +269,16 @@ export function AddProjectDialog({
             placeholder={
               isGit ? 'https://github.com/owner/repo' : 'C:\\Users\\you\\projects\\my-repo'
             }
-            className="min-w-0 flex-1 bg-transparent font-mono text-[14px] text-text-primary outline-none placeholder:text-text-tertiary"
+            className="min-w-0 flex-1 bg-transparent font-mono text-console-14 text-text-primary outline-none placeholder:text-text-tertiary"
             disabled={submitting}
           />
         </div>
-        <p className="mt-[11px] text-[12.5px] leading-relaxed text-text-tertiary">
+        <p className="mt-2.75 text-console-13 leading-relaxed text-text-tertiary">
           {isGit ? (
             <>
               Archon will clone this repo to{' '}
               <code
-                className="rounded border bg-surface px-1.5 py-0.5 font-mono text-[0.92em] text-text-secondary"
+                className="rounded border bg-surface px-1.5 py-0.5 font-mono text-console-12 text-text-secondary"
                 style={{ borderColor: 'var(--border)' }}
               >
                 ~/.archon/workspaces/{owner}/{repo}/source
@@ -291,7 +294,7 @@ export function AddProjectDialog({
         </p>
 
         {!isGit ? (
-          <label className="mt-4 block text-[13px] text-text-secondary">
+          <label className="mt-4 block text-console-13 text-text-secondary">
             <input
               type="checkbox"
               checked={folder}
@@ -302,7 +305,7 @@ export function AddProjectDialog({
               disabled={submitting}
             />{' '}
             Register as a folder project
-            <span className="mt-1 block text-[12px] text-text-tertiary">
+            <span className="mt-1 block text-console-12 text-text-tertiary">
               Run in place with no Archon-managed worktree, branch or PR, even if this is a git
               repository.
             </span>
@@ -320,18 +323,18 @@ export function AddProjectDialog({
         })}
 
         {error !== null ? (
-          <p className="mt-3 rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-[11px] text-error">
+          <p className="mt-3 rounded border border-error/40 bg-error/10 px-2 py-1.5 font-mono text-console-11 text-error">
             {error}
           </p>
         ) : null}
 
         {/* Footer */}
-        <div className="mt-[22px] flex items-center justify-end gap-[11px]">
+        <div className="mt-5.5 flex items-center justify-end gap-2.75">
           <button
             type="button"
             onClick={onClose}
             disabled={submitting}
-            className="rounded-[10px] border bg-transparent px-[18px] py-2.5 text-[13px] font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
+            className="rounded-lg border bg-transparent px-4.5 py-2.5 text-console-13 font-semibold text-text-secondary transition-colors hover:bg-surface-hover hover:text-text-primary disabled:opacity-50"
             style={{ borderColor: 'var(--border-bright)' }}
           >
             Cancel
@@ -343,9 +346,9 @@ export function AddProjectDialog({
               value.trim().length === 0 ||
               (!explicitFolder && (!currentInspection || inspectionError !== null))
             }
-            className="brand-bar inline-flex items-center gap-[7px] rounded-[10px] px-[18px] py-2.5 text-[13px] font-bold text-white shadow-[0_8px_22px_-10px_color-mix(in_oklch,var(--brand-magenta),transparent_20%)] transition-all hover:-translate-y-px hover:brightness-110 disabled:translate-y-0 disabled:opacity-45 disabled:shadow-none"
+            className="brand-bar inline-flex items-center gap-1.75 rounded-lg px-4.5 py-2.5 text-console-13 font-bold text-white shadow-[0_8px_22px_-10px_color-mix(in_oklch,var(--brand-magenta),transparent_20%)] transition-all hover:-translate-y-px hover:brightness-110 disabled:translate-y-0 disabled:opacity-45 disabled:shadow-none"
           >
-            <span aria-hidden className="text-[14px] leading-none">
+            <span aria-hidden className="text-console-14 leading-none">
               +
             </span>
             {submitting ? 'Adding…' : 'Add project'}
@@ -376,7 +379,7 @@ function renderBranchInspection({
   return (
     <>
       {currentInspection?.kind === 'repo' ? (
-        <label className="mt-4 block text-[13px] text-text-secondary">
+        <label className="mt-4 block text-console-13 text-text-secondary">
           Base branch
           <input
             aria-label="Base branch"
@@ -387,7 +390,7 @@ function renderBranchInspection({
             disabled={submitting}
             className="mt-2 block w-full rounded border bg-surface px-3 py-2 font-mono text-text-primary"
           />
-          <span className="mt-1 block text-[12px] text-text-tertiary">
+          <span className="mt-1 block text-console-12 text-text-tertiary">
             {currentInspection.defaultBranch
               ? 'Keep this value to follow the remote default, or choose another branch.'
               : 'Remote default unavailable. Leave empty to resolve it when a run starts.'}
@@ -395,10 +398,10 @@ function renderBranchInspection({
         </label>
       ) : null}
       {!explicitFolder && value.trim() && !currentInspection && !inspectionError ? (
-        <p className="mt-3 text-[12px] text-text-tertiary">Checking remote default…</p>
+        <p className="mt-3 text-console-12 text-text-tertiary">Checking remote default…</p>
       ) : null}
       {!explicitFolder && inspectionError ? (
-        <p className="mt-3 text-[12px] text-error">{inspectionError}</p>
+        <p className="mt-3 text-console-12 text-error">{inspectionError}</p>
       ) : null}
     </>
   );

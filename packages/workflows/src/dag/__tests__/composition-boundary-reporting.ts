@@ -21,6 +21,82 @@ import type { setupIncludeExpansionTests } from './composition-include-resume';
 export function registerBoundaryReportingTests(
   fixture: ReturnType<typeof setupIncludeExpansionTests>
 ) {
+  for (const cached of [false, true]) {
+    it(`fails an include entry on an unresolved gate reference (cached: ${cached})`, async () => {
+      const block = fixture.buildWf('review-block', [
+        { id: 'entry', bash: 'exit 99' },
+        { id: 'tail', bash: 'exit 99', depends_on: ['entry'], trigger_rule: 'all_done' },
+      ]);
+      const parent = fixture.buildWf('missing-route', [
+        { id: 'classify', bash: `printf '%s' '{"other":"x"}'` },
+        {
+          id: 'review',
+          include: 'review-block',
+          depends_on: ['classify'],
+          when: "$classify.output.route == 'deep'",
+        },
+        { id: 'report', bash: 'echo reported', depends_on: ['review'], trigger_rule: 'all_done' },
+      ]);
+      const expanded = expandWorkflowIncludes(
+        new Map([
+          ['review-block', block],
+          ['missing-route', parent],
+        ])
+      );
+      expect(expanded.errors).toEqual([]);
+      const workflow = expanded.workflows.get('missing-route')!;
+      const deps = createMockDeps();
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: fixture.testDir,
+          workflow,
+          workflowRun: makeWorkflowRun('missing-route'),
+          priorCompletedNodes: cached
+            ? new Map([
+                ['review__entry', { output: 'old entry' }],
+                ['review__tail', { output: 'old tail' }],
+              ])
+            : undefined,
+        })
+      );
+      expect(deps.store.failWorkflowRun).toHaveBeenCalled();
+      const events = fixture.eventList(deps);
+      const failures = events.filter(e => e.event_type === 'node_failed');
+      expect(failures).toHaveLength(1);
+      expect(failures[0]?.step_name).toBe('review__entry');
+      expect(failures[0]?.data?.error).toContain("Include 'review' (workflow 'review-block')");
+      expect(failures[0]?.data?.error).toContain("references field 'route'");
+      expect(failures[0]?.data?.error).toContain('JSON output has no such key');
+      const skips = events.filter(e => e.event_type === 'node_skipped');
+      expect(skips).toMatchObject([
+        {
+          step_name: 'review__tail',
+          data: { cause: { boundary: { includeId: 'review', workflow: 'review-block' } } },
+        },
+      ]);
+      expect(events.filter(e => e.event_type === 'node_completed').map(e => e.step_name)).toEqual([
+        'classify',
+        'report',
+      ]);
+      expect(events.some(e => e.event_type === 'node_skipped_prior_success')).toBe(false);
+      const dry = await dryRunWorkflow({
+        workflow,
+        userMessage: '',
+        cwd: fixture.testDir,
+        stubs: { classify: '{"other":"x"}', report: 'reported' },
+      });
+      expect(dry.outcome).toBe('failed');
+      expect(dry.trace.find(e => e.nodeId === 'review__entry')).toMatchObject({
+        state: 'failed',
+        reason: failures[0]?.data?.error,
+      });
+      expect(dry.trace.filter(e => e.state === 'skipped').map(e => e.nodeId)).toEqual([
+        'review__tail',
+      ]);
+    });
+  }
+
   it('shares in-flight boundary history and successful claims but retries a rejected read', async () => {
     const deps = createMockDeps();
     const failure = new Error('history temporarily unavailable');
@@ -74,6 +150,7 @@ export function registerBoundaryReportingTests(
     );
     const platform = createMockPlatform();
     const errors = spyOn(getLog(), 'error');
+    errors.mockClear();
     try {
       await executeDagWorkflow(
         dagOptions({
@@ -244,6 +321,7 @@ export function registerBoundaryReportingTests(
         }
       });
       const errors = spyOn(getLog(), 'error');
+      errors.mockClear();
       try {
         const run = async (id: string, resume = false) =>
           executeDagWorkflow(
@@ -356,6 +434,7 @@ export function registerBoundaryReportingTests(
         const deps = createMockDeps();
         const platform = createMockPlatform();
         const errors = spyOn(getLog(), 'error');
+        errors.mockClear();
         try {
           await executeDagWorkflow(
             dagOptions({
@@ -371,6 +450,15 @@ export function registerBoundaryReportingTests(
                 ['gate', { state: 'completed', output: JSON.stringify({ route: value }) }],
               ]),
             })
+          );
+          expect(deps.store.failWorkflowRun).toHaveBeenCalled();
+          expect(fixture.eventList(deps).filter(e => e.event_type === 'node_failed')).toMatchObject(
+            [
+              {
+                step_name: 'review__entry',
+                data: { error: expect.stringContaining('resolved to an') },
+              },
+            ]
           );
           expect(
             errors.mock.calls.filter(
@@ -430,6 +518,7 @@ export function registerBoundaryReportingTests(
             cwd: fixture.testDir,
             stubs: { gate: JSON.stringify({ route: value }) },
           });
+          expect(dry.outcome).toBe('failed');
           expect(formatDryRunTrace(dry)).toContain(
             `resolved to an ${Array.isArray(value) ? 'array' : 'object'}`
           );
@@ -551,18 +640,22 @@ export function registerBoundaryReportingTests(
         },
       })
     );
-    const messages = deliveredMessages(platform).filter(m => m.startsWith("Include '"));
+    const messages = deliveredMessages(platform).filter(m =>
+      m.startsWith("Node 'review__work' failed before execution:")
+    );
     expect(messages).toHaveLength(2);
-    expect(messages.some(m => m.startsWith(`Include '["one.two"].review'`))).toBe(true);
-    expect(messages.some(m => m.startsWith("Include 'one.two.review'"))).toBe(true);
-    const identities = fixture
-      .eventList(deps)
-      .filter(e => e.event_type === 'node_skipped')
-      .map(e => skipCauseSchema.parse(e.data?.cause).boundary?.includeId);
-    expect(new Set(identities)).toEqual(new Set(['one%2Etwo.review', 'one.two.review']));
+    expect(messages.some(m => m.includes(`Include '["one.two"].review'`))).toBe(true);
+    expect(messages.some(m => m.includes("Include 'one.two.review'"))).toBe(true);
+    const failures = fixture.eventList(deps).filter(e => e.event_type === 'node_failed');
+    for (const includeId of ['["one.two"].review', 'one.two.review']) {
+      expect(failures.some(e => String(e.data?.error).includes(`Include '${includeId}'`))).toBe(
+        true
+      );
+    }
     const dry = await dryRunWorkflow({ workflow, userMessage: '', cwd: fixture.testDir });
-    expect(formatDryRunTrace(dry)).toContain(`[include '["one.two"].review', workflow 'leaf']`);
-    expect(formatDryRunTrace(dry)).toContain("[include 'one.two.review', workflow 'leaf']");
+    expect(dry.outcome).toBe('failed');
+    expect(formatDryRunTrace(dry)).toContain(`Include '["one.two"].review' (workflow 'leaf')`);
+    expect(formatDryRunTrace(dry)).toContain("Include 'one.two.review' (workflow 'leaf')");
   });
 
   it('reports separate includes with identical malformed expressions once each, including entries', async () => {

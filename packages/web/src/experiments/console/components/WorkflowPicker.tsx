@@ -254,7 +254,7 @@ export function WorkflowPicker({
           else setOpen(true);
         }}
         onKeyDown={handleTriggerKey}
-        className="flex h-9 min-w-[140px] items-center gap-2 rounded border border-border bg-surface px-3 text-sm text-text-primary transition-colors hover:bg-surface-hover disabled:opacity-50"
+        className="flex h-9 min-w-35 items-center gap-2 rounded border border-border bg-surface px-3 text-sm text-text-primary transition-colors hover:bg-surface-hover disabled:opacity-50"
         aria-haspopup="listbox"
         aria-expanded={open}
       >
@@ -285,13 +285,13 @@ export function WorkflowPicker({
                   }}
                   onKeyDown={handleSearchKey}
                   placeholder="Filter workflows…"
-                  className="h-7 w-full rounded border border-border bg-surface px-2 font-mono text-[12px] text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none"
+                  className="h-7 w-full rounded border border-border bg-surface px-2 font-mono text-console-12 text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none"
                 />
               </div>
 
               <div ref={listRef} className="flex flex-1 flex-col overflow-y-auto py-1">
                 {filtered.length === 0 ? (
-                  <div className="px-3 py-4 text-[12px] text-text-tertiary">
+                  <div className="px-3 py-4 text-console-12 text-text-tertiary">
                     No workflows match <span className="font-mono">{query}</span>.
                   </div>
                 ) : (
@@ -310,7 +310,7 @@ export function WorkflowPicker({
                         {header !== null ? (
                           <div
                             role="presentation"
-                            className={`px-3 pb-1 text-[9px] font-semibold uppercase tracking-[0.16em] text-text-tertiary ${
+                            className={`px-3 pb-1 text-console-9 font-semibold uppercase tracking-console-label-wide text-text-tertiary ${
                               i === 0 ? 'pt-1' : 'mt-1 border-t border-border/60 pt-2'
                             }`}
                           >
@@ -334,11 +334,11 @@ export function WorkflowPicker({
                           }`}
                         >
                           <div className="flex min-w-0 flex-1 items-baseline gap-2">
-                            <span className="shrink-0 font-mono text-[13px] text-text-primary">
+                            <span className="shrink-0 font-mono text-console-13 text-text-primary">
                               {w.name}
                             </span>
                             {desc.length > 0 ? (
-                              <span className="min-w-0 truncate text-[11px] text-text-tertiary">
+                              <span className="min-w-0 truncate text-console-11 text-text-tertiary">
                                 {desc}
                               </span>
                             ) : null}
@@ -349,7 +349,7 @@ export function WorkflowPicker({
                             // aria-label on it is dropped by assistive tech.
                             <span
                               role="img"
-                              className="shrink-0 font-mono text-[11px] text-warning"
+                              className="shrink-0 font-mono text-console-11 text-warning"
                               title={w.parseWarnings.join('\n')}
                               aria-label={`Ignored keys: ${w.parseWarnings.join('; ')}`}
                             >
@@ -357,14 +357,14 @@ export function WorkflowPicker({
                             </span>
                           ) : null}
                           <span
-                            className={`shrink-0 text-[9px] uppercase tracking-[0.16em] ${sourceBadgeClass(w.source)}`}
+                            className={`shrink-0 text-console-9 uppercase tracking-console-label-wide ${sourceBadgeClass(w.source)}`}
                           >
                             {w.source}
                           </span>
                           {selected ? (
                             <span
                               aria-hidden
-                              className="shrink-0 font-mono text-[11px] text-accent-bright"
+                              className="shrink-0 font-mono text-console-11 text-accent-bright"
                             >
                               ✓
                             </span>
@@ -376,7 +376,7 @@ export function WorkflowPicker({
                 )}
               </div>
 
-              <div className="border-t border-border/60 px-3 py-1.5 font-mono text-[10px] text-text-tertiary">
+              <div className="border-t border-border/60 px-3 py-1.5 font-mono text-console-10 text-text-tertiary">
                 {filtered.length.toString()} of {workflows.length.toString()} · ↑↓ navigate · ↵
                 select · esc close
               </div>

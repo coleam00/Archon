@@ -1,3 +1,11 @@
+import { runProject } from '@archon/workflows/attention-queue';
+import { watchAttentionQueue } from '@archon/workflows/attention-watch';
+import {
+  attentionWatchReader,
+  type ClassifiedAttentionStreamLine,
+} from '@archon/workflows/attention-needs';
+import { workflowNoticeSchema } from '@archon/workflows/workflow-notice';
+import { workflowAttentionCommand } from './workflow-attention';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, readFile, realpath, stat, unlink } from 'node:fs/promises';
@@ -1301,6 +1309,116 @@ test('a fire from inside a run records that run, and the started run and its req
       requested_by: origin,
     });
   } finally {
+    stdout.mockRestore();
+    restore();
+  }
+});
+
+test('a skipped hand-off from an ended run appears in the notice window and watch', async () => {
+  const { host, project, configPath, restore } = await fireFixture(true);
+  const store = host.deps.store;
+  const codebase = await host.records.codebases.findCodebaseByDefaultCwd(project);
+  if (!codebase) throw new Error('Expected registered project');
+  const config = JSON.parse(await readFile(configPath, 'utf8'));
+  config.binding.overlap = 'skip';
+  await writeFile(configPath, JSON.stringify(config));
+  const holder = launch(codebase.id);
+  holder.execution.cwd = project;
+  await store.admitResourceStart({
+    resource: 'portable',
+    capacity: 1,
+    overlap: 'skip',
+    hostId: 'host',
+    launch: holder,
+  });
+  const source = await store.createWorkflowRun({
+    workflow_name: 'requester',
+    codebase_id: codebase.id,
+    user_message: '',
+  });
+  await store.claimPendingWorkflowRun(source.id);
+  await store.completeWorkflowRun(source.id, { duration_ms: 1 });
+  const projectRef = await runProject({ store }, source);
+  if (!projectRef) throw new Error('Expected source project');
+  const reader = attentionWatchReader('notices');
+  const lines: ClassifiedAttentionStreamLine[] = [];
+  const received = Promise.withResolvers<void>();
+  const watch = await watchAttentionQueue(
+    store,
+    { branchOf: async () => null },
+    line => {
+      const classified = reader(line);
+      if (classified) lines.push(classified);
+      if (classified?.type === 'notice') received.resolve();
+    },
+    { scope: { kind: 'project', project: projectRef }, pollIntervalMs: 5 }
+  );
+  const output: string[] = [];
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: unknown,
+    callback?: () => void
+  ) => {
+    output.push(String(chunk));
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath, deliveryId: 'handoff' },
+      {
+        dispatch: noDispatch,
+        env: {
+          WORKFLOW_ID: source.id,
+          ARCHON_NODE_EXECUTION: JSON.stringify({ runId: source.id, path: 'handoff' }),
+        },
+      }
+    );
+    await received.promise;
+    expect(lines.filter(line => line.type === 'notice')).toMatchObject([
+      {
+        type: 'notice',
+        runId: source.id,
+        needs: 'nothing',
+        workflow: 'requester',
+        node: null,
+        labels: { binding: 'fired', resource: 'portable', blocker: holder.run.id },
+      },
+    ]);
+    output.length = 0;
+    expect(
+      await workflowAttentionCommand(host, project, undefined, {
+        notices: true,
+        since: '24h',
+        json: true,
+        labels: [],
+      })
+    ).toBe(0);
+    const { notices } = JSON.parse(output.join(''));
+    expect(notices).toHaveLength(1);
+    const notice = workflowNoticeSchema.parse(notices[0]);
+    expect(notice).toMatchObject({
+      runId: source.id,
+      workflow: 'requester',
+      parentRunId: null,
+      node: null,
+      project: projectRef,
+      text: 'Trigger fire dropped, not queued (overlap=skip).',
+      labels: {
+        kind: 'trigger_fire_skipped',
+        binding: 'fired',
+        resource: 'portable',
+        overlap: 'skip',
+        blocker_kind: 'run',
+        blocker: holder.run.id,
+        delivery: 'handoff',
+      },
+    });
+    expect((await store.getWorkflowRun(source.id))?.status).toBe('completed');
+  } finally {
+    await watch.close();
     stdout.mockRestore();
     restore();
   }

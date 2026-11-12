@@ -44,12 +44,12 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
       <time
         dateTime={timestamp}
         title={wallClock}
-        className="w-14 shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary"
+        className="w-14 shrink-0 font-mono text-console-12 tabular-nums text-text-tertiary"
       >
         {displayed}
       </time>
       <span
-        className="shrink-0 rounded-[5px] border px-[7px] py-[2px] font-mono text-[10px] font-bold uppercase tracking-[0.08em]"
+        className="shrink-0 rounded-sm border px-1.75 py-0.5 font-mono text-console-10 font-bold uppercase tracking-widest"
         // Inline because the console scope's wildcard border-color rule
         // repaints Tailwind border utilities (see theme.css).
         style={{
@@ -61,35 +61,35 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
         Tool
       </span>
       <span className="flex min-w-0 flex-1 items-baseline gap-2.5">
-        <span className="shrink-0 font-mono text-[12.5px] font-bold text-text-primary">
+        <span className="shrink-0 font-mono text-console-13 font-bold text-text-primary">
           {call.name}
         </span>
         {summary.length > 0 ? (
-          <span className="min-w-0 truncate font-mono text-[12px] text-text-tertiary">
+          <span className="min-w-0 truncate font-mono text-console-12 text-text-tertiary">
             {summary}
           </span>
         ) : null}
       </span>
       {call.status === 'failed' || call.status === 'cancelled' ? (
-        <span className="shrink-0 font-mono text-[11.5px] text-error">
+        <span className="shrink-0 font-mono text-console-12 text-error">
           {call.status}
           {call.exitCode !== undefined ? ` (exit ${call.exitCode.toString()})` : ''}
         </span>
       ) : null}
       {call.outcomeUnrecorded === true ? (
-        <span className="shrink-0 font-mono text-[11.5px] text-text-tertiary">
+        <span className="shrink-0 font-mono text-console-12 text-text-tertiary">
           no result recorded
         </span>
       ) : null}
       {call.durationMs !== undefined ? (
-        <span className="shrink-0 font-mono text-[11.5px] tabular-nums text-text-tertiary">
+        <span className="shrink-0 font-mono text-console-12 tabular-nums text-text-tertiary">
           {call.durationMs.toString()}ms
         </span>
       ) : null}
       {hasDetails ? (
         <span
           aria-hidden
-          className="shrink-0 font-mono text-[11px] text-text-tertiary transition-transform"
+          className="shrink-0 font-mono text-console-11 text-text-tertiary transition-transform"
           style={{ transform: expanded ? 'rotate(90deg)' : 'rotate(0deg)' }}
         >
           ▸
@@ -99,7 +99,7 @@ export function ToolCallItem({ call, timestamp }: ToolCallItemProps): ReactEleme
   );
 
   return (
-    <div className="flex flex-col border-b border-border/60 py-[11px]">
+    <div className="flex flex-col border-b border-border/60 py-2.75">
       {hasDetails ? (
         <button
           type="button"
@@ -126,24 +126,24 @@ function ToolCallDetails({
   hasInput: boolean;
 }): ReactElement {
   return (
-    <div className="ml-[72px] mt-2 space-y-1.5">
+    <div className="ml-18 mt-2 space-y-1.5">
       {hasInput ? (
-        <pre className="max-h-[320px] overflow-auto rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
+        <pre className="max-h-80 overflow-auto rounded border border-border bg-surface-inset p-2 font-mono text-console-11 leading-relaxed text-text-secondary">
           {JSON.stringify(call.input, null, 2)}
         </pre>
       ) : null}
       {call.output !== undefined && call.output.length > 0 ? (
         <div>
-          <div className="mb-0.5 text-[9px] font-semibold uppercase tracking-wider text-text-tertiary">
+          <div className="mb-0.5 text-console-9 font-semibold uppercase tracking-wider text-text-tertiary">
             Result
           </div>
-          <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-inset p-2 font-mono text-[11px] leading-relaxed text-text-secondary">
+          <pre className="overflow-x-auto whitespace-pre-wrap break-words rounded border border-border bg-surface-inset p-2 font-mono text-console-11 leading-relaxed text-text-secondary">
             {call.output.length > 2000
               ? `${call.output.slice(0, 2000)}\n\n… (${(call.output.length - 2000).toString()} more chars)`
               : call.output}
           </pre>
           {call.outputTruncated === true ? (
-            <div className="mt-0.5 text-[10px] text-text-tertiary">
+            <div className="mt-0.5 text-console-10 text-text-tertiary">
               Output cut short by the provider.
             </div>
           ) : null}

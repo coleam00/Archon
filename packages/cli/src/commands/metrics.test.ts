@@ -78,6 +78,20 @@ test('--since 7d ends the window now and starts it seven days earlier', async ()
   ]);
 });
 
+test('--since 90m selects metrics from the last ninety minutes', async () => {
+  const { invoke, stdout } = await fixture([
+    { at: '2026-10-30T10:29:59Z' },
+    { at: '2026-10-30T10:30:00Z' },
+  ]);
+  expect(await invoke({ since: '90m', json: true })).toBe(0);
+  const report = metricsReportSchema.parse(JSON.parse(stdout.join('')));
+  expect(report.window).toEqual({
+    since: '2026-10-30T10:30:00.000Z',
+    until: now.toISOString(),
+  });
+  expect(report.metrics[0]?.instruments[0]?.n).toBe(1);
+});
+
 test('--json emits exactly one parseable document', async () => {
   const { invoke, stdout } = await fixture([{}, {}]);
   expect(await invoke({ json: true }, 'factory.prs_merged')).toBe(0);

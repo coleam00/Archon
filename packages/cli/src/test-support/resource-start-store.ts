@@ -5,6 +5,7 @@ import {
 import { holdsWorkflowPath } from '@archon/workflows/workflow-path-lock';
 import {
   validateStartReceiptLimit,
+  skippedFireNotice,
   compareStartReceipts,
   capacityWaiters,
   drainableStarts,
@@ -38,7 +39,8 @@ export function createInMemoryResourceStartStore(
   listRuns: () => WorkflowRun[],
   listReusableCheckouts: () => Promise<readonly ReusableCheckout[]>,
   resourceCaps: ReadonlyMap<string, number>,
-  clearPendingPath: (id: string) => Promise<void>
+  clearPendingPath: (id: string) => Promise<void>,
+  recordNotice: (notice: NonNullable<ReturnType<typeof skippedFireNotice>>) => Promise<void>
 ): IResourceStartStore & {
   clearDeclaredCapacity(id: string): Promise<void>;
   /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
@@ -171,6 +173,16 @@ export function createInMemoryResourceStartStore(
     };
     if (!blocker && !pending) await createRun(launch.run);
     if (pending) await clearPendingPath(pending.id);
+    if (intent.receipt && request.status === 'skipped') {
+      const receipt = receipts.get(intent.receipt.receiptId);
+      if (!receipt) throw new Error('Resource start receipt missing');
+      const notice = skippedFireNotice(
+        receipt,
+        { ...intent, bindingId: intent.receipt.bindingId },
+        decision(request)
+      );
+      if (notice) await recordNotice(notice);
+    }
     requests.set(request.id, request);
     return decision(request);
   };
@@ -371,6 +383,7 @@ export function createInMemoryResourceStartStore(
         ...item.intent,
         ...selectStartResource(item.intent, input.workflowResource),
         launch: input.launch,
+        receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
       });
       item.status = 'complete';
       item.error = null;

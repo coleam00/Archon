@@ -195,11 +195,11 @@ interface SectionHeaderProps {
 function SectionHeader({ label, count }: SectionHeaderProps): ReactElement {
   return (
     <div className="mb-3 flex items-center gap-2.5 px-0.5">
-      <span className="font-mono text-[11px] font-bold uppercase tracking-[0.13em] text-text-tertiary">
+      <span className="font-mono text-console-11 font-bold uppercase tracking-console-label text-text-tertiary">
         {label}
       </span>
       <span
-        className="rounded-full border bg-surface-elevated px-2 py-px font-mono text-[10.5px] tabular-nums text-text-secondary"
+        className="rounded-full border bg-surface-elevated px-2 py-px font-mono text-console-11 tabular-nums text-text-secondary"
         style={{ borderColor: 'var(--border)' }}
       >
         {count}
@@ -242,7 +242,7 @@ function RunsFeed({
   const showActiveSection = active.length > 0 || draftProject !== null;
 
   return (
-    <div className="flex flex-col gap-[26px]">
+    <div className="flex flex-col gap-6.5">
       {showActiveSection ? (
         <section>
           <SectionHeader label="Active" count={active.length} />
@@ -266,7 +266,7 @@ function RunsFeed({
       {recent.length > 0 ? (
         <section>
           <SectionHeader label="Recent" count={recent.length} />
-          <div className="flex flex-col overflow-hidden rounded-[12px] border border-border bg-surface">
+          <div className="flex flex-col overflow-hidden rounded-console-12 border border-border bg-surface">
             {recent.map(run => (
               <RecentRunRow
                 key={run.id}
@@ -367,7 +367,7 @@ export function RunsPage(): ReactElement {
         onDismiss={pending.dismiss}
       />
 
-      <div className="flex-1 overflow-y-auto px-[30px] pb-[30px] pt-[22px]">
+      <div className="flex-1 overflow-y-auto px-7.5 pb-7.5 pt-5.5">
         <RunsFeedBody
           feedError={demoMode ? undefined : error}
           loading={loading && !demoMode}
@@ -577,19 +577,19 @@ function RunsHeader({
           <p className="text-xs text-text-tertiary">
             {scope === 'all' ? 'Every run, across every project.' : (project?.path ?? 'Loading…')}
             {demoMode ? (
-              <span className="ml-2 rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-[10px] uppercase tracking-widest text-warning">
+              <span className="ml-2 rounded border border-warning/40 bg-warning/10 px-1.5 py-0.5 font-mono text-console-10 uppercase tracking-widest text-warning">
                 demo mocks on
               </span>
             ) : null}
           </p>
         </div>
         <div
-          className="flex h-[38px] w-[300px] max-w-[34vw] shrink-0 items-center gap-2 rounded-[10px] border bg-surface-elevated px-3 text-text-tertiary transition-colors focus-within:text-text-secondary"
+          className="flex h-9.5 w-75 max-w-[34vw] shrink-0 items-center gap-2 rounded-lg border bg-surface-elevated px-3 text-text-tertiary transition-colors focus-within:text-text-secondary"
           // Inline because the console scope's wildcard border-color rule
           // repaints Tailwind border utilities (see theme.css).
           style={{ borderColor: 'var(--border)' }}
         >
-          <span aria-hidden className="font-mono text-[13px] leading-none">
+          <span aria-hidden className="font-mono text-console-13 leading-none">
             ⌕
           </span>
           <input
@@ -610,13 +610,13 @@ function RunsHeader({
             aria-label="Search runs"
             placeholder="Search workflow, project, run id…"
             spellCheck={false}
-            className="min-w-0 flex-1 bg-transparent font-mono text-[12.5px] text-text-primary outline-none placeholder:text-text-tertiary"
+            className="min-w-0 flex-1 bg-transparent font-mono text-console-13 text-text-primary outline-none placeholder:text-text-tertiary"
           />
         </div>
       </div>
 
       {scope === 'all' ? (
-        <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-[12px] text-text-tertiary">
+        <div className="rounded border border-dashed border-border bg-surface-inset/60 px-3 py-2 text-console-12 text-text-tertiary">
           Choose a project to start a run.
         </div>
       ) : (

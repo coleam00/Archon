@@ -433,7 +433,7 @@ export function registerIncludeResumeTests(fixture: ReturnType<typeof setupInclu
     expect(reused).not.toContain('down__strict');
   });
 
-  it('reports a fail-closed skip for a cached block entry when its include gate reads a structured field', async () => {
+  it('fails a cached block entry when its include gate reads a structured field', async () => {
     const { events } = await fixture.executeExpanded(
       fixture.expandedStructuredGateNodes(),
       'inc-resume-structured-gate',
@@ -442,15 +442,11 @@ export function registerIncludeResumeTests(fixture: ReturnType<typeof setupInclu
 
     const entryEvents = events.filter(event => event.step_name === 'review__entry');
     expect(entryEvents).toHaveLength(1);
-    expect(entryEvents[0]?.event_type).toBe('node_skipped');
-    expect(entryEvents[0]?.data).toMatchObject({
-      reason: 'when_condition_parse_error',
-      cause: {
-        kind: 'condition_parse_error',
-        expr: "$gate.output.route == 'true'",
-        boundary: { includeId: 'review', workflow: 'structured-gate-block' },
-      },
-    });
+    expect(entryEvents[0]?.event_type).toBe('node_failed');
+    expect(entryEvents[0]?.data?.error).toContain(
+      "Include 'review' (workflow 'structured-gate-block')"
+    );
+    expect(entryEvents[0]?.data?.error).toContain('resolved to an object');
     expect(
       events.some(
         event =>

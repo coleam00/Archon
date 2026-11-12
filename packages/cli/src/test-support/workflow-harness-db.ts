@@ -125,6 +125,7 @@ mock.module('@archon/core/db/workflows', () => ({
 }));
 
 mock.module('@archon/core/db/workflow-events', () => ({
+  insertWorkflowEvent: mock(() => Promise.resolve()),
   listWorkflowEvents: mock(() => Promise.resolve([])),
   listEventsForRuns: mock(() => Promise.resolve(new Map())),
   createWorkflowEvent: mock(() => Promise.resolve()),

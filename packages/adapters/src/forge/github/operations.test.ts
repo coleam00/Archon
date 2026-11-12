@@ -968,3 +968,161 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
     });
   }
 });
+
+describe('pr.view read retries', () => {
+  const repo = { host: 'github.com', path: 'archon/test' };
+  const request = {
+    operationId: 'view',
+    op: 'pr.view',
+    selector: { kind: 'number', ref: { repo, number: 42 } },
+  } satisfies ForgeRequest;
+  const pull = {
+    number: 42,
+    node_id: 'PR_42',
+    html_url: 'https://github.com/archon/test/pull/42',
+    title: 'A pull request',
+    body: 'Description',
+    state: 'closed',
+    draft: false,
+    merged: true,
+    created_at: '2026-11-01T12:00:00Z',
+    merged_at: '2026-11-10T12:00:00Z',
+    closed_at: '2026-11-10T12:00:00Z',
+    head: { ref: 'build/widget', sha: 'a'.repeat(40), repo: { full_name: repo.path } },
+    base: { ref: 'dev', sha: 'b'.repeat(40) },
+  };
+
+  test('one HTTP 503 then success returns the complete failure-free answer', async () => {
+    const baseline = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async () => json(pull),
+    });
+    expect(baseline).toMatchObject({
+      ok: true,
+      result: {
+        op: 'pr.view',
+        value: { pr: { state: 'merged' }, timestamps: { merged_at: pull.merged_at } },
+      },
+    });
+    const waits: number[] = [];
+    let calls = 0;
+    const recovered = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async (url, init) => {
+        expect(String(url)).toBe('https://api.github.com/repos/archon/test/pulls/42');
+        expect(init?.method ?? 'GET').toBe('GET');
+        return ++calls === 1 ? json({}, 503) : json(pull);
+      },
+      sleep: async ms => {
+        waits.push(ms);
+      },
+    });
+    expect(recovered).toEqual(baseline);
+    expect(calls).toBe(2);
+    expect(waits).toEqual([1_000]);
+  });
+
+  test('persistent HTTP 503 stops after four attempts and preserves the final error', async () => {
+    const waits: number[] = [];
+    let calls = 0;
+    const response = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async () => {
+        calls++;
+        return json({}, 503);
+      },
+      sleep: async ms => {
+        waits.push(ms);
+      },
+    });
+    expect(response).toEqual({
+      operationId: 'view',
+      ok: false,
+      error: {
+        kind: 'forge_error',
+        status: 503,
+        message: 'GitHub API request failed with HTTP 503',
+      },
+    });
+    expect(calls).toBe(4);
+    expect(waits).toEqual([1_000, 2_000, 4_000]);
+  });
+
+  test.each([false, true])(
+    'network failures keep bounded retries (persistent: %s)',
+    async persistent => {
+      let calls = 0;
+      const waits: number[] = [];
+      const response = await handleGithubOperation(request, {
+        token: 'token',
+        fetch: async () => {
+          calls++;
+          if (persistent || calls === 1) throw new TypeError('connection lost');
+          return json(pull);
+        },
+        sleep: async ms => {
+          waits.push(ms);
+        },
+      });
+      if (persistent) {
+        expect(response).toEqual({
+          operationId: 'view',
+          ok: false,
+          error: { kind: 'forge_error', message: 'GitHub API request failed' },
+        });
+        expect(calls).toBe(4);
+        expect(waits).toEqual([1_000, 2_000, 4_000]);
+      } else {
+        const baseline = await handleGithubOperation(request, {
+          token: 'token',
+          fetch: async () => json(pull),
+        });
+        expect(response).toEqual(baseline);
+        expect(calls).toBe(2);
+        expect(waits).toEqual([1_000]);
+      }
+    }
+  );
+
+  test.each([400, 401, 403, 404, 422, 429])('HTTP %s is never retried', async status => {
+    let calls = 0;
+    const waits: number[] = [];
+    const response = await handleGithubOperation(request, {
+      token: 'token',
+      fetch: async () => {
+        calls++;
+        return json({}, status);
+      },
+      sleep: async ms => {
+        waits.push(ms);
+      },
+    });
+    expect(response).toMatchObject({ ok: false, error: { status } });
+    expect(calls).toBe(1);
+    expect(waits).toEqual([]);
+  });
+
+  test.each(['invalid JSON', 'invalid shape', 'no credential'])(
+    '%s is never retried',
+    async failure => {
+      let calls = 0;
+      const waits: number[] = [];
+      const response = await handleGithubOperation(request, {
+        token: failure === 'no credential' ? undefined : 'token',
+        fetch: async () => {
+          calls++;
+          return failure === 'invalid JSON' ? new Response('{') : json({});
+        },
+        sleep: async ms => {
+          waits.push(ms);
+        },
+      });
+      expect(response).toMatchObject({
+        ok: false,
+        error: { kind: failure === 'no credential' ? 'no_credential' : 'forge_error' },
+      });
+      expect(calls).toBe(failure === 'no credential' ? 0 : 1);
+      expect(waits).toEqual([]);
+    }
+  );
+});

@@ -45,7 +45,10 @@ export function createFileAdmissionStore(
         result,
         changes: {
           documents: await tx.changedDocuments(),
-          runs: [...runs.values()].map(run => ({ run })),
+          runs: [...runs.values()].map(run => ({
+            run,
+            events: tx.events.filter(event => event.workflow_run_id === run.id),
+          })),
         },
       };
     });

@@ -43,6 +43,30 @@
 }
 
 @theme inline {
+  /* Console dimensions; font tokens deliberately inherit line-height. */
+  --text-console-9: 9px;
+  --text-console-10: 10px;
+  --text-console-11: 11px;
+  --text-console-12: 12px;
+  --text-console-13: 13px;
+  --text-console-14: 14px;
+  --text-console-15: 15px;
+  --text-console-17: 17px;
+  --text-console-18: 18px;
+  --text-console-22: 22px;
+  --text-console-34: 34px;
+  --radius-console-12: 12px;
+  --radius-console-16: 16px;
+  --tracking-console-label: 0.14em;
+  --tracking-console-label-wide: 0.16em;
+  --tracking-console-display: 0.2em;
+  --tracking-console-tight: -0.2px;
+  --tracking-console-tighter: -0.4px;
+  --tracking-console-detail: 0.3px;
+  --tracking-console-badge: 0.6px;
+  --tracking-console-body: -0.005em;
+  --tracking-console-heading: -0.028em;
+
   /* App-specific theme colors */
   --color-background: var(--background);
   --color-surface: var(--surface);
