@@ -7,7 +7,7 @@ import { getLog } from './server-log';
 
 const SOURCE_ROOT = join(import.meta.dir, '../../..');
 
-/** Git variables that select a repository other than the one at the working directory. */
+/** Git variables that select a repository other than the one at git's working directory. */
 const REPOSITORY_SELECTORS = new Set([
   'GIT_DIR',
   'GIT_WORK_TREE',
@@ -15,6 +15,18 @@ const REPOSITORY_SELECTORS = new Set([
   'GIT_OBJECT_DIRECTORY',
   'GIT_COMMON_DIR',
 ]);
+
+/**
+ * `env` without the variables that would point git at another repository than the one at
+ * its working directory. A process can inherit them (a git hook exports `GIT_DIR` and
+ * `GIT_INDEX_FILE`), and every git it spawns would then read or write that repository.
+ * Names compare case-insensitively because Windows reads the environment that way.
+ */
+export function withoutRepositorySelectors(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  return Object.fromEntries(
+    Object.entries(env).filter(([key]) => !REPOSITORY_SELECTORS.has(key.toUpperCase()))
+  );
+}
 
 /** The running server's version: the build-time constant in a binary, package.json in source. */
 export const appVersion = readAppVersion();
@@ -49,21 +61,20 @@ export async function readAppCommit(sourceRoot = SOURCE_ROOT): Promise<AppCommit
     getLog().debug({ sourceRoot }, 'app_commit.no_git_metadata');
     return undefined;
   }
-  // An inherited GIT_DIR and its relatives would point git at another repository.
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !REPOSITORY_SELECTORS.has(key))
-  );
   try {
     const { stdout } = await execFileAsync('git', ['log', '-1', '--format=%h%n%cI'], {
       cwd: sourceRoot,
-      env,
+      env: withoutRepositorySelectors(process.env),
       timeout: 5000,
     });
     const [sha, committedAt] = stdout.trim().split('\n');
     if (!sha || !committedAt) throw new Error(`unexpected git log output: ${stdout}`);
     return { sha, committedAt };
   } catch (err) {
-    getLog().debug({ err, sourceRoot }, 'app_commit.read_failed');
+    // The checkout has git metadata, so this is unexpected (git missing from PATH, a
+    // checkout owned by another user, a corrupt repository). Health still answers; the
+    // warning is the only place the reason surfaces.
+    getLog().warn({ err, sourceRoot }, 'app_commit.read_failed');
     return undefined;
   }
 }

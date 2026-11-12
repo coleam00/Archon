@@ -1,26 +1,16 @@
 import { describe, expect, test } from 'bun:test';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { trackTempRoots } from '@archon/paths/test-utils';
-import { readAppCommit } from './app-version';
+import { captureLogLines, trackTempRoots } from '@archon/paths/test-utils';
+import { readAppCommit, withoutRepositorySelectors } from './app-version';
 
 const trackTempRoot = trackTempRoots();
 
-// Dropped so a test run inside a git hook, which exports these, cannot commit into the
-// caller's repository instead of the temporary one.
-const REPOSITORY_SELECTORS = [
-  'GIT_DIR',
-  'GIT_WORK_TREE',
-  'GIT_INDEX_FILE',
-  'GIT_OBJECT_DIRECTORY',
-  'GIT_COMMON_DIR',
-];
-
 function git(cwd: string, ...args: string[]): string {
-  const env = Object.fromEntries(
-    Object.entries(process.env).filter(([key]) => !REPOSITORY_SELECTORS.includes(key))
-  );
+  // A test run inside a git hook inherits GIT_DIR; without this the commit below would
+  // land in the caller's repository instead of the temporary one.
+  const env = withoutRepositorySelectors(process.env);
   const result = Bun.spawnSync(
     ['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args],
     { cwd, env: { ...env, GIT_COMMITTER_DATE: '2026-11-12T14:03:21+01:00' } }
@@ -35,6 +25,25 @@ async function repoWithCommit(message: string): Promise<string> {
   git(root, 'commit', '-q', '--allow-empty', '--no-gpg-sign', '-m', message);
   return root;
 }
+
+describe('withoutRepositorySelectors', () => {
+  test('drops every variable that selects another repository, in any case, and keeps the rest', () => {
+    const env = {
+      GIT_DIR: '/elsewhere/.git',
+      GIT_WORK_TREE: '/elsewhere',
+      GIT_INDEX_FILE: '/elsewhere/.git/index',
+      GIT_OBJECT_DIRECTORY: '/elsewhere/.git/objects',
+      GIT_COMMON_DIR: '/elsewhere/.git',
+      git_dir: '/lowercase/.git',
+      GIT_CEILING_DIRECTORIES: '/ceiling',
+      PATH: '/usr/bin',
+    };
+    expect(withoutRepositorySelectors(env)).toEqual({
+      GIT_CEILING_DIRECTORIES: '/ceiling',
+      PATH: '/usr/bin',
+    });
+  });
+});
 
 describe('readAppCommit', () => {
   test("names the source checkout's HEAD by short hash and committer date", async () => {
@@ -64,6 +73,20 @@ describe('readAppCommit', () => {
     } finally {
       if (inherited === undefined) delete process.env.GIT_DIR;
       else process.env.GIT_DIR = inherited;
+    }
+  });
+
+  test('warns, and names no commit, when git fails on a checkout that has git metadata', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-app-commit-')));
+    await writeFile(join(root, '.git'), `gitdir: ${join(root, 'missing')}\n`);
+    const logs = captureLogLines();
+    try {
+      expect(await readAppCommit(root)).toBeUndefined();
+      expect(logs.lines).toContainEqual(
+        expect.objectContaining({ level: 40, msg: 'app_commit.read_failed', sourceRoot: root })
+      );
+    } finally {
+      logs.restore();
     }
   });
 });
