@@ -1,7 +1,10 @@
+import { assertWorkflowNoticeLimit } from '@archon/workflows/workflow-notice';
+import { insertWorkflowEvent } from './workflow-events';
 import { z } from 'zod';
 import {
   SourceReceiptDigestConflictError,
   drainableStarts,
+  skippedFireNotice,
   resourceStartBlocker,
   validateStartReceiptLimit,
 } from '@archon/workflows/resource-start-store';
@@ -139,7 +142,48 @@ async function admitResourceStartWithQuery(
     blocker_kind: blocker?.kind ?? null,
     launch: intent.launch,
   };
-  return blocker ? disposition(row) : admitExisting(query, intent.resource, { id: row.id, launch });
+  const result = blocker
+    ? disposition(row)
+    : await admitExisting(query, intent.resource, { id: row.id, launch });
+  await recordSkippedFireNotice(query, intent, result);
+  return result;
+}
+
+async function recordSkippedFireNotice(
+  query: Query,
+  intent: ResourceStartIntent,
+  result: ResourceStartDisposition
+): Promise<void> {
+  if (result.status !== 'skipped' || !intent.receipt) return;
+  const receipt = (
+    await query<{ delivery_id: string | null; source_actor: unknown }>(
+      'SELECT delivery_id, source_actor FROM remote_agent_start_receipts WHERE id = $1',
+      [intent.receipt.receiptId]
+    )
+  ).rows[0];
+  if (!receipt) throw new Error('Resource start receipt missing');
+  const notice = skippedFireNotice(
+    {
+      deliveryId: receipt.delivery_id,
+      sourceActor: sourceReceiptInputSchema.shape.sourceActor.parse(
+        parseStoredJson(receipt.source_actor)
+      ),
+    },
+    { ...intent, bindingId: intent.receipt.bindingId },
+    result
+  );
+  if (notice) {
+    const count = await query<{ count: string | number }>(
+      "SELECT COUNT(*) AS count FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'workflow_notice'",
+      [notice.runId]
+    );
+    assertWorkflowNoticeLimit(notice.runId, Number(count.rows[0]?.count ?? 0));
+    await insertWorkflowEvent(query, {
+      workflow_run_id: notice.runId,
+      event_type: 'workflow_notice',
+      data: notice.data,
+    });
+  }
 }
 
 export async function admitResourceStart(
