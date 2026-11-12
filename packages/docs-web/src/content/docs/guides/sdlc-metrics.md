@@ -40,7 +40,7 @@ A work item keeps its last ten build rounds. A pull request whose rounds all fel
 
 `archon-metrics-prs` reads each pull request through the forge plugin's `pr.view`, whose `timestamps` give the creation, merge and close times. A plugin that does not report them makes the run refuse.
 
-A merged pull request's facts never change, so a run keeps them as a state document under `pr-facts/` and later runs read it in place of the forge. Both metrics workflows share these documents. An open pull request, a closed one (it can reopen) and a merged one no run has kept yet are read from the forge on every run, so a run's cost grows with those, not with every pull request recorded. The first run after a pack carrying this change reads every pull request once, as before, and writes one document per merged pull request. A document that cannot be written is noted on stderr and the run goes on. A document that does not hold a merged pull request's facts is read again and replaced.
+A merged pull request's facts never change, so a run keeps them as a state document under `pr-facts/v1/` and later runs read it in place of the forge. Both metrics workflows share these documents. An open pull request, a closed one (it can reopen) and a merged one no run has kept yet are read from the forge on every run, so a run's cost grows with those, not with every pull request recorded. The first run after a pack carrying this change reads every pull request once, as before, and writes one document per merged pull request. A document that cannot be written is noted on stderr and the run goes on.
 
 ## Pull requests
 

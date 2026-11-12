@@ -22,7 +22,11 @@ import type { WorkItem } from './workitem.ts';
 /** The engine accepts at most this many run ids on one record. */
 export const MAX_RUNS = 20;
 
-/** One pull request's facts as the forge's `pr.view` reports them. */
+/**
+ * One pull request's facts as the forge's `pr.view` reports them. A merged pull request's
+ * facts are kept as this object under `SETTLED_PREFIX`: change this shape, and that
+ * prefix's version with it, so a run never serves a kept document of the old shape.
+ */
 export interface PrFacts {
   readonly url: string;
   readonly state: 'OPEN' | 'CLOSED' | 'MERGED';
@@ -97,45 +101,36 @@ export function prFacts(url: string, view: ForgeOperations['pr.view']['result'])
  * call and asks the forge only about the pull requests that can still change: open
  * ones, closed ones (which can reopen), and merged ones no run has kept yet. The cost
  * of a run then grows with those, not with every pull request ever recorded.
+ *
+ * The version is in the prefix: a document holds `PrFacts` as of that version, so a
+ * change to `PrFacts` bumps it and the old documents are left unread.
  */
-const SETTLED_PREFIX = 'pr-facts/';
+const SETTLED_PREFIX = 'pr-facts/v1/';
 
 const settledName = (url: string): string => `${SETTLED_PREFIX}${createHash('sha256').update(url).digest('hex')}`;
 
-/** The facts a run kept, or undefined for a document that is not a merged pull request's facts. */
-function keptFacts(value: unknown): PrFacts | undefined {
-  const facts = typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
-  if (
-    facts?.state !== 'MERGED' ||
-    typeof facts.url !== 'string' ||
-    typeof facts.createdAt !== 'string' ||
-    typeof facts.mergedAt !== 'string' ||
-    (facts.closedAt !== null && typeof facts.closedAt !== 'string') ||
-    typeof facts.headRefName !== 'string' ||
-    typeof facts.isCrossRepository !== 'boolean'
-  ) {
-    return undefined;
-  }
-  return {
-    url: facts.url,
-    state: 'MERGED',
-    createdAt: facts.createdAt,
-    mergedAt: facts.mergedAt,
-    closedAt: facts.closedAt,
-    headRefName: facts.headRefName,
-    isCrossRepository: facts.isCrossRepository,
-  };
+/** The facts a run kept for `url`, or undefined for a document that does not hold them. */
+function keptFacts(value: unknown, url: string): PrFacts | undefined {
+  const facts = value as Partial<PrFacts> | null;
+  return facts?.state === 'MERGED' && facts.url === url ? (facts as PrFacts) : undefined;
 }
 
 /**
  * Keep a merged pull request's facts. The metrics are already right without the
  * document, so a failed write is noted and the run goes on, and the next run reads the
- * pull request again. A refused write needs no note: the store refuses one only when
- * another run moved the document first, and that run kept the same facts.
+ * pull request again.
+ *
+ * A refused write means the document moved since the listing: another run kept the
+ * facts, which needs nothing more, or the document was deleted, and a deleted document
+ * keeps its revision, which a recreating write must name. So after a refusal the
+ * document is read, and written once at its own revision unless it holds the facts. A
+ * second refusal is another run moving it again, and is left to that run.
  */
 function keepFacts(name: string, facts: PrFacts, revision: number): void {
   try {
-    state.put(name, facts, { ifRevision: revision });
+    if (state.put(name, facts, { ifRevision: revision }).ok) return;
+    const moved = state.get(name);
+    if (keptFacts(moved.value, facts.url) === undefined) state.put(name, facts, { ifRevision: moved.revision });
   } catch (error) {
     console.error(`PR metrics could not keep the facts of ${facts.url}: ${error instanceof Error ? error.message : String(error)}`);
   }
@@ -152,8 +147,8 @@ export function readPrFacts(urls: Iterable<string>): PrFacts[] {
   const facts: PrFacts[] = [];
   for (const url of urls) {
     const name = settledName(url);
-    const kept = keptFacts(stored.get(name)?.value);
-    if (kept?.url === url) {
+    const kept = keptFacts(stored.get(name)?.value, url);
+    if (kept !== undefined) {
       facts.push(kept);
       continue;
     }
@@ -164,7 +159,7 @@ export function readPrFacts(urls: Iterable<string>): PrFacts[] {
     }
     const read = prFacts(url, forge('pr.view', { selector: { kind: 'number', ref } }));
     facts.push(read);
-    // A document that is not valid facts is replaced, at its revision, rather than read past every run.
+    // A listed document that does not hold these facts is replaced at its revision; a name not listed is created.
     if (read.state === 'MERGED' && read.mergedAt !== null) keepFacts(name, read, stored.get(name)?.revision ?? 0);
   }
   return facts;
