@@ -1,5 +1,5 @@
-import { createSqlWorkflowOperations } from '../workflows/sql-host';
 // @archon-test-isolated
+import { createSqlWorkflowOperations } from '../workflows/sql-host';
 /** Covers `handleMessage` in orchestrator-agent.ts; shared mocks live in `../test/orchestrator-agent-harness`. */
 import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
