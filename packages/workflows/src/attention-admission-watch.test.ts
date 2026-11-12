@@ -202,6 +202,8 @@ test.each(['read', 'projection', 'listener'] as const)(
   'admission %s failures retain progress and suppress bookmarks until recovery',
   async mode => {
     const { store, drop } = await fixture();
+    const after = await attentionFeedStart(store);
+    await drop('retry');
     const failing: IWorkflowStore = Object.create(store);
     let broken = false;
     let failures = 0;
@@ -222,15 +224,14 @@ test.each(['read', 'projection', 'listener'] as const)(
       failing,
       host,
       line => {
+        if (line.type === 'ready') broken = true;
         if (broken && mode === 'listener' && line.type === 'notice') fail();
         lines.push(line);
       },
-      { scope: { kind: 'all' }, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
+      { scope: { kind: 'all' }, after, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
     );
     try {
-      broken = true;
       lines.length = 0;
-      await drop('retry');
       await until(() => failures >= 3);
       expect(lines.some(line => line.type === 'bookmark' || line.type === 'notice')).toBe(false);
       broken = false;
