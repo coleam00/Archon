@@ -1,4 +1,6 @@
 /** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
+import { canonicalValueText } from './output-ref';
+import { collectCredentialValues } from '@archon/paths/credential-redaction';
 import { createLogger, getArchonTempPath } from '@archon/paths';
 import { validateStructuredOutput } from './structured-output';
 import { randomUUID } from 'node:crypto';
@@ -139,7 +141,8 @@ interface DryRunOptions {
   sourceRoots?: WorkflowSourceRoots;
   execCode?: boolean;
   /** Credential provenance for callers publishing diagnostics; simulation stays unredacted. */
-  onExecCredentials?: DryRunContext['onExecCredentials'];
+  onCredentials?: DryRunContext['onCredentials'];
+  formatDiagnostic?: DryRunContext['formatDiagnostic'];
   /** Fill reached nodes without explicit stubs using schema-valid deterministic placeholders. */
   defaultStubs?: boolean;
   pauseAtGates?: boolean;
@@ -160,7 +163,8 @@ function createDryRunContext(
 ): DryRunContext {
   const assistantModels = options.config ? assistantModelDefaults(options.config) : {};
   return {
-    onExecCredentials: options.onExecCredentials,
+    onCredentials: options.onCredentials,
+    formatDiagnostic: options.formatDiagnostic,
     envVars: options.config?.envVars,
     protectedEnvKeys: options.config?.protectedEnvKeys,
     protectedCredentialValues: options.config?.protectedCredentialValues,
@@ -204,6 +208,13 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
     options,
     tempRoot,
     await resolveRunStartInputs(options.cwd, options.workflow, options.inputs)
+  );
+  ctx.onCredentials?.(
+    collectCredentialValues(
+      Object.fromEntries(
+        Object.entries(ctx.inputs ?? {}).map(([name, value]) => [name, canonicalValueText(value)])
+      )
+    )
   );
   const outputs = new Map<string, NodeOutput>();
   try {

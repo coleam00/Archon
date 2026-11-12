@@ -1,3 +1,4 @@
+import { unredactedDiagnosticText, type DiagnosticTextFormatter } from '../diagnostic-text';
 import { z } from 'zod';
 import Ajv from 'ajv';
 import { mkdir, open } from 'node:fs/promises';
@@ -269,7 +270,11 @@ function stubSatisfiesNode(node: DagNode, stub: DryRunStubValue): boolean {
  * a workflow declares an iterated verdict, so its schema is usually the contract a
  * composition is built on.
  */
-export function assertAuthoredStubSatisfiesSchema(node: DagNode, stub: DryRunStubValue): void {
+export function assertAuthoredStubSatisfiesSchema(
+  node: DagNode,
+  stub: DryRunStubValue,
+  formatDiagnostic: DiagnosticTextFormatter = unredactedDiagnosticText
+): void {
   if (node.output_format === undefined) return;
   // A string stub stands in for what the node PRINTS, which the engine parses before
   // it validates; a non-string stub already is the structured value. Parse the first
@@ -281,8 +286,11 @@ export function assertAuthoredStubSatisfiesSchema(node: DagNode, stub: DryRunStu
       value = JSON.parse(stub);
     } catch {
       throw new Error(
-        `Stub for node '${node.id}' declares output_format but is not one JSON document: ` +
-          stub.slice(0, 120)
+        formatDiagnostic(
+          redact =>
+            `Stub for node '${node.id}' declares output_format but is not one JSON document: ` +
+            redact(stub).slice(0, 120)
+        )
       );
     }
   }

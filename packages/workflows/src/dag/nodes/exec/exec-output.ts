@@ -1,3 +1,4 @@
+import { unredactedDiagnosticText, type DiagnosticTextFormatter } from '../../../diagnostic-text';
 import { finishNodeExecution } from '../../../node-execution';
 import { type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
@@ -53,7 +54,8 @@ function execStdoutPreview(stdout: string, credentialValues: readonly string[]):
 export function certifyExecOutput(
   node: ExecNode,
   stdout: string,
-  credentialValues: readonly string[]
+  credentialValues: readonly string[],
+  formatDiagnostic: DiagnosticTextFormatter = unredactedDiagnosticText
 ): {
   output: string;
   structuredOutput?: JsonValue;
@@ -68,7 +70,14 @@ export function certifyExecOutput(
   } catch (parseErr) {
     const diagnostic = redactCredentialValues((parseErr as Error).message, credentialValues);
     throw new ExecOutputContractError(
-      `${label} declares an output_format, so its stdout must be a single JSON document, but it did not parse: ${diagnostic}. stdout began: ${execStdoutPreview(stdout, credentialValues)}`
+      formatDiagnostic(redact => {
+        const protectedStdout = redact(stdout);
+        const parseDiagnostic =
+          protectedStdout === stdout
+            ? diagnostic
+            : 'invalid JSON (credential-bearing stdout redacted)';
+        return `${label} declares an output_format, so its stdout must be a single JSON document, but it did not parse: ${parseDiagnostic}. stdout began: ${execStdoutPreview(protectedStdout, credentialValues)}`;
+      })
     );
   }
   // `JSON.parse` can only yield a JsonValue — no undefined, no non-finite number, no
@@ -96,7 +105,10 @@ export function certifyExecOutput(
       diagnosticCredentialValues
     );
     throw new ExecOutputContractError(
-      `${label}: stdout did not satisfy its declared output_format: ${schemaErrors}. stdout began: ${execStdoutPreview(stdout, credentialValues)}`
+      formatDiagnostic(
+        redact =>
+          `${label}: stdout did not satisfy its declared output_format: ${redact(schemaErrors)}. stdout began: ${execStdoutPreview(redact(stdout), credentialValues)}`
+      )
     );
   }
 

@@ -69,7 +69,7 @@ export async function executeCodeNode(
       ctx.protectedEnvKeys,
       ctx.protectedCredentialValues
     );
-    ctx.onExecCredentials?.(credentialValues);
+    ctx.onCredentials?.(credentialValues);
     let result: Awaited<ReturnType<typeof execFileAsync>>;
     try {
       result = await execFileAsync(command, args, {
@@ -83,7 +83,12 @@ export async function executeCodeNode(
       return { error: codeNodeFailure(node, command, err) };
     }
     // The real run's gate, so a fixture cannot pass a node whose stdout the engine would reject.
-    return certifyExecOutput(node, result.stdout.replace(/\n$/, ''), credentialValues);
+    return certifyExecOutput(
+      node,
+      result.stdout.replace(/\n$/, ''),
+      credentialValues,
+      ctx.formatDiagnostic
+    );
   } catch (error) {
     return { error: (error as Error).message };
   }

@@ -496,6 +496,249 @@ describe('runFixtures', () => {
     }
   });
 
+  const stubInputBody = (nodeId: string, secret: string): string =>
+    Bun.YAML.stringify({
+      fixture: {
+        expect: 'completed',
+        'resolved-text-contains': { [nodeId]: secret, absent: 'missing' },
+      },
+      [nodeId]: 'done',
+    });
+
+  async function expectProtectedStubInput(
+    cwd: string,
+    workflows: WorkflowWithSource[],
+    nodeId: string,
+    secret: string
+  ): Promise<void> {
+    const report = await runFixtures({ workflows, cwd });
+    const result = report.results[0];
+    expect(result.outcome).toBe('completed');
+    expect(result.pass).toBe(false);
+    expect(result.failureReason).toBe(
+      "expected resolved text for node 'absent', but it was not reached"
+    );
+    expect(result.trace?.find(entry => entry.nodeId === nodeId)?.resolvedText).toBe('[REDACTED]');
+    for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+      expect(output).not.toContain(secret);
+    }
+  }
+
+  it.each(['default', 'pack-default', 'pack-project'] as const)(
+    'protects %s stub-only inputs without changing assertions',
+    async source => {
+      const secret = 'synthetic-stub-input-credential';
+      const { cwd } = writeTempProject({
+        workflowYaml: Bun.YAML.stringify({
+          name: 'test-wf',
+          description: 'stub input provenance',
+          ...(source === 'default' ? { inputs: { token: { default: secret } } } : {}),
+          nodes: [{ id: 'answer', prompt: '$INPUTS.token' }],
+        }),
+        body: stubInputBody('answer', secret),
+      });
+      const workflows = workflowsOnDisk(cwd, ['test-wf']);
+      if (source !== 'default') {
+        workflows[0].workflow.pack = {
+          key: 'synthetic',
+          source: 'project',
+          settings: {
+            token: { type: 'string', ...(source === 'pack-default' ? { default: secret } : {}) },
+          },
+        };
+      }
+      if (source === 'pack-project') {
+        mkdirSync(join(cwd, '.archon/packs'), { recursive: true });
+        writeFileSync(
+          join(cwd, '.archon/packs/synthetic.yaml'),
+          Bun.YAML.stringify({ settings: { token: secret } })
+        );
+      }
+      await expectProtectedStubInput(cwd, workflows, 'answer', secret);
+    }
+  );
+
+  it.each(['prompt', 'command', 'compiled-command'] as const)(
+    'protects %s stub-only bindings without changing assertions',
+    async source => {
+      const secret = 'synthetic-stub-input-credential';
+      const composed = source !== 'command';
+      const nodeId = composed ? 'included__answer' : 'answer';
+      const commandNode = { id: 'answer', command: 'bind-test', with: { token: secret } };
+      const { cwd } = writeTempProject({
+        workflowYaml: Bun.YAML.stringify({
+          name: 'test-wf',
+          description: 'stub binding provenance',
+          nodes: composed
+            ? [
+                {
+                  id: 'included',
+                  include: 'child',
+                  ...(source === 'prompt' ? { with: { token: secret } } : {}),
+                },
+              ]
+            : [commandNode],
+        }),
+        body: stubInputBody(nodeId, secret),
+      });
+      let workflows: WorkflowWithSource[];
+      if (composed) {
+        const parent = parseWorkflow(
+          readFileSync(join(cwd, '.archon/workflows/pack/test-wf.yaml'), 'utf8'),
+          'test-wf',
+          providerRegistry
+        );
+        const child = parseWorkflow(
+          Bun.YAML.stringify({
+            name: 'child',
+            description: 'included input provenance',
+            ...(source === 'prompt' ? { inputs: { token: { required: true } } } : {}),
+            nodes:
+              source === 'prompt' ? [{ id: 'answer', prompt: '$INPUTS.token' }] : [commandNode],
+          }),
+          'child',
+          providerRegistry
+        );
+        if (!parent.workflow || !child.workflow)
+          throw new Error(JSON.stringify({ parent: parent.error, child: child.error }));
+        const expanded = expandWorkflowIncludes(
+          new Map([
+            ['test-wf', parent.workflow],
+            ['child', child.workflow],
+          ]),
+          new Map([['bind-test', '$INPUTS.token']])
+        );
+        const workflow = expanded.workflows.get('test-wf');
+        if (!workflow) throw new Error(JSON.stringify(expanded.errors));
+        workflows = [{ workflow, source: 'project' }];
+      } else {
+        mkdirSync(join(cwd, '.archon/commands'), { recursive: true });
+        writeFileSync(join(cwd, '.archon/commands/bind-test.md'), '$INPUTS.token');
+        workflows = workflowsOnDisk(cwd, ['test-wf']);
+      }
+      await expectProtectedStubInput(cwd, workflows, nodeId, secret);
+    }
+  );
+
+  it.each(['available', 'unused'] as const)(
+    'collects %s composed credential references without changing simulation',
+    async state => {
+      const secret = 'synthetic-composed-token';
+      const { cwd } = writeTempProject({
+        workflowYaml: Bun.YAML.stringify({
+          name: 'test-wf',
+          description: 'composed credential reference',
+          inputs: { enabled: { default: state === 'available' ? 'yes' : 'no' } },
+          nodes: [
+            { id: 'seed', prompt: 'produce', when: "$INPUTS.enabled == 'yes'" },
+            {
+              id: 'included',
+              include: 'child',
+              depends_on: ['seed'],
+              trigger_rule: 'all_done',
+              with: { token: '$seed.output' },
+            },
+          ],
+        }),
+        body: Bun.YAML.stringify({
+          fixture: {
+            expect: 'completed',
+            'resolved-text-contains': {
+              included__answer: state === 'available' ? secret : 'hello',
+              absent: 'missing',
+            },
+          },
+          seed: secret,
+          included__answer: 'done',
+        }),
+      });
+      const parent = parseWorkflow(
+        readFileSync(join(cwd, '.archon/workflows/pack/test-wf.yaml'), 'utf8'),
+        'test-wf',
+        providerRegistry
+      );
+      const child = parseWorkflow(
+        Bun.YAML.stringify({
+          name: 'child',
+          description: 'composed credential reference',
+          inputs: { token: { required: true } },
+          nodes: [{ id: 'answer', prompt: state === 'available' ? '$INPUTS.token' : 'hello' }],
+        }),
+        'child',
+        providerRegistry
+      );
+      if (!parent.workflow || !child.workflow)
+        throw new Error(JSON.stringify({ parent: parent.error, child: child.error }));
+      const expanded = expandWorkflowIncludes(
+        new Map([
+          ['test-wf', parent.workflow],
+          ['child', child.workflow],
+        ])
+      );
+      const workflow = expanded.workflows.get('test-wf');
+      if (!workflow) throw new Error(JSON.stringify(expanded.errors));
+      const report = await runFixtures({ workflows: [{ workflow, source: 'project' }], cwd });
+      expect(report.results[0].outcome).toBe('completed');
+      expect(report.results[0].failureReason).toBe(
+        "expected resolved text for node 'absent', but it was not reached"
+      );
+      expect(report.results[0].trace?.find(entry => entry.nodeId === 'seed')?.state).toBe(
+        state === 'available' ? 'stubbed' : 'skipped'
+      );
+      for (const output of [formatFixtureReport(report), JSON.stringify(report)])
+        expect(output).not.toContain(secret);
+    }
+  );
+
+  it.each(['completed', 'failed'] as const)(
+    'protects truncated stub diagnostics only when fixture expecting %s fails',
+    async expected => {
+      const secret = 'synthetic-"quote-credential-' + 'abcdef'.repeat(40);
+      const stub = '{"token":' + JSON.stringify(secret);
+      const { cwd } = writeTempProject({
+        workflowYaml: `name: test-wf
+description: test
+nodes:
+  - id: answer
+    prompt: hello
+    output_format:
+      type: object
+`,
+        body: Bun.YAML.stringify({
+          fixture: {
+            expect: expected,
+            ...(expected === 'failed' ? { 'fail-node': 'answer' } : {}),
+          },
+          answer: stub,
+        }),
+      });
+      const report = await runFixtures({
+        workflows: workflowsOnDisk(cwd, ['test-wf']),
+        cwd,
+        config: {
+          assistant: undefined,
+          assistants: { claude: {}, codex: {} },
+          commands: {},
+          protectedCredentialValues: [secret],
+        },
+      });
+      const result = report.results[0];
+      expect(result.pass).toBe(expected === 'failed');
+      expect(result.nodeFailures?.[0].reason).toContain('not one JSON document');
+      if (expected === 'failed') {
+        expect(result.trace).toBeUndefined();
+        expect(result.nodeFailures?.[0].reason).toBe(
+          `Stub for node 'answer' declares output_format but is not one JSON document: ${stub.slice(0, 120)}`
+        );
+      } else {
+        for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+          expect(output).toContain('[REDACTED]');
+          expect(output).not.toContain('quote-credential');
+        }
+      }
+    }
+  );
+
   it.each(['parsed-string', 'object', 'array'] as const)(
     'redacts %s structured stubs and shell references in and outside loops',
     async shape => {
@@ -2320,52 +2563,58 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       expect(JSON.stringify(report)).not.toContain(JSON.stringify(escaped).slice(1, -1));
     });
 
-    it('protects JSON-escaped credentials in structured failure previews', async () => {
-      const secret = 'synthetic-"quote-credential';
-      const { cwd } = writeTempProject({
-        workflowYaml: [
-          'name: test-wf',
-          'description: canonical output probe',
-          'nodes:',
-          '  - id: code',
-          '    runtime: bun',
-          '    script: |',
-          '      process.stdout.write(JSON.stringify({ token: process.env.ACCOUNT }));',
-          '    output_format:',
-          '      type: object',
-          '      properties:',
-          '        token:',
-          '          type: number',
-          '      required: [token]',
-          '      additionalProperties: false',
-          '  - id: consumer',
-          '    depends_on: [code]',
-          '    bash: exit 7',
-        ].join('\n'),
-        body: 'fixture:\n  expect: completed\nexec-code: true',
-      });
-      callerFrom(trackedOnlyRepo, cwd);
-      const report = await runFixtures({
-        workflows: workflowsOnDisk(cwd, ['test-wf']),
-        cwd,
-        resolveExecConfig: async () => ({
-          assistant: undefined,
-          assistants: { claude: {}, codex: {} },
-          commands: {},
-          envVars: { ACCOUNT: secret },
-          protectedEnvKeys: ['ACCOUNT'],
-        }),
-      });
-      expect(report.results[0].pass).toBe(false);
-      const output = report.results[0].nodeFailures?.find(entry => entry.nodeId === 'code')?.reason;
-      expect(output).toContain('stdout began');
-      const twiceEscaped = JSON.stringify(JSON.stringify(secret).slice(1, -1)).slice(1, -1);
-      expect(output).not.toContain(twiceEscaped);
-      expect(output).toContain('[REDACTED]');
-      for (const published of [formatFixtureReport(report), JSON.stringify(report)]) {
-        expect(published).not.toContain('quote-credential');
+    it.each(['short-schema', 'long-schema', 'long-parse'] as const)(
+      'protects escaped credentials before %s stdout diagnostics are truncated',
+      async shape => {
+        const secret =
+          'synthetic-"quote-credential-' + (shape === 'short-schema' ? 'end' : 'abcdef'.repeat(40));
+        const { cwd } = writeTempProject({
+          workflowYaml: Bun.YAML.stringify({
+            name: 'test-wf',
+            description: 'contract diagnostic',
+            nodes: [
+              {
+                id: 'code',
+                runtime: 'bun',
+                script:
+                  'process.stdout.write(JSON.stringify({ token: process.env.ACCOUNT, context: "$&" })' +
+                  (shape === 'long-parse' ? ' + "invalid"' : '') +
+                  ');',
+                output_format: {
+                  type: 'object',
+                  properties: { token: { type: 'number' }, context: { type: 'string' } },
+                  required: ['token'],
+                  additionalProperties: false,
+                },
+              },
+            ],
+          }),
+          body: 'fixture:\n  expect: completed\nexec-code: true',
+        });
+        callerFrom(trackedOnlyRepo, cwd);
+        const report = await runFixtures({
+          workflows: workflowsOnDisk(cwd, ['test-wf']),
+          cwd,
+          resolveExecConfig: async () => ({
+            assistant: undefined,
+            assistants: { claude: {}, codex: {} },
+            commands: {},
+            envVars: { ACCOUNT: secret },
+            protectedEnvKeys: ['ACCOUNT'],
+          }),
+        });
+        expect(report.results[0].pass).toBe(false);
+        const reason = report.results[0].nodeFailures?.find(
+          entry => entry.nodeId === 'code'
+        )?.reason;
+        expect(reason).toContain(shape === 'long-parse' ? 'did not parse' : 'must be number');
+        expect(reason).toContain('stdout began');
+        expect(reason).toContain('[REDACTED]');
+        for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+          expect(output).not.toContain('quote-credential');
+        }
       }
-    });
+    );
     it('protects JSON-escaped credentials in canonical structured stdout', async () => {
       const secret = 'synthetic-"quote-credential';
       const { cwd } = writeTempProject({
