@@ -72,7 +72,7 @@ archon workflow answer <run-id> --occurrence <id> --text "Rotated the key"
 
 `--occurrence` pins the answer to one pause. If the run has moved on to a different pause, the answer is refused and the refusal names the current occurrence. A second answer to the same pause is refused too, so two answerers never both win.
 
-In a terminal, an answer continues the run in place, unless a running continuation host (`archon serve`, or `archon workflow wake --watch`) on the same database claims it first. The run then continues in that host's process, and the command prints `Run <run-id> is already continuing in another process.` and returns. With `--json`, the answer is recorded and the run waits for a continuation host: `archon serve`, or `archon workflow wake --watch`. A container run needs `archon workflow resume <run-id>`.
+In a terminal, an answer continues the run in place, unless a running continuation host (`archon serve`, or `archon workflow wake --watch`) on the same database claims it first. The command then returns with `Run <run-id> is already continuing in another process.` if that host is still running it, or `Run <run-id> has already continued in another process and is completed.` if it has finished. With `--json`, the answer is recorded and the run waits for a continuation host: `archon serve`, or `archon workflow wake --watch`. A container run needs `archon workflow resume <run-id>`.
 
 ## Resume, cancel or abandon a run
 

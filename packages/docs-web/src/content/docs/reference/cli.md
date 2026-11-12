@@ -1287,7 +1287,7 @@ Resolve a paused gate with `archon workflow respond <run-id> <decision> [text]`.
 When the gate authors `approval.decisions`, only those declared ids are accepted,
 including for `approve` and `reject`. An undeclared decision is refused with the
 allowed ids, and the run stays paused. Without authored decisions, use `approve`
-or `reject`. In human mode it continues the run as [`approve`](#workflow-approve) does, including when a continuation host claims it first.
+or `reject`. The `reject` decision follows [`workflow reject`](#workflow-reject), including cancellation of a legacy gate without authored decisions or `on_reject`. When the answer leaves a resumable run, human mode continues it as [`approve`](#workflow-approve) does, including when a continuation host claims it first.
 
 `archon workflow respond <run-id> --recommended --occurrence <id> [--text <text>]` answers an
 attention wait with the option it recommends, as
@@ -1361,7 +1361,7 @@ archon workflow approve <run-id> --occurrence <occurrence> --json   # refused if
 archon workflow approve <run-id> --json   # record approval + ack; does NOT auto-resume inline
 ```
 
-In human mode `approve`/`reject` auto-resume the run inline, unless a running `archon serve` or [`workflow wake`](#workflow-wake) on the same database claims it first. The run then continues in that host's process, and the command prints `Run <run-id> is already continuing in another process.` and returns. `respond` and `answer` behave the same way. In `--json` mode they record the decision and return an ack **without** resuming. An answered gate is a due continuation, so a running `archon serve` or [`workflow wake`](#workflow-wake) continues it; `workflow resume <run-id>` continues it by hand. Container runs are the exception and need the manual resume.
+In human mode `approve` and a `reject` that leaves the run resumable attempt to resume it inline, unless a running `archon serve` or [`workflow wake`](#workflow-wake) on the same database claims it first. The command then returns with `Run <run-id> is already continuing in another process.` if that host is still running it, or `Run <run-id> has already continued in another process and is completed.` if it has finished. `respond` and `answer` behave the same way for resumable answers. Rejecting a legacy `approval:` gate without authored decisions or `on_reject` cancels the run instead. In `--json` mode they record the decision and return an ack **without** resuming. An answered gate is a due continuation, so a running `archon serve` or [`workflow wake`](#workflow-wake) continues it; `workflow resume <run-id>` continues it by hand. Container runs are the exception and need the manual resume.
 
 #### Detached control verbs
 
@@ -1418,7 +1418,7 @@ transcript. Precheck failures follow each verb's existing error contract:
 
 ### `workflow reject`
 
-Reject a paused run. At an attention wait this is the shorthand described under [`workflow answer`](#workflow-answer): the run continues with `decision: reject` and is not cancelled. At a deprecated `approval:` gate with authored `approval.decisions`, the list must contain `reject`; otherwise the command is refused with the allowed ids and the run stays paused. The optional reason is available as `$<gate-id>.output.text` for authored decisions, or as `$REJECTION_REASON` inside a legacy `on_reject` prompt. Like `approve`, human mode continues the run inline unless a continuation host claims it first, and `--json` only records the decision.
+Reject a paused run. At an attention wait this is the shorthand described under [`workflow answer`](#workflow-answer): the run continues with `decision: reject` and is not cancelled. At a deprecated `approval:` gate with authored `approval.decisions`, the list must contain `reject`; otherwise the command is refused with the allowed ids and the run stays paused. The optional reason is available as `$<gate-id>.output.text` for authored decisions, or as `$REJECTION_REASON` inside a legacy `on_reject` prompt. A legacy `approval:` gate without authored decisions or `on_reject` cancels the run immediately on rejection. With `on_reject`, rejection stages rework until the attempt limit is reached, when it cancels the run. When rejection leaves the run resumable, human mode attempts to continue it inline as [`approve`](#workflow-approve) does, unless a continuation host claims it first. With `--json`, the command records the rejection and returns without inline execution, whether it cancels the run or leaves it resumable.
 
 ```bash
 archon workflow reject <run-id>
