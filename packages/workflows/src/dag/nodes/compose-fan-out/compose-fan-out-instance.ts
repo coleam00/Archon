@@ -348,13 +348,23 @@ async function recordInstanceTerminal(
   return outcome;
 }
 
-function skipOriginOutput(
-  output: NodeOutput | undefined,
-  nodeOutputs: ReadonlyMap<string, NodeOutput>
-): NodeOutput | undefined {
-  return output?.state === 'skipped' && output.cause.kind === 'upstream_skipped'
-    ? nodeOutputs.get(output.cause.origin)
-    : output;
+function blockingBoundaryError(primarySink: string, ctx: RunLayersContext): string | undefined {
+  const nodes = new Map(ctx.layers.flat().map(node => [node.id, node]));
+  const pending = [primarySink];
+  const visited = new Set<string>();
+  for (const id of pending) {
+    if (visited.has(id)) continue;
+    visited.add(id);
+    const output = ctx.nodeOutputs.get(id);
+    if (output?.state !== 'skipped') continue;
+    if (output.cause.kind === 'condition_parse_error' && output.cause.boundary !== undefined) {
+      return formatSkipCause(output.cause);
+    }
+    if (output.cause.kind === 'upstream_skipped') {
+      pending.push(output.cause.origin, ...(nodes.get(id)?.depends_on ?? []));
+    }
+  }
+  return undefined;
 }
 
 /** Reduce a finished body run to the instance outcome, storing its terminal record. */
@@ -402,13 +412,8 @@ async function settleInstance(
   // deterministic instance finishes through a sibling's pause and reaches its sink.
   // Surface any remaining incompleteness rather than treating absent output as success.
   const terminal = instanceCtx.nodeOutputs.get(primarySink);
-  const blocked = skipOriginOutput(terminal, instanceCtx.nodeOutputs);
-  if (
-    blocked?.state === 'skipped' &&
-    blocked.cause.kind === 'condition_parse_error' &&
-    blocked.cause.boundary !== undefined
-  ) {
-    const error = formatSkipCause(blocked.cause);
+  const error = blockingBoundaryError(primarySink, instanceCtx);
+  if (error !== undefined) {
     return recordInstanceTerminal(
       instance,
       { status: 'failed', output: '', error, ...instanceUsage },

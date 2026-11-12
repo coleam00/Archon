@@ -158,9 +158,20 @@ nodes:
     expect(warnings()).toHaveLength(2);
   });
 
-  for (const downstream of [0, 1, 2]) {
+  for (const [downstream, dependencies] of [
+    [0, ['review_qa']],
+    [1, ['review_qa']],
+    [1, ['closed', 'review_qa']],
+    [1, ['review_qa', 'closed']],
+    [2, ['bridge']],
+    [2, ['closed', 'bridge']],
+    [2, ['bridge', 'closed']],
+    [3, ['review_qa']],
+    [3, ['closed', 'review_qa']],
+    [3, ['review_qa', 'closed']],
+  ] as const) {
     for (const join of ['all_success', 'all_done'] as const) {
-      it(`settles a boundary evaluation error at the primary sink as failed (${join}, downstream: ${downstream})`, async () => {
+      it(`settles a boundary evaluation error at the primary sink as failed (${join}, downstream: ${downstream}, dependencies: ${dependencies.join(',')})`, async () => {
         await writeBlock(
           'name: error-leaf\ndescription: leaf\nnodes:\n  - id: work\n    bash: exit 99',
           'error-leaf'
@@ -175,12 +186,28 @@ nodes:
     include: error-leaf
     depends_on: [source]
     when: "$source.output.route == 'go'"
-${downstream === 2 ? '  - id: bridge\n    bash: exit 99\n    depends_on: [review_qa]\n' : ''}
+${
+  dependencies.some(id => id === 'closed')
+    ? `  - id: closed
+    bash: exit 99
+    depends_on: [source]
+    when: "$source.output == 'closed'"
+`
+    : ''
+}
+${
+  downstream >= 2
+    ? `  - id: bridge
+    bash: exit 99
+    depends_on: [${downstream === 3 ? dependencies.join(', ') : 'review_qa'}]
+`
+    : ''
+}
 ${
   downstream > 0
     ? `  - id: result
     bash: exit 99
-    depends_on: [${downstream === 2 ? 'bridge' : 'review_qa'}]
+    depends_on: [${downstream === 3 ? 'bridge' : dependencies.join(', ')}]
 `
     : ''
 }`);
@@ -214,7 +241,7 @@ ${
             )?.data.cause
           ).toMatchObject({
             kind: 'upstream_skipped',
-            origin: `fan__${buildInstanceSnapshots([1])[0].identity}__review_qa__work`,
+            origin: `fan__${buildInstanceSnapshots([1])[0].identity}__${dependencies[0] === 'closed' ? 'closed' : 'review_qa__work'}`,
           });
         }
         const failures = events.filter(
