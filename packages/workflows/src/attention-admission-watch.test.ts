@@ -26,10 +26,14 @@ const host = { branchOf: async () => null };
 async function fixture() {
   const root = roots(await mkdtemp(join(tmpdir(), 'admission-watch-')));
   const store = await createFileWorkflowStore({ root });
-  const { start, launch } = resourceStartFixtures('codebase', 'conversation');
+  const { start } = resourceStartFixtures('codebase', 'conversation');
   const holder = start();
   await store.admitResourceStart(holder);
-  const drop = async (deliveryId: string | null, sourceId: string | null = null) => {
+  const drop = async (
+    deliveryId: string | null,
+    sourceId: string | null = null,
+    codebaseId = 'codebase'
+  ) => {
     const input: SourceReceiptAcceptance = {
       receipt: {
         id: crypto.randomUUID(),
@@ -64,7 +68,9 @@ async function fixture() {
     if (receipt.replay) return null;
     const identity = { receiptId: receipt.receiptId, bindingId: 'binding', ownerId: 'owner' };
     await store.claimStartBindingPreparation(identity);
-    const prepared = launch(undefined, { cwd: '/test' });
+    const prepared = resourceStartFixtures(codebaseId, 'conversation').launch(undefined, {
+      cwd: '/test',
+    });
     expect(
       await store.completeStartBindingPreparation({ ...identity, launch: prepared })
     ).toMatchObject({ status: 'skipped' });
@@ -281,11 +287,11 @@ test.each(['run', 'source-project', 'binding-project'] as const)(
       bad = await drop('unreadable', boundary === 'binding-project' ? null : source.id);
       await until(() => lines.some(line => line.type === 'degraded'));
       const good = await drop('readable', independent.id);
+      await until(() => lines.some(line => line.type === 'notice' && line.labels.request === good));
       await store.persistWorkflowEvent({
         workflow_run_id: independent.id,
         event_type: 'workflow_resumed',
       });
-      await until(() => lines.some(line => line.type === 'notice' && line.labels.request === good));
       await until(() =>
         lines.some(line => line.type === 'resumed' && line.runId === independent.id)
       );
@@ -317,6 +323,109 @@ test.each(['run', 'source-project', 'binding-project'] as const)(
     }
   }
 );
+
+test('admissions from a deleted source can witness a different binding project', async () => {
+  const { store, drop } = await fixture();
+  const source = await store.createWorkflowRun({ workflow_name: 'source', user_message: '' });
+  await store.cancelWorkflowRun(source.id);
+  await store.deleteWorkflowRun(source.id);
+  const failing: IWorkflowStore = Object.create(store);
+  failing.getCodebase = id =>
+    id === 'codebase'
+      ? Promise.reject(new Error('private project failure'))
+      : store.getCodebase(id);
+  const lines: AttentionStreamLine[] = [];
+  const stream = await watchAttentionQueue(
+    failing,
+    host,
+    line => {
+      lines.push(line);
+    },
+    { scope: { kind: 'all' }, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
+  );
+  try {
+    await drop('unreadable', source.id);
+    await until(() => lines.some(line => line.type === 'degraded'));
+    const good = await drop('readable', source.id, 'other-codebase');
+    await until(() => lines.some(line => line.type === 'notice' && line.labels.request === good));
+    await until(() => lines.some(line => line.type === 'bookmark'));
+    expect(lines.filter(line => line.type === 'notice')).toMatchObject([
+      { runId: source.id, workflow: null, labels: { request: good } },
+    ]);
+  } finally {
+    await stream.close();
+  }
+});
+
+test('a workflow delivery can witness an admission from the same deleted source', async () => {
+  const { store, drop } = await fixture();
+  const source = await store.createWorkflowRun({ workflow_name: 'source', user_message: '' });
+  const after = await attentionFeedStart(store);
+  await drop('unreadable', source.id);
+  const page = await readAttentionFeed(store, after, 100);
+  const delivery = page.deliveries.find(row => row.kind === 'admission');
+  if (!delivery) throw new Error('no admission');
+  await store.cancelWorkflowRun(source.id);
+  await store.deleteWorkflowRun(source.id);
+  const failing: IWorkflowStore = Object.create(store);
+  failing.getCodebase = () => Promise.reject(new Error('private project failure'));
+  const { admissionWorkflowNotice } = await import('./workflow-notice');
+  const { hasReadableAttentionWitness } = await import('./attention-watch-witness');
+  await expect(admissionWorkflowNotice({ store: failing }, delivery.facts, null)).rejects.toThrow();
+  expect(
+    await hasReadableAttentionWitness(
+      store,
+      delivery,
+      async candidate => {
+        if (candidate.kind === 'workflow')
+          return store.getWorkflowRun(candidate.event.workflow_run_id);
+        return admissionWorkflowNotice({ store: failing }, candidate.facts, null);
+      },
+      () => false
+    )
+  ).toBe(true);
+});
+
+test('an admission witnesses a workflow projection failure for the same source', async () => {
+  const { store, drop } = await fixture();
+  const source = await store.createWorkflowRun({ workflow_name: 'source', user_message: '' });
+  await store.claimPendingWorkflowRun(source.id);
+  let broken = false;
+  const lines: AttentionStreamLine[] = [];
+  const stream = await watchAttentionQueue(
+    store,
+    {
+      branchOf: async () => {
+        if (broken) throw new Error('private branch failure');
+        return null;
+      },
+    },
+    line => {
+      lines.push(line);
+    },
+    { scope: { kind: 'all' }, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
+  );
+  try {
+    broken = true;
+    await store.pauseWorkflowRun(
+      source.id,
+      {
+        nodeId: 'review',
+        message: 'Ship?',
+        type: 'approval',
+        pauseId: crypto.randomUUID(),
+      },
+      undefined,
+      { workflow_run_id: source.id, event_type: 'node_suspended', step_name: 'review', data: {} }
+    );
+    await until(() => lines.some(line => line.type === 'degraded'));
+    const good = await drop('readable', source.id);
+    await until(() => lines.some(line => line.type === 'notice' && line.labels.request === good));
+    expect(lines.filter(line => line.type === 'notice')).toHaveLength(1);
+  } finally {
+    await stream.close();
+  }
+});
 
 test('closing waits for an in-flight admission read and delivers nothing after closing', async () => {
   const { store } = await fixture();

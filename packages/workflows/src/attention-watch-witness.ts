@@ -4,18 +4,18 @@ import {
   type AttentionDelivery,
   type AttentionFeedStore,
 } from './attention-feed';
-import { requestingRun } from './schemas/resource-start';
 import { WorkflowEventCursorError } from './store';
+import { requestingRun } from './schemas/resource-start';
 
-const deliveryIdentity = (delivery: AttentionDelivery): string => {
-  const runId =
-    delivery.kind === 'workflow'
-      ? delivery.event.workflow_run_id
-      : requestingRun(delivery.facts.sourceActor)?.runId;
-  return delivery.kind === 'admission' && runId === undefined
-    ? `codebase:${delivery.facts.codebaseId}`
-    : `run:${runId}`;
-};
+const deliveryIdentity = (delivery: AttentionDelivery): string =>
+  delivery.kind === 'workflow'
+    ? JSON.stringify(['workflow', delivery.event.workflow_run_id])
+    : JSON.stringify([
+        'admission',
+        requestingRun(delivery.facts.sourceActor)?.runId ?? null,
+        delivery.facts.codebaseId,
+      ]);
+
 export const attentionDeliveryFields = (delivery: AttentionDelivery) =>
   delivery.kind === 'workflow'
     ? {
