@@ -288,7 +288,7 @@ async function dispatchBackgroundWorkflowOwned(
     }
   };
   if (workflow.resource) {
-    // The worker owns the wait, so an API request can return its durable pending run.
+    // A waiting worker must not hold the dispatch call or its conversation lock.
     void launch()
       .catch(async error => {
         getLog().error(

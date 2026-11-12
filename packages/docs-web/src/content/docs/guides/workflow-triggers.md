@@ -239,7 +239,7 @@ concurrency:
 
 These positive integer limits are independent per resource, not an install-wide total. There is no project-level capacity setting or declaration inventory. Editing the override affects the next admission; it never ends or preempts holders. Queued requests retain their own declaration, not the resolved override. Starts can declare different numbers: a start declaring 1 waits beside any holder, while a later start declaring 3 can enter beside two. Use an install override of 1 to serialize every start of a resource.
 
-A hand start waits before workspace setup and names the resource. `archon workflow run <name> --no-wait` refuses a blocked start with the resource and blocker named and returns nonzero. Detached starts wait in their CLI child; detached `--no-wait` reports success only after admission. Chat and API starts also wait; a background API launch returns its pending run while its native worker waits.
+A hand start waits before workspace setup and names the resource. `archon workflow run <name> --no-wait` refuses a blocked start with the resource and blocker named and returns nonzero. Detached starts wait in their CLI child; detached `--no-wait` reports success only after admission. Chat and API starts report waiting through their conversation. A background worker retains the pending run while it waits; the HTTP response remains an acceptance acknowledgment.
 
 The `overlap` setting controls a request that arrives while the resource is full:
 
