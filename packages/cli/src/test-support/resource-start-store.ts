@@ -51,6 +51,7 @@ export function createInMemoryResourceStartStore(
 } {
   const requests = new Map<string, ResourceStartRequestInspection>();
   const receipts = new Map<string, StartReceiptInspection>();
+  const legacyDeclarations = new Set<string>();
   // Holders are implicit: an admitted request whose run is live, unless it gave its slot back.
   const released = new Set<string>();
   const receiptForDelivery = (
@@ -76,19 +77,16 @@ export function createInMemoryResourceStartStore(
       request.blocker?.kind === 'run' ? ((await getRun(request.blocker.id))?.status ?? null) : null,
   });
   const capacity = async (request: ResourceStartRequestInspection): Promise<number> => {
+    if (resourceCaps.has(request.resource) || !legacyDeclarations.has(request.id))
+      return resolveResourceCapacity(resourceCaps, request.resource, request.declaredCapacity);
     const binding = [...receipts.values()]
       .flatMap(receipt => receipt.bindings)
       .find(binding => binding.disposition?.requestId === request.id);
     return resolveResourceCapacity(
       resourceCaps,
       request.resource,
-      resourceCaps.has(request.resource)
-        ? undefined
-        : (request.declaredCapacity ??
-            (binding?.intent?.resource === request.resource
-              ? binding.intent.capacity
-              : undefined) ??
-            (await capturedResourceDeclaration({}, request.launch, request.resource)))
+      (binding?.intent?.resource === request.resource ? binding.intent.capacity : undefined) ??
+        (await capturedResourceDeclaration({}, request.launch, request.resource))
     );
   };
   const withdrawTerminalQueuedStarts = async (resource: string): Promise<void> => {
@@ -223,7 +221,10 @@ export function createInMemoryResourceStartStore(
   return {
     clearDeclaredCapacity: async id => {
       const request = requests.get(id);
-      if (request) delete request.declaredCapacity;
+      if (request) {
+        delete request.declaredCapacity;
+        legacyDeclarations.add(id);
+      }
     },
     resume: async run => {
       const request = requests.get(run.id);
