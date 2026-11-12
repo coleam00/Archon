@@ -1381,6 +1381,7 @@ test('launch diagnostics retain all lines in both inspect forms and workflow get
 
 for (const storage of ['files', 'sql'] as const) {
   test(`${storage} trigger diagnostics project stored run and request blockers without changing receipt acceptance`, async () => {
+    const previousToken = process.env.TRIGGER_LIST_TEST_API_TOKEN;
     const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-diagnostics-')));
     const db = storage === 'sql' ? new SqliteAdapter(join(root, 'store.db')) : undefined;
     const spies = db
@@ -1528,7 +1529,7 @@ for (const storage of ['files', 'sql'] as const) {
       expect(await store.getStartReceipt(receipt.receipt.id)).toEqual(retained);
       const getDetail = store.getStartReceipt.bind(store);
       const secret = 'receipt-list-credential-value-5508';
-      const previousToken = process.env.TRIGGER_LIST_TEST_API_TOKEN;
+      process.env.TRIGGER_LIST_TEST_API_TOKEN = secret;
       for (const failure of ['unreadable', 'missing'] as const) {
         const failedRead = spyOn(store, 'getStartReceipt').mockImplementation(async id => {
           if (id !== empty.receipt.id) return getDetail(id);
@@ -1536,7 +1537,6 @@ for (const storage of ['files', 'sql'] as const) {
           throw new Error(`receipt unreadable: ${secret}`);
         });
         try {
-          process.env.TRIGGER_LIST_TEST_API_TOKEN = secret;
           output.length = 0;
           await triggerCommand(host, 'list', [], { limit: '2' });
           expect(output.join('')).not.toContain(secret);
@@ -1553,11 +1553,11 @@ for (const storage of ['files', 'sql'] as const) {
           ]);
         } finally {
           failedRead.mockRestore();
-          if (previousToken === undefined) delete process.env.TRIGGER_LIST_TEST_API_TOKEN;
-          else process.env.TRIGGER_LIST_TEST_API_TOKEN = previousToken;
         }
       }
     } finally {
+      delete process.env.TRIGGER_LIST_TEST_API_TOKEN;
+      if (previousToken !== undefined) process.env.TRIGGER_LIST_TEST_API_TOKEN = previousToken;
       stdout.mockRestore();
       for (const spy of spies) spy.mockRestore();
       await db?.close();
