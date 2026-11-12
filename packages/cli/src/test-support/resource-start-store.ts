@@ -16,6 +16,7 @@ import {
   resourceStartBlocker,
   selectStartResource,
   resolveResourceCapacity,
+  capturedResourceDeclaration,
   SourceReceiptDigestConflictError,
   type IResourceStartStore,
   type ResourceBlocker,
@@ -43,7 +44,7 @@ export function createInMemoryResourceStartStore(
   recordNotice: (notice: NonNullable<ReturnType<typeof skippedFireNotice>>) => Promise<void>
 ): IResourceStartStore & {
   clearDeclaredCapacity(id: string): Promise<void>;
-  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
+  /** Take a slot for an admitted run's resume or fan-out recovery, or say what blocks it. */
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
   /** Give back the slot of an admitted run; whether it held one. */
   release(id: string): Promise<boolean>;
@@ -74,15 +75,20 @@ export function createInMemoryResourceStartStore(
     blockerRunStatus:
       request.blocker?.kind === 'run' ? ((await getRun(request.blocker.id))?.status ?? null) : null,
   });
-  const capacity = (request: ResourceStartRequestInspection) => {
+  const capacity = async (request: ResourceStartRequestInspection): Promise<number> => {
     const binding = [...receipts.values()]
       .flatMap(receipt => receipt.bindings)
       .find(binding => binding.disposition?.requestId === request.id);
     return resolveResourceCapacity(
       resourceCaps,
       request.resource,
-      request.declaredCapacity ??
-        (binding?.intent?.resource === request.resource ? binding.intent.capacity : undefined)
+      resourceCaps.has(request.resource)
+        ? undefined
+        : (request.declaredCapacity ??
+            (binding?.intent?.resource === request.resource
+              ? binding.intent.capacity
+              : undefined) ??
+            (await capturedResourceDeclaration({}, request.launch, request.resource)))
     );
   };
   const withdrawTerminalQueuedStarts = async (resource: string): Promise<void> => {
@@ -117,9 +123,11 @@ export function createInMemoryResourceStartStore(
       reusableCheckouts: reusable,
       holders,
       waiters: capacityWaiters(candidates),
-      queue: [...requests.values()]
-        .filter(request => request.resource === resource && request.status === 'queued')
-        .map(request => ({ ...request, capacity: capacity(request) })),
+      queue: await Promise.all(
+        [...requests.values()]
+          .filter(request => request.resource === resource && request.status === 'queued')
+          .map(async request => ({ ...request, capacity: await capacity(request) }))
+      ),
       heldCheckouts: heldCheckouts(live, reusable),
       foreignHeldCheckouts: heldCheckouts(
         listRuns()
@@ -220,10 +228,10 @@ export function createInMemoryResourceStartStore(
     resume: async run => {
       const request = requests.get(run.id);
       if (request?.status !== 'admitted') return null;
-      if (run.status !== 'failed' && run.status !== 'paused')
+      if (run.status !== 'failed' && run.status !== 'paused' && run.status !== 'cancelled')
         throw new WorkflowNotResumableError(run.id, run.status);
       const blocker = resourceResumeBlocker(
-        { ...(await occupancy(request.resource)), capacity: capacity(request) },
+        { ...(await occupancy(request.resource)), capacity: await capacity(request) },
         {
           ...run,
           status: run.status,

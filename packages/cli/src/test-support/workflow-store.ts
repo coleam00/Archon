@@ -318,7 +318,15 @@ export function createInMemoryWorkflowStore(
         if (released) view.clearCapacityWait(id);
         return { released };
       }),
-    recoverCancelledFanOutRun: id => write(view => view.recoverCancelledFanOutRun(id)),
+    recoverCancelledFanOutRun: id =>
+      write(async view => {
+        const run = await view.getWorkflowRun(id);
+        if (run?.status === 'cancelled') {
+          const blocker = await admission.resume(run);
+          if (blocker) throw new WorkflowResourceBusyError(id, blocker, 'failed');
+        }
+        return view.recoverCancelledFanOutRun(id);
+      }),
     pauseWorkflowRun: (id, approval, extra, event) =>
       write(view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>
