@@ -462,6 +462,7 @@ function inspectJoinedRunStatus(runId: string, storedStatus: string | null) {
 }
 
 interface RequestInspectionRow extends RequestRow {
+  receipt_id: string | null;
   run_status: string | null;
   blocker_run_status: string | null;
 }
