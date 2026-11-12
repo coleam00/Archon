@@ -4,6 +4,8 @@ import {
   drainableStarts,
   resourceStartBlocker,
   validateStartReceiptLimit,
+  skippedStartFacts,
+  type SkippedStartFacts,
 } from '@archon/workflows/resource-start-store';
 import type {
   StartBindingInspection,
@@ -75,21 +77,19 @@ async function admitExisting(
   return { status: 'admitted', requestId: start.id, runId: start.id };
 }
 
+function recordedBlocker(
+  row: Pick<RequestRow, 'status' | 'blocker_kind' | 'blocker_run_id'>
+): ResourceStartRequestInspection['blocker'] {
+  if (!row.blocker_run_id) return null;
+  const kind = row.blocker_kind ?? (row.status === 'skipped' ? 'run' : null);
+  return kind === 'run' || kind === 'request' ? { kind, id: row.blocker_run_id } : null;
+}
+
 function disposition(row: RequestRow): ResourceStartDisposition {
   if (row.status === 'admitted') return { status: 'admitted', requestId: row.id, runId: row.id };
-  if (row.status === 'skipped' && row.blocker_run_id) {
-    return {
-      status: 'skipped',
-      requestId: row.id,
-      blocker: { kind: row.blocker_kind ?? 'run', id: row.blocker_run_id },
-    };
-  }
-  if (row.status === 'queued' && row.blocker_run_id && row.blocker_kind) {
-    return {
-      status: 'queued',
-      requestId: row.id,
-      blocker: { kind: row.blocker_kind, id: row.blocker_run_id },
-    };
+  const blocker = recordedBlocker(row);
+  if ((row.status === 'skipped' || row.status === 'queued') && blocker) {
+    return { status: row.status, requestId: row.id, blocker };
   }
   throw new Error(`Resource start request '${row.id}' has no executable disposition`);
 }
@@ -324,6 +324,47 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
   };
 }
 
+export async function readSkippedResourceStarts(
+  receiptId: string
+): Promise<SkippedStartFacts[] | null> {
+  const receipt = await getDatabase().query<Record<string, unknown>>(
+    'SELECT id, delivery_id, received_at, source_actor FROM remote_agent_start_receipts WHERE id = $1',
+    [receiptId]
+  );
+  const row = receipt.rows[0];
+  if (!row) return null;
+  const source = {
+    id: String(row.id),
+    deliveryId: typeof row.delivery_id === 'string' ? row.delivery_id : null,
+    receivedAt:
+      row.received_at instanceof Date ? row.received_at.toISOString() : String(row.received_at),
+    sourceActor: sourceReceiptInputSchema.shape.sourceActor.parse(
+      parseStoredJson(row.source_actor)
+    ),
+  };
+  const requests = await getDatabase().query<RequestRow & { binding_id: string }>(
+    `SELECT r.* FROM remote_agent_resource_start_requests r
+      WHERE r.receipt_id = $1 AND r.status = 'skipped'
+      ORDER BY r.binding_id, r.queue_position`,
+    [receiptId]
+  );
+  return requests.rows.flatMap(request => {
+    const facts = skippedStartFacts(
+      {
+        id: request.id,
+        status: request.status,
+        resource: request.resource_key,
+        overlap: request.overlap_policy,
+        blocker: recordedBlocker(request),
+        launch: preparedWorkflowLaunchSchema.parse(parseStoredJson(request.launch)),
+      },
+      source,
+      request.binding_id
+    );
+    return facts ? [facts] : [];
+  });
+}
+
 export async function getStartReceipt(id: string): Promise<StartReceiptInspection | null> {
   const receipt = await getDatabase().query<Record<string, unknown>>(
     'SELECT * FROM remote_agent_start_receipts WHERE id = $1',
@@ -420,7 +461,7 @@ function inspectJoinedRunStatus(runId: string, storedStatus: string | null) {
   return status.data;
 }
 
-interface RequestInspectionRow extends Record<string, unknown> {
+interface RequestInspectionRow extends RequestRow {
   run_status: string | null;
   blocker_run_status: string | null;
 }
@@ -430,14 +471,10 @@ function inspectRequest(row: RequestInspectionRow): ResourceStartRequestInspecti
     id: String(row.id),
     resource: String(row.resource_key),
     hostId: String(row.host_id),
-    overlap: row.overlap_policy as ResourceStartRequestInspection['overlap'],
-    status: row.status as ResourceStartRequestInspection['status'],
+    overlap: row.overlap_policy,
+    status: row.status,
     runStatus: inspectJoinedRunStatus(String(row.id), row.run_status),
-    blocker:
-      (row.blocker_kind === 'run' || row.blocker_kind === 'request') &&
-      typeof row.blocker_run_id === 'string'
-        ? { kind: row.blocker_kind, id: row.blocker_run_id }
-        : null,
+    blocker: recordedBlocker(row),
     blockerRunStatus: inspectJoinedRunStatus(String(row.blocker_run_id), row.blocker_run_status),
     launch: preparedWorkflowLaunchSchema.parse(parseStoredJson(row.launch)),
   };
@@ -447,7 +484,8 @@ const requestInspectionSelect = `SELECT r.*, own.status AS run_status, w.status 
   FROM remote_agent_resource_start_requests r
   LEFT JOIN remote_agent_workflow_runs own ON own.id = r.id
   LEFT JOIN remote_agent_workflow_runs w
-    ON r.blocker_kind = 'run' AND w.id = r.blocker_run_id`;
+    ON (r.blocker_kind = 'run' OR (r.status = 'skipped' AND r.blocker_kind IS NULL))
+   AND w.id = r.blocker_run_id`;
 
 export async function getResourceStartRequest(
   id: string

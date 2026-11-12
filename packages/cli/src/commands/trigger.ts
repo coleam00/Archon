@@ -15,7 +15,6 @@ import { redactedFailureReasons } from '../utils/trigger-diagnostics';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import {
   SourceReceiptDigestConflictError,
-  type StartReceiptInspection,
   type ResourceBlocker,
   type ResourceStartRequestInspection,
 } from '@archon/workflows/resource-start-store';
@@ -113,20 +112,15 @@ function requestSkipReason(
   return value.status === 'skipped' && value.blocker ? skipReason(value.blocker) : null;
 }
 
-function skippedStarts(receipt: StartReceiptInspection) {
-  return receipt.bindings.flatMap(binding => {
-    const disposition = binding.disposition;
-    return disposition?.status === 'skipped'
-      ? [
-          {
-            bindingId: binding.bindingId,
-            requestId: disposition.requestId,
-            blocker: disposition.blocker,
-            reason: skipReason(disposition.blocker),
-          },
-        ]
-      : [];
-  });
+async function skippedStarts(host: WorkflowHost, receiptId: string) {
+  const facts = await host.deps.store.readSkippedResourceStarts(receiptId);
+  if (!facts) throw new Error(`Trigger receipt ${receiptId} not found.`);
+  return facts.map(({ bindingId, requestId, blocker }) => ({
+    bindingId,
+    requestId,
+    blocker,
+    reason: skipReason(blocker),
+  }));
 }
 
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
@@ -136,9 +130,7 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
   const enriched = await Promise.all(
     receipts.map(async receipt => {
       try {
-        const detail = await host.deps.store.getStartReceipt(receipt.id);
-        if (!detail) throw new Error(`Trigger receipt ${receipt.id} not found.`);
-        return { ...receipt, skippedStarts: skippedStarts(detail) };
+        return { ...receipt, skippedStarts: await skippedStarts(host, receipt.id) };
       } catch (error) {
         return { ...receipt, skippedStarts: null, detailError: redactedFailureReasons([error]) };
       }
@@ -344,7 +336,7 @@ async function triggerInspect(host: WorkflowHost, args: string[]): Promise<void>
   if (!('launch' in value)) {
     await writeJsonLine({
       ...value,
-      skippedStarts: skippedStarts(value),
+      skippedStarts: await skippedStarts(host, value.id),
       bindings: await Promise.all(
         value.bindings.map(async binding => ({
           ...binding,

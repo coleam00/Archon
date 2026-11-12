@@ -107,6 +107,9 @@ function createMockStore(): IWorkflowStore {
     acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
       throw new Error('Unexpected acceptStartReceipt');
     }),
+    readSkippedResourceStarts: mock<IWorkflowStore['readSkippedResourceStarts']>(() => {
+      throw new Error('Unexpected readSkippedResourceStarts');
+    }),
     getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
       throw new Error('Unexpected getStartReceipt');
     }),

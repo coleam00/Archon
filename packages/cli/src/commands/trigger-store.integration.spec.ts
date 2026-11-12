@@ -1536,6 +1536,10 @@ for (const storage of ['files', 'sql'] as const) {
       }
       await store.claimPendingWorkflowRun(holder.requestId);
       await store.completeWorkflowRun(holder.requestId, { duration_ms: 1 });
+      await db?.query(
+        "UPDATE remote_agent_resource_start_requests SET blocker_kind = NULL WHERE receipt_id = $1 AND binding_id = 'run-skip'",
+        [receipt.receipt.id]
+      );
       const retained = await store.getStartReceipt(receipt.receipt.id);
       if (!retained) throw new Error('Expected retained receipt');
       const expected = [
@@ -1576,7 +1580,7 @@ for (const storage of ['files', 'sql'] as const) {
       empty.receipt.receivedAt = '2099-01-01T00:00:00Z';
       await store.acceptStartReceipt(empty);
       const summaries = await store.listStartReceipts(2);
-      const detailReads = spyOn(store, 'getStartReceipt');
+      const detailReads = spyOn(store, 'readSkippedResourceStarts');
       output.length = 0;
       await triggerCommand(host, 'list', [], { limit: '1' });
       expect(JSON.parse(output.join(''))).toEqual([{ ...summaries[0], skippedStarts: [] }]);
@@ -1589,15 +1593,17 @@ for (const storage of ['files', 'sql'] as const) {
         { ...summaries[1], skippedStarts: expected },
       ]);
       expect(await store.getStartReceipt(receipt.receipt.id)).toEqual(retained);
-      const getDetail = store.getStartReceipt.bind(store);
+      const getDetail = store.readSkippedResourceStarts.bind(store);
       const secret = 'receipt-list-credential-value-5508';
       process.env.TRIGGER_LIST_TEST_API_TOKEN = secret;
       for (const failure of ['unreadable', 'missing'] as const) {
-        const failedRead = spyOn(store, 'getStartReceipt').mockImplementation(async id => {
-          if (id !== empty.receipt.id) return getDetail(id);
-          if (failure === 'missing') return null;
-          throw new Error(`receipt unreadable: ${secret}`);
-        });
+        const failedRead = spyOn(store, 'readSkippedResourceStarts').mockImplementation(
+          async id => {
+            if (id !== empty.receipt.id) return getDetail(id);
+            if (failure === 'missing') return null;
+            throw new Error(`receipt unreadable: ${secret}`);
+          }
+        );
         try {
           output.length = 0;
           await triggerCommand(host, 'list', [], { limit: '2' });

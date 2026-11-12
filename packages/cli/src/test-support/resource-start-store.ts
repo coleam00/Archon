@@ -1,6 +1,7 @@
 import { holdsWorkflowPath } from '@archon/workflows/workflow-path-lock';
 import {
   validateStartReceiptLimit,
+  skippedStartFacts,
   compareStartReceipts,
   capacityWaiters,
   drainableStarts,
@@ -236,6 +237,19 @@ export function createInMemoryResourceStartStore(
         ],
       });
       return { receiptId: input.receipt.id, replay: false };
+    },
+    readSkippedResourceStarts: async receiptId => {
+      const receipt = receipts.get(receiptId);
+      if (!receipt) return null;
+      return [...receipt.bindings]
+        .sort((a, b) => compareCodeUnits(a.bindingId, b.bindingId))
+        .flatMap(binding => {
+          const request = binding.disposition
+            ? requests.get(binding.disposition.requestId)
+            : undefined;
+          const facts = request ? skippedStartFacts(request, receipt, binding.bindingId) : null;
+          return facts ? [facts] : [];
+        });
     },
     getStartReceipt: async (id): ReturnType<IResourceStartStore['getStartReceipt']> => {
       const receipt = receipts.get(id);

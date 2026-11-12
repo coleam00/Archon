@@ -119,6 +119,7 @@ export function createWorkflowStore(): IWorkflowStore {
     drainResourceStarts: resourceStarts.drainResourceStarts,
     hasStartReceiptForDelivery: resourceStarts.hasStartReceiptForDelivery,
     acceptStartReceipt: resourceStarts.acceptStartReceipt,
+    readSkippedResourceStarts: resourceStarts.readSkippedResourceStarts,
     getStartReceipt: resourceStarts.getStartReceipt,
     listStartReceipts: resourceStarts.listStartReceipts,
     listPendingStartBindings: resourceStarts.listPendingStartBindings,

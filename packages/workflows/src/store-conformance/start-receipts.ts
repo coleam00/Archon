@@ -1,5 +1,5 @@
 import { resourceStartFixtures } from '../resource-start-conformance';
-import { SourceReceiptDigestConflictError } from '../resource-start-store';
+import { SourceReceiptDigestConflictError, type SkippedStartFacts } from '../resource-start-store';
 import type {
   ResourceStartBindingIntent,
   SourceReceiptAcceptance,
@@ -109,6 +109,77 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       });
       expect(await store.listPendingStartBindings({ hostId: 'host' })).toEqual([]);
     });
+    for (const blockerKind of ['run', 'request'] as const) {
+      for (const deliveryId of ['explicit-delivery', null]) {
+        test(`skipped-start reader retains ${blockerKind} blocker (delivery: ${String(deliveryId)})`, async () => {
+          const held = launch();
+          const intent = {
+            resource: binding.resource,
+            capacity: 1,
+            hostId: binding.hostId,
+            overlap: 'queue' as const,
+          };
+          await store.admitResourceStart({ ...intent, launch: held });
+          let blockerId = held.run.id;
+          if (blockerKind === 'request') {
+            const queued = launch();
+            await store.admitResourceStart({ ...intent, launch: queued });
+            await store.cancelWorkflowRun(held.run.id);
+            blockerId = queued.run.id;
+          }
+          expect(await store.readSkippedResourceStarts(crypto.randomUUID())).toBeNull();
+          const input = acceptance();
+          input.receipt.deliveryId = deliveryId;
+          input.receipt.sourceActor = { source: 'operator', id: 'sender', display: 'Sender' };
+          input.bindings = [
+            { ...binding, overlap: 'skip' },
+            { ...binding, bindingId: 'other', resource: 'other-resource' },
+          ];
+          await store.acceptStartReceipt(input);
+          expect(await store.readSkippedResourceStarts(input.receipt.id)).toEqual([]);
+          const identity = {
+            receiptId: input.receipt.id,
+            bindingId: binding.bindingId,
+            ownerId: 'preparer',
+          };
+          await store.claimStartBindingPreparation(identity);
+          const prepared = launch();
+          expect(
+            await store.completeStartBindingPreparation({ ...identity, launch: prepared })
+          ).toEqual({
+            status: 'skipped',
+            requestId: prepared.run.id,
+            blocker: { kind: blockerKind, id: blockerId },
+          });
+          const expected: SkippedStartFacts[] = [
+            {
+              requestId: prepared.run.id,
+              receiptId: input.receipt.id,
+              bindingId: binding.bindingId,
+              resource: binding.resource,
+              overlap: 'skip',
+              blocker: { kind: blockerKind, id: blockerId },
+              deliveryId,
+              receivedAt: input.receipt.receivedAt,
+              sourceActor: input.receipt.sourceActor,
+              codebaseId: prepared.run.codebase_id,
+              cwd: prepared.execution.cwd,
+            },
+          ];
+          const other = { ...identity, bindingId: 'other' };
+          await store.claimStartBindingPreparation(other);
+          const admitted = await store.completeStartBindingPreparation({
+            ...other,
+            launch: launch(),
+          });
+          expect(admitted?.status).toBe('admitted');
+          expect(await store.readSkippedResourceStarts(input.receipt.id)).toEqual(expected);
+          if (blockerKind === 'run') await store.cancelWorkflowRun(blockerId);
+          else await store.withdrawQueuedResourceStart(blockerId);
+          expect(await store.readSkippedResourceStarts(input.receipt.id)).toEqual(expected);
+        });
+      }
+    }
     test('delivery lookup answers only for the recorded source and delivery', async () => {
       const input = acceptance();
       expect(await store.hasStartReceiptForDelivery('source', 'delivery')).toBe(false);

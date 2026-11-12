@@ -1,3 +1,9 @@
+import type { SkippedStartFacts } from './skipped-start';
+export {
+  skippedStartFactsSchema,
+  skippedStartFacts,
+  type SkippedStartFacts,
+} from './skipped-start';
 import { createLogger } from '@archon/paths';
 import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
 import type { z } from 'zod';
@@ -378,6 +384,8 @@ export interface IResourceStartStore {
   acceptStartReceipt(
     input: SourceReceiptAcceptance
   ): Promise<{ receiptId: string; replay: boolean }>;
+  /** Recorded blockers, including receipts without delivery IDs; null if the receipt is absent. */
+  readSkippedResourceStarts(receiptId: string): Promise<SkippedStartFacts[] | null>;
   getStartReceipt(id: string): Promise<StartReceiptInspection | null>;
   listStartReceipts(
     limit?: number

@@ -161,6 +161,9 @@ export function createMockStore(): MockWorkflowStore {
     inMemoryEventRows(createWorkflowEvent.mock.calls.map(([event]) => event)).filter(
       e => e.workflow_run_id === runId && (types?.includes(e.event_type) ?? true)
     );
+  const unexpected = (operation: string) => (): never => {
+    throw new Error(`Unexpected ${operation}`);
+  };
   const unexpectedWrite = (): never => {
     throw new Error('Unexpected state document write');
   };
@@ -200,15 +203,10 @@ export function createMockStore(): MockWorkflowStore {
     hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
       throw new Error('Unexpected hasStartReceiptForDelivery');
     }),
-    acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
-      throw new Error('Unexpected acceptStartReceipt');
-    }),
-    getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
-      throw new Error('Unexpected getStartReceipt');
-    }),
-    listStartReceipts: mock<IWorkflowStore['listStartReceipts']>(() => {
-      throw new Error('Unexpected listStartReceipts');
-    }),
+    acceptStartReceipt: mock(unexpected('acceptStartReceipt')),
+    readSkippedResourceStarts: mock(unexpected('readSkippedResourceStarts')),
+    getStartReceipt: mock(unexpected('getStartReceipt')),
+    listStartReceipts: mock(unexpected('listStartReceipts')),
     listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(() => {
       throw new Error('Unexpected listPendingStartBindings');
     }),

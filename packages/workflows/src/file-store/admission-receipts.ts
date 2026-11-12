@@ -18,6 +18,8 @@ import {
   compareCodeUnits,
   compareStartReceipts,
   validateStartReceiptLimit,
+  skippedStartFacts,
+  type SkippedStartFacts,
   type DamagedStartReceipt,
   type IResourceStartStore,
   type StartBindingInspection,
@@ -35,6 +37,7 @@ type ReceiptOperations = Pick<
   | 'acceptStartReceipt'
   | 'hasStartReceiptForDelivery'
   | 'getStartReceipt'
+  | 'readSkippedResourceStarts'
   | 'listStartReceipts'
   | 'listPendingStartBindings'
   | 'claimStartBindingPreparation'
@@ -127,6 +130,23 @@ export function createReceiptOperations(
         async tx =>
           (await tx.read(deliveryPathFor(sourceInstanceId, deliveryId), z.string())) !== null
       ),
+    readSkippedResourceStarts: receiptId =>
+      query(async tx => {
+        const receipt = await tx.receipt(receiptId);
+        if (!receipt) return null;
+        const facts: SkippedStartFacts[] = [];
+        for (const binding of [...receipt.bindings].sort((a, b) =>
+          compareCodeUnits(a.bindingId, b.bindingId)
+        )) {
+          for (const requestId of binding.requestIds) {
+            const request = await tx.request(requestId);
+            if (!request) throw new Error(`Resource start request '${requestId}' missing`);
+            const skipped = skippedStartFacts(request, receipt, binding.bindingId);
+            if (skipped) facts.push(skipped);
+          }
+        }
+        return facts;
+      }),
     getStartReceipt: id =>
       query(async tx => {
         const row = await tx.receipt(id);
