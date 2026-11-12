@@ -1527,15 +1527,19 @@ for (const storage of ['files', 'sql'] as const) {
       ]);
       expect(await store.getStartReceipt(receipt.receipt.id)).toEqual(retained);
       const getDetail = store.getStartReceipt.bind(store);
+      const secret = 'receipt-list-credential-value-5508';
+      const previousToken = process.env.TRIGGER_LIST_TEST_API_TOKEN;
       for (const failure of ['unreadable', 'missing'] as const) {
         const failedRead = spyOn(store, 'getStartReceipt').mockImplementation(async id => {
           if (id !== empty.receipt.id) return getDetail(id);
           if (failure === 'missing') return null;
-          throw new Error('receipt unreadable');
+          throw new Error(`receipt unreadable: ${secret}`);
         });
         try {
+          process.env.TRIGGER_LIST_TEST_API_TOKEN = secret;
           output.length = 0;
           await triggerCommand(host, 'list', [], { limit: '2' });
+          expect(output.join('')).not.toContain(secret);
           expect(JSON.parse(output.join(''))).toEqual([
             {
               ...summaries[0],
@@ -1543,12 +1547,14 @@ for (const storage of ['files', 'sql'] as const) {
               detailError:
                 failure === 'missing'
                   ? `Trigger receipt ${empty.receipt.id} not found.`
-                  : 'receipt unreadable',
+                  : 'receipt unreadable: [REDACTED]',
             },
             { ...summaries[1], skippedStarts: expected },
           ]);
         } finally {
           failedRead.mockRestore();
+          if (previousToken === undefined) delete process.env.TRIGGER_LIST_TEST_API_TOKEN;
+          else process.env.TRIGGER_LIST_TEST_API_TOKEN = previousToken;
         }
       }
     } finally {
