@@ -166,7 +166,6 @@ nodes:
     [2, ['bridge']],
     [2, ['closed', 'bridge']],
     [2, ['bridge', 'closed']],
-    [3, ['review_qa']],
     [3, ['closed', 'review_qa']],
     [3, ['review_qa', 'closed']],
   ] as const) {
