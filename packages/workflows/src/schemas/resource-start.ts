@@ -133,7 +133,8 @@ export function requestingRun(
 
 /**
  * How many admitted holders a resource slot allows at once, as a pack or binding declares
- * it. Optional: admission resolves the number it uses (`resolveResourceCapacity`).
+ * it. Optional: admission resolves the number it uses (`recordedResourceCapacity`, then the
+ * install config).
  */
 export const resourceSlotCapacitySchema = z.number().int().min(1).optional();
 
