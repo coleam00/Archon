@@ -1,3 +1,4 @@
+import { generateKeyPairSync } from 'node:crypto';
 import { mkdir, mkdtemp, writeFile, unlink } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -7,13 +8,23 @@ import {
   retainsWorkspace,
   getRegisteredPlatformPolicies,
 } from '@archon/core/platforms/registry';
-import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
+import { afterAll, beforeAll, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
 import type { IGitHubAppAuthProvider, GitHubAuth, handleMessage } from '@archon/core';
 import type { EventEmitter } from 'events';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
 import { clearConfigCache, loadConfig, toSafeConfig } from '@archon/core/config/config-loader';
 import { InvalidConfigError } from '@archon/core/config';
+import {
+  createWorkflowDeps,
+  initializeWorkflowGitHubAppAuth,
+  registerGitHubAppAuthProvider,
+} from '@archon/core/workflows/store-adapter';
+import { installGitHubCliShim } from '@archon/core/github-auth/gh-shim-install';
+
+const appPrivateKey = generateKeyPairSync('rsa', { modulusLength: 2048 })
+  .privateKey.export({ type: 'pkcs1', format: 'pem' })
+  .toString();
 
 const trackTempRoot = trackTempRoots();
 let pluginsDir: string;
@@ -177,7 +188,7 @@ mock.module('@archon/core', () => ({
   },
   logConfig: (): void => undefined,
   getPort: async (): Promise<number> => 12345,
-  initializeWorkflowGitHubAppAuth: (): IGitHubAppAuthProvider => installationTokenProvider,
+  initializeWorkflowGitHubAppAuth,
   isPerUserGitHubEnabled: (): boolean => false,
   isPerUserProviderKeysEnabled: (): boolean => false,
   getDatabaseType: (): string => 'sqlite',
@@ -205,6 +216,11 @@ const installationTokenProvider = {
   invalidateToken: () => {},
   invalidateRepo: () => {},
 } satisfies IGitHubAppAuthProvider;
+
+const constructAppProvider = mock(() => installationTokenProvider);
+mock.module('@archon/core/github-auth/auth', () => ({
+  createGitHubAppAuthProvider: constructAppProvider,
+}));
 
 const githubDispatches: (typeof handleMessage | undefined)[] = [];
 const mockGitHubAuth = mock((_auth: GitHubAuth): void => undefined);
@@ -325,14 +341,17 @@ mock.module('./services/attention-router', () => ({
   },
 }));
 mock.module('./services/web-push', () => ({ WebPushDestination: class {} }));
+let capturedWorkflowDeps: ReturnType<typeof createWorkflowDeps> | undefined;
 const workflowHost = { operations: {}, afterOwnedExecution: async () => {} };
 mock.module('@archon/core/workflows/sql-host', () => ({
-  createSqlWorkflowHost: () => workflowHost,
+  createSqlWorkflowHost: () => {
+    capturedWorkflowDeps = createWorkflowDeps();
+    return workflowHost;
+  },
   createSqlWorkflowOperations: () => {
     throw new Error('No plugin action expected during boot');
   },
 }));
-mock.module('@archon/core/workflows/store-adapter', () => ({ createWorkflowStore: () => ({}) }));
 
 mock.module('./services/workflow-resume-service', () => ({
   resumeWorkflowRunFromServer: async (): Promise<never> => {
@@ -393,6 +412,12 @@ const processEmitter: EventEmitter = process;
 const originalListeners = new Map(
   processEvents.map(event => [event, new Set(processEmitter.listeners(event))] as const)
 );
+
+beforeEach(() => {
+  registerGitHubAppAuthProvider(null);
+  constructAppProvider.mockClear();
+  capturedWorkflowDeps = undefined;
+});
 
 beforeAll(async () => {
   pluginsDir = await mkdtemp(join(tmpdir(), 'server-chat-policies-'));
@@ -560,6 +585,8 @@ describe('server platform composition', () => {
       } else {
         expect(mockGitHubAuth).not.toHaveBeenCalled();
       }
+      expect(capturedWorkflowDeps?.githubApp).toBeUndefined();
+      expect(constructAppProvider).not.toHaveBeenCalled();
       expect(logOutput.output()).not.toBe('');
       for (const token of [env.GH_TOKEN, env.GITHUB_TOKEN]) {
         if (token) expect(logOutput.output()).not.toContain(token);
@@ -573,35 +600,50 @@ describe('server platform composition', () => {
     }
   });
 
-  test('server passes its configured App provider to the URL API routes', async () => {
-    process.env.GITHUB_APP_ID = '123';
-    process.env.GITHUB_APP_PRIVATE_KEY = 'test-key';
-    process.env.WEBHOOK_SECRET = 'test-webhook';
-    const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
-      port: 12345,
-    })) as unknown as typeof Bun.serve);
-    try {
-      mockRegisterApiRoutes.mockClear();
-      const { startServer } = await import('./index');
-      await startServer({ port: 12345 });
-      expect(mockRegisterApiRoutes.mock.calls.at(-1)?.[5]?.githubAppAuth).toBe(
-        installationTokenProvider
-      );
-    } finally {
-      serveSpy.mockRestore();
-      delete process.env.GITHUB_APP_ID;
-      delete process.env.GITHUB_APP_PRIVATE_KEY;
-      delete process.env.WEBHOOK_SECRET;
+  test.each([false, true])(
+    'cold App boot initializes workflow dependencies before hosting (skip adapters: %s)',
+    async skipPlatformAdapters => {
+      process.env.GITHUB_APP_ID = '123';
+      process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
+      process.env.WEBHOOK_SECRET = 'test-webhook';
+      const serveSpy = spyOn(Bun, 'serve').mockImplementation((() => ({
+        port: 12345,
+      })) as unknown as typeof Bun.serve);
+      try {
+        mockRegisterApiRoutes.mockClear();
+        const { startServer } = await import('./index');
+        await startServer({ port: 12345, skipPlatformAdapters });
+        const app = capturedWorkflowDeps?.githubApp;
+        expect(app).toBeDefined();
+        expect(app?.installCliShim).toBe(installGitHubCliShim);
+        expect(await app?.resolveInstallationToken('owner', 'private-repo')).toBe(
+          'inherited-port-token'
+        );
+        expect(mockInstallationToken).toHaveBeenLastCalledWith('owner', 'private-repo');
+        expect(initializeWorkflowGitHubAppAuth()).toBe(installationTokenProvider);
+        expect(constructAppProvider).toHaveBeenCalledTimes(1);
+        if (!skipPlatformAdapters) {
+          expect(mockRegisterApiRoutes.mock.calls.at(-1)?.[5]?.githubAppAuth).toBe(
+            installationTokenProvider
+          );
+        }
+      } finally {
+        serveSpy.mockRestore();
+        delete process.env.GITHUB_APP_ID;
+        delete process.env.GITHUB_APP_PRIVATE_KEY;
+        delete process.env.WEBHOOK_SECRET;
+      }
     }
-  });
+  );
 
   test.each([
-    { HOST: '0.0.0.0', allow: undefined, rejects: true },
+    { HOST: '0.0.0.0', allow: undefined, rejects: true, skipPlatformAdapters: false },
+    { HOST: '0.0.0.0', allow: undefined, rejects: true, skipPlatformAdapters: true },
     { HOST: '0.0.0.0', allow: '1', rejects: false },
     { HOST: 'localhost', allow: undefined, rejects: false },
   ])('App mode refuses a public bind before listening: %j', async env => {
     process.env.GITHUB_APP_ID = '123';
-    process.env.GITHUB_APP_PRIVATE_KEY = 'test-key';
+    process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
     process.env.WEBHOOK_SECRET = 'test-webhook';
     process.env.HOST = env.HOST;
     if (env.allow) process.env.ARCHON_ALLOW_INTERNAL_ON_PUBLIC_BIND = env.allow;
@@ -610,7 +652,7 @@ describe('server platform composition', () => {
     })) as unknown as typeof Bun.serve);
     try {
       const { startServer } = await import('./index');
-      const started = startServer({ port: 12345 });
+      const started = startServer({ port: 12345, skipPlatformAdapters: env.skipPlatformAdapters });
       if (env.rejects) {
         await expect(started).rejects.toThrow(/non-loopback/);
         expect(serveSpy).not.toHaveBeenCalled();
@@ -683,7 +725,7 @@ describe('server platform composition', () => {
       process.env.ARCHON_PORT = '3090';
       process.env.PORT = '3000';
       process.env.GITHUB_APP_ID = '123';
-      process.env.GITHUB_APP_PRIVATE_KEY = 'test-key';
+      process.env.GITHUB_APP_PRIVATE_KEY = appPrivateKey;
       process.env.WEBHOOK_SECRET = 'test-secret';
       mockInstallationToken.mockClear();
       try {

@@ -76,6 +76,7 @@ import {
   loadConfig,
   logConfig,
   getPort,
+  initializeWorkflowGitHubAppAuth,
   isPerUserGitHubEnabled,
   isPerUserProviderKeysEnabled,
   getDatabaseType,
@@ -206,6 +207,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     workflowPlatforms: new Map([[web.adapter.getPlatformType(), web.adapter]]),
     activePlatforms: ['Web'],
   };
+  const githubAppAuthProvider = initializeWorkflowGitHubAppAuth();
   const resourceStarts = await createResourceStarts();
   const adapterContext: PlatformAdapterContext = {
     dispatchMessage: (platform, id, message, context) =>
@@ -253,7 +255,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   });
 
   const hostname = process.env.HOST || '0.0.0.0';
-  assertInternalEndpointBind(hostname, adapters.githubAppAuthProvider);
+  assertInternalEndpointBind(hostname, githubAppAuthProvider);
   warnWebAuthHeaderTrust(hostname);
 
   const server = Bun.serve({
