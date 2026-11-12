@@ -1,4 +1,4 @@
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { execFileAsync } from '@archon/git';
 import { BUNDLED_GIT_COMMIT, BUNDLED_IS_BINARY, BUNDLED_VERSION } from '@archon/paths';
@@ -6,6 +6,15 @@ import type { AppCommit } from './routes/schemas/system.schemas';
 import { getLog } from './server-log';
 
 const SOURCE_ROOT = join(import.meta.dir, '../../..');
+
+/** Git variables that select a repository other than the one at the working directory. */
+const REPOSITORY_SELECTORS = new Set([
+  'GIT_DIR',
+  'GIT_WORK_TREE',
+  'GIT_INDEX_FILE',
+  'GIT_OBJECT_DIRECTORY',
+  'GIT_COMMON_DIR',
+]);
 
 /** The running server's version: the build-time constant in a binary, package.json in source. */
 export const appVersion = readAppVersion();
@@ -34,9 +43,20 @@ export async function readAppCommit(sourceRoot = SOURCE_ROOT): Promise<AppCommit
       ? undefined
       : { sha: BUNDLED_GIT_COMMIT, committedAt: null };
   }
+  // Git would otherwise walk up from a tree without its own `.git` (a directory, or a
+  // worktree's file) and name the commit of whatever checkout encloses it.
+  if (!existsSync(join(sourceRoot, '.git'))) {
+    getLog().debug({ sourceRoot }, 'app_commit.no_git_metadata');
+    return undefined;
+  }
+  // An inherited GIT_DIR and its relatives would point git at another repository.
+  const env = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !REPOSITORY_SELECTORS.has(key))
+  );
   try {
     const { stdout } = await execFileAsync('git', ['log', '-1', '--format=%h%n%cI'], {
       cwd: sourceRoot,
+      env,
       timeout: 5000,
     });
     const [sha, committedAt] = stdout.trim().split('\n');
