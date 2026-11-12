@@ -7,6 +7,7 @@ import { dryRunWorkflow, formatDryRunTrace } from '../../dry-run';
 import { expandWorkflowIncludes } from '../../include-expander';
 import { resolvedBodyNodes } from '../../graph-plan';
 import { getLog } from '../log';
+import { createBoundaryErrorHistory } from '../skip-node';
 import {
   resolveTestWorkflow,
   createMockDeps,
@@ -20,6 +21,99 @@ import type { setupIncludeExpansionTests } from './composition-include-resume';
 export function registerBoundaryReportingTests(
   fixture: ReturnType<typeof setupIncludeExpansionTests>
 ) {
+  it('shares in-flight boundary history and successful claims but retries a rejected read', async () => {
+    const deps = createMockDeps();
+    const failure = new Error('history temporarily unavailable');
+    deps.store.listWorkflowEvents.mockRejectedValueOnce(failure);
+    const history = createBoundaryErrorHistory(deps.store, 'history-retry');
+    const failed = history();
+    expect(history()).toBe(failed);
+    await expect(failed).rejects.toBe(failure);
+    const recovered = history();
+    expect(history()).toBe(recovered);
+    const claimed = await recovered;
+    claimed.add('already-reported');
+    expect(await history()).toBe(claimed);
+    expect(await history()).toContain('already-reported');
+    expect(deps.store.listWorkflowEvents).toHaveBeenCalledTimes(2);
+  });
+
+  it('reports a later include gate after an earlier boundary history read fails', async () => {
+    const block = fixture.buildWf('recovery-block', [{ id: 'work', bash: 'exit 99' }]);
+    const parent = fixture.buildWf('history-recovery', [
+      { id: 'source', bash: 'printf go' },
+      {
+        id: 'first',
+        include: 'recovery-block',
+        depends_on: ['source'],
+        when: "$source.output == 'go'",
+      },
+      {
+        id: 'second',
+        include: 'recovery-block',
+        depends_on: ['first'],
+        trigger_rule: 'all_done',
+        when: "$source.output == 'go'",
+      },
+    ]);
+    const expansion = expandWorkflowIncludes(
+      new Map([
+        ['recovery-block', block],
+        ['history-recovery', parent],
+      ])
+    );
+    expect(expansion.errors).toEqual([]);
+    const workflow = expansion.workflows.get('history-recovery')!;
+    for (const node of workflow.nodes) {
+      for (const boundary of readComposedMeta(node)?.boundaries ?? [])
+        boundary.when = `invalid ${boundary.boundary.includeId} gate`;
+    }
+    const deps = createMockDeps();
+    deps.store.listWorkflowEvents.mockRejectedValueOnce(
+      new Error('history temporarily unavailable')
+    );
+    const platform = createMockPlatform();
+    const errors = spyOn(getLog(), 'error');
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          platform,
+          cwd: fixture.testDir,
+          workflow,
+          workflowRun: makeWorkflowRun('history-recovery'),
+        })
+      );
+      const events = fixture.eventList(deps);
+      expect(events.filter(e => e.event_type === 'node_failed')).toMatchObject([
+        { step_name: 'first__work', data: { error: 'history temporarily unavailable' } },
+      ]);
+      expect(events.filter(e => e.event_type === 'node_skipped')).toMatchObject([
+        {
+          step_name: 'second__work',
+          data: {
+            reason: 'when_condition_parse_error',
+            cause: {
+              kind: 'condition_parse_error',
+              expr: 'invalid second gate',
+              boundary: { includeId: 'second', workflow: 'recovery-block' },
+            },
+          },
+        },
+      ]);
+      const messages = deliveredMessages(platform).filter(m => m.startsWith("Include '"));
+      expect(messages).toHaveLength(1);
+      expect(messages[0]).toContain("Include 'second'");
+      expect(messages[0]).toContain('invalid second gate');
+      expect(deps.store.listWorkflowEvents).toHaveBeenCalledTimes(2);
+      expect(
+        errors.mock.calls.filter(call => call[1] === 'dag_node_skipped_condition_parse_error')
+      ).toHaveLength(1);
+    } finally {
+      errors.mockRestore();
+    }
+  });
+
   for (const include of [false, true]) {
     it(`does not read boundary history without an evaluation error (include: ${include})`, async () => {
       const deps = createMockDeps();

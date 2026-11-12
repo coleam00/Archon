@@ -10,7 +10,11 @@ import { skipReasonForCause } from './trigger-rule';
 
 export function createBoundaryErrorHistory(store: IWorkflowStore, runId: string) {
   let history: Promise<Set<string>> | undefined;
-  return () => (history ??= readReportedBoundaryErrors(store, runId));
+  return () =>
+    (history ??= readReportedBoundaryErrors(store, runId).catch(error => {
+      history = undefined;
+      throw error;
+    }));
 }
 
 async function readReportedBoundaryErrors(
