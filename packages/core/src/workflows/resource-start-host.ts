@@ -68,7 +68,6 @@ import {
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
 import { loadWorkflowRunConfigFile, unsealWorkflowRunConfig } from '../config/run-config';
-import { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
 import type { Codebase } from '../schemas/codebase';
 import type { WorkflowHost } from './host-store';
 import { registerRepository } from '../handlers/clone';
@@ -340,10 +339,7 @@ async function prepareClaimedBinding(
       await host.deps.store.failStartBindingPreparation({
         ...identity,
         retryable: false,
-        error:
-          error instanceof ResourceSlotCapacityConflictError
-            ? 'resource_capacity_conflict'
-            : `${stage}_failed`,
+        error: `${stage}_failed`,
       });
     } catch (statusError) {
       throw new AggregateError(

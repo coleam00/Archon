@@ -113,7 +113,6 @@ describe('parsePackDeclaration bindings', () => {
           workflow: 'sweep',
           resource: 'sweep',
           resource_scope: 'repo',
-          capacity: 1,
           overlap: 'skip',
           isolation: { kind: 'default' },
           schedule: { interval_seconds: 60 },
@@ -129,7 +128,6 @@ describe('parsePackDeclaration bindings', () => {
           workflow: 'sweep',
           resource: 'follow-up',
           resource_scope: 'repo',
-          capacity: 1,
           overlap: 'queue',
           isolation: { kind: 'default' },
           inputs: {},
@@ -173,10 +171,6 @@ describe('parsePackDeclaration bindings', () => {
     [
       `${timer()}  ev:\n    workflow: w\n    resource: r\n    overlap: skip\n    event: { kind: k }\n  ref:\n    workflow: w\n    resource: x\n    overlap: skip\n    schedule: { interval_seconds: 5 }\n    inputs:\n      e: { binding: ev }\n`,
       "names event binding 'ev'",
-    ],
-    [
-      `${timer()}  again:\n    workflow: w\n    resource: sweep\n    capacity: 2\n    overlap: skip\n    schedule: { interval_seconds: 5 }\n`,
-      "share resource 'sweep' but declare capacity 1 and 2",
     ],
   ])('refuses %p, naming the file and binding', (bindings, reason) => {
     const parse = (): unknown =>

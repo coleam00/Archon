@@ -3,7 +3,7 @@ import { toBranchName } from '@archon/git';
 // @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
-import { mkdtemp } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -21,12 +21,7 @@ const {
   getStartReceipt,
   withdrawQueuedResourceStart,
 } = createWorkflowStore();
-import {
-  addResourceSlotHolder,
-  liveResourceSlotHolders,
-  lockResourceSlot,
-  ResourceSlotCapacityConflictError,
-} from './resource-slots';
+import { addResourceSlotHolder, liveResourceSlotHolders, lockResourceSlot } from './resource-slots';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import {
   claimPendingWorkflowRun,
@@ -1020,29 +1015,26 @@ describe('durable resource starts', () => {
     expect((await claimPendingWorkflowRun(third))?.status).toBe('running');
   });
 
-  test('a request that declares a different capacity for a resource fails without a row', async () => {
-    const owner = crypto.randomUUID();
-    const conflicting = crypto.randomUUID();
-    await admitResourceStart({
-      resource: 'fixed',
-      capacity: 1,
-      hostId: 'host',
-      overlap: 'queue',
-      launch: launch(owner),
-    });
-    await expect(
-      admitResourceStart({
-        resource: 'fixed',
-        capacity: 3,
-        hostId: 'host',
-        overlap: 'queue',
-        launch: launch(conflicting),
-      })
-    ).rejects.toBeInstanceOf(ResourceSlotCapacityConflictError);
-    expect(await getResourceStartRequest(conflicting)).toBeNull();
-    expect(
-      (await getDatabase().query('SELECT capacity FROM remote_agent_resource_slots')).rows
-    ).toEqual([{ capacity: 1 }]);
+  test('the install config beats a declared capacity, which beats the default of 10', async () => {
+    const decide = async (resource: string, count: number, capacity?: number) => {
+      const statuses: string[] = [];
+      for (let index = 0; index < count; index++) {
+        const decision = await admitResourceStart({
+          resource,
+          ...(capacity === undefined ? {} : { capacity }),
+          hostId: 'host',
+          overlap: 'skip',
+          launch: launch(crypto.randomUUID()),
+        });
+        statuses.push(decision.status);
+      }
+      return statuses;
+    };
+    const admitted = (count: number) => Array<string>(count).fill('admitted');
+    expect(await decide('undeclared', 11)).toEqual([...admitted(10), 'skipped']);
+    expect(await decide('declared', 3, 2)).toEqual([...admitted(2), 'skipped']);
+    await writeFile(join(root, 'config.yaml'), 'concurrency:\n  resources:\n    declared: 3\n');
+    expect(await decide('declared', 2, 2)).toEqual(['admitted', 'skipped']);
   });
 });
 

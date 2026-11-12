@@ -66,18 +66,33 @@ export function skippedFireNotice(
 
 export class SourceReceiptDigestConflictError extends Error {}
 
-export class ResourceSlotCapacityConflictError extends Error {
-  constructor(
-    public readonly resource: string,
-    public readonly configured: number,
-    public readonly requested: number
-  ) {
-    super(
-      `Resource '${resource}' has capacity ${String(configured)}; a request declared ${String(requested)}. Every binding for one resource must declare the same capacity.`
-    );
-    this.name = 'ResourceSlotCapacityConflictError';
-  }
+/** The capacity of a resource that no start, pack, binding or install config gave a number. */
+export const DEFAULT_RESOURCE_CAPACITY = 10;
+
+/**
+ * What a slot records as its capacity after a start: the capacity the start declares, or
+ * what the slot already recorded, or the default for a new slot. A declared capacity
+ * replaces the recorded one, so changing it takes effect at the next admission.
+ */
+export function recordedResourceCapacity(
+  recorded: number | undefined,
+  declared: number | undefined
+): number {
+  return declared ?? recorded ?? DEFAULT_RESOURCE_CAPACITY;
 }
+
+/**
+ * The install's own number for a resource (`concurrency.resources.<resource>`), read at
+ * every admission. It wins over the slot's recorded capacity; `undefined` leaves that.
+ */
+export type ResourceCapacityOverride = (resource: string) => Promise<number | undefined>;
+
+/**
+ * The host ID recorded on the admitted request of a start no binding made (a direct
+ * `archon workflow run`, chat or API start). No host drains it: it is admitted at once
+ * or not recorded at all.
+ */
+export const DIRECT_START_HOST_ID = 'direct-start';
 
 export type StartBindingInspection = z.infer<typeof startBindingInspectionSchema> & {
   requestStatus: ResourceStartRequestInspection['status'] | null;
@@ -268,12 +283,14 @@ function checkoutHolder(
 ): string | undefined {
   const checkout = launchCheckout(launch);
   if (checkout === undefined) return undefined;
-  return (
-    slot.heldCheckouts.get(checkout) ??
-    (readAdmissionCheckoutGuard(launch)
-      ? (slot.foreignHeldCheckouts.get(checkout) ?? slot.unknownForeignCheckoutHolder)
-      : undefined)
-  );
+  const holders = [
+    slot.heldCheckouts.get(checkout),
+    ...(readAdmissionCheckoutGuard(launch)
+      ? [slot.foreignHeldCheckouts.get(checkout), slot.unknownForeignCheckoutHolder]
+      : []),
+  ];
+  // A direct start's run row exists before its admission and holds its own checkout.
+  return holders.find(holder => holder !== undefined && holder !== launch.run.id);
 }
 
 function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
@@ -410,6 +427,16 @@ export type PendingStartBindingInspection = StartBindingInspection | DamagedStar
 
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
+  /**
+   * Admit an existing pending run that no binding started onto `resource` now, or return
+   * what blocks it. A refusal records nothing, so the caller waits by trying again and
+   * never holds a queue position a dead process could strand. A run that already has an
+   * admitted request holds its slot: the result is `null` and nothing changes.
+   */
+  admitPendingRun(input: {
+    resource: string;
+    launch: PreparedWorkflowLaunch;
+  }): Promise<ResourceBlocker | null>;
   drainResourceStarts(options: {
     resource: string;
     hostId: string;

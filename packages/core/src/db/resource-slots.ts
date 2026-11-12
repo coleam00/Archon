@@ -1,8 +1,8 @@
 import { z } from 'zod';
 import { activeWorkflowPathHolderCondition } from './workflow-run-reads';
 import {
-  ResourceSlotCapacityConflictError,
   capacityWaiters,
+  recordedResourceCapacity,
   heldCheckouts,
   type ReusableCheckout,
   type ResourceSlotOccupancy,
@@ -34,6 +34,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
+import { loadResourceCapacities } from '../config/provider-concurrency';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { parseJsonObject } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
@@ -52,23 +53,25 @@ export type ResourceSlotHolder =
   | { kind: 'run'; id: string }
   | { kind: 'attempt'; id: string; owner: ProcessOwner };
 
-export { ResourceSlotCapacityConflictError } from '@archon/workflows/resource-start-store';
-
 const terminalList = TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).join(', ');
 
 /**
- * Create the slot if needed and take its lock for the rest of the transaction.
- * A `requestedCapacity` that differs from the stored one fails instead of picking one.
+ * Create the slot if needed and take its lock for the rest of the transaction, then
+ * return the capacity admission uses now. A `declaredCapacity` replaces the recorded one;
+ * the install config's number for the resource wins over both.
  */
 export async function lockResourceSlot(
   query: TransactionQuery,
   resource: string,
-  requestedCapacity?: number
+  declaredCapacity?: number
 ): Promise<{ capacity: number }> {
+  const recorded = recordedResourceCapacity(undefined, declaredCapacity);
   await query(
     `INSERT INTO remote_agent_resource_slots (resource_key, capacity) VALUES ($1, $2)
-       ON CONFLICT(resource_key) DO NOTHING`,
-    [resource, requestedCapacity ?? 1]
+       ON CONFLICT(resource_key) DO ${
+         declaredCapacity === undefined ? 'NOTHING' : 'UPDATE SET capacity = excluded.capacity'
+       }`,
+    [resource, recorded]
   );
   // A no-op write takes SQLite's writer lock and PostgreSQL's row lock before any read.
   await query(
@@ -79,11 +82,8 @@ export async function lockResourceSlot(
     'SELECT capacity FROM remote_agent_resource_slots WHERE resource_key = $1',
     [resource]
   );
-  const capacity = Number(slot.rows[0]?.capacity ?? 1);
-  if (requestedCapacity !== undefined && requestedCapacity !== capacity) {
-    throw new ResourceSlotCapacityConflictError(resource, capacity, requestedCapacity);
-  }
-  return { capacity };
+  const installed = (await loadResourceCapacities()).get(resource);
+  return { capacity: installed ?? Number(slot.rows[0]?.capacity ?? recorded) };
 }
 
 /**

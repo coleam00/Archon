@@ -89,6 +89,7 @@ bindings:
   split-queue:
     workflow: archon-split
     resource: split
+    capacity: 1
     overlap: skip
     schedule: { interval_seconds: 1800 }
     inputs:
@@ -100,6 +101,7 @@ bindings:
   merge-queue:
     workflow: archon-merge-queue
     resource: merge
+    capacity: 1
     overlap: skip
     schedule: { interval_seconds: 300 }
     inputs:

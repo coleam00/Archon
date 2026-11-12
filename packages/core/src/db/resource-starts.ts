@@ -2,6 +2,7 @@ import { assertWorkflowNoticeLimit } from '@archon/workflows/workflow-notice';
 import { insertWorkflowEvent } from './workflow-events';
 import { z } from 'zod';
 import {
+  DIRECT_START_HOST_ID,
   SourceReceiptDigestConflictError,
   drainableStarts,
   skippedFireNotice,
@@ -11,6 +12,7 @@ import {
 import type {
   StartBindingInspection,
   StartReceiptInspection,
+  ResourceBlocker,
   ResourceStartRequestInspection,
   QueuedResourceStartInspection,
 } from '@archon/workflows/resource-start-store';
@@ -190,6 +192,44 @@ export async function admitResourceStart(
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
   return getDatabase().withTransaction(query => admitResourceStartWithQuery(query, intent));
+}
+
+export async function admitPendingRun(input: {
+  resource: string;
+  launch: PreparedWorkflowLaunch;
+}): Promise<ResourceBlocker | null> {
+  const launch = preparedWorkflowLaunchSchema.parse(input.launch);
+  const id = launch.run.id;
+  return getDatabase().withTransaction(async query => {
+    await lockCheckoutReservations(query);
+    const { capacity } = await lockResourceSlot(query, input.resource);
+    const existing = await query<RequestRow>(
+      'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
+      [id]
+    );
+    const request = existing.rows[0];
+    if (request?.status === 'admitted') return null;
+    if (request) throw new Error(`Run '${id}' already has a ${request.status} resource request`);
+    const run = await query<{ status: string }>(
+      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+      [id]
+    );
+    const status = run.rows[0]?.status;
+    if (status !== 'pending') throw new Error(`Run '${id}' is ${status ?? 'missing'}, not pending`);
+    const blocker = resourceStartBlocker(
+      await resourceStartOccupancy(query, input.resource, capacity),
+      launch
+    );
+    if (blocker) return blocker;
+    await query(
+      `INSERT INTO remote_agent_resource_start_requests
+         (id, resource_key, host_id, overlap_policy, status, launch, admitted_at)
+         VALUES ($1, $2, $3, 'queue', 'admitted', $4, ${getDialect().now()})`,
+      [id, input.resource, DIRECT_START_HOST_ID, JSON.stringify(launch)]
+    );
+    await addResourceSlotHolder(query, input.resource, { kind: 'run', id });
+    return null;
+  });
 }
 
 /** Admit this host's queued requests that can run while the slot has free capacity. */

@@ -10,7 +10,8 @@ import {
   type ReusableCheckout,
   resourceResumeBlocker,
   resourceStartBlocker,
-  ResourceSlotCapacityConflictError,
+  DIRECT_START_HOST_ID,
+  recordedResourceCapacity,
   SourceReceiptDigestConflictError,
   type IResourceStartStore,
   type ResourceBlocker,
@@ -81,7 +82,7 @@ export function createInMemoryResourceStartStore(
     }
     const reusable = await listReusableCheckouts();
     return {
-      capacity: capacities.get(resource) ?? 1,
+      capacity: recordedResourceCapacity(capacities.get(resource), undefined),
       reusableCheckouts: reusable,
       holders,
       waiters: capacityWaiters(candidates),
@@ -108,16 +109,14 @@ export function createInMemoryResourceStartStore(
     };
   };
   const admit = async (intent: ResourceStartIntent): Promise<ResourceStartDisposition> => {
-    const capacity = capacities.get(intent.resource);
-    if (capacity !== undefined && capacity !== intent.capacity)
-      throw new ResourceSlotCapacityConflictError(intent.resource, capacity, intent.capacity);
+    capacities.set(
+      intent.resource,
+      recordedResourceCapacity(capacities.get(intent.resource), intent.capacity)
+    );
     const previous = requests.get(intent.launch.run.id);
     if (previous) return decision(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker(
-      { ...(await occupancy(intent.resource)), capacity: intent.capacity },
-      launch
-    );
+    const blocker = resourceStartBlocker(await occupancy(intent.resource), launch);
     const request: ResourceStartRequestInspection = {
       id: launch.run.id,
       resource: intent.resource,
@@ -140,7 +139,6 @@ export function createInMemoryResourceStartStore(
       );
       if (notice) await recordNotice(notice);
     }
-    capacities.set(intent.resource, intent.capacity);
     requests.set(request.id, request);
     return decision(request);
   };
@@ -189,6 +187,30 @@ export function createInMemoryResourceStartStore(
       return true;
     },
     admitResourceStart: admit,
+    admitPendingRun: async ({ resource, launch }) => {
+      const id = launch.run.id;
+      const previous = requests.get(id);
+      if (previous?.status === 'admitted') return null;
+      if (previous)
+        throw new Error(`Run '${id}' already has a ${previous.status} resource request`);
+      const run = await getRun(id);
+      if (run?.status !== 'pending')
+        throw new Error(`Run '${id}' is ${run?.status ?? 'missing'}, not pending`);
+      const blocker = resourceStartBlocker(await occupancy(resource), launch);
+      if (blocker) return blocker;
+      requests.set(id, {
+        id,
+        resource,
+        hostId: DIRECT_START_HOST_ID,
+        overlap: 'queue',
+        status: 'admitted',
+        blocker: null,
+        runStatus: null,
+        blockerRunStatus: null,
+        launch,
+      });
+      return null;
+    },
     drainResourceStarts: async ({
       resource,
       hostId,
