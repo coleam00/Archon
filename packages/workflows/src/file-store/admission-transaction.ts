@@ -28,8 +28,10 @@ import {
   type ResourceStartDisposition,
 } from '../schemas/resource-start';
 import {
-  ResourceSlotCapacityConflictError,
+  DIRECT_START_HOST_ID,
   capacityWaiters,
+  recordedResourceCapacity,
+  type ResourceCapacityOverride,
   skippedFireNotice,
   heldCheckouts,
   type ReusableCheckout,
@@ -76,13 +78,19 @@ export interface AdmissionTransaction {
   read<S extends z.ZodType>(path: string, schema: S): Promise<z.output<S> | null>;
   request(id: string): Promise<Request | null>;
   receipt(id: string): Promise<Receipt | null>;
-  slot(resource: string, capacity?: number): Promise<Slot>;
+  /** The slot document; a `declaredCapacity` replaces its recorded capacity. */
+  slot(resource: string, declaredCapacity?: number): Promise<Slot>;
   occupancy(resource: string, launch?: Request['launch']): Promise<ResourceSlotOccupancy>;
   admit(
     intent: ResourceStartIntent,
     runs: Map<string, WorkflowRun>
   ): Promise<ResourceStartDisposition>;
   admitExisting(row: Request, runs: Map<string, WorkflowRun>): Promise<ResourceStartDisposition>;
+  admitPending(
+    resource: string,
+    capacity: number,
+    launch: Request['launch']
+  ): Promise<ResourceBlocker | null>;
   binding(input: BindingIdentity): Promise<Binding | undefined>;
   owned(input: PreparationOwner): Promise<Binding | undefined>;
   canClaim(id: string): Promise<boolean>;
@@ -94,7 +102,8 @@ export interface AdmissionTransaction {
 
 export function createAdmissionTransaction(
   root: string,
-  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]> = async () => []
+  listReusableCheckouts: () => Promise<readonly ReusableCheckout[]> = async () => [],
+  resourceCapacity: ResourceCapacityOverride = async () => undefined
 ): AdmissionTransaction {
   const documents: Record<string, unknown> = {};
   const events: WorkflowEventRow[] = [];
@@ -111,15 +120,18 @@ export function createAdmissionTransaction(
     if (row) receipts.set(id, row);
     return row;
   }
-  async function slot(resource: string, capacity?: number): Promise<Slot> {
+  async function slot(resource: string, declaredCapacity?: number): Promise<Slot> {
     const path = pathFor('slots', resource);
     const schema = slotSchema(join(root, path));
     const row =
       slots.get(resource) ??
       (await read(path, schema)) ??
-      schema.parse({ capacity: capacity ?? 1, holders: [], queue: [] });
-    if (capacity !== undefined && row.capacity !== capacity)
-      throw new ResourceSlotCapacityConflictError(resource, row.capacity, capacity);
+      schema.parse({
+        capacity: recordedResourceCapacity(undefined, declaredCapacity),
+        holders: [],
+        queue: [],
+      });
+    row.capacity = recordedResourceCapacity(row.capacity, declaredCapacity);
     documents[path] = row;
     slots.set(resource, row);
     return row;
@@ -316,7 +328,7 @@ export function createAdmissionTransaction(
       }
     }
     return {
-      capacity: row.capacity,
+      capacity: (await resourceCapacity(resource)) ?? row.capacity,
       reusableCheckouts: reusable,
       holders: row.holders,
       waiters: capacityWaiters(
@@ -381,6 +393,42 @@ export function createAdmissionTransaction(
     if (row.status === 'queued') resource.queue.push(row.id);
     await recordSkippedFireNotice(intent, row, runs);
     return disposition(row);
+  }
+  async function admitPending(
+    resourceName: string,
+    declaredCapacity: number,
+    launch: Request['launch']
+  ): Promise<ResourceBlocker | null> {
+    const id = launch.run.id;
+    const resource = await slot(resourceName);
+    const previous = await request(id);
+    if (previous?.status === 'admitted') return null;
+    if (previous) throw new Error(`Run '${id}' already has a ${previous.status} resource request`);
+    const run = await readSnapshot(root, id);
+    if (run?.status !== 'pending')
+      throw new Error(`Run '${id}' is ${run?.status ?? 'missing'}, not pending`);
+    const blocker = resourceStartBlocker(
+      {
+        ...(await occupancy(resourceName, launch)),
+        capacity: (await resourceCapacity(resourceName)) ?? declaredCapacity,
+      },
+      launch
+    );
+    if (blocker) return blocker;
+    const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
+    documents[pathFor('requests', id)] = {
+      id,
+      resource: resourceName,
+      hostId: DIRECT_START_HOST_ID,
+      overlap: 'queue',
+      status: 'admitted',
+      blocker: null,
+      launch,
+      position: head.seq + 1,
+    } satisfies Request;
+    resource.holders.push({ kind: 'run', id });
+    resource.admitted.push(id);
+    return null;
   }
   async function recordSkippedFireNotice(
     intent: ResourceStartIntent,
@@ -487,6 +535,7 @@ export function createAdmissionTransaction(
     occupancy,
     admit,
     admitExisting,
+    admitPending,
     binding,
     owned,
     canClaim,

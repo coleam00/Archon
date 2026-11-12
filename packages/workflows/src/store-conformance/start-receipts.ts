@@ -68,6 +68,31 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       expect(await store.getWorkflowRun(prepared.run.id)).toBeNull();
       return { identity, prepared, result };
     }
+    test("a binding start holds its workflow's declared resource, so a direct start waits on it", async () => {
+      const input = acceptance();
+      await store.acceptStartReceipt(input);
+      const identity = { receiptId: input.receipt.id, bindingId: binding.bindingId, ownerId: 'o' };
+      expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+      const prepared = launch();
+      expect(
+        await store.completeStartBindingPreparation({
+          ...identity,
+          launch: prepared,
+          resource: 'build',
+        })
+      ).toMatchObject({ status: 'admitted' });
+      expect(await store.getResourceStartRequest(prepared.run.id)).toMatchObject({
+        resource: 'build',
+      });
+      const direct = launch();
+      await store.createWorkflowRun(direct.run);
+      expect(
+        await store.admitPendingRun({ resource: 'build', capacity: 1, launch: direct })
+      ).toEqual({
+        kind: 'run',
+        id: prepared.run.id,
+      });
+    });
     test('skipped explicit fires notify their source run, including after it ends', async () => {
       const longSuffix = 'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength);
       const fireBinding = {

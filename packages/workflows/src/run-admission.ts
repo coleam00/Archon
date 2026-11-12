@@ -31,6 +31,7 @@ import {
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import type { WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
+import { holdWorkflowResource } from './resource-hold';
 import { parseDbTimestamp } from './utils/duration';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -105,9 +106,10 @@ export async function admitWorkflowRun(
       platform,
       conversationId,
       cwd,
+      workflow,
       workflowRun,
       execContext,
-      opts.onExecutionClaimed
+      opts
     );
     if (claimed.stopped) return claimed;
     checkoutBaselineSample = claimed.value;
@@ -220,16 +222,30 @@ async function createWorkflowRunRow(
   }
 }
 
-/** Win execution ownership of a pending row, then sample the checkout the run starts from. */
+/**
+ * Take the workflow's resource slot, win execution ownership of a pending row, then sample
+ * the checkout the run starts from.
+ */
 async function claimPendingRun(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
   cwd: string,
+  workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun,
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
-  onExecutionClaimed: ExecuteWorkflowOptions['onExecutionClaimed']
+  { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
+  const refused = await holdWorkflowResource(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    workflowRun,
+    noWait === true
+  );
+  if (refused) return { stopped: true, result: refused };
   let claimed: WorkflowRun | null;
   try {
     claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);

@@ -86,6 +86,7 @@ export async function executeOwnedRun(
       store: host.deps.store,
       runId: ownedRunId,
       getExecutionClaim: () => ownedExecutionClaim,
+      ownsPendingRun: launch.resumable === null,
       isExecutionSettled: () => execution.result !== undefined,
       logModule: 'cli.workflow',
       liveOwner: {
@@ -313,6 +314,7 @@ function commonRunOptions(
     container: containerRunCtx,
     resolveChildIsolation,
     onExecutionClaimed,
+    noWait: request.options.noWait,
   };
 }
 

@@ -348,6 +348,8 @@ Options:
   --as <name>                For 'workflow approve/reject/respond/answer': the name the answerer declares for itself,
                              recorded with an attention wait's answer as a claim (never checked; refused at a gate)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
+  --no-wait                  For 'workflow run': refuse, naming the resource, instead of waiting when the workflow's
+                             resource is full
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded

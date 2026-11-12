@@ -28,6 +28,7 @@ import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import {
   addResourceSlotHolder,
   lockResourceSlot,
+  lockResourceSlotForAdmission,
   removeResourceSlotHolder,
   resourceStartOccupancy,
   type TransactionQuery,
@@ -182,7 +183,7 @@ async function claimResourceSlot(
   const resourceKey = prior.resource_key ?? undefined;
   const status = prior.status;
   if (resourceKey === undefined || (status !== 'failed' && status !== 'paused')) return undefined;
-  const { capacity } = await lockResourceSlot(query, resourceKey);
+  const { capacity } = await lockResourceSlotForAdmission(query, resourceKey);
   const metadata = normalizeMetadata(prior.metadata);
   const occupancy = await resourceStartOccupancy(query, resourceKey, capacity);
   const blocker = resourceResumeBlocker(occupancy, { id, status, metadata });

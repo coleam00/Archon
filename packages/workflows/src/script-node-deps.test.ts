@@ -98,6 +98,9 @@ function createMockStore(): IWorkflowStore {
     admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
       throw new Error('Unexpected admitResourceStart');
     }),
+    admitPendingRun: mock<IWorkflowStore['admitPendingRun']>(() => {
+      throw new Error('Unexpected admitPendingRun');
+    }),
     drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
       throw new Error('Unexpected drainResourceStarts');
     }),

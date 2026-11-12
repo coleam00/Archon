@@ -130,6 +130,10 @@ concurrency:
   # Pi also honors assistants.pi.maxConcurrent. See "Provider concurrency caps" below.
   # providers:
   #   pi: 1
+  # Optional capacity per workflow resource; wins over a binding's capacity.
+  # See "Resource capacity" below.
+  # resources:
+  #   build: 5
 
 # Live tool attention and the provider-limit wait are both on by default.
 workflows:
@@ -177,6 +181,10 @@ The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotice
 - **Changes apply immediately.** The cap is re-read on every admission check, including by attempts already waiting. Lowering it blocks new attempts until enough running ones finish; running attempts are never cancelled.
 - **Strict.** A key that is not a registered provider ID, a value that is not a positive integer, or a config file that cannot be parsed refuses every provider attempt with an error naming the problem, instead of silently running uncapped.
 - **Process loss.** A slot belongs to the process that took it. When that process dies, the next admission on the same host releases the slot. A holder from another host is never released by time or guesswork: list it with `archon ai capacity` and, once you have verified that process is gone, release it with `archon ai capacity release <attempt-id>`. Hosts that share one PostgreSQL database need distinct hostnames. A recreated Docker container gets a new hostname unless the compose service sets `hostname:`, so holders left by the old container need an explicit release.
+
+## Resource capacity
+
+`concurrency.resources.<resource>: N` sets how many runs may hold a resource at once, for a workflow that declares `resource:` and for trigger bindings. It wins over the capacity a start declares (a binding's `capacity`, or a workflow's `resource: { name, capacity }` for a hand start), which wins over the engine default of 1. Admission re-reads it at every start, drain and resume, so a change applies to the next admission, and lowering it never ends a run that holds a slot. A value that is not a positive integer, or a config file that cannot be parsed, refuses resource admissions with an error naming the problem. See [Choose a resource, capacity, and overlap policy](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
 
 ## Run-scoped configuration
 

@@ -1,6 +1,16 @@
 import { z } from 'zod';
 import { jsonValueSchema } from '../output-ref';
 import { workflowRunOriginSchema } from './workflow-run';
+import {
+  DEFAULT_RESOURCE_CAPACITY,
+  notProviderResource,
+  resourceNameSchema,
+} from './resource-name';
+export {
+  DEFAULT_RESOURCE_CAPACITY,
+  PROVIDER_RESOURCE_PREFIX,
+  resourceNameSchema,
+} from './resource-name';
 
 const jsonObjectSchema = z.record(z.string(), jsonValueSchema);
 const preparedIsolationSchema = z.discriminatedUnion('kind', [
@@ -130,23 +140,15 @@ export function requestingRun(
 }
 
 /**
- * Resource keys under this prefix are provider-attempt slots owned by core provider
- * admission. An operator-named resource cannot use it, so a trigger resource never
- * shares a slot, or its capacity, with a provider cap.
+ * How many admitted holders a resource slot allows at once, as a pack or binding declares
+ * it. It defaults to 1, so a resource means "must not overlap" unless configured
+ * otherwise. The install config's `concurrency.resources.<resource>` wins at admission.
  */
-export const PROVIDER_RESOURCE_PREFIX = 'provider:';
-
-const notProviderResource = {
-  check: (name: string): boolean => !name.startsWith(PROVIDER_RESOURCE_PREFIX),
-  message: `Resource names starting with '${PROVIDER_RESOURCE_PREFIX}' are reserved for provider admission`,
-};
-
-/**
- * How many admitted holders a resource slot allows at once. It defaults to 1, so a
- * resource means "must not overlap" unless configured otherwise. Every binding that
- * names a resource must declare the same capacity; admission refuses a mismatch.
- */
-export const resourceSlotCapacitySchema = z.number().int().min(1).default(1);
+export const resourceSlotCapacitySchema = z
+  .number()
+  .int()
+  .min(1)
+  .default(DEFAULT_RESOURCE_CAPACITY);
 
 export const resourceStartOverlapSchema = z.enum(['skip', 'queue']);
 export const startBindingPreparationStatusSchema = z.enum([
@@ -166,11 +168,7 @@ export const sourceReceiptOutcomeSchema = z.enum([
 
 export const resourceStartIntentSchema = z
   .object({
-    resource: z
-      .string()
-      .trim()
-      .min(1)
-      .refine(notProviderResource.check, notProviderResource.message),
+    resource: resourceNameSchema,
     capacity: resourceSlotCapacitySchema,
     hostId: z.string().trim().min(1),
     overlap: resourceStartOverlapSchema,

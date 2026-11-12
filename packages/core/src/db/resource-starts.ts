@@ -2,6 +2,7 @@ import { assertWorkflowNoticeLimit } from '@archon/workflows/workflow-notice';
 import { insertWorkflowEvent } from './workflow-events';
 import { z } from 'zod';
 import {
+  DIRECT_START_HOST_ID,
   SourceReceiptDigestConflictError,
   drainableStarts,
   skippedFireNotice,
@@ -11,6 +12,7 @@ import {
 import type {
   StartBindingInspection,
   StartReceiptInspection,
+  ResourceBlocker,
   ResourceStartRequestInspection,
   QueuedResourceStartInspection,
 } from '@archon/workflows/resource-start-store';
@@ -37,10 +39,12 @@ import { getDatabase, getDatabaseType, getDialect } from './connection';
 import {
   addResourceSlotHolder,
   lockResourceSlot,
+  lockResourceSlotForAdmission,
   resourceStartOccupancy,
   parseQueuedResourceStart,
   type TransactionQuery as Query,
 } from './resource-slots';
+import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 
@@ -102,7 +106,7 @@ async function admitResourceStartWithQuery(
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
   await lockCheckoutReservations(query);
-  const { capacity } = await lockResourceSlot(query, intent.resource, intent.capacity);
+  const { capacity } = await lockResourceSlotForAdmission(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
     [intent.launch.run.id]
@@ -192,6 +196,47 @@ export async function admitResourceStart(
   return getDatabase().withTransaction(query => admitResourceStartWithQuery(query, intent));
 }
 
+export async function admitPendingRun(input: {
+  resource: string;
+  capacity: number;
+  launch: PreparedWorkflowLaunch;
+}): Promise<ResourceBlocker | null> {
+  const launch = preparedWorkflowLaunchSchema.parse(input.launch);
+  const id = launch.run.id;
+  return getDatabase().withTransaction(async query => {
+    await lockCheckoutReservations(query);
+    // A hand start is checked against its own number and leaves the slot's recorded one.
+    await lockResourceSlot(query, input.resource);
+    const capacity = (await loadResourceCapacities()).get(input.resource) ?? input.capacity;
+    const existing = await query<RequestRow>(
+      'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
+      [id]
+    );
+    const request = existing.rows[0];
+    if (request?.status === 'admitted') return null;
+    if (request) throw new Error(`Run '${id}' already has a ${request.status} resource request`);
+    const run = await query<{ status: string }>(
+      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+      [id]
+    );
+    const status = run.rows[0]?.status;
+    if (status !== 'pending') throw new Error(`Run '${id}' is ${status ?? 'missing'}, not pending`);
+    const blocker = resourceStartBlocker(
+      await resourceStartOccupancy(query, input.resource, capacity),
+      launch
+    );
+    if (blocker) return blocker;
+    await query(
+      `INSERT INTO remote_agent_resource_start_requests
+         (id, resource_key, host_id, overlap_policy, status, launch, admitted_at)
+         VALUES ($1, $2, $3, 'queue', 'admitted', $4, ${getDialect().now()})`,
+      [id, input.resource, DIRECT_START_HOST_ID, JSON.stringify(launch)]
+    );
+    await addResourceSlotHolder(query, input.resource, { kind: 'run', id });
+    return null;
+  });
+}
+
 /** Admit this host's queued requests that can run while the slot has free capacity. */
 export async function drainResourceStarts(options: {
   resource: string;
@@ -199,7 +244,7 @@ export async function drainResourceStarts(options: {
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
     await lockCheckoutReservations(query);
-    const { capacity } = await lockResourceSlot(query, options.resource);
+    const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];
     for (const start of drainableStarts(slot, options.hostId))
@@ -569,6 +614,7 @@ export async function completeStartBindingPreparation(input: {
   bindingId: string;
   ownerId: string;
   launch: PreparedWorkflowLaunch;
+  resource?: string;
 }): Promise<ResourceStartDisposition | null> {
   return getDatabase().withTransaction(async query => {
     // See withdrawQueuedResourceStart: acquire SQLite's writer lock before the read.
@@ -587,7 +633,7 @@ export async function completeStartBindingPreparation(input: {
     if (!rawIntent) return null;
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(rawIntent));
     const disposition = await admitResourceStartWithQuery(query, {
-      resource: persisted.resource,
+      resource: input.resource ?? persisted.resource,
       capacity: persisted.capacity,
       hostId: persisted.hostId,
       overlap: persisted.overlap,

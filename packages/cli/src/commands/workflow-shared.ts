@@ -105,6 +105,8 @@ export interface WorkflowRunOptions {
    * argv. The child executes that run and owns its source capture and worktree.
    */
   detach?: boolean;
+  /** Refuse instead of waiting when the workflow's `resource:` is full. */
+  noWait?: boolean;
   /**
    * Emit a machine-readable JSON ack for the spawned child instead of human
    * text. Only meaningful together with `detach`: without `detach` a foreground
