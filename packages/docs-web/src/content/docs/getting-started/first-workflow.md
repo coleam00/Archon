@@ -211,7 +211,7 @@ approve-plan: { decision: approve, text: "" }
 ```text
 STUBBED   plan (prompt)
 STUBBED   approve-plan (wait) — answered by stub
-SKIPPED   stop (cancel) — when_condition_false
+SKIPPED   stop (cancel) — when_condition (condition: $approve-plan.output.decision == 'reject')
 STUBBED   implement (prompt)
 STUBBED   test (script)
 STUBBED   fix (command)

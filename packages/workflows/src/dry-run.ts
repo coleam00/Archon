@@ -1,4 +1,5 @@
 /** Side-effect-free workflow DAG simulation with caller-supplied node outputs. */
+import { formatSkipCause } from './skip-cause';
 import { createLogger, getArchonTempPath } from '@archon/paths';
 import { validateStructuredOutput } from './structured-output';
 import { randomUUID } from 'node:crypto';
@@ -295,7 +296,11 @@ export function formatDryRunTraceLine(entry: DryRunTraceSummary): string {
 }
 
 function formatDryRunTraceEntry(entry: DryRunTraceEntry): string[] {
-  const lines = [formatDryRunTraceLine(entry)];
+  const reason =
+    entry.state === 'skipped' ? `${entry.reason} (${formatSkipCause(entry.cause)})` : entry.reason;
+  const lines = [formatDryRunTraceLine({ ...entry, reason })];
+  if (entry.state === 'skipped' && entry.diagnostic)
+    lines.push(`  diagnostic: ${entry.diagnostic}`);
   if (entry.resolution) lines.push(...formatDryRunResolution(entry.resolution));
   if (entry.resolvedText) lines.push(`  resolved: ${entry.resolvedText}`);
   if (entry.output !== undefined) lines.push(`  output: ${entry.output}`);

@@ -4854,25 +4854,45 @@ export interface components {
                     /** @enum {string} */
                     kind: 'condition';
                     expr: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'condition_parse_error';
                     expr: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'timeout';
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'upstream_failed';
                     origin: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   }
                 | {
                     /** @enum {string} */
                     kind: 'upstream_skipped';
                     origin: string;
+                    boundary?: {
+                      includeId: string;
+                      workflow: string;
+                    };
                   };
             }
           | {
@@ -4897,25 +4917,45 @@ export interface components {
           /** @enum {string} */
           kind: 'condition';
           expr: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'condition_parse_error';
           expr: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'timeout';
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'upstream_failed';
           origin: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         }
       | {
           /** @enum {string} */
           kind: 'upstream_skipped';
           origin: string;
+          boundary?: {
+            includeId: string;
+            workflow: string;
+          };
         };
     WebPushPayload: {
       runId: string;
@@ -6406,25 +6446,45 @@ export interface components {
                       /** @enum {string} */
                       kind: 'condition';
                       expr: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'condition_parse_error';
                       expr: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'timeout';
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'upstream_failed';
                       origin: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     }
                   | {
                       /** @enum {string} */
                       kind: 'upstream_skipped';
                       origin: string;
+                      boundary?: {
+                        includeId: string;
+                        workflow: string;
+                      };
                     };
               }
             | {
@@ -7611,25 +7671,45 @@ export interface components {
                   /** @enum {string} */
                   kind: 'condition';
                   expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'condition_parse_error';
                   expr: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'timeout';
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'upstream_failed';
                   origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 }
               | {
                   /** @enum {string} */
                   kind: 'upstream_skipped';
                   origin: string;
+                  boundary?: {
+                    includeId: string;
+                    workflow: string;
+                  };
                 };
             fan_out_outcome?: {
               tally: {
@@ -7779,25 +7859,45 @@ export interface components {
                 /** @enum {string} */
                 kind: 'condition';
                 expr: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'condition_parse_error';
                 expr: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'timeout';
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'upstream_failed';
                 origin: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               }
             | {
                 /** @enum {string} */
                 kind: 'upstream_skipped';
                 origin: string;
+                boundary?: {
+                  includeId: string;
+                  workflow: string;
+                };
               };
           fan_out_outcome?: {
             tally: {

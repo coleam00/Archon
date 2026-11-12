@@ -97,6 +97,7 @@ export function registerIncludeGateTests(fixture: ReturnType<typeof setupInclude
         expect(nodeEvents.find(event => event.event_type === 'node_skipped')?.data?.cause).toEqual({
           kind: 'condition',
           expr: when,
+          boundary: { includeId: 'cycle.inc', workflow: 'block' },
         });
         const trace = dryRun.trace.filter(entry => entry.nodeId === `inc__${id}`);
         expect(trace.map(entry => entry.state)).toEqual(
@@ -105,6 +106,7 @@ export function registerIncludeGateTests(fixture: ReturnType<typeof setupInclude
         expect(trace.find(entry => entry.state === 'skipped')?.cause).toEqual({
           kind: 'condition',
           expr: when,
+          boundary: { includeId: 'cycle.inc', workflow: 'block' },
         });
       }
     });
@@ -193,14 +195,18 @@ export function registerIncludeGateTests(fixture: ReturnType<typeof setupInclude
         ['innerWork', { state: 'completed', output: 'current' }],
       ]);
       for (const node of innerBody.filter(node => node.id.startsWith('local__'))) {
-        const options = { evaluateEntryBoundary: true, loopBodyScopes };
+        const options = { loopBodyScopes };
         expect(checkComposedBlockBoundaries(node, outputs, undefined, options)).toEqual({
           decision: 'run',
         });
         outerPrevious.set('work', { state: 'completed', output: 'stop' });
         expect(checkComposedBlockBoundaries(node, outputs, undefined, options)).toEqual({
           decision: 'skip',
-          cause: { kind: 'condition', expr: when },
+          cause: {
+            kind: 'condition',
+            expr: when,
+            boundary: { includeId: 'outer.inc', workflow: 'nested-block' },
+          },
         });
         outerPrevious.set('work', { state: 'completed', output: value });
       }
@@ -230,6 +236,7 @@ export function registerIncludeGateTests(fixture: ReturnType<typeof setupInclude
         expect(leafEvents[0]?.data?.cause).toEqual({
           kind: 'condition',
           expr: "$LOOP_PREV.innerWork.output == 'inner'",
+          boundary: { includeId: 'outer.inc__inner.local', workflow: 'leaf' },
         });
         expect(dryRun.trace.filter(e => e.nodeId === `local__${id}`).map(e => e.state)).toEqual([
           'skipped',
@@ -259,13 +266,19 @@ export function registerIncludeGateTests(fixture: ReturnType<typeof setupInclude
         if (!node) throw new Error(`expected expanded ${id}`);
         expect(
           checkComposedBlockBoundaries(node, outputs, undefined, {
-            evaluateEntryBoundary: true,
             loopBodyScopes: [scope],
           })
         ).toEqual(
           previous === 'go'
             ? { decision: 'run' }
-            : { decision: 'skip', cause: { kind: 'condition', expr: when } }
+            : {
+                decision: 'skip',
+                cause: {
+                  kind: 'condition',
+                  expr: when,
+                  boundary: { includeId: 'cycle.inc', workflow: 'block' },
+                },
+              }
         );
       }
     }
@@ -279,13 +292,13 @@ export function registerIncludeGateTests(fixture: ReturnType<typeof setupInclude
     const entry = resolvedBodyNodes(group.loop_group).find(node => node.id === 'inc__entry');
     if (!entry) throw new Error('expected expanded entry');
     const outputs = new Map([['work', { state: 'completed' as const, output: 'current' }]]);
-    expect(
-      checkComposedBlockBoundaries(entry, outputs, undefined, {
-        evaluateEntryBoundary: true,
-      })
-    ).toEqual({
+    expect(checkComposedBlockBoundaries(entry, outputs, undefined, {})).toEqual({
       decision: 'skip',
-      cause: { kind: 'condition_parse_error', expr: when },
+      cause: {
+        kind: 'condition_parse_error',
+        expr: when,
+        boundary: { includeId: 'cycle.inc', workflow: 'block' },
+      },
     });
   });
 
@@ -349,6 +362,7 @@ export function registerIncludeGateTests(fixture: ReturnType<typeof setupInclude
     expect(conditionSkip?.data?.cause).toEqual({
       kind: 'condition',
       expr: "$gate.output == 'run'",
+      boundary: { includeId: 'review', workflow: 'review-block' },
     });
 
     const dependencyRun = await fixture.executeExpanded(
@@ -361,6 +375,7 @@ export function registerIncludeGateTests(fixture: ReturnType<typeof setupInclude
     expect(dependencySkip?.data?.cause).toEqual({
       kind: 'upstream_skipped',
       origin: 'gate',
+      boundary: { includeId: 'review', workflow: 'review-block' },
     });
   });
 
@@ -463,7 +478,15 @@ export function registerIncludeGateTests(fixture: ReturnType<typeof setupInclude
       for (const run of runs) fixture.assertJoinProvenance(run, mode, cause);
       for (const id of ['flip-ready', 'action__entry', 'action__tail']) {
         expect(dryRun.trace.find(entry => entry.nodeId === id)).toMatchObject(
-          mode === 'failed' ? { state: 'skipped', cause } : { state: 'stubbed' }
+          mode === 'failed'
+            ? {
+                state: 'skipped',
+                reason: 'trigger_rule',
+                cause: id.startsWith('action__')
+                  ? { ...cause, boundary: { includeId: 'action', workflow: 'action-block' } }
+                  : cause,
+              }
+            : { state: 'stubbed' }
         );
       }
     }

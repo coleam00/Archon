@@ -256,7 +256,8 @@ export function recordSkipped(
   ctx: DryRunContext,
   reason: string,
   cause: SkipCause,
-  iteration?: number
+  iteration?: number,
+  diagnostic?: string
 ): void {
   outputs.set(node.id, { state: 'skipped', output: '', cause });
   ctx.trace.push({
@@ -265,6 +266,7 @@ export function recordSkipped(
     state: 'skipped',
     reason,
     cause,
+    ...(diagnostic !== undefined ? { diagnostic } : {}),
     ...(iteration ? { iteration } : {}),
   });
 }

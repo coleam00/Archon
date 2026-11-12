@@ -1,6 +1,10 @@
 /** Walks a graph plan node by node: the reach checks every node shares, then its kind's simulator. */
 import { peerAdmissions } from '../interaction-admission';
-import { checkComposedBlockBoundaries, checkTriggerRule } from '../dag/trigger-rule';
+import {
+  checkComposedBlockBoundaries,
+  checkTriggerRule,
+  skipReasonForCause,
+} from '../dag/trigger-rule';
 import { evaluateCondition } from '../condition-evaluator';
 import { observeCheckout } from '../checkout-observation';
 import { executionMetadata, newNodeInvocation, startNodeExecution } from '../node-execution';
@@ -36,7 +40,15 @@ function isReached(
     loopBodyScopes: ctx.loopBodyScopes,
   });
   if (boundaryDecision.decision === 'skip') {
-    recordSkipped(node, outputs, ctx, 'trigger_rule', boundaryDecision.cause, iteration);
+    recordSkipped(
+      node,
+      outputs,
+      ctx,
+      skipReasonForCause(boundaryDecision.cause),
+      boundaryDecision.cause,
+      iteration,
+      boundaryDecision.error instanceof Error ? boundaryDecision.error.message : undefined
+    );
     return false;
   }
   const triggerDecision = checkTriggerRule(node, outputs);
@@ -67,7 +79,7 @@ function isReached(
           node,
           outputs,
           ctx,
-          'when_condition_false',
+          'when_condition',
           { kind: 'condition', expr: node.when },
           iteration
         );

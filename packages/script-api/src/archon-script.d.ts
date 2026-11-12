@@ -1893,17 +1893,37 @@ declare module 'archon:script' {
       readonly cause?: {
         readonly kind: 'condition';
         readonly expr: string;
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       } | {
         readonly kind: 'condition_parse_error';
         readonly expr: string;
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       } | {
         readonly kind: 'timeout';
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       } | {
         readonly kind: 'upstream_failed';
         readonly origin: string;
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       } | {
         readonly kind: 'upstream_skipped';
         readonly origin: string;
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       };
       readonly fan_out_outcome?: {
         readonly tally: {

@@ -1,3 +1,4 @@
+import { formatSkipCause } from '@archon/workflows/skip-cause';
 import { formatDuration } from '@archon/paths/duration';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import {
@@ -81,20 +82,7 @@ export function formatFanOutOutcome(outcome: FanOutOutcome | undefined): string[
   ];
 }
 
-export function formatSkipCause(cause: SkipCause): string {
-  switch (cause.kind) {
-    case 'condition':
-      return `condition: ${cause.expr}`;
-    case 'condition_parse_error':
-      return `condition parse error: ${cause.expr}`;
-    case 'timeout':
-      return 'timeout';
-    case 'upstream_failed':
-      return `upstream failed: ${cause.origin}`;
-    case 'upstream_skipped':
-      return `upstream skipped: ${cause.origin}`;
-  }
-}
+export { formatSkipCause } from '@archon/workflows/skip-cause';
 
 function outputFields(
   data: ReadNodeRecordEvent['data']

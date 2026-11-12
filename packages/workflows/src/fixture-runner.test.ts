@@ -461,7 +461,7 @@ describe('runFixtures', () => {
         nodeType: 'prompt',
         state: 'skipped',
         iteration: 1,
-        reason: 'when_condition_false',
+        reason: 'when_condition',
       },
       expect.objectContaining({ nodeId: 'rounds', state: 'completed' }),
       { nodeId: 'report', nodeType: 'prompt', state: 'failed' },
@@ -470,7 +470,7 @@ describe('runFixtures', () => {
     expect(rendered).toContain(
       '    trace:\n' +
         '      STUBBED   gate (prompt) [iteration 1]\n' +
-        '      SKIPPED   deliver (prompt) [iteration 1] — when_condition_false\n'
+        '      SKIPPED   deliver (prompt) [iteration 1] — when_condition\n'
     );
     expect(rendered).toContain('      FAILED    report (prompt)\n');
     expect(rendered).toContain(`    report: ${result.nodeFailures?.[0]?.reason}`);

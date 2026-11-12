@@ -315,6 +315,10 @@ nodes:
     effort: low      # Per-node override — ignores workflow-level effort
 ```
 
+A skip caused by an include's gate retains the include identity and the condition expression or upstream origin in its cause. False include conditions use `when_condition`; unevaluable conditions use `when_condition_parse_error` and fail closed. Real runs report an unevaluable gate once per include boundary for the run, including across loop iterations and resume. Dry-run traces print the same skip reason and cause details.
+
+Diagnostic delivery is best-effort. Skip persistence and platform notification are separate operations: if the process stops after storing a skip but before reporting it, resume retains the recorded cause but does not resend the diagnostic.
+
 ### `trigger_rule` Values
 
 | Value | Behavior |
@@ -437,11 +441,12 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
 - `$nodeId.output.field` accesses a JSON field (for `output_format` nodes)
 - `$nodeId.output.a.b` accesses nested object fields, checked against every declared schema
   segment. Paths stop at arrays; indexing, wildcards, and expressions are unsupported.
-- A field used in a scalar condition must resolve to a string, number, boolean, or null. A present object or array fails the gated node; expose a scalar decision field or inspect structured data in a script node.
+- A field used in a scalar condition must resolve to a string, number, boolean, or null. A present object or array makes the condition unevaluable; expose a scalar decision field or inspect structured data in a script node.
 - `$INPUTS.<name>` references a declared input supplied by a caller's `with:` (or a direct
-  run's `--input`). A name this run does not carry **fails the node**: it never quietly
+  run's `--input`). A name this run does not carry makes the condition unevaluable; it never quietly
   becomes an empty string. `INPUTS` is a reserved scope: a node cannot be given that id
   (the loader rejects it), so `$INPUTS.x` always means an input.
+- A reference-resolution error in an ordinary node's condition fails that node. An unevaluable include gate skips the included nodes with `when_condition_parse_error`, retaining the include and expression in the cause. Real runs report the error once per boundary; dry runs show the evaluation diagnostic with the skip.
 - Invalid or unsupported expression syntax is rejected when workflows load and by `archon validate workflows`.
 - A numeric operator (`<`, `>`, `<=`, `>=`) needs a number on the right-hand side, quoted or bare; any other literal is rejected at load. If the left-hand value is not a number at run time, the node is skipped (fail-closed).
 - Grouping parentheses are not supported. Use AND/OR precedence or compute a decision in a `script:` node and gate on its scalar output.
