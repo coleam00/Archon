@@ -179,6 +179,30 @@ const ASK =
   '  - id: ask\n    depends_on: [warmup]\n    wait:\n      attention: "Ship it?"\n' +
   '  - id: finish\n    depends_on: [ask]\n    bash: "echo done"\n';
 
+const RED =
+  'name: watch-red\ndescription: Attention watch fixture.\nreturns: verdict\noutcome_field: green\nnodes:\n' +
+  '  - id: verdict\n    bash: |\n      echo \'{"green": false, "summary": "main is red: lint fails on dev"}\'\n' +
+  '    output_format:\n      type: object\n      properties:\n        green: { type: boolean }\n        summary: { type: string }\n' +
+  '      required: [green, summary]\n';
+
+test('a run that completes with a failed outcome says why on its watch line and in get', async () => {
+  const fixture = makeFixture({ 'watch-red': RED });
+  const watch = startWatch(fixture, []);
+  const runId = await launchDetached(fixture, 'watch-red');
+  expect(await watch.next('terminal', ofRun(runId, 'terminal'))).toMatchObject({
+    status: 'completed',
+    outcome: 'failed',
+    needs: 'look',
+    reason: ['summary: main is red: lint fails on dev'],
+  });
+  await watch.stop();
+  activeRunIds.delete(runId);
+  const got = await runCli(fixture, ['workflow', 'get', runId]);
+  expect(got.stdout).toContain('Reason: summary: main is red: lint fails on dev');
+  const json = JSON.parse((await runCli(fixture, ['workflow', 'get', runId, '--json'])).stdout);
+  expect(json).toMatchObject({ reason: ['summary: main is red: lint fails on dev'] });
+}, 120_000);
+
 test('the quiet watch writes an open ask to a pipe while it is still running', async () => {
   const fixture = makeFixture({ 'watch-ask': ASK });
   const runId = await launchDetached(fixture, 'watch-ask');

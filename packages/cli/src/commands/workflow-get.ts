@@ -1,7 +1,7 @@
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
-import { getTerminalRecord } from '@archon/workflows/terminal-record';
+import { getTerminalRecord, terminalReason } from '@archon/workflows/terminal-record';
 import { runThroughput, type RunThroughput } from '@archon/workflows/throughput';
 import { buildNodeSummaries, listRunEvents } from './workflow-node-summaries';
 import { writeJsonLine } from '../utils/stdout';
@@ -110,12 +110,17 @@ async function writeWorkflowGetJson(
   rawEvents?: boolean,
   throughput?: RunThroughput
 ): Promise<number> {
+  // The bounded excerpt the text view and the attention watch print, for a run that
+  // failed or completed with a failed outcome.
+  const reason = terminalReason(terminalRecord);
+  const why = reason.length > 0 ? { reason } : {};
   if (!verbose) {
     await writeJsonLine({
       ...run,
       ...(throughput ? { throughput } : {}),
       transcript_path: transcriptPath,
       terminal_record: terminalRecord,
+      ...why,
       ...(leaveBehind ? { leave_behind: leaveBehind } : {}),
     });
     return 0;
@@ -128,6 +133,7 @@ async function writeWorkflowGetJson(
         ...(throughput ? { throughput } : {}),
         transcript_path: transcriptPath,
         terminal_record: terminalRecord,
+        ...why,
         events,
       }
     : {
@@ -135,6 +141,7 @@ async function writeWorkflowGetJson(
         ...(throughput ? { throughput } : {}),
         transcript_path: transcriptPath,
         terminal_record: terminalRecord,
+        ...why,
         nodes: buildNodeSummaries(events),
         // Keys the engine dropped from this run's YAML (#2213). Surfaced as a
         // named field rather than leaving the caller to scan raw events.

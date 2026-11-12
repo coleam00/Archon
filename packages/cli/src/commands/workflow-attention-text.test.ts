@@ -95,6 +95,17 @@ test('an unreadable item, a failed run and a lost owner say which run and what s
   expect(failed).toContain('run-1');
   expect(failed).toContain('build');
   expect(failed).toContain(more);
+  // The reason the stream recorded rides under the line, so the look starts informed.
+  const red = text({
+    type: 'terminal',
+    ...run,
+    status: 'completed',
+    outcome: 'failed',
+    cause: null,
+    reason: ['summary: main is red: lint fails on dev.'],
+  });
+  expect(red).toContain('summary: main is red: lint fails on dev.');
+  expect(red).toContain(more);
   const lost = text({ type: 'owner_lost', ...run, observedStatus: 'running' });
   expect(lost).toContain(more);
   expect(lost).toContain('archon workflow abandon run-1');
