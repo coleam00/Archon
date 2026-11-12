@@ -20,6 +20,30 @@ import type { setupIncludeExpansionTests } from './composition-include-resume';
 export function registerBoundaryReportingTests(
   fixture: ReturnType<typeof setupIncludeExpansionTests>
 ) {
+  for (const include of [false, true]) {
+    it(`does not read boundary history without an evaluation error (include: ${include})`, async () => {
+      const deps = createMockDeps();
+      deps.store.listWorkflowEvents.mockRejectedValue(new Error('history unavailable'));
+      await executeDagWorkflow(
+        dagOptions({
+          deps,
+          cwd: fixture.testDir,
+          workflowRun: makeWorkflowRun('no-boundary-error'),
+          workflow: resolveTestWorkflow({
+            name: 'no-boundary-error',
+            nodes: include
+              ? fixture.expandedGatedParentNodes('false-condition')
+              : fixture.buildWf('ordinary', [{ id: 'work', bash: 'echo done' }]).nodes,
+          }),
+        })
+      );
+      expect(
+        fixture.eventList(deps).filter(e => e.event_type === 'node_completed').length
+      ).toBeGreaterThan(0);
+      expect(deps.store.listWorkflowEvents).not.toHaveBeenCalled();
+    });
+  }
+
   it('records and renders the same false include gate for every descendant', async () => {
     const nodes = fixture.expandedGatedParentNodes('false-condition');
     const { events } = await fixture.executeExpanded(nodes, 'false-boundary-rendering');
@@ -164,6 +188,7 @@ export function registerBoundaryReportingTests(
         const reports = () =>
           errors.mock.calls.filter(call => call[1] === 'dag_node_skipped_condition_parse_error');
         expect(reports()).toHaveLength(1);
+        expect(deps.store.listWorkflowEvents).toHaveBeenCalledTimes(1);
         expect(reports()[0]?.[0]).toMatchObject({
           nodeId: 'cycle.inc__left',
           when: expr,
@@ -375,6 +400,18 @@ export function registerBoundaryReportingTests(
       );
     await run();
     expect(deliveredMessages(platform).filter(m => m.startsWith("Include '"))).toHaveLength(2);
+    expect(deliveredMessages(platform).some(m => m.startsWith("Include 'outer__inner'"))).toBe(
+      true
+    );
+    expect(deliveredMessages(platform).some(m => m.includes('outer%5F%5Finner'))).toBe(false);
+    const dry = await dryRunWorkflow({
+      workflow,
+      userMessage: '',
+      cwd: fixture.testDir,
+      stubs: { source: 'go' },
+    });
+    expect(formatDryRunTrace(dry)).toContain("[include 'outer__inner', workflow 'other-leaf']");
+    expect(formatDryRunTrace(dry)).not.toContain('outer%5F%5Finner');
     const identities = fixture
       .eventList(deps)
       .filter(e => e.event_type === 'node_skipped')

@@ -8,7 +8,12 @@ import { getLog } from './log';
 import { beginExecution, type LayerNodeResult, type RunLayersContext } from './run-context';
 import { skipReasonForCause } from './trigger-rule';
 
-export async function readReportedBoundaryErrors(
+export function createBoundaryErrorHistory(store: IWorkflowStore, runId: string) {
+  let history: Promise<Set<string>> | undefined;
+  return () => (history ??= readReportedBoundaryErrors(store, runId));
+}
+
+async function readReportedBoundaryErrors(
   store: IWorkflowStore,
   runId: string
 ): Promise<Set<string>> {
@@ -30,12 +35,16 @@ export async function skipNode(
   cause: SkipCause,
   error?: unknown
 ): Promise<LayerNodeResult> {
+  const reported =
+    cause.kind === 'condition_parse_error' && cause.boundary !== undefined
+      ? await ctx.getReportedBoundaryErrors()
+      : undefined;
   const reportBoundary =
     cause.kind === 'condition_parse_error' &&
     cause.boundary !== undefined &&
-    !ctx.reportedBoundaryErrors.has(cause.boundary.includeId);
-  // Claim before yielding to peers; persist before notifying so resume has durable evidence.
-  if (reportBoundary && cause.boundary) ctx.reportedBoundaryErrors.add(cause.boundary.includeId);
+    !reported?.has(cause.boundary.includeId);
+  // Claim before yielding to peers so concurrent skips share one report.
+  if (reportBoundary && cause.boundary) reported?.add(cause.boundary.includeId);
   const reason = skipReasonForCause(cause);
   getLog().info({ nodeId: node.id, reason }, 'dag_node_skipped');
   const output = await recordNodeState(
@@ -65,7 +74,7 @@ export async function skipNode(
     await safeSendMessage(
       ctx.platform,
       ctx.conversationId,
-      `Include '${cause.boundary.includeId}' (workflow '${cause.boundary.workflow}'): cannot evaluate when: "${cause.expr}" at node '${ctx.stepNamePrefix + node.id}' — node skipped (fail-closed).`,
+      `Include '${decodeURIComponent(cause.boundary.includeId)}' (workflow '${cause.boundary.workflow}'): cannot evaluate when: "${cause.expr}" at node '${ctx.stepNamePrefix + node.id}' — node skipped (fail-closed).`,
       { workflowId: ctx.workflowRun.id, nodeName: node.id }
     );
   }

@@ -1,3 +1,4 @@
+import { formatSkipCause } from '../../../skip-cause';
 import { boundaryIdComponent } from '../../../include/inline';
 import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { attemptSpend } from '../../../run-budget';
@@ -213,7 +214,7 @@ function instanceRunContext(
     priorCompletedNodes: threaded.priorNodes,
     claimedWorkPausePolicy: 'finish_through_parent_pause',
     lastSequentialSession: undefined,
-    reportedBoundaryErrors: ctx.reportedBoundaryErrors,
+    getReportedBoundaryErrors: ctx.getReportedBoundaryErrors,
     warnedProviderConflicts: ctx.warnedProviderConflicts,
     totalCostUsd: undefined,
     totalTokens: undefined,
@@ -392,6 +393,19 @@ async function settleInstance(
   // deterministic instance finishes through a sibling's pause and reaches its sink.
   // Surface any remaining incompleteness rather than treating absent output as success.
   const terminal = instanceCtx.nodeOutputs.get(primarySink);
+  if (
+    terminal?.state === 'skipped' &&
+    terminal.cause.kind === 'condition_parse_error' &&
+    terminal.cause.boundary !== undefined
+  ) {
+    const error = formatSkipCause(terminal.cause);
+    return recordInstanceTerminal(
+      instance,
+      { status: 'failed', output: '', error, ...instanceUsage },
+      { status: 'failed', error, failureKind: 'child_failed' },
+      'failed and its terminal state could not be stored'
+    );
+  }
   if (terminal?.state !== 'completed') {
     return {
       status: 'ambiguous',

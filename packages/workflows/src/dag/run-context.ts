@@ -231,7 +231,7 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   /** Sequential-session threading cursor (mutated by runLayers). Provider-tagged so the
    *  session is only threaded into nodes that resolve to the SAME provider (#1992). */
   lastSequentialSession: SequentialSessionCursor | undefined;
-  reportedBoundaryErrors: Set<string>;
+  getReportedBoundaryErrors: () => Promise<Set<string>>;
   /**
    * Provider/model conflicts already reported to the user this run, keyed
    * `declared|resolved|modelRef`. A conflict the author wrote once at workflow level is

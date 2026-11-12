@@ -158,6 +158,64 @@ nodes:
     expect(warnings()).toHaveLength(2);
   });
 
+  for (const join of ['all_success', 'all_done'] as const) {
+    it(`settles a boundary evaluation error at the primary sink as failed (${join})`, async () => {
+      await writeBlock(
+        'name: error-leaf\ndescription: leaf\nnodes:\n  - id: work\n    bash: exit 99',
+        'error-leaf'
+      );
+      await writeBlock(`name: compose-blk
+description: block
+mutates_checkout: false
+nodes:
+  - id: source
+    bash: printf '%s' '{"route":{}}'
+  - id: review_qa
+    include: error-leaf
+    depends_on: [source]
+    when: "$source.output.route == 'go'"
+`);
+      const deps = createMockDeps();
+      const platform = createMockPlatform();
+      const options = dagOptions({
+        deps,
+        platform,
+        cwd: testDir,
+        workflowRun: makeWorkflowRun(`sink-boundary-${join}`),
+        workflow: {
+          name: 'sink-boundary',
+          nodes: [
+            {
+              id: 'fan',
+              kind: 'compose_fan_out',
+              include: 'compose-blk',
+              fan_out: { items: '[1]', as: 'item', join, max_parallel: 1 },
+            },
+          ],
+        },
+      });
+      await executeDagWorkflow(options);
+      const events = eventsOf(deps.store);
+      const failure = events.find(
+        e => e.event_type === 'node_failed' && e.data.type === 'compose_fan_out_instance'
+      );
+      expect(failure?.data.error).toContain('condition evaluation error: $');
+      expect(failure?.data.error).toContain("source.output.route == 'go'");
+      expect(failure?.data.error).toContain('review_qa');
+      expect(failure?.data.error).not.toContain('automatic replay is unsafe');
+      const fan = events.find(
+        e =>
+          e.step_name === 'fan' &&
+          e.event_type === (join === 'all_done' ? 'node_completed' : 'node_failed')
+      );
+      expect(fan).toBeDefined();
+      expect(JSON.stringify(fan?.data)).toContain('condition evaluation error');
+      const warnings = deliveredMessages(platform).filter(m => m.startsWith("Include '"));
+      expect(warnings).toHaveLength(1);
+      expect(warnings[0]).toContain('review_qa');
+    });
+  }
+
   for (const scenario of ['parallel sibling', 'usage read failure', 'usage write failure']) {
     it(`preserves an unreadable parent after settling work (${scenario})`, async () => {
       await writeBlock(

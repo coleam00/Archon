@@ -3,7 +3,7 @@ import type { SkipCause } from './schemas/node-state';
 export function formatSkipCause(cause: SkipCause): string {
   const detail = formatCauseDetail(cause);
   return cause.boundary
-    ? `${detail} [include '${cause.boundary.includeId}', workflow '${cause.boundary.workflow}']`
+    ? `${detail} [include '${decodeURIComponent(cause.boundary.includeId)}', workflow '${cause.boundary.workflow}']`
     : detail;
 }
 
