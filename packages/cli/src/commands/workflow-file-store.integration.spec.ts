@@ -885,6 +885,32 @@ test('a hand start waits while its resource is full and --no-wait refuses it', a
   expect(waited.output + waited.error).toContain("Waiting for resource 'build'");
   expect(readFileSync(join(f.project, 'quick-ran'), 'utf8')).toBe('ran\n');
 }, 60000);
+test('a broken capacity config ends a waiting hand start instead of leaving it pending', async () => {
+  const config = 'store: files\nconcurrency:\n  resources:\n    build: 1\n';
+  const f = fixture(config);
+  writeFileSync(
+    join(f.project, '.archon/workflows/held.yaml'),
+    'name: held\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: touch held-started; while [ ! -f release ]; do sleep 0.1; done\n'
+  );
+  const run = () => cli(f, ['workflow', 'run', 'held', '--folder', '--no-worktree']);
+  const held = run();
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+  const waiting = run();
+  await Bun.sleep(2000);
+  writeFileSync(join(f.home, 'config.yaml'), config.replace('build: 1', 'build: 0'));
+  const refused = await waiting;
+  expect(refused.code, refused.output + refused.error).not.toBe(0);
+  expect(refused.output + refused.error).toContain("Resource 'build' admission failed");
+  writeFileSync(join(f.home, 'config.yaml'), config);
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+  const listed = await cli(f, ['workflow', 'runs', '--json']);
+  expect(
+    JSON.parse(listed.output)
+      .runs.map((r: { status: string }) => r.status)
+      .sort()
+  ).toEqual(['cancelled', 'completed']);
+}, 60000);
 test('a workflow that includes or runs another declaring its resource holds one slot', async () => {
   const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
   writeFileSync(
@@ -905,6 +931,32 @@ test('a workflow that includes or runs another declaring its resource holds one 
     '--folder',
     '--no-worktree',
   ]);
+  expect(result, result.output + result.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(f.project, 'inner-ran'), 'utf8')).toBe('inner\n');
+}, 60000);
+test('a sub-run whose parent holds no slot on its resource waits for one', async () => {
+  const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
+  const write = (name: string, body: string): void =>
+    writeFileSync(
+      join(f.project, `.archon/workflows/${name}.yaml`),
+      `name: ${name}\ndescription: ${name}\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n${body}`
+    );
+  write(
+    'held',
+    '  - id: work\n    bash: touch held-started; while [ ! -f release ]; do sleep 0.1; done\nresource: build\n'
+  );
+  write('block', '  - id: inner\n    bash: echo inner > inner-ran\nresource: build\n');
+  write('orchestrate', '  - id: sub\n    workflow: block\n');
+  const run = (name: string) => cli(f, ['workflow', 'run', name, '--folder', '--no-worktree']);
+  const held = run('held');
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+  const orchestrated = run('orchestrate');
+  await Bun.sleep(3000);
+  expect(existsSync(join(f.project, 'inner-ran'))).toBe(false);
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+  const result = await orchestrated;
   expect(result, result.output + result.error).toMatchObject({ code: 0 });
   expect(readFileSync(join(f.project, 'inner-ran'), 'utf8')).toBe('inner\n');
 }, 60000);

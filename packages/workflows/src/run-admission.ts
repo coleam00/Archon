@@ -29,12 +29,9 @@ import {
   type ExecutionOwnerRecord,
 } from './schemas';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
-import {
-  ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
-  type PreparedWorkflowLaunch,
-} from './schemas/resource-start';
 import type { WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
+import { holdWorkflowResource } from './resource-hold';
 import { parseDbTimestamp } from './utils/duration';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
@@ -222,69 +219,6 @@ async function createWorkflowRunRow(
       stopped: true,
       result: { success: false, error: 'Database error creating workflow run' },
     };
-  }
-}
-
-/** How often a start waiting for its workflow's resource asks for a slot again. */
-const RESOURCE_WAIT_POLL_MS = 1000;
-
-/**
- * Take a slot on the workflow's `resource:` before the run is claimed, waiting while the
- * resource is full, or refusing when `noWait` is set. A sub-run runs inside its parent's
- * slot. A run a binding admitted already holds its binding's slot, so it takes no second.
- */
-async function holdWorkflowResource(
-  deps: WorkflowDeps,
-  platform: IWorkflowPlatform,
-  conversationId: string,
-  cwd: string,
-  workflow: ResolvedWorkflow,
-  workflowRun: WorkflowRun,
-  noWait: boolean
-): Promise<WorkflowExecutionResult | undefined> {
-  const { resource } = workflow;
-  if (resource === undefined || workflowRun.parent_run_id) return undefined;
-  const refuse = async (error: string): Promise<WorkflowExecutionResult> => {
-    await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${error}`);
-    await requireTerminalStatusWrite(
-      deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
-      { workflowRunId: workflowRun.id, site: 'workflow.resource_refused' }
-    );
-    return { success: false, workflowRunId: workflowRun.id, error };
-  };
-  if (!workflowRun.codebase_id) {
-    return refuse(
-      `Workflow '${workflow.name}' holds resource '${resource}', and a run takes a slot only in a registered project.`
-    );
-  }
-  const launch: PreparedWorkflowLaunch = {
-    version: 2,
-    run: {
-      id: workflowRun.id,
-      workflow_name: workflow.name,
-      codebase_id: workflowRun.codebase_id,
-      user_message: '',
-      metadata: { [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false },
-      working_path: cwd,
-    },
-    execution: { cwd, conversationId, isolation: { kind: 'in-place' } },
-  };
-  let announced = false;
-  for (;;) {
-    const blocker = await deps.store.admitPendingRun({ resource, launch });
-    if (!blocker) return undefined;
-    const held = `${blocker.kind === 'run' ? 'held by run' : 'behind queued start'} ${blocker.id}`;
-    if (noWait) return refuse(`Resource '${resource}' is full (${held}); the start does not wait.`);
-    if (!announced) {
-      announced = true;
-      getLog().info({ workflowRunId: workflowRun.id, resource, blocker }, 'workflow.resource_wait');
-      await safeSendMessage(
-        platform,
-        conversationId,
-        `⏳ Waiting for resource '${resource}' (${held}). The run starts when a slot frees.`
-      );
-    }
-    await Bun.sleep(RESOURCE_WAIT_POLL_MS);
   }
 }
 
