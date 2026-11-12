@@ -1802,16 +1802,10 @@ nodes:
         expect(abandon.stdout).toMatch(/Last activity: \d{4}-\d{2}-\d{2}T/);
         expect(abandon.stdout).not.toContain('another host');
         expect(fixture.runs()[0]?.status).toBe('cancelled');
-        expect(fixture.requests()[1]?.status).toBe('queued');
-        await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
-          'trigger',
-          'drain',
-          '--host',
-          fixture.hostId,
-        ]);
+        expect(fixture.requests()[1]?.status).toBe('admitted');
         await waitFor(
           () => (fixture.runs()[1]?.status === 'completed' ? true : undefined),
-          'successor after explicit abandonment and drain'
+          'successor after the explicit abandonment releases the slot'
         );
       } finally {
         killAll(pids);
