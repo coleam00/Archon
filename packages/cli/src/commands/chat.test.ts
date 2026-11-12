@@ -57,11 +57,10 @@ describe('chatCommand', () => {
     expect(conversationId).toMatch(/^cli-chat-\d+-[a-f0-9]{32}$/);
     expect(message).toBe('Hello, agent!');
     expect(createHost).toHaveBeenCalledWith(true);
-    expect(mockHandleMessage.mock.calls[0][3]).toEqual({
-      actor: { kind: 'operator' },
-      workflowOperations: host.operations,
-      afterOwnedExecution: host.afterOwnedExecution,
-    });
+    const context = mockHandleMessage.mock.calls[0][3];
+    expect(context?.actor).toEqual({ kind: 'operator' });
+    expect(context?.workflowOperations).toBe(host.operations);
+    expect(context?.afterOwnedExecution).toBe(host.afterOwnedExecution);
   });
 
   test('should use batch streaming mode for the CLIAdapter', async () => {
