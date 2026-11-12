@@ -407,7 +407,8 @@ function returnedText(value: unknown): string[] {
   return Object.entries(value).flatMap(([key, field]) => {
     const line = typeof field === 'string' ? firstLine(field) : undefined;
     // A key is authored text too: one with a line break must not make the entry span lines.
-    return line === undefined ? [] : [`${key.replace(/\s+/g, ' ').trim()}: ${line}`];
+    // Only the breaks are replaced, so any other key is written as authored.
+    return line === undefined ? [] : [`${key.replace(/\s*[\r\n]+\s*/g, ' ')}: ${line}`];
   });
 }
 
