@@ -138,7 +138,7 @@ async function admitResourceStartWithQuery(
   if (!attachPending && (await lockRun(query, launch.run.id)))
     throw new Error(`Run already exists: ${launch.run.id}`);
   const blocker = resourceStartBlocker(
-    await resourceStartOccupancy(query, intent.resource, capacity, caps, policy),
+    await resourceStartOccupancy(query, intent.resource, capacity, caps, policy, launch.run.id),
     launch
   );
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';

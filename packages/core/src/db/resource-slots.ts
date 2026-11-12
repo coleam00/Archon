@@ -188,7 +188,8 @@ export async function resourceStartOccupancy(
   resource: string,
   capacity: number,
   caps: ReadonlyMap<string, number> = new Map(),
-  policy: ResourceCapacityPolicy = {}
+  policy: ResourceCapacityPolicy = {},
+  candidateRunId?: string
 ): Promise<ResourceSlotOccupancy> {
   const holders = await liveResourceSlotHolders(query, resource);
   const holding = new Set(holders.filter(holder => holder.kind === 'run').map(holder => holder.id));
@@ -220,9 +221,6 @@ export async function resourceStartOccupancy(
       ORDER BY w.started_at, w.id`,
     [resource]
   );
-  const parents = await query<{ id: string; parent_run_id: string }>(
-    'SELECT id, parent_run_id FROM remote_agent_workflow_runs WHERE parent_run_id IS NOT NULL'
-  );
   await query(
     `UPDATE remote_agent_resource_start_requests SET status = 'withdrawn'
       WHERE resource_key = $1 AND status = 'queued' AND EXISTS (
@@ -236,6 +234,18 @@ export async function resourceStartOccupancy(
       WHERE resource_key = $1 AND status = 'queued'
       ORDER BY queue_position${getDialect().rowLock()}`,
     [resource]
+  );
+  const parents = await query<{ id: string; parent_run_id: string }>(
+    `WITH RECURSIVE ancestry AS (
+       SELECT id, parent_run_id FROM remote_agent_workflow_runs WHERE id IN (
+         SELECT id FROM remote_agent_resource_start_requests WHERE resource_key = $1 AND status = 'queued'
+         UNION SELECT id FROM remote_agent_workflow_runs WHERE id = $2
+       )
+       UNION
+       SELECT w.id, w.parent_run_id FROM remote_agent_workflow_runs w
+         JOIN ancestry a ON w.id = a.parent_run_id
+     ) SELECT id, parent_run_id FROM ancestry WHERE parent_run_id IS NOT NULL`,
+    [resource, candidateRunId ?? null]
   );
   const isLocal = (row: (typeof live.rows)[number]) =>
     holding.has(String(row.id)) || (!row.foreign_membership && row.resource_key === resource);
@@ -285,7 +295,9 @@ export async function resourceStartOccupancy(
   for (const row of queued.rows) {
     try {
       const start = parseQueuedResourceStart(row, resource);
-      const declared = await requestDeclaredCapacity(query, row, resource, start.launch, policy);
+      const declared = caps.has(resource)
+        ? undefined
+        : await requestDeclaredCapacity(query, row, resource, start.launch, policy);
       queue.push({ ...start, capacity: resolveResourceCapacity(caps, resource, declared) });
     } catch (error) {
       if (!(error instanceof z.ZodError || error instanceof SyntaxError)) throw error;

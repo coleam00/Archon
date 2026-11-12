@@ -828,7 +828,7 @@ test('full resource refuses a fresh container launch before backend preparation'
         container: true,
         noWait: true,
       })
-    ).rejects.toThrow("Resource 'build' is full");
+    ).rejects.toThrow("Resource 'build' did not admit this start");
     expect(prepare).not.toHaveBeenCalled();
     expect(f.execute).not.toHaveBeenCalled();
     expect((await f.store.getWorkflowRun(holder.id))?.status).toBe('pending');

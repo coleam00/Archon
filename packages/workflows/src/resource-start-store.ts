@@ -308,17 +308,17 @@ export function drainableStarts(slot: ResourceSlotOccupancy, hostId: string): Qu
 }
 
 /**
- * What keeps an admitted failed or paused run from resuming now.
+ * What keeps an admitted failed, cancelled or paused run from resuming now.
  *
  * A paused run that still holds its slot keeps it. A paused run that gave its slot back
  * never lost its admission, so it waits only for holders and for waiters refused before
- * it, never for queued new starts. A failed run's claim ended, so its resume is a new
+ * it, never for queued new starts. A failed or cancelled run's claim ended, so recovery is a new
  * decision and must not pass any promised work: a waiter the slot cannot also fit, or a
  * queued request that could run.
  */
 export function resourceResumeBlocker(
   slot: ResourceSlotOccupancy,
-  run: Pick<WorkflowRun, 'id' | 'metadata'> & { status: 'failed' | 'paused' }
+  run: Pick<WorkflowRun, 'id' | 'metadata'> & { status: 'failed' | 'cancelled' | 'paused' }
 ): ResourceBlocker | null {
   if (slot.queueError) throw slot.queueError;
   const others = slot.holders.filter(holder => holder.id !== run.id);

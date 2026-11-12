@@ -28,13 +28,18 @@ export async function awaitResourceStartAdmission(
   signal?.throwIfAborted();
   // Only the native launcher has its execution options; a trigger host cannot take over.
   const hostId = nativeResourceStartHostId(launch.run.id);
-  const disposition = await store.admitPendingResourceStart({
-    resource: resource.name,
-    capacity: resource.capacity,
-    hostId,
-    overlap: options.noWait ? 'skip' : 'queue',
-    launch,
-  });
+  let disposition: ResourceStartDisposition;
+  try {
+    disposition = await store.admitPendingResourceStart({
+      resource: resource.name,
+      capacity: resource.capacity,
+      hostId,
+      overlap: options.noWait ? 'skip' : 'queue',
+      launch,
+    });
+  } catch (error) {
+    return withdrawOrReadAdmission(store, launch.run.id, error);
+  }
   if (disposition.status !== 'queued') return disposition;
   try {
     await options.onWaiting?.(resource.name, disposition.requestId);

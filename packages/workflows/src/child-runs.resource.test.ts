@@ -12,7 +12,15 @@ import { runChildWorkflow } from './child-runs';
 import { admitNativeResourceStart } from './resource-start-admission';
 
 const track = trackTempRoots();
-test.each(['default', 'inherit', 'worktree', 'placement-fails', 'notice-fails'] as const)(
+const resourceChildAdmissionScenarios = [
+  'default',
+  'inherit',
+  'worktree',
+  'placement-fails',
+  'notice-fails',
+  'admission-fails',
+] as const;
+test.each(resourceChildAdmissionScenarios)(
   'resource child admission preserves ownership: %s',
   async scenario => {
     const isolation =
@@ -61,6 +69,15 @@ test.each(['default', 'inherit', 'worktree', 'placement-fails', 'notice-fails'] 
         };
       const platform = makePlatform();
       let queuedId: string | undefined;
+      if (scenario === 'admission-fails') {
+        const admit = store.admitPendingResourceStart.bind(store);
+        spyOn(store, 'admitPendingResourceStart').mockImplementationOnce(async intent => {
+          const result = await admit(intent);
+          queuedId = result.requestId;
+          expect(result.status).toBe('queued');
+          throw new Error('admission response lost');
+        });
+      }
       const send = spyOn(platform, 'sendMessage').mockImplementation(
         async (_conversation, message) => {
           if (!message.startsWith('Waiting for resource')) return;
@@ -100,7 +117,7 @@ test.each(['default', 'inherit', 'worktree', 'placement-fails', 'notice-fails'] 
       expect(run?.user_message).toBe('payload');
       expect((await store.getResourceStartRequest(outcome.childRunId))?.declaredCapacity).toBe(1);
       expect(calls).toHaveLength(scenario === 'worktree' ? 1 : 0);
-      if (scenario === 'notice-fails') {
+      if (scenario === 'notice-fails' || scenario === 'admission-fails') {
         expect(run?.status).toBe('failed');
         expect((await store.getResourceStartRequest(outcome.childRunId))?.status).toBe('withdrawn');
         const source = run?.metadata.workflow_source;
@@ -118,7 +135,7 @@ test.each(['default', 'inherit', 'worktree', 'placement-fails', 'notice-fails'] 
         expect(run?.status).toBe('failed');
         expect(run?.working_path).toBeNull();
       }
-      expect(send).toHaveBeenCalled();
+      expect(send).toHaveBeenCalledTimes(Number(scenario !== 'admission-fails'));
     } finally {
       if (previousHome === undefined) delete process.env.ARCHON_HOME;
       else process.env.ARCHON_HOME = previousHome;

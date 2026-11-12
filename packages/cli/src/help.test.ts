@@ -321,7 +321,7 @@ Options:
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
   --workflow-source <path>   Read the workflow, its commands and scripts from this directory
                              instead of --cwd (which stays the workspace the run acts on)
-  --no-wait                  Refuse when the workflow resource is full instead of waiting
+  --no-wait                  Refuse instead of waiting when the resource blocks the start
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current directory (with or without git) as a folder project and run in place
   --container                Run a folder project in container isolation

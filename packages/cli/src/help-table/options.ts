@@ -48,7 +48,7 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--no-wait',
-    description: 'Refuse when the workflow resource is full instead of waiting',
+    description: 'Refuse instead of waiting when the resource blocks the start',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {

@@ -201,7 +201,8 @@ export function createWorkflowStore(
     resumeWorkflowRun: (id, cursor) =>
       workflowDb.resumeWorkflowRun(id, cursor, resourceCapacityPolicy),
     releasePausedRunSlot: workflowDb.releasePausedRunSlot,
-    recoverCancelledFanOutRun: workflowDb.recoverCancelledFanOutRun,
+    recoverCancelledFanOutRun: id =>
+      workflowDb.recoverCancelledFanOutRun(id, resourceCapacityPolicy),
     updateWorkflowRun: workflowDb.updateWorkflowRun,
     updateWorkflowRunMetadataIfRunning: workflowDb.updateWorkflowRunMetadataIfRunning,
     updateWorkflowActivity: workflowDb.updateWorkflowActivity,

@@ -14,6 +14,36 @@ export function describeNativeAdmissionConformance(getHarness: () => WorkflowSto
       store = harness.store;
     });
     const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    test.each(['queued', 'admitted'] as const)(
+      'native admission recovers a committed %s request after a lost response',
+      async state => {
+        if (state === 'queued') await store.admitResourceStart(start());
+        const native = start();
+        await store.createWorkflowRun(native.launch.run);
+        const admit = store.admitPendingResourceStart.bind(store);
+        const fault = spyOn(store, 'admitPendingResourceStart').mockImplementationOnce(
+          async intent => {
+            expect((await admit(intent)).status).toBe(state);
+            throw new Error('admission response lost');
+          }
+        );
+        try {
+          const admission = awaitResourceStartAdmission(
+            store,
+            { name: 'resource', capacity: 1 },
+            native.launch
+          );
+          if (state === 'queued')
+            await expect(admission).rejects.toThrow('admission response lost');
+          else expect((await admission).status).toBe('admitted');
+        } finally {
+          fault.mockRestore();
+        }
+        expect((await store.getResourceStartRequest(native.launch.run.id))?.status).toBe(
+          state === 'queued' ? 'withdrawn' : 'admitted'
+        );
+      }
+    );
     test.each(['local', 'foreign'] as const)(
       'native child shares ancestor checkouts in %s resources on admission and drain',
       async kind => {

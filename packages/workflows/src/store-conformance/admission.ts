@@ -2,6 +2,7 @@ import { resourceStartFixtures } from '../resource-start-conformance';
 import type { ResourceStartIntent } from '../schemas/resource-start';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import {
+  FAN_OUT_CANCEL_REASONS,
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   deadlineWaitCursor,
@@ -34,6 +35,62 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
     });
 
     const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    test.each([...FAN_OUT_CANCEL_REASONS])(
+      'cancelled child recovery reacquires capacity (%s)',
+      async reason => {
+        const child = start();
+        await store.admitResourceStart(child);
+        await store.claimPendingWorkflowRun(child.launch.run.id);
+        const next = start();
+        expect((await store.admitResourceStart(next)).status).toBe('queued');
+        await store.cancelFanOutRun(child.launch.run.id, reason);
+        const cancelled = await store.getWorkflowRun(child.launch.run.id);
+        const events = await store.listWorkflowEvents(child.launch.run.id);
+        harness.resourceCaps.set('resource', 1);
+        await expect(store.recoverCancelledFanOutRun(child.launch.run.id)).rejects.toMatchObject({
+          blocker: { kind: 'request', id: next.launch.run.id },
+        });
+        await store.drainResourceStarts({ resource: 'resource', hostId: 'host' });
+        await expect(store.recoverCancelledFanOutRun(child.launch.run.id)).rejects.toBeInstanceOf(
+          WorkflowResourceBusyError
+        );
+        expect(await store.getWorkflowRun(child.launch.run.id)).toEqual(cancelled);
+        expect(await store.listWorkflowEvents(child.launch.run.id)).toEqual(events);
+        harness.resourceCaps.set('resource', 2);
+        expect((await store.recoverCancelledFanOutRun(child.launch.run.id)).status).toBe('running');
+        expect((await store.admitResourceStart(start('queue', 'host', 2))).status).toBe('queued');
+      }
+    );
+    test('install overrides bypass unavailable legacy declaration evidence on drain and resume', async () => {
+      const holder = start();
+      await store.admitResourceStart(holder);
+      const legacy = start();
+      legacy.launch.run.metadata.workflow_source = {
+        version: 1,
+        root: '/unavailable-capture',
+        origin: '/source',
+        captured_at: '2026-01-01T00:00:00Z',
+        digest: 'digest',
+        file_count: 1,
+        byte_count: 1,
+      };
+      await store.admitResourceStart(legacy);
+      await harness.clearDeclaredCapacity(legacy.launch.run.id);
+      await expect(
+        store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+      ).rejects.toThrow();
+      harness.resourceCaps.set('resource', 2);
+      expect(
+        await store.drainResourceStarts({ resource: 'resource', hostId: 'host' })
+      ).toMatchObject([{ runId: legacy.launch.run.id }]);
+      await store.claimPendingWorkflowRun(legacy.launch.run.id);
+      await store.failWorkflowRun(legacy.launch.run.id, 'failed');
+      expect((await store.resumeWorkflowRun(legacy.launch.run.id)).status).toBe('running');
+      await store.failWorkflowRun(legacy.launch.run.id, 'failed');
+      harness.resourceCaps.clear();
+      await expect(store.resumeWorkflowRun(legacy.launch.run.id)).rejects.toThrow();
+      expect((await store.getWorkflowRun(legacy.launch.run.id))?.status).toBe('failed');
+    });
     test('admission races keep capacity and persist only admitted runs', async () => {
       const intents = Array.from({ length: 8 }, () => start());
       const decisions = await Promise.all(

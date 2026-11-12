@@ -1,6 +1,6 @@
+// @archon-test-isolated
 import { create as createIsolationEnvironment } from './isolation-environments';
 import { toBranchName } from '@archon/git';
-// @archon-test-isolated
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { Database, type SQLQueryBindings } from 'bun:sqlite';
 import { mkdtemp, writeFile } from 'node:fs/promises';
@@ -21,7 +21,12 @@ const {
   getStartReceipt,
   withdrawQueuedResourceStart,
 } = createWorkflowStore();
-import { addResourceSlotHolder, liveResourceSlotHolders, lockResourceSlot } from './resource-slots';
+import {
+  resourceStartOccupancy,
+  addResourceSlotHolder,
+  liveResourceSlotHolders,
+  lockResourceSlot,
+} from './resource-slots';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import {
   claimPendingWorkflowRun,
@@ -120,6 +125,53 @@ afterEach(async () => {
 });
 
 describe('durable resource starts', () => {
+  test('occupancy loads only candidate and queued ancestry, excluding unrelated history', async () => {
+    const store = createWorkflowStore();
+    const parent = await store.createWorkflowRun(launch(crypto.randomUUID()).run);
+    const middle = await store.createWorkflowRun({
+      ...launch(crypto.randomUUID()).run,
+      parent_run_id: parent.id,
+    });
+    const candidate = await store.createWorkflowRun({
+      ...launch(crypto.randomUUID()).run,
+      parent_run_id: middle.id,
+    });
+    const historical = await store.createWorkflowRun({
+      ...launch(crypto.randomUUID()).run,
+      parent_run_id: parent.id,
+    });
+    await store.cancelWorkflowRun(historical.id);
+    const occupancy = (id?: string) =>
+      getDatabase().withTransaction(async query => {
+        await lockResourceSlot(query, 'resource', 1);
+        return resourceStartOccupancy(query, 'resource', 1, new Map(), {}, id);
+      });
+    const expected = new Map([
+      [candidate.id, middle.id],
+      [middle.id, parent.id],
+    ]);
+    expect((await occupancy(candidate.id)).runParents).toEqual(expected);
+    await store.admitResourceStart({
+      resource: 'resource',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue',
+      launch: launch(crypto.randomUUID()),
+    });
+    expect(
+      (
+        await store.admitPendingResourceStart({
+          resource: 'resource',
+          capacity: 1,
+          hostId: 'host',
+          overlap: 'queue',
+          launch: launch(candidate.id),
+        })
+      ).status
+    ).toBe('queued');
+    expect((await occupancy()).runParents).toEqual(expected);
+  });
+
   test('receipt inspection rejects invalid limits through the SQL store', async () => {
     for (const limit of [NaN, 1.5, 0, 1001]) {
       await expect(listStartReceipts(limit)).rejects.toThrow(

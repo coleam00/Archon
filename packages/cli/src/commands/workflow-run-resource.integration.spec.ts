@@ -118,7 +118,7 @@ for (const store of ['database', 'files'] as const) {
         const refused = start(contender, 'probe', flags);
         expect(await refused.child.exited).not.toBe(0);
         const [stdout, stderr] = await refused.output;
-        expect(stdout + stderr).toContain("Resource 'build' is full");
+        expect(stdout + stderr).toContain("Resource 'build' did not admit this start");
         if (flags.includes('--json')) {
           expect(JSON.parse(stdout).ok).toBe(false);
           expect(stdout).not.toContain('"detached":true');

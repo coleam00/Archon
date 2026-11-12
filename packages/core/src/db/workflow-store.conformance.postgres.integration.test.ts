@@ -1,5 +1,5 @@
-import { assertCapturedCapacityAdmission } from '../workflows/resource-capacity-test-fixture';
 // @archon-test-isolated
+import { assertCapturedCapacityAdmission } from '../workflows/resource-capacity-test-fixture';
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';

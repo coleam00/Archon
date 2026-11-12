@@ -177,7 +177,7 @@ function priorMatchesCursor(prior: PriorRunRow, cursor: WorkflowResumeCursor | u
 }
 
 /**
- * Take a slot on the run's admitted resource before it resumes, or return the refusal when the
+ * Take a slot on the run's admitted resource before resume or fan-out recovery, or refuse when the
  * resource is busy. A run with no admitted resource, or a stale 'running' orphan, takes no slot.
  */
 async function claimResourceSlot(
@@ -189,7 +189,11 @@ async function claimResourceSlot(
 ): Promise<WorkflowResourceBusyError | undefined> {
   const resourceKey = prior.resource_key ?? undefined;
   const status = prior.status;
-  if (resourceKey === undefined || (status !== 'failed' && status !== 'paused')) return undefined;
+  if (
+    resourceKey === undefined ||
+    (status !== 'failed' && status !== 'paused' && status !== 'cancelled')
+  )
+    return undefined;
   const caps = (await policy.loadCaps?.()) ?? new Map<string, number>();
   await lockResourceSlot(query, resourceKey, resolveResourceCapacity(caps, resourceKey));
   const requests = await query<{
@@ -206,7 +210,9 @@ async function claimResourceSlot(
   const launch = preparedWorkflowLaunchSchema.parse(
     typeof request.launch === 'string' ? JSON.parse(request.launch) : request.launch
   );
-  const declared = await requestDeclaredCapacity(query, request, resourceKey, launch, policy);
+  const declared = caps.has(resourceKey)
+    ? undefined
+    : await requestDeclaredCapacity(query, request, resourceKey, launch, policy);
   const capacity = resolveResourceCapacity(caps, resourceKey, declared);
   const metadata = normalizeMetadata(prior.metadata);
   const occupancy = await resourceStartOccupancy(query, resourceKey, capacity, caps, policy);
@@ -364,7 +370,10 @@ export async function resumeWorkflowRun(
   return updateResult.admitted;
 }
 
-export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun> {
+export async function recoverCancelledFanOutRun(
+  id: string,
+  policy: ResourceCapacityPolicy = installResourceCapacityPolicy
+): Promise<WorkflowRun> {
   const dialect = getDialect();
   const cancelledReason = dialect.jsonText('metadata', CANCELLED_REASON_METADATA_KEY);
   const metadataWithoutCancelledReason = dialect.jsonRemove(
@@ -378,6 +387,17 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
 
   try {
     return await getDatabase().withTransaction(async query => {
+      const prior = await lockPriorRun(query, id);
+      if (
+        !prior ||
+        prior.status !== 'cancelled' ||
+        !FAN_OUT_CANCEL_REASONS.some(
+          reason => reason === normalizeMetadata(prior.metadata)[CANCELLED_REASON_METADATA_KEY]
+        )
+      )
+        throw new Error(`Workflow run is not an engine-cancelled fan-out child (id: ${id})`);
+      const busy = await claimResourceSlot(query, id, prior, undefined, policy);
+      if (busy) throw busy;
       const result = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'running',
@@ -417,7 +437,11 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
       return normalizeWorkflowRun(row);
     });
   } catch (error) {
-    if (error instanceof Error && error.message.startsWith('Workflow run ')) throw error;
+    if (
+      error instanceof WorkflowResourceBusyError ||
+      (error instanceof Error && error.message.startsWith('Workflow run '))
+    )
+      throw error;
     const err = error as Error;
     getLog().error({ err, workflowRunId: id }, 'db.workflow_run_fan_out_recover_failed');
     throw new Error(`Failed to recover cancelled fan-out run: ${err.message}`);

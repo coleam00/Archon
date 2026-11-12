@@ -339,7 +339,7 @@ export interface IWorkflowStore
    * held a slot, or already gave it back; a capacity wait then stays, keeping its place.
    */
   releasePausedRunSlot(id: string, cursor: PauseCursor): Promise<{ released: boolean }>;
-  /** Claim an engine-cancelled fan-out child for immediate in-process recovery. */
+  /** Claim an engine-cancelled fan-out child for immediate in-process recovery, reacquiring its resource slot or throwing `WorkflowResourceBusyError`. */
   recoverCancelledFanOutRun(id: string): Promise<WorkflowRun>;
   /**
    * `metadata.parent_node_id` is creation-only: all later metadata writes ignore it,

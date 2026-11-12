@@ -1,5 +1,5 @@
-import { assertCapturedCapacityAdmission } from '../workflows/resource-capacity-test-fixture';
 // @archon-test-isolated
+import { assertCapturedCapacityAdmission } from '../workflows/resource-capacity-test-fixture';
 import { expect, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';

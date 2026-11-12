@@ -1,3 +1,5 @@
+import { createAdmissionTransaction } from './admission-transaction';
+import { pathFor, requestSchema } from './admission-documents';
 import { createHash } from 'node:crypto';
 import { expect, spyOn, test } from 'bun:test';
 import { ZodError } from 'zod';
@@ -232,6 +234,24 @@ test('receipt-linked requests validate their binding and inspection follows ever
     first.launch.run.id,
     second.launch.run.id,
   ]);
+  const third = { ...intent(), capacity: 2, receipt: first.receipt };
+  await store.admitResourceStart(third);
+  for (const start of [second, third]) {
+    const path = join(root, pathFor('requests', start.launch.run.id));
+    const row = requestSchema.parse(JSON.parse(await readFile(path, 'utf8')));
+    delete row.declaredCapacity;
+    await writeFile(path, JSON.stringify(row));
+  }
+  const reads = spyOn(commitModule, 'readJson');
+  try {
+    const occupancy = await createAdmissionTransaction(root).occupancy('resource');
+    expect(occupancy.queue.map(row => row.capacity)).toEqual([2, 2]);
+    expect(reads.mock.calls.filter(([path]) => path.includes('resource/receipts/'))).toHaveLength(
+      1
+    );
+  } finally {
+    reads.mockRestore();
+  }
   expect(receipt).not.toHaveProperty('createdAt');
   expect(receipt?.bindings[0]).not.toHaveProperty('requestIds');
   expect(await store.getResourceStartRequest(first.launch.run.id)).not.toHaveProperty('position');

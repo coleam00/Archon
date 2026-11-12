@@ -93,7 +93,7 @@ export interface AdmissionTransaction {
   binding(input: BindingIdentity): Promise<Binding | undefined>;
   owned(input: PreparationOwner): Promise<Binding | undefined>;
   canClaim(id: string): Promise<boolean>;
-  /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
+  /** Take a slot for an admitted run's resume or fan-out recovery, or say what blocks it. */
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
   /** Remove the run holder of an admitted run; whether one was removed. */
   release(id: string): Promise<boolean>;
@@ -272,19 +272,39 @@ export function createAdmissionTransaction(
     return { kind: 'foreign' as const, run, unknown: !run.working_path };
   }
 
+  let receiptCapacities: Map<string, { resource: string; capacity: number }> | undefined;
+  async function legacyReceiptCapacities() {
+    if (receiptCapacities) return receiptCapacities;
+    const capacities = new Map<string, { resource: string; capacity: number }>();
+    for (const path of await documentPaths(root, 'receipts')) {
+      const receipt = await read(path, receiptSchema);
+      for (const binding of receipt?.bindings ?? []) {
+        const intent = binding.intent;
+        if (intent?.capacity === undefined) continue;
+        for (const id of binding.requestIds) {
+          if (!capacities.has(id))
+            capacities.set(id, { resource: intent.resource, capacity: intent.capacity });
+        }
+      }
+    }
+    receiptCapacities = capacities;
+    return capacities;
+  }
   async function declaredCapacity(row: Request): Promise<number | undefined> {
     if (row.declaredCapacity !== undefined)
       return resourceCapacitySchema.parse(row.declaredCapacity);
-    for (const path of await documentPaths(root, 'receipts')) {
-      const receipt = await read(path, receiptSchema);
-      const binding = receipt?.bindings.find(binding => binding.requestIds.includes(row.id));
-      if (binding?.intent?.resource === row.resource && binding.intent.capacity !== undefined)
-        return binding.intent.capacity;
-    }
-    return capturedResourceDeclaration(policy, row.launch, row.resource);
+    const binding = (await legacyReceiptCapacities()).get(row.id);
+    return binding?.resource === row.resource
+      ? binding.capacity
+      : capturedResourceDeclaration(policy, row.launch, row.resource);
   }
   async function capacityFor(row: Request): Promise<number> {
-    return resolveResourceCapacity(await currentCaps(), row.resource, await declaredCapacity(row));
+    const caps = await currentCaps();
+    return resolveResourceCapacity(
+      caps,
+      row.resource,
+      caps.has(row.resource) ? undefined : await declaredCapacity(row)
+    );
   }
   async function queuedStarts(resource: string, ids: string[]) {
     const queue: QueuedStart[] = [];
@@ -458,7 +478,7 @@ export function createAdmissionTransaction(
     const resource = await slot(row.resource);
     if (await hasSlotMembership(run.id, row.resource, true))
       throw new Error(`Admitted resource request '${run.id}' disagrees with its slot membership`);
-    if (run.status !== 'failed' && run.status !== 'paused')
+    if (run.status !== 'failed' && run.status !== 'paused' && run.status !== 'cancelled')
       throw new WorkflowNotResumableError(run.id, run.status);
     if (!resource.admitted.includes(run.id)) resource.admitted.push(run.id);
     const blocker = resourceResumeBlocker(

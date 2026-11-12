@@ -260,7 +260,15 @@ export async function createFileWorkflowStore(
         if (released) view.clearCapacityWait(id);
         return { released };
       }),
-    recoverCancelledFanOutRun: id => write([id], view => view.recoverCancelledFanOutRun(id)),
+    recoverCancelledFanOutRun: id =>
+      write([id], async (view, admission) => {
+        const run = await view.getWorkflowRun(id);
+        if (run?.status === 'cancelled') {
+          const blocker = await admission.resume(run);
+          if (blocker) throw new WorkflowResourceBusyError(id, blocker, 'failed');
+        }
+        return view.recoverCancelledFanOutRun(id);
+      }),
     pauseWorkflowRun: (id, approval, extra, event) =>
       write([id], view => view.pauseWorkflowRun(id, approval, extra, event)),
     pauseWorkflowRunForWait: (id, wait, pause) =>

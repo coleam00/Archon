@@ -55,7 +55,7 @@ export async function admitForegroundResource(
     if (result.status === 'skipped') {
       lease.setupRun = run;
       throw new Error(
-        `Resource '${workflow.resource.name}' is full; --no-wait refused the start (blocked by ${result.blocker.kind} '${result.blocker.id}').`
+        `Resource '${workflow.resource.name}' did not admit this start; --no-wait refused it (blocked by ${result.blocker.kind} '${result.blocker.id}').`
       );
     }
     lease.setupRun = run;
