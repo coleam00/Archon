@@ -374,8 +374,8 @@ declare module 'archon:script' {
         };
         readonly threads: ReadonlyArray<{
           readonly id: string;
-          readonly createdAt: string;
-          readonly commit: string | null;
+          readonly createdAt?: string;
+          readonly commit?: string | null;
           readonly resolved: boolean;
           readonly outdated: boolean;
           readonly path: string | null;
@@ -387,8 +387,8 @@ declare module 'archon:script' {
               readonly id: string;
               readonly login: string | null;
             } | null;
-            readonly createdAt: string;
-            readonly commit: string | null;
+            readonly createdAt?: string;
+            readonly commit?: string | null;
             readonly body: string;
             readonly url: string;
           }>;

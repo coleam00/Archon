@@ -122,6 +122,10 @@ else {
     bodyDigest: digest(input.body ?? ''),
   };
 
+  // A plugin released before review-thread creation times answers without them.
+  const created = (createdAt: string, commit: string | null) =>
+    mode === 'older-plugin' ? {} : { createdAt, commit };
+
   const answer = (target: unknown, value: object): unknown => ({
     operationId: input.operationId,
     ok: true,
@@ -354,8 +358,7 @@ else {
           threads: [
             {
               id: 'thread-1',
-              createdAt: '2026-11-11T09:00:00Z',
-              commit: 'a'.repeat(40),
+              ...created('2026-11-11T09:00:00Z', 'a'.repeat(40)),
               resolved: false,
               outdated: false,
               path: 'src/a.ts',
@@ -364,16 +367,14 @@ else {
                 {
                   id: 'c1',
                   author: null,
-                  createdAt: '2026-11-11T09:00:00Z',
-                  commit: 'a'.repeat(40),
+                  ...created('2026-11-11T09:00:00Z', 'a'.repeat(40)),
                   body: 'private thread body',
                   url: pr.url,
                 },
                 {
                   id: 'c2',
                   author: null,
-                  createdAt: '2026-11-11T13:00:00+02:00',
-                  commit: null,
+                  ...created('2026-11-11T13:00:00+02:00', null),
                   body: 'a later reply',
                   url: pr.url,
                 },
