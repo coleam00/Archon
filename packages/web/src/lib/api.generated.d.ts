@@ -5996,6 +5996,8 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
+      /** @description When the latest resume started this run's current active phase; null if it was never resumed, or was resumed only by a build that reset `started_at` instead. `started_at` is when the run was created, and a resume never changes it. */
+      resumed_at: string | null;
       codebase_name: string | null;
       platform_type: string | null;
       worker_platform_id: string | null;
@@ -7635,6 +7637,8 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
+      /** @description When the latest resume started this run's current active phase; null if it was never resumed, or was resumed only by a build that reset `started_at` instead. `started_at` is when the run was created, and a resume never changes it. */
+      resumed_at: string | null;
       attention: components['schemas']['RunAttention'] | (never | null);
     };
     /** @enum {string|null} */

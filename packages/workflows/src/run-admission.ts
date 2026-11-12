@@ -33,6 +33,7 @@ import type { WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { holdWorkflowResource } from './resource-hold';
 import { parseDbTimestamp } from './utils/duration';
+import { activePhaseStartedAt } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -414,7 +415,7 @@ function freshInvocationMetadata(
  * block under `mutates_checkout: false`, only to record those events.
  *
  * Runs after workflowRun is finalized (pre-created, resumed, or freshly
- * created) so we always have self-ID + started_at for the deterministic
+ * created) so we always have self-ID + active-phase start for the deterministic
  * older-wins tiebreaker. The query treats `pending` rows older than 5 min
  * as orphaned, so leaks from crashed dispatches or resume orphans don't
  * permanently block the path.
@@ -443,7 +444,7 @@ async function holdCheckoutPathLock(
       ? null
       : await deps.store.getActiveWorkflowRunByPath(cwd, {
           id: workflowRun.id,
-          startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
+          activePhaseStartedAt: activePhaseStartedAt(workflowRun),
           ...(pathLockExclude.length > 0 ? { excludeRunIds: pathLockExclude } : {}),
         });
     if (activeWorkflow) {

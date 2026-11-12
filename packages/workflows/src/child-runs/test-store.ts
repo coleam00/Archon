@@ -188,6 +188,7 @@ export class InMemoryStore implements IWorkflowStore {
       parent_run_id: data.parent_run_id ?? null,
       output_root: null,
       checkout_baseline: null,
+      resumed_at: null,
       adopted_from_run_id: null,
     };
     this.runs.set(id, row);
@@ -249,7 +250,7 @@ export class InMemoryStore implements IWorkflowStore {
   // Prototype method (not an arrow-field) so store doubles can call it via `super`.
   getActiveWorkflowRunByPath(
     workingPath: string,
-    self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
+    self?: { id: string; activePhaseStartedAt: Date; excludeRunIds?: string[] }
   ): Promise<WorkflowRun | null> {
     const exclude = new Set([self?.id, ...(self?.excludeRunIds ?? [])].filter(Boolean));
     const active = [...this.runs.values()]

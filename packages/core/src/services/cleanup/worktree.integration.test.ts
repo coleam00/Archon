@@ -253,6 +253,7 @@ beforeEach(async () => {
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    resumed_at: null,
     origin: null,
   };
   store = isolationDb.createIsolationStore();

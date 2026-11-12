@@ -123,7 +123,7 @@ describe('concurrent-run guard', () => {
     expect(result.workflowRunId).toBe('run-123');
   });
 
-  it('passes self-id and started_at to the lock query so self is excluded', async () => {
+  it('passes self-id and active-phase start to the lock query so self is excluded', async () => {
     // The guard runs after the run row exists; without these args the dispatch's own row
     // would match and falsely trigger the guard.
     const getActiveSpy = mock(async () => null);
@@ -137,7 +137,7 @@ describe('concurrent-run guard', () => {
     });
     expect(getActiveSpy).toHaveBeenCalledWith(
       '/tmp',
-      expect.objectContaining({ id: 'self-run-789', startedAt: expect.any(Date) })
+      expect.objectContaining({ id: 'self-run-789', activePhaseStartedAt: expect.any(Date) })
     );
   });
 

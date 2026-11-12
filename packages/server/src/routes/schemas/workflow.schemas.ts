@@ -191,6 +191,11 @@ const ownerObservationSchema = runOwnerObservationSchema.nullable().openapi({
     "What this server observes about the running run's execution owner, by the rule `archon workflow wait` uses for `owner_lost`: `reachable` (an owner answers), `unreachable` (the recorded owner is on this server's host and user and nothing answers; the stored status is unchanged and abandoning the run is the operator's call), `unknown` (this server cannot observe the owner: another host or user, no recorded owner, or no answer in time). Null when the run is not running. Observed per request; never stored.",
 });
 
+const resumedAtSchema = z.string().nullable().openapi({
+  description:
+    "When the latest resume started this run's current active phase; null if it was never resumed, or was resumed only by a build that reset `started_at` instead. `started_at` is when the run was created, and a resume never changes it.",
+});
+
 /** A workflow run record (wire shape with ISO string dates). */
 export const workflowRunSchema = engineWorkflowRunSchema
   .extend({
@@ -200,6 +205,7 @@ export const workflowRunSchema = engineWorkflowRunSchema
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
+    resumed_at: resumedAtSchema,
   })
   .openapi('WorkflowRun');
 
@@ -367,6 +373,7 @@ export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
     started_at: z.string(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
+    resumed_at: resumedAtSchema,
   })
   .openapi('DashboardWorkflowRun');
 

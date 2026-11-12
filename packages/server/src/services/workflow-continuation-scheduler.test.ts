@@ -47,6 +47,7 @@ test('routes a scheduled continuation to its execution destination and delivers 
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    resumed_at: null,
   };
   const freshRun = { ...due, user_message: 'fresh context' };
   const cursor: WorkflowResumeCursor = {

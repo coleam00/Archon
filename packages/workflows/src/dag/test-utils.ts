@@ -129,27 +129,12 @@ export type MockWorkflowStore = {
 } & { createWorkflowEvent: MockWorkflowEventCollector };
 
 export function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
-  return {
+  return makeWorkflowRun(id, {
     origin: { conversationId: 'conv-mock' },
-    id,
     workflow_name: 'mock',
     conversation_id: 'conv-mock',
-    parent_conversation_id: null,
-    codebase_id: null,
-    status: 'running',
-    outcome: null,
     user_message: 'mock message',
-    metadata: {},
-    started_at: new Date(),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: null,
-    user_id: null,
-    parent_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-    adopted_from_run_id: null,
-  };
+  });
 }
 
 export function createMockStore(): MockWorkflowStore {
@@ -746,6 +731,7 @@ export function makeWorkflowRun(
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    resumed_at: null,
     adopted_from_run_id: null,
     ...overrides,
   };

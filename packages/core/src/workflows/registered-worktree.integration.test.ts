@@ -173,6 +173,7 @@ test.each(['checkout', 'local branch', 'remote branch'])(
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      resumed_at: null,
       origin: null,
     };
     const request = { parentRun, nodeId: 'build', childIndex: 2, codebaseId, setupEnvironment: {} };

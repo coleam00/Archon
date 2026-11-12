@@ -266,6 +266,9 @@ function addWorkflowRunColumns(db: Database): void {
       "ALTER TABLE remote_agent_workflow_runs ADD COLUMN outcome TEXT CHECK (outcome IN ('succeeded', 'failed'))"
     );
   }
+  if (!wfColNames.has('resumed_at')) {
+    db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN resumed_at TEXT');
+  }
   // Same rationale as idx_conversations_user_id in addConversationColumns.
   db.run(
     'CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL'

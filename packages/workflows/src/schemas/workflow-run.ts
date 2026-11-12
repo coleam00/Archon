@@ -48,6 +48,7 @@ export const workflowRunSchema = z.object({
   outcome: workflowRunOutcomeSchema.nullable(),
   user_message: z.string(),
   metadata: z.record(z.string(), z.unknown()),
+  /** When the run was created. Written once; a resume keeps it. */
   started_at: z.date(),
   completed_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),
@@ -88,6 +89,12 @@ export const workflowRunSchema = z.object({
    * started — which is different from a recorded `not_git` or `unavailable` observation.
    */
   checkout_baseline: checkoutObservationSchema.nullable(),
+  /**
+   * When the latest resume started the run's current active phase. Null when the run
+   * was never resumed, or was resumed only by a build that reset `started_at` instead.
+   * Read through `activePhaseStartedAt`, never on its own.
+   */
+  resumed_at: z.date().nullable(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

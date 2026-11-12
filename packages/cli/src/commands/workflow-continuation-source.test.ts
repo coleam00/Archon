@@ -128,6 +128,7 @@ for (const source of [
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      resumed_at: null,
       metadata: {
         workflow_source: {
           version: 1,

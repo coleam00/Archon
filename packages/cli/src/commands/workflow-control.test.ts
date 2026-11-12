@@ -70,6 +70,7 @@ describe('write command --json output', () => {
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      resumed_at: null,
       origin: null,
     });
     mockCancelWorkflowRunCommand.mockResolvedValueOnce({ cancelled: false });

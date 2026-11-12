@@ -14,7 +14,7 @@ export function resumeRun(
   for (const event of events) record(event);
   run.status = 'running';
   run.completed_at = null;
-  run.started_at = new Date();
+  run.resumed_at = new Date();
   run.last_activity_at = new Date();
   return structuredClone(run);
 }

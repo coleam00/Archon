@@ -77,6 +77,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      resumed_at: null,
     };
     try {
       const undashedId = FULL_ID.replaceAll('-', '');

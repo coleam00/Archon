@@ -17,6 +17,7 @@ type RawRunColumn =
   | 'started_at'
   | 'completed_at'
   | 'last_activity_at'
+  | 'resumed_at'
   | 'checkout_baseline';
 
 /**
@@ -33,6 +34,7 @@ export type WorkflowRunRow = Omit<WorkflowRun, RawRunColumn> & {
   started_at: string | Date;
   completed_at: string | Date | null;
   last_activity_at: string | Date | null;
+  resumed_at: string | Date | null;
   checkout_baseline: unknown;
 };
 
@@ -78,6 +80,7 @@ export function normalizeWorkflowRun<T extends WorkflowRunRow>(
     completed_at: row.completed_at === null ? null : toHydratedTimestamp(row.completed_at),
     last_activity_at:
       row.last_activity_at === null ? null : toHydratedTimestamp(row.last_activity_at),
+    resumed_at: row.resumed_at === null ? null : toHydratedTimestamp(row.resumed_at),
     origin,
     conversation_id: origin?.conversationId ?? null,
     parent_conversation_id: origin?.parentConversationId ?? null,

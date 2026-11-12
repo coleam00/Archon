@@ -216,9 +216,9 @@ describe('workflow run reads', () => {
 
     test('excludes self and applies older-wins tiebreaker when self is provided', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      const startedAt = new Date('2026-04-14T10:00:00Z');
+      const activePhaseStartedAt = new Date('2026-04-14T10:00:00Z');
 
-      await getActiveWorkflowRunByPath('/repo/path', { id: 'self-id', startedAt });
+      await getActiveWorkflowRunByPath('/repo/path', { id: 'self-id', activePhaseStartedAt });
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('id != $2');
@@ -226,10 +226,11 @@ describe('workflow run reads', () => {
       // the comparison is chronological, not lexical. SQLite branch wraps
       // both sides in datetime() — covered by tests in adapters/sqlite.test.ts
       // because this suite mocks getDatabaseType as 'postgresql'.
-      expect(query).toContain('started_at < $3::timestamptz');
-      expect(query).toContain('started_at = $3::timestamptz AND id < $2');
-      // selfStartedAt serialized to ISO — bun:sqlite rejects Date bindings.
-      expect(params).toEqual(['/repo/path', 'self-id', startedAt.toISOString()]);
+      // The active-phase start is the later of creation and the latest resume.
+      expect(query).toContain('GREATEST(started_at, resumed_at) < $3::timestamptz');
+      expect(query).toContain('GREATEST(started_at, resumed_at) = $3::timestamptz AND id < $2');
+      // Serialized to ISO — bun:sqlite rejects Date bindings.
+      expect(params).toEqual(['/repo/path', 'self-id', activePhaseStartedAt.toISOString()]);
     });
 
     test('skips self exclusion + tiebreaker when self is omitted (no caller context)', async () => {
@@ -240,17 +241,17 @@ describe('workflow run reads', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       // Without `self`, neither the id-exclusion nor the tiebreaker apply.
       expect(query).not.toContain('id !=');
-      expect(query).not.toContain('started_at <');
+      expect(query).not.toContain('resumed_at) <');
       expect(params).toEqual(['/repo/path']);
     });
 
-    test('orders by (started_at ASC, id ASC) so older-wins is deterministic', async () => {
+    test('orders by (active-phase start ASC, id ASC) so older-wins is deterministic', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await getActiveWorkflowRunByPath('/repo/path');
 
       const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain('ORDER BY started_at ASC, id ASC');
+      expect(query).toContain('ORDER BY GREATEST(started_at, resumed_at) ASC, id ASC');
     });
 
     test('returns null when no active run on path', async () => {
@@ -274,11 +275,11 @@ describe('workflow run reads', () => {
     // binding, works on both dialects).
     test('excludes ancestor run ids via NOT IN with positional placeholders', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
-      const startedAt = new Date('2026-04-14T10:00:00Z');
+      const activePhaseStartedAt = new Date('2026-04-14T10:00:00Z');
 
       await getActiveWorkflowRunByPath('/repo/path', {
         id: 'child-id',
-        startedAt,
+        activePhaseStartedAt,
         excludeRunIds: ['parent-id', 'grandparent-id'],
       });
 
@@ -287,14 +288,14 @@ describe('workflow run reads', () => {
       expect(query).toContain('id NOT IN ($3, $4)');
       // The tiebreaker's id comparison must reference SELF ($2) — a positional
       // back-reference once pointed it at $4 (an ancestor id) when excludeRunIds
-      // params landed between the self id and startedAt.
-      expect(query).toContain('started_at = $5::timestamptz AND id < $2');
+      // params landed between the self id and its timestamp.
+      expect(query).toContain('resumed_at) = $5::timestamptz AND id < $2');
       expect(params).toEqual([
         '/repo/path',
         'child-id',
         'parent-id',
         'grandparent-id',
-        startedAt.toISOString(),
+        activePhaseStartedAt.toISOString(),
       ]);
     });
 
@@ -303,7 +304,7 @@ describe('workflow run reads', () => {
 
       await getActiveWorkflowRunByPath('/repo/path', {
         id: 'child-id',
-        startedAt: new Date(),
+        activePhaseStartedAt: new Date(),
         excludeRunIds: [],
       });
 

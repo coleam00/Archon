@@ -177,7 +177,8 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
   last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   working_path TEXT,
   output_root TEXT,
-  checkout_baseline JSONB
+  checkout_baseline JSONB,
+  resumed_at TIMESTAMP WITH TIME ZONE
 );
 
 COMMENT ON TABLE remote_agent_workflow_runs IS
@@ -374,6 +375,12 @@ ALTER TABLE remote_agent_workflow_runs
 ALTER TABLE remote_agent_workflow_runs
   ADD COLUMN IF NOT EXISTS outcome VARCHAR(20)
     CHECK (outcome IN ('succeeded', 'failed'));
+
+-- When the latest resume started the run's current active phase. NULL means never
+-- resumed by a build that records it. `started_at` stays the creation time; the
+-- path lock orders active runs by the later of the two. Declared identically on SQLite.
+ALTER TABLE remote_agent_workflow_runs
+  ADD COLUMN IF NOT EXISTS resumed_at TIMESTAMP WITH TIME ZONE;
 
 -- From PR-C: per-user GitHub user-to-server tokens (device flow), encrypted at rest.
 -- One row per Archon user; cascades on user deletion. github_user_id is the

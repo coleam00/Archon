@@ -107,6 +107,7 @@ export function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
     started_at: toISOString(row.started_at),
     completed_at: toISOString(row.completed_at),
     last_activity_at: toISOString(row.last_activity_at),
+    resumed_at: toISOString(row.resumed_at),
   };
 }
 
@@ -122,5 +123,6 @@ export function toApiDashboardWorkflowRun(
     started_at: toISOString(row.started_at),
     completed_at: toISOString(row.completed_at),
     last_activity_at: toISOString(row.last_activity_at),
+    resumed_at: toISOString(row.resumed_at),
   };
 }

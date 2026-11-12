@@ -20,7 +20,7 @@ import {
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect, pool } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
-import { getWorkflowRun } from './workflow-run-reads';
+import { activePhaseStartSql, getWorkflowRun } from './workflow-run-reads';
 import { getLog, lockedRunRow, normalizeMetadata } from './workflow-run-shared';
 
 /** Guard error for deleteWorkflowRun — re-thrown without wrapping in the outer catch. */
@@ -253,19 +253,21 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
   const cutoff = getDialect().nowMinusDays(1);
   try {
     return await getDatabase().withTransaction(async query => {
+      // Ages runs by their active-phase start, the value started_at held while resumes
+      // reset it, so a run resumed recently is not swept for its creation time.
       // Delete events first (FK reference)
       await query(
         `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
           SELECT id FROM remote_agent_workflow_runs
           WHERE status IN ('completed', 'failed', 'cancelled')
-            AND started_at < ${cutoff}
+            AND ${activePhaseStartSql()} < ${cutoff}
         )`,
         [olderThanDays]
       );
       const result = await query(
         `DELETE FROM remote_agent_workflow_runs
          WHERE status IN ('completed', 'failed', 'cancelled')
-           AND started_at < ${cutoff}`,
+           AND ${activePhaseStartSql()} < ${cutoff}`,
         [olderThanDays]
       );
       return { count: result.rowCount ?? 0 };

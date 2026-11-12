@@ -1,7 +1,7 @@
 // @archon-test-isolated
 import { describe, test, expect, afterEach } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { unlinkSync } from 'fs';
+import { readFileSync, unlinkSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { mkdtemp } from 'fs/promises';
@@ -9,6 +9,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import { LEGACY_VENDOR_ALIASES } from '@archon/providers/credential-catalog';
 import { getSchemaSQL } from '../bundled-schema';
 import { runEventsSql } from '../run-events-sql';
+import { normalizeWorkflowRun, type WorkflowRunRow } from '../workflow-run-normalization';
 import { metricRecordsSql } from '../workflow-metrics';
 import { SqliteAdapter, sqliteDialect } from './sqlite';
 import { isSqliteSchemaCurrent } from './sqlite-schema-state';
@@ -16,6 +17,7 @@ import { prepareAll, prepareGet } from './sqlite-statements';
 import { raw_indexes, raw_pragma, raw_query } from './sqlite-test-harness';
 
 const trackTempRoot = trackTempRoots();
+const VINTAGES_DIR = join(import.meta.dir, '..', 'fixtures', 'sqlite-vintages');
 
 /** A fresh on-disk database path for one upgrade fixture, reclaimed after the test. */
 async function upgradeFixturePath(): Promise<string> {
@@ -187,6 +189,35 @@ describe('SqliteAdapter upgrade path', () => {
 
     expect(objects).toContain('idx_workflow_events_run_order');
     expect(objects).toContain('remote_agent_workflow_events_assign_order');
+  });
+
+  test('a run row from the latest shipped vintage keeps its creation time and reads as never resumed', async () => {
+    const path = await upgradeFixturePath();
+    const raw = new Database(path);
+    try {
+      raw.exec(readFileSync(join(VINTAGES_DIR, 'v0.14.0.sql'), 'utf8'));
+      raw.run(
+        "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ('c', 'test', 'c')"
+      );
+      raw.run(
+        "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, started_at) VALUES ('r', 'c', 'w', '', 'failed', '2026-11-01 08:00:00')"
+      );
+    } finally {
+      raw.close();
+    }
+    const db = new SqliteAdapter(path);
+    try {
+      const { rows } = await db.query<WorkflowRunRow>(
+        "SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = 'r'"
+      );
+      const [row] = rows;
+      if (!row) throw new Error('upgraded run row is missing');
+      const run = normalizeWorkflowRun(row);
+      expect(run.started_at.toISOString()).toBe('2026-11-01T08:00:00.000Z');
+      expect(run.resumed_at).toBeNull();
+    } finally {
+      await db.close();
+    }
   });
 
   test('adds the authored outcome column idempotently to an existing workflow-runs table', async () => {

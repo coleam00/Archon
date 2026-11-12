@@ -39,6 +39,7 @@ function runRow(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     adopted_from_run_id: null,
     output_root: '/root/artifacts',
     checkout_baseline: null,
+    resumed_at: null,
     ...overrides,
   };
 }

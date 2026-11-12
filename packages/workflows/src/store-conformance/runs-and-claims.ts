@@ -14,6 +14,7 @@ import {
   rejection,
 } from './fixtures';
 import { assertWorkflowClaimRace } from './races';
+import { activePhaseStartedAt } from '../workflow-path-lock';
 import { describeResumeTransitionConformance } from './resume-transition';
 
 export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStoreHarness): void {
@@ -326,15 +327,16 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       const tie = new Date(Date.now() - 60_000);
       for (const run of [first, second]) await harness.backdate(run.id, { started_at: tie });
       expect(
-        await store.getActiveWorkflowRunByPath(path, { id: first.id, startedAt: tie })
+        await store.getActiveWorkflowRunByPath(path, { id: first.id, activePhaseStartedAt: tie })
       ).toBeNull();
       expect(
-        (await store.getActiveWorkflowRunByPath(path, { id: second.id, startedAt: tie }))?.id
+        (await store.getActiveWorkflowRunByPath(path, { id: second.id, activePhaseStartedAt: tie }))
+          ?.id
       ).toBe(first.id);
       expect(
         await store.getActiveWorkflowRunByPath(path, {
           id: second.id,
-          startedAt: tie,
+          activePhaseStartedAt: tie,
           excludeRunIds: [first.id],
         })
       ).toBeNull();
@@ -347,6 +349,40 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       expect((await store.getActiveWorkflowRunByPath(path))?.id).toBe(first.id);
       await store.cancelWorkflowRun(first.id);
       expect(await store.getActiveWorkflowRunByPath(path)).toBeNull();
+    });
+    test('a resume keeps the creation time and does not take the path from the current holder', async () => {
+      const path = '/resumed-locked';
+      const resumed = await running(store, { working_path: path });
+      await store.failWorkflowRun(resumed.id, 'interrupted');
+      const createdAt = new Date(Date.now() - 600_000);
+      await harness.backdate(resumed.id, { started_at: createdAt });
+      const holder = await running(store, { working_path: path });
+      // Older than the resume by more than SQLite's one-second timestamp precision.
+      await harness.backdate(holder.id, { started_at: new Date(Date.now() - 60_000) });
+
+      const admitted = await store.resumeWorkflowRun(resumed.id);
+      for (const run of [admitted, await store.getWorkflowRun(resumed.id)]) {
+        expect(run?.started_at.toISOString().slice(0, 19)).toBe(
+          createdAt.toISOString().slice(0, 19)
+        );
+        expect(run?.resumed_at).toBeInstanceOf(Date);
+      }
+      const currentHolder = await store.getWorkflowRun(holder.id);
+      if (!currentHolder) throw new Error('holder vanished');
+      expect(
+        (
+          await store.getActiveWorkflowRunByPath(path, {
+            id: admitted.id,
+            activePhaseStartedAt: activePhaseStartedAt(admitted),
+          })
+        )?.id
+      ).toBe(holder.id);
+      expect(
+        await store.getActiveWorkflowRunByPath(path, {
+          id: holder.id,
+          activePhaseStartedAt: activePhaseStartedAt(currentHolder),
+        })
+      ).toBeNull();
     });
     test('resumable lookup chooses newest matching run and includes stale running', async () => {
       const first = await running(store, { working_path: '/resume' });

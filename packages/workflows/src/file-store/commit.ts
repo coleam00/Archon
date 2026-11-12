@@ -23,6 +23,7 @@ export const persistedRunSchema = workflowRunSchema.extend({
   started_at: z.coerce.date(),
   last_activity_at: z.coerce.date().nullable(),
   completed_at: z.coerce.date().nullable(),
+  resumed_at: z.coerce.date().nullable().default(null),
 });
 const lineSchema = z.object({
   seq: z.number().int().positive(),

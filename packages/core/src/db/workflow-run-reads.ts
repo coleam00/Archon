@@ -218,6 +218,18 @@ export function activeWorkflowPathHolderCondition(): string {
 }
 
 /**
+ * SQL for `activePhaseStartedAt`: the later of `started_at` and `resumed_at`, which an
+ * older build's resume can leave behind `started_at`. PostgreSQL's GREATEST skips NULL;
+ * SQLite's max() returns NULL on any NULL argument, hence the COALESCE. SQLite compares
+ * through datetime() so the order is chronological (see getActiveWorkflowRunByPath).
+ */
+export function activePhaseStartSql(): string {
+  return getDatabaseType() === 'postgresql'
+    ? 'GREATEST(started_at, resumed_at)'
+    : 'max(datetime(started_at), datetime(COALESCE(resumed_at, started_at)))';
+}
+
+/**
  * Find the workflow run currently holding the lock on `workingPath`.
  *
  * The lock is held by any row in `(running, paused)` or `pending` younger
@@ -225,12 +237,13 @@ export function activeWorkflowPathHolderCondition(): string {
  * ignored — they're from crashed or resume-replaced dispatches).
  *
  * When called from a dispatch that already pre-created its own row, pass
- * `self` (`id` + `startedAt`) so:
+ * `self` (`id` + `activePhaseStartedAt`) so:
  *   1. Self is never returned.
  *   2. If two dispatches both have rows, the deterministic older-wins
- *      tiebreaker `(started_at, id)` ensures both agree on which is "first."
- *      The newer dispatch sees the older row and aborts; the older dispatch
- *      sees nothing.
+ *      tiebreaker `(active-phase start, id)` ensures both agree on which is
+ *      "first." The newer dispatch sees the older row and aborts; the older
+ *      dispatch sees nothing. A resumed run competes from its resume, so it
+ *      cannot slip past a current holder with its creation time.
  *
  * `self.excludeRunIds` (#2121 Phase 2) additionally excludes the caller's
  * ancestor run-id chain: a `workflow:` sub-run shares its parent's checkout, so
@@ -240,7 +253,7 @@ export function activeWorkflowPathHolderCondition(): string {
  */
 export async function getActiveWorkflowRunByPath(
   workingPath: string,
-  self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
+  self?: { id: string; activePhaseStartedAt: Date; excludeRunIds?: string[] }
 ): Promise<WorkflowRun | null> {
   const isPostgres = getDatabaseType() === 'postgresql';
   // Build params + clauses dynamically. Self exclusion + tiebreaker travel
@@ -267,30 +280,30 @@ export async function getActiveWorkflowRunByPath(
     clauses.push(`id NOT IN (${placeholders.join(', ')})`);
   }
   if (self !== undefined) {
-    // Older-wins tiebreaker. (started_at, id) is a total order so both
+    // Older-wins tiebreaker. (active-phase start, id) is a total order so both
     // dispatches always agree on which is "first." Without this, two rows
     // with similar timestamps could mutually see each other and both abort.
     //
     // Serialize Date to ISO string — bun:sqlite rejects Date bindings.
     //
     // Format-aware comparison:
-    //   PostgreSQL: started_at is TIMESTAMPTZ; cast the ISO param to
+    //   PostgreSQL: the timestamps are TIMESTAMPTZ; cast the ISO param to
     //     timestamptz so the comparison is chronological, not lexical.
-    //   SQLite: started_at is TEXT in "YYYY-MM-DD HH:MM:SS" format. Our
+    //   SQLite: the timestamps are TEXT in "YYYY-MM-DD HH:MM:SS" format. Our
     //     ISO param has "YYYY-MM-DDTHH:MM:SS.mmmZ". Lexical comparison is
     //     WRONG: char 11 is space (0x20) in the column vs T (0x54) in the
     //     param, so every column value lex-sorts before every ISO param —
     //     making `started_at < $param` always TRUE regardless of actual
     //     time. Wrap both sides in datetime() to force chronological
     //     comparison via SQLite's date/time functions.
-    params.push(self.startedAt.toISOString());
+    params.push(self.activePhaseStartedAt.toISOString());
     const startedAtParam = `$${String(params.length)}`;
     // NOT params.length - 1: excludeRunIds placeholders may sit between the self
-    // id and startedAt — a positional back-reference here once pointed the id
+    // id and its timestamp — a positional back-reference here once pointed the id
     // tiebreak at an ancestor id instead of self (caught by the SQL-shape test).
     // selfIdParam is always set when `self` is (same guard above).
     const idParam = selfIdParam ?? '$2';
-    const colExpr = isPostgres ? 'started_at' : 'datetime(started_at)';
+    const colExpr = activePhaseStartSql();
     const paramExpr = isPostgres ? `${startedAtParam}::timestamptz` : `datetime(${startedAtParam})`;
     clauses.push(`(${colExpr} < ${paramExpr} OR (${colExpr} = ${paramExpr} AND id < ${idParam}))`);
   }
@@ -299,7 +312,7 @@ export async function getActiveWorkflowRunByPath(
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE ${clauses.join(' AND ')}
-       ORDER BY started_at ASC, id ASC LIMIT 1`,
+       ORDER BY ${activePhaseStartSql()} ASC, id ASC LIMIT 1`,
       params
     );
     const row = result.rows[0];

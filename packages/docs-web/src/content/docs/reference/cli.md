@@ -789,6 +789,9 @@ engine could not read it. `null` means not recorded: the run predates this field
 started. Node execution records carry the same observation as `invocation.checkoutStart` and
 `attempt.checkoutStart`, so you can see which commit each node started at.
 
+`Age` and `started_at` are measured from when the run was created, and a resume keeps them.
+JSON's `resumed_at` is when the latest resume began, or `null` when the run was never resumed.
+
 Pressing Ctrl-C on a foreground run stops it without losing it. The process that owns the
 run records why it stopped, and the run stays `failed`, which is the resumable status: it is
 still found by `workflow run <name> --resume` and accepted by `workflow resume <run-id>`.

@@ -5,6 +5,7 @@ import {
 } from '../schemas/run-metadata';
 import { prepareWorkflowRunFailure } from '../workflow-run-failure';
 import { resumeRun } from './run-resume';
+import { activePhaseStartedAt } from '../workflow-path-lock';
 import { createLogger } from '@archon/paths';
 import {
   createTransactionReads,
@@ -209,6 +210,7 @@ export function createTransactionView(
       working_path: input.working_path ?? null,
       output_root: null,
       checkout_baseline: null,
+      resumed_at: null,
       parent_run_id: input.parent_run_id ?? null,
       adopted_from_run_id: input.adopted_from_run_id ?? null,
     };
@@ -426,7 +428,7 @@ export function createTransactionView(
         .filter(
           run =>
             isTerminalRunStatus(run.status) &&
-            run.started_at.getTime() < Date.now() - days * 86_400_000
+            activePhaseStartedAt(run).getTime() < Date.now() - days * 86_400_000
         )
         .map(run => run.id);
       const deleted = new Set(ids);
@@ -513,7 +515,7 @@ export function createTransactionView(
         throw new Error('Not an engine-cancelled fan-out child');
       run.status = 'running';
       run.completed_at = null;
-      run.started_at = new Date();
+      run.resumed_at = new Date();
       run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
       run.last_activity_at = new Date();
       delete run.metadata[CANCELLED_REASON_METADATA_KEY];

@@ -316,6 +316,15 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       expect(await store.getWorkflowRunStatus(first.id)).toBe('pending');
       expect(await rejection(store.deleteOldWorkflowRuns(-1))).toBeInstanceOf(Error);
     });
+    test('cleanup keeps an old run that a recent resume brought back', async () => {
+      const run = await running(store);
+      await store.failWorkflowRun(run.id, 'interrupted');
+      await harness.backdate(run.id, { started_at: new Date(Date.now() - 10 * 86_400_000) });
+      await store.resumeWorkflowRun(run.id);
+      await store.failWorkflowRun(run.id, 'failed again');
+      expect(await store.deleteOldWorkflowRuns(2)).toEqual({ count: 0 });
+      expect(await store.getWorkflowRunStatus(run.id)).toBe('failed');
+    });
     test('origin-free and chat runs round-trip the supplied provenance', async () => {
       const free = await create(store);
       expect(await store.getWorkflowRun(free.id)).toMatchObject({

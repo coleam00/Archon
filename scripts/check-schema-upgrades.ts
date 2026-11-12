@@ -251,7 +251,7 @@ try {
               (workflow_name, conversation_id, user_message)
             SELECT 'upgrade-old-writer', id, 'legacy insert after upgrade' FROM conversation;
             SELECT COUNT(*) FROM remote_agent_workflow_runs
-             WHERE workflow_name = 'upgrade-old-writer' AND origin IS NULL;`,
+             WHERE workflow_name = 'upgrade-old-writer' AND origin IS NULL AND resumed_at IS NULL;`,
     });
     if (olderWriter.code !== 0 || olderWriter.out.trim() !== '1') {
       console.error(`FAIL ${ref}: older writer insert after upgrade failed\n${olderWriter.out}`);

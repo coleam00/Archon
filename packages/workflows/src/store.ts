@@ -265,7 +265,7 @@ export interface IWorkflowStore
    */
   getActiveWorkflowRunByPath(
     workingPath: string,
-    self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
+    self?: { id: string; activePhaseStartedAt: Date; excludeRunIds?: string[] }
   ): Promise<WorkflowRun | null>;
   findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   /**
