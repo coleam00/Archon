@@ -243,6 +243,81 @@ test.each(['read', 'projection', 'listener'] as const)(
   }
 );
 
+test.each(['run', 'source-project', 'binding-project'] as const)(
+  'an unreadable admission %s cannot block independent notices or workflow events',
+  async boundary => {
+    const { store, drop } = await fixture();
+    const source = await store.createWorkflowRun({
+      workflow_name: 'source',
+      user_message: '',
+      ...(boundary === 'source-project' ? { codebase_id: 'codebase' } : {}),
+    });
+    const independent = await store.createWorkflowRun({
+      workflow_name: 'independent',
+      user_message: '',
+    });
+    const failing: IWorkflowStore = Object.create(store);
+    let broken = false;
+    failing.getWorkflowRun = id =>
+      broken && boundary === 'run' && id === source.id
+        ? Promise.reject(new Error('private source failure'))
+        : store.getWorkflowRun(id);
+    failing.getCodebase = id =>
+      broken && boundary !== 'run' && id === 'codebase'
+        ? Promise.reject(new Error('private project failure'))
+        : store.getCodebase(id);
+    const lines: AttentionStreamLine[] = [];
+    const stream = await watchAttentionQueue(
+      failing,
+      host,
+      line => {
+        lines.push(line);
+      },
+      { scope: { kind: 'all' }, pollIntervalMs: 5, bookmarkIntervalMs: 0 }
+    );
+    let bad: string | null = null;
+    try {
+      broken = true;
+      bad = await drop('unreadable', boundary === 'binding-project' ? null : source.id);
+      await until(() => lines.some(line => line.type === 'degraded'));
+      const good = await drop('readable', independent.id);
+      await store.persistWorkflowEvent({
+        workflow_run_id: independent.id,
+        event_type: 'workflow_resumed',
+      });
+      await until(() => lines.some(line => line.type === 'notice' && line.labels.request === good));
+      await until(() =>
+        lines.some(line => line.type === 'resumed' && line.runId === independent.id)
+      );
+      await until(() => lines.some(line => line.type === 'bookmark'));
+      expect(lines.filter(line => line.type === 'notice').map(line => line.labels.request)).toEqual(
+        [good!]
+      );
+      expect(JSON.stringify(lines)).not.toContain('private');
+    } finally {
+      await stream.close();
+    }
+    broken = false;
+    const ready = lines.find(line => line.type === 'ready');
+    if (!ready) throw new Error('no ready');
+    const replay: AttentionStreamLine[] = [];
+    const recovered = await watchAttentionQueue(
+      failing,
+      host,
+      line => {
+        replay.push(line);
+      },
+      { scope: { kind: 'all' }, after: ready.cursor, pollIntervalMs: 5 }
+    );
+    try {
+      await until(() => replay.filter(line => line.type === 'notice').length === 2);
+      expect(replay.filter(line => line.type === 'notice')[0]?.labels.request).toBe(bad!);
+    } finally {
+      await recovered.close();
+    }
+  }
+);
+
 test('closing waits for an in-flight admission read and delivers nothing after closing', async () => {
   const { store } = await fixture();
   const entered = Promise.withResolvers<void>();

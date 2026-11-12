@@ -35,6 +35,7 @@ import {
   type AttentionDelivery,
   type AttentionWorkflowDelivery,
 } from './attention-feed';
+import { attentionDeliveryFields, hasReadableAttentionWitness } from './attention-watch-witness';
 import { requestingRun } from './schemas/resource-start';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -494,72 +495,56 @@ export async function watchAttentionQueue(
   let blocked: { cursor: AttentionCursor; warned: boolean } | undefined;
   const isolated = new Set<string>();
 
-  const probeRunWitness = async (event: AttentionWorkflowDelivery['event']): Promise<boolean> => {
-    try {
-      // A cached success says nothing about whether reads work now.
-      await projectRun(event.workflow_run_id);
-      return true;
-    } catch (error) {
-      if (error instanceof WorkflowEventCursorError) throw error;
-      getLog().debug(
-        { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
-        'workflow.attention_watch_probe_failed'
-      );
-      return false;
-    }
+  const projectAdmission = async (delivery: Extract<AttentionDelivery, { kind: 'admission' }>) => {
+    const origin = requestingRun(delivery.facts.sourceActor);
+    const run = origin === null ? null : await store.getWorkflowRun(origin.runId);
+    return admissionWorkflowNotice(source, delivery.facts, run);
   };
-
-  const hasReadableWitness = async (delivery: AttentionWorkflowDelivery): Promise<boolean> => {
-    let cursor = delivery.workflowCursor;
-    const probed = new Set([delivery.event.workflow_run_id]);
-    while (!closed) {
-      const page = await store.readWorkflowEventsAfter(cursor, { limit: 100 });
-      if (closed || page.events.length === 0) return false;
-      for (const { event } of page.events) {
-        if (closed) return false;
-        if (probed.has(event.workflow_run_id)) continue;
-        probed.add(event.workflow_run_id);
-        if (await probeRunWitness(event)) return !closed;
-      }
-      cursor = page.next;
-    }
-    return false;
-  };
-
-  const retryDeliveryView = async (
-    { event, cursor }: AttentionWorkflowDelivery,
+  const hasReadableWitness = (delivery: AttentionDelivery) =>
+    hasReadableAttentionWitness(
+      store,
+      delivery,
+      candidate =>
+        candidate.kind === 'workflow'
+          ? projectRun(candidate.event.workflow_run_id)
+          : projectAdmission(candidate),
+      () => closed
+    );
+  const retryProjection = async <T>(
+    delivery: AttentionDelivery,
+    project: () => Promise<T>,
     error: unknown
-  ): Promise<RunView | null | undefined> => {
-    const runId = event.workflow_run_id;
-    const fields = { err: error as Error, runId, eventId: event.id, cursor };
+  ): Promise<T | undefined> => {
     try {
-      const view = await projectRun(runId);
+      const value = await project();
       if (closed) throw error;
-      views.set(runId, Promise.resolve(view));
       blocked = undefined;
-      return view;
+      return value;
     } catch (retryError) {
       if (retryError instanceof WorkflowEventCursorError) throw retryError;
       if (closed) throw retryError;
-      getLog().warn({ ...fields, retryError }, 'workflow.attention_watch_delivery_unreadable');
-      isolated.add(runId);
+      getLog().warn(
+        { err: error as Error, ...attentionDeliveryFields(delivery), retryError },
+        'workflow.attention_watch_delivery_unreadable'
+      );
+      if (delivery.kind === 'workflow') isolated.add(delivery.event.workflow_run_id);
       blocked = undefined;
       return undefined;
     }
   };
 
-  const deliveryView = async (
-    delivery: AttentionWorkflowDelivery
-  ): Promise<RunView | null | undefined> => {
-    const { event, cursor } = delivery;
-    const runId = event.workflow_run_id;
+  const deliveryProjection = async <T>(
+    delivery: AttentionDelivery,
+    project: (fresh: boolean) => Promise<T>
+  ): Promise<T | undefined> => {
+    const { cursor } = delivery;
     try {
-      const view = await viewOf(runId);
+      const value = await project(false);
       blocked = undefined;
-      return view;
+      return value;
     } catch (error) {
       if (error instanceof WorkflowEventCursorError) throw error;
-      const fields = { err: error as Error, runId, eventId: event.id, cursor };
+      const fields = { err: error as Error, ...attentionDeliveryFields(delivery) };
       if (blocked?.cursor !== cursor) {
         blocked = { cursor, warned: false };
         getLog().warn(fields, 'workflow.attention_watch_delivery_failed');
@@ -570,9 +555,17 @@ export async function watchAttentionQueue(
         blocked.warned = true;
       }
       if (closed || !(await hasReadableWitness(delivery))) throw error;
-      return retryDeliveryView(delivery, error);
+      return retryProjection(delivery, () => project(true), error);
     }
   };
+  const deliveryView = (delivery: AttentionWorkflowDelivery) =>
+    deliveryProjection(delivery, async fresh => {
+      const runId = delivery.event.workflow_run_id;
+      if (!fresh) return viewOf(runId);
+      const view = await projectRun(runId);
+      views.set(runId, Promise.resolve(view));
+      return view;
+    });
   const reconciled = new Set<string>();
 
   const resolve = async (
@@ -737,9 +730,8 @@ export async function watchAttentionQueue(
       async delivery => {
         if (closed) return;
         if (delivery.kind === 'workflow') return handle(delivery);
-        const origin = requestingRun(delivery.facts.sourceActor);
-        const run = origin === null ? null : await store.getWorkflowRun(origin.runId);
-        const notice = await admissionWorkflowNotice(source, delivery.facts, run, codebases);
+        const notice = await deliveryProjection(delivery, () => projectAdmission(delivery));
+        if (closed || notice === undefined) return;
         if (isInAttentionScope(notice.project, scope) && matchesAttentionLabels(notice, labels))
           await emit({ type: 'notice', cursor: delivery.cursor, ...notice });
       },
