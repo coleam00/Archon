@@ -3,6 +3,7 @@ import type { JsonValue } from '../output-ref';
 import { readComposedMeta, type ComposedBlockBoundary } from '../compiled-command';
 import type { LoopBodyScope } from './loop-scope';
 import { evaluateCondition } from '../condition-evaluator';
+import { formatIncludeBoundaryId } from '../skip-cause';
 
 export type TriggerRuleDecision =
   | { decision: 'run' }
@@ -153,6 +154,12 @@ function checkBoundaryCondition(
       };
     }
   } catch (error) {
+    if (boundary.isEntry) {
+      throw new Error(
+        `Include '${formatIncludeBoundaryId(boundary.boundary.includeId)}' (workflow '${boundary.boundary.workflow}'): cannot evaluate when: "${boundary.when}": ${error instanceof Error ? error.message : String(error)}`,
+        { cause: error }
+      );
+    }
     return {
       decision: 'skip',
       cause: { kind: 'condition_parse_error', expr: boundary.when, boundary: boundary.boundary },

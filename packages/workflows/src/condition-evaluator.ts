@@ -226,10 +226,8 @@ function evaluateAtom(
 ): boolean {
   const { ref, operator, expected } = atom;
 
-  // Reference resolution may throw — OutputRefError for an unresolvable `.field` ref
-  // (typo / schemaless non-JSON / missing key), InputRefError for an undeclared
-  // `$INPUTS.<name>`. Deliberately NOT caught here: under the no-silent-drop contract
-  // it must propagate to fail the node, not fail-closed to a silent skip.
+  // Reference errors fail ordinary nodes and include entries; include descendants
+  // retain boundary skips so the block's work cannot run past the failed gate.
   const actual = resolveAtomRef(ref, nodeOutputs, inputs, loopPrevOutputs);
 
   let result: boolean;
