@@ -368,6 +368,32 @@ test.each(
       expect((await store.getResourceStartRequest(safe.nextId))?.status).toBe(
         failure === 'shared-checkout' || hosts === 'shared-resource' ? 'queued' : 'admitted'
       );
+      const laterId = crypto.randomUUID();
+      const laterNextId = crypto.randomUUID();
+      const laterIntent = {
+        resource: 'later-independent',
+        capacity: 1,
+        hostId: hosts === 'separate' ? 'safe' : 'shared',
+        overlap: 'queue' as const,
+      };
+      const laterLaunch = {
+        ...safe.launch,
+        run: { ...safe.launch.run, id: laterId, origin: undefined, metadata: {} },
+        execution: { ...safe.launch.execution, cwd: '/project/later-independent' },
+      };
+      await store.admitResourceStart({ ...laterIntent, launch: laterLaunch });
+      expect(
+        (
+          await store.admitResourceStart({
+            ...laterIntent,
+            launch: { ...laterLaunch, run: { ...laterLaunch.run, id: laterNextId } },
+          })
+        ).status
+      ).toBe('queued');
+      await store.cancelWorkflowRun(laterId);
+      expect((await store.getResourceStartRequest(laterNextId))?.status).toBe('admitted');
+      expect((await store.getResourceStartRequest(unsafe.nextId))?.status).toBe('queued');
+      expect((await store.getStartReceipt(pendingReceiptId))?.bindings[0]?.status).toBe('pending');
       if (failure === 'shared-checkout') expect(cleaned).toEqual([]);
       else expect(cleaned).toContain(safe.id);
     } finally {

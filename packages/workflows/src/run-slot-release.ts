@@ -5,11 +5,12 @@ import { createLogger } from '@archon/paths';
 type Source = object | string;
 type Listener = (runIds: readonly string[], deferredRunIds: readonly string[]) => Promise<void>;
 interface Hold {
+  source: Source;
+  runId: string;
   closed: boolean;
   count: number;
   pending: boolean;
   unsafe: boolean;
-  deferredRunIds: Set<string>;
 }
 interface CleanupRun {
   store: object;
@@ -27,6 +28,9 @@ interface Scope {
 const sources = new WeakMap<object, () => Source>();
 const listeners = new Map<Source, Set<Listener>>();
 const holds = new Map<Source, Map<string, Hold>>();
+// Unsafe cleanup remains excluded from automatic drains for this process/store.
+// A later unrelated release cannot prove that the earlier cleanup succeeded.
+const deferredReleases = new Map<Source, Set<string>>();
 const scopes = new AsyncLocalStorage<Scope | undefined>();
 
 // Continuation admission can return before its execution settles. Its async work
@@ -62,16 +66,12 @@ function add(pending: Map<Source, Set<string>>, source: Source, runId: string): 
   pending.set(source, ids);
 }
 
-async function dispatch(
-  source: Source,
-  runIds: readonly string[],
-  deferredRunIds: readonly string[] = []
-): Promise<void> {
+async function dispatch(source: Source, runIds: readonly string[]): Promise<void> {
   // Successor execution must not inherit the predecessor's cleanup scope.
   await scopes.run(undefined, async () => {
     for (const listener of listeners.get(source) ?? []) {
       try {
-        await listener(runIds, deferredRunIds);
+        await listener(runIds, [...(deferredReleases.get(source) ?? [])]);
       } catch (err) {
         createLogger('run-slot-release').error({ err, runIds }, 'run_slot_release.dispatch_failed');
       }
@@ -79,20 +79,15 @@ async function dispatch(
   });
 }
 
-async function deliver(
-  source: Source,
-  runIds: Iterable<string>,
-  deferredRunIds: readonly string[] = []
-): Promise<void> {
+async function deliver(source: Source, runIds: Iterable<string>): Promise<void> {
   const ready: string[] = [];
   for (const id of runIds) {
     const hold = holds.get(source)?.get(id);
     if (hold) {
       hold.pending = true;
-      for (const deferredId of deferredRunIds) hold.deferredRunIds.add(deferredId);
     } else ready.push(id);
   }
-  if (ready.length) await dispatch(source, ready, deferredRunIds);
+  if (ready.length) await dispatch(source, ready);
 }
 
 /** Publish only after a won terminal write or pause-slot release has committed. */
@@ -116,13 +111,14 @@ export function deferRunSlotRelease(): void {
   }
   for (let scope = activeScope(scopes.getStore()); scope; scope = activeScope(scope.parent)) {
     scope.unsafe = true;
-    for (const hold of scope.holds) hold.unsafe = true;
+    retainUnsafeReleases(scope);
   }
 }
 
 /** Defer only the cleanup owner in a batch of otherwise independent releases. */
 function deferRunSlotReleaseForRun(store: object, runId: string): void {
   const source = sourceOf(store);
+  add(deferredReleases, source, runId);
   const hold = holds.get(source)?.get(runId);
   if (hold) hold.unsafe = true;
   for (let scope = activeScope(scopes.getStore()); scope; scope = activeScope(scope.parent)) {
@@ -150,6 +146,7 @@ export async function withRunSlotReleaseScope<T>(
     const parent = activeScope(scope.parent);
     discardDeferredReleases(scope, parent);
     if (scope.unsafe) {
+      retainUnsafeReleases(scope);
       if (scope.pending.size)
         createLogger('run-slot-release').warn(
           { runIds: [...scope.pending.values()].flatMap(ids => [...ids]) },
@@ -160,15 +157,13 @@ export async function withRunSlotReleaseScope<T>(
         for (const id of ids) add(parent.pending, source, id);
       for (const hold of scope.holds) parent.holds.add(hold);
     } else {
-      for (const [source, ids] of scope.pending)
-        await deliver(source, ids, [...(scope.deferred.get(source) ?? [])]);
+      for (const [source, ids] of scope.pending) await deliver(source, ids);
     }
   }
 }
 
 function discardDeferredReleases(scope: Scope, parent: Scope | undefined): void {
   for (const [source, ids] of scope.deferred) {
-    preserveDeferredForHolds(scope, source, ids);
     for (const id of ids) {
       scope.pending.get(source)?.delete(id);
       if (parent) add(parent.deferred, source, id);
@@ -176,11 +171,12 @@ function discardDeferredReleases(scope: Scope, parent: Scope | undefined): void 
   }
 }
 
-function preserveDeferredForHolds(scope: Scope, source: Source, ids: Set<string>): void {
-  for (const hold of holds.get(source)?.values() ?? []) {
-    if (scope.holds.has(hold)) {
-      for (const id of ids) hold.deferredRunIds.add(id);
-    }
+function retainUnsafeReleases(scope: Scope): void {
+  for (const [source, ids] of scope.pending)
+    for (const id of ids) add(deferredReleases, source, id);
+  for (const hold of scope.holds) {
+    hold.unsafe = true;
+    add(deferredReleases, hold.source, hold.runId);
   }
 }
 
@@ -189,11 +185,12 @@ export function holdRunSlotRelease(store: object, runId: string): () => Promise<
   const source = sourceOf(store);
   const runs = holds.get(source) ?? new Map<string, Hold>();
   const hold = runs.get(runId) ?? {
+    source,
+    runId,
     closed: false,
     count: 0,
     pending: false,
     unsafe: false,
-    deferredRunIds: new Set<string>(),
   };
   hold.count++;
   runs.set(runId, hold);
@@ -215,8 +212,7 @@ export function holdRunSlotRelease(store: object, runId: string): () => Promise<
     const scope = activeScope(scopes.getStore());
     if (scope) {
       add(scope.pending, source, runId);
-      for (const id of hold.deferredRunIds) add(scope.deferred, source, id);
-    } else await dispatch(source, [runId], [...hold.deferredRunIds]);
+    } else await dispatch(source, [runId]);
   };
 }
 
@@ -235,9 +231,8 @@ export async function finishForcedRunSlotCleanup(store: object, runId: string): 
   // Consume only this run's committed releases after its forced cleanup succeeds.
   for (let scope = activeScope(scopes.getStore()); scope; scope = activeScope(scope.parent)) {
     unsafe ||= scope.unsafe || (scope.deferred.get(source)?.has(runId) ?? false);
-    for (const id of scope.deferred.get(source) ?? []) hold.deferredRunIds.add(id);
     pending = (scope.pending.get(source)?.delete(runId) ?? false) || pending;
     if (!scope.pending.get(source)?.size) scope.pending.delete(source);
   }
-  if (pending && !unsafe) await dispatch(source, [runId], [...hold.deferredRunIds]);
+  if (pending && !unsafe) await dispatch(source, [runId]);
 }

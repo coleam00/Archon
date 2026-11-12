@@ -332,3 +332,39 @@ test('a committed held release survives composition replacing its subscriber', a
     dispose();
   }
 });
+
+test.each(['run', 'scope', 'hold'] as const)(
+  'later releases retain %s cleanup exclusions across subscriber replacement',
+  async kind => {
+    const c = channel();
+    await withRunSlotReleaseScope(
+      async () => {
+        const close = kind === 'hold' ? holdRunSlotRelease(c.store, 'unsafe') : undefined;
+        await publishRunSlotRelease(c.source, 'unsafe');
+        deferRunSlotRelease();
+        await close?.();
+      },
+      kind === 'run' ? { store: c.store, runId: 'unsafe' } : undefined
+    );
+    c.dispose();
+    const batches: { ids: readonly string[]; deferred: readonly string[] }[] = [];
+    const dispose = subscribeRunSlotRelease(c.store, async (ids, deferred) => {
+      batches.push({ ids, deferred });
+    });
+    const other = channel();
+    const otherBatches: string[][] = [];
+    const stopOther = subscribeRunSlotRelease(other.store, async (_ids, deferred) => {
+      otherBatches.push([...deferred]);
+    });
+    try {
+      await publishRunSlotRelease(c.source, 'safe');
+      await publishRunSlotRelease(other.source, 'safe');
+      expect(batches).toEqual([{ ids: ['safe'], deferred: ['unsafe'] }]);
+      expect(otherBatches).toEqual([[]]);
+    } finally {
+      dispose();
+      stopOther();
+      other.dispose();
+    }
+  }
+);
