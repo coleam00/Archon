@@ -30,7 +30,7 @@ import {
   MOCK_PAUSED_RUN,
 } from '../test/api-workflow-runs-harness';
 import { RUN_ACTIONS } from '@archon/core/operations/run-authorization';
-import { describe, test, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach, spyOn, mock } from 'bun:test';
 import type { RunActor } from '@archon/core';
 import * as sqlHost from '@archon/core/workflows/sql-host';
 import { startRunLiveOwner } from '@archon/core/services/run-live-owner';
@@ -128,13 +128,23 @@ describe('POST /api/workflows/runs/:runId/cancel', () => {
       return { cancelled: true };
     });
 
-    const { app } = makeApp();
+    const afterOwnedExecution = async (): Promise<void> => {
+      order.push('drain');
+    };
+    const host = {
+      ...sqlHost.createSqlWorkflowHost(),
+      afterOwnedExecution,
+      operations: sqlHost.createSqlWorkflowOperations(undefined, undefined, {
+        afterOwnedExecution,
+      }),
+    };
+    const { app } = makeApp(undefined, host);
     const response = await app.request('/api/workflows/runs/run-uuid-1/cancel', {
       method: 'POST',
     });
 
     expect(response.status).toBe(200);
-    expect(order).toEqual(['stop', 'cancel']);
+    expect(order).toEqual(['stop', 'cancel', 'drain']);
     const body = (await response.json()) as { message: string };
     expect(body.message).toContain(
       'Some process still holds node output; it was not signalled. Use lsof on the checkout.'
@@ -314,7 +324,9 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
       parent_conversation_id: null,
       working_path: '/tmp/worktrees/run-uuid-4',
     });
-    const { app } = makeApp();
+    const settled = mock(async (_id: string) => {});
+    const host = sqlHost.createSqlWorkflowHost(undefined, { afterOwnedExecution: settled });
+    const { app } = makeApp(undefined, host);
     const response = await app.request('/api/workflows/runs/run-uuid-4/resume', {
       method: 'POST',
     });
@@ -328,6 +340,9 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
     const cwd = mockExecuteWorkflow.mock.calls[0]?.[3];
     expect(cwd).toBe('/tmp/worktrees/run-uuid-4');
+    await new Promise(resolve => setTimeout(resolve, 0));
+    expect(settled).toHaveBeenCalledWith('run-uuid-4');
+    expect(settled).toHaveBeenCalledTimes(1);
   });
 
   test('returns 409 with the refusal when the run resource is busy', async () => {
@@ -1114,4 +1129,18 @@ describe('starter or admin authorization on every HTTP run action', () => {
       });
     }
   }
+});
+
+test('API message dispatch forwards the configured control and completion effects', async () => {
+  const host = sqlHost.createSqlWorkflowHost(undefined, { afterOwnedExecution: async () => {} });
+  const { app } = makeApp(undefined, host);
+  await app.request('/api/conversations/web-test-abc/message', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ message: '/workflow list' }),
+  });
+  expect(mockHandleMessage.mock.calls.at(-1)?.[3]).toMatchObject({
+    workflowOperations: host.operations,
+    afterOwnedExecution: host.afterOwnedExecution,
+  });
 });

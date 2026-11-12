@@ -96,10 +96,13 @@ export function setupRoutingTests() {
     mockHydrateResumableRun.mockReturnValueOnce(
       Promise.reject(refusal ?? new WorkflowNotResumableError('raced-run-1', 'running'))
     );
+    const settled = mock(async () => {});
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
       actor: operator,
+      afterOwnedExecution: settled,
       ...(workflowInputs ? { workflowInputs } : {}),
     });
+    expect(settled).not.toHaveBeenCalled();
   }
   return {
     makeWorkflowResult,

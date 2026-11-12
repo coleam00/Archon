@@ -1,3 +1,6 @@
+import { drainAfterResourceStart } from '@archon/core/workflows/resource-start-completion';
+import { releaseContinuablePauseSlot } from '@archon/workflows/parent-resume';
+import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, readFile, realpath, stat, unlink } from 'node:fs/promises';
@@ -1537,3 +1540,96 @@ for (const storage of ['files', 'sql'] as const) {
     }
   });
 }
+
+test.each(['child', 'shared-checkout', 'independent-checkout', 'continuation-priority'] as const)(
+  'owner drain preserves file-store eligibility: %s',
+  async scenario => {
+    const root = tempRoots(await mkdtemp(join(tmpdir(), 'trigger-eligibility-')));
+    const host = await createFileWorkflowHost(root);
+    const store = host.deps.store;
+    const codebase = await host.records.codebases.createCodebase({
+      name: 'portable',
+      default_cwd: '/portable',
+    });
+    const prepared = (cwd: string): PreparedWorkflowLaunch => {
+      const value = launch(codebase.id);
+      value.execution.cwd = cwd;
+      return value;
+    };
+    const first = prepared('/portable/first');
+    const second = prepared(
+      scenario === 'shared-checkout' ? '/portable/first' : '/portable/second'
+    );
+    const intent = (value: PreparedWorkflowLaunch): ResourceStartIntent => ({
+      resource: 'eligible',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue',
+      launch: value,
+    });
+    expect((await store.admitResourceStart(intent(first))).status).toBe('admitted');
+    await store.claimPendingWorkflowRun(first.run.id, first.execution.cwd);
+    const priority = scenario === 'continuation-priority';
+    if (!priority) expect((await store.admitResourceStart(intent(second))).status).toBe('queued');
+    await store.pauseWorkflowRun(
+      first.run.id,
+      scenario === 'child'
+        ? {
+            type: 'child_workflow',
+            nodeId: 'child',
+            message: '',
+            pauseId: 'p1',
+            childRunId: 'child-run',
+          }
+        : { type: 'approval', nodeId: 'review', message: 'Review?', pauseId: 'p1' }
+    );
+    const paused = await store.getWorkflowRun(first.run.id);
+    if (!paused) throw new Error('Expected paused holder');
+    await releaseContinuablePauseSlot(host.deps, paused);
+    if (priority) {
+      expect((await store.admitResourceStart(intent(second))).status).toBe('admitted');
+      await store.claimPendingWorkflowRun(second.run.id, second.execution.cwd);
+      await host.operations.approveWorkflow(
+        first.run.id,
+        'approved',
+        { kind: 'operator' },
+        { via: 'cli' }
+      );
+      await expect(store.resumeWorkflowRun(first.run.id)).rejects.toBeInstanceOf(
+        WorkflowResourceBusyError
+      );
+      expect((await store.getWorkflowRun(first.run.id))?.metadata.capacity_wait).toBeDefined();
+    }
+    const third = prepared('/portable/third');
+    if (priority) {
+      expect((await store.admitResourceStart(intent(third))).status).toBe('queued');
+      await store.completeWorkflowRun(second.run.id, { duration_ms: 1 });
+    }
+    const dispatched: string[] = [];
+    const notify = async (id: string): Promise<void> =>
+      drainAfterResourceStart(host, id, async hostId => {
+        await drainResourceStartHost({
+          ...host,
+          hostId,
+          startAdmitted: async id => {
+            dispatched.push(id);
+          },
+        });
+      });
+    await notify(priority ? second.run.id : first.run.id);
+    if (scenario === 'independent-checkout') expect(dispatched).toEqual([second.run.id]);
+    else {
+      expect(dispatched).toEqual([]);
+      expect(
+        (await store.getResourceStartRequest(priority ? third.run.id : second.run.id))?.status
+      ).toBe('queued');
+    }
+    expect((await store.getWorkflowRun(first.run.id))?.status).toBe('paused');
+    if (priority) {
+      expect(await store.resumeWorkflowRun(first.run.id)).toMatchObject({ status: 'running' });
+      await store.completeWorkflowRun(first.run.id, { duration_ms: 1 });
+      await notify(first.run.id);
+      expect(dispatched).toEqual([third.run.id]);
+    }
+  }
+);

@@ -1,3 +1,4 @@
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
 /**
  * Remote Coding Agent - Main Entry Point
  * Multi-platform AI coding assistant (Telegram, Discord, GitHub, Gitea, chat plugins)
@@ -66,6 +67,7 @@ import {
   workflowResumeTargetForRun,
 } from './services/workflow-resume-service';
 import {
+  handleMessage,
   pool,
   ConversationLockManager,
   startCleanupScheduler,
@@ -204,14 +206,27 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     workflowPlatforms: new Map([[web.adapter.getPlatformType(), web.adapter]]),
     activePlatforms: ['Web'],
   };
+  const resourceStarts = await createResourceStarts();
   const adapterContext: PlatformAdapterContext = {
+    dispatchMessage: (platform, id, message, context) =>
+      handleMessage(platform, id, message, {
+        ...context,
+        workflowOperations: resourceStarts.workflowHost.operations,
+        afterOwnedExecution: resourceStarts.workflowHost.afterOwnedExecution,
+      }),
     lockManager,
     botName: config.botName,
     registry,
     installedChatIds: new Set(chatPlugins.map(plugin => plugin.descriptor.id)),
   };
   if (!opts.skipPlatformAdapters) warnRetiredAdapters(adapterContext.installedChatIds);
-  const chat = await startChatHosting(chatPlugins, config, lockManager, registry);
+  const chat = await startChatHosting(
+    chatPlugins,
+    config,
+    lockManager,
+    registry,
+    resourceStarts.workflowHost
+  );
 
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let adapters = NO_PLATFORM_ADAPTERS;
@@ -225,9 +240,9 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
 
   const app = new OpenAPIHono({ defaultHook: validationErrorHook });
   const port = opts.port ?? (await getPort());
-  const resourceStarts = await createResourceStarts();
   registerServerRoutes(app, {
     webAdapter: web.adapter,
+    workflowHost: resourceStarts.workflowHost,
     lockManager,
     activePlatforms: registry.activePlatforms,
     attention: { webPush: chat.webPush, router: chat.router },
@@ -259,7 +274,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   // Web background runs execute against a hidden worker conversation but deliver
   // to their visible parent; other runs use their owning conversation directly.
   startWorkflowContinuationScheduler(
-    createSqlWorkflowHost(),
+    resourceStarts.workflowHost,
     run => workflowResumeTargetForRun(run, registry.workflowPlatforms),
     resourceStarts.requestDrain
   );
@@ -477,7 +492,8 @@ async function startChatHosting(
   chatPlugins: readonly InstalledChatPlugin[],
   config: MergedConfig,
   lockManager: ConversationLockManager,
-  registry: PlatformRegistry
+  registry: PlatformRegistry,
+  workflowHost: WorkflowHost
 ): Promise<ChatHosting> {
   const inlinePlatforms = new Set(
     chatPlugins
@@ -490,7 +506,8 @@ async function startChatHosting(
     lockManager,
     registry.workflowPlatforms,
     registry.activePlatforms,
-    { routes: config.attentionNotices, inlinePlatforms }
+    { routes: config.attentionNotices, inlinePlatforms },
+    workflowHost
   );
   // Each route's activation baseline commits before the router's first scan.
   await Promise.all(host.attentionDestinations.map(destination => destination.activate()));
@@ -508,11 +525,16 @@ async function startChatHosting(
 }
 
 async function createResourceStarts(): Promise<{
+  workflowHost: WorkflowHost;
   webhookSources: Awaited<ReturnType<typeof loadWebhookSourcePlugins>> | undefined;
   hostId: string | undefined;
   requestDrain: (() => void) | undefined;
 }> {
-  const workflowHost = createSqlWorkflowHost();
+  const hostId = process.env.ARCHON_TRIGGER_HOST?.trim();
+  const host = hostId
+    ? createServerResourceStartHost(hostId, effects => createSqlWorkflowHost(undefined, effects))
+    : undefined;
+  const workflowHost = host?.workflowHost ?? createSqlWorkflowHost();
   const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
   const webhookSources = webhookSourcesConfigPath
     ? await loadWebhookSourcePlugins(webhookSourcesConfigPath, {
@@ -522,11 +544,8 @@ async function createResourceStarts(): Promise<{
           workflowHost.deps.store.hasStartReceiptForDelivery(sourceInstanceId, deliveryId),
       })
     : undefined;
-  // Explicit only: bindings choose their execution host, so the server never guesses one.
-  const hostId = process.env.ARCHON_TRIGGER_HOST?.trim();
-  const host = hostId ? createServerResourceStartHost(hostId, workflowHost) : undefined;
   const requestDrain = host ? (): void => void host.requestDrain() : undefined;
-  return { webhookSources, hostId, requestDrain };
+  return { workflowHost, webhookSources, hostId, requestDrain };
 }
 
 const isLoopbackHost = (hostname: string): boolean =>

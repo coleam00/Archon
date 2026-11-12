@@ -1,3 +1,4 @@
+import type { WorkflowHost } from '@archon/core/workflows/host-store';
 /**
  * Shared scaffolding for the run-route tests: the module mocks, fakes, fixtures and
  * `makeApp`. Importing this module installs the mocks, so a test file imports it before
@@ -607,7 +608,10 @@ export const MOCK_CONV = {
   codebase_id: null,
 };
 
-export function makeApp(lockManager?: ConversationLockManager): {
+export function makeApp(
+  lockManager?: ConversationLockManager,
+  workflowHost?: WorkflowHost
+): {
   app: OpenAPIHono;
   mockWebAdapter: WebAdapter;
 } {
@@ -624,7 +628,9 @@ export function makeApp(lockManager?: ConversationLockManager): {
     }),
     getStats: mock(makeIdleLockStats),
   } as unknown as ConversationLockManager;
-  registerApiRoutes(app, mockWebAdapter, lockManager ?? mockLockManager);
+  registerApiRoutes(app, mockWebAdapter, lockManager ?? mockLockManager, undefined, undefined, {
+    workflowHost,
+  });
   return { app, mockWebAdapter };
 }
 

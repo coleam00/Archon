@@ -1,3 +1,4 @@
+import { drainAfterResourceStart } from '@archon/core/workflows/resource-start-completion';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { toPersistedMessageMetadata } from '@archon/core/types';
 /**
@@ -5,9 +6,9 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
  *
  * The server drains only the host ID the operator names in `ARCHON_TRIGGER_HOST`; it
  * never infers one, because bindings choose their execution host and a guessed ID
- * could run another machine's work. Drains run after a webhook receipt commits and on
- * every continuation-scheduler tick, so queued work advances once its blocker ends
- * without an external cron. Admitted runs start in-process through the engine port.
+ * could run another machine's work. Execution owners drain after settlement; webhook
+ * receipts and scheduler ticks are intake and recovery backstops. Admitted runs
+ * start in-process through the engine port.
  */
 import {
   drainResourceStartHost,
@@ -19,6 +20,7 @@ import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 const log = createLogger('resource-start-hosting');
 
 export interface ServerResourceStartHost {
+  workflowHost: WorkflowHost;
   /**
    * Run a host pass, or schedule one more if a pass is in flight. Resolves when the
    * pass that covers this request ends; admitted runs keep executing afterwards.
@@ -28,8 +30,19 @@ export interface ServerResourceStartHost {
 
 export function createServerResourceStartHost(
   hostId: string,
-  host: WorkflowHost
+  createHost: (effects: Pick<WorkflowHost, 'afterOwnedExecution'>) => WorkflowHost
 ): ServerResourceStartHost {
+  const host = createHost({
+    afterOwnedExecution: async runId => {
+      try {
+        await drainAfterResourceStart(host, runId, async recordedHostId => {
+          if (recordedHostId === hostId) await requestDrain();
+        });
+      } catch (err) {
+        log.error({ err, runId, hostId }, 'resource_start.completion_failed');
+      }
+    },
+  });
   const startAdmitted = async (requestId: string): Promise<void> => {
     // Not awaited: a run can take hours and must not hold the drain or a webhook ACK.
     void startAdmittedResourceStart({
@@ -89,14 +102,13 @@ export function createServerResourceStartHost(
     running = undefined;
   };
 
-  return {
-    requestDrain(): Promise<void> {
-      if (running) {
-        again = true;
-        return running;
-      }
-      running = pass();
+  function requestDrain(): Promise<void> {
+    if (running) {
+      again = true;
       return running;
-    },
-  };
+    }
+    running = pass();
+    return running;
+  }
+  return { workflowHost: host, requestDrain };
 }

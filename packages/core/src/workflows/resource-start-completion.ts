@@ -1,13 +1,19 @@
 import { createLogger } from '@archon/paths';
 import type { WorkflowHost } from './host-store';
 
-/** Resolve only the admission's recorded host; ordinary runs have no trigger host. */
+/** Resolve only a recorded admission; ordinary run trees have no trigger host. */
 export async function drainAfterResourceStart(
   host: Pick<WorkflowHost, 'deps'>,
   runId: string,
   requestHostDrain: (hostId: string) => Promise<void>
 ): Promise<void> {
-  const request = await host.deps.store.getResourceStartRequest(runId);
+  const store = host.deps.store;
+  let request = await store.getResourceStartRequest(runId);
+  if (!request) {
+    // A resumed child can finish its blocked parent inside the same engine call.
+    const root = (await store.getRunAncestry(runId)).at(-1);
+    if (root) request = await store.getResourceStartRequest(root.id);
+  }
   if (request?.status === 'admitted') await requestHostDrain(request.hostId);
 }
 

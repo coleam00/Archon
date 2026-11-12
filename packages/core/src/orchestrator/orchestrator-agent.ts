@@ -250,7 +250,8 @@ export async function handleMessage(
       actor,
       workflowsWithSource,
       caps,
-      requestOptions
+      requestOptions,
+      context.workflowOperations
     );
 
     const turn = await runChatTurn(
@@ -334,7 +335,7 @@ async function dispatchPendingLaunch(
       context.actor,
       context.isolationHints,
       entry.source,
-      { inputs }
+      { inputs, afterOwnedExecution: context.afterOwnedExecution }
     );
   }
 }
@@ -425,7 +426,8 @@ async function runChatTurn(
         gateResolution.resolved.run,
         gateResolution.resolved.action,
         context.actor,
-        context.isolationHints
+        context.isolationHints,
+        { afterOwnedExecution: context.afterOwnedExecution }
       );
     }
   }
@@ -479,6 +481,7 @@ async function handleDeterministicCommand(
       actor,
       isolationHints,
       {
+        afterOwnedExecution: context.afterOwnedExecution,
         // Declared inputs (#2554) arrive on the request context, not in the
         // command text — the run route is the only caller that sets them.
         inputs: context.workflowInputs,
@@ -544,7 +547,13 @@ async function handleDeterministicCommand(
   }
 
   await deliverCommandResult(
-    await commandHandler.handleCommand(conversation, message, actor, platform)
+    await commandHandler.handleCommand(
+      conversation,
+      message,
+      actor,
+      platform,
+      context.workflowOperations
+    )
   );
   return true;
 }
@@ -674,7 +683,8 @@ function attachNativeTools(
   actor: HandleMessageContext['actor'],
   workflowsWithSource: readonly WorkflowWithSource[],
   caps: ChatTurnRequest['caps'],
-  requestOptions: SendQueryOptions
+  requestOptions: SendQueryOptions,
+  operations?: HandleMessageContext['workflowOperations']
 ): {
   gateResolution: { resolved: ResolvedGate | null };
   pendingLaunch: { launch: ChatLaunch | null };
@@ -711,7 +721,7 @@ function attachNativeTools(
       tools.push(
         buildManageRunTool({
           actor,
-          operations: createSqlWorkflowOperations(),
+          operations: operations ?? createSqlWorkflowOperations(),
           codebaseId: conversation.codebase_id,
           surface: platform,
           // One continuation per turn: the resume runs in this conversation and

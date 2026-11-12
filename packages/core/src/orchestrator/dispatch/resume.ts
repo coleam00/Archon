@@ -1,3 +1,5 @@
+import { notifyOwnedExecutionSettled } from '../../workflows/resource-start-completion';
+import { WorkflowExecutionHandoffError } from '@archon/workflows/engine-port';
 import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { inspectResumableRun } from '@archon/workflows/run-resume';
@@ -46,11 +48,19 @@ export async function continueForegroundResume(
   const engine = new InProcessWorkflowEngine(deps);
   const resumeOwner = await startRunLiveOwner(resumableRun.id);
   let resumeOwnerClosed = false;
+  let ownsSettlement = false;
   try {
     const admission = await admitResume(scope, input, deps, engine);
     if (admission === undefined) return;
     if (admission.accepted) {
-      await admission.settled;
+      ownsSettlement = true;
+      try {
+        const result = await admission.settled;
+        ownsSettlement = !('handedOff' in result);
+      } catch (error) {
+        ownsSettlement = !(error instanceof WorkflowExecutionHandoffError);
+        throw error;
+      }
       return;
     }
     await resumeOwner.close();
@@ -58,6 +68,7 @@ export async function continueForegroundResume(
     await startFreshInResumedWorktree(scope, input, engine);
   } finally {
     if (!resumeOwnerClosed) await resumeOwner.close();
+    if (ownsSettlement) await notifyOwnedExecutionSettled(scope.options ?? {}, resumableRun.id);
   }
 }
 

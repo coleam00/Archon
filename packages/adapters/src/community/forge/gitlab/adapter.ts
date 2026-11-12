@@ -52,7 +52,8 @@ export class GitLabAdapter implements IPlatformAdapter {
     webhookSecret: string,
     lockManager: ConversationLocker,
     gitlabUrl?: string,
-    botMention?: string
+    botMention?: string,
+    private readonly dispatchMessage: typeof handleMessage = handleMessage
   ) {
     if (!token) {
       throw new Error('GitLabAdapter requires a non-empty token');
@@ -236,7 +237,7 @@ export class GitLabAdapter implements IPlatformAdapter {
 
     await this.lockManager.acquireLock(conversationId, async () => {
       try {
-        await handleMessage(this, conversationId, message, {
+        await this.dispatchMessage(this, conversationId, message, {
           issueContext,
           threadContext,
           isolationHints,

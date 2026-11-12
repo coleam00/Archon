@@ -1,3 +1,4 @@
+import type { WorkflowHost } from '../workflows/host-store';
 /**
  * Core type definitions for the Remote Coding Agent platform
  */
@@ -48,6 +49,8 @@ export interface AttachedFile {
 }
 
 export interface HandleMessageContext {
+  readonly workflowOperations?: WorkflowHost['operations'];
+  readonly afterOwnedExecution?: WorkflowHost['afterOwnedExecution'];
   readonly issueContext?: string;
   readonly threadContext?: string;
   readonly parentConversationId?: string;

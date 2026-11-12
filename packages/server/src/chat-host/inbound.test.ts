@@ -1,3 +1,4 @@
+import { createSqlWorkflowHost } from '@archon/core/workflows/sql-host';
 import { beforeEach, afterEach, expect, mock, test } from 'bun:test';
 import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -481,3 +482,34 @@ test.each(['approve', 'reject'] as const)(
     expect((await getWorkflowRun(parent.id))?.metadata.approval).not.toHaveProperty('resolved');
   }
 );
+
+test('configured execution host reaches messages, actions and continuations', async () => {
+  const afterOwnedExecution = mock(async (_id: string) => {});
+  const host = createSqlWorkflowHost(undefined, { afterOwnedExecution });
+  const operations = host.operations;
+  const respondToWorkflow = mock(operations.respondToWorkflow);
+  const configured = { ...host, operations: { ...operations, respondToWorkflow } };
+  registerChatInbound(
+    connection,
+    descriptor,
+    platform,
+    new ConversationLockManager(),
+    platforms,
+    configured
+  );
+  await inbound({
+    conversationId: 'thread-1',
+    text: 'hello',
+    sender: { platformUserId: 'starter' },
+  });
+  expect(handleMessage.mock.calls[0]?.[3]).toMatchObject({
+    workflowOperations: configured.operations,
+    afterOwnedExecution,
+  });
+  const paused = await run(true);
+  expect(
+    await action({ runId: paused.id, action: 'approve', sender: { platformUserId: 'starter' } })
+  ).toMatchObject({ status: 'done' });
+  expect(respondToWorkflow).toHaveBeenCalledTimes(1);
+  expect(resume.mock.calls[0]?.[0]).toBe(configured);
+});

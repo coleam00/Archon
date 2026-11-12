@@ -69,12 +69,15 @@ export class GitHubAdapter implements IPlatformAdapter {
   private readonly callApi: GitHubApiCall = (owner, repo, fn) =>
     this.withTokenRefresh(owner, repo, fn);
 
+  private readonly dispatchMessage: typeof handleMessage;
+
   constructor(
     auth: GitHubAdapterAuth,
     webhookSecret: string,
     lockManager: ConversationLocker,
     botMention?: string,
     options?: {
+      dispatchMessage?: typeof handleMessage;
       retryDelayMs?: (attempt: number) => number;
       getUserToken?: (userId: string) => Promise<string | undefined>;
     }
@@ -88,6 +91,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
     this.botMention = botMention ?? 'Archon';
+    this.dispatchMessage = options?.dispatchMessage ?? handleMessage;
 
     // Parse GitHub user whitelist (optional - empty = open access)
     this.allowedUsers = parseGitHubAllowedUsers(process.env.GITHUB_ALLOWED_USERS);
@@ -468,7 +472,7 @@ export class GitHubAdapter implements IPlatformAdapter {
     // Route to orchestrator with isolation hints (with lock for concurrency control)
     await this.lockManager.acquireLock(conversationId, async () => {
       try {
-        await handleMessage(this, conversationId, message, {
+        await this.dispatchMessage(this, conversationId, message, {
           issueContext,
           threadContext,
           isolationHints,

@@ -8,7 +8,7 @@ import {
   getRegisteredPlatformPolicies,
 } from '@archon/core/platforms/registry';
 import { afterAll, beforeAll, describe, expect, mock, spyOn, test } from 'bun:test';
-import type { IGitHubAppAuthProvider, GitHubAuth } from '@archon/core';
+import type { IGitHubAppAuthProvider, GitHubAuth, handleMessage } from '@archon/core';
 import type { EventEmitter } from 'events';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import { ConversationLockManager } from '@archon/core/utils/conversation-lock';
@@ -152,8 +152,9 @@ mock.module('@archon/paths', () => ({
   getSourceWebDistDir: (): string => '/tmp/web-dist',
 }));
 
+const mockHandleMessage = mock<typeof handleMessage>(async () => {});
 mock.module('@archon/core', () => ({
-  handleMessage: async (): Promise<void> => undefined,
+  handleMessage: mockHandleMessage,
   pool: {
     query: async (): Promise<object> => ({}),
     end: async (): Promise<void> => undefined,
@@ -205,10 +206,18 @@ const installationTokenProvider = {
   invalidateRepo: () => {},
 } satisfies IGitHubAppAuthProvider;
 
+const githubDispatches: (typeof handleMessage | undefined)[] = [];
 const mockGitHubAuth = mock((_auth: GitHubAuth): void => undefined);
 class MockGitHubAdapter {
-  constructor(private readonly auth: GitHubAuth) {
+  constructor(
+    private readonly auth: GitHubAuth,
+    _secret: string,
+    _locks: unknown,
+    _mention: string,
+    options?: { dispatchMessage?: typeof handleMessage }
+  ) {
     mockGitHubAuth(auth);
+    githubDispatches.push(options?.dispatchMessage);
   }
   async start(): Promise<void> {}
   getPlatformType(): string {
@@ -316,7 +325,7 @@ mock.module('./services/attention-router', () => ({
   },
 }));
 mock.module('./services/web-push', () => ({ WebPushDestination: class {} }));
-const workflowHost = {} as import('@archon/core/workflows/host-store').WorkflowHost;
+const workflowHost = { operations: {}, afterOwnedExecution: async () => {} };
 mock.module('@archon/core/workflows/sql-host', () => ({
   createSqlWorkflowHost: () => workflowHost,
   createSqlWorkflowOperations: () => {
@@ -537,6 +546,17 @@ describe('server platform composition', () => {
       await startServer({ port: 12345 });
       if (env.expected) {
         expect(mockGitHubAuth).toHaveBeenCalledWith({ kind: 'pat', token: env.expected });
+        const dispatch = githubDispatches.at(-1);
+        expect(dispatch).toBeDefined();
+        const adapter = mockRegisterApiRoutes.mock.calls.at(-1)?.[1];
+        if (!adapter || !dispatch) throw new Error('Missing configured message dispatcher');
+        await dispatch(adapter, 'test-conversation', '/workflow resume run', {
+          actor: { kind: 'operator' },
+        });
+        expect(mockHandleMessage.mock.calls.at(-1)?.[3]).toMatchObject({
+          workflowOperations: workflowHost.operations,
+          afterOwnedExecution: workflowHost.afterOwnedExecution,
+        });
       } else {
         expect(mockGitHubAuth).not.toHaveBeenCalled();
       }

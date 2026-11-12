@@ -38,6 +38,14 @@ test('completion resolves direct admissions from their recorded host without a r
   expect(hosts).toEqual(['recorded-host']);
   await drainAfterResourceStart(host, 'ordinary-run', drain);
   expect(hosts).toEqual(['recorded-host']);
+  const child = await store.createWorkflowRun({
+    workflow_name: 'child',
+    user_message: '',
+    parent_run_id: launch.run.id,
+  });
+  await drainAfterResourceStart(host, child.id, drain);
+  expect(hosts).toEqual(['recorded-host', 'recorded-host']);
+
   const queued = { ...launch, run: { ...launch.run, id: crypto.randomUUID() } };
   await store.admitResourceStart({
     resource: 'one',
@@ -47,7 +55,7 @@ test('completion resolves direct admissions from their recorded host without a r
     launch: queued,
   });
   await drainAfterResourceStart(host, queued.run.id, drain);
-  expect(hosts).toEqual(['recorded-host']);
+  expect(hosts).toEqual(['recorded-host', 'recorded-host']);
   const read = spyOn(store, 'getResourceStartRequest').mockRejectedValueOnce(
     new Error('unreadable admission')
   );
@@ -55,7 +63,7 @@ test('completion resolves direct admissions from their recorded host without a r
     await expect(drainAfterResourceStart(host, launch.run.id, drain)).rejects.toThrow(
       'unreadable admission'
     );
-    expect(hosts).toEqual(['recorded-host']);
+    expect(hosts).toEqual(['recorded-host', 'recorded-host']);
   } finally {
     read.mockRestore();
   }
