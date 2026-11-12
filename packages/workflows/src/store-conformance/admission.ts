@@ -35,6 +35,23 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
     });
 
     const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    test.each(['free', 'full'] as const)(
+      'ordinary cancelled resume refuses without claiming a %s resource',
+      async occupancy => {
+        const child = start();
+        await store.admitResourceStart(child);
+        await store.claimPendingWorkflowRun(child.launch.run.id);
+        await store.cancelFanOutRun(child.launch.run.id, FAN_OUT_CANCEL_REASONS[0]);
+        if (occupancy === 'full') await store.admitResourceStart(start());
+        const before = await store.getWorkflowRun(child.launch.run.id);
+        const events = await store.listWorkflowEvents(child.launch.run.id);
+        await expect(store.resumeWorkflowRun(child.launch.run.id)).rejects.toBeInstanceOf(
+          WorkflowNotResumableError
+        );
+        expect(await store.getWorkflowRun(child.launch.run.id)).toEqual(before);
+        expect(await store.listWorkflowEvents(child.launch.run.id)).toEqual(events);
+      }
+    );
     test.each([...FAN_OUT_CANCEL_REASONS])(
       'cancelled child recovery reacquires capacity (%s)',
       async reason => {

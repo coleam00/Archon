@@ -328,7 +328,8 @@ export async function resumeWorkflowRun(
   try {
     updateResult = await getDatabase().withTransaction(async query => {
       const prior = await lockPriorRun(query, id);
-      if (!prior || !priorMatchesCursor(prior, cursor)) return { rowCount: 0 };
+      if (!prior || prior.status === 'cancelled' || !priorMatchesCursor(prior, cursor))
+        return { rowCount: 0 };
       const busy = await claimResourceSlot(query, id, prior, cursor, policy);
       if (busy) return { busy };
       const admitted = await casResumeRun(query, id, prior);

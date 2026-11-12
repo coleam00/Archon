@@ -272,31 +272,27 @@ export function createAdmissionTransaction(
     return { kind: 'foreign' as const, run, unknown: !run.working_path };
   }
 
-  let receiptCapacities: Map<string, { resource: string; capacity: number }> | undefined;
-  async function legacyReceiptCapacities() {
-    if (receiptCapacities) return receiptCapacities;
-    const capacities = new Map<string, { resource: string; capacity: number }>();
-    for (const path of await documentPaths(root, 'receipts')) {
-      const receipt = await read(path, receiptSchema);
-      for (const binding of receipt?.bindings ?? []) {
-        const intent = binding.intent;
-        if (intent?.capacity === undefined) continue;
-        for (const id of binding.requestIds) {
-          if (!capacities.has(id))
-            capacities.set(id, { resource: intent.resource, capacity: intent.capacity });
-        }
-      }
-    }
-    receiptCapacities = capacities;
-    return capacities;
-  }
+  const legacyReceipts = new Map<string, Receipt | null>();
+  let receiptPaths: string[] | undefined;
   async function declaredCapacity(row: Request): Promise<number | undefined> {
     if (row.declaredCapacity !== undefined)
       return resourceCapacitySchema.parse(row.declaredCapacity);
-    const binding = (await legacyReceiptCapacities()).get(row.id);
-    return binding?.resource === row.resource
-      ? binding.capacity
-      : capturedResourceDeclaration(policy, row.launch, row.resource);
+    receiptPaths ??= await documentPaths(root, 'receipts');
+    for (const path of receiptPaths) {
+      let receipt = legacyReceipts.get(path);
+      if (receipt === undefined) {
+        receipt = await read(path, receiptSchema);
+        legacyReceipts.set(path, receipt);
+      }
+      const binding = receipt?.bindings.find(
+        binding =>
+          binding.intent?.resource === row.resource &&
+          binding.intent.capacity !== undefined &&
+          binding.requestIds.includes(row.id)
+      );
+      if (binding) return binding.intent?.capacity;
+    }
+    return capturedResourceDeclaration(policy, row.launch, row.resource);
   }
   async function capacityFor(row: Request): Promise<number> {
     const caps = await currentCaps();

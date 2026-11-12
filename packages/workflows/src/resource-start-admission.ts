@@ -1,6 +1,11 @@
+import { validatePendingStartReplay } from './pending-resource-start';
 import { setTimeout } from 'node:timers/promises';
 import type { IResourceStartStore } from './resource-start-store';
-import type { PreparedWorkflowLaunch, ResourceStartDisposition } from './schemas/resource-start';
+import type {
+  PreparedWorkflowLaunch,
+  ResourceStartDisposition,
+  ResourceStartIntent,
+} from './schemas/resource-start';
 import type { ResolvedWorkflow, WorkflowResource } from './schemas/workflow';
 import type { WorkflowRun } from './schemas/workflow-run';
 import type { IWorkflowStore } from './store';
@@ -28,16 +33,19 @@ export async function awaitResourceStartAdmission(
   signal?.throwIfAborted();
   // Only the native launcher has its execution options; a trigger host cannot take over.
   const hostId = nativeResourceStartHostId(launch.run.id);
+  const intent: ResourceStartIntent = {
+    resource: resource.name,
+    capacity: resource.capacity,
+    hostId,
+    overlap: options.noWait ? 'skip' : 'queue',
+    launch,
+  };
   let disposition: ResourceStartDisposition;
   try {
-    disposition = await store.admitPendingResourceStart({
-      resource: resource.name,
-      capacity: resource.capacity,
-      hostId,
-      overlap: options.noWait ? 'skip' : 'queue',
-      launch,
-    });
+    disposition = await store.admitPendingResourceStart(intent);
   } catch (error) {
+    const retained = await readResourceStartAfterFailure(store, launch.run.id, error);
+    if (retained) validatePendingStartReplay(retained, intent);
     return withdrawOrReadAdmission(store, launch.run.id, error);
   }
   if (disposition.status !== 'queued') return disposition;

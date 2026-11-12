@@ -242,6 +242,17 @@ test('receipt-linked requests validate their binding and inspection follows ever
     delete row.declaredCapacity;
     await writeFile(path, JSON.stringify(row));
   }
+  const receiptPath = pathFor('receipts', receiptId);
+  const damagedPath = join(root, 'resource/receipts', 'zz-unrelated.json');
+  const matching = await readFile(join(root, receiptPath), 'utf8');
+  await writeFile(damagedPath, '{');
+  const ordered = (await readdir(join(root, 'resource/receipts'))).map(name =>
+    join(root, 'resource/receipts', name)
+  );
+  const [matchingPath, unrelatedPath] = ordered;
+  if (!matchingPath || !unrelatedPath) throw new Error('Expected two receipt documents');
+  await writeFile(matchingPath, matching);
+  await writeFile(unrelatedPath, '{');
   const reads = spyOn(commitModule, 'readJson');
   try {
     const occupancy = await createAdmissionTransaction(root).occupancy('resource');
@@ -252,6 +263,16 @@ test('receipt-linked requests validate their binding and inspection follows ever
   } finally {
     reads.mockRestore();
   }
+  await writeFile(unrelatedPath, '{}');
+  expect(
+    (await createAdmissionTransaction(root).occupancy('resource')).queue.map(row => row.capacity)
+  ).toEqual([2, 2]);
+  await unlink(matchingPath);
+  expect((await createAdmissionTransaction(root).occupancy('resource')).queueError).toBeInstanceOf(
+    Error
+  );
+  await writeFile(join(root, receiptPath), matching);
+  await unlink(damagedPath);
   expect(receipt).not.toHaveProperty('createdAt');
   expect(receipt?.bindings[0]).not.toHaveProperty('requestIds');
   expect(await store.getResourceStartRequest(first.launch.run.id)).not.toHaveProperty('position');

@@ -36,7 +36,10 @@ export function validatePendingStartReplay(
     request.hostId !== intent.hostId ||
     request.overlap !== intent.overlap ||
     request.declaredCapacity !== intent.capacity ||
-    !isDeepStrictEqual(request.launch, intent.launch)
+    !isDeepStrictEqual(
+      JSON.parse(JSON.stringify(request.launch)),
+      JSON.parse(JSON.stringify(intent.launch))
+    )
   )
     throw new Error(
       `Resource start '${intent.launch.run.id}' does not identify its retained request`

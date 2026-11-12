@@ -5,7 +5,13 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
-import { describeWorkflowStoreConformance } from '@archon/workflows/store-conformance';
+import {
+  describeWorkflowStoreConformance,
+  resourceStartFixtures,
+  CONFORMANCE_CODEBASE_ID,
+  CONFORMANCE_CONVERSATION_ID,
+} from '@archon/workflows/store-conformance';
+import { WorkflowNotResumableError } from '@archon/workflows/store';
 import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
@@ -90,3 +96,24 @@ test.each(['nested-workflow', null])(
     }
   }
 );
+
+test('ordinary cancelled resume leaves no terminal resource holder', async () => {
+  const harness = await makeHarness();
+  try {
+    const { store, db } = harness;
+    const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    const intent = start();
+    const id = intent.launch.run.id;
+    await store.admitResourceStart(intent);
+    await store.claimPendingWorkflowRun(id);
+    await store.cancelWorkflowRun(id);
+    await store.drainResourceStarts({ resource: intent.resource, hostId: intent.hostId });
+    const holders = () =>
+      db.query('SELECT * FROM remote_agent_resource_slot_holders WHERE holder_id = $1', [id]);
+    expect((await holders()).rows).toEqual([]);
+    await expect(store.resumeWorkflowRun(id)).rejects.toBeInstanceOf(WorkflowNotResumableError);
+    expect((await holders()).rows).toEqual([]);
+  } finally {
+    await harness.close();
+  }
+});

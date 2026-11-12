@@ -19,6 +19,8 @@ export function describeNativeAdmissionConformance(getHarness: () => WorkflowSto
       async state => {
         if (state === 'queued') await store.admitResourceStart(start());
         const native = start();
+        native.launch.run.origin = undefined;
+        native.launch.execution.isolation = { kind: 'worktree', branch: undefined };
         await store.createWorkflowRun(native.launch.run);
         const admit = store.admitPendingResourceStart.bind(store);
         const fault = spyOn(store, 'admitPendingResourceStart').mockImplementationOnce(
@@ -42,6 +44,34 @@ export function describeNativeAdmissionConformance(getHarness: () => WorkflowSto
         expect((await store.getResourceStartRequest(native.launch.run.id))?.status).toBe(
           state === 'queued' ? 'withdrawn' : 'admitted'
         );
+      }
+    );
+    test.each(['queued', 'admitted'] as const)(
+      'native helper preserves a mismatched %s replay across every retained field',
+      async state => {
+        if (state === 'queued') await store.admitResourceStart(start());
+        for (const field of ['resource', 'host', 'overlap', 'capacity', 'launch'] as const) {
+          const native = start();
+          native.hostId = field === 'host' ? 'other' : `native:${native.launch.run.id}`;
+          await store.createWorkflowRun(native.launch.run);
+          expect((await store.admitPendingResourceStart(native)).status).toBe(state);
+          const before = await store.getResourceStartRequest(native.launch.run.id);
+          await expect(
+            awaitResourceStartAdmission(
+              store,
+              {
+                name: field === 'resource' ? 'other' : native.resource,
+                capacity: field === 'capacity' ? 3 : native.capacity,
+              },
+              field === 'launch'
+                ? { ...native.launch, execution: { ...native.launch.execution, cwd: '/other' } }
+                : native.launch,
+              { noWait: field === 'overlap' }
+            )
+          ).rejects.toThrow('retained request');
+          expect(await store.getResourceStartRequest(native.launch.run.id)).toEqual(before);
+          if (state === 'admitted') await store.cancelWorkflowRun(native.launch.run.id);
+        }
       }
     );
     test.each(['local', 'foreign'] as const)(
