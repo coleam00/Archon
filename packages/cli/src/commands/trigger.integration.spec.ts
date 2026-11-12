@@ -1,3 +1,4 @@
+import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-cleanup';
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
@@ -1272,7 +1273,11 @@ nodes:
         await waitFor(
           () => (runs()[1]?.status === 'completed' ? true : undefined),
           'next start to run'
-        );
+        ).catch(error => {
+          throw new Error(
+            `${String(error)}\n${readFileSync(join(archonHome, 'logs', `trigger-run-${first.id}.log`), 'utf8')}`
+          );
+        });
         expect(
           readRows<RequestRow>(
             databasePath,
@@ -1401,7 +1406,18 @@ nodes:
 
         activeRuns.delete(first.id);
 
-        // The stopping controller drains after recording cancellation and cleanup.
+        // This host-command fixture cannot exclude untracked background work. The
+        // stop warning defers automatic admission until the operator's explicit drain.
+        if (process.platform !== 'win32') {
+          expect(cancel.stdout + cancel.stderr).toContain(COMPLETED_HOST_COMMAND_WARNING);
+          expect(requests()[1]?.status).toBe('queued');
+          await runCli(cliPath, projectRoot, archonHome, [
+            'trigger',
+            'drain',
+            '--host',
+            'cancel-host',
+          ]);
+        }
         await waitFor(
           () => (runs()[1]?.status === 'completed' ? true : undefined),
           'queued start to run after the cancel'

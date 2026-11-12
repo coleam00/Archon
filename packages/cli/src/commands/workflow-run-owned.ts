@@ -1,3 +1,4 @@
+import { withRunSlotReleaseScope } from '@archon/workflows/run-slot-release';
 import { OwnedRunLease } from '../utils/owned-run-lease';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { withCapturedSource } from '@archon/workflows/run-source';
@@ -53,7 +54,7 @@ async function runWorkflowWithOwnedSource(
   }
 
   const launch = await prepareForegroundLaunch(request, admission);
-  const lease = new OwnedRunLease(request.detachedProcessOwner);
+  const lease = new OwnedRunLease(request.detachedProcessOwner, host.deps.store);
   try {
     if (!defersContainerResume(launch)) {
       await provisionWorkspace(launch, lease);
@@ -110,14 +111,16 @@ export async function workflowRunCommand(
     try {
       await processClaim;
       pending = await withCapturedSource(owner =>
-        runWorkflowWithOwnedSource({
-          host,
-          owner,
-          ...attempt,
-          detachedProcessOwner,
-          launchToken,
-          notifyResumeAccepted,
-        })
+        withRunSlotReleaseScope(() =>
+          runWorkflowWithOwnedSource({
+            host,
+            owner,
+            ...attempt,
+            detachedProcessOwner,
+            launchToken,
+            notifyResumeAccepted,
+          })
+        )
       );
     } catch (error) {
       await recordDetachedChildStartupFailure(

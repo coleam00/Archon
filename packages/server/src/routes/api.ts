@@ -1,4 +1,3 @@
-import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { OpenAPIHono } from '@hono/zod-openapi';
 import { cors } from 'hono/cors';
 import { loadConfig, type CloneOptions, type ConversationLockManager } from '@archon/core';
@@ -50,14 +49,10 @@ export function registerApiRoutes(
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[],
   attention?: { webPush: WebPushDestination; router: AttentionRouter },
-  registration: Pick<CloneOptions, 'githubAppAuth'> & { workflowHost?: WorkflowHost } = {}
+  registration: Pick<CloneOptions, 'githubAppAuth'> = {}
 ): void {
-  const operations = registration.workflowHost?.operations ?? createSqlWorkflowOperations();
-  const dispatchToOrchestrator = createOrchestratorDispatch(
-    webAdapter,
-    lockManager,
-    registration.workflowHost
-  );
+  const operations = createSqlWorkflowOperations();
+  const dispatchToOrchestrator = createOrchestratorDispatch(webAdapter, lockManager);
 
   app.openAPIRegistry.register('DagNodeSseEvent', dagNodeSseEventSchema);
   app.openAPIRegistry.register('WebPushPayload', webPushPayloadSchema);
@@ -115,11 +110,7 @@ export function registerApiRoutes(
   );
   registerDashboardRunsRoute(app);
   registerConversationProcessingRoute(app, { lockManager });
-  registerRunControlRoutes(app, {
-    operations,
-    dispatchToOrchestrator,
-    workflowHost: registration.workflowHost,
-  });
+  registerRunControlRoutes(app, { operations, dispatchToOrchestrator });
   registerRunGateRoutes(app, operations);
   registerRunCleanupRoutes(app, operations);
   registerWorkflowRunReadRoutes(app);

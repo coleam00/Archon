@@ -1,5 +1,3 @@
-import type { WorkflowHost } from './host-store';
-import { notifyOwnedExecutionSettled } from './resource-start-completion';
 import * as runSource from '@archon/workflows/run-source';
 import {
   CONTINUATION_RETRY_MS,
@@ -13,7 +11,6 @@ import {
 import { startRunLiveOwner, RunLiveOwnerAlreadyOwnedError } from '../services/run-live-owner';
 import { resolveRunWorkflow } from './resolve-run-workflow';
 import { createLogger, getArchonWorkspacesPath } from '@archon/paths';
-import { WorkflowExecutionHandoffError } from '@archon/workflows/engine-port';
 import type {
   IWorkflowEngine,
   WorkflowResumeAdmission,
@@ -80,7 +77,7 @@ export type ResolveProject = (
  * Codebase-less runs resolve source from the Archon workspaces directory.
  */
 export async function resumeRunContinuation(
-  host: { deps: WorkflowDeps; engine: IWorkflowEngine } & Pick<WorkflowHost, 'afterOwnedExecution'>,
+  host: { deps: WorkflowDeps; engine: IWorkflowEngine },
   runId: string,
   resolveContext: (run: WorkflowRun) => Promise<ContinuationContext>,
   cursor?: WorkflowResumeCursor,
@@ -136,46 +133,23 @@ export async function resumeRunContinuation(
 }
 
 async function resumeWithLiveOwner(
-  host: Pick<WorkflowHost, 'engine' | 'afterOwnedExecution'>,
+  host: { deps: WorkflowDeps; engine: IWorkflowEngine },
   input: WorkflowResumeInput
 ): Promise<ContinuationAdmission> {
   try {
-    const owner = await startRunLiveOwner(input.run.id);
-    let closing: Promise<boolean> | undefined;
-    const close = (): Promise<boolean> => {
-      closing ??= owner.close().then(
-        () => true,
-        (error: unknown) => {
-          log.error(
-            { err: error, runId: input.run.id },
-            'workflow_continuation_owner_close_failed'
-          );
-          return false;
-        }
-      );
-      return closing;
-    };
+    const owner = await startRunLiveOwner(input.run.id, { store: host.deps.store });
+    const close = (): Promise<void> =>
+      owner.close().catch((error: unknown) => {
+        log.error({ err: error, runId: input.run.id }, 'workflow_continuation_owner_close_failed');
+      });
     let accepted = false;
     try {
       const admission = await host.engine.resume(input);
       if (!admission.accepted) return { kind: 'not-accepted' };
       accepted = true;
-      let ownsSettlement = true;
-      const settled = admission.settled
-        .then(
-          result => {
-            ownsSettlement = !('handedOff' in result);
-            return result;
-          },
-          (error: unknown) => {
-            ownsSettlement = !(error instanceof WorkflowExecutionHandoffError);
-            throw error;
-          }
-        )
-        .finally(async () => {
-          const ownerClosed = await close();
-          if (ownerClosed && ownsSettlement) await notifyOwnedExecutionSettled(host, input.run.id);
-        });
+      const settled = admission.settled.finally(async () => {
+        await close();
+      });
       // Hosts may attach their settlement handler after other admissions finish.
       void settled.catch(() => undefined);
       return { kind: 'accepted', run: input.run, settled };

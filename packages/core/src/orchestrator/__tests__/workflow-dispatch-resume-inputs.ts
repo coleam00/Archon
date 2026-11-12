@@ -1,5 +1,3 @@
-import { WorkflowExecutionHandoffError } from '@archon/workflows/engine-port';
-import { createSqlWorkflowOperations } from '../../workflows/sql-host';
 import { expect, mock, test } from 'bun:test';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
 import {
@@ -27,40 +25,6 @@ import {
 import { handleMessage } from '../orchestrator-agent';
 import type { setupRoutingTests } from './workflow-dispatch-adoption';
 export function registerResumeInputTests(fixture: ReturnType<typeof setupRoutingTests>) {
-  test.each(['failure', 'rejection', 'handoff', 'handoff-rejection'] as const)(
-    'foreground resume notification follows owned settlement: %s',
-    async resultKind => {
-      const run = makeResumableRun({
-        id: 'settled-resume',
-        status: 'paused',
-        working_path: '/repos/test-repo/worktrees/paused',
-      });
-      mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
-      mockGetCodebase.mockResolvedValueOnce(makeCodebase());
-      mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
-      mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
-      const error =
-        resultKind === 'handoff-rejection'
-          ? new WorkflowExecutionHandoffError(run.id, new Error('superseded'))
-          : new Error('execution failed');
-      mockExecuteWorkflow.mockImplementationOnce(async () => {
-        if (resultKind === 'rejection' || resultKind === 'handoff-rejection') throw error;
-        if (resultKind === 'handoff')
-          return { success: true, workflowRunId: run.id, handedOff: true, observedStatus: null };
-        return { success: false, workflowRunId: run.id, error: 'failed' };
-      });
-      const settled = mock(async (id: string) => {
-        expect(id).toBe(run.id);
-        expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
-      });
-      await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
-        actor: operator,
-        afterOwnedExecution: settled,
-      });
-      expect(settled).toHaveBeenCalledTimes(resultKind.startsWith('handoff') ? 0 : 1);
-    }
-  );
-
   test('an IMPLICIT auto-resume of a required-input workflow is not re-gated', async () => {
     // The dangerous case: a plain `/workflow run <name>` (a start request) on a
     // workflow with a paused run. `dispatchOrchestratorWorkflow` auto-detects that run
@@ -84,18 +48,7 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     );
 
     const platform = makeForegroundPlatform();
-    const operations = createSqlWorkflowOperations();
-    const settled = mock(async (id: string) => {
-      expect(id).toBe('implicit-resume-1');
-      expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
-    });
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
-      actor: operator,
-      workflowOperations: operations,
-      afterOwnedExecution: settled,
-    });
-    expect(settled).toHaveBeenCalledTimes(1);
-    expect(mockHandleCommand.mock.calls[0]?.[4]).toBe(operations);
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
 
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).not.toContain("requires input 'diff'");

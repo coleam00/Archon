@@ -1,4 +1,4 @@
-import { notifyOwnedExecutionSettled } from '@archon/core/workflows/resource-start-completion';
+import { deferRunSlotRelease } from '@archon/workflows/run-slot-release';
 import type { OwnedRunLease } from '../utils/owned-run-lease';
 import { disposeWorkflowSource } from '@archon/workflows/run-source';
 import {
@@ -77,11 +77,6 @@ export async function executeOwnedRun(
     progress: undefined,
     containerPreserved: false,
   };
-  let completion: Promise<void> | undefined;
-  const afterOwnedExecution = (): Promise<void> => {
-    completion ??= lease.close().then(() => notifyOwnedExecutionSettled(host, ownedRunId));
-    return completion;
-  };
   let ownedExecutionClaim: string | null | undefined;
   const onExecutionClaimed: OnExecutionClaimed = claim => {
     ownedExecutionClaim = claim;
@@ -94,7 +89,6 @@ export async function executeOwnedRun(
       getExecutionClaim: () => ownedExecutionClaim,
       isExecutionSettled: () => execution.result !== undefined,
       logModule: 'cli.workflow',
-      afterOwnedExecution,
       liveOwner: {
         isStopRequested: () => lease.isStopRequested(),
         close: () => lease.close(),
@@ -159,15 +153,18 @@ export async function executeOwnedRun(
     throw error;
   } finally {
     try {
-      resourceCleanupError = await settleRun(launch, execution, ownedRunId, deregisterTermination);
+      resourceCleanupError = await settleRun(
+        launch,
+        execution,
+        ownedRunId,
+        deregisterTermination
+      ).catch(error => {
+        deferRunSlotRelease();
+        return Promise.reject(error);
+      });
+      if (resourceCleanupError) deferRunSlotRelease();
     } finally {
       preparationTermination?.dispose();
-      if (
-        !lease.isStopRequested() &&
-        ownedExecutionClaim !== undefined &&
-        !(execution.result && 'handedOff' in execution.result)
-      )
-        await afterOwnedExecution();
     }
   }
   const { result } = execution;
@@ -204,8 +201,9 @@ async function teardownOnSignal(
   if (container && !execution.containerPreserved) {
     try {
       await container.backend.destroy(container.envId);
-      if (runId) await releaseRunResources(launch, runId);
+      if (runId && (await releaseRunResources(launch, runId))) deferRunSlotRelease();
     } catch (destroyErr) {
+      deferRunSlotRelease();
       console.error(
         `\nWARNING: could not remove the isolation container on ${signal}: ` +
           `${(destroyErr as Error).message}. Remove it manually: ` +
@@ -214,7 +212,7 @@ async function teardownOnSignal(
     }
   }
   if (runId && !container && !execution.containerPreserved)
-    await releaseRunResources(launch, runId);
+    if (await releaseRunResources(launch, runId)) deferRunSlotRelease();
   // Reclaim the staged capture for the same reason: the ownership `finally` —
   // whose whole premise is "whichever way we leave" — never runs. Ctrl-C during
   // isolation resolution or worktree creation would otherwise strand a complete

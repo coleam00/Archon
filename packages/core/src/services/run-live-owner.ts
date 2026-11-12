@@ -1,3 +1,4 @@
+import { holdRunSlotRelease } from '@archon/workflows/run-slot-release';
 import { createHash } from 'node:crypto';
 import { closeSync, fstatSync, lstatSync, mkdirSync, openSync, rmSync, statSync } from 'node:fs';
 import { createServer, type Server, Socket } from 'node:net';
@@ -36,6 +37,7 @@ const STARTUP_RECHECK_MS = 50;
 const MAX_MESSAGE_BYTES = 256;
 
 export interface RunLiveOwnerOptions {
+  store?: object;
   /** Enables the detached CLI's active-stop lease. Other owners only publish liveness. */
   detachedProcessPid?: number;
 }
@@ -415,6 +417,7 @@ export async function startRunLiveOwner(
     throw error;
   }
   ownedByThisProcess.add(runId);
+  const releaseSlotHold = options.store ? holdRunSlotRelease(options.store, runId) : undefined;
 
   let closePromise: Promise<void> | undefined;
   return {
@@ -449,6 +452,7 @@ export async function startRunLiveOwner(
         ownedByThisProcess.delete(runId);
         if (process.platform !== 'win32') rmSync(path, { force: true });
         releaseOwnerLock(lockPath, lockFd);
+        await releaseSlotHold?.();
       })();
       return closePromise;
     },

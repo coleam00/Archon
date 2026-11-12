@@ -4,7 +4,7 @@ import { OwnedRunLease } from './owned-run-lease';
 
 for (const setupAlreadyStarted of [true, false]) {
   test(`forwards termination preparation with an existing setup owner: ${String(setupAlreadyStarted)}`, async () => {
-    const lease = new OwnedRunLease(true);
+    const lease = new OwnedRunLease(true, {});
     const runId = `owned-lease-${crypto.randomUUID()}`;
     if (setupAlreadyStarted) await lease.start(runId);
     const prepare = () => ({

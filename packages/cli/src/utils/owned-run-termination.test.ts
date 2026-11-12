@@ -1,3 +1,9 @@
+import {
+  holdRunSlotRelease,
+  publishRunSlotRelease,
+  subscribeRunSlotRelease,
+} from '@archon/workflows/run-slot-release';
+import * as subprocess from '@archon/workflows/subprocess';
 import { afterEach, expect, mock, spyOn, test } from 'bun:test';
 import { existsSync, mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -406,22 +412,44 @@ test.each([
   'no-claim',
   'lost-claim',
   'failed-write',
-] as const)('signal completion notification follows owned teardown and close (%s)', async state => {
+  'unregistered-winner',
+  'tree-failure',
+  'teardown-failure',
+] as const)('signal cleanup delivers only confirmed releases (%s)', async state => {
   const order: string[] = [];
   const exited = Promise.withResolvers<void>();
   const exit = spyOn(process, 'exit').mockImplementation((() => exited.resolve()) as never);
+  const trees =
+    state === 'tree-failure'
+      ? spyOn(subprocess, 'recordNodeProcessTrees').mockReturnValue({
+          end: async () => {
+            throw new Error('surviving tree');
+          },
+          release: () => {},
+        })
+      : undefined;
+  const store = {
+    getWorkflowRun: async () => null,
+    listWorkflowEvents: async () => [],
+    findChildRuns: async () => [],
+    failWorkflowRun: async () => {
+      order.push('fail');
+      if (state === 'failed-write') throw new Error('store unavailable');
+      const failed = state !== 'lost-claim';
+      if (failed) await publishRunSlotRelease(store, 'signal-completion');
+      if (state === 'unregistered-winner') deregister();
+      return { failed };
+    },
+  };
+  const dispose = subscribeRunSlotRelease(store, async () => {
+    order.push('drain');
+  });
+  const closeEngine = holdRunSlotRelease(store, 'signal-completion');
+  if (state === 'settled' || state === 'settled-stop-requested')
+    await publishRunSlotRelease(store, 'signal-completion');
   const before = process.listeners('SIGTERM');
   const deregister = registerOwnedRunTermination({
-    store: {
-      getWorkflowRun: async () => null,
-      listWorkflowEvents: async () => [],
-      findChildRuns: async () => [],
-      failWorkflowRun: async () => {
-        order.push('fail');
-        if (state === 'failed-write') throw new Error('store unavailable');
-        return { failed: state !== 'lost-claim' };
-      },
-    },
+    store,
     runId: 'signal-completion',
     isExecutionSettled: () => state === 'settled' || state === 'settled-stop-requested',
     getExecutionClaim: () => (state === 'no-claim' ? undefined : null),
@@ -436,9 +464,7 @@ test.each([
     detachedProcessOwner: false,
     teardown: async () => {
       order.push('teardown');
-    },
-    afterOwnedExecution: async () => {
-      order.push('drain');
+      if (state === 'teardown-failure') throw new Error('container remains');
     },
   });
   try {
@@ -446,11 +472,15 @@ test.each([
     handler?.('SIGTERM');
     handler?.('SIGTERM');
     await exited.promise;
-    if (state === 'owned') expect(order).toEqual(['fail', 'teardown', 'close', 'drain']);
+    if (state === 'owned' || state === 'unregistered-winner')
+      expect(order).toEqual(['fail', 'teardown', 'close', 'drain']);
     else if (state === 'settled') expect(order).toEqual(['teardown', 'close', 'drain']);
     else expect(order).not.toContain('drain');
   } finally {
+    dispose();
     deregister();
+    await closeEngine();
+    trees?.mockRestore();
     exit.mockRestore();
   }
 });

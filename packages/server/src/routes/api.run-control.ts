@@ -1,4 +1,3 @@
-import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { Context } from 'hono';
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import * as conversationDb from '@archon/core/db/conversations';
@@ -173,7 +172,6 @@ export function registerRunControlRoutes(
   {
     operations,
     dispatchToOrchestrator,
-    workflowHost,
   }: {
     operations: Pick<
       WorkflowOperations,
@@ -184,7 +182,6 @@ export function registerRunControlRoutes(
       | 'abandonWorkflow'
     >;
     dispatchToOrchestrator: OrchestratorDispatch;
-    workflowHost?: WorkflowHost;
   }
 ): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
@@ -256,7 +253,7 @@ export function registerRunControlRoutes(
       if (!run.parent_conversation_id) {
         // No parent conversation to dispatch a chat message through at all —
         // every CLI-launched run (#2008). Execute directly instead of 400ing.
-        return await resumeHeadlessRun(c, runId, run, actor, workflowHost);
+        return await resumeHeadlessRun(c, runId, run, actor);
       }
       const parentConv = await conversationDb.getConversationById(run.parent_conversation_id);
       if (!parentConv?.platform_conversation_id || parentConv.platform_type !== 'web') {
@@ -442,11 +439,10 @@ async function resumeHeadlessRun(
   c: Context,
   runId: string,
   run: Parameters<typeof resumeWorkflowRunFromServer>[1],
-  actor: Awaited<ReturnType<typeof resolveRunActor>>,
-  workflowHost: WorkflowHost = createSqlWorkflowHost()
+  actor: Awaited<ReturnType<typeof resolveRunActor>>
 ): Promise<Response> {
   const headless = await resumeWorkflowRunFromServer(
-    workflowHost,
+    createSqlWorkflowHost(),
     run,
     actor.kind === 'user' ? actor.userId : undefined
   );

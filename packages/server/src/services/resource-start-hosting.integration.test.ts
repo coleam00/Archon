@@ -1,3 +1,4 @@
+import { subscribeRunSlotRelease } from '@archon/workflows/run-slot-release';
 import * as archonPaths from '@archon/paths';
 import { isRunOwnerAnswering } from '@archon/core/services/run-live-owner';
 import { resumeWorkflowRunFromServer } from './workflow-resume-service';
@@ -38,7 +39,17 @@ import type { IWorkflowEngine, WorkflowEngineSubmitInput } from '@archon/workflo
 import { RESOURCE_START_METADATA_KEY } from '@archon/workflows/schemas/resource-start';
 import { HeadlessPlatform } from '@archon/core/workflows/headless-platform';
 import { registerWebhookSourceRoutes } from '../routes/webhooks';
-import { createServerResourceStartHost } from './resource-start-hosting';
+import { createServerResourceStartHost as createHost } from './resource-start-hosting';
+const hosted = new Map<string, ReturnType<typeof createHost>>();
+function createServerResourceStartHost(
+  ...args: Parameters<typeof createHost>
+): ReturnType<typeof createHost> {
+  hosted.get(args[0])?.dispose();
+  const host = createHost(...args);
+  hosted.set(args[0], host);
+  return host;
+}
+const releaseObservers: (() => void)[] = [];
 import { loadWebhookSourcePlugins } from './webhook-source-plugins';
 import {
   startWorkflowContinuationScheduler,
@@ -215,7 +226,7 @@ async function fixture(
 
   const engine = recordingEngine();
   const workflowHost = { ...createSqlWorkflowHost(), engine };
-  const host = createServerResourceStartHost(HOST_ID, effects => ({ ...workflowHost, ...effects }));
+  const host = createServerResourceStartHost(HOST_ID, workflowHost);
   const app = new OpenAPIHono();
   registerWebhookSourceRoutes(
     app,
@@ -272,6 +283,9 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const host of hosted.values()) host.dispose();
+  hosted.clear();
+  for (const dispose of releaseObservers.splice(0)) dispose();
   stopWorkflowContinuationScheduler();
   await closeDatabase();
   if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
@@ -283,7 +297,8 @@ afterEach(async () => {
 
 describe('server resource-start host', () => {
   test('a version-1 queued launch delivers output and metadata to its real conversation', async () => {
-    const { deliver } = await fixture(false);
+    const { deliver, host: intake } = await fixture(false);
+    intake.dispose();
     expect((await deliver('blocker', 'queue')).status).toBe(200);
     const blockerId = await admitWithoutStarting();
     const sqlHost = createSqlWorkflowHost();
@@ -326,8 +341,7 @@ describe('server resource-start host', () => {
     await sqlHost.deps.store.completeWorkflowRun(blockerId, { duration_ms: 1 });
     const engine = recordingEngine();
     let delivered = false;
-    const host = createServerResourceStartHost(HOST_ID, effects => ({
-      ...effects,
+    const host = createServerResourceStartHost(HOST_ID, {
       ...sqlHost,
       engine: {
         ...engine,
@@ -342,7 +356,7 @@ describe('server resource-start host', () => {
           return result;
         },
       },
-    }));
+    });
     await host.requestDrain();
     await until(() => (delivered ? true : undefined));
     expect(engine.claimed).toEqual([id]);
@@ -890,7 +904,9 @@ describe('server resource-start host', () => {
       const events = await listWorkflowEvents(requestId);
       expect(events.filter(event => event.event_type === 'node_started')).toEqual([]);
       expect(events.filter(event => event.event_type === 'workflow_failed')).toHaveLength(1);
-      await admitWithoutStarting();
+      await until(async () =>
+        (await bindingOf('second')).disposition?.status === 'admitted' ? true : undefined
+      );
       expect((await bindingOf('second')).disposition?.status).toBe('admitted');
     }
   );
@@ -1047,8 +1063,7 @@ describe('server resource-start host', () => {
   test('a start that fails before submission logs its run and the recovery command', async () => {
     const { deliver } = await fixture(false);
     expect((await deliver('first', 'queue')).status).toBe(200);
-    const host = createServerResourceStartHost(HOST_ID, effects => ({
-      ...effects,
+    const host = createServerResourceStartHost(HOST_ID, {
       ...createSqlWorkflowHost(),
       engine: {
         async submit() {
@@ -1064,7 +1079,7 @@ describe('server resource-start host', () => {
           throw new Error('not used');
         },
       },
-    }));
+    });
 
     const logged = captureLogLines();
     try {
@@ -1136,13 +1151,11 @@ describe('owner-driven server drains', () => {
         ].join('\n')
       );
       const settled = new Set<string>();
-      const host = createServerResourceStartHost(HOST_ID, effects =>
-        createSqlWorkflowHost(undefined, {
-          afterOwnedExecution: async id => {
-            expect(await isRunOwnerAnswering(id)).toBe(false);
-            await effects.afterOwnedExecution?.(id);
-            settled.add(id);
-          },
+      const host = createServerResourceStartHost(HOST_ID, createSqlWorkflowHost());
+      releaseObservers.push(
+        subscribeRunSlotRelease(host.workflowHost.deps.store, async ids => {
+          for (const id of ids) expect(await isRunOwnerAnswering(id)).toBe(false);
+          for (const id of ids) settled.add(id);
         })
       );
       await deliver('held', 'queue');
@@ -1235,18 +1248,21 @@ describe('owner-driven server drains', () => {
           'name: gated\ndescription: Child gate\nnodes:\n  - id: review\n    approval:\n      message: Review child?\n  - id: done\n    depends_on: [review]\n    bash: echo child\n'
         );
       const settled: string[] = [];
-      const host = createServerResourceStartHost(HOST_ID, effects =>
-        createSqlWorkflowHost(undefined, {
-          afterOwnedExecution: async id => {
-            await effects.afterOwnedExecution?.(id);
-            settled.push(id);
-          },
+      const host = createServerResourceStartHost(HOST_ID, createSqlWorkflowHost());
+      releaseObservers.push(
+        subscribeRunSlotRelease(host.workflowHost.deps.store, async ids => {
+          for (const id of ids) expect(await isRunOwnerAnswering(id)).toBe(false);
+          settled.push(...ids);
         })
       );
       await deliver('pausing', 'queue');
       await host.requestDrain();
       const first = (await bindingOf('pausing')).disposition!.requestId;
-      await until(() => (settled.includes(first) ? true : undefined));
+      await until(async () =>
+        (await getWorkflowRun(first))?.status === 'paused' && !(await isRunOwnerAnswering(first))
+          ? true
+          : undefined
+      );
       await deliver('waiting', 'queue');
       await host.requestDrain();
       expect((await bindingOf('waiting')).disposition?.status).toBe('queued');
@@ -1271,7 +1287,11 @@ describe('owner-driven server drains', () => {
           ? binding.disposition.requestId
           : undefined;
       });
-      await until(() => (settled.includes(second) ? true : undefined));
+      await until(async () =>
+        (await getWorkflowRun(second))?.status === 'paused' && !(await isRunOwnerAnswering(second))
+          ? true
+          : undefined
+      );
       expect(settled.filter(id => id === resumedId)).toHaveLength(resumed === 'child' ? 1 : 2);
       expect((await getWorkflowRun(first))?.status).toBe('completed');
       expect((await getWorkflowRun(second))?.status).toBe('paused');
@@ -1286,14 +1306,13 @@ describe('owner-driven server drains', () => {
     const first = await until(() => engine.claimed[0]);
     await deliver('second', 'queue');
     await host.requestDrain();
-    await host.workflowHost.deps.store.completeWorkflowRun(first, { duration_ms: 1 });
     const fail = spyOn(
       host.workflowHost.deps.store,
       'listPendingStartBindings'
     ).mockRejectedValueOnce(new Error('store unavailable'));
     const logged = captureLogLines();
     try {
-      await host.workflowHost.afterOwnedExecution?.(first);
+      await host.workflowHost.deps.store.completeWorkflowRun(first, { duration_ms: 1 });
       expect((await getWorkflowRun(first))?.status).toBe('completed');
       expect((await bindingOf('second')).disposition?.status).toBe('queued');
       expect(logged.lines).toContainEqual(
@@ -1308,28 +1327,26 @@ describe('owner-driven server drains', () => {
     expect(new Set(engine.claimed).size).toBe(2);
   });
 
-  test('foreign-host and ordinary execution notifications cannot drain this host', async () => {
-    const { deliver, engine, host } = await fixture(false);
+  test('foreign-host and ordinary committed releases cannot drain this host', async () => {
+    const { engine, deliver, host } = await fixture(false);
     await deliver('first', 'queue');
     await host.requestDrain();
     const first = await until(() => engine.claimed[0]);
     await deliver('second', 'queue');
     await host.requestDrain();
-    await host.workflowHost.deps.store.completeWorkflowRun(first, { duration_ms: 1 });
-    const foreign = createServerResourceStartHost('other-host', effects =>
-      createSqlWorkflowHost(undefined, effects)
-    );
+    host.dispose();
+    const foreign = createServerResourceStartHost('other-host', createSqlWorkflowHost());
     const pass = spyOn(foreign.workflowHost.deps.store, 'listPendingStartBindings');
     try {
-      await foreign.workflowHost.afterOwnedExecution?.(first);
-      await foreign.workflowHost.afterOwnedExecution?.('ordinary-run');
+      await host.workflowHost.deps.store.completeWorkflowRun(first, { duration_ms: 1 });
+      const ordinary = await host.workflowHost.deps.store.createWorkflowRun({
+        workflow_name: 'ordinary',
+        user_message: '',
+      });
+      await host.workflowHost.deps.store.cancelWorkflowRun(ordinary.id);
       expect(pass).not.toHaveBeenCalled();
       expect((await bindingOf('second')).disposition?.status).toBe('queued');
-      await Promise.all([
-        host.workflowHost.afterOwnedExecution?.(first),
-        host.requestDrain(),
-        host.requestDrain(),
-      ]);
+      await Promise.all([host.requestDrain(), host.requestDrain()]);
       await until(() => (engine.claimed.length === 2 ? true : undefined));
       expect(new Set(engine.claimed).size).toBe(2);
     } finally {

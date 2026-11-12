@@ -5,6 +5,7 @@ import { createLogger } from '@archon/paths';
 type Source = object | string;
 type Listener = (runIds: readonly string[]) => Promise<void>;
 interface Hold {
+  closed: boolean;
   count: number;
   pending: boolean;
   unsafe: boolean;
@@ -81,7 +82,11 @@ async function deliver(source: Source, runIds: Iterable<string>): Promise<void> 
 export async function publishRunSlotRelease(source: Source, runId: string): Promise<void> {
   if (!listeners.has(source)) return;
   const scope = activeScope(scopes.getStore());
-  if (scope) add(scope.pending, source, runId);
+  const hold = holds.get(source)?.get(runId);
+  if (hold) {
+    hold.pending = true;
+    scope?.holds.add(hold);
+  } else if (scope) add(scope.pending, source, runId);
   else await deliver(source, [runId]);
 }
 
@@ -126,14 +131,14 @@ export async function withRunSlotReleaseScope<T>(body: () => Promise<T>): Promis
 export function holdRunSlotRelease(store: object, runId: string): () => Promise<void> {
   const source = sourceOf(store);
   const runs = holds.get(source) ?? new Map<string, Hold>();
-  const hold = runs.get(runId) ?? { count: 0, pending: false, unsafe: false };
+  const hold = runs.get(runId) ?? { closed: false, count: 0, pending: false, unsafe: false };
   hold.count++;
   runs.set(runId, hold);
   holds.set(source, runs);
   activeScope(scopes.getStore())?.holds.add(hold);
   let closed = false;
   return async () => {
-    if (closed) return;
+    if (closed || hold.closed) return;
     closed = true;
     if (--hold.count) return;
     runs.delete(runId);
@@ -148,4 +153,25 @@ export function holdRunSlotRelease(store: object, runId: string): () => Promise<
     if (scope) add(scope.pending, source, runId);
     else await dispatch(source, [runId]);
   };
+}
+
+/** Forced process exit bypasses executor finalizers. Call only after confirmed tree/resource cleanup. */
+export async function finishForcedRunSlotCleanup(store: object, runId: string): Promise<void> {
+  const source = sourceOf(store);
+  const runs = holds.get(source);
+  const hold = runs?.get(runId);
+  if (!hold) return;
+  hold.closed = true;
+  runs?.delete(runId);
+  if (!runs?.size) holds.delete(source);
+  let pending = hold.pending;
+  let unsafe = hold.unsafe;
+  // A signal can interrupt an engine scope that will never reach its finalizer.
+  // Consume only this run's committed releases after its forced cleanup succeeds.
+  for (let scope = activeScope(scopes.getStore()); scope; scope = activeScope(scope.parent)) {
+    unsafe ||= scope.unsafe;
+    pending = (scope.pending.get(source)?.delete(runId) ?? false) || pending;
+    if (!scope.pending.get(source)?.size) scope.pending.delete(source);
+  }
+  if (pending && !unsafe) await dispatch(source, [runId]);
 }

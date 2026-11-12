@@ -1,4 +1,3 @@
-import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type {
   ChatActor,
   ChatPluginDescriptor,
@@ -80,8 +79,7 @@ export function registerChatInbound(
   descriptor: ChatPluginDescriptor,
   platform: IPlatformAdapter,
   lockManager: ConversationLockManager,
-  platforms: ReadonlyMap<string, IWorkflowPlatform>,
-  workflowHost?: WorkflowHost
+  platforms: ReadonlyMap<string, IWorkflowPlatform>
 ): void {
   const configured = descriptor.allowlist ? process.env[descriptor.allowlist.envVar] : undefined;
   const allowed = new Set(
@@ -109,8 +107,6 @@ export function registerChatInbound(
           parentConversationId: message.parentConversationId,
           isolationHints: { workflowType: 'thread', workflowId: message.conversationId },
           actor,
-          workflowOperations: workflowHost?.operations,
-          afterOwnedExecution: workflowHost?.afterOwnedExecution,
         }).catch(createMessageErrorHandler(descriptor.id, platform, message.conversationId))
       )
       .catch(createMessageErrorHandler(descriptor.id, platform, message.conversationId));
@@ -127,7 +123,7 @@ export function registerChatInbound(
       if (!run) return { resumed: false };
       const target = await workflowResumeTargetForRun(run, platforms);
       const outcome = await resumeWorkflowRunFromServer(
-        workflowHost ?? createSqlWorkflowHost(),
+        createSqlWorkflowHost(),
         run,
         actor.kind === 'user' ? actor.userId : undefined,
         target
@@ -256,7 +252,7 @@ export function registerChatInbound(
       return { status: 'rejected', reason: 'not_allowed' };
     const actor = await actorFor(action.sender);
     try {
-      const operations = workflowHost?.operations ?? createSqlWorkflowOperations();
+      const operations = createSqlWorkflowOperations();
       if (action.action === 'resume') {
         await operations.resumeWorkflow(action.runId, actor);
         return {

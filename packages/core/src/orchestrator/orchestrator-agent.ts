@@ -335,7 +335,7 @@ async function dispatchPendingLaunch(
       context.actor,
       context.isolationHints,
       entry.source,
-      { inputs, afterOwnedExecution: context.afterOwnedExecution }
+      { inputs }
     );
   }
 }
@@ -426,8 +426,7 @@ async function runChatTurn(
         gateResolution.resolved.run,
         gateResolution.resolved.action,
         context.actor,
-        context.isolationHints,
-        { afterOwnedExecution: context.afterOwnedExecution }
+        context.isolationHints
       );
     }
   }
@@ -481,7 +480,6 @@ async function handleDeterministicCommand(
       actor,
       isolationHints,
       {
-        afterOwnedExecution: context.afterOwnedExecution,
         // Declared inputs (#2554) arrive on the request context, not in the
         // command text — the run route is the only caller that sets them.
         inputs: context.workflowInputs,
@@ -547,13 +545,15 @@ async function handleDeterministicCommand(
   }
 
   await deliverCommandResult(
-    await commandHandler.handleCommand(
-      conversation,
-      message,
-      actor,
-      platform,
-      context.workflowOperations
-    )
+    await (context.workflowOperations
+      ? commandHandler.handleCommand(
+          conversation,
+          message,
+          actor,
+          platform,
+          context.workflowOperations
+        )
+      : commandHandler.handleCommand(conversation, message, actor, platform))
   );
   return true;
 }

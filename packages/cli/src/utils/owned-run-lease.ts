@@ -19,13 +19,17 @@ export class OwnedRunLease {
   setupRun: WorkflowRun | undefined;
   executionSubmitted = false;
 
-  constructor(detachedProcessOwner: boolean) {
+  constructor(
+    detachedProcessOwner: boolean,
+    private readonly store: object
+  ) {
     this.detachedProcessOwner = detachedProcessOwner;
   }
 
   async start(runId: string): Promise<void> {
     if (this.liveOwner) return;
     this.liveOwner = await startRunLiveOwner(runId, {
+      store: this.store,
       ...(this.detachedProcessOwner ? { detachedProcessPid: process.pid } : {}),
     });
     if (this.prepareTermination)

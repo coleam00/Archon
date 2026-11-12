@@ -14,7 +14,6 @@ import {
   operator,
   mockGetWorkflowRun,
   mockReleaseRunResources,
-  mockAfterStoppedRun,
   mockCancelWorkflowRun,
   mockFindChildRuns,
   mockGetRunAncestry,
@@ -38,8 +37,6 @@ function expectHostCommandWarnings(cleanupWarnings: string[] | undefined): void 
 
 describe('cancelWorkflow', () => {
   beforeEach(() => {
-    mockAfterStoppedRun.mockReset();
-    mockAfterStoppedRun.mockResolvedValue(undefined);
     mockGetWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockClear();
     mockCancelWorkflowRun.mockImplementation(() => Promise.resolve({ cancelled: true }));
@@ -57,7 +54,6 @@ describe('cancelWorkflow', () => {
       (rejection: unknown) => rejection
     );
     expect(error).toBeInstanceOf(CancelRefusedError);
-    expect(mockAfterStoppedRun).not.toHaveBeenCalled();
     return error as InstanceType<typeof CancelRefusedError>;
   }
 
@@ -72,7 +68,6 @@ describe('cancelWorkflow', () => {
 
       expect(result).toMatchObject({ kind: 'cooperative', cancelled: true });
       expect(mockRequestDetachedRunStop).not.toHaveBeenCalled();
-      expect(mockAfterStoppedRun).not.toHaveBeenCalled();
       expectHostCommandWarnings(result.cleanupWarnings);
     } finally {
       await owner.close();
@@ -277,41 +272,10 @@ describe('cancelWorkflow', () => {
       return Promise.resolve({ cancelled: true });
     });
 
-    mockReleaseRunResources.mockImplementationOnce(async () => {
-      order.push('cleanup');
-    });
-    mockAfterStoppedRun.mockImplementationOnce(async runId => {
-      expect(runId).toBe('run-1');
-      order.push('drain');
-    });
     const result = await cancelWorkflow('run-1', operator);
 
-    expect(order).toEqual(['stop', 'cancel', 'cleanup', 'drain']);
+    expect(order).toEqual(['stop', 'cancel']);
     expect(result).toMatchObject({ kind: 'stopped', pid: 42 });
-  });
-
-  test('a stopped owner whose cancellation loses emits no completion', async () => {
-    mockGetWorkflowRun.mockResolvedValue(makePausedRun({ status: 'running' }));
-    mockRequestDetachedRunStop.mockResolvedValueOnce({
-      pid: 42,
-      stop: async () => ({ warnings: [] }),
-      release: () => undefined,
-    });
-    mockCancelWorkflowRun.mockResolvedValueOnce({ cancelled: false });
-    await expect(cancelWorkflow('run-1', operator)).rejects.toThrow('cancellation did not win');
-    expect(mockAfterStoppedRun).not.toHaveBeenCalled();
-  });
-
-  test('a stopped cancellation remains successful when its drain fails', async () => {
-    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
-    mockRequestDetachedRunStop.mockResolvedValueOnce({
-      pid: 42,
-      stop: async () => ({ warnings: [] }),
-      release: () => undefined,
-    });
-    mockAfterStoppedRun.mockRejectedValueOnce(new Error('dispatch failed'));
-    expect(await cancelWorkflow('run-1', operator)).toMatchObject({ kind: 'stopped', pid: 42 });
-    expect(mockAfterStoppedRun).toHaveBeenCalledTimes(1);
   });
 
   // The stopped owner's nodes can no longer write, so its scratch goes; an output holder

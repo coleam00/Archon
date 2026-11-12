@@ -110,9 +110,7 @@ mock.module('@archon/git', () => ({
 }));
 
 // Mock @archon/core so we can assert handleMessage call args (e.g. userId propagation)
-const mockHandleMessage = mock<typeof import('@archon/core')['handleMessage']>(
-  async () => undefined
-);
+const mockHandleMessage = mock(async () => undefined);
 const mockOnConversationClosed = mock(async () => undefined);
 mock.module('@archon/core', () => ({
   handleMessage: mockHandleMessage,
@@ -680,9 +678,6 @@ describe('GiteaAdapter', () => {
       fetchSpy.mockRestore();
     });
 
-    const dispatchMessage = mock((...args: Parameters<typeof mockHandleMessage>) =>
-      mockHandleMessage(...args)
-    );
     function createWebhookAdapter(): GiteaAdapter {
       const a = new GiteaAdapter(
         'https://gitea.example.com',
@@ -690,7 +685,7 @@ describe('GiteaAdapter', () => {
         'fake-webhook-secret',
         mockLockManager,
         undefined,
-        { retryDelayMs: () => 1, dispatchMessage }
+        { retryDelayMs: () => 1 }
       );
       // @ts-expect-error - accessing private method for testing
       a.verifySignature = mock(() => true);
@@ -839,7 +834,6 @@ describe('GiteaAdapter', () => {
           name: 'testrepo',
         }));
 
-        dispatchMessage.mockClear();
         const adapter = createWebhookAdapter();
 
         const payload = JSON.stringify({
@@ -876,7 +870,6 @@ describe('GiteaAdapter', () => {
           expect.any(String),
           'codebase-test-uuid'
         );
-        expect(dispatchMessage).toHaveBeenCalledTimes(1);
         expect(mockHandleMessage).toHaveBeenCalledWith(
           expect.anything(),
           expect.anything(),

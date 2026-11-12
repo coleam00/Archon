@@ -1,5 +1,3 @@
-import { notifyOwnedExecutionSettled } from '../../workflows/resource-start-completion';
-import { WorkflowExecutionHandoffError } from '@archon/workflows/engine-port';
 import type { WorkflowResumeAdmission } from '@archon/workflows/engine-port';
 import { InProcessWorkflowEngine } from '@archon/workflows/in-process-engine';
 import { inspectResumableRun } from '@archon/workflows/run-resume';
@@ -46,21 +44,13 @@ export async function continueForegroundResume(
   // falls through to a fresh run on another owner's worktree.
   const deps = createWorkflowDeps();
   const engine = new InProcessWorkflowEngine(deps);
-  const resumeOwner = await startRunLiveOwner(resumableRun.id);
+  const resumeOwner = await startRunLiveOwner(resumableRun.id, { store: deps.store });
   let resumeOwnerClosed = false;
-  let ownsSettlement = false;
   try {
     const admission = await admitResume(scope, input, deps, engine);
     if (admission === undefined) return;
     if (admission.accepted) {
-      ownsSettlement = true;
-      try {
-        const result = await admission.settled;
-        ownsSettlement = !('handedOff' in result);
-      } catch (error) {
-        ownsSettlement = !(error instanceof WorkflowExecutionHandoffError);
-        throw error;
-      }
+      await admission.settled;
       return;
     }
     await resumeOwner.close();
@@ -68,7 +58,6 @@ export async function continueForegroundResume(
     await startFreshInResumedWorktree(scope, input, engine);
   } finally {
     if (!resumeOwnerClosed) await resumeOwner.close();
-    if (ownsSettlement) await notifyOwnedExecutionSettled(scope.options ?? {}, resumableRun.id);
   }
 }
 
@@ -260,7 +249,8 @@ async function startFreshInResumedWorktree(
   if (!captured) return; // capture failed, message already sent
   const workflow = captured.workflow;
   const freshAiConfiguration = await input.prepareLaunchAiConfiguration(workflow);
-  await assertRunCredentials(createWorkflowDeps(), freshAiConfiguration, { cwd: scope.runCwd });
+  const deps = createWorkflowDeps();
+  await assertRunCredentials(deps, freshAiConfiguration, { cwd: scope.runCwd });
   await platform.sendMessage(
     conversationId,
     `⚠️ Prior run for **${workflow.name}** had no completed nodes; starting fresh in the same worktree.`
@@ -269,7 +259,7 @@ async function startFreshInResumedWorktree(
   // executor adopts for us there (see #2690). `captured.preparedSource` proves
   // the helper has already run `owner.hold`, which is the only thing the wrap
   // needs to know to reclaim if the rename fails.
-  await withRunLiveOwner(captured.preparedSource.runId, {}, async () => {
+  await withRunLiveOwner(captured.preparedSource.runId, { store: deps.store }, async () => {
     await engine.submit({
       platform,
       conversationId,

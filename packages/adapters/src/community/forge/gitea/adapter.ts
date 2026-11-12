@@ -49,15 +49,13 @@ export class GiteaAdapter implements IPlatformAdapter {
   private lockManager: ConversationLocker;
   private readonly retryDelayFn: (attempt: number) => number;
 
-  private readonly dispatchMessage: typeof handleMessage;
-
   constructor(
     baseUrl: string,
     token: string,
     webhookSecret: string,
     lockManager: ConversationLocker,
     botMention?: string,
-    options?: { retryDelayMs?: (attempt: number) => number; dispatchMessage?: typeof handleMessage }
+    options?: { retryDelayMs?: (attempt: number) => number }
   ) {
     // Normalize base URL (remove trailing slash)
     this.baseUrl = baseUrl.replace(/\/+$/, '');
@@ -65,7 +63,6 @@ export class GiteaAdapter implements IPlatformAdapter {
     this.webhookSecret = webhookSecret;
     this.lockManager = lockManager;
     this.botMention = botMention ?? 'Archon';
-    this.dispatchMessage = options?.dispatchMessage ?? handleMessage;
 
     // Parse Gitea user whitelist (optional - empty = open access)
     this.allowedUsers = parseAllowedUsers(process.env.GITEA_ALLOWED_USERS);
@@ -297,7 +294,7 @@ export class GiteaAdapter implements IPlatformAdapter {
     // Route to orchestrator with isolation hints (with lock for concurrency control)
     await this.lockManager.acquireLock(conversationId, async () => {
       try {
-        await this.dispatchMessage(this, conversationId, message, {
+        await handleMessage(this, conversationId, message, {
           issueContext,
           threadContext,
           isolationHints,

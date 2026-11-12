@@ -1,4 +1,3 @@
-import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { existsSync } from 'fs';
 import { OpenAPIHono, z } from '@hono/zod-openapi';
 import { pool, type ConversationLockManager } from '@archon/core';
@@ -22,7 +21,6 @@ import type { PlatformAdapters } from './platform-adapters';
 import { getLog } from './server-log';
 
 export interface ServerRouteDeps {
-  workflowHost: WorkflowHost;
   webAdapter: WebAdapter;
   lockManager: ConversationLockManager;
   activePlatforms: readonly string[];
@@ -48,7 +46,6 @@ export function registerServerRoutes(app: OpenAPIHono, deps: ServerRouteDeps): v
   // Register Web UI API routes
   registerApiRoutes(app, deps.webAdapter, deps.lockManager, deps.activePlatforms, deps.attention, {
     githubAppAuth: adapters.githubAppAuthProvider ?? undefined,
-    workflowHost: deps.workflowHost,
   });
 
   // GitHub webhook endpoint

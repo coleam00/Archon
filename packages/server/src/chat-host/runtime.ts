@@ -1,4 +1,3 @@
-import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { ConversationLockManager } from '@archon/core';
 import type { AttentionNoticeRoute } from '@archon/core/config';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
@@ -17,8 +16,7 @@ export function createChatHost(
   attention: { routes: readonly AttentionNoticeRoute[]; inlinePlatforms: ReadonlySet<string> } = {
     routes: [],
     inlinePlatforms: new Set(),
-  },
-  workflowHost?: WorkflowHost
+  }
 ): {
   start(): void;
   stop(): Promise<void>;
@@ -33,7 +31,7 @@ export function createChatHost(
     const supervisor = new ChatSupervisor(
       plugin,
       connection => {
-        registerChatInbound(connection, descriptor, platform, locks, platforms, workflowHost);
+        registerChatInbound(connection, descriptor, platform, locks, platforms);
       },
       state => {
         states.set(descriptor.id, state);

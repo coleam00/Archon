@@ -22,7 +22,18 @@
  */
 import { consumeWriteError, flushPendingWrites } from './safe-console';
 
+let runTerminationCleanup: Promise<void> | undefined;
+
+export function trackRunTerminationCleanup(cleanup: Promise<void>): void {
+  runTerminationCleanup = cleanup;
+}
+
+export async function waitForRunTerminationCleanup(): Promise<void> {
+  await runTerminationCleanup;
+}
+
 export const exitWithDrain = async (code: number): Promise<never> => {
+  await waitForRunTerminationCleanup();
   await flushPendingWrites();
   const writeError = consumeWriteError();
   if (writeError !== null) {

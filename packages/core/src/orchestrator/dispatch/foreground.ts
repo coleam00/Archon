@@ -62,7 +62,9 @@ export async function dispatchForeground(
       freshCaptured &&
       preparedAiConfiguration
     ) {
-      setupOwner = await startRunLiveOwner(freshCaptured.preparedSource.runId);
+      setupOwner = await startRunLiveOwner(freshCaptured.preparedSource.runId, {
+        store: setupDeps.store,
+      });
       setupRun = await createSetupRun(
         setupDeps,
         scope,

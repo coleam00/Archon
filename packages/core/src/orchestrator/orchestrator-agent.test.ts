@@ -1,5 +1,4 @@
 // @archon-test-isolated
-import { createSqlWorkflowOperations } from '../workflows/sql-host';
 /** Covers `handleMessage` in orchestrator-agent.ts; shared mocks live in `../test/orchestrator-agent-harness`. */
 import { mock, describe, test, expect, beforeEach, afterEach } from 'bun:test';
 import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
@@ -15,7 +14,6 @@ import {
   makeConversation,
   makePlatform,
   makeRun,
-  makeResumableRun,
   makeSession,
   mockAddMessage,
   mockCaptureApprovalResolved,
@@ -484,23 +482,6 @@ describe('typed chat tools', () => {
   }
 
   const launch = { workflow: 'test-workflow', project: 'test-repo', prompt: task };
-
-  test('a typed launch that continues an existing run preserves the completion effect', async () => {
-    const run = makeResumableRun({
-      id: 'typed-resume',
-      status: 'paused',
-      working_path: '/repos/test-repo/worktrees/paused',
-    });
-    mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
-    agentInvokes([launch], []);
-    const settled = mock(async (_id: string) => {});
-    await handleMessage(makeForegroundPlatform(), 'conv-1', 'continue the workflow', {
-      actor: operator,
-      afterOwnedExecution: settled,
-    });
-    expect(settled).toHaveBeenCalledWith(run.id);
-    expect(settled).toHaveBeenCalledTimes(1);
-  });
 
   test.each(['stream', 'batch'] as const)(
     'escaped quotes in model --prompt prose cannot truncate typed Codex dispatch (%s)',
@@ -1135,17 +1116,7 @@ describe('paused approval gate routing', () => {
     );
 
     const platform = makePlatform();
-    const original = createSqlWorkflowOperations();
-    const approveWorkflow = mock(original.approveWorkflow);
-    const settled = mock(async (_id: string) => {});
-    await handleMessage(platform, 'conv-1', 'looks good, ship it', {
-      actor: operator,
-      workflowOperations: { ...original, approveWorkflow },
-      afterOwnedExecution: settled,
-    });
-    expect(approveWorkflow).toHaveBeenCalledTimes(1);
-    expect(settled).toHaveBeenCalledWith(run.id);
-    expect(settled).toHaveBeenCalledTimes(1);
+    await handleMessage(platform, 'conv-1', 'looks good, ship it', { actor: operator });
 
     expect(mockResolveApprovalGate).toHaveBeenCalledWith(
       'run-1',
@@ -1242,13 +1213,7 @@ describe('paused approval gate routing', () => {
     expect(mockGetPausedWorkflowRun).not.toHaveBeenCalled();
     expect(mockCreateWorkflowEvent).not.toHaveBeenCalled();
     // The platform rides along so command suggestions use its spelling.
-    expect(mockHandleCommand).toHaveBeenCalledWith(
-      conversation,
-      '   /status',
-      operator,
-      platform,
-      undefined
-    );
+    expect(mockHandleCommand).toHaveBeenCalledWith(conversation, '   /status', operator, platform);
     expect(platform.sendMessage).toHaveBeenCalledWith('conv-1', 'status ok');
   });
 

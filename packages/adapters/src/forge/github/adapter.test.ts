@@ -361,9 +361,6 @@ describe('GitHubAdapter', () => {
 
   describe('conversational webhook receipt', () => {
     let originalAllowedUsers: string | undefined;
-    const dispatchMessage = mock<typeof core.handleMessage>((...args) =>
-      core.handleMessage(...args)
-    );
 
     beforeEach(() => {
       originalAllowedUsers = process.env.GITHUB_ALLOWED_USERS;
@@ -372,12 +369,10 @@ describe('GitHubAdapter', () => {
         { kind: 'pat', token: 'fake-token-for-testing' },
         'fake-webhook-secret',
         mockLockManager,
-        'archon',
-        { dispatchMessage }
+        'archon'
       );
       installOctokitStubs(adapter);
       handleMessageSpy.mockClear();
-      dispatchMessage.mockClear();
       mockAcquireLock.mockClear();
       mockGetOrCreateConversation.mockClear();
       mockLogger.debug.mockClear();
@@ -487,7 +482,6 @@ describe('GitHubAdapter', () => {
         'testuser/testrepo#42',
         'codebase-test'
       );
-      expect(dispatchMessage).toHaveBeenCalledTimes(1);
       expect(handleMessageSpy).toHaveBeenCalledTimes(1);
       expect(handleMessageSpy.mock.calls[0][1]).toBe('testuser/testrepo#42');
       expect(handleMessageSpy.mock.calls[0][2]).toContain('[GitHub Issue Context]');

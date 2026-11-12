@@ -114,9 +114,7 @@ mock.module('@archon/core/db/codebases', () => ({
 }));
 
 // Mock @archon/core
-const mockHandleMessage = mock<typeof import('@archon/core')['handleMessage']>(
-  async () => undefined
-);
+const mockHandleMessage = mock(async () => undefined);
 const mockOnConversationClosed = mock(async () => undefined);
 mock.module('@archon/core', () => ({
   handleMessage: mockHandleMessage,
@@ -164,7 +162,6 @@ function createAdapter(options?: {
   secret?: string;
   gitlabUrl?: string;
   botMention?: string;
-  dispatchMessage?: typeof mockHandleMessage;
 }): InstanceType<typeof GitLabAdapter> {
   const lockManager = new ConversationLockManager();
   return new GitLabAdapter(
@@ -172,8 +169,7 @@ function createAdapter(options?: {
     options?.secret ?? 'test-secret',
     lockManager,
     options?.gitlabUrl ?? 'https://gitlab.example.com',
-    options?.botMention ?? 'archon',
-    options?.dispatchMessage
+    options?.botMention ?? 'archon'
   );
 }
 
@@ -753,15 +749,11 @@ describe('GitLabAdapter', () => {
           name: 'myproject',
         }));
 
-        const dispatchMessage = mock((...args: Parameters<typeof mockHandleMessage>) =>
-          mockHandleMessage(...args)
-        );
-        const adapter = createAdapter({ dispatchMessage });
+        const adapter = createAdapter();
         const payload = createNotePayload({ username: 'testuser', note: `@archon ${message}` });
 
         await adapter.handleWebhook(payload, 'test-secret');
 
-        expect(dispatchMessage).toHaveBeenCalledTimes(1);
         if (message.startsWith('/'))
           expect(mockLogger.debug).toHaveBeenCalledWith('gitlab.slash_command_processing');
 

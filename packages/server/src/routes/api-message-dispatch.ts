@@ -1,4 +1,3 @@
-import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { randomUUID } from 'crypto';
 import { mkdir, unlink, writeFile } from 'fs/promises';
 import { basename, join } from 'path';
@@ -171,8 +170,7 @@ export async function persistUploadedFiles(
 
 export function createOrchestratorDispatch(
   webAdapter: WebAdapter,
-  lockManager: ConversationLockManager,
-  workflowHost?: WorkflowHost
+  lockManager: ConversationLockManager
 ) {
   return async function dispatchToOrchestrator(
     conversationId: string,
@@ -188,8 +186,6 @@ export function createOrchestratorDispatch(
         await handleMessage(webAdapter, conversationId, message, {
           isolationHints: { workflowType: 'thread', workflowId: conversationId },
           ...extraContext,
-          workflowOperations: workflowHost?.operations,
-          afterOwnedExecution: workflowHost?.afterOwnedExecution,
         });
       } catch (error) {
         getLog().error({ err: error, conversationId }, 'handle_message_failed');

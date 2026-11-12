@@ -13,7 +13,7 @@ import {
 
 /** Resume a run with the host's records: its codebase and child-worktree isolation. */
 export async function resumeWorkflowContinuation(
-  host: Pick<WorkflowHost, 'deps' | 'records' | 'engine' | 'afterOwnedExecution'>,
+  host: Pick<WorkflowHost, 'deps' | 'records' | 'engine'>,
   runId: string,
   resolveContext: (run: WorkflowRun) => Promise<ContinuationContext>,
   cursor?: WorkflowResumeCursor,

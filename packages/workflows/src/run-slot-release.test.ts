@@ -3,6 +3,7 @@ import {
   bindRunSlotReleaseStore,
   deferRunSlotRelease,
   holdRunSlotRelease,
+  finishForcedRunSlotCleanup,
   publishRunSlotRelease,
   subscribeRunSlotRelease,
   withRunSlotReleaseScope,
@@ -205,6 +206,32 @@ describe('run slot release coordination', () => {
       expect(c.received).toEqual([]);
     } finally {
       await close();
+      c.dispose();
+    }
+  });
+
+  test('forced cleanup consumes a committed release while its interrupted scope is still open', async () => {
+    const c = channel();
+    const entered = Promise.withResolvers<void>();
+    const finish = Promise.withResolvers<void>();
+    const interrupted = withRunSlotReleaseScope(async () => {
+      const close = holdRunSlotRelease(c.store, 'run');
+      await publishRunSlotRelease(c.source, 'run');
+      entered.resolve();
+      await finish.promise;
+      await close();
+    });
+    try {
+      await entered.promise;
+      expect(c.received).toEqual([]);
+      await withRunSlotReleaseScope(() => finishForcedRunSlotCleanup(c.store, 'run'));
+      expect(c.received).toEqual([['run']]);
+      finish.resolve();
+      await interrupted;
+      expect(c.received).toEqual([['run']]);
+    } finally {
+      finish.resolve();
+      await interrupted;
       c.dispose();
     }
   });

@@ -1,3 +1,9 @@
+import {
+  deferRunSlotRelease,
+  finishForcedRunSlotCleanup,
+  holdRunSlotRelease,
+  withRunSlotReleaseScope,
+} from '@archon/workflows/run-slot-release';
 import type { IWorkflowStore } from '@archon/workflows/store';
 import type { RunLiveOwner } from '@archon/core/services/run-live-owner';
 import type { RunStopSignal } from '@archon/workflows/schemas/run-terminal-reason';
@@ -6,7 +12,7 @@ import { COMPLETED_HOST_COMMAND_WARNING } from '@archon/workflows/host-command-c
 import { isContainerRun } from '@archon/workflows/schemas/workflow-run';
 import { recordNodeProcessTrees } from '@archon/workflows/subprocess';
 import { createLogger } from '@archon/paths';
-import { exitWithDrain } from './exit-with-drain';
+import { exitWithDrain, trackRunTerminationCleanup } from './exit-with-drain';
 
 // The signals this handler settles a run on are the ones it records as the stop
 // reason's `signal`, so the set is derived from that contract, never re-listed.
@@ -30,10 +36,9 @@ export interface OwnedRunTerminationInput {
   detachedProcessOwner: boolean;
   /**
    * Resources the forced exit would otherwise strand, because it skips the caller's
-   * `finally`. Report its own failures; a rejection is dropped.
+   * `finally`. A rejection defers immediate admission until operator recovery.
    */
   teardown?: (signal: TerminationSignal) => Promise<void>;
-  afterOwnedExecution?: () => Promise<void>;
 }
 
 /**
@@ -90,75 +95,63 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
     let cleanupAllowed = true;
     let ownedSettlement = false;
     log.info({ runId, signal }, 'workflow.process_terminating');
-    (async (): Promise<void> => {
-      if (liveOwner.isStopRequested()) {
-        // The exact-run controller has proved ownership and is terminating this
-        // process tree. It records `cancelled` only after termination succeeds;
-        // do not race it by translating the operator's stop into generic failure.
-        log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
-        return;
-      }
-      if (input.isExecutionSettled?.()) {
-        ownedSettlement = true;
-        return;
-      }
-      const expectedExecutionClaim = input.getExecutionClaim();
-      if (expectedExecutionClaim === undefined) return;
-      cleanupAllowed = false;
-      const { failed } = await input.store.failWorkflowRun(
-        runId,
-        `Process terminated (${signal})`,
-        {
-          exitReason: 'process_terminated',
-          signal,
-          expectedExecutionClaim,
+    const cleanup = withRunSlotReleaseScope(async () => {
+      const releaseHold = holdRunSlotRelease(input.store, runId);
+      try {
+        if (liveOwner.isStopRequested()) {
+          log.info({ runId, signal }, 'workflow.operator_stop_leaves_lifecycle_to_controller');
+          return;
         }
-      );
-      cleanupAllowed = failed;
-      ownedSettlement = failed;
-    })()
-      .catch((err: unknown) => {
-        const e = err as Error;
-        log.error(
-          { err: e, errorType: e.constructor.name, runId },
-          'workflow.termination_cleanup_failed'
-        );
-      })
-      // After the failed status write: ending a tree first lets the executor fail the
-      // run through its own path and win the status write, losing stop_reason.
-      .then(() => {
-        if (!registered) return;
-        if (cleanupAllowed) return nodeTrees?.end();
-        return console.error(
-          `\nWARNING: run ${runId} could not be confirmed as owned on ${signal}; ` +
-            'cleanup was skipped, so subprocesses and any isolation container may still be running. ' +
-            `Inspect ownership before stopping them: archon workflow get ${runId}. ` +
-            'Inspect containers with: docker ps -a --filter label=diy.archon.managed=true'
-        );
-      })
-      .catch((error: unknown) => {
+        if (input.isExecutionSettled?.()) ownedSettlement = true;
+        else {
+          const expectedExecutionClaim = input.getExecutionClaim();
+          if (expectedExecutionClaim !== undefined) {
+            cleanupAllowed = false;
+            const { failed } = await input.store.failWorkflowRun(
+              runId,
+              `Process terminated (${signal})`,
+              { exitReason: 'process_terminated', signal, expectedExecutionClaim }
+            );
+            cleanupAllowed = failed;
+            ownedSettlement = failed;
+          }
+        }
+        if (!registered && !ownedSettlement) return;
+        if (!cleanupAllowed) {
+          deferRunSlotRelease();
+          console.error(
+            `\nWARNING: run ${runId} could not be confirmed as owned on ${signal}; ` +
+              'cleanup was skipped, so subprocesses and any isolation container may still be running. ' +
+              `Inspect ownership before stopping them: archon workflow get ${runId}. ` +
+              'Inspect containers with: docker ps -a --filter label=diy.archon.managed=true'
+          );
+          return;
+        }
+        // The terminal write must win before ending node trees, or the executor can
+        // record an ordinary node failure and lose the signal's stop reason.
+        await nodeTrees?.end();
+        await input.teardown?.(signal);
+        await liveOwner.close();
+        if (ownedSettlement) await finishForcedRunSlotCleanup(input.store, runId);
+      } catch (err) {
+        deferRunSlotRelease();
+        log.error({ err, runId }, 'workflow.termination_cleanup_failed');
         console.error(
-          `\nWARNING: ${(error as Error).message} on ${signal}. Stop them before resuming this run.`
+          (cleanupAllowed
+            ? `\nWARNING: run ${runId} cleanup failed on ${signal}: ${String(err)}. `
+            : `\nWARNING: run ${runId} could not be confirmed as owned on ${signal}: ${String(err)}. `) +
+            `Stop remaining processes and containers before draining; inspect with archon workflow get ${runId}.`
         );
-      })
-      .then(() => (registered && cleanupAllowed ? input.teardown?.(signal) : undefined))
-      .catch(() => undefined)
-      .then(async () => {
-        // A detached cancel already rang the handoff frame and must keep its lease
-        // open while the controller terminates this process tree. Every other
-        // graceful signal rings ordinary attention before the forced exit.
-        if (!liveOwner.isStopRequested()) {
-          await liveOwner.close();
-          if (ownedSettlement) await input.afterOwnedExecution?.();
-        }
-      })
-      .catch((error: unknown) => {
-        log.error({ err: error as Error, runId }, 'workflow.live_owner_close_failed');
-      })
-      .finally(() => {
-        // Drain queued output before exiting; a bare process.exit truncates it (#2400).
-        void exitWithDrain(1);
-      });
+      } finally {
+        await releaseHold();
+      }
+    });
+    trackRunTerminationCleanup(cleanup);
+    void cleanup.finally(() => {
+      // A forced exit skips the executor finalizer; only confirmed cleanup above
+      // can finish its hold. The killed-owner backstop handles all other cases.
+      void exitWithDrain(1);
+    });
   };
   const sigtermHandler = (): void => {
     cleanup('SIGTERM');

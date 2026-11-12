@@ -72,6 +72,4 @@ export interface WorkflowHost {
   engine: IWorkflowEngine;
   operations: WorkflowOperations;
   doorbell?: RunDoorbell;
-  /** Host scheduling after this segment's cleanup and live-owner close. */
-  afterOwnedExecution?: (runId: string) => Promise<void>;
 }

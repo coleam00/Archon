@@ -42,7 +42,6 @@ export function activatePlatform(
 
 export interface PlatformAdapterContext {
   readonly lockManager: ConversationLockManager;
-  readonly dispatchMessage?: typeof handleMessage;
   readonly botName: string;
   readonly registry: PlatformRegistry;
   /** Chat plugin ids; an installed plugin supersedes the bundled adapter with the same id. */
@@ -160,7 +159,7 @@ async function startGitHubAppAdapter(
     webhookSecret,
     ctx.lockManager,
     botMention('GITHUB_BOT_MENTION', ctx.botName),
-    { getUserToken, dispatchMessage: ctx.dispatchMessage }
+    { getUserToken }
   );
   await github.start();
   activatePlatform(ctx.registry, github, 'GitHub (App)');
@@ -179,8 +178,7 @@ async function startGitHubPatAdapter(ctx: PlatformAdapterContext): Promise<GitHu
     auth,
     webhookSecret,
     ctx.lockManager,
-    botMention('GITHUB_BOT_MENTION', ctx.botName),
-    { dispatchMessage: ctx.dispatchMessage }
+    botMention('GITHUB_BOT_MENTION', ctx.botName)
   );
   await github.start();
   activatePlatform(ctx.registry, github, 'GitHub');
@@ -199,8 +197,7 @@ async function startGiteaAdapter(ctx: PlatformAdapterContext): Promise<GiteaAdap
     env.token,
     env.webhookSecret,
     ctx.lockManager,
-    botMention('GITEA_BOT_MENTION', ctx.botName),
-    { dispatchMessage: ctx.dispatchMessage }
+    botMention('GITEA_BOT_MENTION', ctx.botName)
   );
   await gitea.start();
   activatePlatform(ctx.registry, gitea, 'Gitea');
@@ -218,8 +215,7 @@ async function startGitLabAdapter(ctx: PlatformAdapterContext): Promise<GitLabAd
     env.webhookSecret,
     ctx.lockManager,
     env.url,
-    botMention('GITLAB_BOT_MENTION', ctx.botName),
-    ctx.dispatchMessage
+    botMention('GITLAB_BOT_MENTION', ctx.botName)
   );
   await gitlab.start();
   activatePlatform(ctx.registry, gitlab, 'GitLab');
@@ -235,7 +231,7 @@ async function startDiscordAdapter(ctx: PlatformAdapterContext): Promise<Discord
   const streamingMode = (process.env[discordPolicy.streaming.envVar] ??
     discordPolicy.streaming.defaultMode) as 'stream' | 'batch';
   const discord = new DiscordAdapter(token, streamingMode);
-  onDiscordMessage(discord, ctx.lockManager, ctx.dispatchMessage);
+  onDiscordMessage(discord, ctx.lockManager);
 
   // Don't let a Discord login failure (bad token, missing privileged
   // intents, etc.) bring down the whole server — users running
@@ -266,11 +262,7 @@ function discordStartHint(err: Error): string {
   return 'Verify DISCORD_BOT_TOKEN is valid, or unset it to disable the Discord adapter.';
 }
 
-function onDiscordMessage(
-  discord: DiscordAdapter,
-  lockManager: ConversationLockManager,
-  dispatchMessage = handleMessage
-): void {
+function onDiscordMessage(discord: DiscordAdapter, lockManager: ConversationLockManager): void {
   const requireMention = isDiscordMentionRequired();
   discord.onMessage(async ({ message, platformUserId, displayName }) => {
     // Get initial conversation ID
@@ -316,7 +308,7 @@ function onDiscordMessage(
     // Fire-and-forget: handler returns immediately, processing happens async
     lockManager
       .acquireLock(conversationId, async () => {
-        await dispatchMessage(discord, conversationId, content, {
+        await handleMessage(discord, conversationId, content, {
           threadContext,
           parentConversationId,
           isolationHints: { workflowType: 'thread', workflowId: conversationId },
@@ -352,7 +344,7 @@ export async function startTelegramAdapter(
     // Fire-and-forget: handler returns immediately, processing happens async
     lockManager
       .acquireLock(conversationId, async () => {
-        await (ctx.dispatchMessage ?? handleMessage)(telegram, conversationId, message, {
+        await handleMessage(telegram, conversationId, message, {
           isolationHints: { workflowType: 'thread', workflowId: conversationId },
           actor: userId ? { kind: 'user', userId } : { kind: 'unidentified' },
         });

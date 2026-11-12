@@ -31,7 +31,6 @@ mock.module('@archon/core', () => ({
 
 const host = {
   operations: {},
-  afterOwnedExecution: mock(async () => undefined),
 };
 const createHost = mock(async () => host);
 mock.module('../utils/workflow-host', () => ({ createCliWorkflowHost: createHost }));
@@ -60,7 +59,6 @@ describe('chatCommand', () => {
     const context = mockHandleMessage.mock.calls[0][3];
     expect(context?.actor).toEqual({ kind: 'operator' });
     expect(context?.workflowOperations === host.operations).toBe(true);
-    expect(context?.afterOwnedExecution).toBe(host.afterOwnedExecution);
   });
 
   test('should use batch streaming mode for the CLIAdapter', async () => {

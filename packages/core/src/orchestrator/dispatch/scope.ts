@@ -1,4 +1,3 @@
-import type { WorkflowHost } from '../../workflows/host-store';
 import type { ResolvedRunContinuation } from '../../operations/workflow-continuation';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
 import type { RunModelOverrides } from '@archon/workflows/model-validation';
@@ -22,7 +21,6 @@ import { createCodebaseChildResolver } from '../../workflows/child-isolation-res
 import { createWorkflowDeps } from '../../workflows/store-adapter';
 
 export interface WorkflowDispatchOptions {
-  afterOwnedExecution?: WorkflowHost['afterOwnedExecution'];
   /**
    * Declared inputs supplied by the caller (#2554): the run route's
    * `HandleMessageContext.workflowInputs`, or the chat agent's `invoke_workflow` launch.

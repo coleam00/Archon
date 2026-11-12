@@ -1,4 +1,4 @@
-import { drainAfterResourceStart } from '@archon/core/workflows/resource-start-completion';
+import { subscribeResourceStartReleases } from '@archon/core/workflows/resource-start-completion';
 import { releaseContinuablePauseSlot } from '@archon/workflows/parent-resume';
 import { WorkflowResourceBusyError } from '@archon/workflows/store';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
@@ -385,13 +385,13 @@ test('receipt preparation and real engine execution use supplied ports without S
     join(project, '.archon/workflows/portable.yaml'),
     'name: portable\ndescription: Portable trigger\nworktree:\n  enabled: false\nnodes:\n  - id: result\n    bash: echo executed >> count; echo done\n'
   );
-  const host = hostForTest();
+  const host = await createFileWorkflowHost(join(root, 'state'));
+  host.deps.releaseRunResources = async () => [];
   const notifications: string[] = [];
-  host.afterOwnedExecution = async runId => {
-    const { isRunOwnedByThisProcess } = await import('@archon/core/services/run-live-owner');
-    expect(isRunOwnedByThisProcess(runId)).toBe(false);
-    notifications.push(runId);
-  };
+  const dispose = subscribeResourceStartReleases(host, async hostId => {
+    expect(hostId).toBe('host');
+    notifications.push(hostId);
+  });
   // Register through the production owner so default_cwd is the canonical path the
   // binding's cwd resolves to (macOS /var -> /private/var, Windows RUNNER~1 short names).
   await registerFolder(host.records.codebases, project, 'portable');
@@ -457,16 +457,11 @@ test('receipt preparation and real engine execution use supplied ports without S
     expect(prepared?.launch.version).toBe(2);
     await triggerCommand(host, 'inspect', [id], {});
     await triggerCommand(host, 'list', [], {});
-    let completion: (() => Promise<void>) | undefined;
     const execute = (): ReturnType<typeof startAdmittedResourceStart> =>
       startAdmittedResourceStart({
         host,
         hostId: 'host',
         requestId: id,
-        guardOwnedRun: owned => {
-          completion = owned.afterOwnedExecution;
-          return () => undefined;
-        },
         createPlatform: ({ runId, origin, conversationId }) => {
           expect(runId).toBe(id);
           expect(origin).toEqual({ userId: user.id });
@@ -478,9 +473,8 @@ test('receipt preparation and real engine execution use supplied ports without S
     expect(
       results.filter(result => result.status === 'fulfilled' && result.value.success)
     ).toHaveLength(1);
-    expect(notifications).toEqual([id]);
-    await completion?.();
-    expect(notifications).toEqual([id]);
+    expect(notifications).toEqual(['host']);
+    expect(notifications).toEqual(['host']);
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\n');
     expect(await host.deps.store.getWorkflowRun(id)).toMatchObject({
       status: 'completed',
@@ -530,7 +524,7 @@ test('receipt preparation and real engine execution use supplied ports without S
       createPlatform: () => new HeadlessPlatform(),
     });
     expect(delayed.success).toBe(false);
-    expect(notifications).toEqual([id]);
+    expect(notifications).toEqual(['host']);
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\n');
     expect(
       (await host.deps.store.listWorkflowEvents(delayedId)).filter(
@@ -568,6 +562,7 @@ test('receipt preparation and real engine execution use supplied ports without S
     expect(await readFile(join(project, 'count'), 'utf8')).toBe('executed\nexecuted\nexecuted\n');
     expect(accesses).toBe(0);
   } finally {
+    dispose();
     for (const trap of traps) trap.mockRestore();
     stdout.mockRestore();
     if (previousHome === undefined) delete process.env.ARCHON_HOME;
@@ -1677,7 +1672,7 @@ test.each(['child', 'shared-checkout', 'independent-checkout', 'continuation-pri
     );
     const paused = await store.getWorkflowRun(first.run.id);
     if (!paused) throw new Error('Expected paused holder');
-    await releaseContinuablePauseSlot(host.deps, paused);
+    if (priority) await releaseContinuablePauseSlot(host.deps, paused);
     if (priority) {
       expect((await store.admitResourceStart(intent(second))).status).toBe('admitted');
       await store.claimPendingWorkflowRun(second.run.id, second.execution.cwd);
@@ -1695,20 +1690,26 @@ test.each(['child', 'shared-checkout', 'independent-checkout', 'continuation-pri
     const third = prepared('/portable/third');
     if (priority) {
       expect((await store.admitResourceStart(intent(third))).status).toBe('queued');
-      await store.completeWorkflowRun(second.run.id, { duration_ms: 1 });
     }
     const dispatched: string[] = [];
-    const notify = async (id: string): Promise<void> =>
-      drainAfterResourceStart(host, id, async hostId => {
-        await drainResourceStartHost({
-          ...host,
-          hostId,
-          startAdmitted: async id => {
-            dispatched.push(id);
-          },
-        });
+    const dispose = subscribeResourceStartReleases(host, async hostId => {
+      await drainResourceStartHost({
+        ...host,
+        hostId,
+        startAdmitted: async id => {
+          dispatched.push(id);
+        },
       });
-    await notify(priority ? second.run.id : first.run.id);
+    });
+    // Releasing a second holder tests continuation priority; a successful explicit
+    // pause release tests checkout retention without changing its owner.
+    if (priority) {
+      await store.completeWorkflowRun(second.run.id, { duration_ms: 1 });
+    } else {
+      const paused = await store.getWorkflowRun(first.run.id);
+      if (!paused) throw new Error('Missing paused run');
+      await releaseContinuablePauseSlot(host.deps, paused);
+    }
     if (scenario === 'independent-checkout') expect(dispatched).toEqual([second.run.id]);
     else {
       expect(dispatched).toEqual([]);
@@ -1720,8 +1721,8 @@ test.each(['child', 'shared-checkout', 'independent-checkout', 'continuation-pri
     if (priority) {
       expect(await store.resumeWorkflowRun(first.run.id)).toMatchObject({ status: 'running' });
       await store.completeWorkflowRun(first.run.id, { duration_ms: 1 });
-      await notify(first.run.id);
       expect(dispatched).toEqual([third.run.id]);
     }
+    dispose();
   }
 );

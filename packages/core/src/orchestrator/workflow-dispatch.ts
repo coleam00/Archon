@@ -91,8 +91,7 @@ export async function continueResolvedGateRun(
   run: WorkflowRun,
   action: 'approve' | 'reject' | 'respond',
   actor: RunActor,
-  isolationHints?: HandleMessageContext['isolationHints'],
-  options?: WorkflowDispatchOptions
+  isolationHints?: HandleMessageContext['isolationHints']
 ): Promise<void> {
   const decision =
     action === 'approve' ? 'Approved' : action === 'reject' ? 'Rejected' : 'Responded';
@@ -131,9 +130,7 @@ export async function continueResolvedGateRun(
         codebase,
         { kind: 'resume', run },
         actor,
-        isolationHints,
-        undefined,
-        options
+        isolationHints
       );
       getLog().info(
         { conversationId, workflowRunId: run.id, workflowName: run.workflow_name, action },

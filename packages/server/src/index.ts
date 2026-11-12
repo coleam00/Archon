@@ -67,7 +67,6 @@ import {
   workflowResumeTargetForRun,
 } from './services/workflow-resume-service';
 import {
-  handleMessage,
   pool,
   ConversationLockManager,
   startCleanupScheduler,
@@ -210,25 +209,13 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const githubAppAuthProvider = initializeWorkflowGitHubAppAuth();
   const resourceStarts = await createResourceStarts();
   const adapterContext: PlatformAdapterContext = {
-    dispatchMessage: (platform, id, message, context) =>
-      handleMessage(platform, id, message, {
-        ...context,
-        workflowOperations: resourceStarts.workflowHost.operations,
-        afterOwnedExecution: resourceStarts.workflowHost.afterOwnedExecution,
-      }),
     lockManager,
     botName: config.botName,
     registry,
     installedChatIds: new Set(chatPlugins.map(plugin => plugin.descriptor.id)),
   };
   if (!opts.skipPlatformAdapters) warnRetiredAdapters(adapterContext.installedChatIds);
-  const chat = await startChatHosting(
-    chatPlugins,
-    config,
-    lockManager,
-    registry,
-    resourceStarts.workflowHost
-  );
+  const chat = await startChatHosting(chatPlugins, config, lockManager, registry);
 
   // Platform adapters (skipped in CLI serve mode or when not configured)
   let adapters = NO_PLATFORM_ADAPTERS;
@@ -244,7 +231,6 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
   const port = opts.port ?? (await getPort());
   registerServerRoutes(app, {
     webAdapter: web.adapter,
-    workflowHost: resourceStarts.workflowHost,
     lockManager,
     activePlatforms: registry.activePlatforms,
     attention: { webPush: chat.webPush, router: chat.router },
@@ -494,8 +480,7 @@ async function startChatHosting(
   chatPlugins: readonly InstalledChatPlugin[],
   config: MergedConfig,
   lockManager: ConversationLockManager,
-  registry: PlatformRegistry,
-  workflowHost: WorkflowHost
+  registry: PlatformRegistry
 ): Promise<ChatHosting> {
   const inlinePlatforms = new Set(
     chatPlugins
@@ -508,8 +493,7 @@ async function startChatHosting(
     lockManager,
     registry.workflowPlatforms,
     registry.activePlatforms,
-    { routes: config.attentionNotices, inlinePlatforms },
-    workflowHost
+    { routes: config.attentionNotices, inlinePlatforms }
   );
   // Each route's activation baseline commits before the router's first scan.
   await Promise.all(host.attentionDestinations.map(destination => destination.activate()));
@@ -533,9 +517,7 @@ async function createResourceStarts(): Promise<{
   requestDrain: (() => void) | undefined;
 }> {
   const hostId = process.env.ARCHON_TRIGGER_HOST?.trim();
-  const host = hostId
-    ? createServerResourceStartHost(hostId, effects => createSqlWorkflowHost(undefined, effects))
-    : undefined;
+  const host = hostId ? createServerResourceStartHost(hostId, createSqlWorkflowHost()) : undefined;
   const workflowHost = host?.workflowHost ?? createSqlWorkflowHost();
   const webhookSourcesConfigPath = process.env.ARCHON_WEBHOOK_SOURCES;
   const webhookSources = webhookSourcesConfigPath

@@ -1,3 +1,4 @@
+import { deferRunSlotRelease } from '@archon/workflows/run-slot-release';
 import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
 import {
@@ -161,6 +162,7 @@ async function releaseAbandonedWorktrees(
     run,
     owner
   );
+  if (ownerChecks.some(check => !check.safe)) deferRunSlotRelease();
   const retainRoot =
     result.cascadeFailures > 0 || ownerChecks.some(check => check.run.id !== run.id && !check.safe);
   const rootProof = readOwnedWorktree(run.metadata);
@@ -362,6 +364,7 @@ export async function abandonResumableRunsForConversation(
   const cleanupWarnings: string[] = [];
   const releasedWorktrees: ReleasedWorktree[] = [];
   const ownerChecks = await checkBatchWorktreeOwners(ctx, runs);
+  if (ownerChecks.some(check => !check.safe)) deferRunSlotRelease();
   for (const { run, ...ownerCheck } of ownerChecks) {
     cleanupWarnings.push(...(await persistCleanupWarnings(ctx, run, ownerCheck.warnings)));
     cleanupWarnings.push(...(await reclaimCancelledRunContainer(ctx, run)));

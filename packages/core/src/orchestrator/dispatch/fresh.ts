@@ -107,5 +107,6 @@ export async function submitFreshForeground(
     });
   };
   if (setupOwner) await submitFresh();
-  else await withRunLiveOwner(captured.preparedSource.runId, {}, submitFresh);
+  else
+    await withRunLiveOwner(captured.preparedSource.runId, { store: freshDeps.store }, submitFresh);
 }

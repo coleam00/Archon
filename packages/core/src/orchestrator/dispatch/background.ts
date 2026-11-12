@@ -187,7 +187,7 @@ async function dispatchBackgroundWorkflowOwned(
   const { workerPlatformId, workerConv } = await createWorkerConversation(ctx);
 
   // Hold the live-owner lock before publishing the pending run.
-  const runLiveOwner = await startRunLiveOwner(preparedSource.runId);
+  const runLiveOwner = await startRunLiveOwner(preparedSource.runId, { store: workflowDeps.store });
   let runLiveOwnerClose: Promise<void> | undefined;
   const closeRunLiveOwner = (): Promise<void> => {
     runLiveOwnerClose ??= runLiveOwner.close();

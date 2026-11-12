@@ -11,6 +11,5 @@ export async function chatCommand(message: string): Promise<void> {
   await handleMessage(adapter, conversationId, message, {
     actor: { kind: 'operator' },
     workflowOperations: host.operations,
-    afterOwnedExecution: host.afterOwnedExecution,
   });
 }

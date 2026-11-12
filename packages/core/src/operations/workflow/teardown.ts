@@ -1,3 +1,4 @@
+import { deferRunSlotRelease } from '@archon/workflows/run-slot-release';
 import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import { hostname } from 'node:os';
 import { releaseRunScratch } from '@archon/workflows/run-scratch';
@@ -295,6 +296,7 @@ export async function reclaimCancelledRunContainer(
       ctx.hostStore.isolation
     );
   } catch (err) {
+    deferRunSlotRelease();
     getLog().warn({ err, runId: run.id }, 'operations.workflow_abandon_container_reclaim_failed');
     return [
       `Could not reclaim container environment ${run.metadata[ISOLATION_ENV_ID_METADATA_KEY]} for run ${run.id}; resources may remain allocated. Inspect the managed containers before retrying cleanup.`,
@@ -334,6 +336,7 @@ export async function cancelRunAndCleanup(
         imageWarnings.push(...(await releaseRunResources(ctx, child.id)));
       }
   }
+  if (cascadeFailures || stopWarnings.length) deferRunSlotRelease();
   const blockedParentRunId = cancelled ? await findParentBlockedOn(ctx, run) : null;
 
   // Reclaim only when our cancel won the CAS. A miss means another lifecycle

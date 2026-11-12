@@ -1,4 +1,4 @@
-import type { WorkflowHost } from '../../workflows/host-store';
+import { deferRunSlotRelease } from '@archon/workflows/run-slot-release';
 import type { WorkflowDeps } from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
@@ -53,7 +53,6 @@ export interface WorkflowOperationsDeps {
   reclaimContainerEnv: (envId: string, store: IIsolationStore) => Promise<void>;
   reclaimRunWorktree: typeof ReclaimRunWorktree;
   releaseRunResources?: WorkflowDeps['releaseRunResources'];
-  afterStoppedRun?: WorkflowHost['afterOwnedExecution'];
 }
 
 /** The supplied effects plus the lookup and authorization every operation starts with. */
@@ -108,8 +107,11 @@ export function createOperationContext(deps: WorkflowOperationsDeps): OperationC
 
 export async function releaseRunResources(ctx: OperationContext, runId: string): Promise<string[]> {
   try {
-    return (await ctx.releaseRunResources?.(runId)) ?? [];
+    const warnings = (await ctx.releaseRunResources?.(runId)) ?? [];
+    if (warnings.length) deferRunSlotRelease();
+    return warnings;
   } catch (err) {
+    deferRunSlotRelease();
     getLog().warn({ err, runId }, 'operations.resource_release_failed');
     return [`Run ${runId} retained verification images: ${String(err)}`];
   }

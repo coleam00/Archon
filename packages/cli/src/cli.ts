@@ -49,7 +49,7 @@ if (inheritedInstallContext) {
 // `utils/safe-console.ts` for the underlying shim, and #2400 for the full
 // rationale.
 import { installPipeSafeConsole } from './utils/safe-console';
-import { withDrainedExit } from './utils/exit-with-drain';
+import { withDrainedExit, waitForRunTerminationCleanup } from './utils/exit-with-drain';
 import { writeJsonLine } from './utils/stdout';
 import { escapeRunJobIfRequested } from './utils/run-job-escape';
 import { rejectConfigOutsideRun, RESUME_RUN_CONFIG_CONFLICT } from './dispatch-guards';
@@ -283,6 +283,8 @@ async function runParsedCommand({ values, positionals }: ParsedCliArgs): Promise
   } catch (error) {
     return await reportCommandError(error as Error, json);
   } finally {
+    // A status change can finish the command while signal teardown is still using the DB.
+    await waitForRunTerminationCleanup();
     if (showUpdateNotice) printUpdateNotice();
     // Flush queued telemetry events before the CLI process exits.
     // Short-lived CLI commands lose buffered events if shutdown() is skipped.

@@ -50,7 +50,6 @@ export interface AttachedFile {
 
 export interface HandleMessageContext {
   readonly workflowOperations?: WorkflowHost['operations'];
-  readonly afterOwnedExecution?: WorkflowHost['afterOwnedExecution'];
   readonly issueContext?: string;
   readonly threadContext?: string;
   readonly parentConversationId?: string;

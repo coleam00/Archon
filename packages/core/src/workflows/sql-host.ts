@@ -39,7 +39,7 @@ export function createWorkflowHostStore(): IWorkflowHostStore {
 export function createSqlWorkflowOperations(
   store: IWorkflowStore = createWorkflowStore(),
   hostStore: IWorkflowHostStore = createWorkflowHostStore(),
-  effects: Pick<WorkflowDeps, 'releaseRunResources'> & Pick<WorkflowHost, 'afterOwnedExecution'> = {
+  effects: Pick<WorkflowDeps, 'releaseRunResources'> = {
     releaseRunResources: createRunResourceRelease(store),
   }
 ): WorkflowOperations {
@@ -48,7 +48,6 @@ export function createSqlWorkflowOperations(
     store: { ...store, deleteWorkflowRun },
     hostStore,
     releaseRunResources: effects.releaseRunResources,
-    afterStoppedRun: effects.afterOwnedExecution,
     requestDetachedRunStop,
     isRunOwnedByThisProcess,
     isRunOwnerAnswering,
@@ -63,14 +62,10 @@ export function createSqlWorkflowOperations(
   });
 }
 
-export function createSqlWorkflowHost(
-  deps = createWorkflowDeps(),
-  effects: Pick<WorkflowHost, 'afterOwnedExecution'> = {}
-): WorkflowHost {
+export function createSqlWorkflowHost(deps = createWorkflowDeps()): WorkflowHost {
   const records = createWorkflowHostStore();
   return {
     deps,
-    ...effects,
     records,
     doorbell: subscribeToSqlRunDoorbell,
     engine: new InProcessWorkflowEngine(deps, {
@@ -78,7 +73,7 @@ export function createSqlWorkflowHost(
       ownerLoss: runOwnerLossWatch(deps.store),
       doorbell: subscribeToSqlEventDoorbell,
     }),
-    operations: createSqlWorkflowOperations(deps.store, records, { ...deps, ...effects }),
+    operations: createSqlWorkflowOperations(deps.store, records, deps),
   };
 }
 
