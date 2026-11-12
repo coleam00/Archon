@@ -12,6 +12,7 @@ import {
   resourceStartBlocker,
   DIRECT_START_HOST_ID,
   recordedResourceCapacity,
+  preparedBindingStart,
   SourceReceiptDigestConflictError,
   type IResourceStartStore,
   type ResourceBlocker,
@@ -40,10 +41,13 @@ export function createInMemoryResourceStartStore(
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
   /** Give back the slot of an admitted run; whether it held one. */
   release(id: string): Promise<boolean>;
+  /** Stand in for the install config's `concurrency.resources.<resource>`. */
+  setResourceCapacity(resource: string, capacity: number): Promise<void>;
 } {
   const requests = new Map<string, ResourceStartRequestInspection>();
   const receipts = new Map<string, StartReceiptInspection>();
   const capacities = new Map<string, number>();
+  const installed = new Map<string, number>();
   // Holders are implicit: an admitted request whose run is live, unless it gave its slot back.
   const released = new Set<string>();
   const receiptForDelivery = (
@@ -82,7 +86,8 @@ export function createInMemoryResourceStartStore(
     }
     const reusable = await listReusableCheckouts();
     return {
-      capacity: recordedResourceCapacity(capacities.get(resource), undefined),
+      capacity:
+        installed.get(resource) ?? recordedResourceCapacity(capacities.get(resource), undefined),
       reusableCheckouts: reusable,
       holders,
       waiters: capacityWaiters(candidates),
@@ -186,6 +191,9 @@ export function createInMemoryResourceStartStore(
       released.add(id);
       return true;
     },
+    setResourceCapacity: async (resource, capacity) => {
+      installed.set(resource, capacity);
+    },
     admitResourceStart: admit,
     admitPendingRun: async ({ resource, capacity, launch }) => {
       const id = launch.run.id;
@@ -196,7 +204,10 @@ export function createInMemoryResourceStartStore(
       const run = await getRun(id);
       if (run?.status !== 'pending')
         throw new Error(`Run '${id}' is ${run?.status ?? 'missing'}, not pending`);
-      const blocker = resourceStartBlocker({ ...(await occupancy(resource)), capacity }, launch);
+      const blocker = resourceStartBlocker(
+        { ...(await occupancy(resource)), capacity: installed.get(resource) ?? capacity },
+        launch
+      );
       if (blocker) return blocker;
       requests.set(id, {
         id,
@@ -340,12 +351,7 @@ export function createInMemoryResourceStartStore(
     ): ReturnType<IResourceStartStore['completeStartBindingPreparation']> => {
       const item = owned(input);
       if (!item?.intent) return null;
-      const result = await admit({
-        ...item.intent,
-        launch: input.launch,
-        resource: input.resource ?? item.intent.resource,
-        receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
-      });
+      const result = await admit(preparedBindingStart(item.intent, input));
       item.status = 'complete';
       item.error = null;
       item.disposition = result;

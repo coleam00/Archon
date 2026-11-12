@@ -5,11 +5,13 @@ import {
   DIRECT_START_HOST_ID,
   SourceReceiptDigestConflictError,
   drainableStarts,
+  preparedBindingStart,
   skippedFireNotice,
   resourceStartBlocker,
   validateStartReceiptLimit,
 } from '@archon/workflows/resource-start-store';
 import type {
+  PreparedBindingInput,
   StartBindingInspection,
   StartReceiptInspection,
   ResourceBlocker,
@@ -609,13 +611,9 @@ export async function claimStartBindingPreparation(input: {
   return result.rowCount === 1;
 }
 
-export async function completeStartBindingPreparation(input: {
-  receiptId: string;
-  bindingId: string;
-  ownerId: string;
-  launch: PreparedWorkflowLaunch;
-  resource?: string;
-}): Promise<ResourceStartDisposition | null> {
+export async function completeStartBindingPreparation(
+  input: PreparedBindingInput & { ownerId: string }
+): Promise<ResourceStartDisposition | null> {
   return getDatabase().withTransaction(async query => {
     // See withdrawQueuedResourceStart: acquire SQLite's writer lock before the read.
     if (getDatabase().dialect === 'sqlite') {
@@ -632,14 +630,10 @@ export async function completeStartBindingPreparation(input: {
     const rawIntent = binding.rows[0]?.intent;
     if (!rawIntent) return null;
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(rawIntent));
-    const disposition = await admitResourceStartWithQuery(query, {
-      resource: input.resource ?? persisted.resource,
-      capacity: persisted.capacity,
-      hostId: persisted.hostId,
-      overlap: persisted.overlap,
-      launch: input.launch,
-      receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
-    });
+    const disposition = await admitResourceStartWithQuery(
+      query,
+      preparedBindingStart(persisted, input)
+    );
     await query(
       `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete', preparation_error = NULL, updated_at = ${getDialect().now()}
         WHERE receipt_id = $1 AND binding_id = $2 AND preparation_owner = $3`,

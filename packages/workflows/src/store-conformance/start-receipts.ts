@@ -30,7 +30,6 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       hostId: 'host',
       runAsUserId: 'operator',
       resource: 'resource',
-      capacity: 1,
       overlap: 'queue',
       launch: {
         cwd: '/conformance',
@@ -78,7 +77,7 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
         await store.completeStartBindingPreparation({
           ...identity,
           launch: prepared,
-          resource: 'build',
+          resource: { name: 'build' },
         })
       ).toMatchObject({ status: 'admitted' });
       expect(await store.getResourceStartRequest(prepared.run.id)).toMatchObject({
@@ -92,6 +91,60 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
         kind: 'run',
         id: prepared.run.id,
       });
+    });
+    /** Prepare `count` starts of one binding onto its workflow's declared resource. */
+    async function startBinding(
+      count: number,
+      workflow: { name: string; capacity?: number },
+      bindingCapacity?: number
+    ): Promise<string[]> {
+      const statuses: string[] = [];
+      for (let index = 0; index < count; index++) {
+        const input = acceptance();
+        input.receipt.deliveryId = crypto.randomUUID();
+        if (bindingCapacity !== undefined)
+          input.bindings[0] = { ...binding, capacity: bindingCapacity };
+        await store.acceptStartReceipt(input);
+        const identity = {
+          receiptId: input.receipt.id,
+          bindingId: binding.bindingId,
+          ownerId: 'o',
+        };
+        expect(await store.claimStartBindingPreparation(identity)).toBe(true);
+        const result = await store.completeStartBindingPreparation({
+          ...identity,
+          launch: launch(),
+          resource: workflow,
+        });
+        statuses.push(result?.status ?? 'lost');
+      }
+      return statuses;
+    }
+    const admitted = (count: number): string[] => Array<string>(count).fill('admitted');
+    test("a binding without a capacity takes its workflow's declared capacity", async () => {
+      expect(await startBinding(4, { name: 'build', capacity: 3 })).toEqual([
+        ...admitted(3),
+        'queued',
+      ]);
+      expect(await startBinding(2, { name: 'undeclared' })).toEqual([...admitted(1), 'queued']);
+    });
+    test("a binding's own capacity wins over its workflow's", async () => {
+      expect(await startBinding(3, { name: 'build', capacity: 3 }, 2)).toEqual([
+        ...admitted(2),
+        'queued',
+      ]);
+    });
+    test("the install config's capacity wins over the binding's and the workflow's", async () => {
+      await harness.setResourceCapacity('lower', 1);
+      await harness.setResourceCapacity('higher', 4);
+      expect(await startBinding(2, { name: 'lower', capacity: 3 })).toEqual([
+        ...admitted(1),
+        'queued',
+      ]);
+      expect(await startBinding(5, { name: 'higher', capacity: 3 }, 2)).toEqual([
+        ...admitted(4),
+        'queued',
+      ]);
     });
     test('skipped explicit fires notify their source run, including after it ends', async () => {
       const longSuffix = 'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength);

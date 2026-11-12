@@ -3,6 +3,7 @@ import { jsonValueSchema } from '../output-ref';
 import { workflowRunOriginSchema } from './workflow-run';
 import {
   DEFAULT_RESOURCE_CAPACITY,
+  declaredCapacitySchema,
   notProviderResource,
   resourceNameSchema,
 } from './resource-name';
@@ -140,15 +141,11 @@ export function requestingRun(
 }
 
 /**
- * How many admitted holders a resource slot allows at once, as a pack or binding declares
- * it. It defaults to 1, so a resource means "must not overlap" unless configured
- * otherwise. The install config's `concurrency.resources.<resource>` wins at admission.
+ * How many admitted holders a resource slot allows at once, as a start declares it. It
+ * defaults to 1, so a resource means "must not overlap" unless configured otherwise. The
+ * install config's `concurrency.resources.<resource>` wins at admission.
  */
-export const resourceSlotCapacitySchema = z
-  .number()
-  .int()
-  .min(1)
-  .default(DEFAULT_RESOURCE_CAPACITY);
+export const resourceSlotCapacitySchema = declaredCapacitySchema.default(DEFAULT_RESOURCE_CAPACITY);
 
 export const resourceStartOverlapSchema = z.enum(['skip', 'queue']);
 export const startBindingPreparationStatusSchema = z.enum([
@@ -234,7 +231,8 @@ export const resourceStartBindingIntentSchema = z
     hostId: z.string().min(1),
     runAsUserId: z.string().min(1),
     resource: z.string().min(1).refine(notProviderResource.check, notProviderResource.message),
-    capacity: resourceSlotCapacitySchema,
+    /** Omitted, the start takes its workflow's declared capacity, else 1. */
+    capacity: declaredCapacitySchema.optional(),
     overlap: resourceStartOverlapSchema,
     launch: z
       .object({

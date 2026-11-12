@@ -15,6 +15,9 @@ export const notProviderResource = {
 /** The capacity of a resource that no start, binding or install config gave a number. */
 export const DEFAULT_RESOURCE_CAPACITY = 1;
 
+/** A capacity a start declares: a workflow's `resource.capacity` or a binding's `capacity`. */
+export const declaredCapacitySchema = z.number().int().min(1);
+
 /** A resource name a binding or a workflow's `resource:` names. */
 export const resourceNameSchema = z
   .string()
@@ -24,10 +27,10 @@ export const resourceNameSchema = z
 
 /**
  * A workflow's `resource:`, as the loader normalizes it: `resource: build` is
- * `{ name: 'build' }`. `capacity` is the number this workflow's hand starts declare;
- * omitted, they declare the default.
+ * `{ name: 'build' }`. `capacity` is the number this workflow's hand starts declare, and
+ * its binding starts when the binding sets none; omitted, they declare the default.
  */
 export const workflowResourceSchema = z
-  .object({ name: resourceNameSchema, capacity: z.number().int().min(1).optional() })
+  .object({ name: resourceNameSchema, capacity: declaredCapacitySchema.optional() })
   .strict();
 export type WorkflowResource = z.infer<typeof workflowResourceSchema>;

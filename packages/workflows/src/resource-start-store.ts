@@ -9,6 +9,7 @@ import {
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
+  ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
   SourceReceiptInput,
@@ -24,6 +25,7 @@ import {
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
+import type { WorkflowResource } from './schemas/resource-name';
 import type { ResumeRefusal, WorkflowResumeCursor } from './store';
 
 export function skippedFireNotice(
@@ -69,6 +71,33 @@ export function skippedFireNotice(
 }
 
 export class SourceReceiptDigestConflictError extends Error {}
+
+export interface PreparedBindingInput {
+  receiptId: string;
+  bindingId: string;
+  launch: PreparedWorkflowLaunch;
+  resource?: WorkflowResource;
+}
+
+/**
+ * The start a prepared binding asks admission for. The run holds its workflow's declared
+ * resource in place of the binding's, so a binding start and a hand start of that workflow
+ * count against one slot. Its capacity is the binding's, else the workflow's, else 1; the
+ * install config's number still wins at admission.
+ */
+export function preparedBindingStart(
+  binding: ResourceStartBindingIntent,
+  { receiptId, bindingId, launch, resource }: PreparedBindingInput
+): ResourceStartIntent {
+  return {
+    resource: resource?.name ?? binding.resource,
+    capacity: binding.capacity ?? resource?.capacity ?? DEFAULT_RESOURCE_CAPACITY,
+    hostId: binding.hostId,
+    overlap: binding.overlap,
+    launch,
+    receipt: { receiptId, bindingId },
+  };
+}
 
 /**
  * What a slot records as its capacity after a start: the capacity the start declares, or
@@ -476,17 +505,12 @@ export interface IResourceStartStore {
     ownerId: string;
   }): Promise<boolean>;
   /**
-   * Admit a prepared binding start. `resource` is the bound workflow's declared resource:
-   * the run holds it in place of the binding's, so a binding start and a hand start of
-   * that workflow count against one slot.
+   * Admit a prepared binding start. `resource` is the bound workflow's declaration; see
+   * `preparedBindingStart` for what it changes.
    */
-  completeStartBindingPreparation(input: {
-    receiptId: string;
-    bindingId: string;
-    ownerId: string;
-    launch: PreparedWorkflowLaunch;
-    resource?: string;
-  }): Promise<ResourceStartDisposition | null>;
+  completeStartBindingPreparation(
+    input: PreparedBindingInput & { ownerId: string }
+  ): Promise<ResourceStartDisposition | null>;
   failStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;

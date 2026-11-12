@@ -308,7 +308,7 @@ async function prepareBinding(
     const disposition = await host.deps.store.completeStartBindingPreparation({
       ...identity,
       launch,
-      ...(workflow.resource === undefined ? {} : { resource: workflow.resource.name }),
+      ...(workflow.resource === undefined ? {} : { resource: workflow.resource }),
     });
     if (!disposition) throw new Error('Preparation ownership changed before durable acceptance.');
     if (disposition.status !== 'skipped') owner.adopt();
