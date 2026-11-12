@@ -6,7 +6,9 @@ import { join } from 'node:path';
 import { afterAll, describe, mock, test, expect } from 'bun:test';
 import { toolCallAttentionContract } from './tool-call-attention.contract';
 
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...paths,
   BUNDLED_IS_BINARY: false,
   createLogger: () => ({ info() {}, warn() {}, error() {}, debug() {}, trace() {}, fatal() {} }),
   captureApprovalResolved: () => undefined,

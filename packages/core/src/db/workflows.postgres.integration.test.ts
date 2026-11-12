@@ -19,7 +19,9 @@ import { toolCallAttentionContract } from './tool-call-attention.contract';
 import { describe, test, expect, beforeAll, afterAll, mock } from 'bun:test';
 import type { Pool as PgPool } from 'pg';
 
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...paths,
   BUNDLED_IS_BINARY: false,
   createLogger: () => ({
     info() {},

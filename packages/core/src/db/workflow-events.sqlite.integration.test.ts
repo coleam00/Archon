@@ -9,7 +9,9 @@ import { describe, test, expect, mock } from 'bun:test';
 import type { WorkflowEventRow } from './workflow-events';
 import { getTerminalRecord } from '@archon/workflows/terminal-record';
 
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: () => ({
     info() {},
     warn() {},

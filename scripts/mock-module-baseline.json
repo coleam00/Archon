@@ -191,8 +191,7 @@
     "packages/core/src/db/subscription-oauth-store.test.ts": ["./connection"],
     "packages/core/src/db/tool-call-attention.integration.test.ts": [
       "../services/run-live-owner",
-      "./connection",
-      "@archon/paths"
+      "./connection"
     ],
     "packages/core/src/db/user-ai-prefs-store.test.ts": ["./connection", "@archon/paths"],
     "packages/core/src/db/user-github-token-store.test.ts": [
@@ -217,10 +216,7 @@
       "@archon/paths"
     ],
     "packages/core/src/db/workflow-events.resume.integration.test.ts": ["./connection"],
-    "packages/core/src/db/workflow-events.sqlite.integration.test.ts": [
-      "./connection",
-      "@archon/paths"
-    ],
+    "packages/core/src/db/workflow-events.sqlite.integration.test.ts": ["./connection"],
     "packages/core/src/db/workflow-events.test.ts": ["./connection", "@archon/paths"],
     "packages/core/src/db/workflow-node-sessions.test.ts": ["./connection", "@archon/paths"],
     "packages/core/src/db/workflow-run-active.integration.test.ts": ["./connection"],
@@ -233,10 +229,7 @@
     "packages/core/src/db/workflow-run-waits.test.ts": ["./connection"],
     "packages/core/src/db/workflow-run-writes.test.ts": ["./connection"],
     "packages/core/src/db/workflow-store.conformance-harness.ts": ["./connection"],
-    "packages/core/src/db/workflow-terminal-telemetry.integration.test.ts": [
-      "./connection",
-      "@archon/paths"
-    ],
+    "packages/core/src/db/workflow-terminal-telemetry.integration.test.ts": ["./connection"],
     "packages/core/src/db/workflows.adoption-timestamp.integration.test.ts": ["./connection"],
     "packages/core/src/db/workflows.attention.integration.test.ts": ["./connection"],
     "packages/core/src/db/workflows.cancel-failure.integration.test.ts": ["./connection"],
@@ -245,8 +238,7 @@
     "packages/core/src/db/workflows.origin.postgres.integration.test.ts": ["./connection"],
     "packages/core/src/db/workflows.postgres.integration.test.ts": [
       "../services/run-live-owner",
-      "./connection",
-      "@archon/paths"
+      "./connection"
     ],
     "packages/core/src/db/workflows.resume-cas.integration.test.ts": ["./connection"],
     "packages/core/src/db/workflows.sqlite-busy.integration.test.ts": ["./connection"],

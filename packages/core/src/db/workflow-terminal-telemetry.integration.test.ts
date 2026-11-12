@@ -11,7 +11,9 @@ import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowTerminalProperties } from '@archon/paths';
 
 const captured: WorkflowTerminalProperties[] = [];
+const paths = await import('@archon/paths');
 mock.module('@archon/paths', () => ({
+  ...paths,
   createLogger: () => ({
     info() {},
     warn() {},
