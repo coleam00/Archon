@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { MetricsQueryError, resolveMetricsWindow } from './metrics';
+import { MetricsQueryError, resolveMetricsSplit, resolveMetricsWindow } from './metrics';
 
 const until = new Date('2026-10-30T12:00:00Z');
 
@@ -18,4 +18,18 @@ test.each([
 
 test.each(['40x', '0.5h', ''])('refuses since %j', since => {
   expect(() => resolveMetricsWindow({ since }, until)).toThrow(MetricsQueryError);
+});
+
+test.each(['since', 'until', 'compare'] as const)('escapes invalid %s values', field => {
+  const value = '40x\nsecond line\r"third line"';
+  try {
+    if (field === 'compare') resolveMetricsSplit({ compare: value });
+    else resolveMetricsWindow({ [field]: value }, until);
+    throw new Error('Expected query refusal');
+  } catch (error) {
+    expect(error).toBeInstanceOf(MetricsQueryError);
+    if (!(error instanceof MetricsQueryError)) throw error;
+    expect(error.message).toEndWith(`; got ${JSON.stringify(value)}`);
+    expect(error.message).not.toMatch(/[\r\n]/);
+  }
 });

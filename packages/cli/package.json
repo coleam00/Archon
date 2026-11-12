@@ -189,6 +189,9 @@
       "src/commands/metrics.test.ts"
     ],
     [
+      "src/since-refusal.integration.spec.ts"
+    ],
+    [
       "src/cli.test.ts",
       "src/workflow-scope-boot.test.ts",
       "src/help.test.ts",

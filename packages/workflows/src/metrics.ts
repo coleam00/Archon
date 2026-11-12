@@ -82,7 +82,12 @@ const SEEN_NODE_LIMIT = 50;
 
 const DAY_MS = 86_400_000;
 export const DEFAULT_METRICS_WINDOW_DAYS = 30;
-const DURATION_UNIT_MS = { m: 60_000, h: 3_600_000, d: DAY_MS, w: 7 * DAY_MS } as const;
+const DURATION_UNIT_MS = new Map([
+  ['m', 60_000],
+  ['h', 3_600_000],
+  ['d', DAY_MS],
+  ['w', 7 * DAY_MS],
+]);
 const instantSchema = z.union([z.iso.date(), z.iso.datetime({ offset: true })]);
 
 const INSTANT_FORMS =
@@ -90,7 +95,7 @@ const INSTANT_FORMS =
 
 function parseInstant(field: string, value: string, forms = INSTANT_FORMS): Date {
   if (!instantSchema.safeParse(value).success) {
-    throw new MetricsQueryError(`${field} must be ${forms}; got "${value}"`);
+    throw new MetricsQueryError(`${field} must be ${forms}; got ${JSON.stringify(value)}`);
   }
   return new Date(value);
 }
@@ -125,16 +130,16 @@ export function resolveMetricsSplit(input: { compare?: string; byModel?: string 
 
 function resolveSince(since: string | undefined, until: Date): Date {
   if (since === undefined) return new Date(until.getTime() - DEFAULT_METRICS_WINDOW_DAYS * DAY_MS);
-  const duration = /^(\d+)([mhdw])$/.exec(since);
-  if (duration === null) {
+  const duration = /^(\d+)([a-z])$/.exec(since);
+  const unitMs = duration === null ? undefined : DURATION_UNIT_MS.get(duration[2]);
+  if (duration === null || unitMs === undefined) {
     return parseInstant(
       'since',
       since,
       `a duration such as 40m, 24h, 7d or 2w, or ${INSTANT_FORMS}`
     );
   }
-  const unit = duration[2] as keyof typeof DURATION_UNIT_MS;
-  const start = new Date(until.getTime() - Number(duration[1]) * DURATION_UNIT_MS[unit]);
+  const start = new Date(until.getTime() - Number(duration[1]) * unitMs);
   if (Number.isNaN(start.getTime())) {
     throw new MetricsQueryError(`since "${since}" reaches before the earliest representable date`);
   }
