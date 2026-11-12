@@ -17,7 +17,12 @@ import {
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
-import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+import {
+  SourceReceiptDigestConflictError,
+  type StartReceiptInspection,
+  type ResourceBlocker,
+  type ResourceStartRequestInspection,
+} from '@archon/workflows/resource-start-store';
 import {
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
@@ -120,12 +125,44 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
   await writeJsonLine({ runAsUserId: user.id, cliIdentity: cliId });
 }
 
+function skipReason(blocker: ResourceBlocker): string {
+  return `Skipped: blocked by ${blocker.kind} ${blocker.id}.`;
+}
+
+function requestSkipReason(
+  value: Pick<ResourceStartRequestInspection, 'status' | 'blocker'>
+): string | null {
+  return value.status === 'skipped' && value.blocker ? skipReason(value.blocker) : null;
+}
+
+function skippedStarts(receipt: StartReceiptInspection) {
+  return receipt.bindings.flatMap(binding => {
+    const disposition = binding.disposition;
+    return disposition?.status === 'skipped'
+      ? [
+          {
+            bindingId: binding.bindingId,
+            requestId: disposition.requestId,
+            blocker: disposition.blocker,
+            reason: skipReason(disposition.blocker),
+          },
+        ]
+      : [];
+  });
+}
+
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
-  await writeJsonLine(
-    await host.deps.store.listStartReceipts(
-      options.limit === undefined ? undefined : Number(options.limit)
-    )
+  const receipts = await host.deps.store.listStartReceipts(
+    options.limit === undefined ? undefined : Number(options.limit)
   );
+  const enriched = await Promise.all(
+    receipts.map(async receipt => {
+      const detail = await host.deps.store.getStartReceipt(receipt.id);
+      if (!detail) throw new Error(`Trigger receipt ${receipt.id} not found.`);
+      return { ...receipt, skippedStarts: skippedStarts(detail) };
+    })
+  );
+  await writeJsonLine(enriched);
 }
 
 /**
@@ -325,6 +362,7 @@ async function triggerInspect(host: WorkflowHost, args: string[]): Promise<void>
   if (!('launch' in value)) {
     await writeJsonLine({
       ...value,
+      skippedStarts: skippedStarts(value),
       bindings: await Promise.all(
         value.bindings.map(async binding => ({
           ...binding,
@@ -345,6 +383,7 @@ async function triggerInspect(host: WorkflowHost, args: string[]): Promise<void>
         : null;
   await writeJsonLine({
     ...value,
+    skipReason: requestSkipReason(value),
     requestedBy: await requestedBy(host, value.launch.run.metadata),
     run: runId
       ? {

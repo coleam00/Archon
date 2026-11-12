@@ -1375,3 +1375,165 @@ test('launch diagnostics retain all lines in both inspect forms and workflow get
     restore();
   }
 });
+
+for (const storage of ['files', 'sql'] as const) {
+  test(`${storage} trigger diagnostics project stored run and request blockers without changing receipt acceptance`, async () => {
+    const root = tempRoots(await mkdtemp(join(tmpdir(), 'archon-trigger-diagnostics-')));
+    const db = storage === 'sql' ? new SqliteAdapter(join(root, 'store.db')) : undefined;
+    const spies = db
+      ? [
+          spyOn(connection, 'getDatabase').mockReturnValue(db),
+          spyOn(connection, 'getDialect').mockReturnValue(sqliteDialect),
+          spyOn(connection, 'getDatabaseType').mockReturnValue('sqlite'),
+        ]
+      : [];
+    const output: string[] = [];
+    const stdout = spyOn(process.stdout, 'write').mockImplementation(
+      (
+        chunk: string | Uint8Array,
+        encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+        callback?: (error?: Error | null) => void
+      ): boolean => {
+        output.push(String(chunk));
+        if (typeof encodingOrCallback === 'function') encodingOrCallback();
+        else callback?.();
+        return true;
+      }
+    );
+    try {
+      const original =
+        storage === 'files' ? await createFileWorkflowHost(join(root, 'state')) : hostForTest();
+      const store = db ? createWorkflowStore() : original.deps.store;
+      const host = { ...original, deps: { ...original.deps, store } };
+      const codebaseId = randomUUID();
+      if (db)
+        await db.query(
+          "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, 'diagnostics', $2)",
+          [codebaseId, root]
+        );
+      const prepared = (): PreparedWorkflowLaunch => {
+        const value = launch(codebaseId);
+        value.execution.isolation = { kind: 'worktree' };
+        return value;
+      };
+      const admit = (resource: string) =>
+        store.admitResourceStart({
+          resource,
+          capacity: 1,
+          hostId: 'host',
+          overlap: 'queue',
+          launch: prepared(),
+        });
+      const holder = await admit('run-blocker');
+      expect(holder.status).toBe('admitted');
+      const requestHolder = await admit('request-blocker');
+      expect(requestHolder.status).toBe('admitted');
+      const queued = await admit('request-blocker');
+      expect(queued.status).toBe('queued');
+      await store.claimPendingWorkflowRun(requestHolder.requestId);
+      await store.completeWorkflowRun(requestHolder.requestId, { duration_ms: 1 });
+      const binding = (bindingId: string, resource: string): ResourceStartBindingIntent => ({
+        bindingId,
+        bindingRevision: '1',
+        resource,
+        capacity: 1,
+        hostId: 'host',
+        runAsUserId: randomUUID(),
+        overlap: 'skip',
+        launch: {
+          cwd: root,
+          workflowName: 'portable',
+          inputs: {},
+          isolation: { kind: 'worktree' },
+        },
+      });
+      const bindings = [
+        binding('run-skip', 'run-blocker'),
+        binding('request-skip', 'request-blocker'),
+        binding('free', 'free'),
+      ];
+      const receipt: SourceReceiptAcceptance = {
+        ...acceptance(bindings[0], 'mixed'),
+        reason: 'source matched three bindings',
+        outcome: 'matched',
+        bindings: [bindings[0], ...bindings.slice(1)],
+      };
+      await store.acceptStartReceipt(receipt);
+      for (const item of bindings) {
+        const owner = {
+          receiptId: receipt.receipt.id,
+          bindingId: item.bindingId,
+          ownerId: 'owner',
+        };
+        expect(await store.claimStartBindingPreparation(owner)).toBe(true);
+        await store.completeStartBindingPreparation({ ...owner, launch: prepared() });
+      }
+      await store.claimPendingWorkflowRun(holder.requestId);
+      await store.completeWorkflowRun(holder.requestId, { duration_ms: 1 });
+      const retained = await store.getStartReceipt(receipt.receipt.id);
+      if (!retained) throw new Error('Expected retained receipt');
+      const expected = [
+        { bindingId: 'run-skip', blocker: { kind: 'run', id: holder.requestId } },
+        { bindingId: 'request-skip', blocker: { kind: 'request', id: queued.requestId } },
+      ].map(value => ({
+        ...value,
+        requestId: retained.bindings.find(item => item.bindingId === value.bindingId)?.disposition
+          ?.requestId,
+        reason: `Skipped: blocked by ${value.blocker.kind} ${value.blocker.id}.`,
+      }));
+      expected.sort(
+        (a, b) =>
+          retained.bindings.findIndex(item => item.bindingId === a.bindingId) -
+          retained.bindings.findIndex(item => item.bindingId === b.bindingId)
+      );
+      await triggerCommand(host, 'inspect', [receipt.receipt.id], {});
+      expect(JSON.parse(output.join(''))).toMatchObject({
+        outcome: 'matched',
+        reason: receipt.reason,
+        skippedStarts: expected,
+      });
+      for (const item of expected) {
+        output.length = 0;
+        if (!item.requestId) throw new Error('Expected skipped request');
+        await triggerCommand(host, 'inspect', [item.requestId], {});
+        expect(JSON.parse(output.join(''))).toMatchObject({
+          status: 'skipped',
+          blocker: item.blocker,
+          skipReason: item.reason,
+        });
+      }
+      output.length = 0;
+      await triggerCommand(host, 'inspect', [holder.requestId], {});
+      expect(JSON.parse(output.join('')).skipReason).toBeNull();
+
+      const empty = acceptance(binding('unprepared', 'empty'), 'empty');
+      empty.receipt.receivedAt = '2099-01-01T00:00:00Z';
+      await store.acceptStartReceipt(empty);
+      const summaries = await store.listStartReceipts(2);
+      const detailReads = spyOn(store, 'getStartReceipt');
+      output.length = 0;
+      await triggerCommand(host, 'list', [], { limit: '1' });
+      expect(JSON.parse(output.join(''))).toEqual([{ ...summaries[0], skippedStarts: [] }]);
+      expect(detailReads.mock.calls.map(args => args[0])).toEqual([empty.receipt.id]);
+      detailReads.mockRestore();
+      output.length = 0;
+      await triggerCommand(host, 'list', [], { limit: '2' });
+      expect(JSON.parse(output.join(''))).toEqual([
+        { ...summaries[0], skippedStarts: [] },
+        { ...summaries[1], skippedStarts: expected },
+      ]);
+      expect(await store.getStartReceipt(receipt.receipt.id)).toEqual(retained);
+      const failedRead = spyOn(store, 'getStartReceipt').mockRejectedValue(
+        new Error('receipt unreadable')
+      );
+      output.length = 0;
+      await expect(triggerCommand(host, 'list', [], {})).rejects.toThrow('receipt unreadable');
+      expect(output).toEqual([]);
+      failedRead.mockRestore();
+    } finally {
+      stdout.mockRestore();
+      for (const spy of spies) spy.mockRestore();
+      await db?.close();
+    }
+  });
+}

@@ -15,7 +15,7 @@ Schedules and event bindings are deployment configuration. They do not belong in
 
 Every binding names a `hostId`. A host prepares accepted work for its own ID, admits it, and starts the run. Two hosts ship with Archon:
 
-- The server, when `ARCHON_TRIGGER_HOST` names its host ID. It prepares and starts work as soon as a webhook receipt commits, and it checks for queued work every few seconds, so a queued start begins shortly after the run blocking it ends. The server never guesses its host ID; without `ARCHON_TRIGGER_HOST` it records webhook receipts but starts nothing.
+- The server, when `ARCHON_TRIGGER_HOST` names its host ID. It prepares and starts work as soon as a webhook receipt commits. It also checks for queued work every few seconds as a backstop. The server never guesses its host ID; without `ARCHON_TRIGGER_HOST` it records webhook receipts but starts nothing.
 - The CLI, through `archon trigger fire` and `archon trigger drain --host <hostId>`. Each admitted run executes in its own detached process.
 
 Both hosts use the same admission records, so a server and a scheduled CLI command can serve the same host ID without starting a run twice.
@@ -214,6 +214,74 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 `archon trigger schedule install` refuses a fire-only binding, because it has no timer to install. A `schedule` that is present must be complete: a file with an empty or partial `schedule` is invalid, not fire-only.
 
+## Drop scheduled ticks and keep hand-offs
+
+Use two bindings when a scheduled sweep can be dropped while the resource is busy, but an explicit hand-off must wait for a slot. A binding has one overlap policy for all its starts. Give the scheduled binding `overlap: skip` and the fire-only binding `overlap: queue`, with the same resource, capacity, and host.
+
+For example, save the scheduled binding as `/Users/alice/.archon/triggers/sweep-tick.json`:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-sweep-tick",
+  "binding": {
+    "bindingId": "sweep-tick",
+    "bindingRevision": null,
+    "hostId": "alice-macbook",
+    "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
+    "resource": "github:acme/widgets:sweep",
+    "capacity": 1,
+    "overlap": "skip",
+    "launch": {
+      "cwd": "/Users/alice/Projects/widgets",
+      "workflowName": "sweep",
+      "inputs": {},
+      "isolation": { "kind": "worktree" }
+    }
+  },
+  "schedule": { "intervalSeconds": 1800, "runAtLoad": true }
+}
+```
+
+Save the hand-off binding as `/Users/alice/.archon/triggers/sweep-follow-up.json`:
+
+```json
+{
+  "version": 1,
+  "sourceInstanceId": "widgets-sweep-follow-up",
+  "binding": {
+    "bindingId": "sweep-follow-up",
+    "bindingRevision": null,
+    "hostId": "alice-macbook",
+    "runAsUserId": "2a568f73-e217-40ca-b17d-a784d19fd43a",
+    "resource": "github:acme/widgets:sweep",
+    "capacity": 1,
+    "overlap": "queue",
+    "launch": {
+      "cwd": "/Users/alice/Projects/widgets",
+      "workflowName": "sweep",
+      "inputs": {},
+      "isolation": { "kind": "worktree" }
+    }
+  }
+}
+```
+
+Install only the scheduled binding. Fire the hand-off binding when an answer or finished round needs another sweep:
+
+```bash
+archon trigger schedule install --config /Users/alice/.archon/triggers/sweep-tick.json
+archon trigger fire --config /Users/alice/.archon/triggers/sweep-follow-up.json --delivery-id widgets-pr-42-round-3
+```
+
+Replace `runAsUserId` with the ID from `archon trigger whoami`, and provide the `sweep` workflow in that project. These bindings share one slot, even though their source and binding IDs differ. A hand-off fired from the run holding that slot queues until eligible. Use a stable delivery ID for retries of the same hand-off, and a new ID for each new round. Distinct fires are not coalesced or bounded; the workflow's item claim must refuse duplicate work.
+
+The examples use worktrees without a reusable branch, so each run gets its own checkout. An in-place path or explicit worktree branch stays held by a paused admitted run even after it returns capacity. A drain does not bypass that ownership or the priority of an already-admitted continuation.
+
+The execution owner drains its recorded trigger host once after each segment ends or pauses and ownership cleanup finishes, including completion, failure, controlled cancellation, and resumed execution. Eligible queued starts advance without a server or another fire. A pause that retains capacity or a checkout can still block them. The callback does not wait for the next run to finish.
+
+A killed owner starts and ends nothing. After verifying the exact owner and its descendants have stopped, abandon its run explicitly, then drain the host. A periodic drain is a backstop for missed notifications, foreign holders without a recorded trigger host, and cold webhook intake; it never abandons an admitted run or retries its execution automatically. See the recovery steps below.
+
 ## Choose a resource, capacity, and overlap policy
 
 `resource` names the work that must not overlap. Use the same sufficiently qualified resource for every schedule or webhook binding that can mutate that work. A trigger ID or workflow name does not imply a resource.
@@ -222,8 +290,10 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 The `overlap` setting controls a request that arrives while the resource is full:
 
-- `skip` records the blocking run and retains no promise to execute later.
+- `skip` records the blocking run or older request and retains no promise to execute later.
 - `queue` retains the prepared request in durable FIFO order.
+
+`archon trigger inspect <receipt-id>` and `archon trigger list` include `skippedStarts`, an array of `{ bindingId, requestId, blocker, reason }` for every skipped binding. The blocker is the run or older request recorded when admission refused the start, even if it has since finished. `reason` reads `Skipped: blocked by run <id>.` or `Skipped: blocked by request <id>.` Receipts with no skipped starts return `[]`. Receipt `outcome` and top-level `reason` still describe source acceptance: a `matched` receipt can contain both admitted and skipped starts. Inspecting a request directly adds `skipReason`, which is `null` unless it was skipped. Existing receipts expose the same diagnostics from their stored blockers.
 
 A queued request also blocks newer requests for the same resource, so a new arrival never passes older queued work, except work held back because another run holds its checkout (below). Different resources can run concurrently. Pending and running root runs hold their resource; a run releases it when it completes, fails, or is cancelled.
 
@@ -253,11 +323,11 @@ When independent slot membership is absent, a historical resume trusts the survi
 
 If an older released holder also loses its request document, the stored data cannot distinguish it from a manual run. It receives foreign-holder behavior, so read-only starts can pass it even on its former resource. Preserve or repair the request and slot membership before relying on same-resource serialization in that damaged state.
 
-An owned launch that records a preparation error, such as failing to create isolation, ends its still-pending run as `failed`. The full error remains in `trigger inspect` (by receipt or request ID) and `workflow get`. Attention watchers show the run ID and `launch failed before the first node`, without error text. Terminal runs no longer hold resource capacity, so the next drain can admit queued work.
+An owned launch that records a preparation error, such as failing to create isolation, ends its still-pending run as `failed`. The full error remains in `trigger inspect` (by receipt or request ID) and `workflow get`. Attention watchers show the run ID and `launch failed before the first node`, without error text. Terminal runs no longer hold resource capacity; after cleanup, the execution owner drains the recorded host to admit eligible queued work.
 
 If a request was admitted but its run remains `pending`, for example because its host stopped or was killed without recording a preparation error, inspection supplies an explicit `trigger execute` retry. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs or is abandoned. Archon does not infer failure from process death. Server launch errors log `resource_start.start_failed` with the run ID and the `archon trigger inspect` command for its recorded status and recovery options.
 
-To stop a running run that a `trigger execute` process owns, use `archon workflow cancel <runId>`. Cancel stops its safely targetable process groups, then records the run as `cancelled`, which releases the resource. If node output pipes remain held, cancel warns that an unsignalled process still holds them. POSIX host commands that started or completed also produce a warning about possible untracked background work, including after continuation. Neither a survivor nor cleanup is confirmed. These owner-stop warnings retain owned checkouts; inspect processes with `lsof`, verify ownership, and stop leftovers before checkout reuse or removal. The next drain admits queued work for it. A run the server executes has no detached owner process, so `archon workflow cancel` refuses it and leaves it unchanged; cancel it from that server instead (Web UI, API, or chat).
+To stop a running run that a `trigger execute` process owns, use `archon workflow cancel <runId>`. Cancel stops its safely targetable process groups, then records the run as `cancelled`, which releases the resource. If node output pipes remain held, cancel warns that an unsignalled process still holds them. POSIX host commands that started or completed also produce a warning about possible untracked background work, including after continuation. Neither a survivor nor cleanup is confirmed. These owner-stop warnings retain owned checkouts; inspect processes with `lsof`, verify ownership, and stop leftovers before checkout reuse or removal. After cancellation settles and cleanup finishes, the controller drains the recorded host; existing checkout restrictions still apply. A run the server executes has no detached owner process, so `archon workflow cancel` refuses it and leaves it unchanged; cancel it from that server instead (Web UI, API, or chat).
 
 A `trigger execute` process stopped with SIGTERM or SIGINT marks its own running run failed before it exits, which also releases the resource. A crash or SIGKILL cannot do that and leaves ownership ambiguous.
 

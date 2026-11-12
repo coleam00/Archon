@@ -1803,3 +1803,28 @@ function processAlive(pid: number): boolean {
     return false;
   }
 }
+
+test('published two-binding examples share capacity and separate scheduled ticks from hand-offs', () => {
+  const guide = readFileSync(
+    resolve(import.meta.dir, '../../../docs-web/src/content/docs/guides/workflow-triggers.md'),
+    'utf8'
+  );
+  const section = guide
+    .split('## Drop scheduled ticks and keep hand-offs')[1]
+    ?.split('## Choose a resource')[0];
+  if (!section) throw new Error('Two-binding guide section missing');
+  const configs = [...section.matchAll(/```json\n([\s\S]*?)```/g)].map(match =>
+    triggerFireConfigSchema.parse(JSON.parse(match[1]))
+  );
+  expect(configs).toHaveLength(2);
+  const [tick, followUp] = configs;
+  expect(tick.schedule).toBeDefined();
+  expect(tick.binding.overlap).toBe('skip');
+  expect(followUp.schedule).toBeUndefined();
+  expect(followUp.binding.overlap).toBe('queue');
+  expect(followUp.binding.resource).toBe(tick.binding.resource);
+  expect(followUp.binding.capacity).toBe(tick.binding.capacity);
+  expect(followUp.binding.hostId).toBe(tick.binding.hostId);
+  expect(followUp.binding.bindingId).not.toBe(tick.binding.bindingId);
+  expect(followUp.sourceInstanceId).not.toBe(tick.sourceInstanceId);
+});
