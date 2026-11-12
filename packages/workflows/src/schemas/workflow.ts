@@ -231,9 +231,9 @@ export const workflowBaseSchema = z.object({
   mutates_checkout: z.boolean().optional(),
   /**
    * The resource every top-level run of this workflow holds a slot on, however it was
-   * started, with the capacity its hand starts declare. A start waits while the resource
-   * is full. An included workflow's resource is dropped: it runs inside its parent's run
-   * and slot.
+   * started, with the capacity its starts declare unless a binding sets its own. A start
+   * waits while the resource is full. An included workflow's resource is dropped: it runs
+   * inside its parent's run and slot.
    */
   resource: workflowResourceSchema.optional(),
   /**

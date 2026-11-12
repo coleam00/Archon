@@ -23,6 +23,8 @@ import { describeStartReceiptConformance } from './store-conformance/start-recei
 
 export interface WorkflowStoreHarness {
   store: IWorkflowStore;
+  /** Set the install config's `concurrency.resources.<resource>` for later admissions. */
+  setResourceCapacity(resource: string, capacity: number): Promise<void>;
   seedPersistedWait(runId: string, wait: Record<string, unknown>): Promise<void>;
   backdate(
     runId: string,

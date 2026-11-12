@@ -135,7 +135,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
 }
 
 type InMemoryWorkflowStore = IWorkflowStore &
-  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait'>;
+  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait' | 'setResourceCapacity'>;
 
 /**
  * The file store's transaction view over in-memory maps. Every operation runs on a copy and
@@ -258,6 +258,7 @@ export function createInMemoryWorkflowStore(
     ),
     failStartBindingPreparation: admit(admission.failStartBindingPreparation.bind(admission)),
     resetStartBindingPreparation: admit(admission.resetStartBindingPreparation.bind(admission)),
+    setResourceCapacity: admit(admission.setResourceCapacity.bind(admission)),
     backdate: (id, dates) =>
       serialize(async () => {
         const run = runs.get(id);
