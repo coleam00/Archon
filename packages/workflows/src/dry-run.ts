@@ -138,6 +138,8 @@ interface DryRunOptions {
    */
   sourceRoots?: WorkflowSourceRoots;
   execCode?: boolean;
+  /** Credential provenance for callers publishing diagnostics; simulation stays unredacted. */
+  onExecCredentials?: DryRunContext['onExecCredentials'];
   /** Fill reached nodes without explicit stubs using schema-valid deterministic placeholders. */
   defaultStubs?: boolean;
   pauseAtGates?: boolean;
@@ -158,6 +160,7 @@ function createDryRunContext(
 ): DryRunContext {
   const assistantModels = options.config ? assistantModelDefaults(options.config) : {};
   return {
+    onExecCredentials: options.onExecCredentials,
     envVars: options.config?.envVars,
     protectedEnvKeys: options.config?.protectedEnvKeys,
     protectedCredentialValues: options.config?.protectedCredentialValues,

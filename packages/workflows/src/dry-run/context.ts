@@ -110,6 +110,7 @@ export interface DryRunContext
   artifactsDir: string;
   stateDir: string;
   logDir: string;
+  onExecCredentials?: (values: readonly string[]) => void;
   execCode: boolean;
   defaultStubs: boolean;
   pauseAtGates: boolean;

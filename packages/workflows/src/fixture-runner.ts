@@ -34,7 +34,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { createLogger, getArchonTempPath, isPathInside } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
-import { redactFixtureTrace } from './fixture-trace';
+import { fixtureTraceRedactor } from './fixture-trace';
 import {
   RESERVED_FIXTURE_KEYS,
   dryRunStubsSchema,
@@ -705,6 +705,7 @@ async function checkFixture(
     const execCode = parsed.execCode;
     const inputs = resolveTopLevelInputs(ws.workflow, parsed.declaration.inputs);
     const config = await resolveFixtureConfig(options, execCode);
+    const redaction = fixtureTraceRedactor(config);
     const run = (workspace: string): Promise<DryRunResult> =>
       dryRunWorkflow({
         workflow: ws.workflow,
@@ -713,6 +714,7 @@ async function checkFixture(
         stubs: parsed.stubs,
         ...(inputs ? { inputs } : {}),
         execCode,
+        onExecCredentials: redaction.collect,
         execWorkspace: workspace,
         sourceRoots: captured,
         ...(config ? { config } : {}),
@@ -742,15 +744,11 @@ async function checkFixture(
       ...base,
       outcome: result.outcome,
       authoredOutcome: result.authoredOutcome,
-      nodeFailures: result.trace
-        .filter(entry => entry.state === 'failed')
-        .map(({ nodeId, reason }) => ({ nodeId, reason })),
       pass: failureReason === undefined,
-      ...(failureReason !== undefined ? { failureReason } : {}),
       missingStubs: result.missingStubs,
       toleratedMissingStubs: result.toleratedMissingStubs,
       unusedStubs: result.unusedStubs,
-      ...(failureReason !== undefined ? { trace: redactFixtureTrace(result.trace, config) } : {}),
+      ...redaction.publish(result.trace, failureReason),
     };
   } catch (error) {
     return {

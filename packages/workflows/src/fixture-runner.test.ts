@@ -1712,7 +1712,7 @@ describe('runFixtures exec-code isolation (#2851)', () => {
     'redacts successful %s stdout and resolved text when a fixture fails its %s',
     async (kind, failure) => {
       const inherited = 'synthetic-inherited-trace-secret';
-      const configured = 'synthetic-configured-trace-secret';
+      const configured = "synthetic-configured'trace-secret";
       const explicit = 'synthetic-explicit-trace-secret';
       const rawOutput = `${inherited} ${configured} ${explicit}`;
       const previous = process.env.ARCHON_FIXTURE_TRACE_SECRET;
@@ -1737,7 +1737,7 @@ describe('runFixtures exec-code isolation (#2851)', () => {
             '  - id: consumer',
             '    depends_on: [code]',
             '    bash: |',
-            `      [ $code.output = '${rawOutput}' ] || exit 9`,
+            `      [ $code.output = ${JSON.stringify(rawOutput)} ] || exit 9`,
             failure === 'node' ? '      exit 7' : '      printf verified',
           ].join('\n'),
           body: [
@@ -1753,16 +1753,14 @@ describe('runFixtures exec-code isolation (#2851)', () => {
         const report = await runFixtures({
           workflows: workflowsOnDisk(cwd, ['test-wf']),
           cwd,
-          resolveExecConfig: async () =>
-            applyRunEnvironment(
-              {
-                assistant: undefined,
-                assistants: { claude: {}, codex: {} },
-                commands: {},
-                protectedCredentialValues: [explicit],
-              },
-              { ARCHON_FIXTURE_ACCOUNT: configured }
-            ),
+          resolveExecConfig: async () => ({
+            assistant: undefined,
+            assistants: { claude: {}, codex: {} },
+            commands: {},
+            envVars: { ARCHON_FIXTURE_ACCOUNT: configured },
+            protectedEnvKeys: ['ARCHON_FIXTURE_ACCOUNT'],
+            protectedCredentialValues: [explicit],
+          }),
         });
         const result = report.results[0];
         expect(result.pass).toBe(false);
@@ -1778,9 +1776,9 @@ describe('runFixtures exec-code isolation (#2851)', () => {
           state: 'completed',
           output: '[REDACTED] [REDACTED] [REDACTED]',
         });
-        expect(result.trace?.find(entry => entry.nodeId === 'consumer')?.resolvedText).toContain(
-          "[ '[REDACTED] [REDACTED] [REDACTED]' = '[REDACTED] [REDACTED] [REDACTED]' ]"
-        );
+        const consumerText = result.trace?.find(entry => entry.nodeId === 'consumer')?.resolvedText;
+        expect(consumerText).toContain('[REDACTED]');
+        expect(consumerText).not.toContain(configured.replaceAll("'", "'\\''"));
         for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
           for (const secret of [inherited, configured, explicit]) {
             expect(output).not.toContain(secret);
@@ -1793,6 +1791,129 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       }
     }
   );
+
+  it.each(['run', 'composed', 'local'] as const)(
+    'redacts credentials from %s execution inputs without changing simulation',
+    async source => {
+      const secret = 'synthetic-input-credential';
+      const code = [
+        'name: test-wf',
+        'description: input credentials',
+        ...(source !== 'local' ? ['inputs:', '  token:', '    required: true'] : []),
+        'nodes:',
+        '  - id: code',
+        '    runtime: bun',
+        '    script: |',
+        '      process.stdout.write(process.env.INPUTS_TOKEN);',
+        ...(source === 'local' ? ['    with:', '      token: "' + secret + '"'] : []),
+        '  - id: consumer',
+        '    depends_on: [code]',
+        '    bash: |',
+        `      [ $code.output = '${secret}' ] || exit 9`,
+        '      printf verified',
+      ].join('\n');
+      const { cwd } = writeTempProject({
+        workflowYaml:
+          source === 'composed'
+            ? [
+                'name: test-wf',
+                'description: composed credentials',
+                'nodes:',
+                '  - id: included',
+                '    include: child',
+                '    with:',
+                `      token: ${secret}`,
+              ].join('\n')
+            : code,
+        body: [
+          'fixture:',
+          '  expect: completed',
+          ...(source === 'run' ? ['  inputs:', `    token: ${secret}`] : []),
+          '  resolved-text-contains:',
+          `    ${source === 'composed' ? 'included__consumer' : 'consumer'}: "${source === 'local' ? `${secret} missing` : '[REDACTED]'}"`,
+          'exec-code: true',
+        ].join('\n'),
+      });
+      let workflows = workflowsOnDisk;
+      if (source === 'composed') {
+        writeFileSync(
+          join(cwd, '.archon/workflows/pack/child.yaml'),
+          code.replace('name: test-wf', 'name: child')
+        );
+        workflows = (dir, names) => {
+          const raw = new Map(
+            ['test-wf', 'child'].map(name => {
+              const parsed = parseWorkflow(
+                readFileSync(join(dir, '.archon/workflows/pack', `${name}.yaml`), 'utf8'),
+                name,
+                providerRegistry
+              );
+              if (!parsed.workflow) throw new Error(parsed.error.error);
+              return [name, parsed.workflow];
+            })
+          );
+          const expanded = expandWorkflowIncludes(raw);
+          expect(expanded.errors).toHaveLength(0);
+          return names.map(name => ({
+            workflow: expanded.workflows.get(name)!,
+            source: 'project',
+          }));
+        };
+      }
+      callerFrom(trackedOnlyRepo, cwd);
+      const report = await runFixtures({ workflows: workflows(cwd, ['test-wf']), cwd });
+      const result = report.results[0];
+      expect(result.pass).toBe(false);
+      expect(result.outcome).toBe('completed');
+      expect(result.trace?.find(entry => entry.nodeId.endsWith('code'))?.output).toBe('[REDACTED]');
+      expect(result.failureReason).toContain('resolved text');
+      for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+        expect(output).not.toContain(secret);
+        expect(output).toContain('[REDACTED]');
+      }
+    }
+  );
+
+  it('redacts successful stdout embedded in fan-out failure diagnostics', async () => {
+    const secret = 'syntheticsecret';
+    const { cwd } = writeTempProject({
+      workflowYaml: [
+        'name: test-wf',
+        'description: failure reason credentials',
+        'nodes:',
+        '  - id: code',
+        '    bash: printf "%s" "$ACCOUNT"',
+        '  - id: spread',
+        '    depends_on: [code]',
+        '    workflow: other',
+        '    fan_out:',
+        '      items: $code.output',
+      ].join('\n'),
+      body: 'fixture:\n  expect: completed\nexec-code: true',
+    });
+    callerFrom(trackedOnlyRepo, cwd);
+    const report = await runFixtures({
+      workflows: workflowsOnDisk(cwd, ['test-wf']),
+      cwd,
+      resolveExecConfig: async () => ({
+        assistant: undefined,
+        assistants: { claude: {}, codex: {} },
+        commands: {},
+        envVars: { ACCOUNT: secret },
+        protectedEnvKeys: ['ACCOUNT'],
+      }),
+    });
+    const result = report.results[0];
+    expect(result.pass).toBe(false);
+    expect(result.nodeFailures?.[0].reason).toContain('JSON');
+    expect(result.nodeFailures?.[0].reason).toContain('[REDACTED]');
+    expect(result.trace?.find(entry => entry.nodeId === 'spread')?.reason).toBe(
+      result.nodeFailures?.[0].reason
+    );
+    for (const output of [formatFixtureReport(report), JSON.stringify(report)]) {
+      expect(output).not.toContain(secret);
+    }
+  });
 
   it('keeps executed writes out of the caller checkout (#2851)', async () => {
     const { cwd } = writeTempProject({

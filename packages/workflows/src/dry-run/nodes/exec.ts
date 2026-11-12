@@ -69,6 +69,7 @@ export async function executeCodeNode(
       ctx.protectedEnvKeys,
       ctx.protectedCredentialValues
     );
+    ctx.onExecCredentials?.(credentialValues);
     let result: Awaited<ReturnType<typeof execFileAsync>>;
     try {
       result = await execFileAsync(command, args, {
