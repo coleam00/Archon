@@ -36,7 +36,7 @@ import {
 import { assertAbsoluteDefaultCwd, defaultCwdKey, isSameDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
-import { loadResourceCapacities } from '../config/provider-concurrency';
+import { loadResourceCapacities } from '../config/concurrency-config';
 import { completedRunWorktreeDeps, createWorkflowDeps } from './store-adapter';
 import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { createWorkflowOperations } from '../operations/workflow-operations';

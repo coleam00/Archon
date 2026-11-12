@@ -34,7 +34,7 @@ import {
   TERMINAL_WORKFLOW_STATUSES,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
-import { loadResourceCapacities } from '../config/provider-concurrency';
+import { loadResourceCapacities } from '../config/concurrency-config';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import { parseJsonObject } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';

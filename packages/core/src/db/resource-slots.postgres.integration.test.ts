@@ -27,6 +27,13 @@ mock.module('@archon/paths', () => ({
   }),
 }));
 
+// Admission reads resource capacities from the install config; this test has none.
+const concurrencyConfig = await import('../config/concurrency-config');
+mock.module('../config/concurrency-config', () => ({
+  ...concurrencyConfig,
+  loadResourceCapacities: async () => new Map(),
+}));
+
 const baseUrl = process.env.ARCHON_TEST_PG_URL;
 const SCRATCH_DB = 'archon_pg_resource_slots_test';
 
