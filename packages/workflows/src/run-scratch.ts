@@ -1,5 +1,5 @@
 /**
- * Remove a terminal run's scratch directory (`$ARTIFACTS_DIR/.archon/scratch`).
+ * Release a terminal run's scratch and tagged artifact caches.
  *
  * Scratch is removed only once the run is terminal and nothing of it can still write
  * into it. `releaseRunScratch` proves the second half itself: the run's recorded
@@ -20,15 +20,15 @@
  *   `removeRunScratch` once the container is removed, so a gate reject that proves the
  *   owner gone reclaims the container.
  *
- * Only the scratch child is removed; the rest of the artifacts directory is the
- * workflow's evidence and is never inspected. Git worktrees a node added under scratch are
- * removed from the repository of the run's checkout first, so their registrations do not
- * outlive their files. A container run's are not: its paths are the container's.
+ * Scratch and descendant directories carrying a valid CACHEDIR.TAG are disposable;
+ * untagged evidence and the artifacts root are retained. Git worktrees a node added
+ * under scratch are removed from the run's repository first, so their registrations
+ * do not outlive their files. A container run's are not: its paths are the container's.
  */
 
-import { existsSync } from 'node:fs';
 import { hostname } from 'node:os';
-import { realpath, rm } from 'node:fs/promises';
+import { lstat, open, readdir, realpath, rm } from 'node:fs/promises';
+import { dirname, join, relative } from 'node:path';
 import { execFileAsync, GitFailure } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { isPidProvablyGone } from '@archon/paths/process-owner';
@@ -102,7 +102,11 @@ export async function releaseRunScratch(run: ScratchRun): Promise<void> {
     return;
   }
   const artifactsDir = getRunArtifactsDirForRoot(root, run.id);
-  if (run.working_path !== null) {
+  if (
+    run.working_path !== null &&
+    (await scratchParentIsDirectory(artifactsDir, { workflowRunId: run.id })) &&
+    (await isDirectory(getRunScratchDir(artifactsDir), { workflowRunId: run.id }))
+  ) {
     await deregisterScratchWorktrees(run.working_path, getRunScratchDir(artifactsDir), {
       workflowRunId: run.id,
     });
@@ -124,7 +128,6 @@ async function deregisterScratchWorktrees(
   scratchDir: string,
   logContext: Record<string, unknown>
 ): Promise<void> {
-  if (!existsSync(scratchDir)) return;
   // A failure below is logged and the caller still deletes the files. That is safe: a
   // registration whose checkout is gone holds no work, Git reports it as prunable, and
   // `git worktree prune` drops it. Keeping scratch instead would keep the run's bulk on
@@ -159,9 +162,9 @@ async function deregisterScratchWorktrees(
 }
 
 /**
- * Remove `artifactsDir`'s scratch child. The caller guarantees the run is terminal and
- * nothing of it can still write into `artifactsDir`. Never throws; failures are logged
- * with `logContext`.
+ * Remove `artifactsDir`'s scratch child and validly tagged descendant caches. The caller
+ * guarantees the run is terminal and nothing of it can still write into `artifactsDir`.
+ * Never throws; failures are logged with `logContext`.
  *
  * A recursive `rm` does not follow symlinks inside the tree, so a link a node left in
  * scratch is removed, not its target.
@@ -170,13 +173,123 @@ export async function removeRunScratch(
   artifactsDir: string,
   logContext: Record<string, unknown>
 ): Promise<void> {
+  if (!(await isDirectory(artifactsDir, logContext))) return;
+  await removeTaggedCaches(artifactsDir, logContext);
+  if (!(await scratchParentIsDirectory(artifactsDir, logContext))) return;
   const scratchDir = getRunScratchDir(artifactsDir);
   try {
     await rm(scratchDir, { recursive: true, force: true });
   } catch (error) {
-    getLog().warn(
-      { ...logContext, err: error as Error, path: scratchDir },
-      'run_scratch.remove_failed'
+    getLog().warn({ ...logContext, err: error, path: scratchDir }, 'run_scratch.remove_failed');
+  }
+}
+
+const cacheSignature = Buffer.from('Signature: 8a477f597d28d172789f06886806bc55');
+
+function warnFilesystem(error: unknown, path: string, logContext: Record<string, unknown>): void {
+  if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+  getLog().warn({ ...logContext, err: error, path }, 'run_scratch.inspect_failed');
+}
+
+async function isDirectory(path: string, logContext: Record<string, unknown>): Promise<boolean> {
+  try {
+    return (await lstat(path)).isDirectory();
+  } catch (error) {
+    warnFilesystem(error, path, logContext);
+    return false;
+  }
+}
+
+// Writer ordering excludes our own mutations. These checks reject existing links;
+// they do not defend against a hostile outside process swapping ancestors afterward.
+async function scratchParentIsDirectory(
+  artifactsDir: string,
+  logContext: Record<string, unknown>
+): Promise<boolean> {
+  return (
+    (await isDirectory(artifactsDir, logContext)) &&
+    (await isDirectory(dirname(getRunScratchDir(artifactsDir)), logContext))
+  );
+}
+
+async function hasCacheTag(path: string, logContext: Record<string, unknown>): Promise<boolean> {
+  const tag = join(path, 'CACHEDIR.TAG');
+  try {
+    if (!(await lstat(tag)).isFile()) return false;
+    const file = await open(tag, 'r');
+    try {
+      const prefix = Buffer.alloc(cacheSignature.length);
+      const { bytesRead } = await file.read(prefix, 0, prefix.length, 0);
+      return bytesRead === prefix.length && prefix.equals(cacheSignature);
+    } finally {
+      await file.close();
+    }
+  } catch (error) {
+    warnFilesystem(error, tag, logContext);
+    return false;
+  }
+}
+
+async function estimateCacheBytes(path: string): Promise<number> {
+  const pending = [path];
+  const seen = new Set<string>();
+  let bytes = 0;
+  while (pending.length) {
+    const current = pending.pop();
+    if (current === undefined) break;
+    const stat = await lstat(current);
+    const key = `${stat.dev}:${stat.ino}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    bytes += stat.blocks * 512;
+    if (stat.isDirectory()) {
+      for (const name of await readdir(current)) pending.push(join(current, name));
+    }
+  }
+  return bytes;
+}
+
+async function removeTaggedCaches(
+  artifactsDir: string,
+  logContext: Record<string, unknown>
+): Promise<void> {
+  const pending = [artifactsDir];
+  while (pending.length) {
+    const path = pending.pop();
+    if (path === undefined) break;
+    if (!(await isDirectory(path, logContext))) continue;
+    if (path !== artifactsDir && (await hasCacheTag(path, logContext))) {
+      await removeCache(path, artifactsDir, logContext);
+      continue;
+    }
+    try {
+      for (const entry of await readdir(path, { withFileTypes: true })) {
+        if (entry.isDirectory()) pending.push(join(path, entry.name));
+      }
+    } catch (error) {
+      warnFilesystem(error, path, logContext);
+    }
+  }
+}
+
+async function removeCache(
+  path: string,
+  artifactsDir: string,
+  logContext: Record<string, unknown>
+): Promise<void> {
+  let estimatedFreedBytes: number | null = null;
+  try {
+    estimatedFreedBytes = await estimateCacheBytes(path);
+  } catch (error) {
+    getLog().warn({ ...logContext, err: error, path }, 'run_scratch.cache_measure_failed');
+  }
+  try {
+    await rm(path, { recursive: true, force: true });
+    getLog().info(
+      { ...logContext, artifactsDir, path: relative(artifactsDir, path), estimatedFreedBytes },
+      'run_scratch.cache_removed'
     );
+  } catch (error) {
+    getLog().warn({ ...logContext, err: error, path }, 'run_scratch.cache_remove_failed');
   }
 }
