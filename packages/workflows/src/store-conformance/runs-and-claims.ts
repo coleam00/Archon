@@ -384,6 +384,20 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
         })
       ).toBeNull();
     });
+    test('fan-out recovery keeps the creation time and stamps the resume', async () => {
+      const run = await running(store);
+      const createdAt = new Date(Date.now() - 600_000);
+      await harness.backdate(run.id, { started_at: createdAt });
+      await store.cancelFanOutRun(run.id, 'fan_out_orphan');
+
+      const recovered = await store.recoverCancelledFanOutRun(run.id);
+      for (const row of [recovered, await store.getWorkflowRun(run.id)]) {
+        expect(row?.started_at.toISOString().slice(0, 19)).toBe(
+          createdAt.toISOString().slice(0, 19)
+        );
+        expect(row?.resumed_at).toBeInstanceOf(Date);
+      }
+    });
     test('resumable lookup chooses newest matching run and includes stale running', async () => {
       const first = await running(store, { working_path: '/resume' });
       await store.failWorkflowRun(first.id, 'old');
