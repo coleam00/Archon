@@ -1,3 +1,4 @@
+import { attentionCursor } from '@archon/workflows/attention-feed';
 import {
   splitAttentionRead,
   scopeAttentionDegraded,
@@ -29,7 +30,7 @@ import {
 import { attentionWatchReader } from '@archon/workflows/attention-needs';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import type { IWorkflowEngine } from '@archon/workflows/engine-port';
-import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
+import { WorkflowEventCursorError } from '@archon/workflows/store';
 import { checkedSSEWriter } from '../adapters/web/sse-writer';
 import { resolveRunActor } from './api-request-auth';
 import {
@@ -201,7 +202,7 @@ export function registerAttentionStreamRoute(
     const { scope, request } = parsed;
     const level = query.level ?? 'protocol';
     const lastEventId = c.req.header('last-event-id');
-    const after = lastEventId === undefined ? undefined : workflowEventCursor(lastEventId);
+    const after = lastEventId === undefined ? undefined : attentionCursor(lastEventId);
 
     return streamSSE(c, async stream => {
       const writer = checkedSSEWriter(stream);

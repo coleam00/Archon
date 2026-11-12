@@ -327,3 +327,40 @@ describe('followWorkflowEventFeed', () => {
     expect(detached).toBe(true);
   });
 });
+
+it('closing a busy follower waits for its current page without starting another read', async () => {
+  const { followFeed } = await import('./run-subscription');
+  const entered = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  let reads = 0;
+  let caughtUp = 0;
+  const follower = await followFeed<number, { cursor: number }>(
+    async (cursor, limit) => {
+      reads++;
+      if (reads > 1) throw new Error('another page read after closing');
+      return {
+        deliveries: Array.from({ length: limit }, (_, index) => ({ cursor: cursor + index + 1 })),
+        next: cursor + limit,
+        caughtUp: false,
+      };
+    },
+    0,
+    async () => {
+      entered.resolve();
+      await release.promise;
+    },
+    {
+      pollIntervalMs: 1,
+      logFields: {},
+      onCaughtUp: () => {
+        caughtUp++;
+      },
+    }
+  );
+  await entered.promise;
+  const closing = follower.close();
+  release.resolve();
+  await closing;
+  expect(reads).toBe(1);
+  expect(caughtUp).toBe(0);
+});

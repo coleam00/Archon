@@ -228,7 +228,10 @@ The `overlap` setting controls a request that arrives while the resource is full
   It belongs to the requesting run, even after that run ends, or to the binding's project
   for a runless fire. Replaying a delivery produces no duplicate. Scheduled ticks without
   delivery IDs produce no notice. Admission notices do not consume the author's
-  50-notice budget; each is bounded by its skipped request.
+  50-notice budget; each is bounded by its skipped request. New drops also appear on
+  `archon workflow attention --watch --notices`, including when the requesting run has ended.
+  History uses the receipt time; live delivery follows admission commit order. Retained
+  skipped requests become visible after upgrading, without writing new events.
 - `queue` retains the prepared request in durable FIFO order.
 
 A queued request also blocks newer requests for the same resource, so a new arrival never passes older queued work, except work held back because another run holds its checkout (below). Different resources can run concurrently. Pending and running root runs hold their resource; a run releases it when it completes, fails, or is cancelled.

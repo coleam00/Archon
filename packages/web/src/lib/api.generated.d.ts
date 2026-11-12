@@ -7302,50 +7302,48 @@ export interface components {
                 detail: string;
               };
         }
-      | (
-          | {
-              /** @enum {string} */
-              type: 'resolved';
-              cursor: string;
-              project: {
-                key: string;
-                codebaseId: string | null;
-                name: string;
-              } | null;
-              runId: string;
-              workflow: string | null;
-              parentRunId: string | null;
-              occurrence: string | null;
-              /** @enum {string} */
-              reason: 'answered';
-              answeredVia: string | null;
-              answeredBy:
-                | {
-                    declared: string;
-                  }
-                | {
-                    userId: string;
-                  }
-                | unknown;
-              answeredAt: string | null;
-            }
-          | {
-              /** @enum {string} */
-              type: 'resolved';
-              cursor: string;
-              project: {
-                key: string;
-                codebaseId: string | null;
-                name: string;
-              } | null;
-              runId: string;
-              workflow: string | null;
-              parentRunId: string | null;
-              occurrence: string | null;
-              /** @enum {string} */
-              reason: 'withdrawn';
-            }
-        )
+      | {
+          /** @enum {string} */
+          type: 'resolved';
+          cursor: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          runId: string;
+          workflow: string | null;
+          parentRunId: string | null;
+          occurrence: string | null;
+          /** @enum {string} */
+          reason: 'answered';
+          answeredVia: string | null;
+          answeredBy:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          answeredAt: string | null;
+        }
+      | {
+          /** @enum {string} */
+          type: 'resolved';
+          cursor: string;
+          project: {
+            key: string;
+            codebaseId: string | null;
+            name: string;
+          } | null;
+          runId: string;
+          workflow: string | null;
+          parentRunId: string | null;
+          occurrence: string | null;
+          /** @enum {string} */
+          reason: 'withdrawn';
+        }
       | {
           /** @enum {string} */
           type: 'unmatched';
@@ -7412,25 +7410,44 @@ export interface components {
           /** @enum {string} */
           status: 'running';
         }
-      | {
+      | ((
+          | {
+              text: string;
+              labels: {
+                [key: string]: string;
+              };
+              node: string | null;
+              at: string;
+              runId: string;
+              workflow: string | null;
+              parentRunId: string | null;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+            }
+          | {
+              text: string;
+              labels: {
+                [key: string]: string;
+              };
+              node: unknown;
+              at: string;
+              runId: unknown;
+              workflow: unknown;
+              parentRunId: unknown;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+            }
+        ) & {
           /** @enum {string} */
           type: 'notice';
           cursor: string;
-          project: {
-            key: string;
-            codebaseId: string | null;
-            name: string;
-          } | null;
-          runId: string;
-          workflow: string | null;
-          parentRunId: string | null;
-          at: string;
-          text: string;
-          labels: {
-            [key: string]: string;
-          };
-          node: string | null;
-        }
+        })
       | {
           /** @enum {string} */
           type: 'owner_lost';

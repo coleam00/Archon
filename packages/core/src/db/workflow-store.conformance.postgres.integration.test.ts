@@ -48,6 +48,96 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test('admission readers cannot acknowledge an uncommitted lower request position', async () => {
+    const harness = await makeHarness();
+    const { store, db } = harness;
+    const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let first: Promise<unknown> | undefined;
+    let second: Promise<unknown> | undefined;
+    let interception: ReturnType<typeof spyOn> | undefined;
+    try {
+      await store.admitResourceStart(start());
+      const intents = [start('skip'), start('skip')];
+      for (const [index, intent] of intents.entries()) {
+        const receiptId = randomUUID();
+        await store.acceptStartReceipt({
+          receipt: {
+            id: receiptId,
+            sourceInstanceId: 'source',
+            deliveryId: String(index),
+            contentDigest: 'digest',
+            receivedAt: new Date().toISOString(),
+            occurredAt: null,
+            sourceActor: null,
+          },
+          outcome: 'matched',
+          bindings: [
+            {
+              bindingId: 'binding',
+              bindingRevision: null,
+              hostId: 'host',
+              runAsUserId: 'operator',
+              resource: intent.resource,
+              capacity: 1,
+              overlap: 'skip',
+              launch: {
+                cwd: intent.launch.execution.cwd,
+                workflowName: 'conformance',
+                inputs: {},
+                isolation: { kind: 'in-place' },
+              },
+            },
+          ],
+        });
+        intent.receipt = { receiptId, bindingId: 'binding' };
+      }
+      const head = await store.getAdmissionNoticeHead();
+      const transaction = db.withTransaction.bind(db);
+      let intercepted = false;
+      interception = spyOn(db, 'withTransaction').mockImplementation(callback =>
+        transaction(query =>
+          callback(async <T>(sql: string, params?: unknown[]) => {
+            const result = await query<T>(sql, params);
+            if (!intercepted && sql.includes('INSERT INTO remote_agent_resource_start_requests')) {
+              intercepted = true;
+              entered.resolve();
+              await release.promise;
+            }
+            return result;
+          })
+        )
+      );
+      first = store.admitResourceStart(intents[0]!);
+      await entered.promise;
+      second = store.admitResourceStart(intents[1]!);
+      let blocked = false;
+      for (let attempt = 0; attempt < 1000 && !blocked; attempt++) {
+        const result = await db.query<{ blocked: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS blocked`
+        );
+        blocked = result.rows[0]?.blocked ?? false;
+      }
+      expect(blocked).toBe(true);
+      const empty = await store.readAdmissionNoticesAfter(head, { limit: 1 });
+      expect(empty).toEqual({ notices: [], next: head, caughtUp: true });
+      release.resolve();
+      await Promise.all([first, second]);
+      const lower = await store.readAdmissionNoticesAfter(empty.next, { limit: 1 });
+      const higher = await store.readAdmissionNoticesAfter(lower.next, { limit: 1 });
+      expect([...lower.notices, ...higher.notices].map(row => row.facts.requestId)).toEqual(
+        intents.map(intent => intent.launch.run.id)
+      );
+      expect(lower.caughtUp).toBe(false);
+      expect(higher.caughtUp).toBe(true);
+    } finally {
+      release.resolve();
+      await Promise.allSettled([first, second]);
+      interception?.mockRestore();
+      await harness.close();
+    }
+  });
   test('foreign slot membership blocks guarded starts after its request is lost', async () => {
     const harness = await makeHarness();
     try {

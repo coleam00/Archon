@@ -1,3 +1,4 @@
+import { attentionCoordinates } from '@archon/workflows/attention-feed';
 import { describe, expect, mock, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
 import { mkdtemp } from 'node:fs/promises';
@@ -194,10 +195,18 @@ describe('GET /api/runs/attention/stream', () => {
       ])
     );
     expect(snapshotKeys(second)).toHaveLength(2);
-    // The id lags the event in progress, so the reconnect repeats it with the same key.
+    if (!('cursor' in earlyTerminal)) throw new Error('expected terminal cursor');
+    // Replaying the same workflow event can carry a different admission position.
     expect(
       second.events.filter(event => ofRun(early, 'terminal')(event.line)).map(e => e.line)
-    ).toEqual([earlyTerminal]);
+    ).toEqual([
+      {
+        ...earlyTerminal,
+        cursor: expect.stringContaining(
+          JSON.stringify(attentionCoordinates(earlyTerminal.cursor).workflow)
+        ),
+      },
+    ]);
   });
 
   test('a cursor the store cannot read ends the stream with one error event', async () => {
@@ -345,4 +354,128 @@ test('an SSE id names the last event all of whose lines were sent', () => {
     idOf({ type: 'error', error: 'cursor_invalid' }),
   ];
   expect(ids).toEqual([undefined, 'S', 'S', 'S', 'X', 'X', 'X', 'X', 'Y', 'Z', undefined]);
+});
+
+test('runless admission notices replay with workflow events from an SSE checkpoint', async () => {
+  const store = await makeStore();
+  const { resourceStartFixtures } = await import('@archon/workflows/store-conformance');
+  const { start, launch } = resourceStartFixtures('codebase', 'conversation');
+  const holder = start();
+  await store.admitResourceStart(holder);
+  const app = streamApp(store);
+  const first = sseClient(await app.request('/api/runs/attention/stream'));
+  await first.until(line => line.type === 'ready');
+  const checkpoint = first.lastEventId();
+  if (checkpoint === undefined) throw new Error('no checkpoint');
+  await first.disconnect();
+  const receiptId = randomUUID();
+  await store.acceptStartReceipt({
+    receipt: {
+      id: receiptId,
+      sourceInstanceId: 'source',
+      deliveryId: 'drop',
+      contentDigest: 'digest',
+      receivedAt: new Date().toISOString(),
+      occurredAt: null,
+      sourceActor: null,
+    },
+    outcome: 'matched',
+    bindings: [
+      {
+        bindingId: 'binding',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: holder.resource,
+        capacity: 1,
+        overlap: 'skip',
+        launch: { cwd: '/test', workflowName: 'wf', inputs: {}, isolation: { kind: 'in-place' } },
+      },
+    ],
+  });
+  const identity = { receiptId, bindingId: 'binding', ownerId: 'owner' };
+  await store.claimStartBindingPreparation(identity);
+  await store.completeStartBindingPreparation({ ...identity, launch: launch() });
+  const runId = await running(store);
+  await store.completeWorkflowRun(runId, { duration_ms: 1 });
+  const connect = async (cursor: string) =>
+    sseClient(
+      await app.request('/api/runs/attention/stream', {
+        headers: { 'Last-Event-ID': cursor },
+      })
+    );
+  const second = await connect(checkpoint);
+  const notice = await second.until(line => line.type === 'notice');
+  expect(notice).toMatchObject({
+    runId: null,
+    workflow: null,
+    parentRunId: null,
+    node: null,
+    labels: { delivery: 'drop' },
+  });
+  expect(second.events.some(event => ofRun(runId, 'terminal')(event.line))).toBe(true);
+  const admissionEvent = second.events.find(event => event.line.type === 'notice');
+  expect(admissionEvent?.id).toBeDefined();
+  await second.disconnect();
+  const third = await connect(admissionEvent!.id!);
+  try {
+    const replay = await third.until(line => line.type === 'notice');
+    expect(replay).toEqual(notice);
+    expect(third.events.some(event => ofRun(runId, 'terminal')(event.line))).toBe(false);
+  } finally {
+    await third.disconnect();
+  }
+});
+
+test('disconnecting between resolved and terminal lines replays the unfinished event', async () => {
+  const store = await makeStore();
+  const run = await paused(store);
+  const reached = Promise.withResolvers<void>();
+  const release = Promise.withResolvers<void>();
+  const app = new OpenAPIHono();
+  let hold = true;
+  registerAttentionStreamRoute(app, (listener, options) =>
+    watchAttentionQueue(
+      store,
+      { branchOf: async () => null },
+      async line => {
+        await listener(line);
+        if (hold && line.type === 'resolved') {
+          reached.resolve();
+          await release.promise;
+        }
+      },
+      { ...options, pollIntervalMs: 5 }
+    )
+  );
+  const first = sseClient(await app.request('/api/runs/attention/stream'));
+  await first.until(line => line.type === 'ready');
+  try {
+    await store.cancelWorkflowRun(run.runId);
+    await reached.promise;
+    await first.until(line => line.type === 'resolved');
+    const checkpoint = first.lastEventId();
+    if (!checkpoint) throw new Error('no checkpoint');
+    const disconnecting = first.disconnect();
+    hold = false;
+    release.resolve();
+    await disconnecting;
+    expect(first.events.some(event => event.line.type === 'terminal')).toBe(false);
+    const second = sseClient(
+      await app.request('/api/runs/attention/stream', { headers: { 'Last-Event-ID': checkpoint } })
+    );
+    try {
+      await second.until(line => line.type === 'terminal');
+      expect(
+        second.events
+          .filter(event => event.line.type === 'resolved' || event.line.type === 'terminal')
+          .map(event => event.line.type)
+      ).toEqual(['terminal']);
+    } finally {
+      await second.disconnect();
+    }
+  } finally {
+    release.resolve();
+    await first.disconnect();
+  }
 });

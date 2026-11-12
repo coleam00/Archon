@@ -1208,13 +1208,15 @@ binding, resource, overlap, blocker kind/ID, delivery and request labels. They u
 receipt time for `--since`. They keep source-run attribution after completion; runless
 notices belong to the binding project and have null run context. Each skipped request
 contributes at most one notice, separately from the author's 50-notice ceiling.
+`--watch --notices` delivers new drops, including those attributed to completed runs.
+A fresh watch starts at the current heads; retained history is available through `--since`.
 
 **`--protocol`**, with `--watch`, writes the full sync protocol, for a program that keeps its
 own copy of the open set: one `attention` line per open
 item in scope and an identifier-free `degraded` warning for each batch report of an affected
 paused run (an unreadable row or a readable parent whose descendant cannot be read),
 then `ready`, then follows changes any process commits, as
-`attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
+`attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `notice`, `owner_lost` and idle `bookmark` lines.
 Every run line carries the run's `workflow` and `parentRunId`, so a consumer can keep
 top-level runs or one parent's children. A failed `terminal` line carries `cause` with the
 failed node and its recorded error class when available; `cause` is null for failures
@@ -1236,7 +1238,12 @@ snapshot, replays readable feed events strictly after it. Multiple lines can sha
 event cursor; resuming after it excludes all of them. For a partially handled event,
 replay from an earlier checkpoint as described in the guide. A `degraded` warning means replay may have
 gaps; use the repair and replay steps above. The line shapes and the consumer contract are in
-the [Operate page](/getting-started/operate/#the-full-protocol-for-programs). Exit codes: `0` when a signal or a
+the [Operate page](/getting-started/operate/#the-full-protocol-for-programs).
+Attention cursors contain workflow-event and admission positions and are opaque to clients.
+New cursors replay both sources, preserving order within each source. Legacy workflow cursors
+replay workflow events and start admissions at connection head. Deduplicate admission replay
+by `labels.request`. Old binaries cannot read new cursors after rollback; reconnect without
+`--after` or `Last-Event-ID`. No persisted data changes are required. Exit codes: `0` when a signal or a
 closed stdout stops the stream (a closed stdout is noticed at the next line), `1` when it
 cannot start or an output write fails for another reason, `4` when the store cannot read the stream's cursor, an `--after` cursor this
 install did not issue or the stream's own position (with `--json`, the last line is

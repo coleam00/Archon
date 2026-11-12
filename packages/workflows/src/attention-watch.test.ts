@@ -1,3 +1,4 @@
+import { attentionCoordinates } from './attention-feed';
 // @archon-test-isolated
 import { describe, expect, mock, spyOn, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
@@ -24,6 +25,15 @@ import {
   workflowEventCursor,
   type IWorkflowStore,
 } from './store';
+
+function sameWorkflowLine(line: AttentionStreamLine): AttentionStreamLine {
+  return 'cursor' in line
+    ? {
+        ...line,
+        cursor: expect.stringContaining(JSON.stringify(attentionCoordinates(line.cursor).workflow)),
+      }
+    : line;
+}
 
 const roots = trackTempRoots();
 const host: AttentionWatchHost = { branchOf: async () => null };
@@ -184,12 +194,25 @@ describe('watchAttentionQueue', () => {
         const head = await store.getWorkflowEventHead();
         await until(() => rejected.length >= 3);
         expect(rejected.every(line => isDeepStrictEqual(line, rejected[0]))).toBe(true);
-        expect(accepted.some(line => 'cursor' in line && line.cursor === head)).toBe(false);
+        expect(
+          accepted.some(
+            line => 'cursor' in line && attentionCoordinates(line.cursor).workflow === head
+          )
+        ).toBe(false);
         accepting = true;
-        await until(() => accepted.some(line => line.type === 'bookmark' && line.cursor === head));
+        await until(() =>
+          accepted.some(
+            line => line.type === 'bookmark' && attentionCoordinates(line.cursor).workflow === head
+          )
+        );
         expect(accepted).toContainEqual(rejected[0]);
         expect(
-          accepted.filter(line => line.type === type && 'cursor' in line && line.cursor !== start)
+          accepted.filter(
+            line =>
+              line.type === type &&
+              'cursor' in line &&
+              attentionCoordinates(line.cursor).workflow !== start
+          )
         ).toHaveLength(1);
       } finally {
         await stream.close();
@@ -245,7 +268,11 @@ describe('watchAttentionQueue', () => {
       accepting = true;
       await until(() => lines.some(ofRun(b, 'resumed')));
       expect(lines.map(line => line.type)).toEqual(['ready', 'degraded', 'terminal', 'resumed']);
-      expect(lines[1]).toEqual({ type: 'degraded', reason: 'run_unreadable', cursor: start });
+      expect(lines[1]).toEqual({
+        type: 'degraded',
+        reason: 'run_unreadable',
+        cursor: expect.stringContaining(JSON.stringify(start)),
+      });
     } finally {
       await stream.close();
     }
@@ -290,7 +317,11 @@ describe('watchAttentionQueue', () => {
         const terminal = await stream.next(ofRun(b, 'terminal'));
         const resumed = await stream.next(ofRun(b, 'resumed'));
         const degraded = await stream.next(line => line.type === 'degraded');
-        expect(degraded).toEqual({ type: 'degraded', reason: 'run_unreadable', cursor: start });
+        expect(degraded).toEqual({
+          type: 'degraded',
+          reason: 'run_unreadable',
+          cursor: expect.stringContaining(JSON.stringify(start)),
+        });
         expect(JSON.stringify(stream.lines)).not.toContain(a);
         expect(JSON.stringify(stream.lines)).not.toContain('private read failure');
         expect(JSON.stringify(warnings)).toContain(a);
@@ -300,15 +331,15 @@ describe('watchAttentionQueue', () => {
         try {
           await replay.next(ofRun(b, 'resumed'));
           expect(replay.lines.filter(ofRun(a, 'terminal'))).toHaveLength(1);
-          expect(replay.lines.filter(ofRun(b, 'terminal'))).toEqual([terminal]);
-          expect(replay.lines.filter(ofRun(b, 'resumed'))).toEqual([resumed]);
+          expect(replay.lines.filter(ofRun(b, 'terminal'))).toEqual([sameWorkflowLine(terminal)]);
+          expect(replay.lines.filter(ofRun(b, 'resumed'))).toEqual([sameWorkflowLine(resumed)]);
         } finally {
           await replay.close();
         }
         if (terminal.type !== 'terminal') throw new Error('expected terminal');
         const after = await watch(store, { after: terminal.cursor });
         try {
-          expect(await after.next(ofRun(b, 'resumed'))).toEqual(resumed);
+          expect(await after.next(ofRun(b, 'resumed'))).toEqual(sameWorkflowLine(resumed));
           expect(after.lines.filter(ofRun(b, 'terminal'))).toEqual([]);
         } finally {
           await after.close();
@@ -417,8 +448,14 @@ describe('watchAttentionQueue', () => {
     };
     const stream = await watch(feed);
     try {
-      expect(await stream.next(ofRun(b, 'terminal'))).toHaveProperty('cursor', events[501].cursor);
-      expect(await stream.next(ofRun(b, 'resumed'))).toHaveProperty('cursor', events[502].cursor);
+      expect(await stream.next(ofRun(b, 'terminal'))).toHaveProperty(
+        'cursor',
+        expect.stringContaining(JSON.stringify(events[501].cursor))
+      );
+      expect(await stream.next(ofRun(b, 'resumed'))).toHaveProperty(
+        'cursor',
+        expect.stringContaining(JSON.stringify(events[502].cursor))
+      );
       expect(failures).toBe(6);
       expect(stream.lines.filter(line => line.type === 'degraded')).toHaveLength(2);
     } finally {
@@ -479,7 +516,7 @@ describe('watchAttentionQueue', () => {
       expect(
         stream.lines
           .filter(line => line.type === 'terminal' || line.type === 'resumed')
-          .map(line => line.cursor)
+          .map(line => attentionCoordinates(line.cursor).workflow)
       ).toEqual(events.map(event => event.cursor));
     } finally {
       await stream.close();
@@ -521,12 +558,19 @@ describe('watchAttentionQueue', () => {
         held = false;
         if (recovery === 'latched') {
           const warning = await stream.next(line => line.type === 'degraded' && attempts >= 8);
-          expect(warning).toEqual({ type: 'degraded', reason: 'run_unreadable', cursor: safe });
+          expect(warning).toEqual({
+            type: 'degraded',
+            reason: 'run_unreadable',
+            cursor: expect.stringContaining(JSON.stringify(safe)),
+          });
           expect(stream.lines.filter(line => line.type === 'terminal')).toHaveLength(1);
           expect(stream.lines.filter(line => line.type === 'degraded')).toHaveLength(1);
-          expect(stream.lines.some(line => line.type === 'bookmark' && line.cursor !== start)).toBe(
-            false
-          );
+          expect(
+            stream.lines.some(
+              line =>
+                line.type === 'bookmark' && attentionCoordinates(line.cursor).workflow !== start
+            )
+          ).toBe(false);
           down = false;
         }
         await stream.next(ofRun(c, 'terminal'));
@@ -542,7 +586,7 @@ describe('watchAttentionQueue', () => {
         expect(
           stream.lines
             .filter(line => line.type === 'terminal' || line.type === 'resumed')
-            .map(line => ('cursor' in line ? line.cursor : null))
+            .map(line => ('cursor' in line ? attentionCoordinates(line.cursor).workflow : null))
         ).toEqual(expected.events.map(event => event.cursor));
       } finally {
         await stream.close();
@@ -712,14 +756,14 @@ describe('watchAttentionQueue', () => {
     expect(filtered.lines).toEqual([
       {
         type: 'attention',
-        cursor: head,
+        cursor: expect.stringContaining(JSON.stringify(head)),
         snapshot: true,
         project: { key: '_cwd/alpha', codebaseId: null, name: 'alpha' },
         workflow: 'wf',
         parentRunId: null,
         item: (await readAttentionQueueItem({ store, branchOf: host.branchOf }, other.runId))!,
       },
-      { type: 'ready', cursor: head },
+      { type: 'ready', cursor: expect.stringContaining(JSON.stringify(head)) },
     ]);
 
     const beta = await pausedAtAsk(store, {}, 'beta');
@@ -779,7 +823,9 @@ describe('watchAttentionQueue', () => {
       const expected = await readAttentionQueueItem({ store, branchOf: host.branchOf }, runId);
       const head = await store.getWorkflowEventHead();
       held = false;
-      await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+      await stream.next(
+        line => line.type === 'bookmark' && attentionCoordinates(line.cursor).workflow === head
+      );
       const items = stream.lines.filter(line => line.type === 'attention');
       expect(items).toHaveLength(2);
       expect(items[1]).toMatchObject({ snapshot: false, item: expected });
@@ -879,7 +925,7 @@ describe('watchAttentionQueue', () => {
     expect(JSON.stringify(stream.lines)).not.toContain('sensitive-marker');
     await store.resumeWorkflowRun(run.id);
     const replay = await watch(store, { after: before });
-    expect(await replay.next(ofRun(run.id, 'terminal'))).toEqual(terminal);
+    expect(await replay.next(ofRun(run.id, 'terminal'))).toEqual(sameWorkflowLine(terminal));
     await replay.close();
   });
 
@@ -912,10 +958,17 @@ describe('watchAttentionQueue', () => {
     await nodeFailed('timeout');
     await store.failWorkflowRun(runId, 'node failed');
     const replay = await watch(store, { after: before });
-    await replay.next(line => ofRun(runId, 'terminal')(line) && !isDeepStrictEqual(line, terminal));
+    if (!('cursor' in terminal)) throw new Error('expected cursor');
+    await replay.next(
+      line =>
+        ofRun(runId, 'terminal')(line) &&
+        'cursor' in line &&
+        attentionCoordinates(line.cursor).workflow !==
+          attentionCoordinates(terminal.cursor).workflow
+    );
     await replay.close();
     const terminals = replay.lines.filter(ofRun(runId, 'terminal'));
-    expect(terminals[0]).toEqual(terminal);
+    expect(terminals[0]).toEqual(sameWorkflowLine(terminal));
     expect(terminals[1]).toMatchObject({ cause: { node: 'build', errorClass: 'timeout' } });
   });
 
@@ -999,7 +1052,9 @@ describe('watchAttentionQueue', () => {
     // state below is read by the tail before the next replaces it.
     const caughtUp = async (): Promise<void> => {
       const head = await store.getWorkflowEventHead();
-      await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+      await stream.next(
+        line => line.type === 'bookmark' && attentionCoordinates(line.cursor).workflow === head
+      );
     };
     const runId = await running(store, 'alpha');
     await store.createWorkflowEvent({
@@ -1068,7 +1123,9 @@ describe('watchAttentionQueue', () => {
       ])
     );
     expect(snapshot).toHaveLength(2);
-    expect(second.lines.filter(ofRun(finishing, 'terminal'))).toEqual([firstTerminal]);
+    expect(second.lines.filter(ofRun(finishing, 'terminal'))).toEqual([
+      sameWorkflowLine(firstTerminal),
+    ]);
     // The late pause is already held from the snapshot, so its replayed event adds nothing.
     expect(second.lines.filter(attentionOf(late.runId))).toHaveLength(1);
   });
@@ -1095,7 +1152,9 @@ describe('watchAttentionQueue', () => {
         const row = await store.getWorkflowRun(runId);
         const head = await store.getWorkflowEventHead();
         held = false;
-        await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+        await stream.next(
+          line => line.type === 'bookmark' && attentionCoordinates(line.cursor).workflow === head
+        );
         const changes = stream.lines.filter(line => 'runId' in line && line.runId === runId);
         expect(changes).toMatchObject([
           { type: 'terminal', status: 'failed' },
@@ -1110,9 +1169,11 @@ describe('watchAttentionQueue', () => {
 
         const replay = await watch(store, { after: terminal.cursor, bookmarkIntervalMs: 0 });
         try {
-          await replay.next(line => line.type === 'bookmark' && line.cursor === head);
+          await replay.next(
+            line => line.type === 'bookmark' && attentionCoordinates(line.cursor).workflow === head
+          );
           expect(replay.lines.filter(line => 'runId' in line && line.runId === runId)).toEqual(
-            changes.slice(1)
+            changes.slice(1).map(sameWorkflowLine)
           );
         } finally {
           await replay.close();
@@ -1382,7 +1443,9 @@ describe('watchAttentionQueue', () => {
       try {
         await stream.next(ofRun(runId, 'owner_lost'));
         held = false;
-        await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+        await stream.next(
+          line => line.type === 'bookmark' && attentionCoordinates(line.cursor).workflow === head
+        );
       } finally {
         await stream.close();
       }
@@ -1426,7 +1489,9 @@ describe('watchAttentionQueue', () => {
         expect(executionClaim(resumed.metadata)).not.toBe(executionClaim(original.metadata));
         const head = await store.getWorkflowEventHead();
         held = false;
-        await stream.next(line => line.type === 'bookmark' && line.cursor === head);
+        await stream.next(
+          line => line.type === 'bookmark' && attentionCoordinates(line.cursor).workflow === head
+        );
         await stream.next(() => stream.lines.filter(ofRun(runId, 'owner_lost')).length >= 2);
       } finally {
         await stream.close();
@@ -1571,7 +1636,7 @@ describe('watchAttentionQueue', () => {
     down = false;
     expect(await stream.next(line => line.type === 'bookmark')).toEqual({
       type: 'bookmark',
-      cursor: await store.getWorkflowEventHead(),
+      cursor: expect.stringContaining(JSON.stringify(await store.getWorkflowEventHead())),
     });
     await stream.close();
   });
@@ -1582,7 +1647,10 @@ describe('watchAttentionQueue', () => {
     const stream = await watch(store, { bookmarkIntervalMs: 20 });
     const bookmark = await stream.next(line => line.type === 'bookmark');
     await stream.close();
-    expect(bookmark).toEqual({ type: 'bookmark', cursor: await store.getWorkflowEventHead() });
+    expect(bookmark).toEqual({
+      type: 'bookmark',
+      cursor: expect.stringContaining(JSON.stringify(await store.getWorkflowEventHead())),
+    });
   });
 });
 
@@ -1618,7 +1686,7 @@ test.each(['all', 'project'] as const)(
         expect(line).toEqual({
           type: 'degraded',
           reason: 'run_unreadable',
-          cursor: start,
+          cursor: expect.stringContaining(JSON.stringify(start)),
         });
       }
       expect(JSON.stringify(handle.lines)).not.toContain('private-run');

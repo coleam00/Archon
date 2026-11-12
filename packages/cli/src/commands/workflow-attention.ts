@@ -1,3 +1,4 @@
+import { attentionCursor } from '@archon/workflows/attention-feed';
 import {
   splitAttentionRead,
   scopeAttentionDegraded,
@@ -5,7 +6,7 @@ import {
 } from '@archon/workflows/schemas/attention-degraded';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import type { AttentionWatch } from '@archon/workflows/engine-port';
-import { WorkflowEventCursorError, workflowEventCursor } from '@archon/workflows/store';
+import { WorkflowEventCursorError } from '@archon/workflows/store';
 import { attentionWatchReader, type AttentionWatchLevel } from '@archon/workflows/attention-needs';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { resolveCodebaseForPath } from '@archon/core/services/codebase-checkout-resolver';
@@ -181,7 +182,7 @@ export async function workflowAttentionWatch(
       watch = await host.engine.watchAttention(listener, {
         scope,
         labels,
-        ...(opts.after === undefined ? {} : { after: workflowEventCursor(opts.after) }),
+        ...(opts.after === undefined ? {} : { after: attentionCursor(opts.after) }),
       });
     } catch (error) {
       if (!(error instanceof WorkflowEventCursorError)) throw error;

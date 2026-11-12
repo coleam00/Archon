@@ -1,3 +1,4 @@
+import type { AttentionCursor } from './attention-feed';
 import type { IWorkflowPlatform } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import type { WorkflowEventCursor, WorkflowResumeCursor } from './store';
@@ -112,7 +113,7 @@ export type WorkflowEventDoorbell = (onEvent: () => void) => Promise<(() => void
 
 export interface AttentionWatchOptions {
   /** Replay from this cursor, after the snapshot, instead of starting at the head. */
-  after?: WorkflowEventCursor;
+  after?: AttentionCursor;
   scope: AttentionQueueScope;
   /** Exact label matches for `attention` and `resolved` lines; every one must hold. */
   labels?: Readonly<AttentionLabels>;

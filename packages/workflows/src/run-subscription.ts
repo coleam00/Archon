@@ -37,13 +37,7 @@ async function isRunInSubscriptionScope(
   return ancestry.some(ancestor => ancestor.id === targetRunId);
 }
 
-/** A position in the feed and a stop; what both the run-tree tail and the attention watch hold. */
-export interface WorkflowEventFeedFollower {
-  /** The cursor after the last handled delivery. */
-  cursor(): WorkflowEventCursor;
-  /** Stops polling and waits for an in-flight read; with `drain`, reads to the head once more. Idempotent. */
-  close(options?: { drain?: boolean }): Promise<void>;
-}
+export type WorkflowEventFeedFollower = FeedFollower<WorkflowEventCursor>;
 
 export interface WorkflowEventFeedFollowOptions {
   pollIntervalMs: number;
@@ -59,18 +53,33 @@ export interface WorkflowEventFeedFollowOptions {
   logFields: Record<string, unknown>;
 }
 
+export interface FeedPage<C, D> {
+  deliveries: readonly D[];
+  next: C;
+  caughtUp: boolean;
+}
+
+export interface FeedFollower<C> {
+  /** The cursor after the last handled delivery. */
+  cursor(): C;
+  /** Stops polling and waits for in-flight work; `drain` reads to head once more. Idempotent. */
+  close(options?: { drain?: boolean }): Promise<void>;
+}
+
 /**
  * Tail the store's commit-ordered feed from `start`, handing every delivery to `handle`
  * in order. The cursor advances only past a handled delivery, so a read or handler
  * failure retries from the last one handled. A `WorkflowEventCursorError` stops the tail:
  * a cursor the store did not issue never becomes readable.
  */
-export async function followWorkflowEventFeed(
-  store: Pick<IWorkflowStore, 'readWorkflowEventsAfter'>,
-  start: WorkflowEventCursor,
-  handle: (delivery: WorkflowRunDelivery) => Promise<void>,
-  options: WorkflowEventFeedFollowOptions
-): Promise<WorkflowEventFeedFollower> {
+export async function followFeed<C, D extends { cursor: C }>(
+  read: (cursor: C, limit: number) => Promise<FeedPage<C, D>>,
+  start: C,
+  handle: (delivery: D) => Promise<void>,
+  options: Omit<WorkflowEventFeedFollowOptions, 'beginPage'> & {
+    beginPage?: (page: FeedPage<C, D>) => void;
+  }
+): Promise<FeedFollower<C>> {
   let cursor = start;
   let consecutiveFailures = 0;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -78,25 +87,25 @@ export async function followWorkflowEventFeed(
   let rang = false;
   let closing: Promise<void> | undefined;
 
-  const drainToHead = async (): Promise<void> => {
+  const drainToHead = async (stopOnClose = false): Promise<boolean> => {
     for (;;) {
-      const page = await store.readWorkflowEventsAfter(cursor, { limit: PAGE_LIMIT });
+      const page = await read(cursor, PAGE_LIMIT);
       options.beginPage?.(page);
-      for (const delivery of page.events) {
+      for (const delivery of page.deliveries) {
         await handle(delivery);
         // Advance per row so a tick that fails mid-page resumes after the last delivery.
         cursor = delivery.cursor;
       }
       cursor = page.next;
-      if (page.events.length < PAGE_LIMIT) return;
+      if (page.caughtUp || (stopOnClose && closing !== undefined)) return page.caughtUp;
     }
   };
 
   const tick = async (): Promise<void> => {
     try {
-      await drainToHead();
+      const caughtUp = await drainToHead(true);
       consecutiveFailures = 0;
-      options.onCaughtUp?.();
+      if (caughtUp) options.onCaughtUp?.();
     } catch (error) {
       consecutiveFailures += 1;
       const fields = { ...options.logFields, err: error as Error, consecutiveFailures };
@@ -157,6 +166,26 @@ export async function followWorkflowEventFeed(
       return closing;
     },
   };
+}
+
+export function followWorkflowEventFeed(
+  store: Pick<IWorkflowStore, 'readWorkflowEventsAfter'>,
+  start: WorkflowEventCursor,
+  handle: (delivery: WorkflowRunDelivery) => Promise<void>,
+  options: WorkflowEventFeedFollowOptions
+): Promise<WorkflowEventFeedFollower> {
+  return followFeed<WorkflowEventCursor, WorkflowRunDelivery>(
+    async (cursor, limit) => {
+      const page = await store.readWorkflowEventsAfter(cursor, { limit });
+      return { next: page.next, deliveries: page.events, caughtUp: page.events.length < limit };
+    },
+    start,
+    handle,
+    {
+      ...options,
+      beginPage: page => options.beginPage?.({ events: page.deliveries, next: page.next }),
+    }
+  );
 }
 
 /**

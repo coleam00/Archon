@@ -25,13 +25,17 @@ import {
   type AttentionQueueSource,
   type ProjectRef,
 } from './attention-queue';
-import type {
-  AttentionWatch,
-  AttentionWatchOptions,
-  WorkflowEventDoorbell,
-  WorkflowRunDelivery,
-} from './engine-port';
-import { followWorkflowEventFeed, type WorkflowEventFeedFollower } from './run-subscription';
+import type { AttentionWatch, AttentionWatchOptions, WorkflowEventDoorbell } from './engine-port';
+import { followFeed, type FeedFollower } from './run-subscription';
+import {
+  attentionCursor,
+  attentionFeedStart,
+  readAttentionFeed,
+  type AttentionCursor,
+  type AttentionDelivery,
+  type AttentionWorkflowDelivery,
+} from './attention-feed';
+import { requestingRun } from './schemas/resource-start';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
@@ -50,14 +54,7 @@ import {
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
-import {
-  executionClaim,
-  WorkflowEventCursorError,
-  workflowEventCursor,
-  type IWorkflowStore,
-  type WorkflowEventCursor,
-  type WorkflowEventPage,
-} from './store';
+import { executionClaim, WorkflowEventCursorError, type IWorkflowStore } from './store';
 import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
 import {
   firstFailedNodeEvent,
@@ -65,7 +62,11 @@ import {
   recordedFailureKind,
   failedOutcomeReason,
 } from './terminal-record';
-import { workflowNoticeDataSchema } from './workflow-notice';
+import {
+  admissionWorkflowNotice,
+  workflowNoticeSchema,
+  workflowNoticeDataSchema,
+} from './workflow-notice';
 
 function getLog(): ReturnType<typeof createLogger> {
   return createLogger('workflow.attention_watch');
@@ -75,7 +76,7 @@ const DEFAULT_POLL_INTERVAL_MS = 1000;
 const DEFAULT_BOOKMARK_INTERVAL_MS = 30_000;
 const RUNNING_PAGE_LIMIT = 100;
 
-const cursorSchema = z.string().min(1).transform(workflowEventCursor);
+const cursorSchema = z.string().min(1).transform(attentionCursor);
 /** What a run is part of, from its row; both null when the stream could not read the row. */
 const runContextFields = { workflow: z.string().nullable(), parentRunId: z.string().nullable() };
 const lineBase = {
@@ -92,7 +93,7 @@ const lineBase = {
  * `workflow attention <run>` build it. Every run line carries the run's `workflow` and
  * `parentRunId` (null for a top-level run), so a consumer can filter on them.
  */
-export const attentionStreamLineSchema = z.discriminatedUnion('type', [
+export const attentionStreamLineSchema = z.union([
   z.object({
     type: z.literal('attention'),
     cursor: cursorSchema,
@@ -147,13 +148,7 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     reason: z.array(z.string()).min(1).optional(),
   }),
   z.object({ type: z.literal('resumed'), ...lineBase, status: z.literal('running') }),
-  /** What a node of the run said the run did (`workflow notice`); `at` is when it said it. */
-  z.object({
-    type: z.literal('notice'),
-    ...lineBase,
-    at: z.string(),
-    ...workflowNoticeDataSchema.shape,
-  }),
+  workflowNoticeSchema.and(z.object({ type: z.literal('notice'), cursor: cursorSchema })),
   z.object({ type: z.literal('owner_lost'), ...lineBase, observedStatus: workflowRunStatusSchema }),
   z.object({ type: z.literal('ready'), cursor: cursorSchema }),
   /** Sent only after a read that reached the head, so a stream that cannot read stops sending them. */
@@ -185,6 +180,8 @@ export interface AttentionWatchHost {
 /** Read methods only, so the watch cannot write run state. */
 export type AttentionWatchStore = Pick<
   IWorkflowStore,
+  | 'getAdmissionNoticeHead'
+  | 'readAdmissionNoticesAfter'
   | 'getWorkflowEventHead'
   | 'readWorkflowEventsAfter'
   | 'listAttentionQueueRows'
@@ -242,9 +239,9 @@ const answerKey = (runId: string, occurrence: string): string => `${runId}\u0000
 type AnswerOrigin = Pick<Extract<Resolution, { reason: 'answered' }>, 'answeredVia' | 'answeredBy'>;
 
 /** The surface and answerer of each answer event in a page, by run and occurrence. */
-function indexAnswers(page: WorkflowEventPage): Map<string, AnswerOrigin> {
+function indexAnswers(events: readonly AttentionWorkflowDelivery[]): Map<string, AnswerOrigin> {
   const answers = new Map<string, AnswerOrigin>();
-  for (const { event } of page.events) {
+  for (const { event } of events) {
     if (event.event_type !== 'approval_received' && event.event_type !== 'wait_answered') continue;
     const { occurrence, via, by } = event.data;
     if (typeof occurrence !== 'string') continue;
@@ -276,9 +273,9 @@ function runContext(run: WorkflowRun | null): RunContext {
 
 /** The fields of a line about the delivered event's run, from the row the stream read. */
 function lifecycleFields(
-  { cursor, event }: WorkflowRunDelivery,
+  { cursor, event }: AttentionWorkflowDelivery,
   view: RunView | null
-): { cursor: WorkflowEventCursor; project: ProjectRef | null; runId: string } & RunContext {
+): { cursor: AttentionCursor; project: ProjectRef | null; runId: string } & RunContext {
   return {
     cursor,
     project: view?.project ?? null,
@@ -339,15 +336,14 @@ export async function watchAttentionQueue(
   const bookmarkIntervalMs = options.bookmarkIntervalMs ?? DEFAULT_BOOKMARK_INTERVAL_MS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
-  const start = options.after ?? (await store.getWorkflowEventHead());
-  if (options.after !== undefined) await store.readWorkflowEventsAfter(options.after, { limit: 1 });
+  const start = await attentionFeedStart(store, options.after);
 
   const open = new Map<string, AttentionQueueItem>();
-  let follower: WorkflowEventFeedFollower | undefined;
+  let follower: FeedFollower<AttentionCursor> | undefined;
   let closed = false;
   let chain: Promise<void> = Promise.resolve();
   let lastLineAt = Date.now();
-  const position = (): WorkflowEventCursor => follower?.cursor() ?? start;
+  const position = (): AttentionCursor => follower?.cursor() ?? start;
 
   // Every line, including asynchronous liveness lines, goes through one chain so the
   // listener sees one line at a time. Feed handlers await the original delivery.
@@ -495,10 +491,10 @@ export async function watchAttentionQueue(
     }
     return view;
   };
-  let blocked: { cursor: WorkflowEventCursor; warned: boolean } | undefined;
+  let blocked: { cursor: AttentionCursor; warned: boolean } | undefined;
   const isolated = new Set<string>();
 
-  const probeRunWitness = async (event: WorkflowRunDelivery['event']): Promise<boolean> => {
+  const probeRunWitness = async (event: AttentionWorkflowDelivery['event']): Promise<boolean> => {
     try {
       // A cached success says nothing about whether reads work now.
       await projectRun(event.workflow_run_id);
@@ -513,8 +509,8 @@ export async function watchAttentionQueue(
     }
   };
 
-  const hasReadableWitness = async (delivery: WorkflowRunDelivery): Promise<boolean> => {
-    let cursor = delivery.cursor;
+  const hasReadableWitness = async (delivery: AttentionWorkflowDelivery): Promise<boolean> => {
+    let cursor = delivery.workflowCursor;
     const probed = new Set([delivery.event.workflow_run_id]);
     while (!closed) {
       const page = await store.readWorkflowEventsAfter(cursor, { limit: 100 });
@@ -531,7 +527,7 @@ export async function watchAttentionQueue(
   };
 
   const retryDeliveryView = async (
-    { event, cursor }: WorkflowRunDelivery,
+    { event, cursor }: AttentionWorkflowDelivery,
     error: unknown
   ): Promise<RunView | null | undefined> => {
     const runId = event.workflow_run_id;
@@ -553,7 +549,7 @@ export async function watchAttentionQueue(
   };
 
   const deliveryView = async (
-    delivery: WorkflowRunDelivery
+    delivery: AttentionWorkflowDelivery
   ): Promise<RunView | null | undefined> => {
     const { event, cursor } = delivery;
     const runId = event.workflow_run_id;
@@ -582,7 +578,7 @@ export async function watchAttentionQueue(
   const resolve = async (
     runId: string,
     prev: AttentionQueueItem,
-    cursor: WorkflowEventCursor,
+    cursor: AttentionCursor,
     run: WorkflowRun | null
   ): Promise<void> => {
     const occurrence = occurrenceOf(prev);
@@ -607,7 +603,7 @@ export async function watchAttentionQueue(
   const reconcile = async (
     runId: string,
     view: RunView | null,
-    cursor: WorkflowEventCursor
+    cursor: AttentionCursor
   ): Promise<void> => {
     const prev = open.get(runId);
     const item = view?.item ?? null;
@@ -658,7 +654,7 @@ export async function watchAttentionQueue(
   };
 
   const emitUnmatched = async (
-    { cursor, event }: WorkflowRunDelivery,
+    { cursor, event }: AttentionWorkflowDelivery,
     view: RunView | null
   ): Promise<void> => {
     const runId = event.workflow_run_id;
@@ -684,7 +680,7 @@ export async function watchAttentionQueue(
   };
 
   const emitLifecycle = async (
-    delivery: WorkflowRunDelivery,
+    delivery: AttentionWorkflowDelivery,
     view: RunView | null
   ): Promise<void> => {
     const { event } = delivery;
@@ -716,7 +712,7 @@ export async function watchAttentionQueue(
     }
   };
 
-  const handle = async (delivery: WorkflowRunDelivery): Promise<void> => {
+  const handle = async (delivery: AttentionWorkflowDelivery): Promise<void> => {
     const { cursor, event } = delivery;
     const runId = event.workflow_run_id;
     if (closed || isolated.has(runId)) return;
@@ -735,27 +731,44 @@ export async function watchAttentionQueue(
 
   try {
     await armRunning();
-    follower = await followWorkflowEventFeed(store, start, handle, {
-      pollIntervalMs,
-      ...(host.doorbell ? { doorbell: host.doorbell } : {}),
-      beginPage: page => {
-        views = new Map();
-        codebases = new Map();
-        reconciled.clear();
-        isolated.clear();
-        answers = indexAnswers(page);
+    follower = await followFeed<AttentionCursor, AttentionDelivery>(
+      (cursor, limit) => readAttentionFeed(store, cursor, limit),
+      start,
+      async delivery => {
+        if (closed) return;
+        if (delivery.kind === 'workflow') return handle(delivery);
+        const origin = requestingRun(delivery.facts.sourceActor);
+        const run = origin === null ? null : await store.getWorkflowRun(origin.runId);
+        const notice = await admissionWorkflowNotice(source, delivery.facts, run, codebases);
+        if (isInAttentionScope(notice.project, scope) && matchesAttentionLabels(notice, labels))
+          await emit({ type: 'notice', cursor: delivery.cursor, ...notice });
       },
-      onCaughtUp: () => {
-        if (Date.now() - lastLineAt >= bookmarkIntervalMs)
-          emit({ type: 'bookmark', cursor: position() });
-      },
-      onStopped: () => {
-        emit({ type: 'error', error: 'cursor_invalid' });
-        closed = true;
-        stopLiveness();
-      },
-      logFields: { watch: 'attention' },
-    });
+      {
+        pollIntervalMs,
+        ...(host.doorbell ? { doorbell: host.doorbell } : {}),
+        beginPage: page => {
+          views = new Map();
+          codebases = new Map();
+          reconciled.clear();
+          isolated.clear();
+          answers = indexAnswers(
+            page.deliveries.filter(
+              (delivery): delivery is AttentionWorkflowDelivery => delivery.kind === 'workflow'
+            )
+          );
+        },
+        onCaughtUp: () => {
+          if (Date.now() - lastLineAt >= bookmarkIntervalMs)
+            emit({ type: 'bookmark', cursor: position() });
+        },
+        onStopped: () => {
+          emit({ type: 'error', error: 'cursor_invalid' });
+          closed = true;
+          stopLiveness();
+        },
+        logFields: { watch: 'attention' },
+      }
+    );
   } catch (error) {
     // Already past `ready`: nothing else will close what was armed.
     await close();

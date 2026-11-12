@@ -151,7 +151,8 @@ async function runCli(
   cwd: string,
   archonHome: string,
   args: string[],
-  expectSuccess = true
+  expectSuccess = true,
+  extraEnv: Record<string, string> = {}
 ): Promise<{ exitCode: number; stdout: string; stderr: string }> {
   const child = Bun.spawn([process.execPath, cliPath, ...args], {
     cwd,
@@ -168,6 +169,7 @@ async function runCli(
       GITHUB_TOKEN: '',
       GH_TOKEN: '',
       GITHUB_APP_ID: '',
+      ...extraEnv,
     },
     stdout: 'pipe',
     stderr: 'pipe',
@@ -230,6 +232,188 @@ nodes:
 }
 
 describe('trigger CLI durable execution', () => {
+  test('dropped explicit fires appear once in history and a separate notices watcher', async () => {
+    const fixture = await heldTriggerRun('admission-notice');
+    const { cliPath, projectRoot, archonHome } = fixture;
+    const cli = (args: string[]) => runCli(cliPath, projectRoot, archonHome, args);
+    await fixture.fire();
+    const holder = await waitFor(
+      () => fixture.runs().find(run => run.status === 'running'),
+      'holder to run'
+    );
+    activeRuns.add(holder.id);
+    const configPath = join(projectRoot, '..', 'trigger.json');
+    const config = triggerFireConfigSchema.parse(JSON.parse(readFileSync(configPath, 'utf8')));
+    config.binding.overlap = 'skip';
+    config.binding.capacity = 1;
+    writeFileSync(configPath, JSON.stringify(config));
+    const watcher = Bun.spawn(
+      [
+        process.execPath,
+        cliPath,
+        'workflow',
+        'attention',
+        '--watch',
+        '--notices',
+        '--json',
+        '--all',
+      ],
+      {
+        cwd: projectRoot,
+        env: {
+          ...process.env,
+          WORKFLOW_ID: '',
+          ARCHON_NODE_EXECUTION: '',
+          DATABASE_URL: '',
+          ARCHON_HOME: archonHome,
+        },
+        stdout: 'pipe',
+        stderr: 'pipe',
+      }
+    );
+    const stderr = new Response(watcher.stderr).text();
+    let watcherErrors = '';
+    const lines: {
+      type: string;
+      runId?: string | null;
+      needs?: string;
+      labels?: Record<string, string>;
+    }[] = [];
+    const read = (async () => {
+      let buffer = '';
+      for await (const chunk of watcher.stdout) {
+        buffer += new TextDecoder().decode(chunk);
+        const complete = buffer.split('\n');
+        buffer = complete.pop() ?? '';
+        for (const line of complete) lines.push(JSON.parse(line));
+      }
+    })();
+    try {
+      // An observed author notice establishes that the notices-only watcher is attached.
+      for (let attempt = 0; attempt < 10 && lines.length === 0; attempt++) {
+        await runCli(
+          cliPath,
+          projectRoot,
+          archonHome,
+          ['workflow', 'notice', 'watch attached'],
+          true,
+          {
+            WORKFLOW_ID: holder.id,
+            ARCHON_NODE_EXECUTION: JSON.stringify({ runId: holder.id, path: 'hold' }),
+          }
+        );
+        await Bun.sleep(100);
+      }
+      expect(lines.length).toBeGreaterThan(0);
+      const sourcePath = join(projectRoot, '.archon', 'workflows', 'source.yaml');
+      const quote = (value: string): string => "'" + value.replaceAll("'", "'\\''") + "'";
+      const fireCommand = [
+        process.execPath,
+        cliPath,
+        'trigger',
+        'fire',
+        '--config',
+        configPath,
+        '--delivery-id',
+        'from-run',
+      ]
+        .map(quote)
+        .join(' ');
+      writeFileSync(
+        sourcePath,
+        `name: source
+description: Fire from a node.
+mutates_checkout: false
+nodes:
+  - id: handoff
+    bash: ${JSON.stringify(fireCommand)}
+`
+      );
+      const launched = JSON.parse(
+        (await cli(['workflow', 'run', 'source', 'handoff', '--no-worktree', '--detach', '--json']))
+          .stdout
+      ) as { runId: string };
+      activeRuns.add(launched.runId);
+      await waitFor(
+        () => fixture.runs().find(run => run.id === launched.runId && run.status === 'completed'),
+        'source to finish'
+      );
+      const fire = ['trigger', 'fire', '--config', configPath, '--delivery-id', 'runless'];
+      await cli(fire);
+      await cli(fire);
+      await fixture.fire();
+      await waitFor(
+        () =>
+          lines.filter(line => line.labels?.kind === 'admission-skipped').length === 2
+            ? true
+            : undefined,
+        'both drops on live notices watch'
+      );
+      const result = JSON.parse(
+        (await cli(['workflow', 'attention', '--notices', '--since', '24h', '--json'])).stdout
+      ) as {
+        notices: {
+          runId: string | null;
+          workflow: string | null;
+          parentRunId: string | null;
+          node: string | null;
+          project: { codebaseId: string };
+          text: string;
+          labels: Record<string, string>;
+        }[];
+      };
+      const notices = result.notices.filter(notice => notice.labels.kind === 'admission-skipped');
+      expect(notices).toHaveLength(2);
+      expect(notices.find(notice => notice.labels.delivery === 'from-run')).toMatchObject({
+        runId: launched.runId,
+        workflow: 'source',
+        node: 'handoff',
+      });
+      expect(notices.find(notice => notice.labels.delivery === 'runless')).toMatchObject({
+        runId: null,
+        workflow: null,
+        parentRunId: null,
+        node: null,
+      });
+      for (const notice of notices) {
+        expect(notice.labels).toMatchObject({
+          binding: 'admission-notice-proof',
+          resource: 'admission-notice:resource',
+          blocker: holder.id,
+        });
+        expect(notice.text).toContain('Not queued.');
+        expect(notice.project.codebaseId).toBeDefined();
+        expect(Object.keys(notice).sort()).toEqual([
+          'at',
+          'labels',
+          'node',
+          'parentRunId',
+          'project',
+          'runId',
+          'text',
+          'workflow',
+        ]);
+      }
+      expect(
+        lines.filter(line => line.labels?.kind === 'admission-skipped').map(line => line.needs)
+      ).toEqual(['nothing', 'nothing']);
+      expect(fixture.requests().map(row => row.status)).toEqual([
+        'admitted',
+        'skipped',
+        'skipped',
+        'skipped',
+      ]);
+      expect(fixture.runs().find(run => run.id === holder.id)?.status).toBe('running');
+      expect(fixture.runs()).toHaveLength(2);
+    } finally {
+      watcher.kill('SIGTERM');
+      await watcher.exited;
+      await read;
+      watcherErrors = await stderr;
+    }
+    if (process.platform !== 'win32') expect(watcher.exitCode, watcherErrors).toBe(0);
+  }, 30_000);
+
   test('a killed launch records no failure and continues to hold its slot', async () => {
     const fixture = await heldTriggerRun('killed-preparation');
     const ready = join(fixture.projectRoot, 'ready.json');
