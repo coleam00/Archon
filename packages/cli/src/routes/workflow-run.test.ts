@@ -244,6 +244,7 @@ test.each(['acme/app', 'registered-id'])(
     const result = await invoke({
       project,
       'no-worktree': true,
+      'no-wait': true,
       adopt: 'prior',
     });
     expect(result.exitCode).toBe(0);
@@ -253,6 +254,7 @@ test.each(['acme/app', 'registered-id'])(
     expect(call?.[4]).toMatchObject({
       codebaseId: repo.id,
       noWorktree: true,
+      noWait: true,
       adoptRunId: 'prior',
     });
   }

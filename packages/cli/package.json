@@ -290,6 +290,9 @@
       "src/commands/workflow-codebase-resolution.integration.spec.ts"
     ],
     [
+      "src/commands/workflow-run-resource.integration.spec.ts"
+    ],
+    [
       "src/commands/workflow-github-app.integration.spec.ts"
     ],
     [

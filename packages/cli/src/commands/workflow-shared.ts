@@ -56,6 +56,7 @@ export interface WorkflowRunOptions {
   baseBranch?: string;
   registrationBaseBranch?: string;
   noWorktree?: boolean;
+  noWait?: boolean;
   /**
    * Register the supplied directory as a folder project and run in place,
    * even with git. Reuses existing folder registrations; refuses existing repos.

@@ -16,6 +16,7 @@ export const cliArgOptions: CliArgOptions = {
   'base-branch': { type: 'string' },
   'workflow-source': { type: 'string' },
   'no-worktree': { type: 'boolean' },
+  'no-wait': { type: 'boolean' },
   folder: { type: 'boolean' },
   container: { type: 'boolean' },
   resume: { type: 'boolean' },

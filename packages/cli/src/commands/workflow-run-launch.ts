@@ -693,7 +693,7 @@ async function createRunWorktree(
   });
 }
 
-function createSetupRun(
+export function createSetupRun(
   launch: ForegroundLaunch,
   codebase: Codebase,
   runId: string

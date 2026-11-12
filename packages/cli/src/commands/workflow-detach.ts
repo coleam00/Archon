@@ -337,6 +337,8 @@ export async function recordDetachedChildStartupFailure(
   const { detachedRunId, detachedProcessOwner, launchToken } = request;
   if (detachedRunId === undefined || !detachedProcessOwner || !launchToken) return;
   try {
+    const resourceRequest = await host.deps.store.getResourceStartRequest(detachedRunId);
+    if (resourceRequest?.status === 'queued') return;
     await host.deps.store.failWorkflowRun(
       detachedRunId,
       `Detached run failed to start: ${error.message}`,
@@ -484,15 +486,17 @@ export async function launchDetachedRun(launch: DetachedLaunch): Promise<void> {
       destinationCorrelationId(childDestination),
       extraArgs,
       runConfigPayload,
-      false,
+      !launch.isContinuation && launch.options.noWait === true,
       claim.launchToken
     );
   } catch (error) {
-    // The child never took the run — it failed to spawn, or died inside the startup
-    // window. This process is the row's only owner until the child claims it, so it
-    // records why instead of leaving a `pending` row nobody can explain.
+    // Queued work retains its source and pending row even after its launcher exits.
+    // Admission, rather than process lifetime, decides whether cleanup can fail it.
     const launchedRunId = claim.launchedRunId;
-    if (launchedRunId !== undefined) {
+    if (
+      launchedRunId !== undefined &&
+      (await host.deps.store.getResourceStartRequest(launchedRunId))?.status !== 'queued'
+    ) {
       await host.deps.store
         .failWorkflowRun(launchedRunId, `Detached launch failed: ${(error as Error).message}`, {
           exitReason: 'launch_failed',
@@ -549,6 +553,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     // about to reclaim. The row's generated id is what the child files under.
     const launchToken = crypto.randomUUID();
     const created = await host.deps.store.createWorkflowRun({
+      ...(workflow.resource ? { id: crypto.randomUUID() } : {}),
       workflow_name: workflow.name,
       origin: {
         userId: cliUserId,

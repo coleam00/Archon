@@ -46,7 +46,14 @@ it('renders every scopedFlags entry in its own scoped --help Options block', () 
 
 it('keeps run source and isolation flags consistent with the parser', () => {
   const options = scopedHelpOptions(['workflow', 'run']).split('\n');
-  for (const name of ['project', 'workflow-source', 'no-worktree', 'folder', 'container']) {
+  for (const name of [
+    'project',
+    'workflow-source',
+    'no-wait',
+    'no-worktree',
+    'folder',
+    'container',
+  ]) {
     const parserOption = cliArgOptions[name];
     expect(parserOption).toBeDefined();
     const lines = options.filter(line => line.trimStart().startsWith(`--${name} `));
@@ -314,6 +321,7 @@ Options:
   --base <branch>            Per-dispatch base override for epic slices (worktree cut-from + PR target)
   --workflow-source <path>   Read the workflow, its commands and scripts from this directory
                              instead of --cwd (which stays the workspace the run acts on)
+  --no-wait                  Refuse when the workflow resource is full instead of waiting
   --no-worktree              Run on branch directly without worktree isolation
   --folder                   Register the current directory (with or without git) as a folder project and run in place
   --container                Run a folder project in container isolation

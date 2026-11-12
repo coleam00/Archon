@@ -47,6 +47,11 @@ export const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
+    spec: '--no-wait',
+    description: 'Refuse when the workflow resource is full instead of waiting',
+    owners: [{ command: 'workflow', subcommand: 'run' }],
+  },
+  {
     spec: '--no-worktree',
     description: 'Run on branch directly without worktree isolation',
     owners: [{ command: 'workflow', subcommand: 'run' }],

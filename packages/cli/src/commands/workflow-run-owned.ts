@@ -29,6 +29,7 @@ import {
   provisionWorkspace,
   recordConversationLaunch,
 } from './workflow-run-launch';
+import { admitForegroundResource } from './workflow-run-resource';
 import { executeOwnedRun } from './workflow-run-execution';
 
 /**
@@ -55,6 +56,9 @@ async function runWorkflowWithOwnedSource(
   const launch = await prepareForegroundLaunch(request, admission);
   const lease = new OwnedRunLease(request.detachedProcessOwner);
   try {
+    await admitForegroundResource(launch, lease);
+    if (!admission.isContinuation && options.noWait && admission.preCreatedRun)
+      request.notifyResumeAccepted?.(admission.preCreatedRun.id);
     if (!defersContainerResume(launch)) {
       await provisionWorkspace(launch, lease);
       await recordConversationLaunch(launch);

@@ -11,7 +11,7 @@ import { isTerminalRunStatus, type WorkflowRun } from '@archon/workflows/schemas
 import { createCodebaseChildResolver } from '@archon/core/workflows/child-isolation-resolver';
 import {
   registerOwnedRunTermination,
-  registerResumePreparationTermination,
+  registerWorkflowPreparationTermination,
 } from '../utils/owned-run-termination';
 import { getLog } from './workflow-shared';
 import { type OpenToolCalls, presentRunResult, workflowEventLine } from './workflow-run-output';
@@ -107,7 +107,7 @@ export async function executeOwnedRun(
   // A successful run must not hide leaked resources behind CLI exit 0.
   let resourceCleanupError: Error | undefined;
   const preparationTermination = defersContainerResume(launch)
-    ? registerResumePreparationTermination()
+    ? registerWorkflowPreparationTermination('Resume preparation')
     : undefined;
   if (!preparationTermination) registerTermination();
   try {

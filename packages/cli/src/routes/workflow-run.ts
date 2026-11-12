@@ -161,6 +161,7 @@ function buildRunOptions(
     // freezes as its source.
     discoveryCwd: workflowSource,
     noWorktree: values['no-worktree'] as boolean | undefined,
+    noWait: values['no-wait'] as boolean | undefined,
     folder: values.folder as boolean | undefined,
     container: values.container as boolean | undefined,
     resume: values.resume as boolean | undefined,
