@@ -34,10 +34,7 @@ import { isAbsolute, join, relative, resolve, sep } from 'node:path';
 import { z } from 'zod';
 import { createLogger, getArchonTempPath, isPathInside } from '@archon/paths';
 import { execFileAsync } from '@archon/git';
-import {
-  collectCredentialValues,
-  redactCredentialValues,
-} from '@archon/paths/credential-redaction';
+import { redactFixtureTrace } from './fixture-trace';
 import {
   RESERVED_FIXTURE_KEYS,
   dryRunStubsSchema,
@@ -741,24 +738,6 @@ async function checkFixture(
       failureReason = `reached nodes without stubs: ${blockingMissingStubs.join(', ')}`;
     }
 
-    const credentialValues = collectCredentialValues(
-      { ...process.env, ...config?.envVars },
-      config?.protectedEnvKeys,
-      config?.protectedCredentialValues
-    );
-    const trace =
-      failureReason !== undefined
-        ? result.trace.map(entry => ({
-            ...entry,
-            ...(entry.resolvedText !== undefined
-              ? { resolvedText: redactCredentialValues(entry.resolvedText, credentialValues) }
-              : {}),
-            ...(entry.output !== undefined
-              ? { output: redactCredentialValues(entry.output, credentialValues) }
-              : {}),
-          }))
-        : undefined;
-
     return {
       ...base,
       outcome: result.outcome,
@@ -771,7 +750,7 @@ async function checkFixture(
       missingStubs: result.missingStubs,
       toleratedMissingStubs: result.toleratedMissingStubs,
       unusedStubs: result.unusedStubs,
-      ...(trace !== undefined ? { trace } : {}),
+      ...(failureReason !== undefined ? { trace: redactFixtureTrace(result.trace, config) } : {}),
     };
   } catch (error) {
     return {
