@@ -137,7 +137,6 @@
       "@archon/core/services/run-live-owner"
     ],
     "packages/cli/src/test-support/workflow-harness-workflows.ts": [
-      "@archon/workflows/dry-run",
       "@archon/workflows/event-emitter",
       "@archon/workflows/fixture-runner",
       "@archon/workflows/run-paths",
@@ -3014,14 +3013,6 @@
       "BUNDLED_WORKFLOWS",
       "BUNDLED_WORKFLOW_OWNERS",
       "BUNDLED_WORKFLOW_PATHS"
-    ],
-    "packages/workflows/src/dry-run.ts": [
-      "RESERVED_FIXTURE_KEYS",
-      "createDryRunStubScaffold",
-      "dryRunResultSchema",
-      "dryRunStubValueSchema",
-      "dryRunStubsSchema",
-      "dryRunTraceEntrySchema"
     ],
     "packages/workflows/src/event-emitter.ts": ["resetWorkflowEventEmitter"],
     "packages/workflows/src/fixture-runner.ts": ["fixtureDeclarationSchema", "parseFixtureFile"],
