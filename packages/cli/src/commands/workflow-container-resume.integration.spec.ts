@@ -797,3 +797,40 @@ test('backend image cleanup failure still fails a successful foreground resume',
     expect(f.defaultRelease).not.toHaveBeenCalled();
   });
 });
+
+test('full resource refuses a fresh container launch before backend preparation', async () => {
+  await fixture(async f => {
+    const { admitNativeResourceStart } = await import('@archon/workflows/resource-start-store');
+    await writeFile(
+      join(f.cwd, '.archon/workflows/resume.yaml'),
+      'name: resume\ndescription: resource container\nresource: { name: build, capacity: 1 }\nnodes:\n  - id: work\n    bash: echo work\n'
+    );
+    const holder = await f.store.createWorkflowRun({
+      id: crypto.randomUUID(),
+      workflow_name: 'holder',
+      codebase_id: (await f.host.records.codebases.listCodebases())[0]!.id,
+      user_message: '',
+    });
+    await admitNativeResourceStart(
+      f.store,
+      makeTestResolvedWorkflow({ name: 'holder', resource: { name: 'build', capacity: 1 } }),
+      holder,
+      { cwd: '/other', conversationId: 'holder', isolation: { kind: 'worktree' } }
+    );
+    const prepare = watch(spyOn(ContainerBackend.prototype, 'prepare')).mockImplementation(
+      async () => {
+        throw new Error('Resource admission must precede container preparation');
+      }
+    );
+    await expect(
+      workflowRunCommand(f.host, f.cwd, 'resume', '', {
+        folder: true,
+        container: true,
+        noWait: true,
+      })
+    ).rejects.toThrow("Resource 'build' is full");
+    expect(prepare).not.toHaveBeenCalled();
+    expect(f.execute).not.toHaveBeenCalled();
+    expect((await f.store.getWorkflowRun(holder.id))?.status).toBe('pending');
+  });
+});

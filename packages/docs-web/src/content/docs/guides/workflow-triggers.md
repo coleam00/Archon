@@ -216,22 +216,45 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 ## Choose a resource, capacity, and overlap policy
 
-`resource` names the work that must not overlap. Use the same sufficiently qualified resource for every schedule or webhook binding that can mutate that work. A trigger ID or workflow name does not imply a resource.
+A workflow can declare the install-wide resource its runs consume:
 
-`capacity` sets how many runs can hold the resource at once. It is optional and defaults to `1`, so by default runs for one resource never overlap. Set it higher for work that tolerates a bounded number of concurrent runs, such as `"capacity": 2`. Every binding that names a resource must declare the same capacity. A start that declares a different capacity is rejected and recorded as `resource_capacity_conflict` instead of silently using either value. To change a resource's capacity, use a new resource name.
+```yaml
+resource: build
+# Or declare this start's capacity:
+# resource: { name: build, capacity: 2 }
+```
+
+Every start of that workflow, through a binding, CLI, chat or API, takes one slot. An `include:` stays inside its parent's run and takes no second slot. An independent `workflow:` child takes its own slot; a child using its parent's resource can wait for that parent, so use distinct resources when the parent must remain active. A workflow without a resource remains unaffected on non-binding starts.
+
+Resource names are exact install-wide keys, with no implicit project or pack prefix. `build` does not alias an existing generated `<pack>:<repo>:build` binding key. A workflow declaration selects the resource even if its binding names another. For that start, the lowest explicit capacity in the workflow and its binding for the **same key** supplies the declaration; a binding number for a different key does not apply. Existing binding-only starts keep their binding's resource.
+
+At every admission and slot reacquisition, capacity is the current install override, otherwise this start's declared capacity, otherwise **10**. Configure install overrides in `~/.archon/config.yaml`:
+
+```yaml
+concurrency:
+  resources:
+    build: 5
+    merge: 1
+```
+
+These positive integer limits are independent per resource, not an install-wide total. There is no project-level capacity setting or declaration inventory. Editing the override affects the next admission; it never ends or preempts holders. Queued requests retain their own declaration, not the resolved override. Starts can declare different numbers: a start declaring 1 waits beside any holder, while a later start declaring 3 can enter beside two. Use an install override of 1 to serialize every start of a resource.
+
+A hand start waits before workspace setup and names the resource. `archon workflow run <name> --no-wait` refuses a blocked start with the resource and blocker named and returns nonzero. Detached starts wait in their CLI child; detached `--no-wait` reports success only after admission. Chat and API starts also wait; a background API launch returns its pending run while its native worker waits.
 
 The `overlap` setting controls a request that arrives while the resource is full:
 
 - `skip` records the blocking run and retains no promise to execute later.
 - `queue` retains the prepared request in durable FIFO order.
 
-A queued request also blocks newer requests for the same resource, so a new arrival never passes older queued work, except work held back because another run holds its checkout (below). Different resources can run concurrently. Pending and running root runs hold their resource; a run releases it when it completes, fails, or is cancelled.
+A queued request also blocks newer requests for the same resource, so a new arrival never passes older queued work, except work held back because another run holds its checkout (below). Different resources can run concurrently. Pending and running admitted runs hold their resource; a run releases it when it completes, fails, or is cancelled.
 
 A paused run gives back its resource at a host-continued wait or gate. Once its process stops at a time or event wait, or at an approval gate or attention wait, the run releases its slot and later work can be admitted. Its continuation takes a slot again before it executes, ahead of queued new starts, because the run never lost its admission. When the resource is full, the run stays `paused`, keeps any answer it was given, and waits for capacity: `archon workflow wake` reports it as `waiting_for_capacity`, and a continuation host retries it about once a minute. Paused runs that wait for capacity take free slots in the order they were first refused. A refused resume keeps the run's place once it is ready to continue, its wait due or signaled or its pause answered, whichever surface resumed it. A refused resume of a run that is not ready records no place, so it holds no capacity. A parent blocked on a child workflow, a container write-back, and any container run keep their slot until they continue, because no continuation host retries them. A run paused because its source is unreadable also keeps its slot, even when a continuation host will retry it. Automatic continuation of waits, gates and unreadable-source pauses requires a continuation host: `archon serve`, or [`archon workflow wake --watch`](/reference/cli/#workflow-wake). Runs paused before this behavior existed keep their slot until they continue.
 
 A run admitted on a resource holds its checkout until it completes, fails, or is cancelled, including while it is paused and has given back its slot. Admission therefore passes over a queued request that would run in a checkout another run admitted on the same resource holds: the same `in-place` directory, or the same explicit worktree `branch` in that codebase. The request keeps its place in the queue, and the free slot goes to the next request that can run. When that run ends, the request is admitted ahead of later requests for that checkout, one request per checkout at a time. A new request for a held checkout queues, or with `skip` is skipped, with the holding run as its blocker. A worktree lane without a `branch` gets its own checkout and is never held back this way.
 
-Guarded starts also wait behind live runs outside the resource, including manual runs and runs on other resources, when they hold the same directory or registered reusable worktree. The holding run is named in inspection. Workflows declaring `mutates_checkout: false` can proceed beside these foreign holders; same-resource checkout serialization still applies. The resolved declaration is captured during preparation, so later workflow edits do not change a queued request. Older stored requests without that declaration are treated as guarded. Admission observes holders without changing their state. Foreign pending runs hold their checkout only during the executor's five-minute dispatch window; running and paused holders keep blocking until they end. Expiry releases only foreign checkout occupancy, leaving the pending run and any resource admission unchanged.
+Guarded starts also wait behind live runs outside the resource, including resource-free manual runs and runs on other resources, when they hold the same directory or registered reusable worktree. The holding run is named in inspection. Workflows declaring `mutates_checkout: false` can proceed beside these foreign holders; same-resource checkout serialization still applies. The resolved declaration is captured during preparation, so later workflow edits do not change a queued request. Older stored requests without that declaration are treated as guarded. Admission observes holders without changing their state. Foreign pending runs hold their checkout only during the executor's five-minute dispatch window; running and paused holders keep blocking until they end. Expiry releases only foreign checkout occupancy, leaving the pending run and any resource admission unchanged.
+
+Native CLI/chat/API launchers retain their execution options and drive their own queued requests. If a launcher dies, its pending request and captured source remain inspectable; another trigger host does not take them over. Inspect with `archon trigger inspect <run-id>` and, after checking the owner, withdraw a still-queued request with `archon trigger withdraw <run-id>`. Recover or abandon the retained run explicitly; elapsed time alone does not establish that its owner is gone.
 
 A drain processes untouched queued requests assigned to one host and admits them while the resource has free capacity.
 

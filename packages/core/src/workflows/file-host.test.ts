@@ -69,6 +69,11 @@ test('file host reads install resource overrides fresh for direct admission and 
   await writeFile(join(home, 'config.yaml'), 'concurrency:\n  resources: { build: 2 }\n');
   for (let index = 0; index < 2; index++)
     expect((await host.deps.store.admitResourceStart(start())).status).toBe('admitted');
+  await writeFile(join(home, 'config.yaml'), 'concurrency:\n  resources: { build: 3 }\n');
+  const raised = start();
+  expect((await host.deps.store.admitResourceStart(raised)).status).toBe('admitted');
+  await host.deps.store.cancelWorkflowRun(raised.launch.run.id);
+  await writeFile(join(home, 'config.yaml'), 'concurrency:\n  resources: { build: 1 }\n');
   const third = start();
   expect((await host.deps.store.admitResourceStart(third)).status).toBe('queued');
   await writeFile(join(home, 'config.yaml'), 'concurrency:\n  resources: { build: 3 }\n');
@@ -1044,3 +1049,46 @@ for (const [damage, owner] of [
     ]);
   });
 }
+
+test('generic trigger execution cannot replace a native resource launcher', async () => {
+  const { admitNativeResourceStart, nativeResourceStartHostId } = await import(
+    '@archon/workflows/resource-start-store'
+  );
+  const { makeTestResolvedWorkflow } = await import('@archon/workflows/test-utils');
+  const { startAdmittedResourceStart } = await import('./resource-start-host');
+  const home = roots(await mkdtemp(join(tmpdir(), 'native-resource-owner-')));
+  process.env.ARCHON_HOME = home;
+  process.env.DATABASE_URL = '';
+  process.env.GITHUB_APP_ID = '';
+  const host = await createFileWorkflowHost(join(home, 'store'));
+  const run = await host.deps.store.createWorkflowRun({
+    id: crypto.randomUUID(),
+    workflow_name: 'native',
+    codebase_id: 'project',
+    user_message: '',
+  });
+  await admitNativeResourceStart(
+    host.deps.store,
+    makeTestResolvedWorkflow({ name: 'holder', resource: { name: 'build' } }),
+    run,
+    { cwd: home, conversationId: 'native', isolation: { kind: 'worktree' } }
+  );
+  const submit = spyOn(host.engine, 'submit');
+  try {
+    await expect(
+      startAdmittedResourceStart({
+        host,
+        requestId: run.id,
+        hostId: nativeResourceStartHostId(run.id),
+        createPlatform: () => {
+          throw new Error('must not create a generic platform');
+        },
+      })
+    ).rejects.toThrow('belongs to its native launcher');
+    expect(submit).not.toHaveBeenCalled();
+    expect((await host.deps.store.getWorkflowRun(run.id))?.status).toBe('pending');
+    expect((await host.deps.store.getResourceStartRequest(run.id))?.status).toBe('admitted');
+  } finally {
+    submit.mockRestore();
+  }
+});

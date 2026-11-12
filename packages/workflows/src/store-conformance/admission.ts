@@ -53,6 +53,11 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
       const second = start('queue', 'host', 2);
       expect((await store.admitResourceStart(first)).status).toBe('admitted');
       expect((await store.admitResourceStart(second)).status).toBe('admitted');
+      harness.resourceCaps.set('resource', 3);
+      const raised = start('queue', 'host', 2);
+      expect((await store.admitResourceStart(raised)).status).toBe('admitted');
+      expect((await store.getResourceStartRequest(raised.launch.run.id))?.declaredCapacity).toBe(2);
+      await store.cancelWorkflowRun(raised.launch.run.id);
       const before = await Promise.all(
         [first, second].map(intent => store.getWorkflowRun(intent.launch.run.id))
       );

@@ -1,3 +1,5 @@
+import * as sqlIsolation from '@archon/core/db/isolation-environments';
+import { admitNativeResourceStart } from '@archon/workflows/resource-start-store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
@@ -39,11 +41,6 @@ export interface ForegroundLaunch {
   prepareLaunchAiConfiguration: (definition: ResolvedWorkflow) => Promise<PreparedAiConfiguration>;
 }
 
-/**
- * Run the workflow in this process: create the run row its worktree setup reports to,
- * resolve isolation, then continue the detected run or submit a fresh one. A run row
- * created here that never reached the engine is failed before the error propagates.
- */
 export async function dispatchForeground(
   scope: DispatchScope,
   launch: ForegroundLaunch
@@ -58,7 +55,7 @@ export async function dispatchForeground(
   try {
     if (
       !willContinueExistingRun &&
-      workflow.worktree?.enabled !== false &&
+      (workflow.resource || workflow.worktree?.enabled !== false) &&
       freshCaptured &&
       preparedAiConfiguration
     ) {
@@ -82,6 +79,7 @@ export async function dispatchForeground(
         ),
       };
     }
+    await admitForegroundResource(scope, launch, setupDeps, setupRun);
     const isolation = await resolveForegroundIsolation(scope, {
       workflow,
       willContinueExistingRun,
@@ -135,10 +133,15 @@ export async function dispatchForeground(
       });
     }
   } catch (error) {
-    if (setupRun && !foregroundSubmitted && !(error instanceof TerminalStatusWriteError))
+    if (
+      setupRun &&
+      !foregroundSubmitted &&
+      (await canFailSetupRun(setupDeps, workflow, setupRun, error))
+    )
       await requireTerminalStatusWrite(
         setupDeps.store.failWorkflowRun(setupRun.id, toError(error).message, {
           exitReason: 'launch_failed',
+          pendingOnly: true,
         }),
         { workflowRunId: setupRun.id, site: 'foreground.preparation_failed' }
       );
@@ -148,7 +151,65 @@ export async function dispatchForeground(
   }
 }
 
-/** The run row a fresh worktree run is created under before its worktree setup runs. */
+async function canFailSetupRun(
+  deps: ReturnType<typeof createWorkflowDeps>,
+  workflow: ResolvedWorkflow,
+  run: WorkflowRun,
+  error: unknown
+): Promise<boolean> {
+  if (error instanceof TerminalStatusWriteError) return false;
+  if (!workflow.resource) return true;
+  return (await deps.store.getResourceStartRequest(run.id))?.status !== 'queued';
+}
+
+async function admitForegroundResource(
+  scope: DispatchScope,
+  launch: ForegroundLaunch,
+  setupDeps: ReturnType<typeof createWorkflowDeps>,
+  setupRun: WorkflowRun | undefined
+): Promise<void> {
+  const { workflow, adoptionLane } = launch;
+  if (!workflow.resource || !setupRun) return;
+  const existingEnvironment =
+    workflow.worktree?.enabled !== false &&
+    scope.codebase.kind !== 'folder' &&
+    !adoptionLane &&
+    scope.conversation.isolation_env_id
+      ? await sqlIsolation.getById(scope.conversation.isolation_env_id)
+      : null;
+  const reusableEnvironment =
+    launch.adoptedEnvironment ??
+    (existingEnvironment?.status === 'active' ? existingEnvironment : undefined);
+  await admitNativeResourceStart(
+    setupDeps.store,
+    workflow,
+    setupRun,
+    {
+      cwd: reusableEnvironment?.working_path ?? scope.codebase.default_cwd,
+      conversationId: scope.conversationId,
+      isolation:
+        workflow.worktree?.enabled === false || scope.codebase.kind === 'folder'
+          ? { kind: 'in-place' }
+          : {
+              kind: 'worktree',
+              ...(adoptionLane?.kind === 'checkout-branch'
+                ? { branch: adoptionLane.taskBranch.branch }
+                : reusableEnvironment
+                  ? { branch: reusableEnvironment.branch_name }
+                  : {}),
+            },
+    },
+    {
+      onWaiting: async (resource, requestId) => {
+        await scope.platform.sendMessage(
+          scope.conversationId,
+          `Waiting for resource '${resource}' (request ${requestId}).`
+        );
+      },
+    }
+  );
+}
+
 function createSetupRun(
   setupDeps: ReturnType<typeof createWorkflowDeps>,
   { conversation, codebase, userId, userMessage, declaredContinuation }: DispatchScope,

@@ -1,7 +1,17 @@
 import { setTimeout } from 'node:timers/promises';
 import type { IResourceStartStore } from './resource-start-store';
 import type { PreparedWorkflowLaunch, ResourceStartDisposition } from './schemas/resource-start';
-import type { WorkflowResource } from './schemas/workflow';
+import type { ResolvedWorkflow, WorkflowResource } from './schemas/workflow';
+import type { WorkflowRun } from './schemas/workflow-run';
+import type { IWorkflowStore } from './store';
+import {
+  ADMISSION_CHECKOUT_GUARD_METADATA_KEY,
+  preparedWorkflowLaunchSchema,
+} from './schemas/resource-start';
+
+export function nativeResourceStartHostId(runId: string): string {
+  return `native:${runId}`;
+}
 
 export async function awaitResourceStartAdmission(
   store: IResourceStartStore,
@@ -17,7 +27,7 @@ export async function awaitResourceStartAdmission(
   const { signal } = options;
   signal?.throwIfAborted();
   // Only the native launcher has its execution options; a trigger host cannot take over.
-  const hostId = `native:${launch.run.id}`;
+  const hostId = nativeResourceStartHostId(launch.run.id);
   const disposition = await store.admitPendingResourceStart({
     resource: resource.name,
     capacity: resource.capacity,
@@ -55,4 +65,36 @@ async function withdrawOrReadAdmission(
       return { status: 'admitted', requestId: request.id, runId: request.id };
   }
   throw error;
+}
+
+/** Preserve native execution ownership while the shared store arbitrates the start. */
+export async function admitNativeResourceStart(
+  store: IWorkflowStore,
+  workflow: ResolvedWorkflow,
+  run: WorkflowRun,
+  execution: PreparedWorkflowLaunch['execution'],
+  options: Parameters<typeof awaitResourceStartAdmission>[3] = {}
+): ReturnType<typeof awaitResourceStartAdmission> {
+  if (!workflow.resource)
+    throw new Error('Native resource admission requires a resource declaration');
+  const metadata = { [ADMISSION_CHECKOUT_GUARD_METADATA_KEY]: workflow.mutates_checkout !== false };
+  await store.updateWorkflowRun(run.id, { metadata });
+  run.metadata = { ...run.metadata, ...metadata };
+  // JSON persistence removes undefined fields; attachment compares the durable invocation.
+  const retained = await store.getWorkflowRun(run.id);
+  if (!retained) throw new Error(`Resource start '${run.id}' lost its pending run`);
+  const launch = preparedWorkflowLaunchSchema.parse({
+    version: 2,
+    run: {
+      id: retained.id,
+      workflow_name: retained.workflow_name,
+      codebase_id: retained.codebase_id,
+      user_message: retained.user_message,
+      origin: retained.origin ?? undefined,
+      metadata: retained.metadata,
+      ...(execution.isolation.kind === 'in-place' ? { working_path: execution.cwd } : {}),
+    },
+    execution,
+  });
+  return awaitResourceStartAdmission(store, workflow.resource, launch, options);
 }

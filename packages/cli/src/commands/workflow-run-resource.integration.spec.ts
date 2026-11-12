@@ -129,6 +129,39 @@ for (const store of ['database', 'files'] as const) {
       interrupted.child.kill('SIGINT');
       expect(await interrupted.child.exited).not.toBe(0);
       expect(await queued()).toHaveLength(0);
+      const killed = start(contender, 'probe');
+      await until(async () => (await queued()).length === 1, 'abrupt-death request queued');
+      const killedId = (await queued())[0]!.id;
+      killed.child.kill('SIGKILL');
+      expect(await killed.child.exited).not.toBe(0);
+      expect((await queued())[0]?.id).toBe(killedId);
+      expect(first.child.exitCode).toBeNull();
+      async function trigger(action: string) {
+        const child = Bun.spawn(
+          [process.execPath, join(import.meta.dir, '../cli.ts'), 'trigger', action, killedId],
+          {
+            env: {
+              ...process.env,
+              ARCHON_HOME: home,
+              DATABASE_URL: '',
+              DEFAULT_AI_ASSISTANT: '',
+              ARCHON_TELEMETRY_DISABLED: '1',
+            },
+            stdout: 'pipe',
+            stderr: 'pipe',
+          }
+        );
+        children.push(child);
+        const output = await Promise.all([
+          new Response(child.stdout).text(),
+          new Response(child.stderr).text(),
+        ]);
+        expect(await child.exited, output.join('\n')).toBe(0);
+        return JSON.parse(output[0]);
+      }
+      expect((await trigger('inspect')).status).toBe('queued');
+      expect((await trigger('withdraw')).withdrawn).toBe(true);
+      expect(await queued()).toHaveLength(0);
       const detached = start(contender, 'probe', ['--detach', '--json']);
       expect(await detached.child.exited).toBe(0);
       const ack = JSON.parse((await detached.output)[0]) as { ok: boolean; runId: string };
@@ -165,7 +198,7 @@ for (const store of ['database', 'files'] as const) {
               'SELECT count(*) AS count FROM remote_agent_workflow_runs'
             )
             .get()?.count
-        ).toBe(7);
+        ).toBe(8);
       }
     } finally {
       writeFileSync(release, 'release');

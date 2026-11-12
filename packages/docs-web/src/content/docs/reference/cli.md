@@ -284,6 +284,10 @@ The file is written with LF line endings on every platform, and describes the Ar
 
 ### `workflow run <name> [message]`
 
+A workflow declaring `resource: build` or `resource: { name: build, capacity: 2 }` takes a resource slot on every start. When blocked, the CLI names the resource and waits before workspace setup. `--no-wait` refuses with a nonzero exit and names the resource and blocker. `--detach` transfers waiting to the child; with `--detach --no-wait`, success acknowledges admission.
+
+Capacity is read fresh at admission: `concurrency.resources.<resource>` in the install's `~/.archon/config.yaml`, otherwise this start's declaration, otherwise 10. Each resource has its own limit. Changing it never preempts holders. Includes share the parent slot. See [resource admission and recovery](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
+
 Run a workflow with an optional user message, which the workflow reads as `$ARGUMENTS`.
 
 ```bash
@@ -350,6 +354,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--from <branch>`, `--from-branch <branch>` | Start point for the new worktree only. Unlike `--base`, it does not change the PR target. |
 | `--base-branch <name>` | Choose the project base branch on first registration only. Omit to follow the remote default at use time; no prompt. Rejected for folder projects, existing projects, resume/adoption/supersedes, and dry runs. A reachable remote must advertise the branch. With `--base`, this flag stores the project choice while `--base` overrides only this dispatch. |
 | `--base <branch>` | Per-dispatch base override, inherited by fresh shared-checkout children. Sets **both** the worktree cut-from **and** the PR target (`$BASE_BRANCH`), and outranks `worktree.baseBranch` in config plus the codebase default; see [Base branch precedence](#base-branch-precedence) below. The branch **must already exist on the remote**; a missing one is a hard error, not a fallback. Combine with `--from` to drive the two separately. Rejected with `--no-worktree`, `--folder`, and workflows pinning `worktree.enabled: false`. |
+| `--no-wait` | Refuse a fresh resource-declaring workflow start when admission is blocked, naming its resource and blocker. |
 | `--project <id\|name>` | Bind a fresh run to an existing registered repository by ID or exact name (for example `owner/repo`); see `archon project list`. Folder projects are unsupported. See `archon workflow run --help` for incompatible flags. |
 | `--no-worktree` | Run directly in the live checkout, without isolation |
 | `--folder` | Register the current directory, git or not, as a folder project on first use and run in place, without a worktree. Rejects `--branch`, `--from` and `--base`. |

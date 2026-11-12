@@ -1,4 +1,8 @@
-export { awaitResourceStartAdmission } from './resource-start-admission';
+export {
+  awaitResourceStartAdmission,
+  admitNativeResourceStart,
+  nativeResourceStartHostId,
+} from './resource-start-admission';
 export { validatePendingResourceRun, validatePendingStartReplay } from './pending-resource-start';
 import type { WorkflowResource } from './schemas/workflow';
 export {

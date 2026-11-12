@@ -18,7 +18,10 @@ import {
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
-import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+import {
+  nativeResourceStartHostId,
+  SourceReceiptDigestConflictError,
+} from '@archon/workflows/resource-start-store';
 import {
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
@@ -400,7 +403,9 @@ async function triggerInspect(host: WorkflowHost, args: string[]): Promise<void>
           status: value.status === 'admitted' ? value.runStatus : value.blockerRunStatus,
           inspectCommand: `archon workflow get ${runId}`,
           recovery: {
-            ...(value.status === 'admitted' && value.runStatus === 'pending'
+            ...(value.status === 'admitted' &&
+            value.runStatus === 'pending' &&
+            value.hostId !== nativeResourceStartHostId(value.id)
               ? {
                   retryPendingArgv: [
                     'archon',

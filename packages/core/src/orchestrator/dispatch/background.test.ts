@@ -98,8 +98,12 @@ const mockStartRunLiveOwner = mock<typeof RunLiveOwnerModule.startRunLiveOwner>(
     registerTerminationPreparation: () => () => undefined,
   });
 });
+mock.module('./resume', () => ({ continueForegroundResume: mock(async () => {}) }));
 mock.module('../../services/run-live-owner', () => ({
   startRunLiveOwner: mockStartRunLiveOwner,
+  withRunLiveOwner: mock<typeof RunLiveOwnerModule.withRunLiveOwner>(
+    async (runId, _options, body) => body(await mockStartRunLiveOwner(runId))
+  ),
 }));
 
 const mockUpdateConversation = mock(() => Promise.resolve());
@@ -557,6 +561,198 @@ describe('dispatchBackgroundWorkflow', () => {
     );
     mockGetCodebase.mockResolvedValue(makeCodebase());
   });
+
+  test.each([
+    { worktree: false, folder: false, reuse: false },
+    { worktree: true, folder: false, reuse: false },
+    { worktree: true, folder: true, reuse: false },
+    { worktree: true, folder: false, reuse: true },
+    { worktree: false, folder: false, reuse: false, noticeFails: true },
+  ])(
+    'resource admission precedes foreground checkout %j',
+    async ({ worktree, folder, reuse, noticeFails }) => {
+      const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
+      const { admitNativeResourceStart } = await import('@archon/workflows/resource-start-store');
+      const { dispatchForeground } = await import('./foreground');
+      const { createDispatchScope } = await import('./scope');
+      const root = track(await mkdtemp(join(tmpdir(), 'foreground-resource-')));
+      const store = await createFileWorkflowStore({ root });
+      const workflow = makeWorkflow({
+        resource: { name: 'build', capacity: 1 },
+        worktree: { enabled: worktree },
+      });
+      const holder = await store.createWorkflowRun({
+        id: crypto.randomUUID(),
+        workflow_name: 'holder',
+        codebase_id: 'cb-1',
+        user_message: '',
+      });
+      await admitNativeResourceStart(store, workflow, holder, {
+        cwd: '/other',
+        conversationId: 'holder',
+        isolation: { kind: 'worktree' },
+      });
+      const adapter = await import('../../workflows/store-adapter');
+      const original = adapter.createWorkflowDeps();
+      const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+        ...original,
+        store,
+      }));
+      const source = {
+        ...(await mockPrepareWorkflowSource(original, { sourceRoot: '/workspace' })),
+        runId: crypto.randomUUID(),
+      };
+      const { prepareRunAiConfiguration } = await import('@archon/workflows/run-preflight');
+      const prepared = await prepareRunAiConfiguration(
+        { ...original, store },
+        workflow,
+        '/workspace'
+      );
+      const send = platform.sendMessage;
+      send.mockImplementation(async (_conversation, message) => {
+        if (!message.startsWith('Waiting for resource')) return;
+        expect((await store.getWorkflowRun(source.runId))?.working_path).toBeNull();
+        expect(mockResolve).not.toHaveBeenCalled();
+        expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+        if (noticeFails) throw new Error('notification unavailable');
+        await store.cancelWorkflowRun(holder.id);
+      });
+      try {
+        const execution = withObservableCapturedSource(capturedSourceOwnerCalls, async owner => {
+          const scope = createDispatchScope({
+            owner,
+            platform,
+            conversationId: 'parent',
+            conversation: makeConversation({ isolation_env_id: reuse ? 'env-1' : null }),
+            codebase: makeCodebase({ kind: folder ? 'folder' : 'repo' }),
+            actor: { kind: 'operator' },
+            request: { kind: 'start', definition: workflow, args: 'run it' },
+          });
+          await dispatchForeground(scope, {
+            workflow,
+            continuation: {
+              resumableRun: null,
+              explicitResumeRequested: false,
+              willContinueExistingRun: false,
+            },
+            freshCaptured: { preparedSource: source, workflow },
+            adoptedEnvironment: undefined,
+            adoptionLane: undefined,
+            preparedAiConfiguration: prepared,
+            resolvedInputs: { issue: '5566' },
+            deferredInputError: undefined,
+            prepareLaunchAiConfiguration: async () => prepared,
+          });
+        });
+        if (noticeFails) {
+          await expect(execution).rejects.toThrow('notification unavailable');
+          expect((await store.getWorkflowRun(source.runId))?.status).toBe('pending');
+          expect((await store.getResourceStartRequest(source.runId))?.status).toBe('queued');
+          expect(mockResolve).not.toHaveBeenCalled();
+          expect(mockFailWorkflowRun).not.toHaveBeenCalled();
+          expect(capturedSourceOwnerCalls).toContain('adopt');
+          return;
+        }
+        await execution;
+        expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+        expect((await store.getResourceStartRequest(source.runId))?.status).toBe('admitted');
+        expect(mockExecuteWorkflow.mock.calls[0]?.[7]?.preCreatedRun?.id).toBe(source.runId);
+        expect(mockResolve.mock.calls.length).toBe(worktree ? 1 : 0);
+        const request = await store.getResourceStartRequest(source.runId);
+        expect(request?.launch.execution.isolation.kind).toBe(
+          !worktree || folder ? 'in-place' : 'worktree'
+        );
+        if (reuse)
+          expect(request?.launch.execution.isolation).toEqual({
+            kind: 'worktree',
+            branch: 'issue-42',
+          });
+      } finally {
+        send.mockReset();
+        factory.mockRestore();
+        (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+      }
+    }
+  );
+
+  test.each([false, true])(
+    'resource admission precedes background checkout (worktree=%s) and returns a pending run',
+    async worktree => {
+      const { createFileWorkflowStore } = await import('@archon/workflows/file-store');
+      const { admitNativeResourceStart } = await import('@archon/workflows/resource-start-store');
+      const root = track(await mkdtemp(join(tmpdir(), 'background-resource-')));
+      const store = await createFileWorkflowStore({ root });
+      const holder = await store.createWorkflowRun({
+        id: crypto.randomUUID(),
+        workflow_name: 'holder',
+        codebase_id: 'cb-1',
+        user_message: '',
+      });
+      await admitNativeResourceStart(
+        store,
+        makeWorkflow({ resource: { name: 'build', capacity: 1 } }),
+        holder,
+        { cwd: '/other', conversationId: 'holder', isolation: { kind: 'worktree' } }
+      );
+      const adapter = await import('../../workflows/store-adapter');
+      const original = adapter.createWorkflowDeps();
+      const factory = spyOn(adapter, 'createWorkflowDeps').mockImplementation(() => ({
+        ...original,
+        store,
+      }));
+      const source = await mockPrepareWorkflowSource(original, { sourceRoot: '/parent/cwd' });
+      const runId = crypto.randomUUID();
+      mockPrepareWorkflowSource.mockResolvedValueOnce({ ...source, runId });
+      let waiting!: () => void;
+      let rejected!: (error: Error) => void;
+      const queued = new Promise<void>((resolve, reject) => {
+        waiting = resolve;
+        rejected = reject;
+      });
+      let submitted!: () => void;
+      const execution = new Promise<void>(resolve => {
+        submitted = resolve;
+      });
+      mockExecuteWorkflow.mockImplementationOnce(async () => {
+        submitted();
+        return { success: true, paused: true, workflowRunId: runId };
+      });
+      const send = platform.sendMessage;
+      send.mockImplementation(async (_conversation, message) => {
+        if (message.startsWith('Waiting for resource')) waiting();
+        if (message.includes('could not start:')) rejected(new Error(message));
+      });
+      try {
+        await dispatchBackgroundWorkflow(
+          makeRoutingCtx({ inputs: { issue: '5566' } }),
+          makeWorkflow({
+            resource: { name: 'build', capacity: 1 },
+            worktree: { enabled: worktree },
+          })
+        );
+        await queued;
+        expect((await store.getWorkflowRun(runId))?.status).toBe('pending');
+        expect((await store.getWorkflowRun(runId))?.working_path).toBeNull();
+        expect((await store.getResourceStartRequest(runId))?.status).toBe('queued');
+        expect(mockResolve).not.toHaveBeenCalled();
+        expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+        await store.cancelWorkflowRun(holder.id);
+        // The native owner drains its own host; the server's trigger host cannot submit it.
+        await execution;
+        expect(mockExecuteWorkflow).toHaveBeenCalledTimes(1);
+        expect(mockResolve.mock.calls.length).toBe(worktree ? 1 : 0);
+        const opts = mockExecuteWorkflow.mock.calls[0]?.[7];
+        expect(opts?.preCreatedRun?.id).toBe(runId);
+        expect(opts?.preCreatedRun?.metadata.inputs).toEqual({ issue: '5566' });
+        expect(opts?.preparedSource?.runId).toBe(runId);
+        await flushBackgroundExecution();
+      } finally {
+        send.mockReset();
+        factory.mockRestore();
+        (adapter.createWorkflowDeps as ReturnType<typeof mock>).mockImplementation(() => original);
+      }
+    }
+  );
 
   test('credential refusal prevents worker isolation and engine submission', async () => {
     const adapter = await import('../../workflows/store-adapter');

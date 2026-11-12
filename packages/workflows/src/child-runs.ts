@@ -1,3 +1,4 @@
+import { admitNativeResourceStart } from './resource-start-admission';
 import { ISOLATION_ENV_ID_METADATA_KEY } from './schemas/run-metadata';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { existsSync } from 'fs';
@@ -17,6 +18,8 @@ import {
 } from './run-preflight';
 import { hydrateResumableRun, inspectResumableRun } from './run-resume';
 import {
+  finalizeWorkflowSource,
+  preparedWorkflowSourceRecord,
   prepareWorkflowSource,
   withCapturedSource,
   type CapturedSourceOwner,
@@ -30,7 +33,7 @@ import type {
   WorkflowWithSource,
 } from './schemas';
 import { findWorkflowLoadError } from './schemas/workflow';
-import { SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
+import { WORKFLOW_SOURCE_METADATA_KEY, SUBRUN_METADATA_KEYS, runInputsMetadata } from './schemas';
 import type { WorkflowRunConfigInput } from './schemas/run-config';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
@@ -47,39 +50,6 @@ import {
 
 /** Depth cap on the `workflow:` sub-run tree (D9). A node nested deeper fails fast. */
 const CHILD_WORKFLOW_DEPTH_CAP = 5;
-
-/** Safety bound on the descendant walk (guards a corrupted run tree). */
-const MAX_DESCENDANT_RUNS = 64;
-
-/**
- * Collect the transitive descendant run ids of `rootId` via a bounded downward walk
- * of `parent_run_id` (#2121 Phase 2). Used to exclude a run's own sub-run children
- * from its path-lock: they share the checkout by design, so a parent resumed while
- * still blocked on a paused child must not self-cancel against that child. Throws
- * are the caller's to handle (it fails closed).
- */
-export async function gatherDescendantRunIds(
-  deps: WorkflowDeps,
-  rootId: string
-): Promise<string[]> {
-  const out: string[] = [];
-  const queue: string[] = [rootId];
-  const seen = new Set<string>([rootId]);
-  let processed = 0;
-  while (queue.length > 0 && processed < MAX_DESCENDANT_RUNS) {
-    const id = queue.shift();
-    if (id === undefined) break;
-    processed++;
-    const children = await deps.store.findChildRuns(id);
-    for (const c of children) {
-      if (seen.has(c.id)) continue;
-      seen.add(c.id);
-      out.push(c.id);
-      queue.push(c.id);
-    }
-  }
-  return out;
-}
 
 /**
  * A child launch reads its parent's source before the child runs. The parent releases
@@ -139,7 +109,7 @@ interface ChildLaunch {
 }
 
 interface ChildRunStart {
-  readonly opts: ExecuteWorkflowOptions;
+  readonly opts: ExecuteWorkflowOptions & { preCreatedRun: WorkflowRun };
   readonly runId: string;
 }
 
@@ -189,6 +159,20 @@ export async function runChildWorkflow(
     if (inputs.stopped) return inputs.outcome;
     const prepared = await prepareChildAiConfiguration(launch, workflow);
     if (prepared.stopped) return prepared.outcome;
+    if (workflow.resource && !args.resumeChild) {
+      return startResourceChild(
+        launch,
+        owner,
+        {
+          source: source.value,
+          workflow,
+          inputs: inputs.value,
+          prepared: prepared.value,
+          placement: { cwd: args.cwd },
+        },
+        workflowSource
+      );
+    }
     const placement = await resolveChildPlacement(launch, prepared.value);
     if (placement.stopped) return placement.outcome;
     const start = await startChildRun(launch, {
@@ -207,6 +191,102 @@ export async function runChildWorkflow(
       start: start.value,
     });
   });
+}
+
+async function startResourceChild(
+  launch: ChildLaunch,
+  owner: CapturedSourceOwner,
+  plan: ChildRunPlan,
+  workflowSource: WorkflowSource
+): Promise<ChildWorkflowOutcome> {
+  const { deps, args } = launch;
+  let childRun: WorkflowRun | undefined;
+  let submitted = false;
+  try {
+    const start = await createChildRun(launch, plan, true);
+    childRun = start.opts.preCreatedRun;
+    const source = await finalizeWorkflowSource(deps, plan.source, {
+      cwd: args.cwd,
+      codebaseId: args.codebaseId,
+    });
+    owner.hold(source);
+    const metadata = { [WORKFLOW_SOURCE_METADATA_KEY]: preparedWorkflowSourceRecord(source) };
+    await deps.store.updateWorkflowRun(childRun.id, { metadata });
+    childRun.metadata = { ...childRun.metadata, ...metadata };
+    owner.adopt();
+    await admitNativeResourceStart(
+      deps.store,
+      plan.workflow,
+      childRun,
+      {
+        cwd: args.cwd,
+        conversationId: args.conversationId,
+        isolation: args.isolation === 'worktree' ? { kind: 'worktree' } : { kind: 'in-place' },
+      },
+      {
+        onWaiting: async (resource, requestId) => {
+          await launch.platform.sendMessage(
+            args.conversationId,
+            `Waiting for resource '${resource}' (request ${requestId}).`
+          );
+        },
+      }
+    );
+    const placement = await resolveChildPlacement(launch, plan.prepared);
+    if (placement.stopped) {
+      await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(
+          childRun.id,
+          placement.outcome.error ?? 'Child placement failed',
+          { pendingOnly: true, exitReason: 'launch_failed' }
+        ),
+        { workflowRunId: childRun.id, site: 'child.resource_placement_failed' }
+      );
+      return { ...placement.outcome, childRunId: childRun.id };
+    }
+    const { cwd, isolationEnv } = placement.value;
+    const isolationMetadata = isolationEnv ? childIsolationMetadata(isolationEnv) : {};
+    await deps.store.updateWorkflowRun(childRun.id, {
+      working_path: cwd,
+      metadata: isolationMetadata,
+    });
+    childRun.working_path = cwd;
+    childRun.metadata = { ...childRun.metadata, ...isolationMetadata };
+    submitted = true;
+    return await executeChildRun(launch, owner, {
+      workflow: plan.workflow,
+      source: workflowSource,
+      prepared: plan.prepared,
+      cwd,
+      start: {
+        ...start,
+        opts: {
+          ...start.opts,
+          preparedSource: source,
+          resolvedBaseBranch: childBaseBranch(isolationEnv, launch.parentBaseBranch),
+          ...(isolationEnv?.cutFromCommit !== undefined
+            ? { cutFromCommit: isolationEnv.cutFromCommit }
+            : {}),
+        },
+      },
+    });
+  } catch (error) {
+    if (isWorkflowExecutionInterruption(error)) throw error;
+    if (
+      childRun &&
+      !submitted &&
+      (await deps.store.getResourceStartRequest(childRun.id))?.status !== 'queued'
+    ) {
+      await requireTerminalStatusWrite(
+        deps.store.failWorkflowRun(childRun.id, (error as Error).message, {
+          pendingOnly: true,
+          exitReason: 'launch_failed',
+        }),
+        { workflowRunId: childRun.id, site: 'child.resource_preparation_failed' }
+      );
+    }
+    return failedOutcome((error as Error).message, childRun?.id);
+  }
 }
 
 interface ParentSource {
@@ -428,12 +508,8 @@ function resumedChildPlacement(
       childRun.id
     );
   }
-  // `working_path` is nullable in the schema, and falling back to the parent's
-  // `cwd` here would be the one silent shared-checkout fallback in this launch —
-  // for an ISOLATED child that is exactly the concurrent-write collision the
-  // isolation was requested to prevent. Unreachable today (every child row is
-  // created with a real path, see createChildRun), so this is defense-in-depth:
-  // fail loudly rather than resume somewhere the author didn't ask for.
+  // A resource child can fail before placement. An absent path cannot authorize
+  // resuming in its parent's checkout instead of the isolated checkout it requested.
   if (!priorPath) {
     return refuse(
       `Cannot resume sub-run '${childWorkflowName}': its run row has no recorded working ` +
@@ -560,7 +636,11 @@ async function recoverCancelledChildRun(
   };
 }
 
-async function createChildRun(launch: ChildLaunch, plan: ChildRunPlan): Promise<ChildRunStart> {
+async function createChildRun(
+  launch: ChildLaunch,
+  plan: ChildRunPlan,
+  reserveBeforePlacement = false
+): Promise<ChildRunStart> {
   const { deps, args, runConfig, parentBaseBranch } = launch;
   const { isolationEnv } = plan.placement;
   const childRun = await deps.store.createWorkflowRun({
@@ -570,7 +650,7 @@ async function createChildRun(launch: ChildLaunch, plan: ChildRunPlan): Promise<
     origin: args.parentRun.origin ?? undefined,
     codebase_id: args.codebaseId,
     user_message: args.input,
-    working_path: plan.placement.cwd,
+    ...(reserveBeforePlacement ? {} : { working_path: plan.placement.cwd }),
     parent_run_id: args.parentRun.id,
     metadata: childRunMetadata(args, plan),
   });

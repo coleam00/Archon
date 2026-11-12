@@ -1,9 +1,6 @@
+import { admitNativeResourceStart } from '@archon/workflows/resource-start-store';
 import { continuationInheritsEstate } from '@archon/workflows/schemas/workflow-run';
 import type { ResolvedRunContinuation } from '../../operations/workflow-continuation';
-// Background dispatch: run a workflow in a hidden worker conversation, bridged to the
-// parent, and return once the run is submitted. Its phases, in order: estate, source and
-// AI configuration, worker conversation, pre-created run, worker checkout, announcement,
-// then the detached run in background-run.ts.
 import { createLogger } from '@archon/paths';
 import type { IsolationHints } from '@archon/isolation';
 import * as sqlIsolation from '@archon/core/db/isolation-environments';
@@ -205,7 +202,6 @@ async function dispatchBackgroundWorkflowOwned(
     throw error;
   }
 
-  let executionSubmitted = false;
   try {
     preparedSource = await retainSetupRunSource(
       workflowDeps,
@@ -215,51 +211,145 @@ async function dispatchBackgroundWorkflowOwned(
       ctx.cwd,
       ctx.codebaseId
     );
-    const checkout = await resolveWorkerCheckout({
-      ctx,
-      workflow,
-      estate,
-      workflowDeps,
-      preCreatedRun,
-      preparedAiConfiguration,
-      workerPlatformId,
-      workerConv,
-    });
-
-    if (ctx.adoptionLane?.kind === 'checkout-branch') {
-      preparedSource = { ...preparedSource, origin: checkout.cwd };
-      await recordSetupRunSource(workflowDeps, preCreatedRun, preparedSource);
-    }
-
-    await announceDispatch(ctx, workflow, workerPlatformId);
-
-    const backgroundExecution = runInBackground({
-      ctx,
-      workflow,
-      engine,
-      workerPlatformId,
-      workerConv,
-      preCreatedRun,
-      preparedSource,
-      preparedAiConfiguration,
-      checkout,
-      isolationContext,
-      closeRunLiveOwner,
-    });
-    executionSubmitted = true;
-    void backgroundExecution;
   } catch (error) {
-    if (!executionSubmitted)
+    try {
       await requireTerminalStatusWrite(
         workflowDeps.store.failWorkflowRun(preCreatedRun.id, toError(error).message, {
           exitReason: 'launch_failed',
+          pendingOnly: true,
         }),
-        { workflowRunId: preCreatedRun.id, site: 'background.worktree_setup_failed' }
+        { workflowRunId: preCreatedRun.id, site: 'background.source_retention_failed' }
       );
+    } finally {
+      await closeRunLiveOwner();
+    }
     throw error;
-  } finally {
-    if (!executionSubmitted) await closeRunLiveOwner();
   }
+  const launch = async (): Promise<void> => {
+    let executionSubmitted = false;
+    try {
+      await admitBackgroundResource(
+        workflowDeps,
+        workflow,
+        preCreatedRun,
+        ctx,
+        estate,
+        workerPlatformId
+      );
+      const checkout = await resolveWorkerCheckout({
+        ctx,
+        workflow,
+        estate,
+        workflowDeps,
+        preCreatedRun,
+        preparedAiConfiguration,
+        workerPlatformId,
+        workerConv,
+      });
+
+      if (ctx.adoptionLane?.kind === 'checkout-branch') {
+        preparedSource = { ...preparedSource, origin: checkout.cwd };
+        await recordSetupRunSource(workflowDeps, preCreatedRun, preparedSource);
+      }
+
+      await announceDispatch(ctx, workflow, workerPlatformId);
+
+      const backgroundExecution = runInBackground({
+        ctx,
+        workflow,
+        engine,
+        workerPlatformId,
+        workerConv,
+        preCreatedRun,
+        preparedSource,
+        preparedAiConfiguration,
+        checkout,
+        isolationContext,
+        closeRunLiveOwner,
+      });
+      executionSubmitted = true;
+      void backgroundExecution;
+    } catch (error) {
+      if (
+        !executionSubmitted &&
+        (!workflow.resource ||
+          (await workflowDeps.store.getResourceStartRequest(preCreatedRun.id))?.status !== 'queued')
+      )
+        await requireTerminalStatusWrite(
+          workflowDeps.store.failWorkflowRun(preCreatedRun.id, toError(error).message, {
+            exitReason: 'launch_failed',
+            pendingOnly: true,
+          }),
+          { workflowRunId: preCreatedRun.id, site: 'background.worktree_setup_failed' }
+        );
+      throw error;
+    } finally {
+      if (!executionSubmitted) await closeRunLiveOwner();
+    }
+  };
+  if (workflow.resource) {
+    // The worker owns the wait, so an API request can return its durable pending run.
+    void launch()
+      .catch(async error => {
+        getLog().error(
+          { err: toError(error), workflowRunId: preCreatedRun.id },
+          'background_resource_launch_failed'
+        );
+        await ctx.platform.sendMessage(
+          ctx.conversationId,
+          `Workflow '${workflow.name}' could not start: ${toError(error).message}`
+        );
+      })
+      .catch(error => {
+        getLog().error(
+          { err: toError(error), workflowRunId: preCreatedRun.id },
+          'background_resource_notice_failed'
+        );
+      });
+  } else {
+    await launch();
+  }
+}
+
+async function admitBackgroundResource(
+  workflowDeps: WorkflowDeps,
+  workflow: ResolvedWorkflow,
+  preCreatedRun: PreCreatedRun,
+  ctx: WorkflowRoutingContext,
+  estate: LaunchEstate,
+  workerPlatformId: string
+): Promise<void> {
+  if (!workflow.resource) return;
+  await admitNativeResourceStart(
+    workflowDeps.store,
+    workflow,
+    preCreatedRun,
+    {
+      cwd: estate.adoptedEnvironment?.working_path ?? ctx.cwd,
+      conversationId: workerPlatformId,
+      isolation:
+        workflow.worktree?.enabled === false ||
+        !estate.codebase ||
+        estate.codebase.kind === 'folder'
+          ? { kind: 'in-place' }
+          : {
+              kind: 'worktree',
+              ...(ctx.adoptionLane?.kind === 'checkout-branch'
+                ? { branch: ctx.adoptionLane.taskBranch.branch }
+                : estate.adoptedEnvironment
+                  ? { branch: estate.adoptedEnvironment.branch_name }
+                  : {}),
+            },
+    },
+    {
+      onWaiting: async (resource, requestId) => {
+        await ctx.platform.sendMessage(
+          ctx.conversationId,
+          `Waiting for resource '${resource}' (request ${requestId}).`
+        );
+      },
+    }
+  );
 }
 
 async function resolveLaunchEstate(

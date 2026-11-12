@@ -5,7 +5,7 @@ import { formatDuration } from '@archon/paths/duration';
 import { captureWorkflowTerminal, createLogger } from '@archon/paths';
 import { hostname } from 'os';
 import { recordCheckoutSample, sampleCheckout, type CheckoutSample } from './checkout-observation';
-import { gatherDescendantRunIds } from './child-runs';
+import { gatherDescendantRunIds } from './run-tree';
 import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { attentionAnswerLines, spellWorkflowCommand } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
@@ -62,7 +62,7 @@ export async function admitWorkflowRun(
   opts: ExecuteWorkflowOptions,
   dispatch: RunDispatch
 ): Promise<RunPhase<AdmittedRun>> {
-  const { preCreatedRun, priorCompletedNodes } = opts;
+  const { preCreatedRun } = opts;
   const execContext = opts.execContext ?? { kind: 'host' };
   // This process is the one executing the run, whether it created the row, claimed a
   // row a launcher pre-created, or resumed one. `abandon` shows this record when no
@@ -74,29 +74,20 @@ export async function admitWorkflowRun(
     ...(uid === undefined ? {} : { uid }),
   };
 
-  if (preCreatedRun && priorCompletedNodes !== undefined) {
-    await notifyResumingRun(platform, conversationId, workflow.name, priorCompletedNodes);
-  }
-
-  let workflowRun: WorkflowRun;
-  if (preCreatedRun) {
-    workflowRun = preCreatedRun;
-  } else {
-    const created = await createWorkflowRunRow(
-      deps,
-      platform,
-      conversationId,
-      cwd,
-      workflow,
-      userMessage,
-      origin,
-      opts,
-      dispatch,
-      executionOwner
-    );
-    if (created.stopped) return created;
-    workflowRun = created.value;
-  }
+  const selected = await selectWorkflowRun(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    userMessage,
+    origin,
+    opts,
+    dispatch,
+    executionOwner
+  );
+  if (selected.stopped) return selected;
+  let workflowRun = selected.value;
 
   let checkoutBaselineSample: CheckoutSample | undefined;
   if (!dispatch.isContinuation) {
@@ -138,6 +129,47 @@ export async function admitWorkflowRun(
   );
   if (blocked) return { stopped: true, result: blocked };
   return { stopped: false, value: { workflowRun, checkoutBaselineSample } };
+}
+
+async function selectWorkflowRun(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  cwd: string,
+  workflow: ResolvedWorkflow,
+  userMessage: string,
+  origin: WorkflowRunOrigin | undefined,
+  opts: ExecuteWorkflowOptions,
+  dispatch: RunDispatch,
+  executionOwner: ExecutionOwnerRecord
+): Promise<RunPhase<WorkflowRun>> {
+  const { preCreatedRun, priorCompletedNodes } = opts;
+  if (preCreatedRun && priorCompletedNodes !== undefined) {
+    await notifyResumingRun(platform, conversationId, workflow.name, priorCompletedNodes);
+  }
+  if (!dispatch.isContinuation && workflow.resource) {
+    const request = preCreatedRun
+      ? await deps.store.getResourceStartRequest(preCreatedRun.id)
+      : null;
+    if (request?.status !== 'admitted' || request.resource !== workflow.resource.name) {
+      const error = `Workflow '${workflow.name}' requires admission on resource '${workflow.resource.name}' before execution`;
+      await sendCriticalMessage(platform, conversationId, error);
+      return { stopped: true, result: { success: false, workflowRunId: preCreatedRun?.id, error } };
+    }
+  }
+  if (preCreatedRun) return { stopped: false, value: preCreatedRun };
+  return createWorkflowRunRow(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    userMessage,
+    origin,
+    opts,
+    dispatch,
+    executionOwner
+  );
 }
 
 async function notifyResumingRun(

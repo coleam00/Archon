@@ -1,4 +1,7 @@
-import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
+import {
+  nativeResourceStartHostId,
+  type QueuedResourceStartInspection,
+} from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
@@ -739,6 +742,11 @@ async function loadAdmittedResourceStart(input: StartAdmittedResourceStartInput)
   const request = await host.deps.store.getResourceStartRequest(input.requestId);
   if (request?.status !== 'admitted' || request.hostId !== input.hostId) {
     throw new Error('Execution requires an admitted request for this configured host.');
+  }
+  if (request.hostId === nativeResourceStartHostId(request.id)) {
+    throw new Error(
+      `Resource start '${request.id}' belongs to its native launcher; inspect that owner and abandon/relaunch explicitly if it has stopped.`
+    );
   }
   const { launch } = request;
   const run = await host.deps.store.getWorkflowRun(launch.run.id);

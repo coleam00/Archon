@@ -67,6 +67,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `webSearchMode` | Codex web search: `disabled`, `cached` or `live`. Workflow level only. See [Codex options](#codex-specific-options). |
 | `worktree.enabled` | `false` always runs in the live checkout, and `--branch` or `--from` is an error. `true` always uses a worktree, and `--no-worktree` is an error. Omit it to let the caller decide; the default is a worktree. |
 | `container` | `enabled` and `write_back` (`approve` or `auto`) for container runs of folder projects. |
+| `resource` | Exact install-wide resource key (`build`) or `{ name: build, capacity: 2 }`. Every independent run takes a slot; includes share their parent's slot. Capacity uses the fresh install override, this start's declaration, then 10. See [resource admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). |
 | `mutates_checkout` | `false` asserts that runs of this workflow never write to their checkout, so the engine skips the path lock and several runs can share one checkout. Default `true`. See [Running sub-runs side by side](#running-sub-runs-side-by-side). |
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
@@ -2333,7 +2334,7 @@ bindings:
   sweep:                              # the binding id: lowercase letters, digits, hyphens
     workflow: review-sweep            # a workflow of this pack
     resource: sweep                   # last segment of the resource name
-    capacity: 1                       # optional, default 1
+    capacity: 1                       # optional declaration; default 10 without an install override
     overlap: skip                     # skip | queue
     isolation: { kind: worktree }     # optional, default { kind: default }
     schedule: { interval_seconds: 1800 }
@@ -2372,7 +2373,7 @@ same `resource` share its slots. With `resource_scope: host` it is
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
 input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an event
-binding, and bindings sharing a resource must declare the same capacity. An `event:` selector
+binding. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 ## Launching a Separate Governed Run with `workflow:`

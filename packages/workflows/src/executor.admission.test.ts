@@ -646,3 +646,75 @@ describe('run checkout baseline (#3305)', () => {
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
   });
 });
+
+describe('workflow resource execution boundary', () => {
+  it('refuses a fresh resource workflow before creating an unadmitted run', async () => {
+    const store = makeStore();
+    const result = await startWorkflow({
+      store,
+      workflow: makeWorkflow({ resource: { name: 'build' } }),
+    });
+    expect(result.success).toBe(false);
+    if (result.success) throw new Error('Expected admission refusal');
+    expect(result.error).toContain("resource 'build'");
+    expect(store.createWorkflowRun).not.toHaveBeenCalled();
+    expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+  });
+
+  for (const state of [
+    'missing',
+    'queued',
+    'skipped',
+    'withdrawn',
+    'different',
+    'admitted',
+  ] as const) {
+    it(`requires matching admitted resource for a precreated ${state} run`, async () => {
+      const run = makeRun({ status: 'pending' });
+      const store = makeStore({
+        getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(async () =>
+          state === 'missing'
+            ? null
+            : {
+                id: run.id,
+                resource: state === 'different' ? 'merge' : 'build',
+                hostId: 'host',
+                overlap: 'queue',
+                status: state === 'different' ? 'admitted' : state,
+                runStatus: 'pending',
+                blocker: null,
+                blockerRunStatus: null,
+                launch: {
+                  version: 2,
+                  run: {
+                    id: run.id,
+                    workflow_name: run.workflow_name,
+                    codebase_id: 'project',
+                    user_message: '',
+                    metadata: {},
+                  },
+                  execution: {
+                    cwd: '/tmp',
+                    conversationId: 'test',
+                    isolation: { kind: 'worktree' },
+                  },
+                },
+              }
+        ),
+      });
+      const result = await startWorkflow({
+        store,
+        workflow: makeWorkflow({ resource: { name: 'build' } }),
+        options: { preCreatedRun: run },
+      });
+      if (state === 'admitted') {
+        expect(store.claimPendingWorkflowRun).toHaveBeenCalledTimes(1);
+      } else {
+        expect(result.success).toBe(false);
+        if (result.success) throw new Error('Expected admission refusal');
+        expect(result.error).toContain("resource 'build'");
+        expect(store.claimPendingWorkflowRun).not.toHaveBeenCalled();
+      }
+    });
+  }
+});
