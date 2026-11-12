@@ -230,6 +230,8 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
        build: 5
    ```
 
+   The key is the resource exactly as runs hold it: a workflow's `resource:` name, or a binding's full `resource` when its workflow declares none.
+
 Raising a capacity admits queued work at the next drain or start. Lowering it ends no run that holds a slot; it only blocks new admissions until enough holders finish. Capacity `1` means runs for the resource never overlap.
 
 The `overlap` setting controls a request that arrives while the resource is full:
@@ -288,7 +290,11 @@ resource: build
 nodes: [...]
 ```
 
-Every top-level run of that workflow then takes a slot on the resource, however it starts: `archon workflow run`, a chat or API start, or a binding. A hand start of a full resource waits as a `pending` run and prints `Waiting for resource 'build'`, then starts when a slot frees. It waits behind runnable queued trigger requests but holds no queue position itself, so a waiting process that dies strands nothing. `archon workflow run --no-wait` refuses instead and names the resource. An included workflow and a `workflow:` sub-run run inside the parent run's slot and take none of their own. A run a binding starts holds the binding's resource, which is the one slot that run takes. A workflow without `resource:` that no binding starts takes no slot.
+Every run of that workflow then takes a slot on the resource, however it starts: `archon workflow run`, a chat or API start, a `workflow:` sub-run, or a binding. A binding that starts it admits the run on the workflow's resource instead of the binding's own `resource`, so binding starts and hand starts count against one slot, and the binding's `capacity` is a declared capacity for the workflow's resource. The name is used as written: `concurrency.resources.build` in the install config is the number for every workflow that declares `resource: build`, across projects.
+
+A hand start of a full resource waits as a `pending` run and prints `Waiting for resource 'build'`, then starts when a slot frees. It waits behind runnable queued trigger requests but holds no queue position itself, so a waiting process that dies strands nothing. `archon workflow run --no-wait` refuses instead and names the resource. If admission fails while the start waits, for example because the install config became invalid, the run is cancelled with the reason; a run an operator cancels while it waits ends without a slot.
+
+An included workflow runs inside its parent's run and takes no slot of its own. A `workflow:` sub-run takes none when one of its ancestor runs already holds the same resource, so a workflow that runs another declaring its resource holds one slot. A sub-run whose ancestors hold no slot on its resource waits for one like a hand start. A workflow without `resource:` that no binding starts takes no slot.
 
 ## Configure GitHub event starts
 

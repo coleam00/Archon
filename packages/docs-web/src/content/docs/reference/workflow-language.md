@@ -68,7 +68,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `worktree.enabled` | `false` always runs in the live checkout, and `--branch` or `--from` is an error. `true` always uses a worktree, and `--no-worktree` is an error. Omit it to let the caller decide; the default is a worktree. |
 | `container` | `enabled` and `write_back` (`approve` or `auto`) for container runs of folder projects. |
 | `mutates_checkout` | `false` asserts that runs of this workflow never write to their checkout, so the engine skips the path lock and several runs can share one checkout. Default `true`. See [Running sub-runs side by side](#running-sub-runs-side-by-side). |
-| `resource` | The resource every top-level run of this workflow holds a slot on, however it starts. A start waits while the resource is full; `archon workflow run --no-wait` refuses instead. Included workflows and sub-runs share the parent's slot. See [Workflows that declare a resource](/guides/workflow-triggers/#workflows-that-declare-a-resource). |
+| `resource` | The resource every run of this workflow holds a slot on, however it starts, including a binding start. A start waits while the resource is full; `archon workflow run --no-wait` refuses instead. An included workflow, and a `workflow:` sub-run whose ancestor holds the same resource, share the parent's slot. See [Workflows that declare a resource](/guides/workflow-triggers/#workflows-that-declare-a-resource). |
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
@@ -2334,7 +2334,7 @@ bindings:
   sweep:                              # the binding id: lowercase letters, digits, hyphens
     workflow: review-sweep            # a workflow of this pack
     resource: sweep                   # last segment of the resource name
-    capacity: 1                       # optional, default 1
+    capacity: 1                       # optional; omitted, the engine default of 10 applies
     overlap: skip                     # skip | queue
     isolation: { kind: worktree }     # optional, default { kind: default }
     schedule: { interval_seconds: 1800 }
@@ -2368,7 +2368,11 @@ it. Setting both is refused, and so is a `schedule:` or `event:` key with an inv
 [binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
 resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
 same `resource` share its slots. With `resource_scope: host` it is
-`<pack>:<host id>:<resource>`, for work that spans every repository on the host.
+`<pack>:<host id>:<resource>`, for work that spans every repository on the host. When the
+bound workflow declares a top-level `resource:`, its runs hold that resource instead, and the
+binding's `capacity` applies to it. An omitted `capacity` declares no number; it used to mean
+`1`, and now the engine default of 10 applies unless another source gives one. Binding files
+already generated carry their capacity explicitly and are unaffected.
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`

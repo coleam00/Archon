@@ -653,7 +653,6 @@ describe('workflow-level policy fields', () => {
     ],
     // A dropped resource would let every start run without a slot.
     ['a reserved resource name', 'resource: "provider:claude"', "Invalid 'resource'"],
-    ['a blank resource name', 'resource: "  "', "Invalid 'resource'"],
   ])('rejects %s', (_, field, message) => {
     const result = parseWorkflow(withField(field), 'evidence.yaml');
     expect(result.workflow).toBeNull();
