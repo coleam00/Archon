@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
 import { chmod, link, lstat, mkdir, mkdtemp, realpath, symlink, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { join, relative, resolve } from 'node:path';
 import { execFileAsync } from '@archon/git';
 import {
   getArchonWorkspacesPath,
@@ -154,6 +154,71 @@ test.each(['real', 'root-link', 'engine-link', 'scratch-link'] as const)(
       ).sort()
     );
     expect(existsSync(join(sibling, '.git'))).toBe(true);
+  }
+);
+
+test.each(['inside', 'worktree', 'ancestor', 'scratch', 'engine'] as const)(
+  'accounts for tagged %s caches before Git removes a scratch worktree',
+  async placement => {
+    const { id, root, artifactsDir } = runStorage();
+    const repo = trackTempRoot(await realpath(await mkdtemp(join(tmpdir(), 'cache-worktree-'))));
+    const git = (...args: string[]): Promise<{ stdout: string }> =>
+      execFileAsync('git', ['-C', repo, ...args]);
+    await git('init', '-q');
+    await git(
+      '-c',
+      'user.name=t',
+      '-c',
+      'user.email=t@example.com',
+      'commit',
+      '-q',
+      '--allow-empty',
+      '-m',
+      'init'
+    );
+    const scratch = getRunScratchDir(artifactsDir);
+    const worktree = join(scratch, 'probe', 'tree');
+    await git('worktree', 'add', '-q', '--detach', worktree);
+    const cache =
+      placement === 'inside'
+        ? join(worktree, 'cache')
+        : placement === 'worktree'
+          ? worktree
+          : placement === 'ancestor'
+            ? join(scratch, 'probe')
+            : placement === 'scratch'
+              ? scratch
+              : join(artifactsDir, '.archon');
+    await tagged(cache);
+    const bulk = join(placement === 'inside' ? cache : worktree, 'bulk');
+    await writeFile(bulk, Buffer.alloc(1024 * 1024, 1));
+    const allocatedBulk = (await lstat(bulk)).blocks * 512;
+    expect(allocatedBulk).toBeGreaterThan(0);
+    await writeFile(join(artifactsDir, 'report.md'), 'evidence');
+    const capture = captureLogLines();
+    try {
+      await releaseRunScratch({
+        id,
+        output_root: root,
+        working_path: repo,
+        metadata: ownedBy(process.pid),
+      });
+      const removals = capture.lines.filter(line => line.msg === 'run_scratch.cache_removed');
+      expect(removals).toHaveLength(1);
+      expect(removals[0]).toMatchObject({
+        workflowRunId: id,
+        artifactsDir,
+        path: relative(artifactsDir, cache),
+      });
+      expect(Number(removals[0].estimatedFreedBytes)).toBeGreaterThanOrEqual(allocatedBulk);
+    } finally {
+      capture.restore();
+    }
+    expect(existsSync(cache)).toBe(false);
+    expect(existsSync(scratch)).toBe(false);
+    expect(existsSync(join(artifactsDir, 'report.md'))).toBe(true);
+    const { stdout } = await git('worktree', 'list', '--porcelain', '-z');
+    expect(stdout.split('\0').filter(field => field.startsWith('worktree '))).toHaveLength(1);
   }
 );
 

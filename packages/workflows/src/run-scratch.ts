@@ -102,16 +102,17 @@ export async function releaseRunScratch(run: ScratchRun): Promise<void> {
     return;
   }
   const artifactsDir = getRunArtifactsDirForRoot(root, run.id);
+  const logContext = { workflowRunId: run.id };
+  // Git removes worktree files too, so capture tags and allocation before deregistration.
+  const caches = await discoverTaggedCaches(artifactsDir, logContext);
   if (
     run.working_path !== null &&
-    (await scratchParentIsDirectory(artifactsDir, { workflowRunId: run.id })) &&
-    (await isDirectory(getRunScratchDir(artifactsDir), { workflowRunId: run.id }))
+    (await scratchParentIsDirectory(artifactsDir, logContext)) &&
+    (await isDirectory(getRunScratchDir(artifactsDir), logContext))
   ) {
-    await deregisterScratchWorktrees(run.working_path, getRunScratchDir(artifactsDir), {
-      workflowRunId: run.id,
-    });
+    await deregisterScratchWorktrees(run.working_path, getRunScratchDir(artifactsDir), logContext);
   }
-  await removeRunScratch(artifactsDir, { workflowRunId: run.id });
+  await removeScratchAndCaches(artifactsDir, logContext, caches);
 }
 
 /**
@@ -173,8 +174,18 @@ export async function removeRunScratch(
   artifactsDir: string,
   logContext: Record<string, unknown>
 ): Promise<void> {
-  if (!(await isDirectory(artifactsDir, logContext))) return;
-  await removeTaggedCaches(artifactsDir, logContext);
+  const caches = await discoverTaggedCaches(artifactsDir, logContext);
+  await removeScratchAndCaches(artifactsDir, logContext, caches);
+}
+
+type TaggedCache = { path: string; estimatedFreedBytes: number | null };
+
+async function removeScratchAndCaches(
+  artifactsDir: string,
+  logContext: Record<string, unknown>,
+  caches: TaggedCache[]
+): Promise<void> {
+  for (const cache of caches) await removeCache(cache, artifactsDir, logContext);
   if (!(await scratchParentIsDirectory(artifactsDir, logContext))) return;
   const scratchDir = getRunScratchDir(artifactsDir);
   try {
@@ -249,17 +260,30 @@ async function estimateCacheBytes(path: string): Promise<number> {
   return bytes;
 }
 
-async function removeTaggedCaches(
+async function measureCache(
+  path: string,
+  logContext: Record<string, unknown>
+): Promise<TaggedCache> {
+  try {
+    return { path, estimatedFreedBytes: await estimateCacheBytes(path) };
+  } catch (error) {
+    getLog().warn({ ...logContext, err: error, path }, 'run_scratch.cache_measure_failed');
+    return { path, estimatedFreedBytes: null };
+  }
+}
+
+async function discoverTaggedCaches(
   artifactsDir: string,
   logContext: Record<string, unknown>
-): Promise<void> {
+): Promise<TaggedCache[]> {
+  const caches: TaggedCache[] = [];
   const pending = [artifactsDir];
   while (pending.length) {
     const path = pending.pop();
     if (path === undefined) break;
     if (!(await isDirectory(path, logContext))) continue;
     if (path !== artifactsDir && (await hasCacheTag(path, logContext))) {
-      await removeCache(path, artifactsDir, logContext);
+      caches.push(await measureCache(path, logContext));
       continue;
     }
     try {
@@ -270,19 +294,14 @@ async function removeTaggedCaches(
       warnFilesystem(error, path, logContext);
     }
   }
+  return caches;
 }
 
 async function removeCache(
-  path: string,
+  { path, estimatedFreedBytes }: TaggedCache,
   artifactsDir: string,
   logContext: Record<string, unknown>
 ): Promise<void> {
-  let estimatedFreedBytes: number | null = null;
-  try {
-    estimatedFreedBytes = await estimateCacheBytes(path);
-  } catch (error) {
-    getLog().warn({ ...logContext, err: error, path }, 'run_scratch.cache_measure_failed');
-  }
   try {
     await rm(path, { recursive: true, force: true });
     getLog().info(
