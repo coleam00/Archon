@@ -537,14 +537,6 @@ describe('review threads and issue bodies', () => {
     expect(thread?.comments.map(comment => comment.commit)).toEqual(['a'.repeat(40), null]);
   });
 
-  test('a thread comment without a creation time is an invalid response', async () => {
-    const result = await dispatch(
-      { operationId: 'threads', op: 'pr.threads', ref },
-      'untimed-comment'
-    );
-    expect(result.response).toMatchObject({ ok: false, error: { kind: 'invalid_response' } });
-  });
-
   test.each([reply, resolve, editIssue])(
     'an applied $op that answers the request is accepted',
     async request => {

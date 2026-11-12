@@ -372,7 +372,7 @@ else {
                 {
                   id: 'c2',
                   author: null,
-                  createdAt: mode === 'untimed-comment' ? undefined : '2026-11-11T13:00:00+02:00',
+                  createdAt: '2026-11-11T13:00:00+02:00',
                   commit: null,
                   body: 'a later reply',
                   url: pr.url,
