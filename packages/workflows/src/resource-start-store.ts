@@ -31,12 +31,20 @@ export function skippedFireNotice(
   if (receipt.deliveryId === null || source === null || disposition.status !== 'skipped')
     return null;
   const label = (value: string): string => {
-    const printable = value.replace(
-      /[\u0000-\u001f\u007f-\u009f]/gu,
-      char => `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+    const parts = Array.from(value, char =>
+      /[\u0000-\u001f\u007f-\u009f]/u.test(char)
+        ? `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+        : char
     );
+    const printable = parts.join('');
     const max = WORKFLOW_NOTICE_LIMITS.labelValueLength;
-    return printable.length > max ? `${printable.slice(0, max - 1)}…` : printable;
+    if (printable.length <= max) return printable;
+    let prefix = '';
+    for (const part of parts) {
+      if (prefix.length + part.length >= max) break;
+      prefix += part;
+    }
+    return `${prefix}…`;
   };
   return {
     runId: source.runId,

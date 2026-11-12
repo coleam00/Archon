@@ -77,42 +77,50 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       };
       const holder = { ...start(), resource: fireBinding.resource };
       await store.admitResourceStart(holder);
-      for (const ended of [false, true]) {
-        const source = await store.createWorkflowRun(launch().run);
-        await store.claimPendingWorkflowRun(source.id);
-        if (ended) await store.completeWorkflowRun(source.id, { duration_ms: 1 });
-        const before = await store.getWorkflowRun(source.id);
-        const input = acceptance();
-        input.receipt.deliveryId = `delivery\t${longSuffix}${crypto.randomUUID()}`;
-        input.receipt.sourceActor = { source: 'archon-run', id: source.id };
-        const { prepared } = await skipFire(input, fireBinding);
-        expect(await store.getStartReceipt(input.receipt.id)).toMatchObject({
-          deliveryId: input.receipt.deliveryId,
-          bindings: [
-            { bindingId: fireBinding.bindingId, intent: { resource: fireBinding.resource } },
-          ],
-        });
-        expect(await store.getResourceStartRequest(prepared.run.id)).toMatchObject({
-          status: 'skipped',
-          resource: fireBinding.resource,
-        });
-        const events =
-          (await store.listEventsForRuns([source.id], ['workflow_notice'])).get(source.id) ?? [];
-        expect(events).toHaveLength(1);
-        const notice = workflowNoticeDataSchema.parse(events[0]?.data);
-        expect(notice).toMatchObject({
-          text: 'Trigger fire dropped, not queued (overlap=skip).',
-          node: null,
-          labels: {
-            binding: `binding\\u000a${'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength - 14)}…`,
-            resource: `resource\\u007f${'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength - 15)}…`,
-            blocker_kind: 'run',
-            blocker: holder.launch.run.id,
-            delivery: `delivery\\u0009${'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength - 15)}…`,
-            overlap: 'skip',
-          },
-        });
-        expect(await store.getWorkflowRun(source.id)).toEqual(before);
+      for (const [bindingId, expectedBinding] of [
+        [
+          fireBinding.bindingId,
+          `binding\\u000a${'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength - 14)}…`,
+        ],
+        [`${'x'.repeat(198)}\n`, `${'x'.repeat(198)}…`],
+        [`${'x'.repeat(193)}\nxx`, `${'x'.repeat(193)}\\u000a…`],
+        [`${'x'.repeat(194)}\n`, `${'x'.repeat(194)}\\u000a`],
+      ]) {
+        for (const ended of [false, true]) {
+          const source = await store.createWorkflowRun(launch().run);
+          await store.claimPendingWorkflowRun(source.id);
+          if (ended) await store.completeWorkflowRun(source.id, { duration_ms: 1 });
+          const before = await store.getWorkflowRun(source.id);
+          const input = acceptance();
+          input.receipt.deliveryId = `delivery\t${longSuffix}${crypto.randomUUID()}`;
+          input.receipt.sourceActor = { source: 'archon-run', id: source.id };
+          const { prepared } = await skipFire(input, { ...fireBinding, bindingId });
+          expect(await store.getStartReceipt(input.receipt.id)).toMatchObject({
+            deliveryId: input.receipt.deliveryId,
+            bindings: [{ bindingId, intent: { resource: fireBinding.resource } }],
+          });
+          expect(await store.getResourceStartRequest(prepared.run.id)).toMatchObject({
+            status: 'skipped',
+            resource: fireBinding.resource,
+          });
+          const events =
+            (await store.listEventsForRuns([source.id], ['workflow_notice'])).get(source.id) ?? [];
+          expect(events).toHaveLength(1);
+          const notice = workflowNoticeDataSchema.parse(events[0]?.data);
+          expect(notice).toMatchObject({
+            text: 'Trigger fire dropped, not queued (overlap=skip).',
+            node: null,
+            labels: {
+              binding: expectedBinding,
+              resource: `resource\\u007f${'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength - 15)}…`,
+              blocker_kind: 'run',
+              blocker: holder.launch.run.id,
+              delivery: `delivery\\u0009${'x'.repeat(WORKFLOW_NOTICE_LIMITS.labelValueLength - 15)}…`,
+              overlap: 'skip',
+            },
+          });
+          expect(await store.getWorkflowRun(source.id)).toEqual(before);
+        }
       }
       const queued = { ...start(), resource: fireBinding.resource };
       await store.admitResourceStart(queued);
