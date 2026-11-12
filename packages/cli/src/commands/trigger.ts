@@ -87,12 +87,12 @@ async function assertKnownRunAsUser(host: WorkflowHost, config: TriggerFireConfi
 }
 
 /**
- * The messages behind drain failures, for the operator's terminal. The store keeps only
+ * Failure messages for the operator's terminal. The store keeps only
  * the failed stage because configuration and provider errors can carry credentials, so
  * the text is redacted with the same policy as subprocess output before it is shown.
  * Flattens the nested `AggregateError`s the drain builds, which carry no reason of their own.
  */
-function drainFailureReasons(errors: readonly unknown[]): string {
+function redactedFailureReasons(errors: readonly unknown[]): string {
   const messages = (error: unknown): string[] =>
     error instanceof AggregateError
       ? error.errors.flatMap(messages)
@@ -157,9 +157,13 @@ async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise
   );
   const enriched = await Promise.all(
     receipts.map(async receipt => {
-      const detail = await host.deps.store.getStartReceipt(receipt.id);
-      if (!detail) throw new Error(`Trigger receipt ${receipt.id} not found.`);
-      return { ...receipt, skippedStarts: skippedStarts(detail) };
+      try {
+        const detail = await host.deps.store.getStartReceipt(receipt.id);
+        if (!detail) throw new Error(`Trigger receipt ${receipt.id} not found.`);
+        return { ...receipt, skippedStarts: skippedStarts(detail) };
+      } catch (error) {
+        return { ...receipt, skippedStarts: null, detailError: redactedFailureReasons([error]) };
+      }
     })
   );
   await writeJsonLine(enriched);
@@ -265,7 +269,7 @@ async function drainReceipt(
   } catch (error) {
     if (!(error instanceof ResourceStartDrainError)) {
       throw new Error(
-        `Receipt ${receiptId} is retained, but its host drain failed: ${drainFailureReasons([error])}. Inspect that receipt before recovery.`,
+        `Receipt ${receiptId} is retained, but its host drain failed: ${redactedFailureReasons([error])}. Inspect that receipt before recovery.`,
         { cause: error }
       );
     }
@@ -275,11 +279,11 @@ async function drainReceipt(
     const own = error.failures.filter(failure => !others.includes(failure));
     if (own.length > 0)
       throw new Error(
-        `Receipt ${receiptId} is retained, but its host drain failed: ${drainFailureReasons(own.map(failure => failure.error))}. Inspect that receipt before recovery.`,
+        `Receipt ${receiptId} is retained, but its host drain failed: ${redactedFailureReasons(own.map(failure => failure.error))}. Inspect that receipt before recovery.`,
         { cause: error }
       );
     process.stderr.write(
-      `Warning: ${String(others.length)} other or unattributed start operation(s) on this host failed while draining receipt ${receiptId}: ${drainFailureReasons(others.map(failure => failure.error))}\n`
+      `Warning: ${String(others.length)} other or unattributed start operation(s) on this host failed while draining receipt ${receiptId}: ${redactedFailureReasons(others.map(failure => failure.error))}\n`
     );
   }
 }

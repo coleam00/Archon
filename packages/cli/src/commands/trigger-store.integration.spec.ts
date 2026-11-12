@@ -1526,13 +1526,31 @@ for (const storage of ['files', 'sql'] as const) {
         { ...summaries[1], skippedStarts: expected },
       ]);
       expect(await store.getStartReceipt(receipt.receipt.id)).toEqual(retained);
-      const failedRead = spyOn(store, 'getStartReceipt').mockRejectedValue(
-        new Error('receipt unreadable')
-      );
-      output.length = 0;
-      await expect(triggerCommand(host, 'list', [], {})).rejects.toThrow('receipt unreadable');
-      expect(output).toEqual([]);
-      failedRead.mockRestore();
+      const getDetail = store.getStartReceipt.bind(store);
+      for (const failure of ['unreadable', 'missing'] as const) {
+        const failedRead = spyOn(store, 'getStartReceipt').mockImplementation(async id => {
+          if (id !== empty.receipt.id) return getDetail(id);
+          if (failure === 'missing') return null;
+          throw new Error('receipt unreadable');
+        });
+        try {
+          output.length = 0;
+          await triggerCommand(host, 'list', [], { limit: '2' });
+          expect(JSON.parse(output.join(''))).toEqual([
+            {
+              ...summaries[0],
+              skippedStarts: null,
+              detailError:
+                failure === 'missing'
+                  ? `Trigger receipt ${empty.receipt.id} not found.`
+                  : 'receipt unreadable',
+            },
+            { ...summaries[1], skippedStarts: expected },
+          ]);
+        } finally {
+          failedRead.mockRestore();
+        }
+      }
     } finally {
       stdout.mockRestore();
       for (const spy of spies) spy.mockRestore();
