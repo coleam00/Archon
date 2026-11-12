@@ -230,6 +230,110 @@ nodes:
 }
 
 describe('trigger CLI durable execution', () => {
+  test('a killed launch records no failure and continues to hold its slot', async () => {
+    const fixture = await heldTriggerRun('killed-preparation');
+    const ready = join(fixture.projectRoot, 'ready.json');
+    const config = join(fixture.projectRoot, '..', 'trigger.json');
+    const child = Bun.spawn(
+      [
+        process.execPath,
+        resolve(import.meta.dir, '../test-support/fixtures/held-trigger-preparation.ts'),
+        config,
+        ready,
+        fixture.hostId,
+      ],
+      {
+        cwd: fixture.projectRoot,
+        env: {
+          ...process.env,
+          ARCHON_HOME: fixture.archonHome,
+          DATABASE_URL: '',
+          WORKFLOW_ID: '',
+          ARCHON_NODE_EXECUTION: '',
+        },
+        stdout: 'ignore',
+        stderr: 'pipe',
+      }
+    );
+    const stderr = new Response(child.stderr).text();
+    try {
+      const requestId = await waitFor(() => {
+        if (child.exitCode !== null) throw new Error('Preparation fixture exited');
+        return existsSync(ready)
+          ? (JSON.parse(readFileSync(ready, 'utf8')) as { requestId: string }).requestId
+          : undefined;
+      }, 'owned preparation to block');
+      const before = fixture.runs()[0];
+      expect(before?.status).toBe('pending');
+      expect(fixture.requests().map(row => row.status)).toEqual(['admitted', 'queued']);
+      child.kill('SIGKILL');
+      await child.exited;
+      expect(fixture.runs()[0]).toEqual(before);
+      await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+        'trigger',
+        'drain',
+        '--host',
+        fixture.hostId,
+      ]);
+      expect(fixture.requests().map(row => row.status)).toEqual(['admitted', 'queued']);
+      const inspected = JSON.parse(
+        (
+          await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+            'trigger',
+            'inspect',
+            requestId,
+          ])
+        ).stdout
+      );
+      expect(inspected.run).toMatchObject({ id: requestId, status: 'pending', error: null });
+      expect(
+        readRows(
+          join(fixture.archonHome, 'archon.db'),
+          "SELECT id FROM remote_agent_workflow_events WHERE event_type='workflow_failed'"
+        )
+      ).toEqual([]);
+    } catch (error) {
+      child.kill('SIGKILL');
+      await child.exited;
+      throw new Error(`${String(error)}\n${await stderr}`);
+    } finally {
+      child.kill('SIGKILL');
+      await child.exited;
+    }
+  }, 30_000);
+
+  test('a no-remote launch exposes its full error in both inspect forms and workflow get', async () => {
+    const fixture = await heldTriggerRun('launch-failure');
+    fixture.writeWorkflow('echo unreachable');
+    const configPath = join(fixture.projectRoot, '..', 'trigger.json');
+    const config = JSON.parse(readFileSync(configPath, 'utf8'));
+    config.binding.launch.isolation = { kind: 'default' };
+    writeFileSync(configPath, JSON.stringify(config));
+    await fixture.fire();
+    const failed = await waitFor(() => {
+      const run = fixture.runs()[0];
+      return run?.status === 'failed' ? run : undefined;
+    }, 'launch failure');
+    const metadata = JSON.parse(failed.metadata);
+    expect(metadata.error).toContain('no git remote');
+    const invoke = (args: string[]) =>
+      runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
+    const request = JSON.parse((await invoke(['trigger', 'inspect', failed.id])).stdout);
+    expect(request.run).toMatchObject({ id: failed.id, status: 'failed', error: metadata.error });
+    const receipt = JSON.parse(
+      (await invoke(['trigger', 'inspect', metadata.resource_start.receiptId])).stdout
+    );
+    expect(receipt.bindings[0].run).toMatchObject({
+      id: failed.id,
+      status: 'failed',
+      error: metadata.error,
+    });
+    const json = JSON.parse((await invoke(['workflow', 'get', failed.id, '--json'])).stdout);
+    expect(json.metadata.error).toBe(metadata.error);
+    expect(json.terminal_record.error).toBe(metadata.error);
+    expect((await invoke(['workflow', 'get', failed.id])).stdout).toContain(metadata.error);
+  }, 30_000);
+
   test.skipIf(process.platform === 'win32')(
     'published polling recipes distinguish delimiter collisions and replay on both hosts',
     async () => {

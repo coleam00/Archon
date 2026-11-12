@@ -141,7 +141,7 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
      */
     cause: z.object({ node: z.string(), errorClass: nodeFailureKindSchema.nullable() }).nullable(),
     /**
-     * Why a run completed with a failed outcome (`failedOutcomeReason`); absent otherwise.
+     * A fixed launch-failure indication, or why a run completed with a failed outcome.
      * A failed run's error text never rides the stream: `cause` names where it failed.
      */
     reason: z.array(z.string()).min(1).optional(),
@@ -303,7 +303,10 @@ function terminalFacts(
     return {
       outcome: record?.outcome ?? null,
       firstFailedNode: record?.first_failed_node ?? null,
-      reason: failedOutcomeReason(record),
+      reason:
+        status === 'failed' && event.data.exit_reason === 'launch_failed'
+          ? ['launch failed before the first node']
+          : failedOutcomeReason(record),
     };
   } catch (error) {
     // A malformed record must not stall the stream on one row; the line still reports

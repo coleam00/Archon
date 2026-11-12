@@ -1,63 +1,77 @@
 import { expect, test } from 'bun:test';
 import { DETACHED_LAUNCH_METADATA_KEY, executionClaim } from '../store';
 import type { WorkflowStoreHarness } from '../store-conformance';
+import type { WorkflowRunFailureOptions } from '../workflow-run-failure';
 import { approval } from './fixtures';
 
 export function describeExecutionFailureConformance(getHarness: () => WorkflowStoreHarness): void {
-  test.each([
-    'pending',
-    'wrong token',
-    'running',
-    'paused',
-    'completed',
-    'failed',
-    'cancelled',
-    'missing',
-  ] as const)('detached startup failure condition preserves ownership: %s', async state => {
-    const harness = getHarness();
-    const { store } = harness;
-    const run = await store.createWorkflowRun({
-      workflow_name: 'startup',
-      user_message: '',
-      metadata: { [DETACHED_LAUNCH_METADATA_KEY]: 'launch-token' },
-    });
-    if (state !== 'pending' && state !== 'wrong token' && state !== 'missing') {
-      await store.claimPendingWorkflowRun(run.id);
-      if (state === 'paused') await store.pauseWorkflowRun(run.id, approval);
-      if (state === 'completed') await store.completeWorkflowRun(run.id, { duration_ms: 0 });
-      if (state === 'failed') await store.failWorkflowRun(run.id, 'first failure');
-      if (state === 'cancelled') await store.cancelWorkflowRun(run.id);
-    }
-    const before = await store.getWorkflowRun(run.id);
-    const events = await store.listWorkflowEvents(run.id);
-    const reports = harness.terminalReports();
-    expect(
-      await store.failWorkflowRun(
-        state === 'missing' ? crypto.randomUUID() : run.id,
-        'startup failed',
-        {
-          exitReason: 'launch_failed',
-          pendingLaunchToken: state === 'wrong token' ? 'stale-token' : 'launch-token',
+  for (const condition of ['detached', 'pending', 'combined'] as const) {
+    const options: WorkflowRunFailureOptions = {
+      exitReason: 'launch_failed',
+      ...(condition !== 'pending' ? { pendingLaunchToken: 'launch-token' } : {}),
+      ...(condition !== 'detached' ? { pendingOnly: true } : {}),
+    };
+    const states = [
+      'pending',
+      'wrong token',
+      'running',
+      'paused',
+      'completed',
+      'failed',
+      'cancelled',
+      'missing',
+    ] as const;
+    test.each(condition === 'pending' ? states.filter(state => state !== 'wrong token') : states)(
+      `startup failure preserves ownership (${condition}): %s`,
+      async state => {
+        const harness = getHarness();
+        const { store } = harness;
+        const run = await store.createWorkflowRun({
+          workflow_name: 'startup',
+          user_message: '',
+          metadata: { [DETACHED_LAUNCH_METADATA_KEY]: 'launch-token' },
+        });
+        if (state !== 'pending' && state !== 'wrong token' && state !== 'missing') {
+          await store.claimPendingWorkflowRun(run.id);
+          if (state === 'paused') await store.pauseWorkflowRun(run.id, approval);
+          if (state === 'completed') await store.completeWorkflowRun(run.id, { duration_ms: 0 });
+          if (state === 'failed') await store.failWorkflowRun(run.id, 'first failure');
+          if (state === 'cancelled') await store.cancelWorkflowRun(run.id);
         }
-      )
-    ).toEqual({ failed: state === 'pending' });
-    if (state === 'pending') {
-      expect(await store.getWorkflowRun(run.id)).toMatchObject({
-        status: 'failed',
-        metadata: { error: 'startup failed', stop_reason: { reason: 'launch_failed' } },
-      });
-      expect(
-        (await store.listWorkflowEvents(run.id)).filter(
-          event => event.event_type === 'workflow_failed'
-        )
-      ).toHaveLength(1);
-      expect(harness.terminalReports()).toEqual([...reports, run.id]);
-    } else {
-      expect(await store.getWorkflowRun(run.id)).toEqual(before);
-      expect(await store.listWorkflowEvents(run.id)).toEqual(events);
-      expect(harness.terminalReports()).toEqual(reports);
-    }
-  });
+        const before = await store.getWorkflowRun(run.id);
+        const events = await store.listWorkflowEvents(run.id);
+        const reports = harness.terminalReports();
+        expect(
+          await store.failWorkflowRun(
+            state === 'missing' ? crypto.randomUUID() : run.id,
+            'startup failed',
+            {
+              ...options,
+              ...(state === 'wrong token' ? { pendingLaunchToken: 'stale-token' } : {}),
+            }
+          )
+        ).toEqual({
+          failed: state === 'pending',
+        });
+        if (state === 'pending') {
+          expect(await store.getWorkflowRun(run.id)).toMatchObject({
+            status: 'failed',
+            metadata: { error: 'startup failed', stop_reason: { reason: 'launch_failed' } },
+          });
+          expect(
+            (await store.listWorkflowEvents(run.id)).filter(
+              event => event.event_type === 'workflow_failed'
+            )
+          ).toHaveLength(1);
+          expect(harness.terminalReports()).toEqual([...reports, run.id]);
+        } else {
+          expect(await store.getWorkflowRun(run.id)).toEqual(before);
+          expect(await store.listWorkflowEvents(run.id)).toEqual(events);
+          expect(harness.terminalReports()).toEqual(reports);
+        }
+      }
+    );
+  }
   for (const claimedBefore of [false, true]) {
     test.each([
       'running',

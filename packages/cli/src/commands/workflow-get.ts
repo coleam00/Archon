@@ -110,8 +110,7 @@ async function writeWorkflowGetJson(
   rawEvents?: boolean,
   throughput?: RunThroughput
 ): Promise<number> {
-  // The bounded excerpt the text view and the attention watch print, for a run that
-  // failed or completed with a failed outcome.
+  // Unlike attention streams, this individual read may include the recorded error.
   const reason = terminalReason(terminalRecord);
   const why = reason.length > 0 ? { reason } : {};
   if (!verbose) {

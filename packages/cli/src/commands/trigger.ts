@@ -351,6 +351,18 @@ async function triggerExecute(
   if (!result.success) throw new Error(`Run ${args[0]} did not complete: ${result.error}`);
 }
 
+async function inspectedRun(host: WorkflowHost, runId: string) {
+  const run = await host.deps.store.getWorkflowRun(runId);
+  return run
+    ? {
+        id: run.id,
+        status: run.status,
+        error: typeof run.metadata.error === 'string' ? run.metadata.error : null,
+        inspectCommand: `archon workflow get ${run.id}`,
+      }
+    : null;
+}
+
 async function triggerInspect(host: WorkflowHost, args: string[]): Promise<void> {
   if (!args[0]) throw new Error('Usage: archon trigger inspect <receipt-or-request-id>');
   const value =
@@ -358,7 +370,18 @@ async function triggerInspect(host: WorkflowHost, args: string[]): Promise<void>
     (await host.deps.store.getResourceStartRequest(args[0]));
   if (!value) throw new Error('Trigger receipt or request not found.');
   if (!('launch' in value)) {
-    await writeJsonLine(value);
+    await writeJsonLine({
+      ...value,
+      bindings: await Promise.all(
+        value.bindings.map(async binding => ({
+          ...binding,
+          run:
+            binding.disposition?.status === 'admitted'
+              ? await inspectedRun(host, binding.disposition.runId)
+              : null,
+        }))
+      ),
+    });
     return;
   }
   const runId =
@@ -372,6 +395,7 @@ async function triggerInspect(host: WorkflowHost, args: string[]): Promise<void>
     requestedBy: await requestedBy(host, value.launch.run.metadata),
     run: runId
       ? {
+          ...(value.status === 'admitted' ? await inspectedRun(host, runId) : {}),
           id: runId,
           status: value.status === 'admitted' ? value.runStatus : value.blockerRunStatus,
           inspectCommand: `archon workflow get ${runId}`,
