@@ -68,6 +68,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       outcome: null,
       user_message: 'task',
       metadata: {},
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,
@@ -211,6 +212,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       workflow_name: 'implement',
       status: 'completed',
       working_path: '/tmp/wt',
+      active_phase_started_at: null,
       started_at: new Date(),
       metadata: {},
     });
@@ -236,6 +238,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       workflow_name: 'implement',
       status: 'completed',
       working_path: '/tmp/wt',
+      active_phase_started_at: null,
       started_at: new Date(),
       metadata: {},
     });
@@ -263,6 +266,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       workflow_name: 'implement',
       status: 'completed',
       working_path: '/tmp/wt',
+      active_phase_started_at: null,
       started_at: new Date(),
       metadata: {},
     });

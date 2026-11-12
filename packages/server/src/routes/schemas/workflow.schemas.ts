@@ -198,6 +198,7 @@ export const workflowRunSchema = engineWorkflowRunSchema
     metadata: workflowRunMetadataSchema,
     attention: nullableRunAttentionSchema,
     started_at: z.string(),
+    active_phase_started_at: z.string().nullable(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
   })
@@ -365,6 +366,7 @@ export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
     attention: nullableRunAttentionSchema,
     owner_observation: ownerObservationSchema,
     started_at: z.string(),
+    active_phase_started_at: z.string().nullable(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
   })

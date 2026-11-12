@@ -34,6 +34,7 @@ describe('artifact pointers (#2453)', () => {
       outcome: null,
       user_message: 'msg',
       metadata: {},
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,

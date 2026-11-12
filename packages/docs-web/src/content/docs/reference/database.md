@@ -394,3 +394,25 @@ when reading an origin-free run.
 Every workflow store exposes `getWorkflowEventHead()` and `readWorkflowEventsAfter(cursor, { limit, eventTypes? })`. The feed covers all runs in commit order. A page carries each event with its opaque cursor and a `next` cursor that also advances past rows excluded by the type filter. Pass cursors back unchanged; only the issuing store interprets them. A malformed cursor or one from a different store kind throws `WorkflowEventCursorError`.
 
 Start at the head to follow new commits, or resume from a cursor saved by an earlier read. This feed observes committed events; it does not report retractions or undo deliveries when fan-out recovery or cleanup removes events. Earlier cursors can still read those payloads: SQL deletion triggers retain them in a feed archive without run foreign keys, and the file store retains deleted run logs. Feed history has no expiry and is retained for the store's lifetime. `getWorkflowRun` and `listWorkflowEvents` remain the current state of record. File-store reads at the head are cheap; reads with new commits use the derived feed index to select run logs.
+
+## Workflow run timestamps
+
+`started_at` is the run's creation time. Resume, including cancelled fan-out recovery,
+keeps it unchanged, so age, duration, listings and creation-based cleanup retain their
+original baseline. An old resumed terminal run can therefore reach cleanup eligibility
+sooner than it did when resume reset its age. Capacity waiters retain their first-refusal
+`capacity_wait.since`; queued starts retain their queue position.
+
+`active_phase_started_at` records the most recent successful resume. It is nullable:
+initial runs and records written before this field existed use `started_at` for checkout
+priority. Checkout priority uses the later of the two timestamps, then the run id, so an
+older writer that advances `started_at` without updating the phase value still orders
+correctly when read by an upgraded executor. Both API run lists expose the nullable phase
+timestamp as ISO text.
+
+The upgrade adds a nullable column in SQLite and PostgreSQL; missing phase fields in file
+records read as null. Existing timestamps are retained without backfill. Creation times
+already overwritten by previous resumes cannot be restored exactly by this change.
+Older binaries can still read and write records, but keep their destructive resume behavior
+and do not understand the separate phase clock. Upgrade all executors together before
+relying on creation-time preservation or the new checkout-priority rule.

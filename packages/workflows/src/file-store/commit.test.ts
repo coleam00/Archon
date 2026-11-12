@@ -432,3 +432,28 @@ test('cancellation retains structured cleanup warnings across reopen', async () 
     warnings,
   });
 });
+
+test('legacy snapshots and log replay without phase time retain creation across resume', async () => {
+  const { root, store, run, dir } = await fixture();
+  await store.failWorkflowRun(run.id, 'legacy');
+  for (const name of ['run.json', 'log.jsonl']) {
+    const lines = (await readFile(join(dir, name), 'utf8'))
+      .trim()
+      .split('\n')
+      .map(line => {
+        const record = JSON.parse(line);
+        delete record.run.active_phase_started_at;
+        record.run.started_at = '2020-01-01T00:00:00.000Z';
+        return JSON.stringify(record);
+      });
+    await writeFile(join(dir, name), lines.join('\n') + '\n');
+  }
+  expect((await store.getWorkflowRun(run.id))?.active_phase_started_at).toBeNull();
+  await unlink(join(dir, 'run.json'));
+  const reopened = await createFileWorkflowStore({ root });
+  expect((await reopened.getWorkflowRun(run.id))?.active_phase_started_at).toBeNull();
+  const resumed = await reopened.resumeWorkflowRun(run.id);
+  expect(resumed.started_at).toEqual(new Date('2020-01-01'));
+  expect(resumed.active_phase_started_at).toBeInstanceOf(Date);
+  expect(await (await createFileWorkflowStore({ root })).getWorkflowRun(run.id)).toEqual(resumed);
+});

@@ -48,6 +48,29 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test('a pre-phase schema upgrades legacy rows and accepts old-style inserts', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const run = await store.createWorkflowRun({ workflow_name: 'legacy', user_message: '' });
+      await store.failWorkflowRun(run.id, 'failure');
+      await harness.backdate(run.id, { started_at: new Date('2020-01-01') });
+      await db.query('ALTER TABLE remote_agent_workflow_runs DROP COLUMN active_phase_started_at');
+      await db.query(getSchemaSQL());
+      expect((await store.getWorkflowRun(run.id))?.active_phase_started_at).toBeNull();
+      const resumed = await store.resumeWorkflowRun(run.id);
+      expect(resumed.started_at).toEqual(new Date('2020-01-01'));
+      expect(resumed.active_phase_started_at).toBeInstanceOf(Date);
+      const id = randomUUID();
+      await db.query(
+        "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ($1, $2, 'old-writer', '')",
+        [id, CONFORMANCE_CONVERSATION_ID]
+      );
+      expect((await store.getWorkflowRun(id))?.active_phase_started_at).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
   test('foreign slot membership blocks guarded starts after its request is lost', async () => {
     const harness = await makeHarness();
     try {

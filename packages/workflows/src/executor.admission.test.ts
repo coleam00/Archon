@@ -123,23 +123,29 @@ describe('concurrent-run guard', () => {
     expect(result.workflowRunId).toBe('run-123');
   });
 
-  it('passes self-id and started_at to the lock query so self is excluded', async () => {
-    // The guard runs after the run row exists; without these args the dispatch's own row
-    // would match and falsely trigger the guard.
-    const getActiveSpy = mock(async () => null);
-    await startWorkflow({
-      store: makeStore({
-        createWorkflowRun: mock(async () =>
-          makeRun({ id: 'self-run-789', started_at: new Date('2026-04-14T10:00:00.000Z') })
-        ),
-        getActiveWorkflowRunByPath: getActiveSpy,
-      }),
-    });
-    expect(getActiveSpy).toHaveBeenCalledWith(
-      '/tmp',
-      expect.objectContaining({ id: 'self-run-789', startedAt: expect.any(Date) })
-    );
-  });
+  it.each(['fresh', 'resume'] as const)(
+    'passes effective phase priority to the lock query on %s admission',
+    async mode => {
+      const run = makeRun({
+        id: 'self-run-789',
+        started_at: new Date('2026-04-14T10:00:00.000Z'),
+        active_phase_started_at: new Date('2026-04-14T12:00:00.123Z'),
+      });
+      const getActiveSpy = mock(async () => null);
+      await startWorkflow({
+        store: makeStore({
+          createWorkflowRun: mock(async () => run),
+          claimPendingWorkflowRun: mock(async () => run),
+          getActiveWorkflowRunByPath: getActiveSpy,
+        }),
+        ...(mode === 'resume' ? { options: resumeOf(run) } : {}),
+      });
+      expect(getActiveSpy).toHaveBeenCalledWith(
+        '/tmp',
+        expect.objectContaining({ id: run.id, startedAt: run.active_phase_started_at })
+      );
+    }
+  );
 
   it('marks self as cancelled when the guard fires (no zombie pending row)', async () => {
     const cancelSpy = mock(async () => ({ cancelled: true }));
@@ -261,7 +267,10 @@ describe('checkout-in-use message', () => {
 
   it('names the running blocker, its duration and short id, and what to do next', async () => {
     const message = await blockedBy(
-      blocker({ started_at: new Date(Date.now() - 125000) }) // 2m 5s ago
+      blocker({
+        started_at: new Date(Date.now() - 4 * 3600_000),
+        active_phase_started_at: new Date(Date.now() - 125000),
+      })
     );
     expect(message).toContain('archon-implement');
     expect(message).toContain('abc12345');

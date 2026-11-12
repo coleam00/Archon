@@ -261,6 +261,9 @@ function addWorkflowRunColumns(db: Database): void {
   if (!wfColNames.has('checkout_baseline')) {
     db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN checkout_baseline TEXT');
   }
+  if (!wfColNames.has('active_phase_started_at')) {
+    db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN active_phase_started_at TEXT');
+  }
   if (!wfColNames.has('outcome')) {
     db.run(
       "ALTER TABLE remote_agent_workflow_runs ADD COLUMN outcome TEXT CHECK (outcome IN ('succeeded', 'failed'))"

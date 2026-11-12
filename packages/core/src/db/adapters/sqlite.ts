@@ -528,7 +528,6 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_isolation_environments (codebase_id, workflow_type, workflow_id)
         WHERE status = 'active';
 
-      -- Workflow runs table
       -- conversation_id's ON DELETE CASCADE would erase run rows (and with them
       -- the live-run cleanup pin for isolation environments, #2868) on a hard
       -- conversation delete; soft delete is the only supported path. Mirrors
@@ -549,6 +548,7 @@ export class SqliteAdapter implements IDatabase {
         parent_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
         adopted_from_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
         started_at TEXT DEFAULT (datetime('now')),
+        active_phase_started_at TEXT,
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),
         working_path TEXT,

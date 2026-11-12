@@ -162,6 +162,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     id: 'r1abcdef-1234',
     workflow_name: 'archon-investigate',
     status: 'running',
+    active_phase_started_at: null,
     started_at: new Date('2026-06-01T00:00:00.000Z'),
     completed_at: null,
     metadata: {},
@@ -544,6 +545,7 @@ describe('manage_run — reads', () => {
     mockFindByPrefix.mockResolvedValue([
       makeRun({
         status: 'completed',
+        active_phase_started_at: null,
         started_at: '2026-07-10 18:26:36' as unknown as Date,
         completed_at: '2026-07-10 18:30:00' as unknown as Date,
       }),
