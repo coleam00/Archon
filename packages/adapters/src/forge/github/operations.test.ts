@@ -1048,6 +1048,42 @@ describe('pr.view read retries', () => {
     expect(waits).toEqual([1_000, 2_000, 4_000]);
   });
 
+  test.each([false, true])(
+    'network failures keep bounded retries (persistent: %s)',
+    async persistent => {
+      let calls = 0;
+      const waits: number[] = [];
+      const response = await handleGithubOperation(request, {
+        token: 'token',
+        fetch: async () => {
+          calls++;
+          if (persistent || calls === 1) throw new TypeError('connection lost');
+          return json(pull);
+        },
+        sleep: async ms => {
+          waits.push(ms);
+        },
+      });
+      if (persistent) {
+        expect(response).toEqual({
+          operationId: 'view',
+          ok: false,
+          error: { kind: 'forge_error', message: 'GitHub API request failed' },
+        });
+        expect(calls).toBe(4);
+        expect(waits).toEqual([1_000, 2_000, 4_000]);
+      } else {
+        const baseline = await handleGithubOperation(request, {
+          token: 'token',
+          fetch: async () => json(pull),
+        });
+        expect(response).toEqual(baseline);
+        expect(calls).toBe(2);
+        expect(waits).toEqual([1_000]);
+      }
+    }
+  );
+
   test.each([400, 401, 403, 404, 422, 429])('HTTP %s is never retried', async status => {
     let calls = 0;
     const waits: number[] = [];
