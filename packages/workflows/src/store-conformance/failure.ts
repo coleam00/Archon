@@ -21,7 +21,7 @@ export function describeExecutionFailureConformance(getHarness: () => WorkflowSt
       'cancelled',
       'missing',
     ] as const;
-    test.each(condition === 'pending' ? states.filter(state => state !== 'wrong token') : states)(
+    test.each(states.filter(state => condition !== 'pending' || state !== 'wrong token'))(
       `startup failure preserves ownership (${condition}): %s`,
       async state => {
         const harness = getHarness();
