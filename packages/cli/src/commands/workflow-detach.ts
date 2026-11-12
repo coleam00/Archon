@@ -1,3 +1,4 @@
+import { readResourceStartAfterFailure } from '@archon/workflows/resource-start-store';
 import { generatedTaskBranch } from '@archon/isolation';
 import { DETACHED_LAUNCH_METADATA_KEY } from '@archon/workflows/store';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
@@ -337,7 +338,11 @@ export async function recordDetachedChildStartupFailure(
   const { detachedRunId, detachedProcessOwner, launchToken } = request;
   if (detachedRunId === undefined || !detachedProcessOwner || !launchToken) return;
   try {
-    const resourceRequest = await host.deps.store.getResourceStartRequest(detachedRunId);
+    const resourceRequest = await readResourceStartAfterFailure(
+      host.deps.store,
+      detachedRunId,
+      error
+    );
     if (resourceRequest?.status === 'queued') return;
     await host.deps.store.failWorkflowRun(
       detachedRunId,
@@ -495,7 +500,8 @@ export async function launchDetachedRun(launch: DetachedLaunch): Promise<void> {
     const launchedRunId = claim.launchedRunId;
     if (
       launchedRunId !== undefined &&
-      (await host.deps.store.getResourceStartRequest(launchedRunId))?.status !== 'queued'
+      (await readResourceStartAfterFailure(host.deps.store, launchedRunId, error))?.status !==
+        'queued'
     ) {
       await host.deps.store
         .failWorkflowRun(launchedRunId, `Detached launch failed: ${(error as Error).message}`, {

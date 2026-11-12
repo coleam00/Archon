@@ -37,6 +37,7 @@ import {
 import { workflowRunCommand } from './workflow-run-owned';
 import {
   buildDetachedRunCmd,
+  recordDetachedChildStartupFailure,
   resolveDetachedRunEncryptionEnv,
   spawnDetachedWorkflowRun,
 } from './workflow-detach';
@@ -789,45 +790,87 @@ describe('workflowRunCommand — detach', () => {
 
   // #2872 — the parent is the row's only owner until the child claims it. A child that
   // never starts must not leave a `pending` row nobody can explain.
-  it('fails the run row it created when the detached child dies during startup', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
-      errors: [],
-    });
-    (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
-    const child = createDetachedChildFixture();
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
-    const savedArgv = process.argv;
-    process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
+  it.each([false, true])(
+    'handles a detached child dying during startup (read fails: %s)',
+    async readFails => {
+      const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+      const workflowDb = await import('@archon/core/db/workflows');
+      (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+        workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+        errors: [],
+      });
+      (workflowDb.failWorkflowRun as ReturnType<typeof mock>).mockClear();
+      const child = createDetachedChildFixture();
+      const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
+      const savedArgv = process.argv;
+      process.argv = ['bun', '/abs/cli.ts', 'workflow', 'run', 'assist', 'hello', '--detach'];
 
-    try {
-      const commandPromise = workflowRunCommand(
-        createTestWorkflowHost(),
-        '/test/path',
-        'assist',
-        'hello',
-        { detach: true }
-      );
-      for (let attempt = 0; attempt < 200 && spawnSpy.mock.calls.length === 0; attempt++) {
-        await Promise.resolve();
+      const host = createTestWorkflowHost();
+      if (readFails)
+        host.deps.store.getResourceStartRequest = async () => {
+          throw new Error('state read unavailable');
+        };
+      try {
+        const commandPromise = workflowRunCommand(host, '/test/path', 'assist', 'hello', {
+          detach: true,
+        });
+        for (let attempt = 0; attempt < 200 && spawnSpy.mock.calls.length === 0; attempt++) {
+          await Promise.resolve();
+        }
+        expect(spawnSpy).toHaveBeenCalledTimes(1);
+        const spawnOptions = firstDetachedSpawnOptions(spawnSpy);
+        spawnOptions.onExit?.(child.child, 1, null);
+        await expect(commandPromise).rejects.toThrow(
+          readFails
+            ? /run-detached-created.*uncertain[\s\S]*exit code 1[\s\S]*state read unavailable/
+            : /exit code 1/
+        );
+      } finally {
+        process.argv = savedArgv;
+        spawnSpy.mockRestore();
       }
-      expect(spawnSpy).toHaveBeenCalledTimes(1);
-      const spawnOptions = firstDetachedSpawnOptions(spawnSpy);
-      spawnOptions.onExit?.(child.child, 1, null);
-      await expect(commandPromise).rejects.toThrow(/exit code 1/);
-    } finally {
-      process.argv = savedArgv;
-      spawnSpy.mockRestore();
-    }
 
-    expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
-      'run-detached-created',
-      expect.stringContaining('Detached launch failed'),
-      { exitReason: 'launch_failed' }
+      if (readFails) expect(workflowDb.failWorkflowRun).not.toHaveBeenCalled();
+      else
+        expect(workflowDb.failWorkflowRun).toHaveBeenCalledWith(
+          'run-detached-created',
+          expect.stringContaining('Detached launch failed'),
+          { exitReason: 'launch_failed' }
+        );
+      expect(consoleSpy).not.toHaveBeenCalledWith("Started 'assist' in the background.");
+    }
+  );
+
+  it('logs the original child startup error when reading its request fails', async () => {
+    const host = createTestWorkflowHost();
+    const original = new Error('child startup failed');
+    const cleanup = new Error('state read unavailable');
+    host.deps.store.getResourceStartRequest = async () => {
+      throw cleanup;
+    };
+    const fail = mock<typeof host.deps.store.failWorkflowRun>();
+    host.deps.store.failWorkflowRun = fail;
+    mockLogger.error.mockClear();
+    await recordDetachedChildStartupFailure(
+      host,
+      {
+        detachedRunId: 'run-child',
+        detachedProcessOwner: true,
+        launchToken: 'token',
+      },
+      original
     );
-    expect(consoleSpy).not.toHaveBeenCalledWith("Started 'assist' in the background.");
+    expect(fail).not.toHaveBeenCalled();
+    expect(mockLogger.error).toHaveBeenCalledWith(
+      {
+        err: expect.objectContaining({
+          errors: [original, cleanup],
+          message: expect.stringContaining('run-child'),
+        }),
+        workflowRunId: 'run-child',
+      },
+      'cli.detached_startup_failure_record_failed'
+    );
   });
 
   it('rejects an immediate non-zero child exit with the log tail and no success ack', async () => {
