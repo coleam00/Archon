@@ -104,24 +104,15 @@ export async function admitWorkflowRun(
 
   let checkoutBaselineSample: CheckoutSample | undefined;
   if (!dispatch.isContinuation) {
-    const refused = await holdWorkflowResource(
+    const claimed = await claimPendingRun(
       deps,
       platform,
       conversationId,
       cwd,
       workflow,
       workflowRun,
-      opts.noWait === true
-    );
-    if (refused) return { stopped: true, result: refused };
-    const claimed = await claimPendingRun(
-      deps,
-      platform,
-      conversationId,
-      cwd,
-      workflowRun,
       execContext,
-      opts.onExecutionClaimed
+      opts
     );
     if (claimed.stopped) return claimed;
     checkoutBaselineSample = claimed.value;
@@ -297,16 +288,30 @@ async function holdWorkflowResource(
   }
 }
 
-/** Win execution ownership of a pending row, then sample the checkout the run starts from. */
+/**
+ * Take the workflow's resource slot, win execution ownership of a pending row, then sample
+ * the checkout the run starts from.
+ */
 async function claimPendingRun(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
   cwd: string,
+  workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun,
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
-  onExecutionClaimed: ExecuteWorkflowOptions['onExecutionClaimed']
+  { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
+  const refused = await holdWorkflowResource(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    workflowRun,
+    noWait === true
+  );
+  if (refused) return { stopped: true, result: refused };
   let claimed: WorkflowRun | null;
   try {
     claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
