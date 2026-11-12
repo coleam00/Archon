@@ -1145,7 +1145,7 @@ The default scope is the current project, resolved from the working directory as
 
 `--label k=v` filters must all match. `--sort label:<key>` compares the label's value as a plain string and puts items without it last. `--count-by` replaces the list with counts.
 
-`--count-by` counts the items open now. Add `--since` to count the attention waits opened in a window instead, whether each has been answered or is still open, so a class of question that recurs stays visible after its runs continue. `--since` takes a duration back from now (`24h`, `7d`, `2w`) or an ISO date or time. Scope and `--label` filters apply as they do to the open count. This count reads each wait's `wait_started` event, so it uses the labels the wait opened with and ignores later [`attention label`](#workflow-attention-label) writes. A wait opened by an Archon version that did not record labels on that event counts under no label (`value: null`, shown as `(no '<key>' label)`). Gates, usage-limit waits and waits of deleted runs are not counted. `--since` needs `--count-by`.
+`--count-by` counts the items open now. Add `--since` to count the attention waits opened in a window instead, whether each has been answered or is still open, so a class of question that recurs stays visible after its runs continue. `--since` takes a duration in minutes, hours, days or weeks back from now (`40m`, `24h`, `7d`, `2w`) or an ISO date or time. Scope and `--label` filters apply as they do to the open count. This count reads each wait's `wait_started` event, so it uses the labels the wait opened with and ignores later [`attention label`](#workflow-attention-label) writes. A wait opened by an Archon version that did not record labels on that event counts under no label (`value: null`, shown as `(no '<key>' label)`). Gates, usage-limit waits and waits of deleted runs are not counted. `--since` needs `--count-by`.
 
 Each group of a `--since` count also carries `recommendations: { asked, answered, followed }`: the waits that opened with a recommendation, those of them that were answered, and those answers that chose the recommended option. Text output prints them after the group when any wait carried one. `--count-by answerer`, which needs `--since`, groups the waits by who answered: each entry has `answeredBy`, which is `{ declared }` for a name given with [`--as`](#workflow-answer), `{ userId }` for an answer through a chat platform, and null for waits still open and answers that named nobody. These numbers come from the `wait_started` and `wait_answered` events alone. `wait_started` records the wait's `occurrence`, `form`, the `options` ids offered, `other` when the reserved option is offered, and the recommendation's `option` and `confidence`; it never records the message, an option's label or the recommendation's reason. A wait opened by an Archon version that did not record them counts as carrying no recommendation.
 
@@ -1199,7 +1199,7 @@ happened to work: a run that completed, was cancelled or resumed, a usage-limit 
 opening or closing, and each [`workflow notice`](#workflow-notice) a run emits. It leaves
 out `ready` and `bookmark`. It cannot be combined with `--protocol`.
 
-**`--notices --since <7d|24h|2w|ISO>`**, without `--watch`, lists the notices runs emitted
+**`--notices --since <40m|24h|7d|2w|ISO>`**, without `--watch`, lists the notices runs emitted
 in the window, oldest first, one line each: time, text, labels. Scope and
 `--label` apply as for the list. `--count-by project|label:<key>` counts them instead.
 `--json` prints `{ ok, action: "attention", scope, since, notices }`. A run id, `--sort`
@@ -2326,8 +2326,8 @@ archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.r
 ```
 
 The window is `[--since, --until)`. `--until` defaults to now and takes an ISO date or a
-time with an offset; a date alone is UTC midnight. `--since` takes the same, or a duration
-(`24h`, `7d`, `2w`) counted back from `--until`, and defaults to 30 days. `--subject` keeps
+time with an offset; a date alone is UTC midnight. `--since` takes the same, or a duration in minutes, hours, days or weeks
+(`40m`, `24h`, `7d`, `2w`) counted back from `--until`, and defaults to 30 days. `--subject` keeps
 records about one subject. `--project <id|name|key>` keeps records from one registered
 codebase. A name's definition is install-wide either way: a record another codebase
 stored first still fixes it. `--compare <ISO>` takes an ISO date or a time with an offset

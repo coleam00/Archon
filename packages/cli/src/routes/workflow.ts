@@ -443,7 +443,7 @@ export async function runWorkflowAttention(route: WorkflowRoute): Promise<number
   if (positionals[3] !== undefined) {
     return await fail(
       json,
-      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>|answerer [--since <7d|24h|2w|ISO>]] [--notices --since <7d|24h|2w|ISO>] [--watch [--notices | --protocol [--after <cursor>]]] [--json]'
+      'Usage: archon workflow attention [<run-id>] [--project <id|name|key> | --all] [--label k=v]... [--sort age|label:<key>] [--count-by project|label:<key>|answerer [--since <40m|24h|7d|2w|ISO>]] [--notices --since <40m|24h|7d|2w|ISO>] [--watch [--notices | --protocol [--after <cursor>]]] [--json]'
     );
   }
   return await route.commands.workflowAttentionCommand(route.host, effectiveCwd, positionals[2], {

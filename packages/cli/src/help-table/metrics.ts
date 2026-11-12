@@ -8,7 +8,7 @@ export const metricsHelp: HelpGroup = {
       description: 'Aggregate metric records by name, window and instrument',
       scopedFlags: [
         {
-          spec: '--since <7d|24h|2w|ISO>',
+          spec: '--since <40m|7d|24h|2w|ISO>',
           description: 'Window start: a duration before --until, or a date (default 30d)',
         },
         { spec: '--until <ISO>', description: 'Window end, exclusive (default now)' },
