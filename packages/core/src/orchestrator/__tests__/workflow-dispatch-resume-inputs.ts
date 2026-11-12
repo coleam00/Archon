@@ -53,7 +53,9 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
     expect(sent).not.toContain("requires input 'diff'");
     expect(mockExecuteWorkflow).toHaveBeenCalled();
-    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('implicit-resume-1');
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('implicit-resume-1', {
+      store: expect.any(Object),
+    });
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow.mock.calls[0][3]).toBe('/repos/test-repo/worktrees/paused');
   });
@@ -221,7 +223,9 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     // Must NOT reach the generic "starting fresh in the same worktree" dispatch.
     expect(sent).not.toContain('starting fresh in the same worktree');
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('nothing-to-resume-1');
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('nothing-to-resume-1', {
+      store: expect.any(Object),
+    });
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
     expect(mockWithRunLiveOwner).not.toHaveBeenCalled();
   });

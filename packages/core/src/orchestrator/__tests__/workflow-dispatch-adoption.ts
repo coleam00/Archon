@@ -136,7 +136,9 @@ export function registerAdoptionTests(fixture: ReturnType<typeof setupRoutingTes
 
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
-    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('prepared-run-id');
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('prepared-run-id', {
+      store: expect.any(Object),
+    });
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
     const opts = callArgs[callArgs.length - 1] as {
       baseBranch?: string;

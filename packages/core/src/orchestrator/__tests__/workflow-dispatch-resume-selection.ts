@@ -494,7 +494,9 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
             { actor }
           );
           if (allowed) {
-            expect(mockStartRunLiveOwner).toHaveBeenCalledWith(run.id);
+            expect(mockStartRunLiveOwner).toHaveBeenCalledWith(run.id, {
+              store: expect.any(Object),
+            });
             expect(mockHydrateResumableRun).toHaveBeenCalled();
             expect(mockExecuteWorkflow).toHaveBeenCalled();
           } else {
