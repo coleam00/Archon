@@ -82,7 +82,7 @@ function gateAndMerge(item: Item, head: string, settings: GateSettings, maintain
   const ci: CiTrust = settings.ci === 'forge' ? { mode: 'forge' } : { mode: 'none', validation: doc === undefined ? null : latestValidation(doc) };
   const refusals = gateRefusals(readComputed(item.pr, maintainers), head, readBase(item.pr.repo), ci, {
     manual: settings.manual,
-    protected: protectedChanges(item.pr, settings.protectedPaths),
+    protected: protectedChanges(item.pr, settings.protectedPaths, head),
     approved: doc?.facts.merge?.approval?.head ?? null,
   });
   if (refusals.length > 0) return { refusals, merge_commit: null };

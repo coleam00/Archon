@@ -236,6 +236,8 @@ interface FakePr {
   readonly checksRevision?: string;
   /** The paths `pr.files` reports the pull request changes. */
   readonly files?: readonly string[];
+  /** The revision `pr.files` reports, when the head moved between the gate's reads. */
+  readonly filesRevision?: string;
 }
 
 /**
@@ -276,7 +278,7 @@ const forgeOp = (op, request) => {
   }
   if (op === 'pr.merge-state') return out(true, { ref, head_revision: forgePr.mergeStateHead ?? forgePr.headRefOid, default_branch: 'dev', default_revision: forgePr.defaultRevision ?? ${JSON.stringify(OLD)}, behind: forgePr.behind ?? 0, mergeable: forgePr.conflicts ? 'conflict' : 'clean', merge_commit: state() === 'merged' ? forgePr.mergeCommit : null });
   if (op === 'checks.state') return out(true, { ref, revision: forgePr.checksRevision ?? forgePr.headRefOid, units: units(forgePr.checks) });
-  if (op === 'pr.files') return out(true, { ref, head_revision: forgePr.headRefOid, files: (forgePr.files ?? []).map(path => ({ path, previous_path: null, status: 'modified', patch: null })) });
+  if (op === 'pr.files') return out(true, { ref, head_revision: forgePr.filesRevision ?? forgePr.headRefOid, files: (forgePr.files ?? []).map(path => ({ path, previous_path: null, status: 'modified', patch: null })) });
   if (op === 'pr.threads') return out(true, { ref, threads: Array.from({ length: forgePr.threads }, (_, index) => ({ id: 'thread-' + index, resolved: false, comments: [{ url: 'thread' }] })) });
   if (op === 'workitem.comments') return out(true, { comments: comments.filter(row => row.issue === undefined).map(row => ({
     id: String(row.id), body: row.body, url: ${JSON.stringify(PR_URL)} + '#issuecomment-' + row.id,
@@ -844,6 +846,10 @@ describe('the merge queue facts and gate', () => {
     expect(gated(gate(at, { pr: { files: ['src/a.ts'] } }, { ...protectedPaths, INPUTS_MERGE_LANE: 'manual' })).refusals).toEqual([
       'the merge lane is manual and no maintainer approved it at this head',
     ]);
+    // A file list read at another commit says nothing about what merges.
+    const moved = gate(at, { pr: { files: ['src/a.ts'], filesRevision: OLD } }, protectedPaths);
+    expect(gated(moved).refusals[0]).toContain(`its changed files were read at ${OLD}, not ${HEAD}`);
+    expect(merges(moved)).toEqual([]);
     seed(at, item(BUILT, { ...merge('waiting'), approval: { head: HEAD, at: AT } }));
     const approved = gate(at, pack, { ...protectedPaths, INPUTS_MERGE_LANE: 'manual' });
     expect(gated(approved).refusals).toEqual([]);

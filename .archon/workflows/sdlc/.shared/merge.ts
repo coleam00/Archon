@@ -496,11 +496,19 @@ export function listSetting(value: string): string[] {
   return value.split(',').map(item => item.trim()).filter(item => item !== '');
 }
 
-/** The paths the pull request changes that a `protected_paths` glob matches; reads nothing when none is set. */
-export function protectedChanges(pr: QualifiedPr, globs: readonly string[]): string[] {
+/**
+ * The paths the pull request changes that a `protected_paths` glob matches; reads nothing
+ * when none is set. With `head`, the commit a gate is about to merge, a file list read at
+ * any other commit throws: it would say nothing about what merges.
+ */
+export function protectedChanges(pr: QualifiedPr, globs: readonly string[], head?: string): string[] {
   if (globs.length === 0) return [];
-  const files = forge('pr.files', { ref: { repo: pr.repo, number: pr.number } })?.files;
+  const listed = forge('pr.files', { ref: { repo: pr.repo, number: pr.number } });
+  const files = listed?.files;
   if (!Array.isArray(files)) throw new Error('forge pr.files returned no file list');
+  if (head !== undefined && listed?.head_revision !== head) {
+    throw new Error(`its changed files were read at ${String(listed?.head_revision)}, not ${head}`);
+  }
   const matchers = globs.map(glob => new Bun.Glob(glob));
   const paths = files.flatMap(file => [record(file)?.path, record(file)?.previous_path]).filter(path => typeof path === 'string');
   return [...new Set(paths)].filter(path => matchers.some(matcher => matcher.match(path)));
