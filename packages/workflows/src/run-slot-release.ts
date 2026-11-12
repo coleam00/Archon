@@ -10,10 +10,16 @@ interface Hold {
   pending: boolean;
   unsafe: boolean;
 }
+interface CleanupRun {
+  store: object;
+  runId: string;
+}
 interface Scope {
+  cleanupRun?: CleanupRun;
   closed: boolean;
   parent: Scope | undefined;
   pending: Map<Source, Set<string>>;
+  deferred: Map<Source, Set<string>>;
   holds: Set<Hold>;
   unsafe: boolean;
 }
@@ -93,16 +99,37 @@ export async function publishRunSlotRelease(source: Source, runId: string): Prom
 /** A workflow failure is safe to drain; unconfirmed resource cleanup is not. */
 export function deferRunSlotRelease(): void {
   for (let scope = activeScope(scopes.getStore()); scope; scope = activeScope(scope.parent)) {
+    if (scope.cleanupRun) {
+      deferRunSlotReleaseForRun(scope.cleanupRun.store, scope.cleanupRun.runId);
+      return;
+    }
+  }
+  for (let scope = activeScope(scopes.getStore()); scope; scope = activeScope(scope.parent)) {
     scope.unsafe = true;
     for (const hold of scope.holds) hold.unsafe = true;
   }
 }
 
-export async function withRunSlotReleaseScope<T>(body: () => Promise<T>): Promise<T> {
+/** Defer only the cleanup owner in a batch of otherwise independent releases. */
+function deferRunSlotReleaseForRun(store: object, runId: string): void {
+  const source = sourceOf(store);
+  const hold = holds.get(source)?.get(runId);
+  if (hold) hold.unsafe = true;
+  for (let scope = activeScope(scopes.getStore()); scope; scope = activeScope(scope.parent)) {
+    add(scope.deferred, source, runId);
+  }
+}
+
+export async function withRunSlotReleaseScope<T>(
+  body: () => Promise<T>,
+  cleanupRun?: CleanupRun
+): Promise<T> {
   const scope: Scope = {
+    cleanupRun,
     parent: activeScope(scopes.getStore()),
     closed: false,
     pending: new Map(),
+    deferred: new Map(),
     holds: new Set(),
     unsafe: false,
   };
@@ -111,7 +138,8 @@ export async function withRunSlotReleaseScope<T>(body: () => Promise<T>): Promis
   } finally {
     scope.closed = true;
     const parent = activeScope(scope.parent);
-    if (scope.unsafe || [...scope.holds].some(hold => hold.unsafe)) {
+    discardDeferredReleases(scope, parent);
+    if (scope.unsafe) {
       if (scope.pending.size)
         createLogger('run-slot-release').warn(
           { runIds: [...scope.pending.values()].flatMap(ids => [...ids]) },
@@ -123,6 +151,15 @@ export async function withRunSlotReleaseScope<T>(body: () => Promise<T>): Promis
       for (const hold of scope.holds) parent.holds.add(hold);
     } else {
       for (const [source, ids] of scope.pending) await deliver(source, ids);
+    }
+  }
+}
+
+function discardDeferredReleases(scope: Scope, parent: Scope | undefined): void {
+  for (const [source, ids] of scope.deferred) {
+    for (const id of ids) {
+      scope.pending.get(source)?.delete(id);
+      if (parent) add(parent.deferred, source, id);
     }
   }
 }
@@ -169,7 +206,7 @@ export async function finishForcedRunSlotCleanup(store: object, runId: string): 
   // A signal can interrupt an engine scope that will never reach its finalizer.
   // Consume only this run's committed releases after its forced cleanup succeeds.
   for (let scope = activeScope(scopes.getStore()); scope; scope = activeScope(scope.parent)) {
-    unsafe ||= scope.unsafe;
+    unsafe ||= scope.unsafe || (scope.deferred.get(source)?.has(runId) ?? false);
     pending = (scope.pending.get(source)?.delete(runId) ?? false) || pending;
     if (!scope.pending.get(source)?.size) scope.pending.delete(source);
   }

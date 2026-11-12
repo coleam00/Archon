@@ -1406,17 +1406,8 @@ nodes:
 
         activeRuns.delete(first.id);
 
-        // This host-command fixture cannot exclude untracked background work. The
-        // stop warning defers automatic admission until the operator's explicit drain.
         if (process.platform !== 'win32') {
           expect(cancel.stdout + cancel.stderr).toContain(COMPLETED_HOST_COMMAND_WARNING);
-          expect(requests()[1]?.status).toBe('queued');
-          await runCli(cliPath, projectRoot, archonHome, [
-            'trigger',
-            'drain',
-            '--host',
-            'cancel-host',
-          ]);
         }
         await waitFor(
           () => (runs()[1]?.status === 'completed' ? true : undefined),

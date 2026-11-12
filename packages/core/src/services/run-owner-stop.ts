@@ -19,6 +19,7 @@ const POLL_INTERVAL_MS = 50;
 
 export interface DetachedRunStopReport {
   warnings: string[];
+  advisories?: string[];
 }
 
 export interface DetachedRunStopTarget {
@@ -181,5 +182,8 @@ async function stopPreparedOwner(
   const failed = live.find(group => group.signalError && group.signalError !== 'ESRCH');
   if (failed)
     throw new Error(`Could not signal node group ${String(failed.pgid)} (${failed.signalError})`);
-  return { warnings: prepared.warnings };
+  return {
+    warnings: prepared.warnings,
+    ...(prepared.advisories?.length ? { advisories: prepared.advisories } : {}),
+  };
 }

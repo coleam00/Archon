@@ -123,7 +123,8 @@ posixOnly(
       for (let attempt = 0; attempt < 2; attempt++) {
         const prepared = trees.prepareTermination();
         expect(prepared.groups).toEqual([]);
-        expect(await prepared.ready).toEqual([
+        expect(await prepared.ready).toEqual([]);
+        expect(prepared.advisories).toEqual([
           expect.stringContaining('may have left untracked background work'),
         ]);
         prepared.release();
@@ -166,7 +167,8 @@ posixOnly(
       signals.mockRestore();
       await waitUntil(() => !alive(pgid));
       expect(settled).toBe(false);
-      expect(await prepared.ready).toEqual([
+      expect(await prepared.ready).toEqual([]);
+      expect(prepared.advisories).toEqual([
         expect.stringContaining('may have left untracked background work'),
       ]);
       for (const options of [{ endTreeOnTimeout: true }, {}, { ownProcessGroup: true }] as const) {
@@ -247,10 +249,7 @@ posixOnly.each(['end', 'timeout', 'abort'] as const)(
             processes.split('\n').some(line => line.trim().endsWith(`archon-node-lifeline ${root}`))
           ).toBe(false);
           const warnings = await prepared.ready;
-          expect(warnings).toEqual([
-            expect.stringContaining("still holds the node's output"),
-            expect.stringContaining('may have left untracked background work'),
-          ]);
+          expect(warnings).toEqual([expect.stringContaining("still holds the node's output")]);
           await expect(trees.end()).rejects.toThrow('still running');
           prepared.release();
         } else {
@@ -449,7 +448,8 @@ posixOnly(
       const signals = spyOn(process, 'kill');
       try {
         const prepared = trees.prepareTermination();
-        expect(await prepared.ready).toEqual([
+        expect(await prepared.ready).toEqual([]);
+        expect(prepared.advisories).toEqual([
           expect.stringContaining('may have left untracked background work'),
         ]);
         expect(signals.mock.calls.filter(([pid]) => Math.abs(pid) === survivor)).toEqual([]);

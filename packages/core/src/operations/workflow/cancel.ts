@@ -122,7 +122,12 @@ export async function cancelWorkflow(
     }
   }
 
-  const { cancelled, ...recorded } = await recordAbandoned(ctx, run, owner.cleanupWarnings);
+  const { cancelled, ...recorded } = await recordAbandoned(
+    ctx,
+    run,
+    owner.cleanupWarnings,
+    owner.advisories
+  );
   if (!cancelled) {
     const latest = await ctx.store.getWorkflowRun(run.id);
     throw new Error(
@@ -132,7 +137,7 @@ export async function cancelWorkflow(
   }
   const cleanupWarnings = [...(recorded.cleanupWarnings ?? [])];
   // An output holder the stop left running may still write scratch.
-  if (!owner.cleanupWarnings?.length) {
+  if (!owner.cleanupWarnings?.length && !owner.advisories?.length) {
     await releaseRunScratch(run);
     cleanupWarnings.push(...(await releaseRunResources(ctx, run.id)));
   }

@@ -28,7 +28,7 @@ export const MAX_CASCADE_RUNS = 500;
  * recorded facts travel with the result for every surface to show.
  */
 export type AbandonOwnerOutcome =
-  | { kind: 'stopped'; pid: number; cleanupWarnings?: string[] }
+  | { kind: 'stopped'; pid: number; cleanupWarnings?: string[]; advisories?: string[] }
   | {
       kind: 'no_owner_answered';
       /** The connection error that showed nothing answered. */
@@ -51,6 +51,7 @@ export function describeAbandonOwner(outcome: AbandonOwnerOutcome): string[] {
     return [
       `Stopped the run's live owner process (pid ${String(outcome.pid)}) first.`,
       ...(outcome.cleanupWarnings ?? []),
+      ...(outcome.advisories ?? []),
     ];
   }
   const lines = [
@@ -308,11 +309,12 @@ export async function reclaimCancelledRunContainer(
 export async function cancelRunAndCleanup(
   ctx: OperationContext,
   run: WorkflowRun,
-  stopWarnings: string[] = []
+  stopWarnings: string[] = [],
+  advisories: string[] = []
 ): Promise<AbandonAttemptResult> {
   let cancelled: boolean;
   try {
-    ({ cancelled } = await cancelByOperator(ctx, run.id, stopWarnings));
+    ({ cancelled } = await cancelByOperator(ctx, run.id, [...stopWarnings, ...advisories]));
   } catch (error) {
     const err = error as Error;
     getLog().error(
@@ -330,7 +332,7 @@ export async function cancelRunAndCleanup(
     cascadeFailures = cascade.failures;
     cancelledDescendants = cascade.cancelledDescendants;
     // An output holder the stop left running may still write a descendant's scratch.
-    if (!stopWarnings.length)
+    if (!stopWarnings.length && !advisories.length)
       for (const child of cascade.cancelledRuns) {
         await releaseRunScratch(child);
         imageWarnings.push(...(await releaseRunResources(ctx, child.id)));
@@ -344,6 +346,7 @@ export async function cancelRunAndCleanup(
   const cleanupWarnings = [
     ...imageWarnings,
     ...stopWarnings,
+    ...advisories,
     ...(cancelled ? await reclaimCancelledRunContainer(ctx, run) : []),
   ];
   return {
@@ -384,11 +387,12 @@ export async function stopLiveOwner(
     return { kind: 'not_stopped', message: ownerNotStoppedMessage(run.id, error) };
   }
   try {
-    const warnings = (await target.stop()).warnings;
+    const { warnings, advisories } = await target.stop();
     return {
       kind: 'stopped',
       pid: target.pid,
       ...(warnings.length ? { cleanupWarnings: warnings } : {}),
+      ...(advisories?.length ? { advisories } : {}),
     };
   } catch (error) {
     return {
@@ -415,9 +419,10 @@ export function cancelByOperator(
 export async function recordAbandoned(
   ctx: OperationContext,
   run: WorkflowRun,
-  stopWarnings: string[] = []
+  stopWarnings: string[] = [],
+  advisories: string[] = []
 ): Promise<AbandonWorkflowResult> {
-  const result = await cancelRunAndCleanup(ctx, run, stopWarnings);
+  const result = await cancelRunAndCleanup(ctx, run, stopWarnings, advisories);
   return {
     run: result.run,
     cancelled: result.cancelled,

@@ -61,11 +61,8 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
         const prepared = detachedTrees.prepareTermination();
         return {
           ...prepared,
-          ready: Promise.all([prepared.ready, priorHostCommands(runId)]).then(
-            ([warnings, hasPriorCommands]) =>
-              hasPriorCommands && !warnings.includes(COMPLETED_HOST_COMMAND_WARNING)
-                ? [...warnings, COMPLETED_HOST_COMMAND_WARNING]
-                : warnings
+          advisories: priorHostCommands(runId).then(hasPriorCommands =>
+            hasPriorCommands ? [COMPLETED_HOST_COMMAND_WARNING] : prepared.advisories
           ),
         };
       })

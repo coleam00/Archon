@@ -30,6 +30,7 @@ test('retains each supported preparation fact', () => {
   const failedSignal = { ...liveGroup, signalError: 'EPERM' };
   for (const frame of [
     { warning: 'held output' },
+    { advisory: 'historical commands' },
     { group: liveGroup },
     { group: reapedGroup },
     { group: failedSignal },
@@ -39,5 +40,6 @@ test('retains each supported preparation fact', () => {
   expect(report).toEqual({
     groups: [liveGroup, reapedGroup, failedSignal],
     warnings: ['held output'],
+    advisories: ['historical commands'],
   });
 });

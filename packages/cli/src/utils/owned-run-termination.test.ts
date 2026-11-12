@@ -536,7 +536,8 @@ for (const scope of ['run', 'descendant', 'container', 'agent'] as const) {
         try {
           const prepared = await lease.commit();
           expect(prepared?.groups).toEqual([]);
-          expect(prepared?.warnings).toEqual(
+          expect(prepared?.warnings).toEqual([]);
+          expect(prepared?.advisories ?? []).toEqual(
             scope === 'container' || scope === 'agent'
               ? []
               : [expect.stringContaining('may have left untracked background work')]

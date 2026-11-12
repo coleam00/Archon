@@ -253,3 +253,31 @@ describe('run slot release coordination', () => {
     }
   });
 });
+
+test('per-run cleanup deferral preserves independent releases and store identities', async () => {
+  const first = channel();
+  const second = channel();
+  const closeUnsafe = holdRunSlotRelease(first.store, 'unsafe');
+  try {
+    await withRunSlotReleaseScope(async () => {
+      await publishRunSlotRelease(first.source, 'unsafe');
+      await publishRunSlotRelease(first.source, 'safe');
+      await publishRunSlotRelease(second.source, 'unsafe');
+      await withRunSlotReleaseScope(
+        async () => {
+          deferRunSlotRelease();
+          await closeUnsafe();
+        },
+        { store: first.store, runId: 'unsafe' }
+      );
+      expect(first.received).toEqual([]);
+      expect(second.received).toEqual([]);
+    });
+    expect(first.received).toEqual([['safe']]);
+    expect(second.received).toEqual([['unsafe']]);
+  } finally {
+    await closeUnsafe();
+    first.dispose();
+    second.dispose();
+  }
+});
