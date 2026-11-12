@@ -1036,6 +1036,32 @@ describe('durable resource starts', () => {
     await writeFile(join(root, 'config.yaml'), 'concurrency:\n  resources:\n    declared: 3\n');
     expect(await decide('declared', 2, 2)).toEqual(['admitted', 'skipped']);
   });
+
+  test('a paused run releases its slot while the install config is broken', async () => {
+    const store = createWorkflowStore();
+    const id = crypto.randomUUID();
+    await admitResourceStart({
+      resource: 'paused-release',
+      hostId: 'host',
+      overlap: 'queue',
+      launch: launch(id),
+    });
+    await claimPendingWorkflowRun(id);
+    const approval = {
+      nodeId: 'review',
+      message: 'Choose',
+      type: 'approval',
+      pauseId: 'p',
+    } as const;
+    await store.pauseWorkflowRun(id, approval);
+    await writeFile(
+      join(root, 'config.yaml'),
+      'concurrency:\n  resources:\n    paused-release: 0\n'
+    );
+    expect(
+      await store.releasePausedRunSlot(id, { kind: 'pause', nodeId: 'review', pauseId: 'p' })
+    ).toEqual({ released: true });
+  });
 });
 
 describe('resource slot holders', () => {
