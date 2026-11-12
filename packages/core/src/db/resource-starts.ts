@@ -327,23 +327,18 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
 export async function readSkippedResourceStarts(
   receiptId: string
 ): Promise<SkippedStartFacts[] | null> {
-  const receipt = await getDatabase().query<Record<string, unknown>>(
-    'SELECT id, delivery_id, received_at, source_actor FROM remote_agent_start_receipts WHERE id = $1',
+  const receipt = await getDatabase().query<{ id: string }>(
+    'SELECT id FROM remote_agent_start_receipts WHERE id = $1',
     [receiptId]
   );
-  const row = receipt.rows[0];
-  if (!row) return null;
-  const source = {
-    id: String(row.id),
-    deliveryId: typeof row.delivery_id === 'string' ? row.delivery_id : null,
-    receivedAt:
-      row.received_at instanceof Date ? row.received_at.toISOString() : String(row.received_at),
-    sourceActor: sourceReceiptInputSchema.shape.sourceActor.parse(
-      parseStoredJson(row.source_actor)
-    ),
-  };
-  const requests = await getDatabase().query<RequestRow & { binding_id: string }>(
-    `SELECT r.* FROM remote_agent_resource_start_requests r
+  if (!receipt.rows[0]) return null;
+  const requests = await getDatabase().query<
+    Pick<RequestRow, 'id' | 'status' | 'blocker_run_id' | 'blocker_kind'> & {
+      binding_id: string;
+    }
+  >(
+    `SELECT r.id, r.status, r.blocker_run_id, r.blocker_kind, r.binding_id
+      FROM remote_agent_resource_start_requests r
       WHERE r.receipt_id = $1 AND r.status = 'skipped'
       ORDER BY r.binding_id, r.queue_position`,
     [receiptId]
@@ -353,12 +348,8 @@ export async function readSkippedResourceStarts(
       {
         id: request.id,
         status: request.status,
-        resource: request.resource_key,
-        overlap: request.overlap_policy,
         blocker: recordedBlocker(request),
-        launch: preparedWorkflowLaunchSchema.parse(parseStoredJson(request.launch)),
       },
-      source,
       request.binding_id
     );
     return facts ? [facts] : [];

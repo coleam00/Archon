@@ -141,7 +141,7 @@ export function createReceiptOperations(
           for (const requestId of binding.requestIds) {
             const request = await tx.request(requestId);
             if (!request) throw new Error(`Resource start request '${requestId}' missing`);
-            const skipped = skippedStartFacts(request, receipt, binding.bindingId);
+            const skipped = skippedStartFacts(request, binding.bindingId);
             if (skipped) facts.push(skipped);
           }
         }

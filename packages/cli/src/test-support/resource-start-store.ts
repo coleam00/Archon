@@ -247,7 +247,7 @@ export function createInMemoryResourceStartStore(
           const request = binding.disposition
             ? requests.get(binding.disposition.requestId)
             : undefined;
-          const facts = request ? skippedStartFacts(request, receipt, binding.bindingId) : null;
+          const facts = request ? skippedStartFacts(request, binding.bindingId) : null;
           return facts ? [facts] : [];
         });
     },

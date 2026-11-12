@@ -154,16 +154,8 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
           const expected: SkippedStartFacts[] = [
             {
               requestId: prepared.run.id,
-              receiptId: input.receipt.id,
               bindingId: binding.bindingId,
-              resource: binding.resource,
-              overlap: 'skip',
               blocker: { kind: blockerKind, id: blockerId },
-              deliveryId,
-              receivedAt: input.receipt.receivedAt,
-              sourceActor: input.receipt.sourceActor,
-              codebaseId: prepared.run.codebase_id,
-              cwd: prepared.execution.cwd,
             },
           ];
           const other = { ...identity, bindingId: 'other' };
