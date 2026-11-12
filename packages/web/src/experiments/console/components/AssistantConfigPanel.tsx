@@ -289,7 +289,7 @@ export function AssistantConfigPanel(): ReactElement {
           return (
             <div
               key={p.id}
-              className="flex items-start gap-[18px] rounded-xl border bg-surface-elevated p-4 transition-colors"
+              className="flex flex-col items-start gap-[18px] rounded-xl border bg-surface-elevated p-4 transition-colors sm:flex-row"
               // Active/default provider gets the magenta tint (design .set-provider.active).
               style={
                 isDefault
@@ -301,7 +301,7 @@ export function AssistantConfigPanel(): ReactElement {
                   : { borderColor: 'var(--border)' }
               }
             >
-              <div className="flex w-[150px] shrink-0 flex-wrap items-center gap-2 pt-[11px] text-[13.5px] font-bold text-text-primary">
+              <div className="flex w-full shrink-0 flex-wrap items-center gap-2 text-[13.5px] font-bold text-text-primary sm:w-[150px] sm:pt-[11px]">
                 {p.displayName}
                 {isDefault ? (
                   <span
@@ -316,7 +316,7 @@ export function AssistantConfigPanel(): ReactElement {
                   </span>
                 ) : null}
               </div>
-              <div className="min-w-0 flex-1">
+              <div className="w-full min-w-0 flex-1">
                 <ModelPickerField
                   agentId={p.id}
                   value={form.models[p.id] ?? ''}
