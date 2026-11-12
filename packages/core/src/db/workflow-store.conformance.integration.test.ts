@@ -4,7 +4,10 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
-import { describeWorkflowStoreConformance } from '@archon/workflows/store-conformance';
+import {
+  describeWorkflowStoreConformance,
+  describeRunSlotReleaseConformance,
+} from '@archon/workflows/store-conformance';
 import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
@@ -29,6 +32,7 @@ const makeHarness = async () => {
   }
 };
 describeWorkflowStoreConformance('SQLite', makeHarness);
+describeRunSlotReleaseConformance('SQLite', makeHarness);
 
 describeSqlStatusReadConformance(makeHarness);
 

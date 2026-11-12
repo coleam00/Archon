@@ -46,7 +46,7 @@ import {
   insertTerminalWorkflowEvent,
   observeRunTerminalArtifacts,
 } from './workflow-terminal-event';
-import { reportRunTerminal } from './workflow-terminal-telemetry';
+import { afterRunTerminalCommit } from './workflow-terminal-telemetry';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -301,7 +301,7 @@ export async function cancelResumableRunsForConversation(
     getLog().error({ err, conversationId }, 'db.workflow_run_cancel_resumable_for_conv_failed');
     throw new Error(`Failed to cancel resumable runs for conversation: ${err.message}`);
   }
-  for (const run of cancelledRuns) await reportRunTerminal(run.id);
+  for (const run of cancelledRuns) await afterRunTerminalCommit(run.id);
   return cancelledRuns;
 }
 
@@ -351,7 +351,7 @@ export async function completeWorkflowRun(
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_complete_no_match');
     throw new Error(`Workflow run not found or not in running state (id: ${id})`);
   }
-  await reportRunTerminal(id);
+  await afterRunTerminalCommit(id);
 }
 
 /**
@@ -452,7 +452,7 @@ export async function failWorkflowRun(
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_fail_no_match');
     throw new Error(`Workflow run not found or not in pending/running state (id: ${id})`);
   }
-  await reportRunTerminal(id);
+  await afterRunTerminalCommit(id);
   return { failed: true };
 }
 
@@ -498,7 +498,7 @@ export async function cancelWorkflowRun(
     // Same info level as the resume CAS-miss signal for consistency (S2).
     getLog().info({ workflowRunId: id }, 'db.workflow_run_cancel_noop');
   } else {
-    await reportRunTerminal(id);
+    await afterRunTerminalCommit(id);
   }
   return { cancelled };
 }
@@ -546,7 +546,7 @@ export async function cancelFanOutRun(
   if (!cancelled) {
     getLog().info({ workflowRunId: id, reason }, 'db.workflow_run_fan_out_cancel_noop');
   } else {
-    await reportRunTerminal(id);
+    await afterRunTerminalCommit(id);
   }
   return { cancelled };
 }

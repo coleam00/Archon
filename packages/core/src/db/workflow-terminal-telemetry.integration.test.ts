@@ -10,6 +10,12 @@
 import { beforeEach, describe, expect, mock, test } from 'bun:test';
 import type { WorkflowTerminalProperties } from '@archon/paths';
 
+import {
+  bindRunSlotReleaseStore,
+  subscribeRunSlotRelease,
+} from '@archon/workflows/run-slot-release';
+
+let telemetryDisabled = false;
 const captured: WorkflowTerminalProperties[] = [];
 mock.module('@archon/paths', () => ({
   createLogger: () => ({
@@ -20,7 +26,7 @@ mock.module('@archon/paths', () => ({
     trace() {},
     fatal() {},
   }),
-  isTelemetryDisabled: () => false,
+  isTelemetryDisabled: () => telemetryDisabled,
   captureWorkflowTerminal: (props: WorkflowTerminalProperties) => {
     captured.push(props);
   },
@@ -88,6 +94,7 @@ async function seedEvent(
 }
 
 beforeEach(() => {
+  telemetryDisabled = false;
   captured.length = 0;
 });
 
@@ -275,4 +282,47 @@ test('terminal telemetry uses the first durable start and latest durable failure
   await failWorkflowRun('t-durable-order', 'failed', { exitReason: 'node_error' });
   expect(captured).toHaveLength(1);
   expect(captured[0]).toMatchObject({ platform: 'cli', exitReason: 'node_error' });
+});
+
+test('terminal release is independent of telemetry opt-out', async () => {
+  telemetryDisabled = true;
+  const releases: string[] = [];
+  const store = bindRunSlotReleaseStore({}, () => db);
+  const dispose = subscribeRunSlotRelease(store, async ids => {
+    releases.push(...ids);
+  });
+  try {
+    await seedRun('opt-out-release', 'running');
+    await completeWorkflowRun('opt-out-release', { duration_ms: 1 });
+    expect(releases).toEqual(['opt-out-release']);
+    expect(captured).toEqual([]);
+  } finally {
+    dispose();
+  }
+});
+
+test('rolled-back terminal event does not publish a release', async () => {
+  const releases: string[] = [];
+  const store = bindRunSlotReleaseStore({}, () => db);
+  const dispose = subscribeRunSlotRelease(store, async ids => {
+    releases.push(...ids);
+  });
+  try {
+    await seedRun('rolled-back-release', 'running');
+    await db.query(`CREATE TEMP TRIGGER refuse_terminal_event BEFORE INSERT ON remote_agent_workflow_events
+      WHEN NEW.workflow_run_id = 'rolled-back-release'
+      BEGIN SELECT RAISE(ABORT, 'test terminal event failure'); END`);
+    await expect(completeWorkflowRun('rolled-back-release', { duration_ms: 1 })).rejects.toThrow(
+      'test terminal event failure'
+    );
+    const rows = await db.query<{ status: string }>(
+      'SELECT status FROM remote_agent_workflow_runs WHERE id = $1',
+      ['rolled-back-release']
+    );
+    expect(rows.rows[0]?.status).toBe('running');
+    expect(releases).toEqual([]);
+  } finally {
+    await db.query('DROP TRIGGER IF EXISTS refuse_terminal_event');
+    dispose();
+  }
 });

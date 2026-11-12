@@ -1,3 +1,4 @@
+import { bindRunSlotReleaseStore, publishRunSlotRelease } from '../run-slot-release';
 import { createFileAdmissionStore } from './admission';
 import { createAdmissionTransaction } from './admission-transaction';
 import { type ReusableCheckout, resumeRefusal } from '../resource-start-store';
@@ -9,7 +10,7 @@ import {
 } from '../store';
 import { createFileStateDocumentStore } from './state-documents';
 import { createHash } from 'node:crypto';
-import { readdir } from 'node:fs/promises';
+import { readdir, realpath } from 'node:fs/promises';
 import { join } from 'node:path';
 import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
@@ -59,6 +60,7 @@ export async function createFileWorkflowStore(
 ): Promise<IWorkflowStore & { deleteWorkflowRun(id: string): Promise<void> }> {
   const { root } = options;
   await openFileStore(root);
+  const releaseSource = await realpath(root);
   const getCodebase = options.getCodebase ?? (async (): Promise<null> => null);
   const getCodebaseEnvVars =
     options.getCodebaseEnvVars ?? (async (): Promise<Record<string, string>> => ({}));
@@ -153,6 +155,7 @@ export async function createFileWorkflowStore(
       };
     });
     for (const report of reports) {
+      await publishRunSlotRelease(releaseSource, report.run.id);
       try {
         const usage = await foldDagResumeSnapshot(report.events, report.run.id);
         reportRunTerminalTelemetry(report.run, report.events, usage);
@@ -246,14 +249,17 @@ export async function createFileWorkflowStore(
       if (outcome instanceof WorkflowResourceBusyError) throw outcome;
       return outcome;
     },
-    releasePausedRunSlot: (id, cursor) =>
-      write([id], async (view, admission) => {
+    releasePausedRunSlot: async (id, cursor) => {
+      const outcome = await write([id], async (view, admission) => {
         const run = await view.getWorkflowRun(id);
         if (!run || !pauseCursorMatches(run, cursor)) return { released: false };
         const released = await admission.release(id);
         if (released) view.clearCapacityWait(id);
         return { released };
-      }),
+      });
+      if (outcome.released) await publishRunSlotRelease(releaseSource, id);
+      return outcome;
+    },
     recoverCancelledFanOutRun: id => write([id], view => view.recoverCancelledFanOutRun(id)),
     pauseWorkflowRun: (id, approval, extra, event) =>
       write([id], view => view.pauseWorkflowRun(id, approval, extra, event)),
@@ -487,5 +493,5 @@ export async function createFileWorkflowStore(
     ...createFileAdmissionStore(root, options.listReusableCheckouts),
     ...createFileStateDocumentStore(root),
   };
-  return store;
+  return bindRunSlotReleaseStore(store, () => releaseSource);
 }

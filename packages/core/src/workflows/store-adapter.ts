@@ -1,3 +1,4 @@
+import { bindRunSlotReleaseStore } from '@archon/workflows/run-slot-release';
 import { createRunResourceRelease } from '../services/cleanup/run-verification-images';
 /**
  * WorkflowStore adapter — bridges @archon/core DB modules to the
@@ -112,7 +113,7 @@ function collectOAuthCredentialValues(
 }
 
 export function createWorkflowStore(): IWorkflowStore {
-  return {
+  const store: IWorkflowStore = {
     ...createSqlStateDocumentStore(getDatabase),
     setToolCallAttention: workflowDb.setToolCallAttention,
     admitResourceStart: resourceStarts.admitResourceStart,
@@ -230,6 +231,7 @@ export function createWorkflowStore(): IWorkflowStore {
     listWorkflowRunNodeSessions,
     upsertWorkflowRunNodeSession,
   };
+  return bindRunSlotReleaseStore(store, getDatabase);
 }
 
 /** One provider cache per process, shared by workflow execution and server adapters. */

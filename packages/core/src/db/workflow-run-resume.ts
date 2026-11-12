@@ -1,3 +1,4 @@
+import { publishRunSlotRelease } from '@archon/workflows/run-slot-release';
 /**
  * Resume of workflow runs: finding a resumable run, the resume compare-and-swap,
  * fan-out child recovery and paused-run slot release. Re-exported from the
@@ -407,7 +408,7 @@ export async function releasePausedRunSlot(
   id: string,
   cursor: PauseCursor
 ): Promise<{ released: boolean }> {
-  return getDatabase().withTransaction(async query => {
+  const outcome = await getDatabase().withTransaction(async query => {
     if (getDatabaseType() === 'sqlite') {
       await query('UPDATE remote_agent_workflow_runs SET id = id WHERE id = $1', [id]);
     }
@@ -441,4 +442,6 @@ export async function releasePausedRunSlot(
       );
     return { released };
   });
+  if (outcome.released) await publishRunSlotRelease(getDatabase(), id);
+  return outcome;
 }

@@ -3,7 +3,12 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { CONFORMANCE_CODEBASE_ID, describeWorkflowStoreConformance } from '../store-conformance';
+import {
+  type WorkflowStoreHarness,
+  CONFORMANCE_CODEBASE_ID,
+  describeWorkflowStoreConformance,
+  describeRunSlotReleaseConformance,
+} from '../store-conformance';
 import * as telemetry from '../run-terminal-telemetry';
 import { createFileWorkflowStore } from './store';
 import { commit } from './commit';
@@ -12,7 +17,7 @@ let restore: (() => void) | undefined;
 afterEach(() => {
   restore?.();
 });
-describeWorkflowStoreConformance('files', async () => {
+const makeHarness = async (): Promise<WorkflowStoreHarness> => {
   const root = roots(await mkdtemp(join(tmpdir(), 'workflow-files-')));
   const reports: string[] = [];
   const spy = spyOn(telemetry, 'reportRunTerminalTelemetry').mockImplementation(run => {
@@ -52,4 +57,6 @@ describeWorkflowStoreConformance('files', async () => {
     terminalReports: () => [...reports],
     close: async () => {},
   };
-});
+};
+describeWorkflowStoreConformance('files', makeHarness);
+describeRunSlotReleaseConformance('files', makeHarness);

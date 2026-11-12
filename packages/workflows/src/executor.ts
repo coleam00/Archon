@@ -1,3 +1,8 @@
+import {
+  deferRunSlotRelease,
+  holdRunSlotRelease,
+  withRunSlotReleaseScope,
+} from './run-slot-release';
 import { isWorkflowExecutionInterruption } from './execution-interruption';
 import { runChildWorkflow } from './child-runs';
 import { layerRunCredentials } from './run-credential-env';
@@ -258,7 +263,13 @@ export type ExecuteWorkflowOptions = ResumePayload & {
  * call `hydrateResumableRun` (`./run-resume`) first and spread its result into `opts` —
  * the executor does not perform resume detection on its own.
  */
-export async function executeWorkflow(
+export function executeWorkflow(
+  ...args: Parameters<typeof executeWorkflowInScope>
+): Promise<WorkflowExecutionResult> {
+  return withRunSlotReleaseScope(() => executeWorkflowInScope(...args));
+}
+
+async function executeWorkflowInScope(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
@@ -316,6 +327,7 @@ export async function executeWorkflow(
   // its stopped results also release through this try's finally.
   keepAwake.acquire();
   const leaveRunExecution = enterRunExecution(workflowRun.id);
+  const releaseSlotHold = holdRunSlotRelease(deps.store, workflowRun.id);
   const exit: RunExitState = { executionStopped: false, terminalStatusWriteFailed: false };
   try {
     const sourced = await establishAdoptedRunSource(
@@ -397,15 +409,31 @@ export async function executeWorkflow(
     // exit path (success, thrown error, or backstop failure).
     keepAwake.release();
     leaveRunExecution();
-    if (!exit.terminalStatusWriteFailed) {
-      if (!exit.executionStopped) await failRunLeftRunning(deps, workflowRun.id);
-      await releaseScratchOnExit(deps, workflowRun, opts.deferScratchCleanup);
-      await releaseResourcesOnExit(
-        deps,
-        workflowRun.id,
-        opts.container?.backend.releaseVerificationImages?.bind(opts.container.backend)
-      );
-    }
+    await finalizeRunExecution(deps, workflowRun, opts, exit).finally(releaseSlotHold);
+  }
+}
+
+async function finalizeRunExecution(
+  deps: WorkflowDeps,
+  run: WorkflowRun,
+  opts: ExecuteWorkflowOptions,
+  exit: RunExitState
+): Promise<void> {
+  if (exit.terminalStatusWriteFailed) {
+    deferRunSlotRelease();
+    return;
+  }
+  try {
+    if (!exit.executionStopped) await failRunLeftRunning(deps, run.id);
+    await releaseScratchOnExit(deps, run, opts.deferScratchCleanup);
+    await releaseResourcesOnExit(
+      deps,
+      run.id,
+      opts.container?.backend.releaseVerificationImages?.bind(opts.container.backend)
+    );
+  } catch (error) {
+    deferRunSlotRelease();
+    throw error;
   }
 }
 
@@ -675,6 +703,7 @@ async function releaseResourcesOnExit(
       else await deps.releaseRunResources(runId);
     }
   } catch (err) {
+    deferRunSlotRelease();
     getLog().warn({ err, runId }, 'executor.exit_resource_release_failed');
   }
 }
