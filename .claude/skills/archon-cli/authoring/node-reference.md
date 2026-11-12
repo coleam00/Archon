@@ -127,6 +127,23 @@ file with no `schedule`. Nothing starts it on a clock; a node, a script or an op
 starts it with `archon trigger fire --config <file>`, through the same admission,
 capacity and overlap rules as a scheduled start.
 
+A node that did something worth knowing says so with a notice:
+`archon workflow notice "Merged pull request 7" --label kind=merged` from a `bash:` or
+`script:` node, or `notice(text, labels)` from `archon:script`. It never pauses the run
+and cannot be answered; a reader of `archon workflow attention --watch --notices` sees
+it, and `--notices --since 24h` lists it afterwards. Emit one when something real
+happened, not on a pass that found nothing. One line of at most 300 characters, at most
+50 per run; an emit past a bound exits 1.
+
+Notices exist so whoever watches can answer three questions with one command each:
+
+- What merged today, or what did the factory do since 08:00?
+  `archon workflow attention --notices --since 2026-11-11T08:00:00Z --all`, or
+  `--since 8h` for the last eight hours (add `--label kind=merged`).
+- What is building right now? `archon workflow status --all`: each live run shows the
+  latest notice it emitted, so a run should say what it is about when it starts the work.
+- What is waiting for me? `archon workflow attention --all`.
+
 ### Result contracts — the producer owns the schema
 
 Use the producing node's `output_format` for a JSON result. `returns:` selects

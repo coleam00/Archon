@@ -12,7 +12,7 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { artifactsDir, emit, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId } from 'archon:script';
 import { viewIssue } from '../../.shared/issue.ts';
 import { filedIssues, SPLIT_PICKUP } from '../../.shared/split.ts';
 import { claimNamed, claimNext } from '../../.shared/workitem.ts';
@@ -20,7 +20,7 @@ import { claimNamed, claimNext } from '../../.shared/workitem.ts';
 function main(): void {
   const runId = workflowRunId();
   const at = new Date().toISOString();
-  const named = trimmed(process.env.INPUTS_NUMBER);
+  const named = input('number').trim();
   const number = Number(named);
   if (named !== '' && (!Number.isInteger(number) || number <= 0)) throw new Error('number must be a positive integer');
   const doc = named === '' ? claimNext(at, runId, SPLIT_PICKUP) : claimNamed(number, at, runId, SPLIT_PICKUP);

@@ -9,9 +9,9 @@
  * Bound input: INPUTS_ROUNDS, the rounds loop's final `round` output.
  */
 
-import { emit, text } from '../../.shared/io.ts';
+import { emit, input } from 'archon:script';
 
-const rounds = JSON.parse(text(process.env.INPUTS_ROUNDS)) as {
+const rounds = JSON.parse(input('rounds')) as {
   done: boolean;
   ready: boolean;
   reason: string;

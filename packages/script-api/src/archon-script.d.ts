@@ -374,6 +374,8 @@ declare module 'archon:script' {
         };
         readonly threads: ReadonlyArray<{
           readonly id: string;
+          readonly createdAt?: string;
+          readonly commit?: string | null;
           readonly resolved: boolean;
           readonly outdated: boolean;
           readonly path: string | null;
@@ -385,6 +387,8 @@ declare module 'archon:script' {
               readonly id: string;
               readonly login: string | null;
             } | null;
+            readonly createdAt?: string;
+            readonly commit?: string | null;
             readonly body: string;
             readonly url: string;
           }>;
@@ -1889,17 +1893,37 @@ declare module 'archon:script' {
       readonly cause?: {
         readonly kind: 'condition';
         readonly expr: string;
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       } | {
         readonly kind: 'condition_parse_error';
         readonly expr: string;
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       } | {
         readonly kind: 'timeout';
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       } | {
         readonly kind: 'upstream_failed';
         readonly origin: string;
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       } | {
         readonly kind: 'upstream_skipped';
         readonly origin: string;
+        readonly boundary?: {
+          readonly includeId: string;
+          readonly workflow: string;
+        };
       };
       readonly fan_out_outcome?: {
         readonly tally: {
@@ -2076,6 +2100,14 @@ declare module 'archon:script' {
    * listed it when this node started.
    */
   export function outcomes(): NodeOutcomesListing;
+  /**
+   * Tell whoever watches the attention stream what this run did (`archon workflow notice`):
+   * one short line, with labels a reader filters and counts by. It asks nothing of anyone:
+   * the run does not pause and nobody can answer. Emit one when something real happened,
+   * not for a pass that found nothing to do. Throws `HostCommandError` when the host
+   * refuses it: text over the length bound or with a line break, or a run past its notice limit.
+   */
+  export function notice(text: string, labels?: Readonly<Record<string, string>>): void;
   export interface TriggerFireOptions {
       /** One delivery id starts at most one run; build it from values a retry repeats. */
       readonly deliveryId?: string;

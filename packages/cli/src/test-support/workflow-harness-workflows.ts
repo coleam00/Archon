@@ -137,7 +137,9 @@ mock.module('@archon/workflows/run-paths', () => ({
     })
   ),
 }));
+const realDryRun = { ...(await import('@archon/workflows/dry-run')) };
 mock.module('@archon/workflows/dry-run', () => ({
+  ...realDryRun,
   loadDryRunStubs: mock(() => Promise.resolve({ node: 'stubbed output' })),
   writeDryRunStubScaffold: mock(() => Promise.resolve({ first: 'TODO', second: 'TODO' })),
   dryRunWorkflow: mock(() =>

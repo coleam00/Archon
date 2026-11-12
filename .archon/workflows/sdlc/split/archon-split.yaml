@@ -37,6 +37,8 @@ inputs:
       work item, another run holds it, or it does not wait for the split queue.
 
 returns: publish
+# False only when a run that claimed nothing found stored items no pickup can act on.
+outcome_field: healthy
 
 # Reads the checkout and writes only to the tracker and the state store: runs in the
 # launch checkout beside any other run, and creates no worktree.
@@ -176,4 +178,5 @@ nodes:
               why: { type: string }
             required: [number, url, why]
         summary: { type: string }
-      required: [path, item, kind, issues, adopted, summary]
+        healthy: { type: boolean }
+      required: [path, item, kind, issues, adopted, summary, healthy]

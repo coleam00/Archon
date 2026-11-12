@@ -320,6 +320,7 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     bodySessionCursors: resume.bodySessionCursors,
     bodySessionCursorAncestry: resume.bodySessionCursorAncestry,
     lastSequentialSession: group.fresh_context || i === 1 ? undefined : state.lastSequentialSession,
+    getReportedBoundaryErrors: ctx.getReportedBoundaryErrors,
     warnedProviderConflicts: ctx.warnedProviderConflicts,
     totalCostUsd: undefined,
     totalTokens: undefined,

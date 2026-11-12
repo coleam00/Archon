@@ -1,4 +1,11 @@
 // @archon-test-isolated
+import {
+  oldSerializedNodeDataSchema,
+  oldSkippedLifecycleSchema,
+  oldRunSkippedNodeSchema,
+} from './skip-cause.compatibility-fixture';
+import { skipCauseSchema, type SkipCause } from './schemas/node-state';
+import { buildRunNodeStates } from './terminal-record';
 import { finishNodeExecution, startNodeExecution, newNodeInvocation } from './node-execution';
 import {
   isExecNodeRecord,
@@ -600,4 +607,53 @@ it('preserves an empty strict composed contract through persistence and authoriz
       '$review.output.undeclared'
     )
   ).toThrow('not declared');
+});
+
+describe('include skip provenance compatibility', () => {
+  const legacyCauses = [
+    { kind: 'condition', expr: "$gate.output == 'go'" },
+    { kind: 'condition_parse_error', expr: '$missing.output.route' },
+    { kind: 'timeout' },
+    { kind: 'upstream_failed', origin: 'source' },
+    { kind: 'upstream_skipped', origin: 'source' },
+  ] satisfies SkipCause[];
+
+  it.each(legacyCauses)('preserves $kind provenance while older readers accept it', legacyCause => {
+    const boundary = { includeId: 'outer__cycle.review', workflow: 'review-block' };
+    const cause = { ...legacyCause, boundary };
+    expect(skipCauseSchema.parse(legacyCause)).toEqual(legacyCause);
+    const reason =
+      cause.kind === 'condition'
+        ? 'when_condition'
+        : cause.kind === 'condition_parse_error'
+          ? 'when_condition_parse_error'
+          : cause.kind === 'timeout'
+            ? 'timeout'
+            : 'trigger_rule';
+    const lifecycle = { status: 'skipped', reason, cause } as const;
+    const source = { ...record(), lifecycle };
+    const durable = serializeNodeStateRecord(source);
+    expect(readNodeRecordEvent(durable)?.metadata?.lifecycle).toEqual(lifecycle);
+    expect(readNodeRecordEvent(durable)?.data.cause).toEqual(cause);
+    expect(serializeNodeOutput(source)).toMatchObject({ state: 'skipped', cause });
+    expect(serializeNodeEmitter(source)).toMatchObject({ type: 'node_skipped', reason, cause });
+    const oldData = oldSerializedNodeDataSchema.parse(durable.data);
+    expect(oldData.cause).toEqual(legacyCause);
+    expect(oldSkippedLifecycleSchema.parse(lifecycle)).toEqual({
+      ...lifecycle,
+      cause: legacyCause,
+    });
+    const oldSource = { ...source, lifecycle: { ...lifecycle, cause: legacyCause } };
+    expect(oldData).toEqual(
+      oldSerializedNodeDataSchema.parse(serializeNodeStateRecord(oldSource).data)
+    );
+    const nodes = buildRunNodeStates({ id: source.runId, metadata: {} }, [durable]);
+    expect(nodes).toEqual([{ node_id: source.path, state: 'skipped', reason, cause }]);
+    expect(oldRunSkippedNodeSchema.parse(nodes[0])).toEqual({
+      node_id: source.path,
+      state: 'skipped',
+      reason,
+      cause: legacyCause,
+    });
+  });
 });

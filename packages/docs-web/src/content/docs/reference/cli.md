@@ -216,6 +216,8 @@ A relative path resolves from the invoking directory before the repository root.
 
 The command exits 0 when every fixture passes, including when none are declared. It exits 1 when a fixture fails, a workflow cannot load, or a named target has no fixtures. `--json` prints `{ results, passed, failed, errors }`. Each result can include `nodeFailures: [{ nodeId, reason }]` with the failed nodes' diagnostics. This field can be present when the fixture passes because it correctly expects a node to fail; `failureReason` describes a fixture verdict failure and can be absent in that case.
 
+A failed fixture also prints a per-node trace under `trace:`, the status lines `workflow run --dry-run` prints: each node stubbed, completed, skipped with its reason, paused or failed. With `--json` the failed result carries the same entries as `trace: [{ nodeId, nodeType, state, iteration?, reason? }]`. The trace carries no resolved text, outputs or skip conditions; a failed node's diagnostic stays in `nodeFailures`. A passing fixture prints no trace and its JSON has no `trace` field. The trace needs no configured provider.
+
 Fixtures with `exec-code: true` receive the same environment as [executable dry runs](#deterministic-dry-run): inherited process values, file-configured `env`, then registered-project environment values, with later sources winning. Environment lookup happens only for executable fixtures. If lookup fails, that fixture fails with the lookup error; independent stub fixtures still run and workflow-load errors remain in the report.
 
 ### `workflow types`
@@ -604,6 +606,10 @@ archon workflow status --json --verbose
 
 If `cwd` is an unregistered Git checkout, the command falls back to install-wide active runs and says so. Every successful JSON result carries `scopeFallback`: `true` for that fallback and `false` for a resolved project or explicit `--all` request. A registry lookup failure fails the command instead of returning install-wide runs under the fallback label. A registered folder project scopes normally; an unregistered non-repository directory is rejected with `Not in a git repository` before status lookup.
 
+Each run carries the latest [notice](#workflow-notice) it emitted, which says what the run
+is about: a `Notice:` line in text, and `notice` (`{ at, node, text, labels }` or null) in
+JSON. `archon workflow status --all` therefore answers "what is running right now, and on what".
+
 The normal human and JSON views include every active node without fetching each run's event
 history. In JSON, `active_nodes` is the ordered list of unresolved node starts: `node_started` adds
 an identifier and `node_suspended` keeps it active, while `node_completed`, `node_failed`, `node_skipped`, and
@@ -751,6 +757,11 @@ These are audit facts. They never name who answered, and nothing routes on them.
 - **Authored outcome** (`succeeded` or `failed`) is the workflow's declared verdict from
   `outcome_field`. Human output labels it separately when present. JSON always carries it as the
   nullable `outcome` field beside `status`.
+- **Reason** is why a run that ended needs a look, in up to two short lines: for a failed
+  outcome, what the `returns:` node said (its first lines, or its text fields as `key: text`);
+  for a failed run, the first line of its first failed node's error. `workflow get` prints
+  it as `Reason:` under the status and carries it as `reason` in `--json`; both are omitted
+  when the record holds no reason text. The full value stays in `terminal_record`.
 
 The axes may disagree without either being rewritten: `completed` with authored outcome `failed`
 means execution finished normally but the workflow judged the work unsuccessful; `failed` or
@@ -1121,8 +1132,10 @@ archon workflow attention --json --count-by label:class --since 30d
 archon workflow attention --json --count-by answerer --since 30d
 archon workflow attention <run-id> --json                          # one item
 archon workflow attention --watch --json --all                     # what needs someone, as it happens
-archon workflow attention --watch --json --label merge=pr          # one class of question
-archon workflow attention --watch --notices --json                 # also runs that ended or resumed
+archon workflow attention --watch --json --label stage=merge       # one queue's questions
+archon workflow attention --watch --notices --json                 # also runs that ended or resumed, and notices
+archon workflow attention --notices --since 24h --json             # the notices runs emitted in a window
+archon workflow attention --notices --since 24h --count-by label:kind
 archon workflow attention --watch --protocol --json                # the full sync protocol, for programs
 archon workflow attention --watch --protocol --json --after <cursor>  # resume it
 ```
@@ -1173,7 +1186,7 @@ to watch one queue or class of question. With `--json` each line is one compact 
 object. Without it each line is text a reader can act on: an ask is a short block with its
 labels, the question's first line, the recommendation and its reason, each option with what
 it does, and the commands that answer that occurrence, including the `--recommended` form
-when a recommendation exists; a failed run, a lost owner and an unreadable item name the
+when a recommendation exists; a failed run, a lost owner and an unreadable item name the run and the reason a failed outcome gave, and the
 command that shows more; the close of an ask is one line. The list prints the same blocks,
 and `workflow attention <run-id>` prints the whole message. Read the watch unfiltered: a
 filter in the pipe can hold lines until the watch ends. Scope and `--label` work as for the list;
@@ -1181,9 +1194,15 @@ filter in the pipe can hold lines until the watch ends. Scope and `--label` work
 [Stream the queue](/getting-started/operate/#stream-the-queue).
 
 **`--notices`**, with `--watch`, also writes the `needs: "nothing"` lines that say what
-happened to work: a run that completed, was cancelled or resumed, and a usage-limit wait
-opening or closing. It leaves out `ready` and `bookmark`. It cannot be combined with
-`--protocol`.
+happened to work: a run that completed, was cancelled or resumed, a usage-limit wait
+opening or closing, and each [`workflow notice`](#workflow-notice) a run emits. It leaves
+out `ready` and `bookmark`. It cannot be combined with `--protocol`.
+
+**`--notices --since <7d|24h|2w|ISO>`**, without `--watch`, lists the notices runs emitted
+in the window, oldest first, one line each: time, text, labels. Scope and
+`--label` apply as for the list. `--count-by project|label:<key>` counts them instead.
+`--json` prints `{ ok, action: "attention", scope, since, notices }`. A run id, `--sort`
+and `--count-by answerer` are refused.
 
 **`--protocol`**, with `--watch`, writes the full sync protocol, for a program that keeps its
 own copy of the open set: one `attention` line per open
@@ -1218,6 +1237,30 @@ HTTP: `GET /api/runs/attention` takes `project`, `all`, `label` (repeated), `sor
 no working directory, so without `project` it covers the whole install.
 `GET /api/runs/<run-id>/attention` reads one item.
 
+### `workflow notice`
+
+Say what a run did, from inside one of its nodes, for whoever watches attention with
+`--notices`. The run does not pause and nobody can answer. See
+[Notices](/getting-started/operate/#notices-what-the-work-did).
+
+```bash
+archon workflow notice "Merged pull request 7 into dev" --label kind=merged --label pr=7
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--label <k=v>` | A label readers filter and count by; repeatable, at most 16, each value at most 200 characters |
+| `--json` | Print `{ ok, action: "notice", runId, count, limit }`, or `{ ok: false, error }` with `reason` when the engine refused the notice itself |
+
+The text is one line of at most 300 characters with no control characters, which labels
+may not contain either, and a run may emit 50 notices. The command
+exits 1 without recording anything when the text or labels are outside those bounds
+(`reason: "invalid"`), when the run has reached its limit (`run_limit`), when the run is
+not running (`run_not_running`), and, with no `reason`, when a label is not `key=value` or
+it is not called from a workflow node: it reads
+`WORKFLOW_ID` and `ARCHON_NODE_EXECUTION` from the node's environment, and the two must
+name the same run. Put the text after `--` when it may start with a dash.
+
 ### `workflow attention label`
 
 Set or remove labels on the attention wait a run is paused at, without answering it.
@@ -1246,7 +1289,7 @@ Resolve a paused gate with `archon workflow respond <run-id> <decision> [text]`.
 When the gate authors `approval.decisions`, only those declared ids are accepted,
 including for `approve` and `reject`. An undeclared decision is refused with the
 allowed ids, and the run stays paused. Without authored decisions, use `approve`
-or `reject`. In human mode it continues the run as [`approve`](#workflow-approve) does, including when a continuation host claims it first.
+or `reject`. The `reject` decision follows [`workflow reject`](#workflow-reject), including cancellation of a legacy gate without authored decisions or `on_reject`. When the answer leaves a resumable run, human mode continues it as [`approve`](#workflow-approve) does, including when a continuation host claims it first.
 
 `archon workflow respond <run-id> --recommended --occurrence <id> [--text <text>]` answers an
 attention wait with the option it recommends, as
@@ -1320,7 +1363,7 @@ archon workflow approve <run-id> --occurrence <occurrence> --json   # refused if
 archon workflow approve <run-id> --json   # record approval + ack; does NOT auto-resume inline
 ```
 
-In human mode `approve`/`reject` auto-resume the run inline, unless a running `archon serve` or [`workflow wake`](#workflow-wake) on the same database claims it first. The run then continues in that host's process, and the command prints `Run <run-id> is already continuing in another process.` and returns. `respond` and `answer` behave the same way. In `--json` mode they record the decision and return an ack **without** resuming. An answered gate is a due continuation, so a running `archon serve` or [`workflow wake`](#workflow-wake) continues it; `workflow resume <run-id>` continues it by hand. Container runs are the exception and need the manual resume.
+In human mode `approve` and a `reject` that leaves the run resumable attempt to resume it inline, unless a running `archon serve` or [`workflow wake`](#workflow-wake) on the same database claims it first. The command then returns with `Run <run-id> is already continuing in another process.` if that host is still running it, or `Run <run-id> has already continued in another process and is completed.` if it has finished. `respond` and `answer` behave the same way for resumable answers. Rejecting a legacy `approval:` gate without authored decisions or `on_reject` cancels the run instead. In `--json` mode they record the decision and return an ack **without** resuming. An answered gate is a due continuation, so a running `archon serve` or [`workflow wake`](#workflow-wake) continues it; `workflow resume <run-id>` continues it by hand. Container runs are the exception and need the manual resume.
 
 #### Detached control verbs
 
@@ -1377,7 +1420,7 @@ transcript. Precheck failures follow each verb's existing error contract:
 
 ### `workflow reject`
 
-Reject a paused run. At an attention wait this is the shorthand described under [`workflow answer`](#workflow-answer): the run continues with `decision: reject` and is not cancelled. At a deprecated `approval:` gate with authored `approval.decisions`, the list must contain `reject`; otherwise the command is refused with the allowed ids and the run stays paused. The optional reason is available as `$<gate-id>.output.text` for authored decisions, or as `$REJECTION_REASON` inside a legacy `on_reject` prompt. Like `approve`, human mode continues the run inline unless a continuation host claims it first, and `--json` only records the decision.
+Reject a paused run. At an attention wait this is the shorthand described under [`workflow answer`](#workflow-answer): the run continues with `decision: reject` and is not cancelled. At a deprecated `approval:` gate with authored `approval.decisions`, the list must contain `reject`; otherwise the command is refused with the allowed ids and the run stays paused. The optional reason is available as `$<gate-id>.output.text` for authored decisions, or as `$REJECTION_REASON` inside a legacy `on_reject` prompt. A legacy `approval:` gate without authored decisions or `on_reject` cancels the run immediately on rejection. With `on_reject`, rejection stages rework until the attempt limit is reached, when it cancels the run. When rejection leaves the run resumable, human mode attempts to continue it inline as [`approve`](#workflow-approve) does, unless a continuation host claims it first. With `--json`, the command records the rejection and returns without inline execution, whether it cancels the run or leaves it resumable.
 
 ```bash
 archon workflow reject <run-id>

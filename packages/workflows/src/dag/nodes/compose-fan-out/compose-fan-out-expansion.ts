@@ -7,7 +7,7 @@ import type {
 } from '../../../schemas';
 import { type JsonValue } from '../../../output-ref';
 import type { IncludeCommandContent } from '../../../compiled-command';
-import { instantiateResolvedInclude } from '../../../include/inline';
+import { boundaryIdComponent, instantiateResolvedInclude } from '../../../include/inline';
 import { buildInstanceSnapshots, type FanOutInstanceSnapshot } from '../../../fan-out-identity';
 import { getLog } from '../../log';
 import { type RunLayersContext } from '../../run-context';
@@ -110,7 +110,8 @@ export function expandComposeInstance(
   identity: string,
   inputs: Record<string, JsonValue>,
   definition: ResolvedWorkflow,
-  commandContents: ReadonlyMap<string, IncludeCommandContent>
+  commandContents: ReadonlyMap<string, IncludeCommandContent>,
+  includeId = `${boundaryIdComponent(node.id)}/${boundaryIdComponent(identity)}`
 ): { nodes: DagNode[]; primarySink: string } | { error: string } {
   const directiveId = `${node.id}__${identity}`;
   const directive: IncludeDirective = {
@@ -119,7 +120,13 @@ export function expandComposeInstance(
     include: node.include,
     ...(Object.keys(inputs).length > 0 ? { with: inputs } : {}),
   };
-  const expanded = instantiateResolvedInclude(directive, definition, commandContents);
+  const expanded = instantiateResolvedInclude(
+    directive,
+    definition,
+    commandContents,
+    new Map(),
+    includeId
+  );
   const primarySink = expanded.primarySink;
   if (primarySink === '') {
     return { error: `composed block '${definition.name}' has no sink node` };

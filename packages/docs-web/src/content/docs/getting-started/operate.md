@@ -72,7 +72,7 @@ archon workflow answer <run-id> --occurrence <id> --text "Rotated the key"
 
 `--occurrence` pins the answer to one pause. If the run has moved on to a different pause, the answer is refused and the refusal names the current occurrence. A second answer to the same pause is refused too, so two answerers never both win.
 
-In a terminal, an answer continues the run in place, unless a running continuation host (`archon serve`, or `archon workflow wake --watch`) on the same database claims it first. The run then continues in that host's process, and the command prints `Run <run-id> is already continuing in another process.` and returns. With `--json`, the answer is recorded and the run waits for a continuation host: `archon serve`, or `archon workflow wake --watch`. A container run needs `archon workflow resume <run-id>`.
+In a terminal, an answer continues the run in place, unless a running continuation host (`archon serve`, or `archon workflow wake --watch`) on the same database claims it first. The command then returns with `Run <run-id> is already continuing in another process.` if that host is still running it, or `Run <run-id> has already continued in another process and is completed.` if it has finished. With `--json`, the answer is recorded and the run waits for a continuation host: `archon serve`, or `archon workflow wake --watch`. A container run needs `archon workflow resume <run-id>`.
 
 ## Resume, cancel or abandon a run
 
@@ -206,6 +206,7 @@ Everything above is also JSON, for scripts and agents. The list, the single read
 |---|---|---|
 | List | `archon workflow attention --json [--project <id\|name\|key> \| --all] [--label k=v]… [--sort age\|label:<key>]` | `GET /api/runs/attention?project=…&label=…&sort=…` |
 | Count | `archon workflow attention --json --count-by project\|label:<key>\|answerer [--since <duration\|ISO>]` | `GET /api/runs/attention?countBy=…` |
+| Notices | `archon workflow attention --notices --since <duration\|ISO> --json [--label k=v]… [--count-by project\|label:<key>]` | none yet |
 | Stream | `archon workflow attention --watch [--notices \| --protocol [--after <cursor>]] --json [--project … \| --all] [--label k=v]…` | `GET /api/runs/attention/stream?project=…&label=…&level=…` (SSE) |
 | Read one | `archon workflow attention <run-id> --json` | `GET /api/runs/<run-id>/attention` |
 | Label | `archon workflow attention label <run-id> --occurrence <id> [--set k=v]… [--unset k]…` | `POST /api/runs/<run-id>/attention/labels` |
@@ -278,7 +279,7 @@ Answer the children in any order. Each child applies its own answer at once. The
 ```bash
 archon workflow attention --watch --json                  # this project
 archon workflow attention --watch --json --all            # the whole install
-archon workflow attention --watch --json --label merge=pr # one class of question
+archon workflow attention --watch --json --label stage=merge # one queue's questions
 ```
 
 | `type` | Written when |
@@ -286,7 +287,7 @@ archon workflow attention --watch --json --label merge=pr # one class of questio
 | `attention` | An item that takes an answer or a look opened or changed. The line carries the item with its message, options and recommendation. The items open at the start come first, with `snapshot: true` |
 | `resolved` | An item this stream wrote closed: `reason` is `answered`, or `withdrawn` when the run resumed, ended, was deleted or moved to a different pause. Stop working on it |
 | `unmatched` | A label write moved an item this stream wrote outside `--label`. It is no longer yours |
-| `terminal` | A run in scope ended with `status: "failed"`, where `cause` says where, or completed with `outcome: "failed"`: it ran to the end and judged the work unsuccessful |
+| `terminal` | A run in scope ended with `status: "failed"`, where `cause` says where, or completed with `outcome: "failed"`: it ran to the end and judged the work unsuccessful, and `reason` says why in up to two short lines taken from what its `returns:` node said |
 | `owner_lost` | A running run's owner process on this host is gone |
 | `degraded` | A run could not be read, so the stream may have missed something. The operator log names the run |
 | `error` | The store can no longer read the stream's position. The last line; exit 4. Start the watch again |
@@ -320,12 +321,46 @@ Every JSON line carries `needs`, which says what the line asks of you:
 | `look` | Someone has to look, and the action is run control | `attention` for an unreadable item; a `usage_limit` wait that replaces an item that needed someone; a failed `terminal`; `owner_lost`; `degraded`; `error` |
 | `nothing` | Nobody has to act | every other line, including `resolved` and `unmatched`: a closed ask leaves nothing to do |
 
-`needs` says what someone must do; the level decides what is shown. The watch writes the `answer` and `look` lines, and the `resolved` or `unmatched` line of an item it wrote, so you stop working on an ask that closed. It writes nothing else. A run that completed with any other outcome or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. `--watch --notices` adds those `nothing` lines, for a reader that also wants to know what happened to the work: every run that ended or resumed, and usage-limit waits opening and closing. It still leaves out `ready` and `bookmark`, which only a program on `--protocol` reads. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
+`needs` says what someone must do; the level decides what is shown. The watch writes the `answer` and `look` lines, and the `resolved` or `unmatched` line of an item it wrote, so you stop working on an ask that closed. It writes nothing else. A run that completed with any other outcome or was cancelled, a run that resumed, and a `usage_limit` wait, which continues by itself, produce no line. `--watch --notices` adds those `nothing` lines, for a reader that also wants to know what happened to the work: every run that ended or resumed, usage-limit waits opening and closing, and the [notices](#notices-what-the-work-did) runs emit. It still leaves out `ready` and `bookmark`, which only a program on `--protocol` reads. To learn that one run finished, use `archon workflow wait <run-id>`; to see what finished, `archon workflow runs`.
 
-- **`--label` turns a queue or a class on or off.** Labels are the only routing: `--label merge=pr` writes only the items a wait labelled `merge=pr`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
+- **`--label` turns a queue or a class on or off.** Labels are the only routing: `--label stage=merge` writes only the items a wait labelled `stage=merge`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
 - **A silent stream proves nothing.** The watch has no heartbeat, so no line can mean that nothing needs you or that the stream stopped reading. A program that must tell the two apart uses `--protocol` and its `bookmark` lines.
 - **A restart starts from the open items.** The snapshot is the current open set. Runs that failed while nothing watched are not replayed; `archon workflow runs` lists them. Replay from a cursor is part of `--protocol`.
 - **Act on the item, then answer by its `runId` and `occurrence`.** An answer to an item someone else answered first is refused, so a `resolved` line you have not read yet cannot make you answer twice.
+
+### Notices: what the work did
+
+A run that ends says nothing about what it did: a queue pass that merged three pull requests and one that found nothing both complete. A notice is how a workflow says it. A node calls `archon workflow notice "<text>" --label k=v` (or `notice()` from [`archon:script`](/guides/script-nodes/#the-script-api)) when something worth knowing happened, and the engine records it with the run. A notice never pauses the run, holds no slot and cannot be answered.
+
+```bash
+archon workflow notice "Merged pull request 7 into dev" --label kind=merged --label pr=7   # inside a node
+archon workflow attention --watch --notices --all            # as it happens, with everything that needs you
+archon workflow attention --notices --since 24h --all        # what was done since yesterday
+archon workflow attention --notices --since 24h --all --count-by label:kind
+```
+
+Each notice prints as one line: when, what, its labels.
+
+```text
+2026-11-11T14:02Z  Merged pull request 7 into dev  kind=merged pr=7
+```
+
+With notices, one command answers each of the simple questions someone asks the seat:
+
+| Question | Command |
+|---|---|
+| What merged today? What did the factory do since 08:00? | `archon workflow attention --notices --since 2026-11-11T08:00:00Z --all` for a time of day (an ISO time with its offset), or `--since 8h` for the last eight hours; add `--label kind=merged` for one kind |
+| What is building right now? | `archon workflow status --all`: every running or paused run, each with its `Notice:` line, the latest notice it emitted |
+| What is waiting for me? | `archon workflow attention --all` |
+
+The labels in these commands are examples: a workflow chooses its own. For the second question to have an answer, a run says what it is about when it starts the work, for example `archon workflow notice "Building issue 12" --label kind=build --label issue=12`.
+
+- **Only a reader who asks receives them.** A notice is a `notice` line with `needs: "nothing"`, so the plain `--watch` never writes one; `--watch --notices` and `--protocol` do. `--label` selects notices the way it selects items.
+- **Labels are the workflow's own.** Archon does not interpret them. What deserves a notice, and which labels it carries, is the workflow's decision, like what deserves an ask.
+- **A live run carries its latest notice.** `archon workflow status` prints it as `Notice:` under the run, and `--json` gives each run a `notice` of `{ at, node, text, labels }`, or null when it emitted none. That is what the run is about now, with no second read.
+- **The window list is the recap.** `--notices --since` reads the recorded notices of the window, oldest first, and `--count-by` counts them per project or per label value. `--json` prints `{ ok, action: "attention", scope, since, notices }`, each notice with `at`, `runId`, `workflow`, `parentRunId`, `project`, `node`, `text` and `labels`.
+- **A notice is not a log.** The text is one line of at most 300 characters, with at most 16 labels, neither with control characters, and a run may emit 50. An emit past a bound exits 1 and says which. Details belong in an artifact; keep secrets out of the text, which every reader of the stream sees.
+- **Only a node of a running run can emit one.** The command reads the run and node from the environment Archon gives a node, as `archon state` does, and refuses anywhere else. A node of a [container run](/guides/container-isolation/) cannot: it has no host CLI to call, so `notice()` throws `HostCommandError` there.
 
 ### The full protocol for programs
 
@@ -338,9 +373,10 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 | `attention` | An item opened or changed | `cursor`, `snapshot`, `project`, `workflow`, `parentRunId`, `item` |
 | `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia`, `answeredBy` and `answeredAt` |
 | `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `occurrence`, `revision` |
-| `terminal` | A run ended | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status`, `outcome`, `cause` |
+| `terminal` | A run ended | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status`, `outcome`, `cause`, and `reason` on a failed outcome |
 | `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused or stale-running run resumed and cleared a stored error | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status: "running"` |
 | `owner_lost` | A running run's owner process on this host is gone | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `observedStatus` |
+| `notice` | A node of a run [said what the run did](#notices-what-the-work-did) | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `at`, `node`, `text`, `labels` |
 | `ready` | Initial snapshot delivery finished; coverage may be degraded | `cursor` |
 | `bookmark` | 30 seconds passed with no other line, and the stream read the store up to `cursor` | `cursor` |
 | `degraded` | A snapshot item cannot be read or projected, or repeated failure to project a run; coverage may be incomplete. The stream keeps running | `cursor`, `reason: "run_unreadable"` |
@@ -354,8 +390,9 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 - **A silent stream is not reading.** A stream that cannot read the store sends no `bookmark`, so no line for well over 30 seconds means it is stuck.
 - **`degraded` means gaps.** The operator log names the run that failed to project; the warning does not. Repair the read failure, reconnect to refresh the open set, and replay from a cursor before the gap to recover missed transitions. The stream sends no recovered signal.
 - **Filter by parent.** Every run line carries the run's `workflow` and `parentRunId`, the same values as the queue item's. A `workflow` of null means the stream could not read the run's row, because it was deleted, so that line's `parentRunId` says nothing. Keep top-level runs with `workflow != null and parentRunId == null`, or one parent's direct children with `parentRunId == "<run-id>"`. `ready`, `bookmark`, `degraded` and `error` have no `workflow` field and must pass through the filter, for example `jq 'select((has("workflow") | not) or (.workflow != null and .parentRunId == null))'`.
-- **A failed run says where it failed.** On a `terminal` line with `status: "failed"`, `cause` is `{ node, errorClass }`: the first failed node from the run's terminal record, and the failure kind that node's failure recorded, such as `exec_failed` or `timeout`. `errorClass` is null when the failure recorded no kind, as older runs did. `cause` is null for other statuses, for a run that failed outside a node, and for a run that ended before terminal records existed. A replayed line keeps the cause it had, even after the run resumed and failed again. The line never carries error text; read it with `archon workflow get <run-id>`.
-- **`--label` filters `attention` and `resolved` only.** `terminal`, `resumed` and `owner_lost` arrive for every run in scope. A label write that leaves an item outside the filter sends `unmatched`.
+- **A failed run says where it failed.** On a `terminal` line with `status: "failed"`, `cause` is `{ node, errorClass }`: the first failed node from the run's terminal record, and the failure kind that node's failure recorded, such as `exec_failed` or `timeout`. `errorClass` is null when the failure recorded no kind, as older runs did. `cause` is null for other statuses, for a run that failed outside a node, and for a run that ended before terminal records existed. A replayed line keeps the cause it had, even after the run resumed and failed again. The line never carries error text; read it with `archon workflow get <run-id>`, which prints the first line of the failed node's error as `Reason:`.
+- **A failed outcome says why.** On a `terminal` line with `outcome: "failed"`, `reason` is up to two lines of at most 200 characters from the value the workflow's `returns:` node produced: its first lines when it is text, or its text fields as `key: text` when it is an object. A workflow that reports a failed outcome should put its diagnosis there. `reason` is absent when the node returned no text. The text watch prints these lines under the run, and `archon workflow get <run-id>` prints them as `Reason:` and carries them as `reason` in `--json`.
+- **`--label` filters `attention`, `resolved` and `notice`.** `terminal`, `resumed` and `owner_lost` arrive for every run in scope. A label write that leaves an item outside the filter sends `unmatched`.
 - **Items report the row when the stream read it.** The stream reads about once a second, and PostgreSQL wakes it on each commit. A pause opened and answered between two reads may never appear.
 
 The stream only reads. Stopping it affects no run.

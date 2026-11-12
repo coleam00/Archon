@@ -9,6 +9,29 @@ inputs:
       What the merge gate trusts at a pull request's head besides a Ready review verdict.
       forge: green checks on the forge. none: the full validation delivery ran and
       recorded at that same head, for a project with no CI.
+  build_lane:
+    type: enum
+    values: [auto, manual]
+    default: auto
+    description: >-
+      auto: the build queue launches a clear item's round by itself. manual: no round
+      launches until a maintainer answered the queue's question about the item, so every
+      launch comes to the attention queue with a recommendation.
+  merge_lane:
+    type: enum
+    values: [auto, manual]
+    default: auto
+    description: >-
+      auto: the merge queue merges a clear pull request by itself. manual: nothing merges
+      until a maintainer approved the pull request at its head, so every merge comes to
+      the attention queue with a recommendation.
+  protected_paths:
+    type: list
+    default: ""
+    description: >-
+      Comma-separated globs, such as `.archon/workflows/**,infra/**`. A pull request
+      that changes a matching path never merges on the auto lane: it merges only once a
+      maintainer approved it at its head.
 
 # The trigger bindings the pack recommends. Nothing here starts a run: an operator writes
 # them for one repository with `archon pack bindings sdlc` and registers each file.
@@ -29,6 +52,7 @@ bindings:
       number: { event: subject.number }
       kind: { event: subject.kind }
       action: { event: event.action }
+      build_queue_binding: { binding: build-queue }
   intake-labels:
     workflow: archon-intake
     resource: intake
@@ -50,6 +74,7 @@ bindings:
       action: { event: event.action }
       label: { event: label.name }
       label_actor: { event: label.actor.login }
+      build_queue_binding: { binding: build-queue }
   build-queue:
     workflow: archon-build-queue
     resource: build
@@ -69,11 +94,14 @@ bindings:
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }
+  # A short interval stands in for an event the forge does not deliver: a pull request
+  # whose checks were pending merges soon after they finish. A sweep where nothing
+  # changed runs no agent.
   merge-queue:
     workflow: archon-merge-queue
     resource: merge
-    overlap: queue
-    schedule: { interval_seconds: 1800 }
+    overlap: skip
+    schedule: { interval_seconds: 300 }
     inputs:
       repo_host: { repo: host }
       repo_path: { repo: path }

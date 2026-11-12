@@ -96,3 +96,14 @@ test('a facts document that cannot be written is noted, and the run still has th
     noted.mockRestore();
   }
 });
+
+test('a facts write the store refuses because another run moved the document first is not an error', () => {
+  writeFileSync(join(dir, 'put-conflicts'), '');
+  const noted = spyOn(console, 'error').mockImplementation(() => undefined);
+  try {
+    expect(readPrFacts([url(1)])[0]).toMatchObject({ url: url(1), state: 'MERGED' });
+    expect(noted).not.toHaveBeenCalled();
+  } finally {
+    noted.mockRestore();
+  }
+});

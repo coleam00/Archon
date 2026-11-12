@@ -4,16 +4,15 @@
  */
 
 import { factoryPrRuns, factoryPrs, prRuns, readPrFacts, sinceTime } from '../../.shared/factory-prs.ts';
-import { emit, refuse, trimmed } from '../../.shared/io.ts';
-import { stateDocuments } from '../../.shared/state.ts';
+import { emit, input, refuse, state } from 'archon:script';
 import { requireTestValueSource } from '../../.shared/test-value.ts';
 import { read } from '../../.shared/workitem.ts';
 
-const since = trimmed(process.env.INPUTS_SINCE);
+const since = input('since').trim();
 
 try {
   const from = sinceTime(since);
-  const items = stateDocuments('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
+  const items = state.listValues('work/').flatMap(stored => read(stored.name, stored)?.doc ?? []);
   const runsByUrl = factoryPrRuns(items);
   const prs = factoryPrs(readPrFacts(runsByUrl.keys()))
     .factory.filter(pr => pr.state === 'MERGED' && pr.mergedAt !== null && Date.parse(pr.mergedAt) >= from)

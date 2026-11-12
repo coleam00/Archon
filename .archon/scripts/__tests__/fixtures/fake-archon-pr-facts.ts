@@ -1,7 +1,8 @@
 /**
  * The host CLI for the pull-request facts test: the commands `readPrFacts` runs, answered
  * from `$FAKE_DIR`. `state list` and `state put` keep documents in `state.json` with the
- * revision rule the real store has (`--if-revision 0` creates, a stale revision exits 3);
+ * revision rule the real store has (`--if-revision 0` creates; a stale revision exits 3 and
+ * names `revision_moved`, as does the presence of `put-conflicts`, a write another run won);
  * `forge resolve` reads a pull request URL; `forge pr.view` answers from `prs.json`, a map
  * of pull request number to what the forge reports. Every call's argv is appended to
  * `calls.log`, a `forge pr.view` with its pull request number. A `state put` fails (exit 1)
@@ -44,7 +45,10 @@ if (argv[0] === 'state' && argv[1] === 'list') {
   if (existsSync(join(dir, 'put-fails'))) {
     process.stderr.write('state is read-only');
     process.exitCode = 1;
-  } else if ((documents[name]?.revision ?? 0) !== ifRevision) process.exitCode = 3;
+  } else if (existsSync(join(dir, 'put-conflicts')) || (documents[name]?.revision ?? 0) !== ifRevision) {
+    out({ reason: 'revision_moved' });
+    process.exitCode = 3;
+  }
   else {
     documents[name] = { revision: ifRevision + 1, value: JSON.parse(readFileSync(0, 'utf8')) };
     writeFileSync(join(dir, 'state.json'), JSON.stringify(documents));

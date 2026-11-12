@@ -8,7 +8,7 @@ The queue merges on its own when the case is clear, and asks a maintainer when i
 not. The gate is not policy: no pull request merges unless its trusted review verdict
 says Ready for its head, what the project's CI setting trusts passes there (green CI,
 or under `ci: none` a passing validation recorded at that head) and the default
-branch's CI is not red, whatever this document says. The queue never pushes, so a verdict for another commit
+branch's CI is not red, whatever this document says. Nor are the project's `merge_lane` and `protected_paths` settings: under the manual lane, and for a pull request that changes a protected path, the gate merges only what a maintainer approved at its head, so each such pull request is asked about. The queue never pushes, so a verdict for another commit
 means someone pushed after the review, and the pull request goes back to be reviewed.
 An open review thread holds the merge only when it raises a defect in what the pull
 request changes. A thread on code the pull request doesn't change or make reachable,
@@ -53,8 +53,8 @@ still holds the merge.
 - **One rerun for red elsewhere.** CI red in code the pull request does not touch gets
   one rerun of the failed jobs. Red again after it counts as the change's.
 - **The default branch comes first.** Each sweep judges its CI before any pull
-  request, and while it is red nothing merges. Red on the default branch is always
-  raised to a maintainer, naming the pull requests merged since it was last green, so
+  request, and while it is red nothing merges. On a red default branch that holds back a pull request the sweep ends
+  failed, naming what each failing job points at and the pull requests merged since it was last green, so
   one can be reverted or fixed forward, or its failed jobs rerun when no recent merge
   touched the red code. The pack cannot rerun them itself: the forge reruns checks only
   on a pull request.

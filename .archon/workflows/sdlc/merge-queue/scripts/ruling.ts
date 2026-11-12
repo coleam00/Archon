@@ -1,39 +1,35 @@
 /**
  * Act on a person's answer to the merge queue's attention item.
  *
- * The answer is one of the declared choices, and the wait returns that choice as the
- * answer's value, so its effect is read from the choice, never from the answer's text.
- * An `other` answer returns no choice: its text is the ruling, and the item returns to
+ * The answer names one of the options the ask declared, so its effect is read from that
+ * option's value, never from the answer's text.
+ * An `other` answer names none: its text is the ruling, and the item returns to
  * the build queue when the sweep wrote a brief and parks otherwise. On a pull request: `merge` records the approval pinned
  * to the head that was asked about, and the next sweep merges it once the gate passes
  * at that head; `return` hands the item back to the build queue with the brief the
  * sweep wrote; `park` stops working it until renewed build readiness. A
  * choice's ruling and the person's words are written into the issue body as one dated
  * "Current scope" section first, as the build queue does, so a returned round reads
- * them as the contract. On a red default branch the only answer is `hold`: the queue
- * merges nothing while the branch is red, which every sweep reads from the forge, so
- * nothing is written. A `merge` then starts a sweep at once through the operator's
+ * them as the contract. A `merge` then starts a sweep at once through the operator's
  * merge-queue binding, and a `return` the item's next round through the build-queue
  * binding; if it does not start, the next queue run picks the item up as before.
  *
- * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_CHOICE, the chosen choice (the
- * answer's value, empty for `other`), and INPUTS_TEXT, the answer's text; INPUTS_MERGE_QUEUE_BINDING and
+ * Bound inputs: INPUTS_ASKED, what record asked; INPUTS_DECISION, the id of the chosen
+ * option (`other` for the wait's own), and INPUTS_TEXT, the answer's text; INPUTS_MERGE_QUEUE_BINDING and
  * INPUTS_BUILD_QUEUE_BINDING, the workflow's inputs.
  */
 
 import { nextRound, withBuild } from '../../.shared/build.ts';
 import { followUp } from '../../.shared/follow-up.ts';
-import type { QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection } from '../../.shared/issue.ts';
-import { answeredMergeDecision, type MergeAsked, type MergeAttention, type MergeDecisionEntry, type MergeStatus, otherEffect, withMerge } from '../../.shared/merge.ts';
+import { answeredMergeDecision, type MergeAsked, type MergeDecisionEntry, type MergeEffect, type MergeStatus, otherEffect, withMerge } from '../../.shared/merge.ts';
 import { answeredChoice, rulingHeading } from '../../.shared/queue.ts';
 import { updateClaimed } from '../../.shared/workitem.ts';
 
-const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<
-  MergeAttention['choices'][number]['effect'],
-  MergeStatus
->;
+const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<MergeEffect, MergeStatus>;
 
 /** Act on the answer now; when that does not start, the released item waits for the next queue run. */
 function continueNow(effect: string, item: QualifiedPr, runId: string): string {
@@ -42,11 +38,11 @@ function continueNow(effect: string, item: QualifiedPr, runId: string): string {
   const { host, path } = item.repo;
   // A sweep merges whatever waits; the binding names the repository, so it takes no inputs.
   const key = `merge-sweep:${host}/${path}#${String(item.number)}:${runId}`;
-  return `; ${followUp(text(process.env.INPUTS_MERGE_QUEUE_BINDING), key, {}, 'a sweep')}`;
+  return `; ${followUp(input('merge_queue_binding'), key, {}, 'a sweep')}`;
 }
 
 /** Write the ruling into the issue body as a dated section; returns its heading, or ''. */
-function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, at: string): string {
+function writeRuling(asked: MergeAsked, ruling: string, at: string): string {
   if (ruling === '') return '';
   const heading = rulingHeading(at, `the merge queue's question on PR ${String(asked.pr.number)}`);
   appendSection(asked.item, heading, ruling);
@@ -54,23 +50,14 @@ function writeRuling(asked: Extract<MergeAsked, { by: 'pr' }>, ruling: string, a
 }
 
 function main(): void {
-  const asked = nullableJson(process.env.INPUTS_ASKED) as MergeAsked | null;
+  const asked = nullableJson(input('asked')) as MergeAsked | null;
   if (asked === null) throw new Error('the answer arrived with nothing asked');
-  const answered = nullableJson(process.env.INPUTS_CHOICE) as MergeAttention['choices'][number] | null;
-  const words = trimmed(process.env.INPUTS_TEXT);
-  if (asked.by === 'base') {
-    emit({
-      decision: 'hold',
-      section: '',
-      summary: 'The queue holds merges while the default branch is red; every sweep reads that from the forge.',
-    });
-    return;
-  }
-
+  const words = input('text').trim();
   const runId = workflowRunId();
-  const choice = answeredChoice(answered, otherEffect(asked.brief));
+  const choice = answeredChoice(asked.ask, input('decision').trim(), otherEffect(asked.brief));
+  const { effect } = choice.value;
   const at = new Date().toISOString();
-  const ruling = [choice.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
+  const ruling = [choice.value.ruling.trim(), words === '' ? '' : `The maintainer's words: ${words}`]
     .filter(part => part !== '')
     .join('\n\n');
   const heading = writeRuling(asked, ruling, at);
@@ -78,9 +65,9 @@ function main(): void {
   const entry: MergeDecisionEntry = {
     at,
     run_id: runId,
-    decision: answeredMergeDecision(choice.effect),
+    decision: answeredMergeDecision(effect),
     reason: choice.label,
-    links: asked.attention.links,
+    links: [],
     answer: { choice: choice.id, text: words, at },
     head: asked.head,
     reran: false,
@@ -90,19 +77,19 @@ function main(): void {
       at,
       run_id: runId,
       entry,
-      status: STATUS[choice.effect],
+      status: STATUS[effect],
       pr: asked.pr,
-      ...(choice.effect === 'merge' ? { approval: { head: asked.head, at } } : {}),
+      ...(effect === 'merge' ? { approval: { head: asked.head, at } } : {}),
       release: true,
     });
-    if (choice.effect !== 'return') return recorded;
+    if (effect !== 'return') return recorded;
     const brief = `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`;
     return withBuild(recorded, { at, run_id: runId, round: null, entry, status: 'next', brief, release: true });
   });
   emit({
-    decision: choice.effect,
+    decision: effect,
     section: heading,
-    summary: `PR ${String(asked.pr.number)}: the maintainer chose ${choice.id} (${choice.effect})${continueNow(choice.effect, asked.item, runId)}.`,
+    summary: `PR ${String(asked.pr.number)}: the maintainer chose ${choice.id} (${effect})${continueNow(effect, asked.item, runId)}.`,
   });
 }
 

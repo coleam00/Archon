@@ -25,6 +25,7 @@ export {
   workflowWaitCommand,
 } from './workflow-query';
 export { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
+export { workflowNoticeCommand, WORKFLOW_NOTICE_USAGE } from './workflow-notice';
 export {
   workflowAbandonCommand,
   workflowAnswerCommand,

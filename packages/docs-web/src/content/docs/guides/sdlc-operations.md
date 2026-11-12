@@ -13,7 +13,7 @@ This page is the operator manual for the bundled `sdlc` pack. Set the pack up fi
 
 ## Pack settings
 
-A project sets the pack's settings in `.archon/packs/sdlc.yaml`. The pack's README says what each setting means and how to choose it: [Choose the pack settings](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#6-choose-the-pack-settings).
+A project sets the pack's settings in `.archon/packs/sdlc.yaml`: what the merge gate trusts (`ci`), whether the build and merge queues act by themselves or ask first (`build_lane`, `merge_lane`), and the paths whose changes a maintainer approves before they merge (`protected_paths`). The pack's README says what each setting means and how to choose it: [Choose the pack settings](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#6-choose-the-pack-settings).
 
 ## Bindings
 
@@ -82,7 +82,7 @@ Each issue has a work item: the state document `work/<number>` in the project's 
 
 Every queue claims an item with a conditional write, in one order: most urgent, then most important, then smallest, then oldest. An untriaged item sorts after triaged ones, oldest first.
 
-A claim takes the work item's engine lease. The next pickup releases a claim whose lease the engine reports ended: its run completed, was cancelled or abandoned, or was deleted. A claim whose run is pending, running, paused or failed is never released, because a failed run can resume. Abandon the run to free its claim. There is no age timeout.
+A claim takes the work item's engine lease. The next pickup releases a claim whose lease the engine reports ended: its run completed, was cancelled or abandoned, or was deleted. A claim whose run is pending, running, paused or failed is never released, because a failed run can resume. Abandon the run to free its claim. There is no age timeout. A queue run that claims nothing while a stored item is stuck, because its document does not parse or its claim's run holds no engine lease, names the item and completes with a failed outcome, so the attention watch shows it. Each stuck item is reported once: the report is recorded in the item's history, and later idle runs leave the item out until something else changes it. A document that does not parse cannot carry that record, so every idle run reports it.
 
 A claim that carries no lease of its run is held, and an idle pass names it. Abandoning its run does not free it. Clear it by writing the document back with `claim` set to `null`, through a conditional `archon state put work/<number> --if-revision <n>`.
 
@@ -95,7 +95,7 @@ A claim that carries no lease of its run is held, and an idle pass names it. Aba
 - **Promotion.** A listed maintainer promotes an outside item by adding `archon-triage`. The label binding takes who added it from the forge event. An event without an actor rejects the binding, and an empty or unlisted actor promotes nothing. A promotion pins the issue body's digest as it was when intake recorded the request. An edit after that demotes the item back to `archon-needs-maintainer`, and the history records both digests.
 - **One request label.** `archon-triage` is how a person asks for a triage: on a maintainer's item it re-triages, and on an outside item it is also the promotion. Route and state labels are written by the pack and request nothing; one a person adds by hand starts no run and is removed as stale at the item's next intake write.
 - **Run requests.** A pack run that sends an item back to intake records its own re-triage request on the work item, naming the run, and starts one intake pickup. The history names the run. The request re-triages a maintainer's item or a promoted outside item. On an outside item no maintainer promoted it is refused: a run's request never promotes.
-- **Pickup.** A run started by an issue event, or by `archon-triage` being added, records the event as a request on its issue. Every run then claims the waiting item that sorts first. A request that arrives while its item is claimed waits for the next intake run. An open, edit or reopen adds no request while another one waits, since the pickup reads the live issue. An item keeps its newest 50 label requests.
+- **Pickup.** A run started by an issue event, or by `archon-triage` being added, records the event as a request on its issue. The run then claims its own issue. A run that recorded no request, or whose issue another run holds, claims the waiting item that sorts first. A request that arrives while its item is claimed waits for the next intake run. An open, edit or reopen adds no request while another one waits, since the pickup reads the live issue. An item keeps its newest 50 label requests.
 - **A request label without a request.** An `archon-triage` label whose request no run has claimed may have a request on its way, so a run leaves it for the run that claims that request. It waits one pickup; the next pickup that still finds no request for it removes it.
 - **Released claims.** A run clears its claim only after the item's labels are written. When a pickup releases an ended run's claim, it queues that run's requests again. The item then sorts after every other waiting item until an attempt finishes, so one item that cannot be read or labelled never starves the rest.
 - **Questions.** Triage asks whether a run can start from the item and through which route; a missing element of a strong brief is not by itself a refusal, and an under-shaped item goes to plan. When no route can start, the item is labelled `archon-needs-contract` and intake posts triage's questions, at most five, as one marked comment. Triage never rewrites the author's text. The author answers by editing the issue or in a comment, and a listed maintainer adds `archon-triage` to have it triaged again. A triage that could not read the forge records no verdict: the run fails and the item stays untriaged.
@@ -103,6 +103,7 @@ A claim that carries no lease of its run is held, and an idle pass names it. Aba
 - **Only intake closes.** `archon-triage` run alone, even with `publish`, only labels the item `archon-close`.
 - **Closed issues.** Intake records the event and changes nothing else: no trust decision, no stage change, no label write.
 - **Inputs.** `label_actor` is the one input that can create a promotion, never trust. Only the binding, or someone with access to the install, can supply it.
+- **Handoff.** A run that leaves its item waiting for the build queue fires the binding its `build_queue_binding` input names, keyed by the item and the run. The fire names no item: the run it starts takes the waiting item that sorts first, under that binding's own `orders_only`. A fire that finds every slot busy is skipped, and the item waits for the next scheduled run.
 
 Two bindings in the GitHub source plugin's configuration start intake: `intake-issues` on an issue opened, edited or reopened, and `intake-labels` on `archon-triage` added. They share one resource with `overlap: queue`, so runs queue instead of overlapping. The label binding's predicate names that label only to save runs: intake ignores any other label, and the pack's own route-label writes start no intake run. A binding file written before this change still lists the route labels; write it again with `archon pack bindings sdlc --only intake-labels`.
 
@@ -116,19 +117,20 @@ Two bindings in the GitHub source plugin's configuration start intake: `intake-i
 - **A named item.** `--input number=<n>` makes the run claim that issue instead of the first in order. One launch per issue lets you choose what a run builds and, with the launch's config, which provider builds it. An issue that cannot be claimed refuses the run before any agent, with why: it has no work item, its work item belongs to another repository, another run holds it, or its stage and build status show it does not wait.
 - **A message.** A run with no `number` and a message, such as `archon workflow run archon-build-queue "build the retry fix"`, has an agent resolve the message through the forge's reads to one typed decision:
   - build one issue, which the run then claims as a named item;
-  - choose between several, which pauses as a `build: message` attention item and claims the issue you pick;
+  - choose between several, which pauses as an attention item labelled `kind: pick`, recommending the issue the message most likely means, and claims the issue you pick;
   - write a [work order](#work-orders) for several issues to build, claiming none of them;
   - file new work no issue covers, such as a pasted brief or a file, as an issue, and hand it to `archon-intake` detached, so the run builds nothing;
   - refuse the run with the agent's reason.
 
   A message that explicitly asks for several issues to be built together, such as "build #122 and #123 in one pull request", files one combined issue carrying each original's contract. Its `Delivered together` section lists the originals, and the delivery's pull request references and closes them with it. The agent never groups issues the message did not ask to group. Scripts claim, write and file only what the agent declared. A run with a `number` ignores its message.
-- **Blocked items.** Intake's blocked verdict can go stale while work lands in parallel: a blocker's outcome can arrive another way while its issue is still open. With `revisit_blocked` set to `true`, a run with no `number` also revisits the blocked items, beside the item it builds. It lists the unclaimed blocked items not revisited in the last six hours, and records the revisit on each as it lists it, so runs that are live at once never judge the same item and a scheduled queue does not judge the same items every run. One agent reads each issue, what it waits on and the default branch, and names the items that no longer look blocked. Each of those gets the run's own re-triage request and one `archon-intake` pickup. No label is written and no maintainer is credited. Intake stays the judge: its verdict decides whether the item now waits for the build queue. An item whose pull request create is unresolved is still revisited.
+- **Blocked items.** Intake's blocked verdict can go stale while work lands in parallel: a blocker's outcome can arrive another way while its issue is still open. With `revisit_blocked` set to `true`, a run with no `number` also revisits the blocked items, beside the item it builds. It lists the unclaimed blocked items not revisited in the last six hours, and records the revisit on each as it lists it, so runs that are live at once never judge the same item and a scheduled queue does not judge the same items every run. Each listed item carries when triage blocked it and the reason and blocker URLs that verdict declared; an item blocked before verdicts stored those carries the time and intake's summary. One agent reads each issue, what it waits on and the default branch, and names an item only when something it waits on changed state after that time, citing the change. A guess that an item is probably unblocked names nothing, because each re-triage is a full agent run. Each of those gets the run's own re-triage request and one `archon-intake` pickup. No label is written and no maintainer is credited. Intake stays the judge: its verdict decides whether the item now waits for the build queue. An item whose pull request create is unresolved is still revisited.
 
 ### How a round runs
 
 - **Route.** The route agent is the one judge before a round spends. Intake triaged the item, and the round does not triage it again. The agent checks that a run can start from the issue body, read with its dated "Current scope" sections, and that triage's verdict still holds on the current checkout, asking for a re-triage when it does not. It proves a bug's symptom before the item's first round, declares the round's route, and writes the brief the round starts from. A bug that needs a browser is reproduced with the playwright-cli skill. The route is triage's on the item's first round. A later round that continues its pull request is `continue`, and goes back to `plan` only when a review asked for a different design or the scope changed.
 - **The pull request.** The queue reports the open pull request in the item's repository as the candidate, and the route agent declares whether the round continues it, unless a dated scope section or a recorded answer supersedes it. Delivery finishes a continued pull request whichever route the round takes, pushing onto its head so the same pull request updates. A superseded one is never checked out or pushed to: the round starts fresh, refusing a checkout that is not on the default branch, and its brief asks for the old pull request to be closed as superseded once the replacement opens. A closed or merged pull request, or one from a fork, is asked about; a round launched anyway never continues it. A round that continues none opens its pull request from `build/<issue>-<slug>-<run>`, a name never reused.
 - **One round.** A round is `archon-ship` after its triage: investigate or plan when the route needs it, then the delivery tail.
+- **The first review of a continued pull request.** A round that continues a pull request an earlier round already reviewed does not review it from the start. Its first review gets the report that round published. It checks that report's findings and reviews what changed since the commit it reviewed. Each published review is kept in its run's artifacts under `review/published/`: the report, its findings and the commit it reviewed. The queue finds that set in the artifacts of the item's earlier rounds: it must name the commit the pull request's review comment names and hold the report that comment shows. The first review reads the whole change when the pull request has no review comment from a maintainer account, when no earlier round on this machine kept that review (another install published it, a review run by hand replaced it, or the artifacts are gone), or when the pull request's history was rewritten after the review. To get a full review of a pull request the queue would continue, run `archon-review` on it yourself without `prior_report`: its report replaces the comment, so the queue's next round reviews the whole change too.
 - **The decision.** An agent reads how the round ended and decides:
   - `done` when the pull request's latest review says Ready at its head commit and no check that no round can run is still outstanding. A dated scope section records such a check as met; otherwise the queue asks for it once.
   - `continue`, with a brief, when the contract already answers what stopped the round: a correctable finding, CI red the change caused, a false blocker naming a later step.
@@ -145,7 +147,7 @@ Two bindings in the GitHub source plugin's configuration start intake: `intake-i
 
 ### What it asks
 
-An unclear decision pauses the run as one attention item labelled `build: route`, `build: stop` or `build: scope`. It says what the decision is, why it matters, the agent's recommendation with its evidence, confidence and what would change it, the choices and what each does, what happens if nobody answers, and the links to the evidence.
+An unclear decision pauses the run as one attention item labelled `stage: build` and `kind: route`, `kind: stop` or `kind: scope`, with the issue number as `item` and its pull request's as `pr`. The deciding agent writes the item, and it reaches you as written: a question whose first sentence names the issue and the decision and which carries the evidence, what happens if nobody answers and the links; the options and what each does; and a recommendation with its reason and confidence. No script checks the item first. One the wait cannot ask, because two options share an id or the recommendation names no option, fails the run after the item is recorded as asking: abandon that run and re-triage the item.
 
 The answer is one declared choice, or `other`, which every item offers: its text says what to do instead and becomes the ruling, and the item continues from it. The queue never reads the answer's prose for a decision. It writes the choice's ruling and your words into the issue body as one dated "Current scope" section, reads it back, and records the answer.
 
@@ -153,7 +155,7 @@ The answer is one declared choice, or `other`, which every item offers: its text
 - A `ready` choice hands the pull request to the merge queue as it stands, as after a maintainer finished it by hand. The merge gate still checks it. An item with no pull request refuses the answer.
 - A `park` choice stops working the item until a re-triage.
 
-A run cancelled while it waits leaves the item asking, and only a re-triage starts it over.
+A run cancelled while it waits leaves the item asking, and only a re-triage starts it over. The same holds for a run abandoned after the wait refused its question. Until then, one queue run that claims nothing names the item and completes with a failed outcome.
 
 ### What it records
 
@@ -165,11 +167,11 @@ A schedule keeps items moving, because a run works one item and a continuation w
 
 The binding's `build_queue_binding` input names the binding's own file, so a run's follow-up rounds start through the same binding. One run of the queue holds a slot of the resource while it fires its follow-up, so the follow-up needs a free slot. Under `overlap: skip`, a follow-up fired while every slot is busy is dropped, and the item waits for the next scheduled run. Without the input, every follow-up waits for the next scheduled run.
 
-To start a run as soon as intake routes an item, add a label binding on the same resource, with intake's label selector narrowed to the route labels the build queue works (`archon-ready`, `archon-plan`, `archon-investigate`) and the same launch.
+Intake's `build_queue_binding` input names the same file, so a run starts as soon as intake routes an item. An intake binding without that input fires nothing, and its items wait for the next scheduled build-queue run: write `intake-issues` and `intake-labels` again with `--only` and `--force`, and replace their entries in the source plugin's configuration.
 
 ### Work orders
 
-A work order is the set of work items you approved for the factory, so the queue's schedule can stay on while you choose what builds. Set `"orders_only": "true"` in the binding's `launch.inputs`, and a run that names no item claims only a waiting item that is a member of an open order, in the usual pickup order. With no open order it claims nothing. A named item (`number`) is claimed either way, so a member's follow-up rounds still start. The default, `"false"`, picks from every waiting item.
+A work order is the set of work items you approved for the factory, so the queue's schedule can stay on while you choose what builds. Set `"orders_only": "true"` in the binding's `launch.inputs`, and a run that names no item claims only a waiting item that is a member of an open order, in the usual pickup order. With no open order it claims nothing. A named item (`number`) is claimed either way, so a member's follow-up rounds still start. Intake's handoff names no item, so it starts nothing outside an order. The default, `"false"`, picks from every waiting item.
 
 An order is one state document, `work-order/<id>`, in the project's state scope, whose key is the repository's `owner/repo`. The easiest way to write one is to name its members in a build-queue run's message:
 
@@ -246,21 +248,22 @@ The sweep measures each diff with git against the merge base, not the forge's co
 
 ### The gate
 
-Every merge goes through one gate script, which reads the pull request and the default branch fresh and refuses unless:
+The sweep agent declares which pull requests merge. A script node then merges them, in the sweep's order, each through one gate, which reads the pull request and the default branch fresh and refuses unless:
 
 - the verdict says Ready for the head;
 - what the [`ci` setting](#pack-settings) trusts passes at the head: green CI, or a passing validation recorded at that head;
 - the default branch's CI is not red (pending does not hold a merge);
 - the pull request is open, not a draft, into the default branch, at the head the sweep named;
-- that head contains the default branch's head, or the forge reports it merges cleanly.
+- that head contains the default branch's head, or the forge reports it merges cleanly;
+- under `merge_lane: manual`, or when the pull request changes a path `protected_paths` matches, the work item holds a maintainer's approval at exactly that head.
 
-Open review threads are the sweep's judgment, not the gate's: the sweep holds a merge only for a thread that raises a defect in code the pull request changes or makes reachable. The gate merges pinned to that head, by squash unless `--input merge_method=merge` asks for a merge commit, and reports the commit the forge's own read-back says it landed as. A merge the forge cannot verify, as when it queues merges, fails the gate with the forge's outcome, and the sweep waits.
+Open review threads are the sweep's judgment, not the gate's: the sweep holds a merge only for a thread that raises a defect in code the pull request changes or makes reachable. The gate merges pinned to that head, by squash unless `--input merge_method=merge` asks for a merge commit. A merge moves the default branch, so the forge may not have computed the next pull request's merge yet: the script reads it again a few times before it refuses. A pull request the gate refuses, or whose merge the forge cannot verify, as when it queues merges, is recorded as waiting with the gate's reasons, and the next sweep decides it again.
 
 Before merging, the queue rechecks the pull request's closing keyword against the review's stamped contract coverage and the issue's latest ruling, and corrects it in either direction.
 
 ### The default branch
 
-The sweep judges the default branch first. While its CI is red the gate refuses every merge, and the sweep always raises it to a maintainer, naming the pull requests merged since it was last green. It recommends a revert or fix-forward, or, when no recent merge touched the red code, a rerun of the failed jobs by hand: the forge's rerun acts only on a pull request, so the pack never reruns the default branch and never reports that it did.
+The sweep judges the default branch first. While its CI is red the gate refuses every merge, and the sweep's run ends with a failed outcome that names the pull requests merged since it was last green. The merge queue reports a red default branch only when it holds back a pull request: with nothing waiting, a run ends after its script nodes whatever the branch's state. It recommends a revert or fix-forward, or, when no recent merge touched the red code, a rerun of the failed jobs by hand: the forge's rerun acts only on a pull request, so the pack never reruns the default branch and never reports that it did.
 
 A default branch that cannot be read permits no sweep or merge. The run still records what it can settle without the sweep, then fails with the read diagnostic. Items it left open keep their claims until the run ends: a failed run keeps them until it is resumed and finishes, or is abandoned.
 
@@ -268,10 +271,10 @@ A default branch that cannot be read permits no sweep or merge. The run still re
 
 The queue reads every pull request back after the sweep: the forge, not the sweep, says what merged, at the head the forge merged.
 
-- A sweep that says it merged a pull request the forge does not show merged fails the run after every other decision is written. That pull request is recorded as waiting, or parked if it was closed.
+- A pull request the sweep declared to merge that the forge does not show merged is recorded as waiting with the gate's reasons, or parked if it was closed.
 - A decision for a pull request this run did not claim is skipped and reported, because that item belongs to another run.
 - A claimed pull request the sweep left undecided waits for the next sweep.
-- A red default branch the sweep did not raise fails the run once every other decision is written.
+- A red default branch asks nobody. The sweep merges nothing and the run completes with a failed outcome, which the attention watch shows as a line that needs a look. Read the diagnosis in the `record` node's summary with `archon workflow get <run-id> --verbose`: the failing checks and what each points at, the pull requests merged since the branch was green, the one the sweep suspects, and whether to rerun, revert or fix forward. It is reported once per change: the pull requests it holds back store what their wait rests on, so while the branch's head and check state read the same no agent runs and the run is idle and healthy. A new head or check state is swept and reported again. A sweep that also asked about a pull request ends only once that question is answered.
 - A pull request that cannot be read waits for the next sweep. A work item that cannot be written is reported, so one bad item never loses the rest of the batch's record.
 
 The work item's `facts.merge` holds the item's merge status, any approval pinned to the head it approved, and the last twenty decisions. A return sets the build record to waiting for its next round, with the brief. That round then starts at once through the build-queue binding (`build_queue_binding`), keyed by the item and the run, so a re-run of the same record starts it at most once. A round that does not start is named in the summary, and the next build-queue run picks the item up.
@@ -283,9 +286,8 @@ The work item's `facts.merge` holds the item's merge status, any approval pinned
 
 ### What it asks
 
-A run raises at most one attention item: a red default branch, labelled `merge: base`, or else the first pull request the sweep asked about, labelled `merge: pr`. It carries the same fields as a build-queue item. Any other ask waits for a later sweep, which decides it again.
+A sweep asks about every unclear pull request that is due. A run holds one wait, so it raises one attention item, labelled `stage: merge`: the first pull request the sweep asked about, labelled `kind: approve` with the issue number as `item` and the pull request's as `pr`. The sweep writes it as the build queue's agents write theirs, and it reaches you as written. Any other ask waits for the next sweep, which decides it again and raises it. An ask made while the default branch is red is decided again once the branch's head or check state changes.
 
-- **`merge: base`** offers `hold`: merges are held until the default branch is green. An `other` answer there holds too, and its text is not acted on.
 - **`merge`** approves the pull request at the head that was asked about. The answer starts a sweep at once through the merge-queue binding (`merge_queue_binding`), which merges it once the gate passes there.
 - **`return`** hands the item back to the build queue, whose next round starts at once through the build-queue binding.
 - **`park`** stops working the item until the build queue readies it again.
@@ -295,9 +297,15 @@ An answer's ruling and your words are written into the issue body as a dated "Cu
 
 ### Its binding
 
-A run never changes its checkout, and the claim keeps two runs off the same item, so the `merge-queue` binding runs in the launch checkout, with `overlap: queue`.
+A run never changes its checkout, and the claim keeps two runs off the same item, so the `merge-queue` binding runs in the launch checkout. It is scheduled every 5 minutes with `overlap: skip`: a tick that finds a sweep running is skipped.
 
-Its `merge_queue_binding` input names the binding's own file and `build_queue_binding` the build queue's, so an answer's follow-up starts through your own binding. The answering run still holds the merge queue's only slot when it fires the sweep, which is why the binding queues: the sweep a `merge` answer fires waits in line and starts as soon as the answering run ends, at the host's next drain. A server drains every few seconds; a CLI-only host needs `archon trigger drain` scheduled. A scheduled tick that finds a sweep running also waits in line instead of being dropped. With `overlap: skip` the answer's sweep would be skipped and the next scheduled sweep would merge the pull request. Without the inputs, follow-ups wait for the next scheduled run.
+The short schedule is the one thing that starts the merge queue. It is how a ready pull request is picked up, and how one with pending checks gets merged soon after they finish, since the forge delivers no event for checks settling at a head.
+
+A sweep where nothing changed runs no agent. When a sweep declares a `wait` while the pull request's checks are pending or the default branch is red, the record stores what the wait rests on: the head, whether the pull request is a draft and merges cleanly, the state of its checks, its open threads, its verdict and contract coverage, the default branch's head and check state, and the `ci` setting. An ask held back by a red default branch's question stores the same. Any other wait, such as a re-run of failed checks or a merge the forge did not complete, stores nothing, and the next sweep decides it again. A later run releases the item without the agent while all of them read the same, so a red default branch is raised once, not on every tick, while a pull request waits behind it. A change to any of them hands the item to the agent again.
+
+Its `merge_queue_binding` input names the binding's own file and `build_queue_binding` the build queue's, so an answer's follow-up fires your own binding. A `merge` answer's sweep is skipped while the answering run holds the queue's one slot, and the next scheduled sweep merges the pull request.
+
+A binding file written with `overlap: queue` keeps every tick that arrives while a sweep runs, without limit. Write it again with `archon pack bindings sdlc --only merge-queue --force` and the `--repo`, `--host`, `--run-as` and `--out` you first wrote it with, and remove the old schedule before installing the new one.
 
 ## Discoveries
 
@@ -311,7 +319,7 @@ Its `merge_queue_binding` input names the binding's own file and `build_queue_bi
   - ask a maintainer;
   - wait, for a discovery about code still on an open pull request. Nothing is written, and its record stays undecided until a later pass decides it, after that pull request merged or closed.
 - **Writes.** Before any write, the pass checks that every queued record is decided exactly once and that a tracking issue is open and in the repository. A filed issue's body begins with a hidden marker, and the create looks for that marker across every issue first; the evidence comment carries the same marker and is replaced in place. So a pass run again after a stop, or a discovery filed twice, never opens a second issue. Filed issues carry no labels: intake triages them like any other issue, which it does only when the install's forge identity is on `maintainers.json`.
-- **Questions.** Every ask in a pass becomes one attention item labelled `discoveries: question`. The answer is stored on the asking run's document. The runs those records came from stay claimed by the asking run until it ends, so no other pass asks again; the next pass then decides them with the answer beside the records.
+- **Questions.** Every ask in a pass becomes one attention item labelled `stage: discoveries` and `kind: question`. The answer is stored on the asking run's document. The runs those records came from stay claimed by the asking run until it ends, so no other pass asks again; the next pass then decides them with the answer beside the records.
 
 The `discoveries` binding starts a pass on a schedule, with `overlap: skip`: a start is skipped while a pass still runs, and a pass paused on a question gives its slot back. Naming the same binding file as the merge queue's `discoveries_binding` also starts a pass after each sweep that merged a pull request, when the records about the merged code can first be decided. A fired pass that finds one already running is skipped like a scheduled one, and the next merging sweep or scheduled tick starts it.
 
@@ -331,6 +339,30 @@ Who removes each checkout:
 - A worktree launched with `--branch` waits for the merged sweep.
 
 A server already runs a merged sweep on its cleanup schedule, so the `worktree-cleanup` binding is for installs that run only the CLI. Its resource is named for the host, not the repository, because one pass covers every project registered there: generated for two repositories, the two schedules share one slot and `overlap: skip` drops the second pass.
+
+## Notices
+
+Each queue says what it did on the attention stream, at the notices level. A notice asks nothing of anyone. Every notice carries `stage` and `kind`, and `item` or `pr` where it has one.
+
+| `kind` | Said when | Labels |
+| --- | --- | --- |
+| `started` | a build round is about to start | `stage=build`, `item` |
+| `ready` | the build queue hands a pull request to the merge queue | `stage=build`, `item`, `pr` |
+| `continued` | the build queue starts another round on the item | `stage=build`, `item` |
+| `parked` | a queue stops working an item | `stage`, `item` |
+| `merged` | the merge queue merged a pull request | `stage=merge`, `item`, `pr`, `lane` (`manual` when a maintainer approved it at the merged head, else `auto`) |
+| `returned` | the merge queue sent a pull request back to the build queue | `stage=merge`, `item`, `pr` |
+| `closed` | intake closed an issue triage found resolved | `stage=intake`, `item` |
+| `blocked` | intake left an issue where no run can start | `stage=intake`, `item` |
+
+```bash
+archon workflow attention --notices --since 24h --label kind=merged     # what merged
+archon workflow attention --notices --since 24h --label kind=started    # what started building
+archon workflow attention --notices --since 30d --label kind=merged --count-by label:lane   # share merged without a person
+archon workflow attention --watch --notices                             # as it happens
+```
+
+A notice the host refuses is reported on the node's stderr and never fails the run.
 
 ## Measure the factory
 

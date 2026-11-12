@@ -7,7 +7,7 @@
  * before the verdict goes public, because the head can move during a long review.
  */
 
-import type { QualifiedPr } from './forge.ts';
+import type { QualifiedPr } from './identity.ts';
 import { viewPr } from './pr.ts';
 
 /** Refuse unless the pull request's remote head is the commit this round reviews. */

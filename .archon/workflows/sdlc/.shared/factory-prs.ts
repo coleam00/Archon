@@ -14,10 +14,9 @@
 
 import { createHash } from 'node:crypto';
 import { BUILD_BRANCH_PREFIX } from './build.ts';
-import { invokeForge, parsePrRecord, record, sameRepo } from './forge.ts';
+import { forge, state, type ForgeOperations } from 'archon:script';
+import { sameRepo } from './identity.ts';
 import { resolvePrUrl } from './pr.ts';
-import { note } from './io.ts';
-import { stateDocuments, statePut } from './state.ts';
 import type { WorkItem } from './workitem.ts';
 
 /** The engine accepts at most this many run ids on one record. */
@@ -71,24 +70,22 @@ export function factoryPrRuns(items: readonly WorkItem[]): Map<string, string[]>
  * optional in the forge contract because a plugin that predates it omits it, so a
  * view without it refuses rather than counting the pull request with no times.
  */
-export function prFacts(url: string, view: Record<string, unknown> | null): PrFacts {
+export function prFacts(url: string, view: ForgeOperations['pr.view']['result']): PrFacts {
   if (view === null) throw new Error(`forge pr.view reported no pull request for ${url}`);
-  const pr = parsePrRecord(view.pr);
-  const times = record(view.timestamps);
+  const { pr, timestamps: times } = view;
   if (times === undefined) {
     throw new Error(
       `forge pr.view reported no timestamps for ${url}; PR metrics need a forge plugin whose pr.view reports them`
     );
   }
-  const time = (field: string): string | null => (typeof times[field] === 'string' ? (times[field] as string) : null);
-  const createdAt = time('created_at');
+  const createdAt = times.created_at;
   if (createdAt === null) throw new Error(`forge pr.view reported no creation time for ${url}`);
   return {
     url,
     state: pr.state === 'open' ? 'OPEN' : pr.state === 'merged' ? 'MERGED' : 'CLOSED',
     createdAt,
-    mergedAt: time('merged_at'),
-    closedAt: time('closed_at'),
+    mergedAt: times.merged_at,
+    closedAt: times.closed_at,
     headRefName: pr.head,
     isCrossRepository: pr.head_repo === null || !sameRepo(pr.head_repo, pr.repo),
   };
@@ -107,7 +104,7 @@ const settledName = (url: string): string => `${SETTLED_PREFIX}${createHash('sha
 
 /** The facts a run kept, or undefined for a document that is not a merged pull request's facts. */
 function keptFacts(value: unknown): PrFacts | undefined {
-  const facts = record(value);
+  const facts = typeof value === 'object' && value !== null && !Array.isArray(value) ? (value as Record<string, unknown>) : undefined;
   if (
     facts?.state !== 'MERGED' ||
     typeof facts.url !== 'string' ||
@@ -133,13 +130,14 @@ function keptFacts(value: unknown): PrFacts | undefined {
 /**
  * Keep a merged pull request's facts. The metrics are already right without the
  * document, so a failed write is noted and the run goes on, and the next run reads the
- * pull request again. A conflict means another run kept the same facts first.
+ * pull request again. A refused write needs no note: the store refuses one only when
+ * another run moved the document first, and that run kept the same facts.
  */
 function keepFacts(name: string, facts: PrFacts, revision: number): void {
   try {
-    statePut(name, facts, revision);
+    state.put(name, facts, { ifRevision: revision });
   } catch (error) {
-    note(`PR metrics could not keep the facts of ${facts.url}: ${error instanceof Error ? error.message : String(error)}`);
+    console.error(`PR metrics could not keep the facts of ${facts.url}: ${error instanceof Error ? error.message : String(error)}`);
   }
 }
 
@@ -150,7 +148,7 @@ function keepFacts(name: string, facts: PrFacts, revision: number): void {
  * cohort is never silently short.
  */
 export function readPrFacts(urls: Iterable<string>): PrFacts[] {
-  const stored = new Map(stateDocuments(SETTLED_PREFIX).map(document => [document.name, document]));
+  const stored = new Map(state.listValues(SETTLED_PREFIX).map(document => [document.name, document]));
   const facts: PrFacts[] = [];
   for (const url of urls) {
     const name = settledName(url);
@@ -161,10 +159,10 @@ export function readPrFacts(urls: Iterable<string>): PrFacts[] {
     }
     const ref = resolvePrUrl(url);
     if (ref === undefined) {
-      note(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
+      console.error(`PR metrics skip a round's URL: "${url}" is not a pull request URL`);
       continue;
     }
-    const read = prFacts(url, invokeForge('pr.view', { selector: { kind: 'number', ref } }));
+    const read = prFacts(url, forge('pr.view', { selector: { kind: 'number', ref } }));
     facts.push(read);
     // A document that is not valid facts is replaced, at its revision, rather than read past every run.
     if (read.state === 'MERGED' && read.mergedAt !== null) keepFacts(name, read, stored.get(name)?.revision ?? 0);

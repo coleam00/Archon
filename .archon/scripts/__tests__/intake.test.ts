@@ -1,14 +1,15 @@
 import { describe, expect, test } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import type { Closure } from '../../workflows/sdlc/.shared/close';
-import { stateGet } from '../../workflows/sdlc/.shared/state';
+import { state } from 'archon:script';
 import {
   bodyDigest,
   decideIntake,
+  enqueue,
   type IntakeRequest,
   type IssueFacts,
   mirrorLabels,
@@ -455,9 +456,22 @@ describe('the intake scripts', () => {
     });
     expect(stored(at).value.claim?.run_id).toBe('run-1');
 
-    const applied = outcome(at, { runId: 'run-1' }, decided, READY_VERDICT);
+    const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
+    const applied = run(at, 'outcome', { runId: 'run-1' }, {
+      INPUTS_PATH: String(decided.path),
+      INPUTS_ITEM: JSON.stringify(decided.item),
+      INPUTS_DECISION: JSON.stringify(decided.decision),
+      ...READY_VERDICT,
+      INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json',
+      ARCHON_CALL_LOG: calls,
+    });
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect(labelWrites(applied, 7)).toEqual({ add: ['archon-ready', 'archon-size-s', 'archon-type-feature'], remove: [] });
+    // The routed item starts a build-queue pickup, once per run. The fire names no item, so
+    // the binding's own orders_only decides what the pickup may take.
+    const fire = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-pickup:ghe.example.com/example/repo#7:run-1']);
+    expect(JSON.parse(readFileSync(fire?.[fire.indexOf('--inputs') + 1] ?? '', 'utf8'))).toEqual({});
     const doc = stored(at).value;
     expect(doc).toMatchObject({ stage: 'deliver', trust: 'maintainer', claim: null, requests: [] });
     expect(doc.facts.triage).toMatchObject({
@@ -673,17 +687,21 @@ describe('the intake scripts', () => {
     expect(stored(at).value).toMatchObject({ stage: 'needs_contract', claim: null });
   }, 60_000);
 
-  test('a blocked item closes nothing', () => {
+  test('a blocked item closes nothing and keeps what its verdict waits on', () => {
     const at = install();
     const applied = outcome(
       at,
       { runId: 'run-1' },
       facts(at, { runId: 'run-1' }).output,
-      verdict({ contract: 'BLOCKED', blocked_reason: 'waits on a release', blocked_by: [] })
+      verdict({ contract: 'BLOCKED', blocked_reason: 'waits on a release', blocked_by: [ORIGINAL_URL] })
     );
     expect({ code: applied.code, stderr: applied.stderr }).toEqual({ code: 0, stderr: '' });
     expect([...applied.closes, ...applied.comments]).toEqual([]);
-    expect(stored(at).value).toMatchObject({ stage: 'blocked', claim: null });
+    expect(stored(at).value).toMatchObject({
+      stage: 'blocked',
+      claim: null,
+      facts: { triage: { blocked: { reason: 'waits on a release', by: [ORIGINAL_URL] } } },
+    });
   }, 60_000);
 
   test('a closed issue is recorded and its labels are left alone', () => {
@@ -715,6 +733,17 @@ describe('the intake scripts', () => {
     expect(stored(at).revision).toBe(revision);
   }, 60_000);
 
+  test("a run claims its own event's issue while another waits, and a run with no request of its own takes the other", () => {
+    const at = install();
+    const older = { repo: PR.repo, number: 3 };
+    inProcess(at, () =>
+      enqueue(older, { at: AT, run_id: 'event', action: 'opened', label: null, actor: null, body_digest: null })
+    );
+    expect(facts(at, { runId: 'run-1', others: [ORIGINAL] }).output).toMatchObject({ item: SUBJECT });
+    expect(inProcess(at, () => state.get('work/3')).value).toMatchObject({ claim: null, requests: [{ run_id: 'event' }] });
+    expect(facts(at, { runId: 'run-2', kind: 'pr', others: [ORIGINAL] }).output).toMatchObject({ item: older });
+  }, 60_000);
+
   test("a re-triage pickup records nothing of its own: the asking run's request is the only one", () => {
     const at = install();
     const first = facts(at, { runId: 'run-1' }).output;
@@ -733,6 +762,6 @@ describe('the intake scripts', () => {
     expect({ code: resumed.code, stderr: resumed.stderr }).toEqual({ code: 0, stderr: '' });
     expect(stored(at).value).toMatchObject({ stage: 'deliver', claim: null });
     // Clearing the claim gave the run's lease back in the same write.
-    expect(inProcess(at, () => stateGet('work/7')).lease).toBeNull();
+    expect(inProcess(at, () => state.get('work/7')).lease).toBeNull();
   }, 60_000);
 });

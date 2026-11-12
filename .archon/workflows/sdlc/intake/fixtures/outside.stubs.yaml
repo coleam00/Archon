@@ -22,6 +22,7 @@ outcome:
   promoted: false
   labels: [archon-needs-maintainer]
   summary: "stub: Issue 8: needs_maintainer"
+  healthy: true
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo, number: "8" }
   expect: completed

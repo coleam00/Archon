@@ -6,10 +6,10 @@
 
 import { existsSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { refuse, report, trimmed } from '../../.shared/io.ts';
+import { input, refuse } from 'archon:script';
 import { FINDINGS_FILE, REPORT_FILE, readItem } from '../../.shared/review-item.ts';
 
-const dir = trimmed(process.env.INPUTS_ITEM);
+const dir = input('item').trim();
 
 function file(path: string): string {
   return readFileSync(join(dir, path), 'utf8').trimEnd();
@@ -25,7 +25,7 @@ try {
     `<findings file="${FINDINGS_FILE}">\n${file(FINDINGS_FILE)}\n</findings>`,
     `<report file="${REPORT_FILE}">\n${existsSync(join(dir, REPORT_FILE)) ? file(REPORT_FILE) : '(absent)'}\n</report>`,
   ];
-  report(`Lenses that left output: ${Object.keys(item.lenses).join(', ') || 'none'}.\n\n${sections.join('\n\n')}`);
+  console.log(`Lenses that left output: ${Object.keys(item.lenses).join(', ') || 'none'}.\n\n${sections.join('\n\n')}`);
 } catch (error) {
   refuse(`read-item: ${error instanceof Error ? error.message : String(error)}`);
 }

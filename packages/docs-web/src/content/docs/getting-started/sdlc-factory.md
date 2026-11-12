@@ -39,7 +39,7 @@ Everything below is written as the `gh` account, to the repository the queues na
 | New issues | Files an issue for a verified discovery, marked so a rerun never files it twice. Adds one evidence comment to an open issue it tracks | Discoveries |
 | Branches | Pushes `build/<issue>-<slug>-<run>`, or pushes onto an open pull request's existing head. Never force-pushes or rebases | Build queue rounds |
 | Pull requests | Opens a draft, updates its description, posts one review comment and edits it in place, replies to and resolves review threads, marks it ready and back to draft. The description says `Closes #N` only when the review found every acceptance item met and no dated ruling on the issue keeps it open. Before merging, the merge queue rechecks the keyword against the review's stamped coverage and the issue's latest ruling, and corrects it in either direction | Build queue rounds; merge queue |
-| CI | Reruns a pull request's failed jobs once, when the red is outside the change. A red default branch is never rerun: it is raised as a `merge: base` item | Merge queue |
+| CI | Reruns a pull request's failed jobs once, when the red is outside the change. A red default branch is never rerun: the sweep ends as a failed outcome that names the diagnosis | Merge queue |
 | Merges | Merges through the gate, pinned to the reviewed head. Deletes no branch | Merge queue |
 | Worktrees and branches | If you schedule it, removes each merged worktree with its local branch, including a branch Archon adopted. Remote branches stay, with a warning | `archon-worktree-cleanup` |
 
@@ -48,5 +48,5 @@ On your machine it keeps state documents (`archon state list --prefix work/`), w
 ## Pause or stop it
 
 - **Stop new runs.** Remove the schedules (`archon trigger schedule remove --config <file>`, or the cron or systemd entry) and the intake webhook bindings. Removing a schedule does not cancel work already accepted.
-- **Stop runs in flight.** Runs start follow-ups by firing the binding files directly: a build round that continues fires the next round, a merge-queue return fires a build round, answering `merge` fires a sweep, and a sweep that merged fires a discoveries pass. A run that sends an issue back to intake launches that intake run itself. So removing schedules alone does not stop a chain. List the runs with `archon workflow status --all` and `archon workflow cancel` or `archon workflow abandon` them.
+- **Stop runs in flight.** Runs start follow-ups by firing the binding files directly: intake fires a build-queue run for an item it routed, a build round that continues fires the next round, a merge-queue return fires a build round, answering `merge` fires a sweep, and a sweep that merged fires a discoveries pass. A run that sends an issue back to intake launches that intake run itself. So removing schedules alone does not stop a chain. List the runs with `archon workflow status --all` and `archon workflow cancel` or `archon workflow abandon` them.
 - **Stop one item.** Answer its attention item with `park`, where the item offers it. A paused run waiting on you does nothing until you answer.

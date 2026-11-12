@@ -1,4 +1,5 @@
 // @archon-test-isolated
+import { registerBoundaryReportingTests } from './__tests__/composition-boundary-reporting';
 import { describe } from 'bun:test';
 import {
   registerAuthoredConfigTests,
@@ -21,6 +22,7 @@ registerResultContractTests();
 describe('executeDagWorkflow -- flattened include expansion', () => {
   const fixture = setupIncludeExpansionTests();
   registerIncludeGateTests(fixture);
+  registerBoundaryReportingTests(fixture);
   registerIncludeResumeTests(fixture);
 });
 registerAuthoredConfigTests();

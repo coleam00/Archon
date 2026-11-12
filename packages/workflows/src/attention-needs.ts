@@ -38,8 +38,8 @@ export type AttentionWatchLevel = z.infer<typeof attentionWatchLevelSchema>;
  *
  * The level decides what is shown. Every level shows the `answer` and `look` lines and
  * the close of an item that needed someone, so nobody keeps working on an ask that was
- * answered or moved. `notices` adds the other `nothing` lines about work; `ready` and
- * `bookmark` only sync a `protocol` reader.
+ * answered or moved. `notices` adds the other `nothing` lines about work, among them a
+ * `notice`, which says what a run did; `ready` and `bookmark` only sync a `protocol` reader.
  *
  * `resumed` is for a stream that continues an earlier one from a cursor. The reader did
  * not see which items that earlier stream showed, so it shows every close: telling a
@@ -83,6 +83,7 @@ export function attentionWatchReader(
       case 'error':
         return { needs: 'look' };
       case 'resumed':
+      case 'notice':
       case 'ready':
       case 'bookmark':
         return { needs: 'nothing' };

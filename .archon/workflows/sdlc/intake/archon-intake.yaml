@@ -1,9 +1,9 @@
 name: archon-intake
 description: |
   The standing front of the label-driven pack. Every issue event records a
-  request on the issue's work item; the run then claims the best waiting item
-  and decides, with a script and before any model reads the text, whether its
-  author is a listed maintainer. A maintainer's issue is triaged, and the
+  request on the issue's work item; the run then claims that issue, or the best
+  waiting item when it does not wait, and decides, with a script and before any
+  model reads the text, whether its author is a listed maintainer. A maintainer's issue is triaged, and the
   verdict becomes the item's stage and a route label; a duplicate or an
   already delivered item the triage policy lets close is closed with a link to
   what resolved it. An outside issue gets
@@ -45,8 +45,18 @@ inputs:
       Who added the label, as the forge reported it (binding field
       label.actor.login). A label promotes only when this login is on the
       maintainer list.
+  build_queue_binding:
+    default: ""
+    description: >-
+      The absolute path of the operator's binding config for this repository's
+      build queue. A run that leaves its item waiting for the build queue fires it with
+      `archon trigger fire`, so a pickup is admitted under that binding's resource,
+      capacity and overlap policy, at most once per run. Empty starts nothing; the
+      next build-queue run takes the item.
 
 returns: outcome
+# False only when a run that claimed nothing found stored items no pickup can act on.
+outcome_field: healthy
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:
@@ -122,4 +132,5 @@ nodes:
         promoted: { type: boolean }
         labels: { type: array, items: { type: string } }
         summary: { type: string }
-      required: [path, item, stage, trust, promoted, labels, summary]
+        healthy: { type: boolean }
+      required: [path, item, stage, trust, promoted, labels, summary, healthy]

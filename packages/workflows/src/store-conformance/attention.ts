@@ -23,6 +23,11 @@ import {
   type ProjectRef,
 } from '../attention-queue';
 import { watchAttentionQueue, type AttentionStreamLine } from '../attention-watch';
+import {
+  emitWorkflowNotice,
+  listWorkflowNotices,
+  WORKFLOW_NOTICE_LIMITS,
+} from '../workflow-notice';
 import type { WorkflowStoreHarness } from '../store-conformance';
 import {
   CONFORMANCE_CODEBASE_ID,
@@ -660,6 +665,49 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         );
         expect(await readAttentionQueueItem(source, item.runId)).toEqual(item);
       }
+    });
+    test('a notice is recorded only for a running run, listed with its labels, and bounded per run', async () => {
+      const run = await running(store);
+      const ended = await running(store);
+      await store.completeWorkflowRun(ended.id, { duration_ms: 1 });
+      const say = (runId: string, text: string, labels: Record<string, string> = {}) =>
+        emitWorkflowNotice(store, { runId, node: 'merge', text, labels });
+
+      expect(await rejection(say(ended.id, 'Merged'))).toMatchObject({ reason: 'run_not_running' });
+      expect(await rejection(say(run.id, 'x'.repeat(301)))).toMatchObject({ reason: 'invalid' });
+      // A label value that would print as a second line, or rewrite the first.
+      for (const value of ['merged\nanother entry', 'merged\u001b[2K'])
+        expect(await rejection(say(run.id, 'Merged', { kind: value }))).toMatchObject({
+          reason: 'invalid',
+        });
+      expect(await say(run.id, 'Merged pull request 7', { kind: 'merged' })).toEqual({
+        runId: run.id,
+        count: 1,
+        limit: WORKFLOW_NOTICE_LIMITS.perRun,
+      });
+      await say(run.id, 'Returned pull request 9', { kind: 'returned' });
+      // The run is still running: a notice changed nothing about it.
+      expect((await store.getWorkflowRun(run.id))?.status).toBe('running');
+
+      const mine = (await store.listWorkflowNoticeRows()).filter(row => row.runId === run.id);
+      // In the order the run emitted them, also when both carry one timestamp.
+      expect(mine.map(row => row.data)).toEqual([
+        { text: 'Merged pull request 7', labels: { kind: 'merged' }, node: 'merge' },
+        { text: 'Returned pull request 9', labels: { kind: 'returned' }, node: 'merge' },
+      ]);
+      expect(Number.isNaN(Date.parse(mine[0]?.at ?? ''))).toBe(false);
+
+      const query = { scope: { kind: 'all' as const }, labels: { kind: 'merged' } };
+      expect(await listWorkflowNotices({ store }, query)).toMatchObject([
+        { runId: run.id, workflow: run.workflow_name, text: 'Merged pull request 7' },
+      ]);
+      expect(
+        await listWorkflowNotices({ store }, { ...query, since: new Date(Date.now() + 60_000) })
+      ).toEqual([]);
+
+      for (let emitted = 2; emitted < WORKFLOW_NOTICE_LIMITS.perRun; emitted++)
+        await say(run.id, 'Merged another');
+      expect(await rejection(say(run.id, 'One too many'))).toMatchObject({ reason: 'run_limit' });
     });
   });
 }

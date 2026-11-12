@@ -147,6 +147,29 @@ besides a Ready review verdict.
   requires a passing validation at exactly the head it merges. This trusts the agent's
   report of the run, which is weaker than CI.
 
+**Ask the user** how much the factory does by itself. Two settings turn it down, and
+they are the off switch:
+
+- `build_lane`: `auto` (the default) launches a clear item's build round by itself.
+  `manual` launches none until a maintainer answered the build queue's question about
+  the item, so every launch arrives on the attention queue with a recommendation.
+- `merge_lane`: `auto` (the default) merges a clear pull request by itself. `manual`
+  merges nothing until a maintainer approved the pull request at its head.
+- `protected_paths`: comma-separated globs, empty by default. A pull request that
+  changes a matching path never merges on the auto lane, whatever `merge_lane` says: it
+  is asked about, and merges once approved at its head. Use it for what a person must
+  read first, such as `.archon/workflows/**,infra/**`.
+
+```yaml
+settings:
+  merge_lane: manual
+  protected_paths: ".archon/workflows/**,.archon/packs/**"
+```
+
+The settings are checked by scripts, not by an agent's reading of them: the build
+queue's checkout refuses a launch, and the merge gate refuses a merge, that the setting
+does not allow.
+
 Check: `.pack/pack.yaml` lists every setting under `inputs:` with its values. A value
 it does not declare is refused when a run starts.
 
@@ -195,7 +218,9 @@ archon workflow wait <run-id> --json
 archon state get work/42
 ```
 
-The build queue works the issue toward a reviewed pull request, one round per run.
+The build queue works the issue toward a reviewed pull request, one round per run. A
+round that continues a pull request starts its review from the review the earlier round
+published, not from the start.
 
 ```bash
 archon workflow run archon-merge-queue --detach
@@ -240,7 +265,9 @@ recommends under `bindings:` in `.pack/pack.yaml`:
 
 - `intake-issues` and `intake-labels` start intake on GitHub issue and label events.
 - `build-queue`, `split-queue`, `merge-queue` and `discoveries` start the queues on a
-  schedule.
+  schedule. Intake also starts the build queue for an item it routed, by firing the
+  `build-queue` file. The merge queue's schedule is short, and a sweep where nothing
+  changed runs no agent.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
 - `worktree-cleanup` removes merged worktrees, for an install that runs no server.
 
@@ -371,8 +398,8 @@ back. So "the write failed" and "the write may have landed" stay different outco
 the pack as in the forge contract. A new public write gets a script node of its own, or
 joins the one that already owns that surface; it does not go into a prompt.
 
-Every forge read and write goes through `archon forge`:
-[`.shared/forge.ts`](.shared/forge.ts) is the client, [`.shared/pr.ts`](.shared/pr.ts)
+Every forge read and write goes through `archon forge`: `forge()` of the engine's
+`archon:script` module is the client, [`.shared/pr.ts`](.shared/pr.ts)
 owns the pull-request operations and [`.shared/issue.ts`](.shared/issue.ts) the issue
 operations. Nothing falls back to another tool when the plugin cannot answer. Every
 pack label is declared in [`.shared/labels.ts`](.shared/labels.ts), and every stage
@@ -416,16 +443,16 @@ tests and the workflow fixtures on a pull request that changes the pack. Run the
 
 Three rules, each protecting something a script cannot get back on its own:
 
-- **Read every binding as a literal `process.env.INPUTS_<NAME>`.** The engine scans
-  each script's own source at load and refuses a workflow whose script reads a
-  binding no `with:` clause provides. It matches that literal form only, and it never
-  follows imports, so a helper that built the key from a name would hide every read
-  in the pack from that check, and a renamed binding would surface as a wrong result
-  at the end of a paid run instead of a refusal before it started. Pass the value to
-  `.shared/io.ts`, never the name.
+- **Read every binding as a literal `input('<name>')`** from `archon:script`, in the
+  node's own script. The engine scans each script's own source at load and refuses a
+  workflow whose script reads a binding no `with:` clause provides. It matches that
+  literal form (and `process.env.INPUTS_<NAME>`) only, and it never follows imports,
+  so a helper that built the name would hide every read in the pack from that check,
+  and a renamed binding would surface as a wrong result at the end of a paid run
+  instead of a refusal before it started. Pass the value to a helper, never the name.
 - **Never call `process.exit()`.** Bun leaves without draining stdout: a 500 KB
-  write to a pipe arrives as 131072 bytes, silently. Set `process.exitCode` and
-  return; `.shared/io.ts` is the only place that should need to know this.
+  write to a pipe arrives as 131072 bytes, silently. Call `refuse()` from
+  `archon:script`, which sets `process.exitCode`, and return.
 - **Nothing the target project provides is available.** No `package.json`, no
   `node_modules`, no `tsconfig.json`, no npm dependency. Relative imports within
   the pack and the standard library are the whole surface, which is what keeps

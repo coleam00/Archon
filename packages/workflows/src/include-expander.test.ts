@@ -211,6 +211,7 @@ describe('expandWorkflowIncludes — namespacing', () => {
     expect(nodeById(expanded, 'down__entry')?.depends_on).toEqual(['up__primary', 'up__secondary']);
     expect(composedBoundaries(nodeById(expanded, 'down__join'))).toEqual([
       {
+        boundary: { includeId: 'down', workflow: 'downstream' },
         dependsOn: ['up__primary', 'up__secondary'],
         entryTriggerRules: ['one_success'],
         when: "$up__primary.output == 'primary'",

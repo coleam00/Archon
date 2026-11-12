@@ -12,7 +12,8 @@
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join, relative } from 'node:path';
-import { invokeForge, record } from './forge.ts';
+import { requireForge } from './forge-check.ts';
+import { record } from './inputs.ts';
 
 /** The judge workflow's directory: every file in it is part of the judge. */
 export const JUDGE_DIR = join(import.meta.dir, '..', 'metrics-test-value-judge');
@@ -30,7 +31,7 @@ export const TEST_VALUE_FORGE_OPERATIONS = ['pr.view', 'pr.files', 'repo.file'] 
  * pull request listed as skipped.
  */
 export function requireTestValueSource(hosts: Iterable<string>): void {
-  for (const host of new Set(hosts)) invokeForge('check', { host, operations: TEST_VALUE_FORGE_OPERATIONS });
+  for (const host of new Set(hosts)) requireForge(host, TEST_VALUE_FORGE_OPERATIONS);
 }
 
 /** The project's calibration labels, relative to the checkout the calibration runs in. */

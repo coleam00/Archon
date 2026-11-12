@@ -22,7 +22,7 @@ Pauses, waits, claims, leases and terminal states are the engine's. Work items l
 
 Agents discover a project's commands, branches and CI and record them as typed output. Prompts carry practice that transfers between projects. A project's strong opinions live in policy: defaults in [`.shared/policy/`](.shared/policy), which a project's `.archon/sdlc/policy/<topic>.md` adds to and overrides. A node names only the policy its decision needs. Anything that must be exact, such as label names or allow-lists, is never prose an agent interprets. Pack files carry no tracker references or history.
 
-- Today: label names are fixed in code, in [`.shared/labels.ts`](.shared/labels.ts), and the maintainer list is the project's `.archon/sdlc/policy/maintainers.json`. The pack has one typed setting, `ci`, in [`.pack/pack.yaml`](.pack/pack.yaml).
+- Today: label names are fixed in code, in [`.shared/labels.ts`](.shared/labels.ts), and the maintainer list is the project's `.archon/sdlc/policy/maintainers.json`. The pack's typed settings are in [`.pack/pack.yaml`](.pack/pack.yaml): what the merge gate trusts (`ci`), whether each queue acts by itself (`build_lane`, `merge_lane`), and the paths a person reads first (`protected_paths`).
 - Direction: an exact value a project needs to change is a typed setting.
 
 ## CI is the validation
@@ -38,9 +38,9 @@ The implement-review-fix loop is one composed run; queues sit between stages, ne
 
 ## Stops the pack can't answer pause
 
-An unanswerable stop pauses as an attention item labelled with its stage and class, such as `build: scope` or `merge: base`.
+An unanswerable stop pauses as an attention item. The deciding agent writes the question, its options and its recommendation, and they reach the person as written. Every item carries four labels: `stage` (the queue that asks), `kind` (the decision, such as `scope` or `approve`), `item` (the issue number) and `pr` (the pull request number, or empty).
 
-- Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by label:build` shows which build classes recur.
+- Today: a person or an orchestrating agent answers it; `archon workflow attention --count-by label:kind --since 30d` shows which decisions recur and how often the answer followed the recommendation.
 - Direction: a recurring class gets a small handler workflow that answers its items through the normal answer channel, without changing the main path or the engine.
 
 ## Smaller is the default

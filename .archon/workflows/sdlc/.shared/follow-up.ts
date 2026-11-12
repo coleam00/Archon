@@ -10,8 +10,9 @@
 
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { archonCommand, record } from './forge.ts';
-import { artifactsDir, note, nullableJson } from './io.ts';
+import { artifactsDir } from 'archon:script';
+import { archonCommand } from './host.ts';
+import { nullableJson, record } from './inputs.ts';
 
 /** The admission the fired binding's request got, as `trigger fire` prints its receipt. */
 function disposition(stdout: string): Record<string, unknown> | undefined {
@@ -52,6 +53,16 @@ export function followUp(
     result.exitCode === 0
       ? `its binding ${String(admitted?.status ?? 'admitted nothing')}`
       : (result.stderr.toString().trim().split('\n')[0] ?? '') || `trigger fire exited ${String(result.exitCode)}`;
-  note(`${what} did not start, so ${later}: ${why}`);
+  console.error(`${what} did not start, so ${later}: ${why}`);
   return `${what} did not start (${why}), so ${later}`;
+}
+
+/**
+ * Start a build-queue pickup now through the operator's build-queue binding, for an
+ * item intake just routed. The fire names no item: the binding names the repository,
+ * and a pickup takes the waiting item that sorts first under the binding's own
+ * `orders_only`, which a named item would pass.
+ */
+export function nextPickup(binding: string, key: string): string {
+  return followUp(binding, `build-pickup:${key}`, {}, 'a build-queue run');
 }

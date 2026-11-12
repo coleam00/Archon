@@ -23,7 +23,7 @@ const LEAKS: readonly { readonly pattern: RegExp; readonly what: string }[] = [
  * where the pack defines it, and as the whole install command in the setup guide.
  */
 const ALLOWED: readonly { readonly file: string; readonly line: RegExp }[] = [
-  { file: `${PACK_ROOT}/.shared/forge.ts`, line: /^export const GITHUB_FORGE_PLUGIN = / },
+  { file: `${PACK_ROOT}/.shared/forge-check.ts`, line: /^const GITHUB_FORGE_PLUGIN = / },
   {
     file: `${PACK_ROOT}/README.md`,
     line: /^archon plugin add coleam00\/Archon\/plugins\/forge-github$/,

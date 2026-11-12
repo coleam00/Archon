@@ -126,3 +126,26 @@ describe('prepared checkout guard declaration', () => {
     expect(shippedV2.parse(current)).toEqual(current);
   });
 });
+
+describe('resource start receipt origin in run metadata', () => {
+  test('a written origin reads back its receipt; a malformed one reads as no receipt', async () => {
+    const { RESOURCE_START_METADATA_KEY, readResourceStartReceiptId } = await import(
+      './schemas/resource-start'
+    );
+    const receiptId = '0b6f3c1e-4a5d-4f6e-9a7b-1c2d3e4f5a6b';
+    const read = (origin: unknown): string | undefined =>
+      readResourceStartReceiptId({ [RESOURCE_START_METADATA_KEY]: origin });
+
+    expect(read({ receiptId, bindingId: 'deploy' })).toBe(receiptId);
+    expect(readResourceStartReceiptId(undefined)).toBeUndefined();
+    for (const malformed of [
+      null,
+      'text',
+      [receiptId],
+      { bindingId: 'deploy' },
+      { receiptId: 7, bindingId: 'deploy' },
+      { receiptId: 'not-a-uuid', bindingId: 'deploy' },
+    ])
+      expect(read(malformed)).toBeUndefined();
+  });
+});

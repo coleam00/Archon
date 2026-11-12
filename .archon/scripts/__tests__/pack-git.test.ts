@@ -11,7 +11,7 @@ import { join, sep } from 'node:path';
 import { trackTempRoots } from './temp-roots';
 import { urlRepo } from '../../workflows/sdlc/.shared/remote';
 import { scratchDir } from '../../workflows/sdlc/.shared/scratch';
-import { PR, forgePrRecord, gitCheckout, packScriptRunner } from './deliver-checks-harness';
+import { PR, forgePrRecord, gitCheckout, packScriptRunner, scriptApiPreload } from './deliver-checks-harness';
 
 const { runPackScript } = packScriptRunner();
 const track = trackTempRoots();
@@ -43,7 +43,7 @@ describe('remote identity', () => {
 describe('the default branch snapshot', () => {
   it('returns no maintainers for a confirmed absent policy file', () => {
     const cwd = gitCheckout({}, track);
-    const run = spawnSync(process.execPath, ['-e', `
+    const run = spawnSync(process.execPath, ['--preload', scriptApiPreload(), '-e', `
       import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
       console.log(JSON.stringify([...readMaintainers(${JSON.stringify(PR.repo)})]));
     `], { cwd, encoding: 'utf8' });
@@ -66,7 +66,7 @@ describe('the default branch snapshot', () => {
     git(writer, 'commit', '-q', '-m', 'new maintainer');
     const fresh = git(writer, 'rev-parse', 'HEAD');
 
-    const run = spawnSync(process.execPath, ['-e', `
+    const run = spawnSync(process.execPath, ['--preload', scriptApiPreload(), '-e', `
       import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
       import { readMaintainers } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/maintainers.ts', import.meta.url).href)};
       const nativeGit = Bun.spawnSync.bind(Bun);
@@ -98,7 +98,7 @@ describe('the default branch snapshot', () => {
       git(cwd, 'push', '-q', 'upstream', 'HEAD:refs/heads/main');
       git(cwd, 'fetch', '-q', 'upstream', 'dev');
       const fetchHead = readFileSync(join(cwd, '.git/FETCH_HEAD'), 'utf8');
-      const run = spawnSync(process.execPath, ['-e', `
+      const run = spawnSync(process.execPath, ['--preload', scriptApiPreload(), '-e', `
         import { fetchDefaultBranch } from ${JSON.stringify(new URL('../../workflows/sdlc/.shared/remote.ts', import.meta.url).href)};
         const nativeGit = Bun.spawnSync.bind(Bun);
         const change = ${JSON.stringify(change)};
@@ -178,7 +178,7 @@ describe('prune-scratch', () => {
     mkdirSync(scratchDir(artifacts, ''), { recursive: true });
     symlinkSync(target, scratchDir(artifacts, 'code'), 'junction');
 
-    const run = spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
+    const run = spawnSync(process.execPath, ['--preload', scriptApiPreload(), join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
       cwd,
       env: { ...process.env, ARTIFACTS_DIR: artifacts },
       encoding: 'utf8',
@@ -204,7 +204,7 @@ describe('prune-scratch', () => {
     git(cwd, 'worktree', 'add', '-q', '--detach', join(user, 'mine'), 'HEAD');
     writeFileSync(join(cwd, 'untracked.txt'), 'kept');
 
-    const run = spawnSync(process.execPath, [join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
+    const run = spawnSync(process.execPath, ['--preload', scriptApiPreload(), join(import.meta.dir, '../../workflows/sdlc/review/scripts/prune-scratch.ts')], {
       cwd,
       env: { ...process.env, ARTIFACTS_DIR: artifacts },
       encoding: 'utf8',

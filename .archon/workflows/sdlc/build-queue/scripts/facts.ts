@@ -25,8 +25,9 @@ import {
   countedRounds,
   itemPullRequest,
 } from '../../.shared/build.ts';
-import { type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/forge.ts';
-import { artifactsDir, emit, nullableJson, refuse, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { artifactsDir, emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { type PrRecord, type QualifiedPr, sameRepo } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { openOrderMembers } from '../../.shared/order.ts';
 import { viewPr } from '../../.shared/pr.ts';
@@ -61,15 +62,15 @@ interface Interpreted {
  * run picks up the waiting item that sorts first; `order` and `handoff` claim nothing.
  */
 function namedItem(): number | null | 'order' | 'handoff' {
-  const number = trimmed(process.env.INPUTS_NUMBER);
+  const number = input('number').trim();
   if (number !== '') return positive('number', number);
-  const interpreted = nullableJson(process.env.INPUTS_INTERPRETED) as Interpreted | null;
+  const interpreted = nullableJson(input('interpreted')) as Interpreted | null;
   if (interpreted === null) return null;
   switch (interpreted.decision) {
     case 'build':
       return positive("interpret's number", interpreted.number);
     case 'choose': {
-      const picked = nullableJson(process.env.INPUTS_PICKED) as { number?: unknown } | null;
+      const picked = nullableJson(input('picked')) as { number?: unknown } | null;
       return positive('the picked issue number', picked?.number);
     }
     case 'order':
@@ -87,7 +88,7 @@ function namedItem(): number | null | 'order' | 'handoff' {
  * claim, so a release or claim never touches that other repository's item.
  */
 function requireRunRepo(number: number): void {
-  const repo = nullableJson(process.env.INPUTS_REPO) as QualifiedPr['repo'];
+  const repo = nullableJson(input('repo')) as QualifiedPr['repo'];
   const subject = readWorkItem(number)?.subject;
   if (subject !== undefined && !sameRepo(subject.repo, repo)) {
     throw new Error(
@@ -161,13 +162,13 @@ function emitItem(
  * so no open order claims nothing. A named item is claimed either way.
  */
 function pickup(): Pickup {
-  if (trimmed(process.env.INPUTS_ORDERS_ONLY) !== 'true') return BUILD_PICKUP;
+  if (input('orders_only').trim() !== 'true') return BUILD_PICKUP;
   const members = openOrderMembers(new Date().toISOString());
   return { ...BUILD_PICKUP, waits: doc => members.has(doc.subject.number) && BUILD_PICKUP.waits(doc) };
 }
 
 function main(): void {
-  const limit = positive('round_limit', trimmed(process.env.INPUTS_ROUND_LIMIT));
+  const limit = positive('round_limit', input('round_limit').trim());
   const runId = workflowRunId();
 
   const named = namedItem();

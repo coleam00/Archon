@@ -81,9 +81,9 @@ nodes:
 ```
 
 **How it works:**
-- `allowed_tools` is a whitelist for tools the provider restricts. An empty list (`[]`) selects no built-in tools governed by that provider's filter.
+- `allowed_tools` is an allow list for the provider's tool filter. An empty list (`[]`) selects no built-in tools governed by that filter. A Claude node that declares `skills` keeps the `Skill` tool even then. On Copilot the filter covers MCP tools too, so `[]` also removes them.
 - `denied_tools` blocks listed tools within the provider's restriction boundary.
-- If both are set, the provider's own precedence applies. Copilot gives `allowed_tools` precedence over `denied_tools` instead of removing the denied tools from the allowed set.
+- If both are set on Claude, Pi or Copilot, `denied_tools` wins: a tool named in both lists is removed.
 - Support and tool names depend on the provider. See [Provider capabilities](/reference/provider-capabilities/#capabilities) for tool restriction support.
 
 On Pi, the filter covers only `read`, `bash`, `edit`, `write`, `grep`, `find`, and `ls`. `allowed_tools: []` does not restrict user extension tools, and `denied_tools` cannot block them. Separately supplied Archon tools also remain available when added, including native tools such as `manage_run` and, when structured output is requested, `structured_output`. Extensions remain user-owned; remove or exclude unwanted extensions through Pi's native settings. See [Pi Extensions](/getting-started/ai-assistants/#extensions) for those controls and [workflow tool restrictions](/reference/workflow-language/#allowed_tools-and-denied_tools-for-tool-restrictions) for the full boundary.

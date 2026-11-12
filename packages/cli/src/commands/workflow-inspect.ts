@@ -18,7 +18,7 @@ import {
   runAttention,
 } from '@archon/workflows/schemas/workflow-run';
 import { getApprovalDecisions } from '@archon/workflows/schemas/dag-node';
-import type { getTerminalRecord } from '@archon/workflows/terminal-record';
+import { terminalReason, type getTerminalRecord } from '@archon/workflows/terminal-record';
 import type {
   WorkflowRun,
   WorkflowRunStatus,
@@ -30,6 +30,7 @@ import { attentionAnswerLines } from '@archon/workflows/deps';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine, writeStderr } from '../utils/stdout';
 import { formatAge, getLog } from './workflow-shared';
+import type { LatestWorkflowNotice } from '@archon/workflows/workflow-notice';
 import { formatRunUsage } from './workflow-usage';
 import { printRequestedBy, type RequestedBy } from '../utils/requested-by';
 import {
@@ -41,7 +42,8 @@ import {
 export async function printStatusRun(
   host: WorkflowHost,
   run: DashboardWorkflowRun,
-  verbose: boolean | undefined
+  verbose: boolean | undefined,
+  notice?: LatestWorkflowNotice
 ): Promise<void> {
   const age = formatAge(run.started_at);
   console.log(`  ID:     ${run.id}`);
@@ -54,6 +56,13 @@ export async function printStatusRun(
     console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
   if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
   console.log(`  Age:    ${age}`);
+  if (notice !== undefined) {
+    // The run's own latest account of what it is doing or did.
+    const labels = Object.entries(notice.labels).map(([key, value]) => `${key}=${value}`);
+    console.log(
+      `  Notice: ${[notice.text, ...(labels.length > 0 ? [labels.join(' ')] : [])].join('  ')} (${formatAge(notice.at)} ago)`
+    );
+  }
   if (run.active_nodes.length > 0) {
     console.log(
       `  Active node${run.active_nodes.length === 1 ? '' : 's'}: ${run.active_nodes.join(', ')}`
@@ -451,6 +460,7 @@ export function printRunDetail(
   console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
   console.log(`  Status: ${run.status}`);
   if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
+  printReason(terminalRecord);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
   for (const line of formatRunUsage(run.metadata)) console.log(line);
   printRunThroughput(detail.throughput);
@@ -476,6 +486,11 @@ export function printRunDetail(
     }
     printVerboseNodes(events);
   }
+}
+
+/** Why a run that failed, or completed with a failed outcome, ended that way. */
+function printReason(terminalRecord: TerminalRecord | null): void {
+  for (const reason of terminalReason(terminalRecord)) console.log(`  Reason: ${reason}`);
 }
 
 /** The gate, choices, wait and scheduled-resume lines of a paused or failed run. */

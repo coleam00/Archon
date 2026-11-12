@@ -3,18 +3,26 @@
  * mirror it, then close an item triage found resolved, then release the claim. A
  * close is checked before the first write; one the forge refuses leaves the item
  * BLOCKED for a maintainer instead. An item no route can start from gets triage's
- * questions as one marked comment. A closed issue gets the document write only.
+ * questions as one marked comment. A closed issue gets the document write only. An
+ * item the run leaves waiting for the build queue starts a build-queue pickup through
+ * the operator's build-queue binding; if it does not start, the next build-queue run
+ * takes the item.
  *
  * Bound inputs: INPUTS_PATH, INPUTS_ITEM and INPUTS_DECISION from facts; INPUTS_TRIAGE,
- * the triage node's typed output, "null" when triage did not run.
+ * the triage node's typed output, "null" when triage did not run;
+ * INPUTS_BUILD_QUEUE_BINDING, the workflow's input.
  */
 
+import { buildWaits } from '../../.shared/build.ts';
 import { type ClosePlan, planClose } from '../../.shared/close.ts';
-import { parseQualifiedPr, type QualifiedPr } from '../../.shared/forge.ts';
-import { emit, nullableJson, refuse, text, trimmed, workflowRunId } from '../../.shared/io.ts';
+import { emit, input, refuse, runId as workflowRunId } from 'archon:script';
+import { nextPickup } from '../../.shared/follow-up.ts';
+import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
+import { nullableJson } from '../../.shared/inputs.ts';
 import { viewIssue } from '../../.shared/issue.ts';
 import { upsertComment } from '../../.shared/pr.ts';
-import { idleSummary, stuckItems } from '../../.shared/stuck.ts';
+import { announce } from '../../.shared/queue.ts';
+import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { type LabelVerdict, isPackLabel, type PackLabel, triageLabels, wantedLabels, writeLabels } from '../../.shared/labels.ts';
 import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import {
@@ -29,7 +37,7 @@ import {
 
 /** Triage's verdict from its node's typed output, or null when triage did not run on this path. */
 function triageResult(): TriageResult | null {
-  const triage = nullableJson(process.env.INPUTS_TRIAGE) as NodeOutput<'archon-triage-block', 'triage'> | null;
+  const triage = nullableJson(input('triage')) as NodeOutput<'archon-triage-block', 'triage'> | null;
   if (triage === null) return null;
   // The triage block's labels node refuses a NOT_TRIAGED decision, so none reaches intake.
   const decision = triage.decision as Exclude<typeof triage.decision, { contract: 'NOT_TRIAGED' }>;
@@ -42,6 +50,7 @@ function triageResult(): TriageResult | null {
     importance: triage.importance,
     urgency: triage.urgency,
     related: triage.related,
+    ...(decision.contract === 'BLOCKED' ? { blocked: { reason: decision.blocked_reason, by: decision.blocked_by } } : {}),
     closure: decision.contract === 'NO_ACTION' ? decision.closure : null,
     questions: decision.contract === 'NEEDS_CONTRACT_WORK' ? decision.questions : [],
     labels: triageLabels({ ...triage, decision }),
@@ -108,13 +117,28 @@ function labelDelta(
   };
 }
 
+/** Called once the claim is released, so the build-queue run this starts can claim the item. */
 function summary(item: QualifiedPr, next: WorkItem, runId: string): string {
   const latest = next.history.at(-1);
-  return `Issue ${String(item.number)}: ${next.stage}${latest?.run_id === runId ? `; ${latest.summary}` : ''}`;
+  const stage = `Issue ${String(item.number)}: ${next.stage}${latest?.run_id === runId ? `; ${latest.summary}` : ''}`;
+  if (!buildWaits(next)) return stage;
+  const key = `${item.repo.host}/${item.repo.path}#${String(item.number)}:${runId}`;
+  return `${stage}; ${nextPickup(input('build_queue_binding'), key)}`;
+}
+
+/** Say what intake did when it closed the issue or left it where no run can start. */
+function announceOutcome(item: QualifiedPr, next: WorkItem, triage: TriageResult | null, closed: boolean): void {
+  if (triage === null) return;
+  const number = String(item.number);
+  const labels = { stage: 'intake', item: number };
+  if (closed) announce(`Issue ${number} closed; ${triage.summary}`, { ...labels, kind: 'closed' });
+  else if (next.stage === 'blocked' || next.stage === 'needs_contract') {
+    announce(`Issue ${number}: no run can start; ${triage.summary}`, { ...labels, kind: 'blocked' });
+  }
 }
 
 function main(): void {
-  const path = trimmed(process.env.INPUTS_PATH);
+  const path = input('path').trim();
   if (path === 'idle') {
     emit({
       path,
@@ -123,13 +147,13 @@ function main(): void {
       trust: null,
       promoted: false,
       labels: [],
-      summary: idleSummary('No item waits for intake.', stuckItems(text(process.env.WORKFLOW_ID))),
+      ...idleOutcome('No item waits for intake.', stuckItems(workflowRunId(), 'intake')),
     });
     return;
   }
   const runId = workflowRunId();
   const item = parseQualifiedPr(process.env.INPUTS_ITEM);
-  const decision = nullableJson(process.env.INPUTS_DECISION) as IntakeDecision | null;
+  const decision = nullableJson(input('decision')) as IntakeDecision | null;
   if (decision === null) throw new Error('facts claimed an item and decided nothing for it');
   const triage = triageResult();
   const at = new Date().toISOString();
@@ -158,6 +182,7 @@ function main(): void {
   // Clearing the claim is what marks this run's requests honored; a run that stops
   // before it leaves them for the next pickup to queue again.
   updateClaimed(item, runId, doc => ({ ...doc, claim: null }));
+  announceOutcome(item, next, judged, close !== null && close.refused === null);
 
   emit({
     path: decision.path,
@@ -167,6 +192,7 @@ function main(): void {
     promoted: next.promoted !== null,
     labels,
     summary: summary(item, next, runId),
+    healthy: true,
   });
 }
 

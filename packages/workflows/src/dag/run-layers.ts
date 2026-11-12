@@ -37,6 +37,7 @@ import { resolveRunInputs } from './references';
 import { formatPersistedNodeOutput, persistedExecutionOutput } from './node-output';
 import { isCheckoutGuarded } from './checkout-guard';
 import { checkComposedBlockBoundaries, checkTriggerRule } from './trigger-rule';
+import { skipNode } from './skip-node';
 import { dispatchNode } from './dispatch';
 import { nodePackDir } from '../pack-dir';
 import { runWithPackDir } from '../workflow-variables';
@@ -217,22 +218,17 @@ async function admitNode(
   ctx: RunLayersContext,
   node: DagNode
 ): Promise<LayerNodeResult | undefined> {
-  // Lifecycle events expose only the immediate enclosing iteration; artifact
-  // identity retains the complete outermost-to-innermost lineage.
-  const iteration = ctx.loopGroupPath.at(-1)?.iteration;
   // A prior success is reusable only while every enclosing include is still active.
   // Unlike ordinary node-local rules, a composed boundary governs the whole block,
   // so resume must not let a stale completed descendant cross a newly-false gate.
   const replayedFailure = replayPriorFailure(ctx, node);
   if (replayedFailure !== undefined) return replayedFailure;
   const priorCompletedNodes = ctx.priorCompletedNodes;
-  const isCachedPriorSuccess = priorCompletedNodes?.has(node.id) === true && !node.always_run;
   const composedBoundaryDecision = checkComposedBlockBoundaries(
     node,
     ctx.nodeOutputs,
     resolveRunInputs(ctx.workflowRun),
     {
-      evaluateEntryBoundary: isCachedPriorSuccess,
       loopBodyScopes: ctx.loopBodyScopes,
     }
   );
@@ -256,17 +252,7 @@ async function admitNode(
       ? composedBoundaryDecision
       : checkTriggerRule(node, ctx.nodeOutputs);
   if (triggerDecision.decision === 'skip') {
-    const { cause } = triggerDecision;
-    getLog().info({ nodeId: node.id, reason: 'trigger_rule' }, 'dag_node_skipped');
-    const output = await recordNodeState(
-      { store: ctx.deps.store, logDir: ctx.logDir },
-      finishNodeExecution(
-        beginExecution(ctx, node),
-        { status: 'skipped', reason: 'trigger_rule', cause },
-        { output: { text: '' }, diagnostics: { iteration, expr: node.when } }
-      )
-    );
-    return { nodeId: node.id, output };
+    return skipNode(ctx, node, triggerDecision.cause, triggerDecision.error);
   }
 
   // 2. Evaluate when: condition
@@ -295,28 +281,12 @@ async function admitNode(
         { nodeId: node.id, when: node.when },
         'dag_node_skipped_condition_parse_error'
       );
-      const output = await recordNodeState(
-        { store: ctx.deps.store, logDir: ctx.logDir },
-        finishNodeExecution(
-          beginExecution(ctx, node),
-          { status: 'skipped', reason: 'when_condition_parse_error', cause },
-          { output: { text: '' }, diagnostics: { iteration, expr: node.when } }
-        )
-      );
-      return { nodeId: node.id, output };
+      return skipNode(ctx, node, cause);
     }
     if (!conditionPasses) {
       const cause: SkipCause = { kind: 'condition', expr: node.when };
       getLog().info({ nodeId: node.id, when: node.when }, 'dag_node_skipped_condition');
-      const output = await recordNodeState(
-        { store: ctx.deps.store, logDir: ctx.logDir },
-        finishNodeExecution(
-          beginExecution(ctx, node),
-          { status: 'skipped', reason: 'when_condition', cause },
-          { output: { text: '' }, diagnostics: { iteration, expr: node.when } }
-        )
-      );
-      return { nodeId: node.id, output };
+      return skipNode(ctx, node, cause);
     }
   }
   return suppressFailedLoopInteraction(ctx, node);

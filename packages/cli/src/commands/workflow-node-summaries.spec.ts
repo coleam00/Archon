@@ -7,6 +7,7 @@ import { describe, expect, it, spyOn } from 'bun:test';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import { WORKFLOW_EVENT_TYPES } from '@archon/workflows/store';
 import {
+  formatSkipCause,
   NODE_SUMMARY_EVENT_TYPES,
   buildNodeSummaries,
   buildRunNodes,
@@ -32,6 +33,44 @@ function event(
 }
 
 describe('buildNodeSummaries', () => {
+  it('renders include provenance while retaining legacy cause wording', () => {
+    const boundary = { includeId: 'cycle.review%5Fqa', workflow: 'review-block' };
+    const causes = [
+      { kind: 'condition', expr: "$gate.output == 'go'" },
+      { kind: 'condition_parse_error', expr: '$INPUTS.missing' },
+      { kind: 'upstream_failed', origin: 'original-failure' },
+      { kind: 'upstream_skipped', origin: 'original-skip' },
+      { kind: 'timeout' },
+    ] as const;
+    const expected = [
+      "condition: $gate.output == 'go'",
+      'condition parse error: $INPUTS.missing',
+      'upstream failed: original-failure',
+      'upstream skipped: original-skip',
+      'timeout',
+    ];
+    const log = spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      for (const [index, cause] of causes.entries()) {
+        expect(formatSkipCause(cause)).toBe(expected[index]!);
+        const detail =
+          cause.kind === 'condition_parse_error'
+            ? 'condition evaluation error: $INPUTS.missing'
+            : expected[index];
+        const rendered = `${detail} [include 'cycle.["review_qa"]', workflow 'review-block']`;
+        expect(formatSkipCause({ ...cause, boundary })).toBe(rendered);
+        printVerboseNodes([
+          event(`skip-${index}`, 'node_skipped', 'review__node', '2026-11-12T10:00:00Z', {
+            cause: { ...cause, boundary },
+          }),
+        ]);
+        expect(log).toHaveBeenCalledWith(`    - review__node (${rendered})`);
+      }
+    } finally {
+      log.mockRestore();
+    }
+  });
+
   it('distinguishes empty from absent output', () => {
     const summaries = buildNodeSummaries([
       event('empty', 'node_completed', 'empty', '2026-11-10T10:00:00.000Z', { node_output: '' }),

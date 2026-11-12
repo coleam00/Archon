@@ -1,6 +1,7 @@
 import type { BindingDirective, DagNode, IncludeDirective, TriggerRule } from './schemas';
 import { isIncludeDirective, isLoopGroupNode, isLoopNode } from './schemas';
 import { OUTPUT_REF_SOURCE, type JsonValue } from './output-ref';
+import type { BoundaryProvenance } from './schemas/node-state';
 import type { WorkflowPack } from './schemas/pack-settings';
 
 /** Engine-private per-node metadata attached during load-time include expansion.
@@ -116,6 +117,7 @@ export const COMPOSED_NODE = Symbol('archon.composed-node');
  * Every descendant carries a copy because load-time expansion removes the include node.
  */
 interface ComposedBlockBoundaryBase {
+  boundary: BoundaryProvenance;
   /** Number of loop bodies crossed since this include was authored. */
   loopDepth?: number;
   dependsOn: string[];

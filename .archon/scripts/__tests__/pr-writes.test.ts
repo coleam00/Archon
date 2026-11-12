@@ -8,8 +8,9 @@
 import { describe, expect, it } from 'bun:test';
 import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { dirname, join } from 'node:path';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
+import { PUBLISHED_REPORT_FILE } from '../../workflows/sdlc/.shared/review-item';
 import { trackTempRoots } from './temp-roots';
 import {
   PR,
@@ -354,7 +355,7 @@ describe('publish-pr opens the pull request at most once', () => {
   it('fails loudly when the forge is unavailable', () => {
     const result = publishPr({ forge: { kind: 'no-host' } });
     expect(result.code).not.toBe(0);
-    expect(result.stderr).toContain('ARCHON_CLI_COMMAND is not set');
+    expect(result.stderr).toContain('ARCHON_CLI_COMMAND');
   });
 });
 
@@ -657,10 +658,14 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
   const report = { INPUTS_REPORT: '{ARTIFACTS}/review-report.md' };
   const STALE = 'stale0000';
 
-  it('records the reviewed commit beside the report as the next round\'s cursor', () => {
-    const result = publishReview({ inputs: report });
+  it('keeps the published report, its findings and the reviewed commit together for a later review to continue from', () => {
+    // The report where the review workflow writes it, so the set lands where delivery's next round reads it.
+    const result = publishReview({ artifacts: { 'review/report.md': REPORT, 'review/findings.json': '[]' } });
     expect(result.code).toBe(0);
-    expect(readFileSync(join(result.artifacts, 'reviewed-head'), 'utf8').trim()).toBe(REVIEWED);
+    const set = dirname(join(result.artifacts, PUBLISHED_REPORT_FILE));
+    expect(readFileSync(join(set, 'report.md'), 'utf8')).toBe(REPORT);
+    expect(readFileSync(join(set, 'findings.json'), 'utf8')).toBe('[]');
+    expect(readFileSync(join(set, 'reviewed-head'), 'utf8').trim()).toBe(REVIEWED);
   });
 
   it('refuses a round that reviewed a commit the pull request no longer carries', () => {
@@ -676,7 +681,7 @@ describe('publish-review publishes a verdict only about the head it reviewed', (
     expect(result.stderr).toContain(`this round reviewed ${STALE}, but`);
     expect(result.stderr).toContain(`is at ${REVIEWED}`);
     expect(result.comments).toEqual([]);
-    expect(existsSync(join(result.artifacts, 'reviewed-head'))).toBe(false);
+    expect(existsSync(join(result.artifacts, 'published'))).toBe(false);
   });
 
   it('refuses when the checkout moved after the round fixed its commit', () => {

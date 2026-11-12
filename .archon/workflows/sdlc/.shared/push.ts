@@ -10,7 +10,7 @@
  * After the push, the remote ref is read back and must equal HEAD.
  */
 
-import { sameRepo, type QualifiedPr } from './forge.ts';
+import { type QualifiedPr, sameRepo } from './identity.ts';
 import { git, gitOrThrow } from './git.ts';
 import { findRemote, remoteFor } from './remote.ts';
 

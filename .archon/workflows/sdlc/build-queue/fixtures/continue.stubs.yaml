@@ -27,8 +27,8 @@ route:
   ready_head: null
   brief: "stub-brief: fix the open review finding on https://github.com/example/repo/pull/1"
   reason: "stub: the finding is correctable"
-  attention: null
-checkout: { head: fixturehead, reviewed: null, pull_request: 1 }
+  ask: null
+checkout: { head: fixturehead, reviewed: null, pull_request: 1, prior_report: "" }
 ship__deliver__forge: { source: forge }
 implement__implement:
   done: true
@@ -70,15 +70,18 @@ answer:
   push: null
   reason: "stub: answered"
   ask_class: stop
-  attention: null
+  ask: null
 apply:
   decision: ready
   summary: "stub: Issue 7: ready."
-  attention: ""
+  question: ""
   options: []
   recommendation: null
   class: ""
+  item: "7"
+  pr: "1"
   asked: null
+  healthy: true
 fixture:
   inputs: { repo_host: github.com, repo_path: example/repo }
   expect: completed

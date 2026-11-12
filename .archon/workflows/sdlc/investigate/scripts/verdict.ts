@@ -9,12 +9,12 @@
  * - INPUTS_VERDICT / INPUTS_SUMMARY / INPUTS_REPORT: the investigate node's certified output.
  */
 
-import { emit, text } from '../../.shared/io.ts';
+import { emit, input } from 'archon:script';
 
-const verdict = text(process.env.INPUTS_VERDICT);
+const verdict = input('verdict');
 emit({
   verdict,
   rooted: verdict === 'rooted',
-  summary: text(process.env.INPUTS_SUMMARY),
-  report: JSON.parse(text(process.env.INPUTS_REPORT)) as unknown,
+  summary: input('summary'),
+  report: JSON.parse(input('report')) as unknown,
 });
