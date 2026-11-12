@@ -38,6 +38,7 @@ import {
   RESERVED_FIXTURE_KEYS,
   dryRunStubsSchema,
   dryRunWorkflow,
+  formatDryRunTraceEntries,
   type DryRunResult,
   type DryRunTraceEntry,
   type DryRunStubs,
@@ -293,6 +294,8 @@ export interface FixtureCheckResult {
    */
   readonly toleratedMissingStubs: readonly string[];
   readonly unusedStubs: readonly string[];
+  /** The dry run's per-node trace, kept only on a failed fixture so passing output stays short. */
+  readonly trace?: readonly DryRunTraceEntry[];
 }
 
 export interface FixtureReport {
@@ -746,6 +749,7 @@ async function checkFixture(
       missingStubs: result.missingStubs,
       toleratedMissingStubs: result.toleratedMissingStubs,
       unusedStubs: result.unusedStubs,
+      ...(failureReason !== undefined ? { trace: result.trace } : {}),
     };
   } catch (error) {
     return {
@@ -759,6 +763,13 @@ async function checkFixture(
   }
 }
 
+/** A failed fixture's trace already carries each failed node's reason, so it replaces those lines. */
+function fixtureNodeLines(r: FixtureCheckResult): string[] {
+  if (r.trace === undefined) return (r.nodeFailures ?? []).map(f => `    ${f.nodeId}: ${f.reason}`);
+  const entries = formatDryRunTraceEntries(r.trace).flatMap(text => text.split('\n'));
+  return ['    trace:', ...entries.map(line => `      ${line}`)];
+}
+
 export function formatFixtureReport(report: FixtureReport): string {
   if (report.results.length === 0) return 'No dry-run fixtures found.';
   const lines: string[] = [];
@@ -770,7 +781,7 @@ export function formatFixtureReport(report: FixtureReport): string {
       lines.push(`    Authored outcome: ${r.authoredOutcome ?? 'undeclared'}`);
     }
     if (r.failureReason) lines.push(`    ${r.failureReason}`);
-    lines.push(...(r.nodeFailures ?? []).map(({ nodeId, reason }) => `    ${nodeId}: ${reason}`));
+    lines.push(...fixtureNodeLines(r));
     if (r.unusedStubs.length > 0) {
       lines.push(`    warning: unused stubs — ${r.unusedStubs.join(', ')}`);
     }

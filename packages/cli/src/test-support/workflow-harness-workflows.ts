@@ -161,6 +161,7 @@ mock.module('@archon/workflows/dry-run', () => ({
     })
   ),
   formatDryRunTrace: mock(() => 'DRY RUN TRACE'),
+  formatDryRunTraceEntries: mock(() => []),
 }));
 
 mock.module('@archon/workflows/event-emitter', () => ({
