@@ -4,6 +4,7 @@ import type { JsonValue } from '../output-ref';
 import { validateDagStructure } from '../loader/dag-structure';
 import {
   COMPOSED_NODE,
+  readComposedMeta,
   cloneNodeWithEngineMetadata,
   type ComposedBlockBoundary,
   type ComposedNodeMeta,
@@ -88,6 +89,7 @@ interface InlineScope {
   child: ResolvedWorkflow;
   commandContents: ReadonlyMap<string, IncludeCommandContent>;
   prefix: string;
+  includeId: string;
   childTopLevelIds: ReadonlySet<string>;
   rename: (id: string) => string;
   parentDeps: string[];
@@ -106,7 +108,8 @@ function inlineInclude(
   includeNode: IncludeDirective,
   child: ResolvedWorkflow,
   commandContents: ReadonlyMap<string, IncludeCommandContent>,
-  namedScripts: ReadonlyMap<string, ExecInputSource>
+  namedScripts: ReadonlyMap<string, ExecInputSource>,
+  includeId: string
 ): ExpandedInclude {
   // Prove the child's lexical boundary before its nodes share the parent's flat id/output
   // maps. Discovery already parsed each file independently; this repeat is intentional so
@@ -117,7 +120,7 @@ function inlineInclude(
       `Node '${includeNode.id}': included workflow '${child.name}' is not hermetic: ${childStructureError}`
     );
   }
-  const scope = inlineScope(includeNode, child, commandContents);
+  const scope = inlineScope(includeNode, child, commandContents, includeId);
   const namespaced = child.nodes.map(cn => inlineChildNode(scope, cn));
 
   if (scope.missingInputs.size > 0) {
@@ -180,7 +183,8 @@ function assertPackSettingReadsPassed(
 function inlineScope(
   includeNode: IncludeDirective,
   child: ResolvedWorkflow,
-  commandContents: ReadonlyMap<string, IncludeCommandContent>
+  commandContents: ReadonlyMap<string, IncludeCommandContent>,
+  includeId: string
 ): InlineScope {
   const prefix = `${includeNode.id}__`;
   const childTopLevelIds = new Set(child.nodes.map(n => n.id));
@@ -195,6 +199,7 @@ function inlineScope(
   }
   return {
     includeNode,
+    includeId,
     child,
     commandContents,
     prefix,
@@ -219,6 +224,7 @@ function inlineChildNode(scope: InlineScope, cn: DagNode): DagNode {
     new Set<string>(),
     cn.id
   );
+  namespaceBoundaryOwners(clone, scope.includeId);
   const wasEntry = (cn.depends_on ?? []).length === 0;
 
   // Rewrite child-internal refs before inserting caller values. This ordering is
@@ -238,6 +244,17 @@ function inlineChildNode(scope: InlineScope, cn: DagNode): DagNode {
   return clone;
 }
 
+function namespaceBoundaryOwners(node: DagNode, includeId: string): void {
+  for (const boundary of readComposedMeta(node)?.boundaries ?? []) {
+    boundary.boundary.includeId = `${includeId}__${boundary.boundary.includeId}`;
+  }
+  if (isLoopGroupNode(node)) {
+    for (const body of node.loop_group.nodes) {
+      if (!isIncludeDirective(body)) namespaceBoundaryOwners(body, includeId);
+    }
+  }
+}
+
 function composedMeta(scope: InlineScope, cn: DagNode, wasEntry: boolean): ComposedNodeMeta {
   const { resolvedInputs } = scope;
   const pack = scope.child.pack;
@@ -255,6 +272,7 @@ function blockBoundary(scope: InlineScope, cn: DagNode, wasEntry: boolean): Comp
   const [firstEntryTriggerRule, ...remainingEntryTriggerRules] = scope.entryTriggerRules;
   return wasEntry
     ? {
+        boundary: { includeId: scope.includeId, workflow: scope.child.name },
         dependsOn: [...parentDeps],
         entryTriggerRules: [firstEntryTriggerRule, ...remainingEntryTriggerRules],
         ...(includeNode.when !== undefined ? { when: includeNode.when } : {}),
@@ -262,6 +280,7 @@ function blockBoundary(scope: InlineScope, cn: DagNode, wasEntry: boolean): Comp
         entryTriggerRule: cn.trigger_rule ?? includeNode.trigger_rule ?? 'all_success',
       }
     : {
+        boundary: { includeId: scope.includeId, workflow: scope.child.name },
         dependsOn: [...parentDeps],
         entryTriggerRules: [firstEntryTriggerRule, ...remainingEntryTriggerRules],
         ...(includeNode.when !== undefined ? { when: includeNode.when } : {}),
@@ -313,7 +332,8 @@ export function instantiateResolvedInclude(
   // Named script sources by reference, read by discovery. A runtime compose_fan_out
   // instance passes none: the load-time instantiation of the same block already checked
   // its named scripts' pack-setting reads.
-  namedScripts: ReadonlyMap<string, ExecInputSource> = new Map()
+  namedScripts: ReadonlyMap<string, ExecInputSource> = new Map(),
+  includeId = includeNode.id
 ): ExpandedInclude {
-  return inlineInclude(includeNode, child, commandContents, namedScripts);
+  return inlineInclude(includeNode, child, commandContents, namedScripts, includeId);
 }

@@ -4,12 +4,21 @@ export const nodeStateSchema = z.enum(['pending', 'running', 'completed', 'faile
 
 export type NodeState = z.infer<typeof nodeStateSchema>;
 
+const boundaryProvenanceSchema = z.object({
+  includeId: z.string(),
+  workflow: z.string(),
+});
+
+export type BoundaryProvenance = z.infer<typeof boundaryProvenanceSchema>;
+
+const skipProvenance = { boundary: boundaryProvenanceSchema.optional() };
+
 export const skipCauseSchema = z.discriminatedUnion('kind', [
-  z.object({ kind: z.literal('condition'), expr: z.string() }),
-  z.object({ kind: z.literal('condition_parse_error'), expr: z.string() }),
-  z.object({ kind: z.literal('timeout') }),
-  z.object({ kind: z.literal('upstream_failed'), origin: z.string() }),
-  z.object({ kind: z.literal('upstream_skipped'), origin: z.string() }),
+  z.object({ kind: z.literal('condition'), expr: z.string(), ...skipProvenance }),
+  z.object({ kind: z.literal('condition_parse_error'), expr: z.string(), ...skipProvenance }),
+  z.object({ kind: z.literal('timeout'), ...skipProvenance }),
+  z.object({ kind: z.literal('upstream_failed'), origin: z.string(), ...skipProvenance }),
+  z.object({ kind: z.literal('upstream_skipped'), origin: z.string(), ...skipProvenance }),
 ]);
 
 export type SkipCause = z.infer<typeof skipCauseSchema>;

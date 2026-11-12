@@ -433,7 +433,8 @@ export async function runComposeInstance(
       snapshot.identity,
       snapshot.inputs,
       scope.definition,
-      scope.commandContents
+      scope.commandContents,
+      `${scope.fanOutScopeName}__${snapshot.identity}`
     );
   } catch (err) {
     expanded = { error: (err as Error).message };

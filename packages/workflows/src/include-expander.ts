@@ -285,7 +285,8 @@ function expandNodeList(
   expansion: IncludeExpansion,
   nodes: (DagNode | IncludeDirective)[],
   workflowName: string,
-  stack: string[]
+  stack: string[],
+  declarationScope = ''
 ): ExpandedNodeList {
   const list: NodeListExpansion = {
     expandedNodes: [],
@@ -298,9 +299,9 @@ function expandNodeList(
     if (isComposeFanOutNode(node)) {
       expandComposeFanOut(expansion, list, node, [...stack, workflowName]);
     } else if (isIncludeDirective(node)) {
-      expandIncludeDirective(expansion, list, node, [...stack, workflowName]);
+      expandIncludeDirective(expansion, list, node, [...stack, workflowName], declarationScope);
     } else if (isLoopGroupNode(node)) {
-      expandLoopGroupBody(expansion, list, node, workflowName, stack);
+      expandLoopGroupBody(expansion, list, node, workflowName, stack, declarationScope);
     } else {
       // Already a private clone — `collapseWorkflowScope` cloned every node before
       // writing this workflow's config onto it, so the second pass below can mutate
@@ -375,7 +376,8 @@ function expandIncludeDirective(
   expansion: IncludeExpansion,
   list: NodeListExpansion,
   node: IncludeDirective,
-  stack: string[]
+  stack: string[],
+  declarationScope: string
 ): void {
   const child = expandTarget(expansion, node, stack);
   warnDroppedWorkflowLevelFields(node, child);
@@ -384,7 +386,8 @@ function expandIncludeDirective(
     node,
     child,
     expansion.commandContents,
-    expansion.namedScripts
+    expansion.namedScripts,
+    `${declarationScope}${node.id}`
   );
   list.includesById.set(node.id, inlined);
   list.includeAliases.set(inlined.primarySink, node.id);
@@ -396,9 +399,16 @@ function expandLoopGroupBody(
   list: NodeListExpansion,
   node: LoopGroupNode,
   workflowName: string,
-  stack: string[]
+  stack: string[],
+  declarationScope: string
 ): void {
-  const body = expandNodeList(expansion, node.loop_group.nodes, workflowName, stack);
+  const body = expandNodeList(
+    expansion,
+    node.loop_group.nodes,
+    workflowName,
+    stack,
+    `${declarationScope}${node.id}.`
+  );
   list.includedRequirements.push(...body.includedRequirements);
   for (const [sink, alias] of body.includeAliases) list.includeAliases.set(sink, alias);
   list.expandedNodes.push({
