@@ -119,6 +119,8 @@ export function createWorkflowStore(
   return {
     ...createSqlStateDocumentStore(getDatabase),
     setToolCallAttention: workflowDb.setToolCallAttention,
+    admitPendingResourceStart: intent =>
+      resourceStarts.admitPendingResourceStart(intent, resourceCapacityPolicy),
     admitResourceStart: intent => resourceStarts.admitResourceStart(intent, resourceCapacityPolicy),
     drainResourceStarts: options =>
       resourceStarts.drainResourceStarts(options, resourceCapacityPolicy),

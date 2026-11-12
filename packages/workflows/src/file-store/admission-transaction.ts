@@ -1,3 +1,4 @@
+import { validatePendingResourceRun } from '../pending-resource-start';
 import { resourceCapacitySchema } from '../schemas/resource';
 import {
   resolveResourceCapacity,
@@ -78,10 +79,15 @@ export interface AdmissionTransaction {
   request(id: string): Promise<Request | null>;
   receipt(id: string): Promise<Receipt | null>;
   slot(resource: string, capacity?: number): Promise<Slot>;
-  occupancy(resource: string, launch?: Request['launch']): Promise<ResourceSlotOccupancy>;
+  occupancy(
+    resource: string,
+    launch?: Request['launch'],
+    pendingId?: string
+  ): Promise<ResourceSlotOccupancy>;
   admit(
     intent: ResourceStartIntent,
-    runs: Map<string, WorkflowRun>
+    runs: Map<string, WorkflowRun>,
+    pending?: WorkflowRun
   ): Promise<ResourceStartDisposition>;
   admitExisting(row: Request, runs: Map<string, WorkflowRun>): Promise<ResourceStartDisposition>;
   binding(input: BindingIdentity): Promise<Binding | undefined>;
@@ -172,6 +178,10 @@ export function createAdmissionTransaction(
     try {
       const path = pathFor('requests', run.id);
       const raw = path in documents ? documents[path] : await readJson(join(root, path));
+      if (run.status === 'pending' && raw !== undefined && !local) {
+        const request = requestSchema.pick({ status: true }).parse(raw);
+        if (request.status !== 'admitted' && !(await hasSlotMembership(run.id))) return null;
+      }
       if (local)
         return {
           kind: 'local' as const,
@@ -297,7 +307,8 @@ export function createAdmissionTransaction(
   // the due scan does.
   async function occupancy(
     resource: string,
-    launch?: Request['launch']
+    launch?: Request['launch'],
+    pendingId?: string
   ): Promise<ResourceSlotOccupancy> {
     const row = await live(resource);
     const queued = await queuedStarts(resource, row.queue);
@@ -315,7 +326,7 @@ export function createAdmissionTransaction(
     );
     let unknownForeignCheckoutHolder: string | undefined;
     for (const run of runs) {
-      if (isTerminalRunStatus(run.status)) continue;
+      if (isTerminalRunStatus(run.status) || run.id === pendingId) continue;
       const holder = await occupancyRun(
         run,
         resource,
@@ -350,16 +361,14 @@ export function createAdmissionTransaction(
     row: Request,
     runs: Map<string, WorkflowRun>
   ): Promise<ResourceStartDisposition> {
-    // A deleted run's ID stays reserved, as in createWorkflowRun.
-    if (
-      runs.has(row.id) ||
-      (await readSnapshot(root, row.id)) ||
-      (await isRunArchived(root, row.id))
-    )
-      throw new Error(`Run already exists: ${row.id}`);
-    await createTransactionView(runs, [], async () => null, new Map()).createWorkflowRun(
-      row.launch.run
-    );
+    const existing = runs.get(row.id) ?? (await readSnapshot(root, row.id));
+    if (existing) validatePendingResourceRun(existing, row.launch);
+    else {
+      if (await isRunArchived(root, row.id)) throw new Error(`Run already exists: ${row.id}`);
+      await createTransactionView(runs, [], async () => null, new Map()).createWorkflowRun(
+        row.launch.run
+      );
+    }
     row.status = 'admitted';
     row.blocker = null;
     const resource = await slot(row.resource);
@@ -371,15 +380,18 @@ export function createAdmissionTransaction(
   }
   async function admit(
     intent: ResourceStartIntent,
-    runs: Map<string, WorkflowRun>
+    runs: Map<string, WorkflowRun>,
+    pending?: WorkflowRun
   ): Promise<ResourceStartDisposition> {
     const capacity = resolveResourceCapacity(await currentCaps(), intent.resource, intent.capacity);
     const resource = await slot(intent.resource, capacity);
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
+    if (!pending && (await readSnapshot(root, launch.run.id)))
+      throw new Error(`Run already exists: ${launch.run.id}`);
     const blocker = resourceStartBlocker(
-      { ...(await occupancy(intent.resource, launch)), capacity },
+      { ...(await occupancy(intent.resource, launch, pending?.id)), capacity },
       launch
     );
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
@@ -394,6 +406,7 @@ export function createAdmissionTransaction(
       launch,
       position: head.seq + 1,
     };
+    if (pending) runs.set(pending.id, { ...pending, working_path: null });
     documents[pathFor('requests', row.id)] = row;
     if (intent.receipt) {
       const item = await binding(intent.receipt);

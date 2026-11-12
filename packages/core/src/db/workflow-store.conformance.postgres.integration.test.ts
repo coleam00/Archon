@@ -48,6 +48,54 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test('a claim waiting on native attachment refreshes the committed queue fence', async () => {
+    const harness = await makeHarness();
+    const { store, db } = harness;
+    const { start } = resourceStartFixtures(CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID);
+    const entered = Promise.withResolvers<void>();
+    const release = Promise.withResolvers<void>();
+    let admission: Promise<unknown> | undefined;
+    let claim: Promise<unknown> | undefined;
+    let interception: ReturnType<typeof spyOn> | undefined;
+    try {
+      await store.admitResourceStart(start());
+      const native = start();
+      await store.createWorkflowRun(native.launch.run);
+      const transaction = db.withTransaction.bind(db);
+      interception = spyOn(db, 'withTransaction').mockImplementation(callback =>
+        transaction(query =>
+          callback(async <T>(sql: string, params?: unknown[]) => {
+            const result = await query<T>(sql, params);
+            if (sql.startsWith('UPDATE remote_agent_workflow_runs SET working_path = NULL')) {
+              entered.resolve();
+              await release.promise;
+            }
+            return result;
+          })
+        )
+      );
+      admission = store.admitPendingResourceStart(native);
+      await entered.promise;
+      claim = store.claimPendingWorkflowRun(native.launch.run.id);
+      let blocked = false;
+      for (let attempt = 0; attempt < 1000 && !blocked; attempt++) {
+        const result = await db.query<{ blocked: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS blocked`
+        );
+        blocked = result.rows[0]?.blocked ?? false;
+      }
+      expect(blocked).toBe(true);
+      release.resolve();
+      expect(await admission).toMatchObject({ status: 'queued' });
+      expect(await claim).toBeNull();
+      expect((await store.getWorkflowRun(native.launch.run.id))?.status).toBe('pending');
+    } finally {
+      release.resolve();
+      await Promise.allSettled([admission, claim]);
+      interception?.mockRestore();
+      await harness.close();
+    }
+  });
   test('foreign slot membership blocks guarded starts after its request is lost', async () => {
     const harness = await makeHarness();
     try {

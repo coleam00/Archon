@@ -56,6 +56,9 @@ export class InMemoryStore implements IWorkflowStore {
   pruneStateRevisions: IWorkflowStore['pruneStateRevisions'] = async () => {
     throw new Error('Unexpected pruneStateRevisions');
   };
+  admitPendingResourceStart: IWorkflowStore['admitPendingResourceStart'] = async () => {
+    throw new Error('Unexpected admitPendingResourceStart');
+  };
   admitResourceStart: IWorkflowStore['admitResourceStart'] = async () => {
     throw new Error('Unexpected admitResourceStart');
   };

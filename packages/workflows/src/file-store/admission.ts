@@ -1,3 +1,5 @@
+import { validatePendingResourceRun, validatePendingStartReplay } from '../pending-resource-start';
+import { disposition } from './admission-transaction';
 import type { ResourceCapacityPolicy } from '../resource-capacity';
 import {
   queuedRequestSchema,
@@ -123,6 +125,17 @@ export function createFileAdmissionStore(
     };
   }
   return {
+    admitPendingResourceStart: intent =>
+      write(async (tx, runs) => {
+        const previous = await tx.request(intent.launch.run.id);
+        if (previous) {
+          validatePendingStartReplay(previous, intent);
+          return disposition(previous);
+        }
+        const pending = await readSnapshot(root, intent.launch.run.id);
+        validatePendingResourceRun(pending, intent.launch);
+        return tx.admit(intent, runs, pending);
+      }),
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
     drainResourceStarts: options =>
       write(async (tx, runs) => {

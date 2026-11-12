@@ -1,3 +1,5 @@
+export { awaitResourceStartAdmission } from './resource-start-admission';
+export { validatePendingResourceRun, validatePendingStartReplay } from './pending-resource-start';
 import type { WorkflowResource } from './schemas/workflow';
 export {
   resolveResourceCapacity,
@@ -360,6 +362,7 @@ export interface DamagedStartReceipt {
 export type PendingStartBindingInspection = StartBindingInspection | DamagedStartReceipt;
 
 export interface IResourceStartStore {
+  admitPendingResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
   drainResourceStarts(options: {
     resource: string;

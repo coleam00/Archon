@@ -1,3 +1,8 @@
+import {
+  validatePendingResourceRun,
+  validatePendingStartReplay,
+} from '@archon/workflows/resource-start-store';
+import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import type { WorkflowResource } from '@archon/workflows/schemas/workflow';
 import { resourceCapacitySchema } from '@archon/workflows/schemas/resource';
 import { installResourceCapacityPolicy } from '../workflows/resource-capacity';
@@ -52,6 +57,7 @@ import { WorkflowStatusReadError } from './workflow-run-reads';
 interface RequestRow {
   id: string;
   resource_key: string;
+  declared_capacity?: number | null;
   host_id: string;
   overlap_policy: ResourceStartRequestInspection['overlap'];
   status: ResourceStartRequestInspection['status'];
@@ -66,13 +72,23 @@ async function lockCheckoutReservations(query: Query): Promise<void> {
   if (getDatabaseType() === 'postgresql') await query('SELECT pg_advisory_xact_lock(1797)');
 }
 
+async function lockRun(query: Query, id: string) {
+  const result = await query<WorkflowRunRow>(
+    `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1${getDialect().rowLock()}`,
+    [id]
+  );
+  return result.rows[0] ? normalizeWorkflowRun(result.rows[0]) : null;
+}
+
 /** Start requests are the run holder's durable FIFO waiters for a resource slot. */
 async function admitExisting(
   query: Query,
   resource: string,
   start: { id: string; launch: PreparedWorkflowLaunch }
 ): Promise<ResourceStartDisposition> {
-  await insertWorkflowRun(query, start.launch.run);
+  const existing = await lockRun(query, start.id);
+  if (existing) validatePendingResourceRun(existing, start.launch);
+  else await insertWorkflowRun(query, start.launch.run);
   await query(
     `UPDATE remote_agent_resource_start_requests
         SET status = 'admitted', admitted_at = ${getDialect().now()}, blocker_run_id = NULL
@@ -105,7 +121,8 @@ function disposition(row: RequestRow): ResourceStartDisposition {
 async function admitResourceStartWithQuery(
   query: Query,
   intent: ResourceStartIntent,
-  policy: ResourceCapacityPolicy = installResourceCapacityPolicy
+  policy: ResourceCapacityPolicy = installResourceCapacityPolicy,
+  attachPending = false
 ): Promise<ResourceStartDisposition> {
   await lockCheckoutReservations(query);
   const caps = (await policy.loadCaps?.()) ?? new Map<string, number>();
@@ -118,6 +135,8 @@ async function admitResourceStartWithQuery(
   if (existing.rows[0]) return disposition(existing.rows[0]);
 
   const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
+  if (!attachPending && (await lockRun(query, launch.run.id)))
+    throw new Error(`Run already exists: ${launch.run.id}`);
   const blocker = resourceStartBlocker(
     await resourceStartOccupancy(query, intent.resource, capacity, caps, policy),
     launch
@@ -159,6 +178,40 @@ export async function admitResourceStart(
   policy: ResourceCapacityPolicy = installResourceCapacityPolicy
 ): Promise<ResourceStartDisposition> {
   return getDatabase().withTransaction(query => admitResourceStartWithQuery(query, intent, policy));
+}
+
+export async function admitPendingResourceStart(
+  intent: ResourceStartIntent,
+  policy: ResourceCapacityPolicy = installResourceCapacityPolicy
+): Promise<ResourceStartDisposition> {
+  return getDatabase().withTransaction(async query => {
+    await lockCheckoutReservations(query);
+    const existing = await query<RequestRow>(
+      'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
+      [intent.launch.run.id]
+    );
+    const previous = existing.rows[0];
+    if (previous) {
+      validatePendingStartReplay(
+        {
+          resource: previous.resource_key,
+          hostId: previous.host_id,
+          overlap: previous.overlap_policy,
+          declaredCapacity: previous.declared_capacity ?? undefined,
+          launch: preparedWorkflowLaunchSchema.parse(parseStoredJson(previous.launch)),
+        },
+        intent
+      );
+      return disposition(previous);
+    }
+    const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
+    validatePendingResourceRun(await lockRun(query, launch.run.id), launch);
+    await query(
+      "UPDATE remote_agent_workflow_runs SET working_path = NULL WHERE id = $1 AND status = 'pending'",
+      [launch.run.id]
+    );
+    return admitResourceStartWithQuery(query, intent, policy, true);
+  });
 }
 
 /** Admit this host's queued requests that can run while the slot has free capacity. */

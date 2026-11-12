@@ -1,3 +1,4 @@
+import { describeNativeAdmissionConformance } from './store-conformance/native-admission';
 export { resourceStartFixtures } from './resource-start-conformance';
 export { CONFORMANCE_CODEBASE_ID, CONFORMANCE_CONVERSATION_ID } from './store-conformance/fixtures';
 export {
@@ -58,6 +59,7 @@ export function describeWorkflowStoreConformance(
 
     describeRunsAndClaimsConformance(current);
     describeAdmissionConformance(current);
+    describeNativeAdmissionConformance(current);
     describeStartReceiptConformance(current);
     describeEventFeedConformance(current);
     describePausesAndWaitsConformance(current);

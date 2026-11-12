@@ -168,6 +168,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     listStateDocuments: mock(unexpected('listStateDocuments')),
     getStateDocuments: mock(unexpected('getStateDocuments')),
     pruneStateRevisions: mock(unexpected('pruneStateRevisions')),
+    admitPendingResourceStart: mock(unexpected('admitPendingResourceStart')),
     admitResourceStart: mock(unexpected('admitResourceStart')),
     drainResourceStarts: mock(unexpected('drainResourceStarts')),
     hasStartReceiptForDelivery: mock(unexpected('hasStartReceiptForDelivery')),

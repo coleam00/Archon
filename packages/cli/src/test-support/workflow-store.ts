@@ -218,7 +218,11 @@ export function createInMemoryWorkflowStore(
           branch: row.workflow_id,
           workingPath: row.working_path,
         })),
-    resourceCaps
+    resourceCaps,
+    async id => {
+      const run = runs.get(id);
+      if (run) runs.set(id, { ...run, working_path: null });
+    }
   );
   const admit =
     <Args extends unknown[], Result>(
@@ -229,6 +233,7 @@ export function createInMemoryWorkflowStore(
   return {
     ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
     clearDeclaredCapacity: admission.clearDeclaredCapacity,
+    admitPendingResourceStart: admit(admission.admitPendingResourceStart.bind(admission)),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
     drainResourceStarts: admit(admission.drainResourceStarts.bind(admission)),
     hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),
@@ -266,7 +271,12 @@ export function createInMemoryWorkflowStore(
     getWorkflowRunsByIds: ids => write(view => view.getWorkflowRunsByIds(ids)),
     getWorkflowRunForAttention: id => write(view => view.getWorkflowRunForAttention(id)),
     getWorkflowRunStatus: id => write(view => view.getWorkflowRunStatus(id)),
-    claimPendingWorkflowRun: (id, path) => write(view => view.claimPendingWorkflowRun(id, path)),
+    claimPendingWorkflowRun: (id, path) =>
+      write(async view => {
+        const request = await admission.getResourceStartRequest(id);
+        if (request && request.status !== 'admitted') return null;
+        return view.claimPendingWorkflowRun(id, path);
+      }),
     updateWorkflowRun: (id, updates) => write(view => view.updateWorkflowRun(id, updates)),
     updateWorkflowRunMetadataIfRunning: (id, metadata) =>
       write(view => view.updateWorkflowRunMetadataIfRunning(id, metadata)),

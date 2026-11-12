@@ -95,6 +95,9 @@ function createMockStore(): IWorkflowStore {
     pruneStateRevisions: mock<IWorkflowStore['pruneStateRevisions']>(() => {
       throw new Error('Unexpected pruneStateRevisions');
     }),
+    admitPendingResourceStart: mock<IWorkflowStore['admitPendingResourceStart']>(() => {
+      throw new Error('Unexpected admitPendingResourceStart');
+    }),
     admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
       throw new Error('Unexpected admitResourceStart');
     }),

@@ -1,3 +1,7 @@
+import {
+  validatePendingResourceRun,
+  validatePendingStartReplay,
+} from '@archon/workflows/resource-start-store';
 import { holdsWorkflowPath } from '@archon/workflows/workflow-path-lock';
 import {
   validateStartReceiptLimit,
@@ -33,7 +37,8 @@ export function createInMemoryResourceStartStore(
   getRun: IWorkflowStore['getWorkflowRun'],
   listRuns: () => WorkflowRun[],
   listReusableCheckouts: () => Promise<readonly ReusableCheckout[]>,
-  resourceCaps: ReadonlyMap<string, number> = new Map()
+  resourceCaps: ReadonlyMap<string, number>,
+  clearPendingPath: (id: string) => Promise<void>
 ): IResourceStartStore & {
   clearDeclaredCapacity(id: string): Promise<void>;
   /** Take a slot for an admitted failed or paused run's resume, or say what blocks it. */
@@ -78,7 +83,10 @@ export function createInMemoryResourceStartStore(
         (binding?.intent?.resource === request.resource ? binding.intent.capacity : undefined)
     );
   };
-  const occupancy = async (resource: string): Promise<ResourceSlotOccupancy> => {
+  const occupancy = async (
+    resource: string,
+    pendingId?: string
+  ): Promise<ResourceSlotOccupancy> => {
     const holders: { id: string }[] = [];
     const candidates: WorkflowRun[] = [];
     const live: (WorkflowRun & { launch: PreparedWorkflowLaunch })[] = [];
@@ -102,7 +110,13 @@ export function createInMemoryResourceStartStore(
       heldCheckouts: heldCheckouts(live, reusable),
       foreignHeldCheckouts: heldCheckouts(
         listRuns()
-          .filter(run => holdsWorkflowPath(run) && !live.some(local => local.id === run.id))
+          .filter(
+            run =>
+              run.id !== pendingId &&
+              holdsWorkflowPath(run) &&
+              !live.some(local => local.id === run.id) &&
+              (!requests.has(run.id) || requests.get(run.id)?.status === 'admitted')
+          )
           .sort(
             (a, b) =>
               a.started_at.getTime() - b.started_at.getTime() || compareCodeUnits(a.id, b.id)
@@ -118,13 +132,16 @@ export function createInMemoryResourceStartStore(
       ),
     };
   };
-  const admit = async (intent: ResourceStartIntent): Promise<ResourceStartDisposition> => {
+  const admit = async (
+    intent: ResourceStartIntent,
+    pending?: WorkflowRun
+  ): Promise<ResourceStartDisposition> => {
     const previous = requests.get(intent.launch.run.id);
     if (previous) return decision(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
     const blocker = resourceStartBlocker(
       {
-        ...(await occupancy(intent.resource)),
+        ...(await occupancy(intent.resource, pending?.id)),
         capacity: resolveResourceCapacity(resourceCaps, intent.resource, intent.capacity),
       },
       launch
@@ -141,7 +158,8 @@ export function createInMemoryResourceStartStore(
       blockerRunStatus: null,
       launch,
     };
-    if (!blocker) await createRun(launch.run);
+    if (!blocker && !pending) await createRun(launch.run);
+    if (pending) await clearPendingPath(pending.id);
     requests.set(request.id, request);
     return decision(request);
   };
@@ -196,6 +214,16 @@ export function createInMemoryResourceStartStore(
       released.add(id);
       return true;
     },
+    admitPendingResourceStart: async intent => {
+      const previous = requests.get(intent.launch.run.id);
+      if (previous) {
+        validatePendingStartReplay(previous, intent);
+        return decision(previous);
+      }
+      const pending = await getRun(intent.launch.run.id);
+      validatePendingResourceRun(pending, intent.launch);
+      return admit(intent, pending);
+    },
     admitResourceStart: admit,
     drainResourceStarts: async ({
       resource,
@@ -205,7 +233,9 @@ export function createInMemoryResourceStartStore(
       for (const { id } of drainableStarts(await occupancy(resource), hostId)) {
         const request = requests.get(id);
         if (!request) throw new Error('Queued resource request missing');
-        await createRun(request.launch.run);
+        const pending = await getRun(request.id);
+        if (pending) validatePendingResourceRun(pending, request.launch);
+        else await createRun(request.launch.run);
         request.status = 'admitted';
         request.blocker = null;
         admitted.push(decision(request));

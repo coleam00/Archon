@@ -175,6 +175,12 @@ export async function claimPendingWorkflowRun(
   workingPath?: string
 ): Promise<WorkflowRun | null> {
   return getDatabase().withTransaction(async query => {
+    // Refresh the request fence after waiting for a concurrent pending attachment.
+    const pending = await query<{ status: string }>(
+      `SELECT status FROM remote_agent_workflow_runs WHERE id = $1${getDialect().rowLock()}`,
+      [id]
+    );
+    if (pending.rows[0]?.status !== 'pending') return null;
     const claimed = await query(
       `UPDATE remote_agent_workflow_runs
           SET status = 'running', last_activity_at = ${getDialect().now()},

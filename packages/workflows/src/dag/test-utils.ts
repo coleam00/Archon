@@ -191,6 +191,9 @@ export function createMockStore(): MockWorkflowStore {
       throw new Error('Unexpected pruneStateRevisions');
     }),
     setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
+    admitPendingResourceStart: mock<IWorkflowStore['admitPendingResourceStart']>(() => {
+      throw new Error('Unexpected admitPendingResourceStart');
+    }),
     admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
       throw new Error('Unexpected admitResourceStart');
     }),
@@ -786,10 +789,6 @@ export function loaderBypassingWorkflow(
   });
 }
 
-/**
- * A run's JSONL transcript, parsed. Module-scoped so every describe reads a run's
- * transcript the same way.
- */
 export const readTranscript = async (
   logDir: string,
   runId: string
