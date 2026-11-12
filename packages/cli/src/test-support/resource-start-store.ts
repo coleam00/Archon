@@ -343,6 +343,7 @@ export function createInMemoryResourceStartStore(
       const result = await admit({
         ...item.intent,
         launch: input.launch,
+        resource: input.resource ?? item.intent.resource,
         receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
       });
       item.status = 'complete';

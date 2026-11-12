@@ -38,7 +38,7 @@ import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run'
 import { getDatabase, getDatabaseType, getDialect } from './connection';
 import {
   addResourceSlotHolder,
-  lockResourceSlot,
+  lockResourceSlotForAdmission,
   resourceStartOccupancy,
   parseQueuedResourceStart,
   type TransactionQuery as Query,
@@ -104,7 +104,7 @@ async function admitResourceStartWithQuery(
   intent: ResourceStartIntent
 ): Promise<ResourceStartDisposition> {
   await lockCheckoutReservations(query);
-  const { capacity } = await lockResourceSlot(query, intent.resource, intent.capacity);
+  const { capacity } = await lockResourceSlotForAdmission(query, intent.resource, intent.capacity);
   const existing = await query<RequestRow>(
     'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
     [intent.launch.run.id]
@@ -202,7 +202,7 @@ export async function admitPendingRun(input: {
   const id = launch.run.id;
   return getDatabase().withTransaction(async query => {
     await lockCheckoutReservations(query);
-    const { capacity } = await lockResourceSlot(query, input.resource);
+    const { capacity } = await lockResourceSlotForAdmission(query, input.resource);
     const existing = await query<RequestRow>(
       'SELECT * FROM remote_agent_resource_start_requests WHERE id = $1',
       [id]
@@ -239,7 +239,7 @@ export async function drainResourceStarts(options: {
 }): Promise<ResourceStartDisposition[]> {
   return getDatabase().withTransaction(async query => {
     await lockCheckoutReservations(query);
-    const { capacity } = await lockResourceSlot(query, options.resource);
+    const { capacity } = await lockResourceSlotForAdmission(query, options.resource);
     const slot = await resourceStartOccupancy(query, options.resource, capacity);
     const admitted: ResourceStartDisposition[] = [];
     for (const start of drainableStarts(slot, options.hostId))
@@ -609,6 +609,7 @@ export async function completeStartBindingPreparation(input: {
   bindingId: string;
   ownerId: string;
   launch: PreparedWorkflowLaunch;
+  resource?: string;
 }): Promise<ResourceStartDisposition | null> {
   return getDatabase().withTransaction(async query => {
     // See withdrawQueuedResourceStart: acquire SQLite's writer lock before the read.
@@ -627,7 +628,7 @@ export async function completeStartBindingPreparation(input: {
     if (!rawIntent) return null;
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(rawIntent));
     const disposition = await admitResourceStartWithQuery(query, {
-      resource: persisted.resource,
+      resource: input.resource ?? persisted.resource,
       capacity: persisted.capacity,
       hostId: persisted.hostId,
       overlap: persisted.overlap,

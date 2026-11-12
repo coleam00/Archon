@@ -292,3 +292,23 @@ test('a fire-only binding starts a run on fire and has no timer to install', asy
     restore();
   }
 });
+
+test("a binding start holds its workflow's declared resource instead of the binding's", async () => {
+  const { host, workflowPath, configPath, restore } = await orderFixture({
+    order_id: 'literal-order',
+    mode: 'resource',
+  });
+  const stdout = silenceStdout();
+  try {
+    await writeFile(workflowPath, orderWorkflow.replace('worktree:', 'resource: build\nworktree:'));
+    await fireAndExecute(host, { config: configPath });
+    const { runs } = await host.deps.store.listWorkflowRuns();
+    expect(runs).toMatchObject([{ status: 'completed' }]);
+    expect(await host.deps.store.getResourceStartRequest(runs[0]?.id ?? '')).toMatchObject({
+      resource: 'build',
+    });
+  } finally {
+    stdout.mockRestore();
+    restore();
+  }
+});

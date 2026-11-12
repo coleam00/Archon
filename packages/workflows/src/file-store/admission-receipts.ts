@@ -214,6 +214,7 @@ export function createReceiptOperations(
           {
             ...item.intent,
             launch: input.launch,
+            resource: input.resource ?? item.intent.resource,
             receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
           },
           runs

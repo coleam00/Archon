@@ -471,11 +471,17 @@ export interface IResourceStartStore {
     bindingId: string;
     ownerId: string;
   }): Promise<boolean>;
+  /**
+   * Admit a prepared binding start. `resource` is the bound workflow's declared resource:
+   * the run holds it in place of the binding's, so a binding start and a hand start of
+   * that workflow count against one slot.
+   */
   completeStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;
     ownerId: string;
     launch: PreparedWorkflowLaunch;
+    resource?: string;
   }): Promise<ResourceStartDisposition | null>;
   failStartBindingPreparation(input: {
     receiptId: string;

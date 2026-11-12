@@ -57,8 +57,8 @@ const terminalList = TERMINAL_WORKFLOW_STATUSES.map(status => `'${status}'`).joi
 
 /**
  * Create the slot if needed and take its lock for the rest of the transaction, then
- * return the capacity admission uses now. A `declaredCapacity` replaces the recorded one;
- * the install config's number for the resource wins over both.
+ * return its recorded capacity. A `declaredCapacity` replaces the recorded one. Reads no
+ * config, so releasing a slot never depends on the install config being readable.
  */
 export async function lockResourceSlot(
   query: TransactionQuery,
@@ -82,8 +82,20 @@ export async function lockResourceSlot(
     'SELECT capacity FROM remote_agent_resource_slots WHERE resource_key = $1',
     [resource]
   );
-  const installed = (await loadResourceCapacities()).get(resource);
-  return { capacity: installed ?? Number(slot.rows[0]?.capacity ?? recorded) };
+  return { capacity: Number(slot.rows[0]?.capacity ?? recorded) };
+}
+
+/**
+ * `lockResourceSlot`, returning the capacity admission uses now: the install config's
+ * number for the resource wins over the recorded one.
+ */
+export async function lockResourceSlotForAdmission(
+  query: TransactionQuery,
+  resource: string,
+  declaredCapacity?: number
+): Promise<{ capacity: number }> {
+  const { capacity } = await lockResourceSlot(query, resource, declaredCapacity);
+  return { capacity: (await loadResourceCapacities()).get(resource) ?? capacity };
 }
 
 /**
