@@ -345,7 +345,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     const dropped = await run(create, fakeGitHub({ network: (_url, method) => method === 'POST' }));
     expect(dropped).toMatchObject({
       ok: false,
-      error: { kind: 'forge_error' },
+      error: { kind: 'unavailable' },
       mutation: { op: 'pr.create', outcome: 'outcome_unknown' },
     });
 
@@ -866,22 +866,18 @@ describe('GitHub draft conversion', () => {
   });
 });
 
-test('a mutation GitHub answers 502 is sent once, never repeated', async () => {
+test('a mutation GitHub answers 502 is sent once and keeps its unknown outcome', async () => {
   const github = fakeGitHub({
     status: (_url: string, method: string) => (method === 'PATCH' ? 502 : undefined),
   });
-  const waits: number[] = [];
   const response = await handleGithubOperation(
     { operationId: 'edit', op: 'pr.edit-body', ref, body: 'next' },
-    {
-      token: 'token',
-      fetch: github.fetch,
-      sleep: async ms => {
-        waits.push(ms);
-      },
-    }
+    { token: 'token', fetch: github.fetch }
   );
-  expect(response).toMatchObject({ ok: false, mutation: { outcome: 'outcome_unknown' } });
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'unavailable', status: 502 },
+    mutation: { outcome: 'outcome_unknown' },
+  });
   expect(github.calls.filter(call => call.method === 'PATCH')).toHaveLength(1);
-  expect(waits).toEqual([]);
 });

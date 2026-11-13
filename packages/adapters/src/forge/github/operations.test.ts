@@ -969,160 +969,82 @@ test('dispatch resolves only claimed GitHub remotes and preserves parser validat
   }
 });
 
-describe('pr.view read retries', () => {
+describe('temporary failures are told apart by status, header or error type', () => {
   const repo = { host: 'github.com', path: 'archon/test' };
-  const request = {
+  const view = {
     operationId: 'view',
     op: 'pr.view',
     selector: { kind: 'number', ref: { repo, number: 42 } },
   } satisfies ForgeRequest;
-  const pull = {
-    number: 42,
-    node_id: 'PR_42',
-    html_url: 'https://github.com/archon/test/pull/42',
-    title: 'A pull request',
-    body: 'Description',
-    state: 'closed',
-    draft: false,
-    merged: true,
-    created_at: '2026-11-01T12:00:00Z',
-    merged_at: '2026-11-10T12:00:00Z',
-    closed_at: '2026-11-10T12:00:00Z',
-    head: { ref: 'build/widget', sha: 'a'.repeat(40), repo: { full_name: repo.path } },
-    base: { ref: 'dev', sha: 'b'.repeat(40) },
-  };
+  const search = {
+    operationId: 'search',
+    op: 'workitem.search',
+    repo,
+    text: 'retry backoff',
+  } satisfies ForgeRequest;
+  const answer = (status: number, headers: Record<string, string> = {}): Response =>
+    Response.json({ message: 'You have exceeded a secondary rate limit.' }, { status, headers });
 
-  test('one HTTP 503 then success returns the complete failure-free answer', async () => {
-    const baseline = await handleGithubOperation(request, {
-      token: 'token',
-      fetch: async () => json(pull),
-    });
-    expect(baseline).toMatchObject({
-      ok: true,
-      result: {
-        op: 'pr.view',
-        value: { pr: { state: 'merged' }, timestamps: { merged_at: pull.merged_at } },
-      },
-    });
-    const waits: number[] = [];
-    let calls = 0;
-    const recovered = await handleGithubOperation(request, {
-      token: 'token',
-      fetch: async (url, init) => {
-        expect(String(url)).toBe('https://api.github.com/repos/archon/test/pulls/42');
-        expect(init?.method ?? 'GET').toBe('GET');
-        return ++calls === 1 ? json({}, 503) : json(pull);
-      },
-      sleep: async ms => {
-        waits.push(ms);
-      },
-    });
-    expect(recovered).toEqual(baseline);
-    expect(calls).toBe(2);
-    expect(waits).toEqual([1_000]);
-  });
-
-  test('persistent HTTP 503 stops after four attempts and preserves the final error', async () => {
-    const waits: number[] = [];
+  test.each([
+    ['a 503', view, () => answer(503), 'unavailable'],
+    ['a 429', view, () => answer(429), 'rate_limited'],
+    [
+      'a search 403 with retry-after',
+      search,
+      () => answer(403, { 'retry-after': '60' }),
+      'rate_limited',
+    ],
+    [
+      'a search 403 with an exhausted limit',
+      search,
+      () => answer(403, { 'x-ratelimit-remaining': '0' }),
+      'rate_limited',
+    ],
+    // Without a header only the message says "rate limit", and prose is not read.
+    ['a 403 with neither header', search, () => answer(403), 'authorization'],
+    [
+      'a 403 with quota left',
+      view,
+      () => answer(403, { 'x-ratelimit-remaining': '4999' }),
+      'authorization',
+    ],
+  ] as const)('%s is %s, asked once', async (_name, request, reply, kind) => {
     let calls = 0;
     const response = await handleGithubOperation(request, {
       token: 'token',
       fetch: async () => {
         calls++;
-        return json({}, 503);
+        return reply();
       },
-      sleep: async ms => {
-        waits.push(ms);
+    });
+    expect(response).toMatchObject({ ok: false, error: { kind, status: reply().status } });
+    // The host owns the retry, so the plugin asks GitHub once per request it makes.
+    expect(calls).toBe(request.op === 'workitem.search' ? 2 : 1);
+  });
+
+  test('no answer at all is unavailable', async () => {
+    const response = await handleGithubOperation(view, {
+      token: 'token',
+      fetch: async () => {
+        throw new TypeError('connection lost');
       },
     });
     expect(response).toEqual({
       operationId: 'view',
       ok: false,
-      error: {
-        kind: 'forge_error',
-        status: 503,
-        message: 'GitHub API request failed with HTTP 503',
-      },
+      error: { kind: 'unavailable', message: 'GitHub API request failed' },
     });
-    expect(calls).toBe(4);
-    expect(waits).toEqual([1_000, 2_000, 4_000]);
   });
 
-  test.each([false, true])(
-    'network failures keep bounded retries (persistent: %s)',
-    async persistent => {
-      let calls = 0;
-      const waits: number[] = [];
-      const response = await handleGithubOperation(request, {
+  test('a GraphQL RATE_LIMITED error is rate limited', async () => {
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref: { repo, number: 42 } },
+      {
         token: 'token',
-        fetch: async () => {
-          calls++;
-          if (persistent || calls === 1) throw new TypeError('connection lost');
-          return json(pull);
-        },
-        sleep: async ms => {
-          waits.push(ms);
-        },
-      });
-      if (persistent) {
-        expect(response).toEqual({
-          operationId: 'view',
-          ok: false,
-          error: { kind: 'forge_error', message: 'GitHub API request failed' },
-        });
-        expect(calls).toBe(4);
-        expect(waits).toEqual([1_000, 2_000, 4_000]);
-      } else {
-        const baseline = await handleGithubOperation(request, {
-          token: 'token',
-          fetch: async () => json(pull),
-        });
-        expect(response).toEqual(baseline);
-        expect(calls).toBe(2);
-        expect(waits).toEqual([1_000]);
+        fetch: async () =>
+          Response.json({ errors: [{ type: 'RATE_LIMITED', message: 'API rate limit exceeded' }] }),
       }
-    }
-  );
-
-  test.each([400, 401, 403, 404, 422, 429])('HTTP %s is never retried', async status => {
-    let calls = 0;
-    const waits: number[] = [];
-    const response = await handleGithubOperation(request, {
-      token: 'token',
-      fetch: async () => {
-        calls++;
-        return json({}, status);
-      },
-      sleep: async ms => {
-        waits.push(ms);
-      },
-    });
-    expect(response).toMatchObject({ ok: false, error: { status } });
-    expect(calls).toBe(1);
-    expect(waits).toEqual([]);
+    );
+    expect(response).toMatchObject({ ok: false, error: { kind: 'rate_limited' } });
   });
-
-  test.each(['invalid JSON', 'invalid shape', 'no credential'])(
-    '%s is never retried',
-    async failure => {
-      let calls = 0;
-      const waits: number[] = [];
-      const response = await handleGithubOperation(request, {
-        token: failure === 'no credential' ? undefined : 'token',
-        fetch: async () => {
-          calls++;
-          return failure === 'invalid JSON' ? new Response('{') : json({});
-        },
-        sleep: async ms => {
-          waits.push(ms);
-        },
-      });
-      expect(response).toMatchObject({
-        ok: false,
-        error: { kind: failure === 'no credential' ? 'no_credential' : 'forge_error' },
-      });
-      expect(calls).toBe(failure === 'no credential' ? 0 : 1);
-      expect(waits).toEqual([]);
-    }
-  );
 });

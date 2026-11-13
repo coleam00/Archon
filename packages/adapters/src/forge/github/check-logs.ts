@@ -15,7 +15,6 @@ import {
 } from '@archon/forge/operations';
 import {
   GitHubError,
-  TransientGitHubError,
   githubRequest,
   githubResponseError,
   githubSend,
@@ -59,10 +58,12 @@ async function readTail(response: Response, cap: number): Promise<{ tail: Buffer
       while (kept.length > 1 && size - kept[0].length >= cap) size -= kept.shift()?.length ?? 0;
     }
   } catch (cause) {
-    throw new TransientGitHubError(
-      { kind: 'forge_error', message: 'GitHub log download was cut off' },
+    throw new GitHubError(
+      { kind: 'unavailable', message: 'GitHub log download was cut off' },
       false,
-      { cause }
+      {
+        cause,
+      }
     );
   }
   return { tail: utf8Tail(Buffer.concat(kept), cap, total > size), total };
@@ -74,15 +75,13 @@ async function download(fetchImpl: Fetch, url: string): Promise<Response> {
   try {
     response = await fetchImpl(url);
   } catch (cause) {
-    throw new TransientGitHubError(
-      { kind: 'forge_error', message: 'GitHub log download failed' },
-      false,
-      { cause }
-    );
+    throw new GitHubError({ kind: 'unavailable', message: 'GitHub log download failed' }, false, {
+      cause,
+    });
   }
   if (response.ok) return response;
-  throw new (response.status >= 500 ? TransientGitHubError : GitHubError)({
-    kind: 'forge_error',
+  throw new GitHubError({
+    kind: response.status >= 500 ? 'unavailable' : 'forge_error',
     message: `GitHub log download failed with HTTP ${String(response.status)}`,
     status: response.status,
   });
