@@ -410,6 +410,12 @@ older writer that advances `started_at` without updating the phase value still o
 correctly when read by an upgraded executor. Both API run lists expose the nullable phase
 timestamp as ISO text.
 
+Time/ID ordering does not persist incumbent ownership. At exactly equal effective
+priority, a later lower-ID contender can pass a previously admitted higher-ID holder.
+Checkout exclusion is not guaranteed for that case. The timestamp fix retains this
+existing tie behavior; [#5600](https://github.com/coleam00/Archon/issues/5600) remains open
+for the deferred exclusion work.
+
 The upgrade adds a nullable column in SQLite and PostgreSQL; missing phase fields in file
 records read as null. Existing timestamps are retained without backfill. Creation times
 already overwritten by previous resumes cannot be restored exactly by this change.
