@@ -10,14 +10,7 @@ import {
   mutationTarget,
   mutationAttempt,
 } from '@archon/forge/operations';
-import {
-  githubErrorDetail,
-  parseRemote,
-  parseSubjectUrl,
-  TransientGitHubError,
-  type Fetch,
-  type Sleep,
-} from './api';
+import { githubErrorDetail, parseRemote, parseSubjectUrl, type Fetch, type Sleep } from './api';
 import { handleGithubChecksLogs } from './check-logs';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
 import { handleGithubWorkItemComments } from './comments';
@@ -82,31 +75,8 @@ export const githubPluginMetadata = {
 export interface GitHubOperationOptions {
   readonly token: string | undefined;
   readonly fetch?: Fetch;
+  /** The wait inside a write's read-back; tests replace it so they do not sleep. */
   readonly sleep?: Sleep;
-}
-
-/** The waits before each repeat of a read; their count is the number of repeats. */
-const READ_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
-
-/**
- * Run a read, repeating it from its start while it fails with a
- * {@link TransientGitHubError}. A read changes nothing, so a repeat is always
- * safe; a mutation never comes through here, because a 5xx can arrive after
- * GitHub applied it. Every other failure, and the last transient one, is thrown.
- */
-async function readWithRetry(
-  read: () => Promise<ForgeResponse>,
-  sleep: Sleep
-): Promise<ForgeResponse> {
-  for (let attempt = 0; ; attempt++) {
-    try {
-      return await read();
-    } catch (cause) {
-      const delay = READ_RETRY_DELAYS_MS[attempt];
-      if (!(cause instanceof TransientGitHubError) || delay === undefined) throw cause;
-      await sleep(delay);
-    }
-  }
 }
 
 function failure(operationId: string, error: ForgeError): ForgeResponse {
@@ -197,7 +167,8 @@ export async function handleGithubOperation(
     // Keyed by the request's own op, the handler takes that request; TypeScript cannot
     // correlate the table's members with the request union on its own.
     const read = readHandlers[request.op] as ReadHandler<ReadOp>;
-    return await readWithRetry(() => read(request, fetchImpl, token), sleep);
+    // A read that fails temporarily is repeated by the host, which records the repeats.
+    return await read(request, fetchImpl, token);
   } catch (cause) {
     return failure(request.operationId, githubErrorDetail(cause));
   }

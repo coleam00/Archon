@@ -1,5 +1,8 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
+import { mkdtempSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { discoverPlugins } from './discovery';
 import { dispatchForge } from './dispatch';
 import {
@@ -132,7 +135,10 @@ describe('mutation evidence at the dispatch boundary', () => {
     const result = await dispatch(edit, 'refused');
     expect(result.response).toMatchObject({
       ok: false,
-      error: { kind: 'conflict', message: 'the forge said no' },
+      error: {
+        kind: 'conflict',
+        message: 'the forge said no (pr.edit-body on forge.example/a/b#42)',
+      },
       mutation: { op: 'pr.edit-body', target: ref, outcome: 'refused' },
     });
   });
@@ -644,4 +650,95 @@ describe('review threads and issue bodies', () => {
       });
     }
   );
+});
+
+describe('temporary failures at the dispatch boundary', () => {
+  const root = mkdtempSync(join(tmpdir(), 'forge-temporary-'));
+  afterAll(() => removeTempTree(root));
+  const view = {
+    operationId: 'view-1',
+    op: 'pr.view',
+    selector: { kind: 'number', ref },
+  } satisfies ForgeRequest;
+
+  /** Dispatch against a plugin whose first `fail` calls fail with `kind`. */
+  async function temporary(
+    request: ForgeRequest,
+    fail: number,
+    kind = 'unavailable'
+  ): Promise<{
+    result: Awaited<ReturnType<typeof dispatchForge>>;
+    calls: number;
+    waits: number[];
+  }> {
+    const calls = join(root, crypto.randomUUID());
+    const discovery = await discoverPlugins({
+      config: {
+        plugins: [
+          {
+            plugin: 'mutator',
+            command: process.execPath,
+            args: [
+              fixture,
+              '--mode',
+              'temporary',
+              '--calls',
+              calls,
+              '--fail',
+              String(fail),
+              '--kind',
+              kind,
+            ],
+          },
+        ],
+        scanPath: false,
+      },
+    });
+    const waits: number[] = [];
+    const result = await dispatchForge(request, {
+      discovery,
+      sleep: async ms => {
+        waits.push(ms);
+      },
+    });
+    return { result, calls: readFileSync(calls, 'utf8').length, waits };
+  }
+
+  test('a read that fails once and then succeeds returns the result and records the retry', async () => {
+    const { result, calls, waits } = await temporary(view, 1);
+    expect(result.response).toMatchObject({ ok: true, result: { op: 'pr.view' } });
+    expect(result.audit.retries).toBe(1);
+    expect(calls).toBe(2);
+    expect(waits).toEqual([1_000]);
+  });
+
+  test.each(['unavailable', 'rate_limited'])(
+    'a read that stays %s stops at the bound and names its operation and subject',
+    async kind => {
+      const { result, calls, waits } = await temporary(view, 99, kind);
+      expect(result.response).toEqual({
+        operationId: 'view-1',
+        ok: false,
+        error: {
+          kind,
+          message: 'the forge is down (pr.view on forge.example/a/b#42, retried 3 times)',
+        },
+      });
+      expect(result.audit.retries).toBe(3);
+      expect(calls).toBe(4);
+      expect(waits).toEqual([1_000, 2_000, 4_000]);
+    }
+  );
+
+  test('a mutation that fails temporarily runs once and keeps its outcome', async () => {
+    const { result, calls, waits } = await temporary(edit, 99);
+    expect(result.response).toMatchObject({
+      ok: false,
+      error: { kind: 'unavailable' },
+      mutation: { op: 'pr.edit-body', outcome: 'outcome_unknown' },
+    });
+    expect(result.audit.retries).toBe(0);
+    expect(calls).toBe(1);
+    expect(waits).toEqual([]);
+  });
 });

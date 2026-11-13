@@ -314,7 +314,7 @@ test.each([
     expect(result.response).toEqual({
       operationId: 'origin',
       ok: false,
-      error: { kind: 'forge_error', message: expected },
+      error: { kind: 'forge_error', message: `${expected} (resolve)` },
     });
   }
 );

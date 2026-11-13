@@ -1,4 +1,5 @@
 import { createHash } from 'node:crypto';
+import { appendFileSync, readFileSync } from 'node:fs';
 
 interface PluginRef {
   repo: { host: string; path: string };
@@ -402,7 +403,25 @@ else {
   const applied = (): unknown =>
     Object.hasOwn(appliedReplies, input.op) ? appliedReplies[input.op]() : editReply();
 
-  if (mode === 'view-content' || mode === 'closed') {
+  // `temporary`: each call adds a line to `--calls`; the first `--fail` of them fail.
+  const callsFile = args[args.indexOf('--calls') + 1];
+  if (mode === 'temporary') appendFileSync(callsFile, '\n');
+  if (
+    mode === 'temporary' &&
+    readFileSync(callsFile, 'utf8').length <= Number(args[args.indexOf('--fail') + 1])
+  ) {
+    process.stdout.write(
+      JSON.stringify({
+        operationId: input.operationId,
+        ok: false,
+        error: { kind: args[args.indexOf('--kind') + 1], message: 'the forge is down' },
+        ...(input.op === 'pr.view'
+          ? {}
+          : { mutation: { op: input.op, target: ref, outcome: 'outcome_unknown' } }),
+      })
+    );
+    process.exit(1);
+  } else if (mode === 'view-content' || mode === 'closed' || mode === 'temporary') {
     process.stdout.write(
       JSON.stringify({
         operationId: input.operationId,

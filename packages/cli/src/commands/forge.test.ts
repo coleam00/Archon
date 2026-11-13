@@ -70,6 +70,7 @@ test('records qualified target and evaluated revision through the host audit', a
             target: ref,
             plugin,
             result: forgeAuditResponse(response),
+            retries: 0,
             durationMs: 1,
           },
         };
@@ -154,6 +155,7 @@ test('the CLI does not inject a built-in producer into explicit plugin configura
             target: null,
             plugin: null,
             result: forgeAuditResponse(response),
+            retries: 0,
             durationMs: 0,
           },
         };
@@ -190,6 +192,7 @@ test('uses trusted discovery/runtime values while retaining repo credential valu
             target: null,
             plugin: null,
             result: forgeAuditResponse(response),
+            retries: 0,
             durationMs: 0,
           },
         };
@@ -270,6 +273,7 @@ test('reads an authored request from a file so no body reaches argv', async () =
               target: null,
               plugin: null,
               result: forgeAuditResponse(response),
+              retries: 0,
               durationMs: 0,
             },
           };
@@ -497,6 +501,7 @@ test('reviews retain bodies in stdout and digest them through the CLI audit boun
             target: ref,
             plugin: null,
             result: forgeAuditResponse(response),
+            retries: 0,
             durationMs: 1,
           },
         };
