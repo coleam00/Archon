@@ -140,6 +140,7 @@ export function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
     outcome: null,
     user_message: 'mock message',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -728,25 +729,11 @@ export function makeWorkflowRun(
   overrides?: Partial<WorkflowRun>
 ): WorkflowRun {
   return {
+    ...mockWorkflowRun(id),
     origin: { conversationId: 'conv-dag' },
-    id,
     workflow_name: 'dag-test',
     conversation_id: 'conv-dag',
-    parent_conversation_id: null,
-    codebase_id: null,
-    status: 'running',
-    outcome: null,
     user_message: 'dag test message',
-    metadata: {},
-    started_at: new Date(),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: null,
-    user_id: null,
-    parent_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-    adopted_from_run_id: null,
     ...overrides,
   };
 }

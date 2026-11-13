@@ -21,6 +21,7 @@ import {
 const log = createLogger('file-store');
 export const persistedRunSchema = workflowRunSchema.extend({
   started_at: z.coerce.date(),
+  active_phase_started_at: z.coerce.date().nullable().default(null),
   last_activity_at: z.coerce.date().nullable(),
   completed_at: z.coerce.date().nullable(),
 });

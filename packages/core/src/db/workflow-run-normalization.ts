@@ -15,6 +15,7 @@ type RawRunColumn =
   | 'origin'
   | 'metadata'
   | 'started_at'
+  | 'active_phase_started_at'
   | 'completed_at'
   | 'last_activity_at'
   | 'checkout_baseline';
@@ -31,6 +32,7 @@ export type WorkflowRunRow = Omit<WorkflowRun, RawRunColumn> & {
   origin: unknown;
   metadata: string | Record<string, unknown> | null;
   started_at: string | Date;
+  active_phase_started_at: string | Date | null;
   completed_at: string | Date | null;
   last_activity_at: string | Date | null;
   checkout_baseline: unknown;
@@ -75,6 +77,8 @@ export function normalizeWorkflowRun<T extends WorkflowRunRow>(
     metadata: readMetadata(row),
     checkout_baseline: readCheckoutBaseline(row),
     started_at: toHydratedTimestamp(row.started_at),
+    active_phase_started_at:
+      row.active_phase_started_at == null ? null : toHydratedTimestamp(row.active_phase_started_at),
     completed_at: row.completed_at === null ? null : toHydratedTimestamp(row.completed_at),
     last_activity_at:
       row.last_activity_at === null ? null : toHydratedTimestamp(row.last_activity_at),

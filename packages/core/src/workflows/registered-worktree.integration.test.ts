@@ -164,6 +164,7 @@ test.each(['checkout', 'local branch', 'remote branch'])(
       outcome: null,
       user_message: '',
       metadata: {},
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,

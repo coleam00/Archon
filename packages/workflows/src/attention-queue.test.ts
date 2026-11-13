@@ -121,6 +121,7 @@ describe('a usage-limit wait', () => {
           resumeAt: '2026-10-15T14:00:00.000Z',
         },
       },
+      active_phase_started_at: null,
       started_at: new Date('2026-10-15T08:00:00.000Z'),
       completed_at: null,
       last_activity_at: null,

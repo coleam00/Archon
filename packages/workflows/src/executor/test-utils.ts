@@ -93,6 +93,7 @@ mock.module('@archon/paths', () => ({
   ),
   captureWorkflowInvoked: mockCaptureWorkflowInvoked,
   captureWorkflowTerminal: mockCaptureWorkflowTerminal,
+  isTelemetryDisabled: () => true,
 }));
 
 export const mockGetDefaultBranch = mock(async () => 'main');
@@ -345,6 +346,7 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     outcome: null,
     user_message: 'test message',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,

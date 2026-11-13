@@ -49,6 +49,7 @@ export const workflowRunSchema = z.object({
   user_message: z.string(),
   metadata: z.record(z.string(), z.unknown()),
   started_at: z.date(),
+  active_phase_started_at: z.date().nullable(),
   completed_at: z.date().nullable(),
   last_activity_at: z.date().nullable(),
   working_path: z.string().nullable(),

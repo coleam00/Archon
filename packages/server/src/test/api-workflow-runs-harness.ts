@@ -514,6 +514,7 @@ export const MOCK_RUNNING_RUN = {
   status: 'running',
   outcome: null,
   user_message: 'Deploy to staging',
+  active_phase_started_at: null,
   started_at: NOW_DATE,
   completed_at: null,
   metadata: {},

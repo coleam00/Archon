@@ -248,8 +248,9 @@ export interface IWorkflowStore
    * Pass `self` from the calling dispatch so:
    *   1. Self is never returned (excluded by `id != self.id`).
    *   2. Two near-simultaneous dispatches deterministically agree on which
-   *      is "first" via the `(started_at, id)` tiebreaker — newer aborts.
+   *      is "first" via the `(effective phase time, id)` tiebreaker — newer aborts.
    *
+   * `startedAt` is the effective path priority from `workflowPathPriorityTime`.
    * `id` and `startedAt` must travel together — the tiebreaker requires
    * both. Bundling them as a single optional struct makes the
    * paired-or-nothing invariant structural rather than a doc-only contract.

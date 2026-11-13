@@ -38,6 +38,7 @@ function runningRun(metadata: Record<string, unknown> = localOwner): WorkflowRun
     outcome: null,
     user_message: 'go',
     metadata,
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,

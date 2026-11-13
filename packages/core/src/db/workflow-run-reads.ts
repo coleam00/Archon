@@ -1,3 +1,4 @@
+import type { IWorkflowStore } from '@archon/workflows/store';
 import { ISOLATION_ENV_ID_METADATA_KEY } from '@archon/workflows/schemas/run-metadata';
 import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import {
@@ -228,7 +229,7 @@ export function activeWorkflowPathHolderCondition(): string {
  * `self` (`id` + `startedAt`) so:
  *   1. Self is never returned.
  *   2. If two dispatches both have rows, the deterministic older-wins
- *      tiebreaker `(started_at, id)` ensures both agree on which is "first."
+ *      tiebreaker `(effective phase time, id)` ensures both agree on which is "first."
  *      The newer dispatch sees the older row and aborts; the older dispatch
  *      sees nothing.
  *
@@ -240,9 +241,12 @@ export function activeWorkflowPathHolderCondition(): string {
  */
 export async function getActiveWorkflowRunByPath(
   workingPath: string,
-  self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
+  self?: Parameters<IWorkflowStore['getActiveWorkflowRunByPath']>[1]
 ): Promise<WorkflowRun | null> {
   const isPostgres = getDatabaseType() === 'postgresql';
+  const priority = isPostgres
+    ? 'GREATEST(started_at, COALESCE(active_phase_started_at, started_at))'
+    : 'MAX(julianday(started_at), julianday(COALESCE(active_phase_started_at, started_at)))';
   // Build params + clauses dynamically. Self exclusion + tiebreaker travel
   // together — the tiebreaker references both ids and timestamps.
   const params: unknown[] = [workingPath];
@@ -267,22 +271,7 @@ export async function getActiveWorkflowRunByPath(
     clauses.push(`id NOT IN (${placeholders.join(', ')})`);
   }
   if (self !== undefined) {
-    // Older-wins tiebreaker. (started_at, id) is a total order so both
-    // dispatches always agree on which is "first." Without this, two rows
-    // with similar timestamps could mutually see each other and both abort.
-    //
-    // Serialize Date to ISO string — bun:sqlite rejects Date bindings.
-    //
-    // Format-aware comparison:
-    //   PostgreSQL: started_at is TIMESTAMPTZ; cast the ISO param to
-    //     timestamptz so the comparison is chronological, not lexical.
-    //   SQLite: started_at is TEXT in "YYYY-MM-DD HH:MM:SS" format. Our
-    //     ISO param has "YYYY-MM-DDTHH:MM:SS.mmmZ". Lexical comparison is
-    //     WRONG: char 11 is space (0x20) in the column vs T (0x54) in the
-    //     param, so every column value lex-sorts before every ISO param —
-    //     making `started_at < $param` always TRUE regardless of actual
-    //     time. Wrap both sides in datetime() to force chronological
-    //     comparison via SQLite's date/time functions.
+    // Julian days preserve subsecond ordering across SQLite's ISO and UTC text formats.
     params.push(self.startedAt.toISOString());
     const startedAtParam = `$${String(params.length)}`;
     // NOT params.length - 1: excludeRunIds placeholders may sit between the self
@@ -290,8 +279,11 @@ export async function getActiveWorkflowRunByPath(
     // tiebreak at an ancestor id instead of self (caught by the SQL-shape test).
     // selfIdParam is always set when `self` is (same guard above).
     const idParam = selfIdParam ?? '$2';
-    const colExpr = isPostgres ? 'started_at' : 'datetime(started_at)';
-    const paramExpr = isPostgres ? `${startedAtParam}::timestamptz` : `datetime(${startedAtParam})`;
+    const colExpr = priority;
+    // Read self in SQL to retain PostgreSQL microseconds lost during Date hydration.
+    const paramExpr = isPostgres
+      ? `COALESCE((SELECT ${priority} FROM remote_agent_workflow_runs WHERE id = ${idParam}), ${startedAtParam}::timestamptz)`
+      : `julianday(${startedAtParam})`;
     clauses.push(`(${colExpr} < ${paramExpr} OR (${colExpr} = ${paramExpr} AND id < ${idParam}))`);
   }
 
@@ -299,7 +291,7 @@ export async function getActiveWorkflowRunByPath(
     const result = await pool.query<WorkflowRunRow>(
       `SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs
        WHERE ${clauses.join(' AND ')}
-       ORDER BY started_at ASC, id ASC LIMIT 1`,
+       ORDER BY ${priority} ASC, id ASC LIMIT 1`,
       params
     );
     const row = result.rows[0];

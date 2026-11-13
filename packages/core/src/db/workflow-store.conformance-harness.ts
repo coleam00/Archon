@@ -77,14 +77,14 @@ export async function makeSqlConformanceHarness(
       );
     },
     backdate: async (id, dates): Promise<void> => {
-      for (const field of ['started_at', 'last_activity_at'] as const) {
+      for (const field of ['started_at', 'active_phase_started_at', 'last_activity_at'] as const) {
         const date = dates[field];
         if (date === undefined) continue;
         const value =
           date === null
             ? null
             : type === 'sqlite'
-              ? date.toISOString().replace('T', ' ').slice(0, 19)
+              ? date.toISOString().replace('T', ' ').replace('Z', '')
               : date.toISOString();
         await db.query(`UPDATE remote_agent_workflow_runs SET ${field} = $2 WHERE id = $1`, [
           id,

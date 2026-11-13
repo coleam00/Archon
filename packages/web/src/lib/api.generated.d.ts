@@ -5940,6 +5940,7 @@ export interface components {
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
+      active_phase_started_at: string | null;
       completed_at: string | null;
       last_activity_at: string | null;
       working_path: string | null;
@@ -7579,6 +7580,7 @@ export interface components {
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
+      active_phase_started_at: string | null;
       completed_at: string | null;
       last_activity_at: string | null;
       working_path: string | null;

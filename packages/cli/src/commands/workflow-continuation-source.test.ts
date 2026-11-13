@@ -119,6 +119,7 @@ for (const source of [
       parent_conversation_id: source.endsWith('-origin') ? 'origin' : null,
       codebase_id: null,
       user_message: '',
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,

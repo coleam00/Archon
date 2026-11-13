@@ -38,6 +38,7 @@ export const detailFixture: Detail = {
     user_message: '',
     metadata: {},
     started_at: '2026-10-05T10:00:00Z',
+    active_phase_started_at: null,
     completed_at: '2026-10-05T10:01:00Z',
     last_activity_at: null,
     working_path: null,
