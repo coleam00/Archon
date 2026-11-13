@@ -1,8 +1,11 @@
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import {
-  attentionQueueItems,
-  readAttentionQueueItem,
+  attentionItemRef,
+  readAttentionQueueItemByRef,
+} from '@archon/workflows/attention-item-ref';
+import {
+  listAttentionQueue,
   selectAttentionQueue,
   type AttentionQueueItem,
   type AttentionQueueScope,
@@ -48,21 +51,17 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
       kind: 'enum',
       values: [...ACTIONS],
       description:
-        'list: the open attention items. answer: answer one item, named by its run and occurrence as list reports them.',
+        'list: the open attention items. answer: answer one item, named by the ref list reports for it.',
     },
     project: {
       kind: 'string',
       description:
         "For action=list: a project name, id or key, or 'all' for every project. Omit for this chat's project, or every project when the chat has none.",
     },
-    run: {
-      kind: 'string',
-      description: "For action=answer: the item's full runId, as list reports it.",
-    },
-    occurrence: {
+    item: {
       kind: 'string',
       description:
-        "For action=answer: the item's occurrence, as list reports it. The answer is refused when the item has since changed.",
+        "For action=answer: the item's ref, copied exactly as list reports it. The answer is refused when the item has since changed.",
     },
     choose: {
       kind: 'string',
@@ -93,9 +92,10 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
  * what needs someone across projects and answers one item, through the queue reader and
  * the answer operations every other surface uses.
  *
- * An item is addressed by its own `runId` and `occurrence`, and a list hands every item
- * to the agent as the queue describes it, so a field the queue adds reaches the agent
- * without a change here.
+ * An item is addressed by the reference the queue builds for it (`attentionItemRef`),
+ * which this tool hands out and takes back without reading. A list hands every item to
+ * the agent as the queue describes it, so a field the queue adds reaches the agent without
+ * a change here.
  *
  * A list reaches across projects, so it shows only the items the chat's actor may answer:
  * the rule an answer is held to. Whoever cannot answer an item does not read its prompt
@@ -122,7 +122,7 @@ export function buildAttentionTool(ctx: AttentionToolContext): NativeTool {
             return `attention: unknown action '${action}'. Use list or answer.`;
         }
       } catch (e: unknown) {
-        log.error({ err: e, action, run: text(input.run) }, 'attention_tool.failed');
+        log.error({ err: e, action, item: text(input.item) }, 'attention_tool.failed');
         return `attention error: ${workflowOperationErrorMessage(e, {})}`;
       }
     },
@@ -140,11 +140,13 @@ async function scopeFor(ctx: AttentionToolContext, project: string): Promise<Att
     : { kind: 'project', project: await ctx.resolveProject(spec) };
 }
 
-/** True when the chat's actor may answer `run`, by the rule the answer operations enforce. */
-async function mayAnswer(
-  ctx: AttentionToolContext,
-  run: Parameters<WorkflowOperations['assertRunActionAllowed']>[0]
-): Promise<boolean> {
+/**
+ * True when the chat's actor may answer `item`, by the rule the answer operations
+ * enforce. Today an item's permission is its run's.
+ */
+async function mayAnswer(ctx: AttentionToolContext, item: AttentionQueueItem): Promise<boolean> {
+  const run = await ctx.queue.store.getWorkflowRun(item.runId);
+  if (run === null) return false;
   try {
     await ctx.operations.assertRunActionAllowed(run, ctx.actor, 'respond');
     return true;
@@ -156,11 +158,10 @@ async function mayAnswer(
 
 async function listItems(ctx: AttentionToolContext, project: string): Promise<string> {
   const scope = await scopeFor(ctx, project);
-  const rows = splitAttentionRead(await ctx.queue.store.listAttentionQueueRows());
-  const answerable = [];
-  for (const run of rows.values) if (await mayAnswer(ctx, run)) answerable.push(run);
-  const read = splitAttentionRead(await attentionQueueItems(ctx.queue, answerable));
-  const items = selectAttentionQueue(read.values, { scope, labels: {}, order: { by: 'age' } });
+  const { values, degraded } = splitAttentionRead(await listAttentionQueue(ctx.queue));
+  const open = selectAttentionQueue(values, { scope, labels: {}, order: { by: 'age' } });
+  const items = [];
+  for (const item of open) if (await mayAnswer(ctx, item)) items.push(item);
   const where = scope.kind === 'all' ? 'every project' : `project ${scope.project.name}`;
   log.info({ scope: scope.kind, count: items.length }, 'attention_tool.list_completed');
   const lines = [
@@ -168,23 +169,30 @@ async function listItems(ctx: AttentionToolContext, project: string): Promise<st
       ? `No open attention items in ${where}.`
       : `${String(items.length)} open attention item(s) in ${where}, oldest first:`,
   ];
-  if (items.length > 0) lines.push(JSON.stringify(items, null, 1), HOW_TO_ANSWER);
-  const withheld = rows.values.length - answerable.length;
+  if (items.length > 0)
+    lines.push(
+      JSON.stringify(
+        items.map(item => ({ ref: attentionItemRef(item), ...item })),
+        null,
+        1
+      ),
+      HOW_TO_ANSWER
+    );
+  const withheld = open.length - items.length;
   if (withheld > 0)
     lines.push(
-      `${String(withheld)} more paused run(s) in the install are not listed: only the user who started a run, or an admin, may answer it.`
+      `${String(withheld)} more item(s) in ${where} are not listed: only the user who started a run, or an admin, may answer it.`
     );
   // A row that cannot be read has no readable owner, so it is counted and never identified.
-  const unreadable = rows.degraded.length + read.degraded.length;
-  if (unreadable > 0)
+  if (degraded.length > 0)
     lines.push(
-      `${String(unreadable)} more paused run(s) in the install could not be read. \`archon workflow attention\` names them.`
+      `${String(degraded.length)} more paused run(s) in the install could not be read. \`archon workflow attention\` names them.`
     );
   return lines.join('\n');
 }
 
 const HOW_TO_ANSWER = [
-  'Answer an item with action=answer, run=<runId>, occurrence=<occurrence>:',
+  'Answer an item with action=answer, item=<its ref>:',
   '- kind attention: choose=<JSON array of option ids> (one id, several only for form multi_select), or recommended=true; form message takes text only.',
   '- kind awaiting_response: choose=<JSON array with one decision id>, e.g. ["approve"] or ["reject"].',
   '- kind usage_limit continues by itself at resetAt; kind unreadable needs someone to look at the run. Neither takes an answer.',
@@ -242,21 +250,22 @@ function describe(answer: Answer): string {
     : answer.request.choose.map(option => `'${option}'`).join(', ');
 }
 
-/** The answerable item `runId` stands for at `occurrence`, or why there is none to answer. */
+/** The answerable item `ref` names, or why there is none to answer. */
 async function answerableItem(
   ctx: AttentionToolContext,
-  runId: string,
-  occurrence: string
+  ref: string
 ): Promise<Answerable | string> {
-  const item = await readAttentionQueueItem(ctx.queue, runId);
-  if (item === undefined) return `attention: no run ${runId}. Call action=list for the open items.`;
-  if (item === null) return `attention: run ${runId} has no open attention item.`;
+  const read = await readAttentionQueueItemByRef(ctx.queue, ref);
+  if (read.kind === 'unknown')
+    return `attention: nothing matches item '${ref}'. Call action=list and copy an item's ref.`;
+  if (read.kind === 'none') return `attention: item '${ref}' is no longer open.`;
+  if (read.kind === 'moved')
+    return `attention: item '${ref}' is over; its run now asks something else, as item '${attentionItemRef(read.item)}'. Call action=list and answer what it asks now.`;
+  const { item } = read;
   if (item.kind === 'usage_limit')
-    return `attention: run ${item.runId} waits for a usage limit and continues by itself at ${item.resetAt}. It takes no answer.`;
+    return `attention: item '${ref}' waits for a usage limit and continues by itself at ${item.resetAt}. It takes no answer.`;
   if (item.kind === 'unreadable')
-    return `attention: run ${item.runId} cannot be read (${item.reason}: ${item.detail}). Someone has to look at it; it takes no answer.`;
-  if (item.occurrence !== occurrence)
-    return `attention: the item on run ${item.runId} is now at occurrence ${item.occurrence}, not ${occurrence}. Call action=list and answer what it asks now.`;
+    return `attention: item '${ref}' cannot be read (${item.reason}: ${item.detail}). Someone has to look at its run; it takes no answer.`;
   return item;
 }
 
@@ -264,11 +273,10 @@ async function answerItem(
   ctx: AttentionToolContext,
   input: Record<string, unknown>
 ): Promise<string> {
-  const runId = text(input.run);
-  if (runId === '') return 'attention: action=answer requires run.';
-  if (typeof input.occurrence !== 'string')
-    return 'attention: action=answer requires occurrence, as list reports it.';
-  const item = await answerableItem(ctx, runId, input.occurrence.trim());
+  const ref = text(input.item);
+  if (ref === '')
+    return "attention: action=answer requires item, the item's ref as list reports it.";
+  const item = await answerableItem(ctx, ref);
   if (typeof item === 'string') return item;
   const answer = answerFor(item, input);
   if (typeof answer === 'string') return answer;

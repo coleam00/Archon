@@ -144,6 +144,12 @@ describe('attention tool', () => {
       project: { codebaseId: API.id, name: API.name },
     });
     expect(items[2]).toMatchObject({ kind: 'awaiting_response', occurrence: 'pause-gate' });
+    // Each item carries the reference an answer names it by.
+    expect(items.map(item => (item as { ref?: string }).ref)).toEqual([
+      'run-api:pause-api',
+      'run-web:pause-web',
+      'run-gate:pause-gate',
+    ]);
   });
 
   test("a project chat lists its own project unless asked for 'all' or another project", async () => {
@@ -166,15 +172,14 @@ describe('attention tool', () => {
 
     expect(listed(out).map(item => item.runId)).toEqual(['run-web']);
     expect(out).not.toContain('run-api');
-    expect(out).toContain('1 more paused run(s) in the install are not listed');
+    expect(out).toContain('1 more item(s) in every project are not listed');
   });
 
   test('an answer without confirm is a preview and records nothing', async () => {
     const { tool, answerWorkflow } = harness([webAsk]);
     const out = await tool.handler({
       action: 'answer',
-      run: 'run-web',
-      occurrence: 'pause-web',
+      item: 'run-web:pause-web',
       choose: '["merge"]',
     });
 
@@ -187,15 +192,13 @@ describe('attention tool', () => {
     const { tool, answerWorkflow } = harness([webAsk, apiAsk]);
     await tool.handler({
       action: 'answer',
-      run: 'run-web',
-      occurrence: 'pause-web',
+      item: 'run-web:pause-web',
       recommended: true,
       confirm: true,
     });
     const out = await tool.handler({
       action: 'answer',
-      run: 'run-api',
-      occurrence: 'pause-api',
+      item: 'run-api:pause-api',
       choose: '["return"]',
       text: 'needs a test',
       confirm: true,
@@ -222,13 +225,25 @@ describe('attention tool', () => {
     const { tool, answerWorkflow } = harness([webAsk]);
     const out = await tool.handler({
       action: 'answer',
-      run: 'run-web',
-      occurrence: 'pause-earlier',
+      item: 'run-web:pause-earlier',
       choose: '["merge"]',
       confirm: true,
     });
 
-    expect(out).toContain('pause-web');
+    expect(out).toContain("'run-web:pause-web'");
+    expect(answerWorkflow).not.toHaveBeenCalled();
+  });
+
+  test('a reference that names nothing is refused without a lookup by guesswork', async () => {
+    const { tool, answerWorkflow } = harness([webAsk]);
+    const out = await tool.handler({
+      action: 'answer',
+      item: 'no-such-run:pause-web',
+      choose: '["merge"]',
+      confirm: true,
+    });
+
+    expect(out).toContain("nothing matches item 'no-such-run:pause-web'");
     expect(answerWorkflow).not.toHaveBeenCalled();
   });
 
@@ -236,8 +251,7 @@ describe('attention tool', () => {
     const { tool, respondToWorkflow, answerWorkflow } = harness([webGate]);
     const refused = await tool.handler({
       action: 'answer',
-      run: 'run-gate',
-      occurrence: 'pause-gate',
+      item: 'run-gate:pause-gate',
       recommended: true,
       confirm: true,
     });
@@ -245,8 +259,7 @@ describe('attention tool', () => {
 
     await tool.handler({
       action: 'answer',
-      run: 'run-gate',
-      occurrence: 'pause-gate',
+      item: 'run-gate:pause-gate',
       choose: '["approve"]',
       text: 'ship it',
       confirm: true,
