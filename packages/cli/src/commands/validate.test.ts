@@ -64,7 +64,7 @@ describe('validateWorkflowsCommand', () => {
     });
   });
 
-  function discoverPackWorkflow(): void {
+  function discoverPackWorkflow() {
     const entry = makeTestWorkflowWithSource({
       name: 'packed',
       inputs: { invocation: { required: true } },
@@ -80,6 +80,7 @@ describe('validateWorkflowsCommand', () => {
       },
     };
     mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [entry], errors: [] });
+    return entry;
   }
 
   async function writePackSettings(text: string): Promise<string> {
@@ -90,7 +91,14 @@ describe('validateWorkflowsCommand', () => {
   }
 
   test('reports every invalid pack setting with its file and allowed values', async () => {
-    discoverPackWorkflow();
+    const entry = discoverPackWorkflow();
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({
+      workflows: [
+        entry,
+        makeTestWorkflowWithSource({ name: 'independent', nodes: [{ id: 'run', bash: 'true' }] }),
+      ],
+      errors: [],
+    });
     const path = await writePackSettings('settings:\n  ci: nonne\n  merge_lane: manul\n');
     expect(await validateWorkflowsCommand(validationCwd)).toBe(1);
     const output = mockConsoleLog.mock.calls.flat().join('\n');
@@ -98,6 +106,34 @@ describe('validateWorkflowsCommand', () => {
     expect(output).toContain(
       `${path}: setting 'merge_lane' must be one of auto, manual, got 'manul'`
     );
+
+    const pack = {
+      key: 'example',
+      source: 'project',
+      settings: {
+        label: { type: 'string' },
+        mode: { type: 'enum', values: ['auto', 'manual'] },
+        enabled: { type: 'bool' },
+        reviewers: { type: 'list' },
+      },
+    } as const;
+    entry.workflow.pack = pack;
+    for (const kind of ['array', 'mapping']) {
+      const settings = Object.keys(pack.settings).map(name => {
+        const value = kind === 'array' ? `[*${name}]` : `{self: *${name}}`;
+        return `  ${name}: &${name} ${value}`;
+      });
+      await writePackSettings(`settings:\n${settings.join('\n')}\n`);
+      mockConsoleLog.mockClear();
+      expect(await validateWorkflowsCommand(validationCwd)).toBe(1);
+      const cycleOutput = mockConsoleLog.mock.calls.flat().join('\n');
+      for (const name of Object.keys(pack.settings)) {
+        expect(cycleOutput).toContain(
+          `${path}: setting '${name}' must be a string (quote it in YAML), got`
+        );
+      }
+      expect(cycleOutput).toContain('1 valid, 1 with errors');
+    }
   });
 
   test('reports undeclared pack settings in JSON with the run-start diagnostic', async () => {
@@ -121,6 +157,26 @@ describe('validateWorkflowsCommand', () => {
         },
       ]);
       expect(output.summary.errors).toBe(1);
+      for (const [yaml, reason] of [
+        ['settings: [', 'not valid YAML:'],
+        ['[]', "must be a mapping with 'settings:'"],
+        ['config: {}', "unknown key 'config'; this file holds only 'settings:'"],
+        ['settings: []', "'settings' must be a mapping"],
+      ]) {
+        await writePackSettings(yaml);
+        write.mockClear();
+        expect(await validateWorkflowsCommand(validationCwd, 'packed', true)).toBe(1);
+        const invalid = JSON.parse(String(write.mock.calls[0]?.[0]));
+        expect(invalid.results[0].valid).toBe(false);
+        expect(invalid.results[0].issues).toEqual([
+          {
+            level: 'error',
+            field: 'pack_settings',
+            message: expect.stringContaining(`${path}: ${reason}`),
+          },
+        ]);
+        expect(invalid.summary.errors).toBe(1);
+      }
     } finally {
       write.mockRestore();
     }

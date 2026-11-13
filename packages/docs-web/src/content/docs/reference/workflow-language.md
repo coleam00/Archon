@@ -2272,6 +2272,11 @@ the run at that point, before any node runs, naming the file and the key; for an
 that is after its worktree was created. A `required` setting must be set there, given a default
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
+Run [`archon validate workflows`](/reference/cli/#validate-workflows-name) to check project
+pack settings before starting a run. It reports invalid values and undeclared names against
+each discovered workflow's pack declaration. Required values that an invocation can supply
+are checked only at run start.
+
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
 reads it against its own declaration. A bundled pack ships its `.pack/pack.yaml` with it, so its
 settings are set the same way. If a project or home pack folder takes another pack's name and

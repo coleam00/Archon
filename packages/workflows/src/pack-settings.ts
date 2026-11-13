@@ -63,7 +63,9 @@ export function packSettingValue(
 ): { value: string } | { error: string } {
   if (typeof raw === 'boolean' && spec.type === 'bool') return { value: String(raw) };
   if (typeof raw !== 'string') {
-    return { error: `must be a string (quote it in YAML), got ${JSON.stringify(raw)}` };
+    return {
+      error: `must be a string (quote it in YAML), got ${Bun.inspect(raw, { depth: 0, colors: false })}`,
+    };
   }
   switch (spec.type) {
     case 'string':
