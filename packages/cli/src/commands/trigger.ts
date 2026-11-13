@@ -206,19 +206,21 @@ async function requestingSourceActor(
 async function inheritedItemKey(
   host: WorkflowHost,
   sourceActor: SourceReceiptInput['sourceActor'],
-  startCwd: string
+  start: { cwd: string; recorded: boolean }
 ): Promise<string | undefined> {
   const caller = requestingRun(sourceActor);
-  if (!caller) return undefined;
+  // A recorded delivery replays with the item of its first acceptance, so only a new
+  // start is judged.
+  if (!caller || start.recorded) return undefined;
   const root =
     (await host.deps.store.getRunAncestry(caller.runId)).at(-1) ??
     (await host.deps.store.getWorkflowRun(caller.runId));
   const item = root?.item_id ? await host.deps.store.getItem(root.item_id) : null;
   if (!item) return undefined;
-  const project = await registeredStartProjectKey(host, startCwd);
+  const project = await registeredStartProjectKey(host, start.cwd);
   if (project === null)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${startCwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there.`
     );
   if (project !== item.projectKey)
     throw new Error(
@@ -252,8 +254,6 @@ async function triggerFire(
   if (options.item !== undefined) assertItemKey(options.item);
   const config = await loadFireConfig(options.config);
   const sourceActor = await requestingSourceActor(host, env);
-  const itemKey =
-    options.item ?? (await inheritedItemKey(host, sourceActor, config.binding.launch.cwd));
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
   // must not turn a recorded delivery into a failure; the store answers replay or
   // conflict for it. This lookup is the only run-as gate before persistence. It holds
@@ -263,6 +263,9 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
+  const itemKey =
+    options.item ??
+    (await inheritedItemKey(host, sourceActor, { cwd: config.binding.launch.cwd, recorded }));
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),

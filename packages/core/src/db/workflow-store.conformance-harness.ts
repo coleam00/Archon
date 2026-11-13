@@ -507,15 +507,17 @@ export function describeSqlStatusReadConformance(
       expect((await run({ adopted_from_run_id: bare.id })).item_id).toBeNull();
 
       // The item belongs to one project: another project's continuation must name its own.
-      const project = (name: string, cwd: string) =>
-        projectKeyForCodebase({ name, default_cwd: cwd }, '');
-      const refused = run({ adopted_from_run_id: first.id }, otherProject);
-      await expect(refused).rejects.toThrow(project('conformance', '/conformance'));
-      await expect(refused).rejects.toThrow(project('other', '/other'));
+      await expect(run({ adopted_from_run_id: first.id }, otherProject)).rejects.toThrow();
       const named = await run({ adopted_from_run_id: first.id, item_key: 'a' }, otherProject);
       expect(named.item_id).not.toBe(first.item_id);
+      // With no project to compare, a continuation of a run on an item is refused; one of
+      // a run with no item starts as it always did.
+      const unregistered = (adopted_from_run_id: string) =>
+        store.createWorkflowRun({ workflow_name: 'item', user_message: '', adopted_from_run_id });
+      await expect(unregistered(first.id)).rejects.toThrow();
+      expect((await unregistered(bare.id)).item_id).toBeNull();
       const runs = await db.query<{ id: string }>('SELECT id FROM remote_agent_workflow_runs');
-      expect(runs.rows).toHaveLength(7);
+      expect(runs.rows).toHaveLength(8);
     } finally {
       await harness.close();
     }

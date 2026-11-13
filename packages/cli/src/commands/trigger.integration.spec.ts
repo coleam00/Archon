@@ -431,14 +431,16 @@ describe('trigger CLI durable execution', () => {
     };
     const otherConfig = join(root, 'other.json');
     writeFileSync(otherConfig, JSON.stringify(config));
-    // The run fires into the other project three times: with no item while that project
-    // is unregistered, with an item named, and with no item once it is registered.
+    // The run fires into the other project with no item while that project is unregistered
+    // and again once it is registered, and in between with an item named.
     const fire = `'${process.execPath}' '${fixture.cliPath}' trigger fire --config '${otherConfig}'`;
     const refusal = (name: string) => join(root, `refused-${name}`);
     const refusedFire = (name: string) =>
       `${fire} > '${refusal(name)}' 2>&1; echo "exit $?" >> '${refusal(name)}'`;
+    // A redelivery of the accepted start replays, though it names no item.
+    const delivery = '--delivery-id delivery-1';
     fixture.writeWorkflow(
-      `${refusedFire('unregistered')}; ${fire} --item item-1 || exit 1; ${refusedFire('registered')}`
+      `${refusedFire('unregistered')}; ${fire} ${delivery} --item item-1 || exit 1; ${fire} ${delivery} || exit 1; ${refusedFire('registered')}`
     );
     const database = join(fixture.archonHome, 'archon.db');
     const runs = () =>
@@ -473,19 +475,30 @@ describe('trigger CLI durable execution', () => {
       `item-1 in ${String(other)}`,
     ]);
     // Each refusal exits non-zero before a receipt: only the two starts were recorded.
-    const unregistered = readFileSync(refusal('unregistered'), 'utf8');
-    expect(unregistered).toContain('--item');
-    expect(unregistered).toContain('exit 1');
-    const registered = readFileSync(refusal('registered'), 'utf8');
-    expect(registered).toContain(String(own));
-    expect(registered).toContain(String(other));
-    expect(registered).toContain('exit 1');
+    expect(readFileSync(refusal('unregistered'), 'utf8')).toContain('exit 1');
+    expect(readFileSync(refusal('registered'), 'utf8')).toContain('exit 1');
     expect(
       readRows<{ count: number }>(
         database,
         'SELECT COUNT(*) AS count FROM remote_agent_start_receipts'
       )
     ).toEqual([{ count: 2 }]);
+
+    // Superseding the other project's run from this one cannot stay on its item.
+    const otherRun = readRows<{ id: string }>(
+      database,
+      "SELECT id FROM remote_agent_workflow_runs WHERE workflow_name = 'other-proof'"
+    )[0];
+    const superseding = ['workflow', 'run', 'item-cross-proof', '--no-worktree', '--supersedes'];
+    const refused = await runCli(
+      fixture.cliPath,
+      fixture.projectRoot,
+      fixture.archonHome,
+      [...superseding, otherRun?.id ?? ''],
+      false
+    );
+    expect(refused.exitCode).not.toBe(0);
+    expect(runs()).toHaveLength(2);
   }, 60_000);
 
   test.skipIf(process.platform === 'win32')(

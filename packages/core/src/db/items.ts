@@ -2,6 +2,7 @@
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
   assertItemKey,
+  ContinuedItemProjectError,
   type WorkflowItem,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -66,8 +67,8 @@ export async function continuedItem(
   if (!item) return null;
   const project = await codebaseProjectKey(query, codebaseId);
   if (project !== item.project_key)
-    throw new Error(
-      `Run ${continuedRunId} is on item '${item.key}' in project '${item.project_key}', but its continuation runs in ${project ? `project '${project}'` : 'no registered project'}. An item belongs to one project: pass --item <key> to name the continuation's item there.`
+    throw new ContinuedItemProjectError(
+      `Run ${continuedRunId} is on item '${item.key}' in project '${item.project_key}', but its continuation runs in ${project ? `project '${project}'` : 'no registered project'}. An item belongs to one project, so the continuation has to name its own item.`
     );
   return item.id;
 }
