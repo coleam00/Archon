@@ -244,9 +244,8 @@ export async function getActiveWorkflowRunByPath(
   self?: Parameters<IWorkflowStore['getActiveWorkflowRunByPath']>[1]
 ): Promise<WorkflowRun | null> {
   const isPostgres = getDatabaseType() === 'postgresql';
-  // The caller's Date loses PostgreSQL microseconds; compare and order at that same precision.
   const priority = isPostgres
-    ? "date_trunc('milliseconds', GREATEST(started_at, COALESCE(active_phase_started_at, started_at)))"
+    ? 'GREATEST(started_at, COALESCE(active_phase_started_at, started_at))'
     : 'MAX(julianday(started_at), julianday(COALESCE(active_phase_started_at, started_at)))';
   // Build params + clauses dynamically. Self exclusion + tiebreaker travel
   // together — the tiebreaker references both ids and timestamps.
@@ -281,8 +280,9 @@ export async function getActiveWorkflowRunByPath(
     // selfIdParam is always set when `self` is (same guard above).
     const idParam = selfIdParam ?? '$2';
     const colExpr = priority;
+    // Read self in SQL to retain PostgreSQL microseconds lost during Date hydration.
     const paramExpr = isPostgres
-      ? `${startedAtParam}::timestamptz`
+      ? `COALESCE((SELECT ${priority} FROM remote_agent_workflow_runs WHERE id = ${idParam}), ${startedAtParam}::timestamptz)`
       : `julianday(${startedAtParam})`;
     clauses.push(`(${colExpr} < ${paramExpr} OR (${colExpr} = ${paramExpr} AND id < ${idParam}))`);
   }

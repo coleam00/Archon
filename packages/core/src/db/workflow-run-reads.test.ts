@@ -223,10 +223,10 @@ describe('workflow run reads', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('id != $2');
       expect(query).toContain(
-        "date_trunc('milliseconds', GREATEST(started_at, COALESCE(active_phase_started_at, started_at))) < $3::timestamptz"
+        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) < COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $3::timestamptz)'
       );
       expect(query).toContain(
-        "date_trunc('milliseconds', GREATEST(started_at, COALESCE(active_phase_started_at, started_at))) = $3::timestamptz AND id < $2"
+        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) = COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $3::timestamptz) AND id < $2'
       );
       // selfStartedAt serialized to ISO — bun:sqlite rejects Date bindings.
       expect(params).toEqual(['/repo/path', 'self-id', startedAt.toISOString()]);
@@ -251,7 +251,7 @@ describe('workflow run reads', () => {
 
       const [query] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain(
-        "ORDER BY date_trunc('milliseconds', GREATEST(started_at, COALESCE(active_phase_started_at, started_at))) ASC, id ASC"
+        'ORDER BY GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) ASC, id ASC'
       );
     });
 
@@ -291,7 +291,7 @@ describe('workflow run reads', () => {
       // back-reference once pointed it at $4 (an ancestor id) when excludeRunIds
       // params landed between the self id and startedAt.
       expect(query).toContain(
-        "date_trunc('milliseconds', GREATEST(started_at, COALESCE(active_phase_started_at, started_at))) = $5::timestamptz AND id < $2"
+        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) = COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $5::timestamptz) AND id < $2'
       );
       expect(params).toEqual([
         '/repo/path',

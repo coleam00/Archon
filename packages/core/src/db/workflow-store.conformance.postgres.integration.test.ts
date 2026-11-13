@@ -50,24 +50,11 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
   test.each(['initial', 'resumed', 'recovered', 'legacy-writer'] as const)(
-    '%s path priorities within a millisecond have one shared winner',
+    '%s preserves an admitted holder across submillisecond arrivals in either id order',
     async mode => {
       const harness = await makeHarness();
       try {
         const { db, store } = harness;
-        const path = '/submillisecond-priority';
-        const runs = await Promise.all(
-          [0, 1].map(() =>
-            store.createWorkflowRun({
-              workflow_name: 'priority',
-              user_message: '',
-              working_path: path,
-            })
-          )
-        );
-        runs.sort((a, b) => (a.id < b.id ? -1 : 1));
-        const [holder, contender] = runs;
-        if (!holder || !contender) throw new Error('Missing priority fixtures');
         const activate = async (id: string) => {
           await store.claimPendingWorkflowRun(id);
           if (mode === 'resumed') {
@@ -94,24 +81,42 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
             ]
           );
         };
-        await activate(holder.id);
-        await activate(contender.id);
-        for (const [firstFraction, secondFraction] of [
-          ['123100', '123900'],
-          ['123900', '123100'],
-        ] as const) {
-          await setPriority(holder.id, firstFraction);
-          await setPriority(contender.id, secondFraction);
-          expect((await store.getActiveWorkflowRunByPath(path))?.id).toBe(holder.id);
-          for (const run of runs) {
-            const hydrated = await store.getWorkflowRun(run.id);
-            if (!hydrated) throw new Error('Missing priority fixture');
-            const blocker = await store.getActiveWorkflowRunByPath(path, {
-              id: run.id,
-              startedAt: workflowPathPriorityTime(hydrated),
+        const blocker = async (id: string, path: string) => {
+          const hydrated = await store.getWorkflowRun(id);
+          if (!hydrated) throw new Error('Missing priority fixture');
+          return store.getActiveWorkflowRunByPath(path, {
+            id,
+            startedAt: workflowPathPriorityTime(hydrated),
+          });
+        };
+        for (const holderFirst of [false, true]) {
+          const path = `/submillisecond-priority/${holderFirst}`;
+          const firstId = randomUUID();
+          const secondId = randomUUID();
+          const ascending = firstId < secondId;
+          const [holderId, contenderId] =
+            ascending === holderFirst
+              ? ([firstId, secondId] as const)
+              : ([secondId, firstId] as const);
+          const create = (id: string) =>
+            store.createWorkflowRun({
+              id,
+              workflow_name: 'priority',
+              user_message: '',
+              working_path: path,
             });
-            expect(blocker?.id ?? null).toBe(run.id === holder.id ? null : holder.id);
-          }
+          const holder = await create(holderId);
+          await activate(holder.id);
+          await setPriority(holder.id, '123100');
+          expect(await blocker(holder.id, path)).toBeNull();
+
+          const contender = await create(contenderId);
+          await activate(contender.id);
+          await setPriority(contender.id, '123900');
+          expect((await blocker(contender.id, path))?.id).toBe(holder.id);
+          expect(await blocker(holder.id, path)).toBeNull();
+          expect((await store.getActiveWorkflowRunByPath(path))?.id).toBe(holder.id);
+          expect((await store.getWorkflowRun(holder.id))?.status).toBe('running');
         }
       } finally {
         await harness.close();
