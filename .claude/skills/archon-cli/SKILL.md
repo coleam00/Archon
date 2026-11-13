@@ -85,6 +85,7 @@ Route by intent:
 - **Launch and answer with `--detach`.** A detached run starts its own session and
   survives your shell. A foreground `respond` or `resume` continues the run inside
   your shell, and closing the shell stops it.
+- **Never put a shell `timeout` on a run.** A full pipeline outlasts any wrapper you would pick, and the wrapper kills it mid-node. The task's exit status is then the wrapper's, not the run's, so a killed run can read as success. Launch with `--detach` or as a background task with no timeout, and read `archon workflow get <run-id>` for the real status. A killed or failed run is resumable: `archon workflow resume <run-id>` skips completed nodes, so resume it instead of relaunching.
 - **One watcher, not one per run.** One `workflow attention --watch` stream covers
   every run in scope, including runs that triggers or other sessions start. A
   `workflow wait <run-id>` per run is fine for one or two runs; with dozens it

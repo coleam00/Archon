@@ -182,6 +182,7 @@ what you changed — a thin brief is cheaper to correct before a run than after 
 - Use [`.github/pull_request_template.md`](.github/pull_request_template.md). Keep its required sections, remove instructional comments and irrelevant conditional sections, and describe the problem before the implementation.
 - Review the complete diff against the actual base branch before opening the pull request.
 - Link the source issue as [`CONTRIBUTING.md`](CONTRIBUTING.md) says: a closing keyword, or `Refs` when the issue's dated ruling keeps it open after the pull request.
+- When a commit answers review findings, list each finding under the reviewer's own label, say what changed, and give a one-line reason for each deferral.
 - Keep titles concise and outcome-focused. Do not add AI attribution to commits or pull requests.
 
 ## Find current facts
