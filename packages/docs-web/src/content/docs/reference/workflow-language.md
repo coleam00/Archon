@@ -73,11 +73,10 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
 | `inputs`, `returns`, `outcome_field` | The workflow's signature. See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
-| `evidence_policy` | `{ required: true }` fails a run that finishes without `$ARTIFACTS_DIR/evidence.json`. See [Deterministic checks, authored outcomes, and evidence markers](#deterministic-checks-authored-outcomes-and-evidence-markers). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
-Some fields are retired. Workflow-level `interactive:` loads with a warning and has no effect. `modelReasoningEffort:` is applied as `effort:` with a warning. The old sequential `steps:` format fails to load, and so does `thinking:` on a workflow, node, tier or alias, with an error pointing at `effort:`.
+Some fields are retired. Workflow-level `interactive:` loads with a warning and has no effect. `modelReasoningEffort:` is applied as `effort:` with a warning. The old sequential `steps:` format fails to load, and so does `thinking:` on a workflow, node, tier or alias, with an error pointing at `effort:`. Workflow-level `evidence_policy:` also fails to load: it only checked that a file named `evidence.json` existed, so use a `bash:` or `script:` node that exits non-zero when a check must fail the run.
 
 ### Execution order
 
@@ -1766,7 +1765,7 @@ reference it from many workflows, instead of copy-pasting the nodes and letting 
 drift apart.
 
 **A node runs with the configuration its own workflow file declares; the run owns isolation,
-interactivity and evidence policy.** That one sentence is the whole rule. A composed workflow
+interactivity and budget.** That one sentence is the whole rule. A composed workflow
 that declares `provider: codex` / `model: large` / `effort: high` runs on exactly those,
 whichever workflow composed it, and a composed workflow that declares nothing resolves from
 your config, tier presets and personal AI preferences at run time, exactly as it would on its
@@ -1802,7 +1801,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition: `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
-| `worktree`, `container`, `evidence_policy`, `budget` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
+| `worktree`, `container`, `budget` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
 | `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow, where it then applies to every node in the run. |
 
@@ -2061,7 +2060,7 @@ and continues to control CLI exit codes and fixture `expect` checks. Fixtures ca
 assert the authored verdict with `fixture.authored: succeeded` or `failed`. Generated placeholder
 stubs, including tolerated `all_done` joins, never author a verdict.
 
-### Deterministic checks, authored outcomes, and evidence markers
+### Deterministic checks and authored outcomes
 
 These are independent signals:
 
@@ -2071,14 +2070,10 @@ These are independent signals:
 - `outcome_field` records the workflow author's schema-declared boolean verdict. It does not control
   lifecycle status. A succeeded outcome can remain on a run that later fails, and a failed outcome can
   coexist with a completed run.
-- `evidence_policy: { required: true }` is only a terminal file-presence convention. It requires a
-  host file at `$ARTIFACTS_DIR/evidence.json` before lifecycle completion. Any contents, including a
-  self-asserted or unsupported claim, satisfy it. The marker proves neither that a check ran nor that
-  an outcome was authored.
 
 There is no special verification node or verification status. Put a check in a deterministic node
 when its execution must govern success, and use `outcome_field` only when the workflow must record its
-own conclusion. Use `evidence_policy` only when a conventionally named deliverable must exist.
+own conclusion.
 
 ### Binding time: includes resolve at load, runs at runtime
 
@@ -3381,7 +3376,7 @@ Node 'plan': 'interactive' is only honoured inside 'loop:' or 'loop_group:';
 
 An AI field on a node that runs no AI, such as `model:` on a `bash:` node, only warns.
 
-The check covers the workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`, `evidence_policy:`) and every node in a `loop_group` body. Three blocks are exempt: `output_format:` is free-form JSON Schema, `sandbox:` passes unknown keys through, and `hooks:` already rejects an unknown key as an error.
+The check covers the workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`) and every node in a `loop_group` body. Three blocks are exempt: `output_format:` is free-form JSON Schema, `sandbox:` passes unknown keys through, and `hooks:` already rejects an unknown key as an error.
 
 Dropped-key warnings appear in `archon validate workflows`, inline in `archon workflow list` (`parseWarnings` in `--json`), on stderr before `archon workflow run` starts, in chat `/workflow list`, and as a marker in the console's workflow picker. Every run that starts also records them as a `workflow_parse_warnings` event, which `archon workflow get <run-id> --verbose` shows. Chat and the console post them to the conversation at run start on a best-effort basis.
 

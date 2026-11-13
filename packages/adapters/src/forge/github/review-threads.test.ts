@@ -47,7 +47,7 @@ const comment = (
   id: string,
   body: string,
   createdAt = '2026-11-11T10:00:00Z',
-  author: unknown = { __typename: 'User', login: 'reviewer', databaseId: 42 }
+  author: unknown = { __typename: 'User', login: 'reviewer', id: 'U_reviewer', databaseId: 42 }
 ) => ({
   id,
   author,
@@ -153,12 +153,32 @@ describe('pr.threads', () => {
                   comment('c1', 'a', undefined, {
                     __typename: 'User',
                     login: 'dev',
+                    id: 'U_dev',
                     databaseId: 1,
                   }),
-                  comment('c2', 'b', undefined, { __typename: 'Bot', login: 'ci', databaseId: 2 }),
-                  comment('c3', 'c', undefined, { __typename: 'Organization', login: 'acme' }),
-                  comment('c4', 'd', undefined, { login: 'untyped', databaseId: 4 }),
-                  comment('c5', 'e', undefined, { __typename: 'Mannequin', login: 'm' }),
+                  comment('c2', 'b', undefined, {
+                    __typename: 'Bot',
+                    login: 'ci',
+                    id: 'BOT_ci',
+                    databaseId: 2,
+                  }),
+                  comment('c3', 'c', undefined, {
+                    __typename: 'Organization',
+                    login: 'acme',
+                    id: 'O_acme',
+                    databaseId: 3,
+                  }),
+                  comment('c4', 'd', undefined, {
+                    login: 'untyped',
+                    id: 'X_untyped',
+                    databaseId: 4,
+                  }),
+                  comment('c5', 'e', undefined, {
+                    __typename: 'Mannequin',
+                    login: 'm',
+                    id: 'MQ_m',
+                    databaseId: 5,
+                  }),
                 ]),
               ],
             },
@@ -177,6 +197,55 @@ describe('pr.threads', () => {
     expect(authors?.[1]).toEqual({ host: 'github.com', id: '2', login: 'ci', type: 'bot' });
     expect(forgeResponseSchema.safeParse(response).success).toBe(true);
     expect(github.calls[0]?.query).toContain('author{__typename login');
+  });
+
+  test('an organization or mannequin author keeps the numeric id REST gives the account', async () => {
+    const github = fakeGitHub(() => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                thread('t1', [
+                  comment('c1', 'a', undefined, {
+                    __typename: 'Organization',
+                    login: 'acme',
+                    id: 'O_acme',
+                    databaseId: 9001,
+                  }),
+                  comment('c2', 'b', undefined, {
+                    __typename: 'Mannequin',
+                    login: 'imported',
+                    id: 'MDk6TWFubmVxdWlu',
+                    databaseId: 9002,
+                  }),
+                  comment('c3', 'c', undefined, {
+                    __typename: 'EnterpriseUserAccount',
+                    login: 'ent',
+                    id: 'MDIxOkVudGVycHJpc2VVc2VyQWNjb3VudDE=',
+                  }),
+                ]),
+              ],
+            },
+          },
+        },
+      },
+    }));
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      { token: 'token', fetch: github.fetch }
+    );
+    if (!response.ok || response.result.op !== 'pr.threads')
+      throw new Error(JSON.stringify(response));
+    expect(response.result.value.threads[0]?.comments.map(item => item.author)).toEqual([
+      { host: 'github.com', id: '9001', login: 'acme', type: 'organization' },
+      { host: 'github.com', id: '9002', login: 'imported', type: null },
+      // GitHub gives an enterprise user account no numeric id; its node id stands in.
+      { host: 'github.com', id: 'MDIxOkVudGVycHJpc2VVc2VyQWNjb3VudDE=', login: 'ent', type: null },
+    ]);
+    for (const kind of ['Organization', 'Mannequin'])
+      expect(github.calls[0]?.query).toContain(`... on ${kind}{databaseId}`);
   });
 
   test('every thread and comment carries when it was created and on which commit', async () => {

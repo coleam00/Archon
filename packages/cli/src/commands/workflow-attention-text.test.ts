@@ -124,6 +124,7 @@ test('the close of an ask is one line that says who answered when that was recor
       reason: 'answered',
       answeredVia: 'cli',
       answeredBy: { declared: 'triage-agent' },
+      answeredFromRun: { runId: 'run-9', nodePath: 'triage.decide' },
       answeredAt: null,
     },
     scope
@@ -131,6 +132,7 @@ test('the close of an ask is one line that says who answered when that was recor
   expect(closed).toHaveLength(1);
   expect(closed[0]).toContain('run-1');
   expect(closed[0]).toContain('triage-agent');
+  expect(closed[0]).toContain('from run run-9 (node triage.decide)');
   expect(
     attentionStreamText(
       { type: 'resolved', ...run, occurrence: 'occ-7', reason: 'withdrawn' },

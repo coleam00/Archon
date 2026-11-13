@@ -224,6 +224,10 @@ export const workflowEventSchema = workflowEventRowSchema
 export const workflowRunDetailSchema = z
   .object({
     run: workflowRunSchema.extend({
+      platform_type: z.string().nullable().openapi({
+        description:
+          "The platform of the run's own conversation (`web`, `cli`, ...), the same value the dashboard listing serves. Null when the run has no conversation.",
+      }),
       worker_platform_id: z.string().optional(),
       parent_platform_id: z.string().optional(),
       conversation_platform_id: z.string().nullable(),

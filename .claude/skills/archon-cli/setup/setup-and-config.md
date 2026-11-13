@@ -26,7 +26,8 @@ exits 1 with the reason.
 
 The first run in a checkout Archon has not seen registers the project before it
 starts. On an install with many projects that takes a few seconds.
-For the SDLC pack's queues, also read `../operate/queues.md` ("Before the first run").
+To set up the SDLC pack on a project, read `../operate/queues.md` ("Setting up the
+pack"): it points at the pack README's setup guide, which is the source of truth.
 
 ## Install
 
