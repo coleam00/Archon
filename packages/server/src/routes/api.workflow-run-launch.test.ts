@@ -230,7 +230,7 @@ describe('POST /api/workflows/:name/run', () => {
     const form = resolve(body.content['multipart/form-data']?.schema);
     for (const schema of [json, form]) {
       expect(schema.required).toEqual(['conversationId', 'message']);
-      // Empty is valid alongside inputs, so the published schema sets no minimum.
+      // An empty message is a valid start, so the published schema sets no minimum.
       expect(resolve(schema.properties?.message).minLength).toBeUndefined();
     }
     expect(resolve(json.properties?.conversationId).pattern).toBeUndefined();
@@ -693,7 +693,7 @@ describe('POST /api/workflows/:name/run', () => {
   });
 
   test.each(['json', 'multipart'] as const)(
-    'starts a %s run from inputs alone and records no empty chat message',
+    'starts a %s run from inputs and an empty message, recording no empty chat message',
     async transport => {
       mockFindConversationByPlatformId.mockImplementationOnce(async () => ({
         ...MOCK_CONV,
@@ -732,32 +732,26 @@ describe('POST /api/workflows/:name/run', () => {
     }
   );
 
-  test.each(['json', 'multipart'] as const)(
-    'refuses a %s run that has neither a message nor inputs',
-    async transport => {
-      const fields = { conversationId: 'web-test-abc', message: '' };
-      const form = new FormData();
-      for (const [key, value] of Object.entries(fields)) form.append(key, value);
-      form.append('inputs', '{}');
+  // The route has no start rule of its own. The dispatch gate checks the workflow's declared
+  // inputs, as CLI admission does, and refuses a start that misses a required one.
+  test('dispatches a run with neither a message nor inputs', async () => {
+    mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+    mockHandleMessage.mockImplementationOnce(async () => {});
 
-      const { app } = makeApp();
-      const response = await app.request(
-        '/api/workflows/fix-issue/run',
-        transport === 'json'
-          ? {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({ ...fields, inputs: {} }),
-            }
-          : { method: 'POST', body: form }
-      );
-      expect(response.status).toBe(400);
-      expect(await response.json()).toEqual({
-        error: 'message is required when no inputs are supplied',
-      });
-      expect(mockHandleMessage).not.toHaveBeenCalled();
-    }
-  );
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/nightly/run', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ conversationId: 'web-test-abc', message: '' }),
+    });
+    expect(response.status).toBe(200);
+    expect(mockHandleMessage).toHaveBeenCalledWith(
+      expect.anything(),
+      'web-test-abc',
+      '',
+      expect.objectContaining({ workflowName: 'nightly' })
+    );
+  });
 
   test('returns 400 for invalid workflow name (path traversal)', async () => {
     const { app } = makeApp();
