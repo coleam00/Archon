@@ -13,24 +13,29 @@ export interface WorkflowStart {
   conversation: Conversation | null;
   workflowName: string;
   inputs: Readonly<Record<string, string>> | undefined;
+  /** Set when the start adopts another run's estate. */
+  adoptRunId: string | undefined;
   actor: RunActor;
 }
 
 /**
- * Why this start cannot run, or `undefined` when it can. The run route asks before it writes
- * or dispatches anything, so a refusal is the request's response and never a later chat
- * message.
+ * Why this start cannot run, or `undefined` when the dispatch should take it. The run route
+ * asks before it writes or dispatches anything, so a refusal is the request's response and
+ * never a later chat message.
  *
- * The answer is the dispatch's own: the workflow resolves the way a start by name resolves
- * it, and the signature gates judge it with the continuation the dispatch would detect. An
- * input error is therefore deferred here exactly when the dispatch defers it. The dispatch
- * still runs the gates, because an adopted branch can replace the definition after this.
+ * It answers only for a start the dispatch judges on the workflow this conversation
+ * resolves: a fresh run that adopts nothing. That start gets the dispatch's own signature
+ * gates. Two starts are judged on a definition only the dispatch can reach, so it answers
+ * them on the conversation as before: one that adopts a run, whose branch can carry its own
+ * workflow, and one that continues a paused run, which runs the definition frozen on that
+ * run.
  *
  * A conversation with no project resolves workflows as the dispatch does for it, and has no
  * run to continue.
  */
 export async function workflowStartRefusal(start: WorkflowStart): Promise<string | undefined> {
   const { conversation, workflowName, actor } = start;
+  if (start.adoptRunId !== undefined) return undefined;
   const command = await startWorkflow(
     conversation ?? { codebase_id: null, cwd: null },
     workflowName,
@@ -44,18 +49,22 @@ export async function workflowStartRefusal(start: WorkflowStart): Promise<string
   const codebase = conversation?.codebase_id
     ? await codebaseDb.getCodebase(conversation.codebase_id)
     : null;
-  const continuation =
-    conversation && codebase
-      ? await readContinuation({ conversation, codebase }, request, request.definition)
-      : undefined;
+  if (conversation && codebase) {
+    const { willContinueExistingRun } = await readContinuation(
+      { conversation, codebase },
+      request,
+      request.definition
+    );
+    if (willContinueExistingRun) return undefined;
+  }
   const verdict = await judgeSignatureGates(
     {
       conversationId: start.conversationId,
       userId: actor.kind === 'user' ? actor.userId : undefined,
-      inputs: start.inputs,
+      options: { inputs: start.inputs },
     },
     request.definition,
-    continuation?.willContinueExistingRun ?? false
+    false
   );
   return verdict.ok ? undefined : verdict.reason;
 }

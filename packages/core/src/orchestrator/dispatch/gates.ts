@@ -13,21 +13,13 @@ import { toError } from '../../utils/error';
 import { getLog } from '../agent-log';
 import type { DispatchScope } from './scope';
 
+/** What the signature gates decide about one start; a refusal carries the reason to show. */
 export type SignatureGates =
-  | { ok: false }
+  | { ok: false; reason: string }
   | { ok: true; resolvedInputs?: Record<string, string>; deferredInputError?: Error };
 
-/** What the signature gates decide about one start, before anyone is told. */
-export type SignatureVerdict =
-  | Extract<SignatureGates, { ok: true }>
-  | { ok: false; reason: string };
-
-/** The facts the signature gates judge. Nothing here can deliver a message. */
-export interface SignatureSubject {
-  readonly conversationId: string;
-  readonly userId: string | undefined;
-  readonly inputs: Readonly<Record<string, string>> | undefined;
-}
+/** The part of a dispatch the gates read. Nothing in it can deliver a message. */
+type SignatureSubject = Pick<DispatchScope, 'conversationId' | 'userId' | 'options'>;
 
 /**
  * Input signature gate (#2470, #2554) plus capability gate, judged against ONE
@@ -41,14 +33,9 @@ export async function runSignatureGates(
   definition: ResolvedWorkflow,
   willContinueExistingRun: boolean
 ): Promise<SignatureGates> {
-  const verdict = await judgeSignatureGates(
-    { conversationId: scope.conversationId, userId: scope.userId, inputs: scope.options?.inputs },
-    definition,
-    willContinueExistingRun
-  );
-  if (verdict.ok) return verdict;
-  await scope.platform.sendMessage(scope.conversationId, verdict.reason);
-  return { ok: false };
+  const verdict = await judgeSignatureGates(scope, definition, willContinueExistingRun);
+  if (!verdict.ok) await scope.platform.sendMessage(scope.conversationId, verdict.reason);
+  return verdict;
 }
 
 /**
@@ -60,7 +47,7 @@ export async function judgeSignatureGates(
   subject: SignatureSubject,
   definition: ResolvedWorkflow,
   willContinueExistingRun: boolean
-): Promise<SignatureVerdict> {
+): Promise<SignatureGates> {
   const inputs = resolveInvocationInputs(subject, definition, willContinueExistingRun);
   if (!inputs.ok) return inputs;
   const unmet = await unmetGithubRequirement(subject, definition);
@@ -74,12 +61,12 @@ export async function judgeSignatureGates(
  * lists/loads normally.
  */
 function resolveInvocationInputs(
-  { inputs }: SignatureSubject,
+  { options }: SignatureSubject,
   definition: ResolvedWorkflow,
   willContinueExistingRun: boolean
-): SignatureVerdict {
+): SignatureGates {
   try {
-    return { ok: true, resolvedInputs: resolveTopLevelInputs(definition, inputs) };
+    return { ok: true, resolvedInputs: resolveTopLevelInputs(definition, options?.inputs) };
   } catch (err) {
     // Both are user-facing contract violations: a missing required input, and — now
     // that a caller can supply values — a key the workflow does not declare.
@@ -90,7 +77,7 @@ function resolveInvocationInputs(
         workflowName: definition.name,
         // Names only, never values — a supplied value is user content (logging rules).
         missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
-        suppliedKeys: inputs ? Object.keys(inputs) : [],
+        suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
         deferred: willContinueExistingRun,
       },
       'workflow.required_inputs_unsatisfiable'

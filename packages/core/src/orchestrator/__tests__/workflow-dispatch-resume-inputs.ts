@@ -68,6 +68,7 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
       conversation: makeDispatchConversation(),
       workflowName: 'test-workflow',
       inputs: undefined,
+      adoptRunId: undefined,
       actor: operator,
     };
     const prepare = (): void => {
@@ -94,6 +95,8 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
 
     prepare();
     expect(await workflowStartRefusal({ ...start, inputs: { diff: 'D1' } })).toBeUndefined();
+    // An adopting start is the dispatch's to judge: its branch can carry its own workflow.
+    expect(await workflowStartRefusal({ ...start, adoptRunId: 'run-to-adopt' })).toBeUndefined();
     // Asking changes nothing: no run is resumed, started or queued.
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
