@@ -427,7 +427,8 @@ export function createTransactionView(
         .filter(
           run =>
             isTerminalRunStatus(run.status) &&
-            run.started_at.getTime() < Date.now() - days * 86_400_000
+            (run.active_phase_started_at ?? run.started_at).getTime() <
+              Date.now() - days * 86_400_000
         )
         .map(run => run.id);
       const deleted = new Set(ids);

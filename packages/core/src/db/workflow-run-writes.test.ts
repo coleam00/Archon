@@ -233,7 +233,9 @@ describe('workflow run writes', () => {
       await deleteOldWorkflowRuns(7);
 
       for (const [sql, params] of mockQuery.mock.calls as [string, unknown[]][]) {
-        expect(sql).toContain(`started_at < ${mockPostgresDialect.nowMinusDays(1)}`);
+        expect(sql).toContain(
+          `COALESCE(active_phase_started_at, started_at) < ${mockPostgresDialect.nowMinusDays(1)}`
+        );
         expect(params).toEqual([7]);
       }
     });

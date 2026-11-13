@@ -398,10 +398,9 @@ Start at the head to follow new commits, or resume from a cursor saved by an ear
 ## Workflow run timestamps
 
 `started_at` is the run's creation time. Resume, including cancelled fan-out recovery,
-keeps it unchanged, so age, duration, listings and creation-based cleanup retain their
-original baseline. An old resumed terminal run can therefore reach cleanup eligibility
-sooner than it did when resume reset its age. Capacity waiters retain their first-refusal
-`capacity_wait.since`; queued starts retain their queue position.
+keeps it unchanged, so age, duration and listings retain their original baseline.
+Capacity waiters retain their first-refusal `capacity_wait.since`; queued starts retain
+their queue position.
 
 `active_phase_started_at` records the most recent successful resume. It is nullable:
 initial runs and records written before this field existed use `started_at` for checkout
@@ -409,6 +408,11 @@ priority. Checkout priority uses the later of the two timestamps, then the run i
 older writer that advances `started_at` without updating the phase value still orders
 correctly when read by an upgraded executor. Both API run lists expose the nullable phase
 timestamp as ISO text.
+
+Workflow cleanup ages terminal runs by `active_phase_started_at` when present,
+otherwise by `started_at`, in PostgreSQL, SQLite and file stores. A run created
+10 days ago, resumed yesterday and finished today survives `archon workflow cleanup 7`.
+This preserves cleanup's active-phase age behavior.
 
 Time/ID ordering does not persist incumbent ownership. At exactly equal effective
 priority, a later lower-ID contender can pass a previously admitted higher-ID holder.
