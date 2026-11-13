@@ -122,8 +122,8 @@ export function parseContainerPolicy(
 }
 
 /**
- * Parse workflow-level run budget (#2814). Malformed REJECTS: a misspelt or invalid ceiling must not silently mean no
- * ceiling. The strict schema rejects unknown keys, so `budget` needs no
+ * Parse workflow-level run budget (#2814). Malformed REJECTS: a misspelt or
+ * invalid ceiling must not silently mean no ceiling. The strict schema rejects unknown keys, so `budget` needs no
  * KNOWN_WORKFLOW_NESTED_KEYS entry.
  */
 export function parseRunBudget(raw: unknown): ParsedField<WorkflowRunBudget> {
@@ -138,8 +138,7 @@ export function parseRunBudget(raw: unknown): ParsedField<WorkflowRunBudget> {
 }
 
 /**
- * Parse workflow-level deprecation marker (#2781). A
- * malformed block REJECTS the workflow instead of warn-and-ignore: silently
+ * Parse workflow-level deprecation marker (#2781). A malformed block REJECTS the workflow instead of warn-and-ignore: silently
  * dropping it would ship a bundled default with no removal warning at all,
  * defeating the whole deprecation window.
  */
