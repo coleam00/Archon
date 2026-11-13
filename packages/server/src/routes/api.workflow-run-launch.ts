@@ -41,9 +41,10 @@ const runWorkflowRoute = createRoute({
     '(#2554). A start the engine refuses returns HTTP 400 with its reason before anything is ' +
     'written or queued: a workflow that does not resolve, a missing required input, an ' +
     'undeclared key, or an unmet `requires:`. For the input refusals the reason is the text ' +
-    '`archon workflow run` prints. A start that names `adopt_run_id`, or that continues a ' +
-    'paused run of the same workflow in the conversation, is judged by the dispatch on the ' +
-    'definition it will run and is answered on conversation SSE after an HTTP 200. `config` ' +
+    '`archon workflow run` prints. A start that names `adopt_run_id`, whose conversation sits ' +
+    'in a worktree, or that continues a paused run of the same workflow in the conversation, ' +
+    'is judged by the dispatch on the definition it will run and is answered on conversation ' +
+    'SSE after an HTTP 200. `config` ' +
     'supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. ' +
     'Caller-supplied filesystem config paths are rejected. JSON requests may supply ' +
     '`adopt_run_id` or `supersedes_run_id`, but not both. Unique prefixes resolve in the conversation selected project; ' +

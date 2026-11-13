@@ -18,6 +18,7 @@ import {
   mockInspectResumableRun,
   mockLogger,
   mockResolveContinuationWorkflow,
+  mockResolveWorkflowSourceRoot,
   mockStartRunLiveOwner,
   mockStartWorkflow,
   mockWithRunLiveOwner,
@@ -95,6 +96,10 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
 
     prepare();
     expect(await workflowStartRefusal({ ...start, inputs: { diff: 'D1' } })).toBeUndefined();
+    // A conversation in a worktree runs the canonical repository's workflow, not this one.
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockResolveWorkflowSourceRoot.mockResolvedValueOnce('/repos/test-repo');
+    expect(await workflowStartRefusal(start)).toBeUndefined();
     // An adopting start is the dispatch's to judge: its branch can carry its own workflow.
     expect(await workflowStartRefusal({ ...start, adoptRunId: 'run-to-adopt' })).toBeUndefined();
     // Asking changes nothing: no run is resumed, started or queued.

@@ -3,6 +3,7 @@ import { startWorkflow } from '../handlers/command-handler';
 import { judgeSignatureGates } from '../orchestrator/dispatch/gates';
 import { readContinuation } from '../orchestrator/dispatch/request';
 import type { Conversation } from '../types';
+import { resolveWorkflowSourceRoot } from '../utils/workflow-source-root';
 import type { RunActor } from './run-authorization';
 
 /** One start by workflow name, as the run route receives it. */
@@ -24,11 +25,12 @@ export interface WorkflowStart {
  * never a later chat message.
  *
  * It answers only for a start the dispatch judges on the workflow this conversation
- * resolves: a fresh run that adopts nothing. That start gets the dispatch's own signature
- * gates. Two starts are judged on a definition only the dispatch can reach, so it answers
- * them on the conversation as before: one that adopts a run, whose branch can carry its own
- * workflow, and one that continues a paused run, which runs the definition frozen on that
- * run.
+ * resolves: a fresh run that adopts nothing, from a checkout that is its own workflow
+ * source. That start gets the dispatch's own signature gates. Three starts are judged on a
+ * definition only the dispatch can reach, so it answers them on the conversation as before:
+ * one that adopts a run, whose branch can carry its own workflow; one whose conversation
+ * sits in a worktree, which runs the workflow of the canonical repository; and one that
+ * continues a paused run, which runs the definition frozen on that run.
  *
  * A conversation with no project resolves workflows as the dispatch does for it, and has no
  * run to continue.
@@ -36,6 +38,18 @@ export interface WorkflowStart {
 export async function workflowStartRefusal(start: WorkflowStart): Promise<string | undefined> {
   const { conversation, workflowName, actor } = start;
   if (start.adoptRunId !== undefined) return undefined;
+  const codebase = conversation?.codebase_id
+    ? await codebaseDb.getCodebase(conversation.codebase_id)
+    : null;
+  if (conversation && codebase) {
+    // When git cannot say where this checkout's workflows come from, the dispatch owns that
+    // failure too: it re-resolves the conversation's checkout before it reads the source.
+    const sourceRoot = await resolveWorkflowSourceRoot(
+      conversation.cwd ?? codebase.default_cwd
+    ).catch(() => 'unknown');
+    if (sourceRoot !== undefined) return undefined;
+  }
+
   const command = await startWorkflow(
     conversation ?? { codebase_id: null, cwd: null },
     workflowName,
@@ -46,9 +60,6 @@ export async function workflowStartRefusal(start: WorkflowStart): Promise<string
   const request = command.workflow;
   if (request?.kind !== 'start') return command.message;
 
-  const codebase = conversation?.codebase_id
-    ? await codebaseDb.getCodebase(conversation.codebase_id)
-    : null;
   if (conversation && codebase) {
     const { willContinueExistingRun } = await readContinuation(
       { conversation, codebase },

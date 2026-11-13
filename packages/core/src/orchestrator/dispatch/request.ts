@@ -165,8 +165,8 @@ export async function detectContinuation(
 
 /**
  * Which existing run a dispatch of this request would continue, read without acting on it.
- * The run route's admission asks the same question before it dispatches, so it defers an
- * input error exactly when the dispatch would.
+ * The run route's admission asks the same question before it dispatches, and leaves a
+ * start that continues a run to the dispatch.
  */
 export async function readContinuation(
   scope: Pick<DispatchScope, 'conversation' | 'codebase'>,
