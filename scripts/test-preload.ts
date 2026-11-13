@@ -28,6 +28,10 @@ process.env.DATABASE_URL = '';
 // run inside the Archon container at the container's real /.archon.
 process.env.ARCHON_DOCKER = '';
 process.env.WORKSPACE_PATH = '';
+// A suite run inside an Archon node inherits that node's identity, and a CLI command
+// under test would act as the outer run. A test of a node's call sets its own.
+process.env.WORKFLOW_ID = '';
+process.env.ARCHON_NODE_EXECUTION = '';
 // isDocker() owns the signal list; fail the process rather than run against a home
 // it would override.
 if (getArchonHome() !== testArchonHome) {

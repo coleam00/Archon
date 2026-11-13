@@ -156,11 +156,17 @@ export async function answerRun(
   const answeredBy = answererOf(actor);
   if (answeredBy !== undefined && !attentionAnswererSchema.safeParse(answeredBy).success)
     throw new Error('The declared answerer name must be 1 to 64 characters on one line.');
+  const fromRun = actor.kind === 'operator' ? actor.fromRun : undefined;
+  if (fromRun !== undefined && (await ctx.store.getWorkflowRun(fromRun.runId)) === null)
+    throw new Error(
+      `The answer comes from inside run ${fromRun.runId}, which this store does not know.`
+    );
   const { answered } = await ctx.store.answerAttentionWait(run.id, {
     pauseId: wait.pauseId,
     answer,
     answeredVia: origin.via,
     ...(answeredBy === undefined ? {} : { answeredBy }),
+    ...(fromRun === undefined ? {} : { fromRun }),
     answeredAt: new Date().toISOString(),
   });
   if (!answered) {
