@@ -9,8 +9,8 @@ import type { UserRole } from '../schemas/user';
  * Who acts on a run. `declared` is the name an operator-side answerer gave for itself
  * (`--as`): a claim recorded with an answer, which nothing checks and authorization
  * never reads. `fromRun` is the run and node the operator-side call was made from, which
- * the surface reads from the identity the engine gave the node process, never from the
- * caller's request.
+ * the surface reads from the identity the engine put in the node's environment, never
+ * from the caller's request.
  */
 export type RunActor =
   | { kind: 'operator'; declared?: string; fromRun?: AttentionAnsweringRun }

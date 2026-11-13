@@ -214,16 +214,10 @@ type Resolution =
     }
   | { reason: 'withdrawn' };
 
-type Answered = Extract<Resolution, { reason: 'answered' }>;
+type Answered = Omit<Extract<Resolution, { reason: 'answered' }>, 'answeredFromRun'>;
 
-/**
- * How `occurrence` closed, from the row when it still records the answer. The row never
- * records the answering run; that comes from the answer's event.
- */
-function rowResolution(
-  run: WorkflowRun,
-  occurrence: string | null
-): Omit<Answered, 'answeredFromRun'> | undefined {
+/** How `occurrence` closed, from the row when it still records the answer. */
+function rowResolution(run: WorkflowRun, occurrence: string | null): Answered | undefined {
   if (occurrence === null) return undefined;
   const { approval, wait } = run.metadata;
   if (isApprovalContext(approval) && gateOccurrence(approval) === occurrence)
@@ -252,22 +246,20 @@ function rowResolution(
 
 const answerKey = (runId: string, occurrence: string): string => `${runId}\u0000${occurrence}`;
 
-type AnswerOrigin = Pick<Answered, 'answeredVia' | 'answeredBy' | 'answeredFromRun'>;
+type AnswerOrigin = Pick<Answered, 'answeredVia' | 'answeredBy'>;
 
-/** The surface, answerer and answering run of each answer event in a page, by run and occurrence. */
+/** The surface and answerer of each answer event in a page, by run and occurrence. */
 function indexAnswers(page: WorkflowEventPage): Map<string, AnswerOrigin> {
   const answers = new Map<string, AnswerOrigin>();
   for (const { event } of page.events) {
     if (event.event_type !== 'approval_received' && event.event_type !== 'wait_answered') continue;
-    const { occurrence, via, by, fromRun } = event.data;
+    const { occurrence, via, by } = event.data;
     if (typeof occurrence !== 'string') continue;
     const surface = recordSurfaceSchema.safeParse(via);
     const answerer = attentionAnswererSchema.safeParse(by);
-    const answeringRun = attentionAnsweringRunSchema.safeParse(fromRun);
     answers.set(answerKey(event.workflow_run_id, occurrence), {
       answeredVia: surface.success ? surface.data : null,
       answeredBy: answerer.success ? answerer.data : null,
-      answeredFromRun: answeringRun.success ? answeringRun.data : null,
     });
   }
   return answers;
@@ -594,6 +586,20 @@ export async function watchAttentionQueue(
   };
   const reconciled = new Set<string>();
 
+  /**
+   * The run an answer was given from. Only the answer's event records it, and that event
+   * can sit in a later page than the one that closes the item, so it is read by run.
+   */
+  const answeringRun = async (
+    runId: string,
+    occurrence: string
+  ): Promise<AttentionAnsweringRun | null> => {
+    const events = (await store.listEventsForRuns([runId], ['wait_answered'])).get(runId) ?? [];
+    const answer = events.find(event => event.data.occurrence === occurrence);
+    const fromRun = attentionAnsweringRunSchema.safeParse(answer?.data.fromRun);
+    return fromRun.success ? fromRun.data : null;
+  };
+
   const resolve = async (
     runId: string,
     prev: AttentionQueueItem,
@@ -603,12 +609,13 @@ export async function watchAttentionQueue(
     const occurrence = occurrenceOf(prev);
     const fromRow = run === null ? undefined : rowResolution(run, occurrence);
     const origin = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
+    const answered: Answered | undefined =
+      fromRow ??
+      (origin !== undefined ? { reason: 'answered', ...origin, answeredAt: null } : undefined);
     const resolution: Resolution =
-      fromRow !== undefined
-        ? { ...fromRow, answeredFromRun: origin?.answeredFromRun ?? null }
-        : origin !== undefined
-          ? { reason: 'answered', ...origin, answeredAt: null }
-          : { reason: 'withdrawn' };
+      answered === undefined || occurrence === null
+        ? { reason: 'withdrawn' }
+        : { ...answered, answeredFromRun: await answeringRun(runId, occurrence) };
     await emit({
       type: 'resolved',
       cursor,

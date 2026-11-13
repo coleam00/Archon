@@ -1155,7 +1155,7 @@ The default scope is the current project, resolved from the working directory as
 
 `--count-by` counts the items open now. Add `--since` to count the attention waits opened in a window instead, whether each has been answered or is still open, so a class of question that recurs stays visible after its runs continue. `--since` takes a duration in minutes, hours, days or weeks back from now (`40m`, `24h`, `7d`, `2w`) or an ISO date or time. Scope and `--label` filters apply as they do to the open count. This count reads each wait's `wait_started` event, so it uses the labels the wait opened with and ignores later [`attention label`](#workflow-attention-label) writes. A wait opened by an Archon version that did not record labels on that event counts under no label (`value: null`, shown as `(no '<key>' label)`). Gates, usage-limit waits and waits of deleted runs are not counted. `--since` needs `--count-by`.
 
-Each group of a `--since` count also carries `recommendations: { asked, answered, followed }`: the waits that opened with a recommendation, those of them that were answered, and those answers that chose the recommended option. Text output prints them after the group when any wait carried one. `--count-by answerer`, which needs `--since`, groups the waits by who answered: each entry has `answeredBy`, which is `{ declared }` for a name given with [`--as`](#workflow-answer), `{ userId }` for an answer through a chat platform, and null for waits still open and answers that named nobody. These numbers come from the `wait_started` and `wait_answered` events alone. `wait_started` records the wait's `occurrence`, `form`, the `options` ids offered, `other` when the reserved option is offered, and the recommendation's `option` and `confidence`; it never records the message, an option's label or the recommendation's reason. A wait opened by an Archon version that did not record them counts as carrying no recommendation.
+Each group of a `--since` count also carries `recommendations: { asked, answered, followed }`: the waits that opened with a recommendation, those of them that were answered, and those answers that chose the recommended option. Text output prints them after the group when any wait carried one. `--count-by answerer`, which needs `--since`, groups the waits by who answered: each entry has `answeredBy`, which is `{ declared }` for a name given with [`--as`](#workflow-answer), `{ userId }` for an answer through a chat platform, and null for waits still open and answers that named nobody. The count groups on `answeredBy` alone: the run an answer was given from (`fromRun`) forms no group, so an answer from inside a run without `--as` counts under null. These numbers come from the `wait_started` and `wait_answered` events alone. `wait_started` records the wait's `occurrence`, `form`, the `options` ids offered, `other` when the reserved option is offered, and the recommendation's `option` and `confidence`; it never records the message, an option's label or the recommendation's reason. A wait opened by an Archon version that did not record them counts as carrying no recommendation.
 
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
@@ -1350,9 +1350,10 @@ The answer records `answeredVia` and `answeredAt` on the run's `metadata.wait`, 
 `{ userId }` is the Archon user that Archon resolved a chat platform's sender to. A
 `wait_answered` event carries the surface as `via`, the `occurrence`, the answer, and the
 answerer as `by`. When the command runs inside a workflow node, the event also carries
-`fromRun: { runId, nodePath }`, the run and node that answered. Archon reads it from the
-identity it gave the node's process, so nothing declares it and `--as` does not replace
-it. Like `approve`,
+`fromRun: { runId, nodePath }`, the run and node that answered. No flag sets it and `--as`
+does not replace it: Archon reads it from the run identity it put in the node's
+environment. A node process can change its own environment, so it is attribution, not
+proof. Like `approve`,
 human mode continues the run inline unless a continuation host claims it first, and `--json` records the answer and returns
 `{ ok, runId, action: "answer", answer, workflowName, resumable }` without continuing
 it; `archon serve` or [`workflow wake`](#workflow-wake) continues it. The HTTP equivalent
