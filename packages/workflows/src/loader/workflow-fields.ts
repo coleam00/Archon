@@ -11,7 +11,6 @@ import {
 } from '../schemas/resource-name';
 import {
   workflowRequirementSchema,
-  workflowEvidencePolicySchema,
   workflowRunBudgetSchema,
   workflowDeprecationSchema,
   workflowInputSpecSchema,
@@ -20,7 +19,6 @@ import {
 } from '../schemas/workflow';
 import type {
   WorkflowRequirement,
-  WorkflowEvidencePolicy,
   WorkflowRunBudget,
   WorkflowDeprecation,
   WorkflowInputSpec,
@@ -124,27 +122,7 @@ export function parseContainerPolicy(
 }
 
 /**
- * Parse workflow-level evidence policy (#2230). Unlike the worktree/container
- * convenience policies, a malformed block REJECTS the workflow instead of
- * warn-and-ignore: silently dropping a declared terminal-success gate would
- * let a run complete ungated — not fail-safe. Same hard-reject posture as
- * unknown-provider and persist_session capability validation.
- */
-export function parseEvidencePolicy(raw: unknown): ParsedField<WorkflowEvidencePolicy> {
-  if (raw === undefined) return { value: undefined };
-  const parsedEvidence = workflowEvidencePolicySchema.safeParse(raw);
-  if (!parsedEvidence.success) {
-    return {
-      error:
-        "Invalid evidence_policy: expected { required: boolean }. When required is true, the run is refused terminal 'completed' unless the conventional marker file $ARTIFACTS_DIR/evidence.json exists; its contents are not checked.",
-    };
-  }
-  return { value: parsedEvidence.data };
-}
-
-/**
- * Parse workflow-level run budget (#2814). Malformed REJECTS, like
- * evidence_policy: a misspelt or invalid ceiling must not silently mean no
+ * Parse workflow-level run budget (#2814). Malformed REJECTS: a misspelt or invalid ceiling must not silently mean no
  * ceiling. The strict schema rejects unknown keys, so `budget` needs no
  * KNOWN_WORKFLOW_NESTED_KEYS entry.
  */
@@ -160,7 +138,7 @@ export function parseRunBudget(raw: unknown): ParsedField<WorkflowRunBudget> {
 }
 
 /**
- * Parse workflow-level deprecation marker (#2781). Like evidence_policy, a
+ * Parse workflow-level deprecation marker (#2781). A
  * malformed block REJECTS the workflow instead of warn-and-ignore: silently
  * dropping it would ship a bundled default with no removal warning at all,
  * defeating the whole deprecation window.

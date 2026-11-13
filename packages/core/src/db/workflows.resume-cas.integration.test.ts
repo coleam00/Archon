@@ -727,6 +727,31 @@ describe('terminal workflow transitions — real SQLite', () => {
     });
   });
 
+  test('a run that failed the retired evidence gate still reads and lists', async () => {
+    // `evidence_policy` is gone (#5630) and nothing writes these values any more, but
+    // rows written before the removal hold them: the stop reason on the run and the
+    // `evidence_validation_failed` event.
+    await seed('terminal-evidence', 'failed', "datetime('now')", {
+      error: 'failed the evidence marker gate',
+      stop_reason: { reason: 'evidence_missing' },
+    });
+    await db.query(
+      `INSERT INTO remote_agent_workflow_events (id, workflow_run_id, event_type, data)
+       VALUES ('evidence-event', 'terminal-evidence', 'evidence_validation_failed', $1)`,
+      [JSON.stringify({ policy: 'evidence_policy.required', expected_path: '/a/evidence.json' })]
+    );
+
+    const run = await getWorkflowRun('terminal-evidence');
+    expect(run?.status).toBe('failed');
+    expect(readRunStopReason(run?.metadata)).toEqual({ reason: 'evidence_missing' });
+
+    const listed = await workflowDb.listDashboardRuns({ status: 'failed', limit: 200 });
+    expect(listed.runs.map(r => r.id)).toContain('terminal-evidence');
+
+    const events = await createWorkflowStore().listWorkflowEvents('terminal-evidence');
+    expect(events.map(e => e.event_type)).toEqual(['evidence_validation_failed']);
+  });
+
   test('a new failure replaces a prior stop reason instead of merging into it', async () => {
     // SQLite's json_patch is RFC 7396 and RECURSES into a nested object, so merging a
     // reason-only record over a signalled one would leave the old signal attached to the

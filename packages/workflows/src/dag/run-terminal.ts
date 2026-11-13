@@ -1,9 +1,7 @@
 /**
  * How a DAG pass ends once its layers have run: the node-outcome tally, the failure and
- * usage-limit dispositions, the evidence and write-back gates, and the completion write.
+ * usage-limit dispositions, the write-back gate, and the completion write.
  */
-import { existsSync } from 'fs';
-import { join as joinPath } from 'path';
 import type { WorkflowDeps } from '../deps';
 import type {
   NodeOutput,
@@ -62,7 +60,7 @@ interface TerminalOutput {
 
 /**
  * Settle a pass whose layers ran to the end: fail it on node failures (or pause it on a
- * provider-limit wait), refuse completion at the evidence and write-back gates, or complete
+ * provider-limit wait), refuse completion at the write-back gate, or complete
  * it. Returns the run's terminal output, the summary for the parent conversation and the
  * `workflow:` re-entry path.
  */
@@ -90,8 +88,6 @@ export async function finishRun(
 
   // Check if status was changed externally (e.g. cancelled) before marking complete.
   if (await skipIfStatusChanged(deps, workflowRun, 'dag.skip_complete_status_changed')) return;
-
-  if (await failsEvidenceGate(ctx, runTranscriptUsage)) return;
 
   // Container write-back gate (Phase C): all nodes succeeded — before completing,
   // present the overlay diff and (unless auto) pause for approval. This is an
@@ -190,87 +186,6 @@ function partialFailureMessage(
     .map(([id, o]) => `'${id}': ${o.state === 'failed' ? o.error : 'unknown'}`)
     .join('; ');
   return `DAG workflow '${workflowName}' completed with failures: ${failedNodes}`;
-}
-
-/**
- * Evidence gate (#2230): thin terminal file-presence gate, a sibling of the
- * approval/write-back gates (run-status transitions are engine governance).
- * When the workflow declares `evidence_policy.required: true`, refuse to flip
- * the run to `completed` unless `$ARTIFACTS_DIR/evidence.json` exists — the
- * engine checks presence only (no schema validation, no content checks, no
- * git/gh I/O). Any contents satisfy this convention; deterministic checks
- * and authored outcomes remain separate. Placed BEFORE
- * the container write-back gate so a run that cannot complete never pauses
- * for (or applies) write-back — mirroring how node-failure runs skip that
- * gate entirely. Resume-safe: the run id (and therefore artifactsDir) is
- * stable across resume, so a failed run resumed after evidence.json is
- * produced re-enters here with all nodes prior-completed and completes.
- */
-async function failsEvidenceGate(
-  ctx: RunTerminalContext,
-  runTranscriptUsage: WorkflowUsage
-): Promise<boolean> {
-  const { deps, platform, conversationId, workflow, workflowRun, artifactsDir, logDir } = ctx;
-  if (workflow.evidence_policy?.required !== true) return false;
-  const evidencePath = joinPath(artifactsDir, 'evidence.json');
-  if (!existsSync(evidencePath)) {
-    const failMsg =
-      `DAG workflow '${workflow.name}' failed the evidence marker gate: ` +
-      `evidence_policy.required is true but its conventional marker file is absent at ${evidencePath}. ` +
-      'The policy checks only that path; create the marker in the host artifacts directory, ' +
-      'then resume the run.';
-    getLog().error({ workflowRunId: workflowRun.id, evidencePath }, 'dag.evidence_gate_failed');
-    // Structured, machine-readable note first (metadata merge), then the
-    // failed-status write — so metadata.evidence_validation is already present
-    // the moment the run reads as failed.
-    await deps.store
-      .updateWorkflowRun(workflowRun.id, {
-        metadata: {
-          evidence_validation: {
-            status: 'missing',
-            policy: 'evidence_policy.required',
-            expected_path: evidencePath,
-            checked_at: new Date().toISOString(),
-          },
-        },
-      })
-      .catch((dbErr: Error) => {
-        getLog().error(
-          { err: dbErr, workflowRunId: workflowRun.id },
-          'dag.evidence_metadata_write_failed'
-        );
-      });
-    // Persist the reason into the workflow-events log (contract: never throws).
-    await deps.store.createWorkflowEvent({
-      workflow_run_id: workflowRun.id,
-      event_type: 'evidence_validation_failed',
-      data: { policy: 'evidence_policy.required', expected_path: evidencePath },
-    });
-    await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
-      (logErr: Error) => {
-        getLog().error(
-          { err: logErr, workflowRunId: workflowRun.id },
-          'dag.workflow_error_log_write_failed'
-        );
-      }
-    );
-    await safeSendMessage(platform, conversationId, `❌ ${failMsg}`, {
-      workflowId: workflowRun.id,
-    });
-    // The metadata merge above precedes the terminal write, so
-    // `metadata.evidence_validation` is present the moment the run reads as failed.
-    await failRun(
-      deps,
-      workflowRun,
-      workflow.name,
-      failMsg,
-      'evidence_missing',
-      'dag.evidence_gate_fail'
-    );
-    return true;
-  }
-  getLog().info({ workflowRunId: workflowRun.id, evidencePath }, 'dag.evidence_gate_passed');
-  return false;
 }
 
 /**
