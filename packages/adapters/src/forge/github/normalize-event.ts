@@ -7,7 +7,7 @@ import {
   type ForgeEvent,
   type ForgeEventEnvelope,
 } from '@archon/forge';
-import { accountType } from './actor';
+import { actor, userSchema } from './actor';
 
 type PrLifecycleAction = Extract<ForgeEvent, { kind: 'pr.lifecycle' }>['action'];
 
@@ -51,15 +51,12 @@ export type GitHubNormalizationResult =
   | { status: 'malformed'; reason: string };
 
 const repositorySchema = z.object({ full_name: z.string().min(1) });
-const senderSchema = z.object({
-  id: z.union([z.string().min(1), z.number().int()]),
-  login: z.string().min(1).nullable().optional(),
-  type: z.string().optional(),
-});
+// A webhook sender is the REST user object. Deliveries omit it; they never send it as null.
+const senderSchema = userSchema.unwrap().optional();
 const baseSchema = z.object({
   action: z.string().min(1),
   repository: repositorySchema,
-  sender: senderSchema.optional(),
+  sender: senderSchema,
 });
 const issueSchema = baseSchema.extend({
   issue: z.object({
@@ -106,7 +103,7 @@ const issueCommentSchema = baseSchema.extend({
   }),
   comment: z.object({
     id: z.union([z.string().min(1), z.number().int()]),
-    user: senderSchema.nullable(),
+    user: userSchema,
     created_at: z.iso.datetime({ offset: true }).nullable().optional(),
   }),
 });
@@ -131,25 +128,11 @@ const statusSchema = z.object({
   created_at: z.iso.datetime({ offset: true }).nullable().optional(),
   updated_at: z.iso.datetime({ offset: true }).nullable().optional(),
   repository: repositorySchema,
-  sender: senderSchema.optional(),
+  sender: senderSchema,
 });
 
 function id(value: string | number | undefined): string | null {
   return value === undefined ? null : String(value);
-}
-
-function actor(
-  sender: z.infer<typeof senderSchema> | undefined,
-  host: string
-): SourceActor | undefined {
-  return sender
-    ? {
-        host,
-        id: String(sender.id),
-        login: sender.login ?? null,
-        type: accountType(sender.type),
-      }
-    : undefined;
 }
 
 export function checkPhase(status: string): 'pending' | 'running' | 'completed' | 'unknown' {
@@ -178,7 +161,7 @@ function malformed(error: z.ZodError): GitHubNormalizationResult {
 function normalizeEnvelope(
   event: ForgeEvent,
   context: GitHubEnvelopeContext,
-  sourceActor: SourceActor | undefined,
+  sourceActor: SourceActor | null,
   occurredAt: string | null
 ): GitHubNormalizationResult {
   const envelope = forgeEventEnvelopeSchema.safeParse({
@@ -188,7 +171,8 @@ function normalizeEnvelope(
     contentDigest: context.contentDigest,
     receivedAt: context.receivedAt,
     occurredAt,
-    sourceActor,
+    // An envelope without a sender omits `sourceActor` rather than recording null.
+    sourceActor: sourceActor ?? undefined,
     event,
   });
   return envelope.success
@@ -204,7 +188,7 @@ function normalizeIssues(
   const parsed = issueSchema.safeParse(payload);
   if (!parsed.success) return malformed(parsed.error);
   const value = parsed.data;
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt = value.issue.updated_at ?? null;
   if (value.action === 'labeled' || value.action === 'unlabeled') {
     if (!value.label) return { status: 'malformed', reason: 'label: Required for label action' };
@@ -220,7 +204,7 @@ function normalizeIssues(
       },
       label: { name: value.label.name, id: id(value.label.id) },
       // GitHub's sender on a labeled delivery is whoever changed the label.
-      actor: sourceActor ?? null,
+      actor: sourceActor,
     };
   } else if (
     value.action === 'opened' ||
@@ -280,7 +264,7 @@ function normalizePullRequest(
   const parsed = pullRequestSchema.safeParse(payload);
   if (!parsed.success) return malformed(parsed.error);
   const value = parsed.data;
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt =
     value.pull_request.merged_at ??
     value.pull_request.closed_at ??
@@ -300,7 +284,7 @@ function normalizePullRequest(
       },
       label: { name: value.label.name, id: id(value.label.id) },
       // GitHub's sender on a labeled delivery is whoever changed the label.
-      actor: sourceActor ?? null,
+      actor: sourceActor,
     };
   } else {
     const action = prLifecycleAction(value.action, value.pull_request.merged);
@@ -337,7 +321,7 @@ function normalizeIssueComment(
       status: 'unsupported',
       reason: `Unsupported GitHub issue_comment action: ${value.action}`,
     };
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt = value.comment.created_at ?? null;
   const ref = {
     repo: { host: context.host, path: value.repository.full_name },
@@ -350,7 +334,7 @@ function normalizeIssueComment(
     subject: value.issue.pull_request === undefined ? { kind: 'issue', ref } : { kind: 'pr', ref },
     comment: {
       id: String(value.comment.id),
-      author: actor(value.comment.user ?? undefined, context.host) ?? null,
+      author: actor(context.host, value.comment.user),
     },
   };
   return normalizeEnvelope(event, context, sourceActor, occurredAt);
@@ -366,7 +350,7 @@ function normalizeCheckRun(
   if (value.action !== 'created' && value.action !== 'completed') {
     return { status: 'unsupported', reason: 'Unsupported GitHub check_run action' };
   }
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt = value.check_run.completed_at ?? value.check_run.started_at ?? null;
   const event: ForgeEvent = {
     kind: 'check.changed',
@@ -393,7 +377,7 @@ function normalizeStatus(
   const parsed = statusSchema.safeParse(payload);
   if (!parsed.success) return malformed(parsed.error);
   const value = parsed.data;
-  const sourceActor = actor(value.sender, context.host);
+  const sourceActor = actor(context.host, value.sender ?? null);
   const occurredAt = value.updated_at ?? value.created_at ?? null;
   const event: ForgeEvent = {
     kind: 'check.changed',

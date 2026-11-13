@@ -781,7 +781,13 @@ describe('chat adapter project selection and capability transport', () => {
           const options = mockSendQuery.mock.calls.at(-1)?.[3];
           expect(options?.nativeTools?.map(t => t.name) ?? []).toEqual(
             nativeTools
-              ? ['invoke_workflow', 'register_project', 'report_workflow_no_match', 'manage_run']
+              ? [
+                  'invoke_workflow',
+                  'register_project',
+                  'report_workflow_no_match',
+                  'attention',
+                  'manage_run',
+                ]
               : []
           );
         } finally {
