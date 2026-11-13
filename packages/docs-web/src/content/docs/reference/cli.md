@@ -1768,7 +1768,7 @@ invalid, or a required event write fails.
 
 ### `validate workflows [name]`
 
-Validate workflow YAML definitions and their referenced resources (command files, MCP configs, skill directories).
+Validate workflow YAML definitions, project pack settings, and referenced resources (command files, MCP configs, skill directories).
 
 ```bash
 archon validate workflows                 # Validate all workflows
@@ -1777,6 +1777,8 @@ archon validate workflows my-workflow --json  # Machine-readable JSON output
 ```
 
 Checks: YAML syntax, DAG structure (cycles, dependency refs), command file existence, MCP config files, skill directories, provider compatibility, tier/alias model refs, and supported static environment reads in inline or named exec sources. An unprovided `INPUTS_*` read is an error when the workflow declares an input contract; other unprovided Python or JavaScript/TypeScript environment reads warn. See [Variables](/reference/variables/#shell-quoting-in-bash-vs-script) for the supported forms and fixes. For bundled and global workflows, validation rejects a bare `@custom` model alias because it isn't portable across projects; use `small`, `medium`, `large`, a literal provider model string, or a preference list that ends in one, such as `['@reviewer', medium]`. Returns actionable error messages with "did you mean?" suggestions for typos.
+
+Project pack settings in `.archon/packs/<pack>.yaml` are checked against each discovered workflow's pack declaration using the same value rules as run start. Errors name the file and setting, including allowed values for enum settings. Validation checks values present in the file; required values that an invocation can supply are checked at run start.
 
 Exit code: 0 = all valid, 1 = errors found.
 

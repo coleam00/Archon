@@ -11,6 +11,7 @@ import { workflowLoadErrorName } from '@archon/workflows/schemas/workflow';
 import { writeStdout } from '../utils/stdout';
 import {
   validateWorkflowResources,
+  validateProjectPackSettings,
   validateCommand,
   validateScript,
   discoverAvailableCommands,
@@ -150,6 +151,12 @@ async function collectWorkflowResults(
       },
       defaultProvider
     );
+
+    if (workflow.pack !== undefined) {
+      for (const message of await validateProjectPackSettings(cwd, workflow.pack)) {
+        issues.push({ level: 'error', field: 'pack_settings', message });
+      }
+    }
 
     if (parseWarnings && parseWarnings.length > 0) {
       for (const warning of parseWarnings) {
