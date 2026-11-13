@@ -31,7 +31,8 @@ import {
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
 import type { WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
-import { parseDbTimestamp } from './utils/duration';
+import { holdWorkflowResource } from './resource-hold';
+import { workflowPathPriorityTime } from './workflow-path-lock';
 
 let cachedLog: ReturnType<typeof createLogger> | undefined;
 function getLog(): ReturnType<typeof createLogger> {
@@ -105,9 +106,10 @@ export async function admitWorkflowRun(
       platform,
       conversationId,
       cwd,
+      workflow,
       workflowRun,
       execContext,
-      opts.onExecutionClaimed
+      opts
     );
     if (claimed.stopped) return claimed;
     checkoutBaselineSample = claimed.value;
@@ -220,16 +222,30 @@ async function createWorkflowRunRow(
   }
 }
 
-/** Win execution ownership of a pending row, then sample the checkout the run starts from. */
+/**
+ * Take the workflow's resource slot, win execution ownership of a pending row, then sample
+ * the checkout the run starts from.
+ */
 async function claimPendingRun(
   deps: WorkflowDeps,
   platform: IWorkflowPlatform,
   conversationId: string,
   cwd: string,
+  workflow: ResolvedWorkflow,
   workflowRun: WorkflowRun,
   execContext: NonNullable<ExecuteWorkflowOptions['execContext']>,
-  onExecutionClaimed: ExecuteWorkflowOptions['onExecutionClaimed']
+  { onExecutionClaimed, noWait }: ExecuteWorkflowOptions
 ): Promise<RunPhase<CheckoutSample>> {
+  const refused = await holdWorkflowResource(
+    deps,
+    platform,
+    conversationId,
+    cwd,
+    workflow,
+    workflowRun,
+    noWait === true
+  );
+  if (refused) return { stopped: true, result: refused };
   let claimed: WorkflowRun | null;
   try {
     claimed = await deps.store.claimPendingWorkflowRun(workflowRun.id, cwd);
@@ -266,6 +282,7 @@ async function claimPendingRun(
   onExecutionClaimed?.(executionClaim(claimed.metadata));
   workflowRun.status = claimed.status;
   workflowRun.started_at = claimed.started_at;
+  workflowRun.active_phase_started_at = claimed.active_phase_started_at;
   // The run's starting checkout is sampled the moment execution ownership is won, with
   // the final cwd and backend bound and before anything else can touch the checkout.
   // Its manifest is written, and the baseline persisted, once the run's artifacts
@@ -398,7 +415,7 @@ function freshInvocationMetadata(
  * block under `mutates_checkout: false`, only to record those events.
  *
  * Runs after workflowRun is finalized (pre-created, resumed, or freshly
- * created) so we always have self-ID + started_at for the deterministic
+ * created) so we always have self-ID + path priority for the deterministic
  * older-wins tiebreaker. The query treats `pending` rows older than 5 min
  * as orphaned, so leaks from crashed dispatches or resume orphans don't
  * permanently block the path.
@@ -427,7 +444,7 @@ async function holdCheckoutPathLock(
       ? null
       : await deps.store.getActiveWorkflowRunByPath(cwd, {
           id: workflowRun.id,
-          startedAt: new Date(parseDbTimestamp(workflowRun.started_at)),
+          startedAt: workflowPathPriorityTime(workflowRun),
           ...(pathLockExclude.length > 0 ? { excludeRunIds: pathLockExclude } : {}),
         });
     if (activeWorkflow) {
@@ -560,7 +577,7 @@ function formatRunCommand(platform: IWorkflowPlatform, action: string, shortId?:
 
 /** Explain which run holds the checkout and what the user can do about it. */
 function checkoutInUseMessage(platform: IWorkflowPlatform, activeWorkflow: WorkflowRun): string {
-  const elapsedMs = Date.now() - parseDbTimestamp(activeWorkflow.started_at);
+  const elapsedMs = Date.now() - workflowPathPriorityTime(activeWorkflow).getTime();
   const duration = formatDuration(elapsedMs);
   const shortId = activeWorkflow.id.slice(0, 8);
 
@@ -603,7 +620,7 @@ function pausedCheckoutState(
   const attention = runAttention(activeWorkflow);
   const wait = pendingWorkflowWaitDeadline(activeWorkflow);
   if (attention?.kind === 'attention') {
-    stateLine = `paused, needs attention (${duration} since started, run \`${shortId}\`)`;
+    stateLine = `paused, needs attention (${duration} since phase began, run \`${shortId}\`)`;
     actionLines = `• Answer it: ${attention.message}\n${attentionAnswerLines(platform, attention)
       .map(line => `• ${line}\n`)
       .join('')}`;
@@ -614,7 +631,7 @@ function pausedCheckoutState(
         : wait.kind === 'quota'
           ? 'on a provider usage or rate limit, trying again at'
           : 'until';
-    stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since started, run \`${shortId}\`)`;
+    stateLine = `paused waiting ${waitingFor} ${wait.resumeAt} (${duration} since phase began, run \`${shortId}\`)`;
     actionLines =
       (wait.kind === 'event'
         ? `• Signal event \`${wait.event}\` for run \`${activeWorkflow.id}\`\n`
@@ -623,10 +640,10 @@ function pausedCheckoutState(
     // The parent takes no answer of its own; it continues when its sub-runs finish.
     const childRunIds =
       attention.kind === 'blocked_on_child' ? [attention.childRunId] : attention.childRunIds;
-    stateLine = `paused waiting on sub-runs (${duration} since started, run \`${shortId}\`)`;
+    stateLine = `paused waiting on sub-runs (${duration} since phase began, run \`${shortId}\`)`;
     actionLines = `• Check sub-runs ${childRunIds.map(id => `\`${id}\``).join(', ')}: \`${formatRunCommand(platform, 'status')}\`\n`;
   } else {
-    stateLine = `paused waiting for user input (${duration} since started, run \`${shortId}\`)`;
+    stateLine = `paused waiting for user input (${duration} since phase began, run \`${shortId}\`)`;
     actionLines =
       `• Approve it: \`${formatRunCommand(platform, 'approve', shortId)}\`\n` +
       `• Reject it: \`${formatRunCommand(platform, 'reject', shortId)}\`\n`;

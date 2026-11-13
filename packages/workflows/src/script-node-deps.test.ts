@@ -98,6 +98,9 @@ function createMockStore(): IWorkflowStore {
     admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
       throw new Error('Unexpected admitResourceStart');
     }),
+    admitPendingRun: mock<IWorkflowStore['admitPendingRun']>(() => {
+      throw new Error('Unexpected admitPendingRun');
+    }),
     drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
       throw new Error('Unexpected drainResourceStarts');
     }),
@@ -212,6 +215,7 @@ function createMockStore(): IWorkflowStore {
         outcome: null,
         user_message: 'mock message',
         metadata: {},
+        active_phase_started_at: null,
         started_at: new Date(),
         completed_at: null,
         last_activity_at: null,
@@ -245,6 +249,7 @@ function createMockStore(): IWorkflowStore {
         outcome: null,
         user_message: 'mock message',
         metadata: {},
+        active_phase_started_at: null,
         started_at: new Date(),
         completed_at: null,
         last_activity_at: null,
@@ -378,6 +383,7 @@ function makeWorkflowRun(id: string): WorkflowRun {
     outcome: null,
     user_message: 'test',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,

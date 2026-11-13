@@ -51,7 +51,9 @@ archon doctor
 
 Doctor does not check forge access for the bundled SDLC pack. Run `archon workflow run archon-forge-check` from the checkout for that; it names the credential source it used or says why it refused. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
-With no registered providers, doctor fails and prints `archon provider add <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a database-store run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant only if the credential it refreshed is still stored). It prints one line per credential and fails when one cannot be used (it cannot be read, the vendor rejected the refresh, or the refresh replaced the refresh token and the new grant could not be saved), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable or a concurrent credential change superseded the refresh. Run doctor again to verify the replacement. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it.
+Without a resolved default provider, doctor checks discoverable workflows using the runtime provider resolver. If a workflow needs a default, doctor fails and names `archon ai default <provider>` and `archon setup`. Workflows that explicitly select their providers remain supported without a default. When discovery succeeds and no workflow needs a provider (including an empty workflow set), a healthy empty provider inventory is skipped. Otherwise, no registered providers fails and prints `archon provider add <claude|codex|pi>`. Discovery errors and broken installed plugins still fail. Stale maintained plugins fail with their installed and CLI versions and the reinstall command.
+
+The AI credentials check uses each connected credential the way a database-store run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant only if the credential it refreshed is still stored). It prints one line per credential and fails when one cannot be used (it cannot be read, the vendor rejected the refresh, or the refresh replaced the refresh token and the new grant could not be saved), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable or a concurrent credential change superseded the refresh. Run doctor again to verify the replacement. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it.
 
 The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon that the assistant can use. Provider specifics:
 
@@ -364,6 +366,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--quiet`, `-q` | Suppress the progress lines on stderr |
 | `--verbose`, `-v` | Also print tool calls (name and duration) in the progress lines, and debug logs |
 | `--detach` | Run in a detached background child and return before completion. Human output names the transcript and the child's log file; the `--json` acknowledgement carries `runId`, `transcriptPath` (the run's JSONL transcript) and `logPath` (the child process's stdout and stderr). Follow execution with [`workflow logs <run-id> --follow`](#workflow-logs) and wait for the next terminal or gate transition with [`workflow wait <run-id>`](#workflow-wait). `approve`, `reject`, `respond` and `resume` accept it too; see [Detached control verbs](#detached-control-verbs). |
+| `--no-wait` | Refuse to start, naming the resource, when the workflow declares a `resource:` that is full. Without it the run waits as `pending`, prints `Waiting for resource '<name>'`, and starts when a slot frees. See [Workflows that declare a resource](/guides/workflow-triggers/#workflows-that-declare-a-resource) for where the capacity comes from. |
 | `--conversation-id <id>` | Correlation id for the run's messages. It creates no conversation and no `persist_session` scope. |
 | `--dry-run` | Simulate deterministic DAG control flow in memory. Creates no run, worktree, session, event, artifact, or provider request. |
 | `--stubs <path>` | YAML mapping of node ids to scalar or structured outputs for `--dry-run`. Relative paths resolve from `--cwd`. |
@@ -378,7 +381,7 @@ Fresh CLI runs do not create a chat conversation, message history, or title. Exe
 
 By default, a run:
 
-- creates a worktree on a generated branch, `archon/task-<workflow>-<timestamp>`;
+- creates a worktree on a generated branch, `archon/task-<workflow>-<timestamp>` (identifiers longer than 50 slug characters use a shortened prefix and a digest of the full identifier);
 - registers the codebase on first use in a git repository;
 - reads `.archon/config.yaml` from the launch checkout, not the new worktree, so uncommitted and gitignored config applies.
 
@@ -759,7 +762,8 @@ These are audit facts. They never name who answered, and nothing routes on them.
   nullable `outcome` field beside `status`.
 - **Reason** is why a run that ended needs a look, in up to two short lines: for a failed
   outcome, what the `returns:` node said (its first lines, or its text fields as `key: text`);
-  for a failed run, the first line of its first failed node's error. `workflow get` prints
+  for a failed run, the first line of its first failed node's error, falling back to the
+  run's own error when no failed-node error is available, including launch failures. `workflow get` prints
   it as `Reason:` under the status and carries it as `reason` in `--json`; both are omitted
   when the record holds no reason text. The full value stays in `terminal_record`.
 
@@ -913,8 +917,13 @@ replayed prior successes and to `workflow runs --json --verbose`. Empty output i
 means the persisted text is incomplete, even though `output` returns all of that text.
 Successful bash and script output stays bounded to 32 KiB in persistence; this view
 does not load spill files. Human output keeps the short preview. Failed nodes include
-`error` (or `Unknown error` when none was recorded). A node a resume reset for
-re-running (`always_run`, or a stale cached success) reads `pending` until its new attempt starts, matching `terminal_record.nodes`.
+`error` (or `Unknown error` when none was recorded). Failed `bash:` and `script:` nodes
+also include `exitCode` (the numeric process exit code, absent for spawn failures,
+timeouts, and cancellations) and, when the subprocess wrote to stdout before failing,
+`output`, `outputTruncated`, and `outputPreview`. Unlike a completed node, a failed
+node keeps only the last 2,000 characters of stdout, exactly as written, and
+`outputTruncated: true` means earlier text was dropped. A node a resume reset for re-running (`always_run`, or a stale cached success)
+reads `pending` until its new attempt starts, matching `terminal_record.nodes`.
 Nodes whose provider reported a session include `sessionIds`: the full
 session id of each attempt and loop iteration, in order. Human `--verbose` output prints
 them on a `Session:` or `Sessions:` line, so you can continue a node's conversation in
@@ -1144,7 +1153,7 @@ The default scope is the current project, resolved from the working directory as
 
 `--label k=v` filters must all match. `--sort label:<key>` compares the label's value as a plain string and puts items without it last. `--count-by` replaces the list with counts.
 
-`--count-by` counts the items open now. Add `--since` to count the attention waits opened in a window instead, whether each has been answered or is still open, so a class of question that recurs stays visible after its runs continue. `--since` takes a duration back from now (`24h`, `7d`, `2w`) or an ISO date or time. Scope and `--label` filters apply as they do to the open count. This count reads each wait's `wait_started` event, so it uses the labels the wait opened with and ignores later [`attention label`](#workflow-attention-label) writes. A wait opened by an Archon version that did not record labels on that event counts under no label (`value: null`, shown as `(no '<key>' label)`). Gates, usage-limit waits and waits of deleted runs are not counted. `--since` needs `--count-by`.
+`--count-by` counts the items open now. Add `--since` to count the attention waits opened in a window instead, whether each has been answered or is still open, so a class of question that recurs stays visible after its runs continue. `--since` takes a duration in minutes, hours, days or weeks back from now (`40m`, `24h`, `7d`, `2w`) or an ISO date or time. Scope and `--label` filters apply as they do to the open count. This count reads each wait's `wait_started` event, so it uses the labels the wait opened with and ignores later [`attention label`](#workflow-attention-label) writes. A wait opened by an Archon version that did not record labels on that event counts under no label (`value: null`, shown as `(no '<key>' label)`). Gates, usage-limit waits and waits of deleted runs are not counted. `--since` needs `--count-by`.
 
 Each group of a `--since` count also carries `recommendations: { asked, answered, followed }`: the waits that opened with a recommendation, those of them that were answered, and those answers that chose the recommended option. Text output prints them after the group when any wait carried one. `--count-by answerer`, which needs `--since`, groups the waits by who answered: each entry has `answeredBy`, which is `{ declared }` for a name given with [`--as`](#workflow-answer), `{ userId }` for an answer through a chat platform, and null for waits still open and answers that named nobody. These numbers come from the `wait_started` and `wait_answered` events alone. `wait_started` records the wait's `occurrence`, `form`, the `options` ids offered, `other` when the reserved option is offered, and the recommendation's `option` and `confidence`; it never records the message, an option's label or the recommendation's reason. A wait opened by an Archon version that did not record them counts as carrying no recommendation.
 
@@ -1198,7 +1207,7 @@ happened to work: a run that completed, was cancelled or resumed, a usage-limit 
 opening or closing, and each [`workflow notice`](#workflow-notice) a run emits. It leaves
 out `ready` and `bookmark`. It cannot be combined with `--protocol`.
 
-**`--notices --since <7d|24h|2w|ISO>`**, without `--watch`, lists the notices runs emitted
+**`--notices --since <40m|24h|7d|2w|ISO>`**, without `--watch`, lists the notices runs emitted
 in the window, oldest first, one line each: time, text, labels. Scope and
 `--label` apply as for the list. `--count-by project|label:<key>` counts them instead.
 `--json` prints `{ ok, action: "attention", scope, since, notices }`. A run id, `--sort`
@@ -1211,8 +1220,13 @@ paused run (an unreadable row or a readable parent whose descendant cannot be re
 then `ready`, then follows changes any process commits, as
 `attention`, `resolved`, `unmatched`, `terminal`, `resumed`, `owner_lost` and idle `bookmark` lines.
 Every run line carries the run's `workflow` and `parentRunId`, so a consumer can keep
-top-level runs or one parent's children, and a failed `terminal` line carries `cause`, the
-failed node and its recorded error class ([fields](/getting-started/operate/#the-full-protocol-for-programs)).
+top-level runs or one parent's children. A failed `terminal` line carries `cause` with the
+failed node and its recorded error class when available; `cause` is null for failures
+outside a node, including launch failures, and for runs without terminal records. A recorded
+`launch_failed` event carries `reason: ["launch failed before the first node"]` and the
+run ID, without error text. Read the full error with `archon workflow get <run-id>` or
+`archon trigger inspect <receipt-or-request-id>`
+([fields](/getting-started/operate/#the-full-protocol-for-programs)).
 Repeated run-projection failures send an identifier-free `degraded` line with
 `reason: "run_unreadable"` and the last handled `cursor`, without exiting. Independent
 readable deliveries can continue while unreadable deliveries are omitted. Store-wide
@@ -1756,7 +1770,7 @@ invalid, or a required event write fails.
 
 ### `validate workflows [name]`
 
-Validate workflow YAML definitions and their referenced resources (command files, MCP configs, skill directories).
+Validate workflow YAML definitions, project pack settings, and referenced resources (command files, MCP configs, skill directories).
 
 ```bash
 archon validate workflows                 # Validate all workflows
@@ -1765,6 +1779,8 @@ archon validate workflows my-workflow --json  # Machine-readable JSON output
 ```
 
 Checks: YAML syntax, DAG structure (cycles, dependency refs), command file existence, MCP config files, skill directories, provider compatibility, tier/alias model refs, and supported static environment reads in inline or named exec sources. An unprovided `INPUTS_*` read is an error when the workflow declares an input contract; other unprovided Python or JavaScript/TypeScript environment reads warn. See [Variables](/reference/variables/#shell-quoting-in-bash-vs-script) for the supported forms and fixes. For bundled and global workflows, validation rejects a bare `@custom` model alias because it isn't portable across projects; use `small`, `medium`, `large`, a literal provider model string, or a preference list that ends in one, such as `['@reviewer', medium]`. Returns actionable error messages with "did you mean?" suggestions for typos.
+
+Project pack settings in `.archon/packs/<pack>.yaml` are checked against each discovered workflow's pack declaration using the same value rules as run start. Errors name the file and setting, including allowed values for enum settings. Validation checks values present in the file; required values that an invocation can supply are checked at run start.
 
 Exit code: 0 = all valid, 1 = errors found.
 
@@ -2320,8 +2336,8 @@ archon metrics sdlc.pr_merge_rate --since 60d --by-model ship__deliver__rounds.r
 ```
 
 The window is `[--since, --until)`. `--until` defaults to now and takes an ISO date or a
-time with an offset; a date alone is UTC midnight. `--since` takes the same, or a duration
-(`24h`, `7d`, `2w`) counted back from `--until`, and defaults to 30 days. `--subject` keeps
+time with an offset; a date alone is UTC midnight. `--since` takes the same, or a duration in minutes, hours, days or weeks
+(`40m`, `24h`, `7d`, `2w`) counted back from `--until`, and defaults to 30 days. `--subject` keeps
 records about one subject. `--project <id|name|key>` keeps records from one registered
 codebase. A name's definition is install-wide either way: a record another codebase
 stored first still fixes it. `--compare <ISO>` takes an ISO date or a time with an offset

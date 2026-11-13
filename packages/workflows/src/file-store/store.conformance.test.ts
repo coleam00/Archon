@@ -19,8 +19,10 @@ describeWorkflowStoreConformance('files', async () => {
     reports.push(run.id);
   });
   restore = () => spy.mockRestore();
+  const capacities = new Map<string, number>();
   const store = await createFileWorkflowStore({
     root,
+    resourceCapacity: async resource => capacities.get(resource),
     // The host's codebase records, as every conformance target registers them.
     getCodebase: async id =>
       id === CONFORMANCE_CODEBASE_ID
@@ -35,6 +37,9 @@ describeWorkflowStoreConformance('files', async () => {
   });
   return {
     store,
+    setResourceCapacity: async (resource, capacity) => {
+      capacities.set(resource, capacity);
+    },
     backdate: (id, dates) =>
       commit(root, [id], async runs => {
         const run = runs.get(id);

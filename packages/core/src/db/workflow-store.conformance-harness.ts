@@ -1,5 +1,9 @@
 import { expect, mock, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { dashboardRunsResultSchema } from '@archon/workflows/schemas/workflow-run-listing';
 import { WorkflowStatusReadError } from './workflows';
@@ -55,17 +59,32 @@ export async function makeSqlConformanceHarness(
     "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ($1, 'test', 'conformance')",
     [CONFORMANCE_CONVERSATION_ID]
   );
+  // The SQL stores read install capacities from `$ARCHON_HOME/config.yaml`.
+  const capacities: Record<string, number> = {};
+  let home: { root: string; previous: string | undefined } | undefined;
   return {
     store: createWorkflowStore(),
+    setResourceCapacity: async (resource, capacity): Promise<void> => {
+      home ??= {
+        root: await mkdtemp(join(tmpdir(), 'archon-conformance-home-')),
+        previous: process.env.ARCHON_HOME,
+      };
+      process.env.ARCHON_HOME = home.root;
+      capacities[resource] = capacity;
+      await writeFile(
+        join(home.root, 'config.yaml'),
+        JSON.stringify({ concurrency: { resources: capacities } })
+      );
+    },
     backdate: async (id, dates): Promise<void> => {
-      for (const field of ['started_at', 'last_activity_at'] as const) {
+      for (const field of ['started_at', 'active_phase_started_at', 'last_activity_at'] as const) {
         const date = dates[field];
         if (date === undefined) continue;
         const value =
           date === null
             ? null
             : type === 'sqlite'
-              ? date.toISOString().replace('T', ' ').slice(0, 19)
+              ? date.toISOString().replace('T', ' ').replace('Z', '')
               : date.toISOString();
         await db.query(`UPDATE remote_agent_workflow_runs SET ${field} = $2 WHERE id = $1`, [
           id,
@@ -84,7 +103,14 @@ export async function makeSqlConformanceHarness(
       ]);
     },
     terminalReports: (): string[] => [...reports],
-    close,
+    close: async (): Promise<void> => {
+      if (home) {
+        if (home.previous === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = home.previous;
+        await removeTempTree(home.root);
+      }
+      await close();
+    },
   };
 }
 

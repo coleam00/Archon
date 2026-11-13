@@ -17,6 +17,7 @@ import {
   SourceReceiptDigestConflictError,
   compareCodeUnits,
   compareStartReceipts,
+  preparedBindingStart,
   validateStartReceiptLimit,
   type DamagedStartReceipt,
   type IResourceStartStore,
@@ -210,14 +211,7 @@ export function createReceiptOperations(
       write(async (tx, runs) => {
         const item = await tx.owned(input);
         if (!item?.intent) return null;
-        const result = await tx.admit(
-          {
-            ...item.intent,
-            launch: input.launch,
-            receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
-          },
-          runs
-        );
+        const result = await tx.admit(preparedBindingStart(item.intent, input), runs);
         item.status = 'complete';
         item.error = null;
         return result;

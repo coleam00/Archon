@@ -2,6 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach, mock, spyOn } from 'bun:test';
 import { mkdir, writeFile, readFile, readdir } from 'fs/promises';
 import { removeTempTree } from '@archon/paths/test-utils';
+import { recordNodeProcessTrees } from '../../../subprocess';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import * as git from '@archon/git';
@@ -288,6 +289,68 @@ describe('executeDagWorkflow -- bash nodes', () => {
     expect(errorMsg).toContain('stdout context before failure');
     expect(errorMsg).toContain('[stderr]');
     expect(errorMsg).toContain('[stdout]');
+  });
+
+  describe('failed node structured fields', () => {
+    async function failedData(script: string, extra: Partial<ExecNode> = {}) {
+      const mockDeps = createMockDeps();
+      const bashNode: ExecNode = { id: 'check', kind: 'exec', runtime: 'sh', script, ...extra };
+      await executeDagWorkflow(
+        dagOptions({
+          deps: mockDeps,
+          platform: createMockPlatform(),
+          conversationId: 'conv-failed-fields',
+          cwd: testDir,
+          workflow: { name: 'bash-failed-fields', nodes: [bashNode] },
+          workflowRun: makeWorkflowRun('bash-failed-fields-run', {
+            workflow_name: 'bash-failed-fields',
+            conversation_id: 'conv-failed-fields',
+            user_message: 'test',
+          }),
+        })
+      );
+      const failed = persistedEvents(mockDeps.store).find(
+        event => event.event_type === 'node_failed' && event.step_name === 'check'
+      );
+      expect(failed).toBeDefined();
+      return failed!.data as Record<string, unknown>;
+    }
+
+    it('records the exit code and the stdout exactly as written', async () => {
+      const data = await failedData('printf "  line1\\nline2\\n\\n"; exit 3');
+      expect(data.exit_code).toBe(3);
+      expect(data.failure_kind).toBe('exec_failed');
+      expect(data.node_output).toBe('  line1\nline2\n\n');
+      expect(data).not.toHaveProperty('node_output_truncated');
+    });
+
+    it('records no output when the process wrote no stdout', async () => {
+      const data = await failedData('echo only-stderr >&2; exit 1');
+      expect(data.exit_code).toBe(1);
+      expect(data).not.toHaveProperty('node_output');
+    });
+
+    it('marks a stdout tail that dropped its head as truncated', async () => {
+      const data = await failedData('head -c 5000 /dev/zero | tr "\\0" x; exit 1');
+      expect(data.node_output_truncated).toBe(true);
+      expect(data.node_output).toBe('x'.repeat(2000));
+      expect(data.node_output_original_bytes).toBe(5000);
+    });
+
+    it('omits the exit code of a timed-out process that traps SIGTERM and exits with one', async () => {
+      // A real run installs a recorder, which routes the node through the owned process
+      // group, whose rejection keeps the numeric exit status of a timed-out child.
+      const trees = recordNodeProcessTrees();
+      try {
+        const data = await failedData("trap 'exit 3' TERM; while :; do :; done", {
+          timeout: 500,
+        });
+        expect(data.failure_kind).toBe('timeout');
+        expect(data).not.toHaveProperty('exit_code');
+      } finally {
+        trees.release();
+      }
+    });
   });
 
   const containerBashNodes: [string, TestWorkflowDefinition['nodes'][number]][] = [

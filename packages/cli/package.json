@@ -35,6 +35,9 @@
   "testConcurrency": 3,
   "testGroups": [
     [
+      "src/commands/doctor-workflow-providers.test.ts"
+    ],
+    [
       "src/commands/provider-upgrade.test.ts"
     ],
     [
@@ -187,6 +190,9 @@
     ],
     [
       "src/commands/metrics.test.ts"
+    ],
+    [
+      "src/since-refusal.integration.spec.ts"
     ],
     [
       "src/cli.test.ts",

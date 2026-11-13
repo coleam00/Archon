@@ -21,7 +21,7 @@ export const runExitReasonSchema = z.enum([
   'not_finalized',
   // The CLI process owning the run was terminated by a signal.
   'process_terminated',
-  // A detached launch failed before its worker took the run.
+  // Launch preparation or detached spawning failed before workflow execution.
   'launch_failed',
   // No run row could be written, so the run never existed.
   'run_not_created',

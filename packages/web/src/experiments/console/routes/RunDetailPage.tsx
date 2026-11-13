@@ -229,7 +229,7 @@ function JumpToBottom({
       type="button"
       onClick={onClick}
       aria-label="Jump to bottom"
-      className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+      className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-console-11 text-text-secondary shadow-md transition-colors hover:text-text-primary"
     >
       <span aria-hidden>↓</span>
       Jump to bottom
@@ -244,7 +244,7 @@ function ApprovalGate({ run }: { run: RunDetailView['run'] }): ReactElement | nu
     <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
       <div className="mb-2 flex items-center gap-2">
         <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-warning" />
-        <span className="text-[11px] font-semibold uppercase tracking-[0.14em] text-warning">
+        <span className="text-console-11 font-semibold uppercase tracking-console-label text-warning">
           Waiting for approval
         </span>
       </div>
@@ -289,7 +289,7 @@ function RunGraphView({
     );
   }
   return (
-    <div className="p-6 text-[12px] text-text-tertiary">
+    <div className="p-6 text-console-12 text-text-tertiary">
       {projectId === undefined
         ? 'This run has no project. Its logs and artifacts are available in the other views.'
         : projectError
@@ -475,7 +475,7 @@ export function RunDetailPage(): ReactElement {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-2 text-center">
         <p className="text-sm text-text-primary">Could not load run.</p>
-        <p className="font-mono text-[11px] text-text-tertiary">{detailError.message}</p>
+        <p className="font-mono text-console-11 text-text-tertiary">{detailError.message}</p>
       </div>
     );
   }

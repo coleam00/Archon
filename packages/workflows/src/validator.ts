@@ -37,6 +37,7 @@ export {
   type ValidationIssue,
   type WorkflowValidationResult,
 } from './validator/types';
+export { validateProjectPackSettings } from './pack-settings';
 export { discoverAvailableCommands, validateCommand } from './validator/commands';
 export { discoverAvailableScripts, validateScript } from './validator/scripts';
 // Levenshtein distance and fuzzy matching live in ./utils/fuzzy-match so lean modules can

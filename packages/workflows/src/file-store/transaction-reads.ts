@@ -1,4 +1,4 @@
-import { holdsWorkflowPath } from '../workflow-path-lock';
+import { holdsWorkflowPath, workflowPathPriorityTime } from '../workflow-path-lock';
 import {
   answeredPauseContinuation,
   isAttentionQueueRow,
@@ -225,11 +225,14 @@ export function createTransactionReads(
               !self?.excludeRunIds?.includes(run.id) &&
               holdsWorkflowPath(run) &&
               (!self ||
-                run.started_at < self.startedAt ||
-                (run.started_at.getTime() === self.startedAt.getTime() && run.id < self.id))
+                workflowPathPriorityTime(run) < self.startedAt ||
+                (workflowPathPriorityTime(run).getTime() === self.startedAt.getTime() &&
+                  run.id < self.id))
           )
           .sort(
-            (a, b) => a.started_at.getTime() - b.started_at.getTime() || a.id.localeCompare(b.id)
+            (a, b) =>
+              workflowPathPriorityTime(a).getTime() - workflowPathPriorityTime(b).getTime() ||
+              (a.id < b.id ? -1 : a.id > b.id ? 1 : 0)
           )[0] ?? null
       ),
     findResumableRun: async (name, path) =>

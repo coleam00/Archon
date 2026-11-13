@@ -198,11 +198,7 @@ describe('workflow run resume', () => {
       expect(mockQuery.mock.calls).toHaveLength(3);
     });
 
-    test('refreshes started_at to NOW so resumed row competes fairly in the path-lock tiebreaker', async () => {
-      // Without this refresh, a resumed row carries its original (potentially
-      // hours-old) started_at and sorts ahead of any currently-active holder
-      // in the older-wins tiebreaker — slipping past the lock and causing
-      // two active workflows on the same working_path.
+    test('advances phase priority without overwriting creation time', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([{ status: 'running', metadata: {} }]));
       mockQuery.mockResolvedValueOnce(createQueryResult([], 1));
       mockQuery.mockResolvedValueOnce(
@@ -212,7 +208,8 @@ describe('workflow run resume', () => {
       await resumeWorkflowRun('workflow-run-123');
 
       const [updateQuery] = mockQuery.mock.calls[1] as [string, unknown[]];
-      expect(updateQuery).toContain('started_at = NOW()');
+      expect(updateQuery).toContain('active_phase_started_at = NOW()');
+      expect(updateQuery).not.toMatch(/(?:^|\s)started_at =/);
     });
 
     test('guards the UPDATE with the resumable-status CAS predicate', async () => {

@@ -173,6 +173,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_runs (
   parent_run_id UUID REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
   adopted_from_run_id UUID REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
   started_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+  active_phase_started_at TIMESTAMP WITH TIME ZONE,
   completed_at TIMESTAMP WITH TIME ZONE,
   last_activity_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
   working_path TEXT,
@@ -358,6 +359,8 @@ ALTER TABLE remote_agent_workflow_runs
 -- identically on SQLite (sqlite.ts) as TEXT holding the same JSON.
 ALTER TABLE remote_agent_workflow_runs
   ADD COLUMN IF NOT EXISTS checkout_baseline JSONB;
+ALTER TABLE remote_agent_workflow_runs
+  ADD COLUMN IF NOT EXISTS active_phase_started_at TIMESTAMP WITH TIME ZONE;
 
 -- Between-run continuation (#2747): the terminal run whose estate (worktree/
 -- branch + artifacts-by-reference) this run explicitly adopted. Mirrors

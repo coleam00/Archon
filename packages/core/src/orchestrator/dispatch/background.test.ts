@@ -179,6 +179,7 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
     outcome: null,
     user_message: 'run it',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -247,10 +248,12 @@ class MockIsolationResolver {
 
 const {
   worktreeRegistrationMetadata,
+  generatedTaskBranch,
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
 } = await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  generatedTaskBranch,
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
   })),

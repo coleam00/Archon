@@ -17,14 +17,14 @@ export function SystemPanel(): ReactElement {
   if (healthError !== undefined) {
     return (
       <SettingsSection title="System">
-        <p className="font-mono text-[11px] text-error">{healthError.message}</p>
+        <p className="font-mono text-console-11 text-error">{healthError.message}</p>
       </SettingsSection>
     );
   }
   if (health === undefined) {
     return (
       <SettingsSection title="System">
-        <p className="font-mono text-[11px] text-text-tertiary">Loading…</p>
+        <p className="font-mono text-console-11 text-text-tertiary">Loading…</p>
       </SettingsSection>
     );
   }
@@ -44,16 +44,16 @@ export function SystemPanel(): ReactElement {
         />
         <Row label="running workflows" value={String(health.runningWorkflows)} />
 
-        <div className="flex items-center gap-[18px] py-[9px]">
-          <span className="w-[170px] shrink-0 text-[13px] text-text-tertiary">platforms</span>
+        <div className="flex items-center gap-4.5 py-2.25">
+          <span className="w-42.5 shrink-0 text-console-13 text-text-tertiary">platforms</span>
           <div className="flex flex-wrap gap-1.5">
             {platforms.length === 0 ? (
-              <span className="text-[13px] text-text-tertiary">none</span>
+              <span className="text-console-13 text-text-tertiary">none</span>
             ) : (
               platforms.map(pl => (
                 <span
                   key={pl}
-                  className="rounded-md border bg-surface-elevated px-2 py-0.5 font-mono text-[11px] font-semibold text-text-secondary"
+                  className="rounded-md border bg-surface-elevated px-2 py-0.5 font-mono text-console-11 font-semibold text-text-secondary"
                   // Inline because the console scope's wildcard border-color
                   // rule repaints Tailwind border utilities (see theme.css).
                   style={{ borderColor: 'var(--border-bright)' }}
@@ -65,8 +65,8 @@ export function SystemPanel(): ReactElement {
           </div>
         </div>
 
-        <div className="flex items-center gap-[18px] py-[9px]">
-          <span className="w-[170px] shrink-0 text-[13px] text-text-tertiary">updates</span>
+        <div className="flex items-center gap-4.5 py-2.25">
+          <span className="w-42.5 shrink-0 text-console-13 text-text-tertiary">updates</span>
           <UpdateStatus update={update} error={updateError} />
         </div>
       </div>
@@ -116,9 +116,9 @@ function Row({
   ok?: boolean;
 }): ReactElement {
   return (
-    <div className="flex items-center gap-[18px] py-[9px]">
-      <span className="w-[170px] shrink-0 text-[13px] text-text-tertiary">{label}</span>
-      <span className={`font-mono text-[13px] ${ok ? 'text-success' : 'text-text-primary'}`}>
+    <div className="flex items-center gap-4.5 py-2.25">
+      <span className="w-42.5 shrink-0 text-console-13 text-text-tertiary">{label}</span>
+      <span className={`font-mono text-console-13 ${ok ? 'text-success' : 'text-text-primary'}`}>
         {value}
       </span>
     </div>

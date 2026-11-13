@@ -94,6 +94,7 @@ test('a second resume recomputes output invalidated before a rejected node start
     metadata: {
       [RUN_GRAPH_METADATA_KEY]: { node_ids: ['upstream', 'consumer'], returns: 'consumer' },
     },
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,

@@ -39,6 +39,7 @@ function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     outcome: null,
     user_message: 'continue',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,

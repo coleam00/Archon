@@ -12,7 +12,7 @@ export const metricViewsSchema = metricViewsListingSchema.meta({ id: 'MetricView
 export const metricsQuerySchema = z.object({
   since: z.string().optional().openapi({
     description:
-      'Window start: a duration before `until` (`24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days.',
+      'Window start: a duration before `until` (`40m`, `24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days.',
   }),
   until: z
     .string()

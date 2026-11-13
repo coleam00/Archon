@@ -31,7 +31,8 @@ export async function checkInstalledProviders(
   loadInventory: () => Promise<{
     versions: ReadonlyMap<string, string>;
     notices: readonly string[];
-  }> = loadInstalledProviderInventory
+  }> = loadInstalledProviderInventory,
+  allowEmptyProviderInventory = false
 ): Promise<CheckResult> {
   const label = 'Installed providers';
   try {
@@ -45,6 +46,8 @@ export async function checkInstalledProviders(
           .filter((reason): reason is string => reason !== undefined),
       ]),
     ];
+    if (allowEmptyProviderInventory && registry.list().length === 0 && unavailable.length === 0)
+      return { label, status: 'skip', message: 'Discovered workflows need no provider' };
     const lines = installed.map(provider => {
       const version =
         !BUNDLED_IS_BINARY && isMaintainedProvider(provider.id)

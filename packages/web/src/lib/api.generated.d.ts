@@ -3300,7 +3300,7 @@ export interface paths {
     get: {
       parameters: {
         query?: {
-          /** @description Window start: a duration before `until` (`24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days. */
+          /** @description Window start: a duration before `until` (`40m`, `24h`, `7d`, `2w`) or an ISO date or time. Defaults to 30 days. */
           since?: string;
           /** @description Exclusive window end: an ISO date or time. Defaults to now. */
           until?: string;
@@ -4838,6 +4838,7 @@ export interface components {
                 resetAt?: string;
                 evidence: string;
               };
+              exitCode?: number;
             }
           | {
               /** @enum {string} */
@@ -5429,6 +5430,10 @@ export interface components {
         max_spend_usd?: number;
       };
       mutates_checkout?: boolean;
+      resource?: {
+        name: string;
+        capacity?: number;
+      };
       persist_sessions?: boolean;
       tags?: string[];
       requires?: 'github'[];
@@ -5935,6 +5940,7 @@ export interface components {
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
+      active_phase_started_at: string | null;
       completed_at: string | null;
       last_activity_at: string | null;
       working_path: string | null;
@@ -6430,6 +6436,7 @@ export interface components {
                   resetAt?: string;
                   evidence: string;
                 };
+                exitCode?: number;
               }
             | {
                 /** @enum {string} */
@@ -7573,6 +7580,7 @@ export interface components {
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
+      active_phase_started_at: string | null;
       completed_at: string | null;
       last_activity_at: string | null;
       working_path: string | null;

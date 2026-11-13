@@ -50,6 +50,7 @@ export const serializedNodeDataSchema = z.object({
   num_turns: z.number().optional(),
   model_usage: z.object({ requested: z.string().optional(), resolved: z.string() }).optional(),
   error: z.string().optional(),
+  exit_code: z.number().optional(),
   retryable: z.literal(false).optional(),
   failure_kind: nodeFailureKindSchema.optional(),
   provider_failure: providerFailureSchema.optional(),
@@ -339,6 +340,7 @@ function lifecycleFields(lifecycle: NodeExecutionRecord['lifecycle']): Serialize
     case 'failed':
       return {
         error: lifecycle.error,
+        ...(lifecycle.exitCode !== undefined ? { exit_code: lifecycle.exitCode } : {}),
         ...(lifecycle.retryable === false ? { retryable: false as const } : {}),
         ...(lifecycle.failureKind !== undefined ? { failure_kind: lifecycle.failureKind } : {}),
         ...(lifecycle.providerFailure !== undefined

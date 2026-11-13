@@ -68,6 +68,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `worktree.enabled` | `false` always runs in the live checkout, and `--branch` or `--from` is an error. `true` always uses a worktree, and `--no-worktree` is an error. Omit it to let the caller decide; the default is a worktree. |
 | `container` | `enabled` and `write_back` (`approve` or `auto`) for container runs of folder projects. |
 | `mutates_checkout` | `false` asserts that runs of this workflow never write to their checkout, so the engine skips the path lock and several runs can share one checkout. Default `true`. See [Running sub-runs side by side](#running-sub-runs-side-by-side). |
+| `resource` | The resource every run of this workflow holds a slot on, however it starts, including a binding start: `resource: build`, or `resource: { name: build, capacity: 3 }` to set the capacity its hand starts declare, and its binding starts when the binding sets none (default 1). A start waits while the resource is full; `archon workflow run --no-wait` refuses instead. An included workflow, and a `workflow:` sub-run whose ancestor holds the same resource, share the parent's slot. See [Workflows that declare a resource](/guides/workflow-triggers/#workflows-that-declare-a-resource). |
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
@@ -315,7 +316,7 @@ nodes:
     effort: low      # Per-node override — ignores workflow-level effort
 ```
 
-A skip caused by an include's gate retains the include identity and the condition expression or upstream origin in its cause. False include conditions use `when_condition`; unevaluable conditions use `when_condition_parse_error` and fail closed. Real runs report an unevaluable gate once per include boundary for the run, including across loop iterations and resume. Dry-run traces print the same skip reason and cause details.
+A skip caused by an include's gate retains the include identity and the condition expression or upstream origin in its cause. False include conditions use `when_condition`. A reference-resolution error fails the entry node with the include name and reference diagnostic; descendants are skipped with `when_condition_parse_error`. Invalid or unsupported expression syntax is rejected when workflows load. If an invalid expression reaches execution, it skips the entire block with `when_condition_parse_error`. Real runs report these diagnostic skips once per include boundary for the run, including across loop iterations and resume. Dry-run traces show the same entry failures, skip reasons and cause details.
 
 Diagnostic delivery is best-effort. Skip persistence and platform notification are separate operations: if the process stops after storing a skip but before reporting it, resume retains the recorded cause but does not resend the diagnostic.
 
@@ -446,7 +447,7 @@ there is no prior output, so it resolves to `''` and the non-empty equality abov
   run's `--input`). A name this run does not carry makes the condition unevaluable; it never quietly
   becomes an empty string. `INPUTS` is a reserved scope: a node cannot be given that id
   (the loader rejects it), so `$INPUTS.x` always means an input.
-- A reference-resolution error in an ordinary node's condition fails that node. An unevaluable include gate skips the included nodes with `when_condition_parse_error`, retaining the include and expression in the cause. Real runs report the error once per boundary; dry runs show the evaluation diagnostic with the skip.
+- A reference-resolution error in a condition fails the node. For an include gate, it fails the entry node with the include name and reference diagnostic; descendants are skipped with `when_condition_parse_error`, retaining the include and expression in the cause. Real runs report the descendant skips once per boundary; dry runs show the same failure and skip diagnostics.
 - Invalid or unsupported expression syntax is rejected when workflows load and by `archon validate workflows`.
 - A numeric operator (`<`, `>`, `<=`, `>=`) needs a number on the right-hand side, quoted or bare; any other literal is rejected at load. If the left-hand value is not a number at run time, the node is skipped (fail-closed).
 - Grouping parentheses are not supported. Use AND/OR precedence or compute a decision in a `script:` node and gate on its scalar output.
@@ -1618,9 +1619,11 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
 - **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
 - **Don't run the workflow concurrently.** A workflow with `worktree: enabled: false` shares
   one working path. With the default `mutates_checkout: true`, direct executor dispatch
-  rejects a second run on a held path with "This worktree is in use"; the operator must
-  re-run it afterwards. Trigger admission instead queues or skips the request according
-  to `overlap`, naming the holding run as its blocker. See
+  rejects a second run when it finds an earlier-priority holder with "This worktree is in
+  use"; the operator must re-run it afterwards. Exact-priority ties can bypass an admitted
+  holder; see the [checkout-priority limitation](/reference/database/#workflow-run-timestamps).
+  Trigger admission instead queues or skips the request according to `overlap`, naming the
+  holding run as its blocker. See
   [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
   `mutates_checkout: false` bypasses the executor's path lock, so it does not prevent
   concurrent state writes.
@@ -2269,6 +2272,11 @@ the run at that point, before any node runs, naming the file and the key; for an
 that is after its worktree was created. A `required` setting must be set there, given a default
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
 
+Run [`archon validate workflows`](/reference/cli/#validate-workflows-name) to check project
+pack settings before starting a run. It reports invalid values and undeclared names against
+each discovered workflow's pack declaration. Required values that an invocation can supply
+are checked only at run start.
+
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
 reads it against its own declaration. A bundled pack ships its `.pack/pack.yaml` with it, so its
 settings are set the same way. If a project or home pack folder takes another pack's name and
@@ -2333,7 +2341,7 @@ bindings:
   sweep:                              # the binding id: lowercase letters, digits, hyphens
     workflow: review-sweep            # a workflow of this pack
     resource: sweep                   # last segment of the resource name
-    capacity: 1                       # optional, default 1
+    capacity: 1                       # optional, default the workflow's, else 1
     overlap: skip                     # skip | queue
     isolation: { kind: worktree }     # optional, default { kind: default }
     schedule: { interval_seconds: 1800 }
@@ -2367,12 +2375,15 @@ it. Setting both is refused, and so is a `schedule:` or `event:` key with an inv
 [binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
 resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
 same `resource` share its slots. With `resource_scope: host` it is
-`<pack>:<host id>:<resource>`, for work that spans every repository on the host.
+`<pack>:<host id>:<resource>`, for work that spans every repository on the host. When the
+bound workflow declares a top-level `resource:`, its runs hold that resource instead, and the
+binding's `capacity` applies to it. An omitted `capacity` means the workflow's declared
+`resource.capacity`, or 1 when it declares none.
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
-input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an event
-binding, and bindings sharing a resource must declare the same capacity. An `event:` selector
+input must name a declared timer or fire-only binding, and an `{ event: <field> }` input belongs to an
+event binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 ## Launching a Separate Governed Run with `workflow:`
@@ -2581,13 +2592,16 @@ happens next depends on whether those children share a checkout.
 Children **in their own worktrees** (`isolation: worktree`) never interact: separate
 directories, separate branches.
 
-Children **sharing the parent's checkout** meet the engine's path-exclusive lock. Every run
-takes a lock on its working path at start, and a run that finds the path already held by
-another active run **cancels itself**. The lock excludes a run's own ancestors and
-descendants: a child never blocks against its own parent. Children of the **same
-`fan_out` node** are also excluded and may share the checkout. Children of different
-`workflow:` nodes are not excluded. Two such children in one layer over one checkout collide:
-the older run keeps the path, the younger one cancels itself, and the parent run fails.
+Children **sharing the parent's checkout** meet the engine's path-priority guard. At start,
+a run that finds an earlier-priority active run on its working path **cancels itself**.
+At exactly equal effective priority, a later lower-ID contender can pass an already
+admitted higher-ID holder, so overlapping execution is possible; see the
+[checkout-priority limitation](/reference/database/#workflow-run-timestamps).
+The guard excludes a run's own ancestors and descendants: a child never blocks against
+its own parent. Children of the **same `fan_out` node** are also excluded and may share the
+checkout. Children of different `workflow:` nodes are not excluded. When two such children
+in one layer collide, the earlier-priority run keeps the path, the other cancels itself,
+and the parent run fails.
 
 > **Resume does not recover from this.** A parent's resume re-drives a *failed* child, but a
 > *cancelled* one is threaded straight through as it stands, so a parent that failed this
@@ -2607,9 +2621,11 @@ nodes:
 ```
 
 `mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
-to its checkout, so the engine skips the path lock for it. It defaults to `true` (take the
-lock, prevent overlapping execution on the same path). Direct executor dispatch rejects a
-run on a held path; [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy)
+to its checkout, so the engine skips the path lock for it. It defaults to `true` (apply the
+path-priority guard, subject to the
+[exact-priority tie limitation](/reference/database/#workflow-run-timestamps)).
+Direct executor dispatch rejects a run when it finds an earlier-priority holder;
+[trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy)
 queues or skips it according to `overlap`. It is author-declared on purpose: the author of a
 review or research workflow is the one who knows it only reads. Children launched by
 separate `workflow:` nodes still compete for the path lock unless they declare it.

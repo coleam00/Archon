@@ -262,10 +262,10 @@ export function ChatPage(): ReactElement {
         <div
           ref={scrollRef}
           onScroll={handleScroll}
-          className="h-full overflow-y-auto px-[30px] pt-[26px] pb-[18px]"
+          className="h-full overflow-y-auto px-7.5 pt-6.5 pb-4.5"
         >
           {/* Match the composer's centered 940px column (design: .stream-inner) */}
-          <div ref={contentRef} className="mx-auto max-w-[940px]">
+          <div ref={contentRef} className="mx-auto max-w-235">
             {messageList.length === 0 && !busy ? (
               <EmptyState
                 title="No messages yet."
@@ -292,7 +292,7 @@ export function ChatPage(): ReactElement {
             type="button"
             onClick={scrollToBottom}
             aria-label="Jump to bottom"
-            className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-[11px] text-text-secondary shadow-md transition-colors hover:text-text-primary"
+            className="absolute bottom-3 left-1/2 flex -translate-x-1/2 items-center gap-1 rounded-full border border-border bg-surface-elevated px-3 py-1 text-console-11 text-text-secondary shadow-md transition-colors hover:text-text-primary"
           >
             <span aria-hidden>↓</span>
             Jump to bottom
@@ -303,7 +303,7 @@ export function ChatPage(): ReactElement {
       <WorkflowDock projectId={projectId} />
 
       {notice !== null ? (
-        <div className="shrink-0 border-t border-warning/30 bg-warning/[0.06] px-6 py-2 font-mono text-[11px] text-warning">
+        <div className="shrink-0 border-t border-warning/30 bg-warning/[0.06] px-6 py-2 font-mono text-console-11 text-warning">
           {notice}
         </div>
       ) : null}
@@ -323,7 +323,7 @@ function ChatError({
   loadError: Error | undefined;
 }): ReactElement | null {
   return error !== null || loadError !== undefined ? (
-    <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-[11px] text-error">
+    <div className="shrink-0 border-t border-error/30 bg-error/[0.06] px-6 py-2 font-mono text-console-11 text-error">
       {error ?? `Failed to load chat: ${loadError?.message ?? 'unknown error'}`}
     </div>
   ) : null;

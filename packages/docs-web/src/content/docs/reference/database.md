@@ -223,7 +223,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 - **`remote_agent_workflow_runs`** - Workflow execution tracking
   - Tracks active workflows per conversation
-  - Guards concurrent execution per `working_path`: direct executor dispatch on a path with an active run (status `pending`/`running`/`paused`) is auto-cancelled with an actionable message. Workflows declaring `mutates_checkout: false` bypass this executor guard. [Trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy) queues or skips guarded starts on held paths according to `overlap`, including paths held by manual runs or other resources. Read-only starts may proceed beside foreign holders; same-resource checkout serialization still applies. Pending rows older than 5 minutes are ignored by the path guard without changing their lifecycle state. A `workflow:` sub-run shares its parent's checkout unless the node declares `isolation: worktree`, so the path-lock excludes both the run's ancestor chain and its descendants (via `parent_run_id`) — a child never contends with its own parent. Children of the same `fan_out` node share the checkout by design, so the lock also excludes them, their descendants, and the fan-out siblings of each ancestor; each such pair is recorded as `workflow.checkout_shared` events. Other runs on the path, including children of a different node, still contend.
+  - Guards concurrent execution per `working_path`: direct executor dispatch is auto-cancelled with an actionable message when it finds an earlier-priority active run (status `pending`/`running`/`paused`) on the path. At exactly equal priority, a lower-ID contender can pass an admitted higher-ID holder; see the [checkout-priority limitation](#workflow-run-timestamps). Workflows declaring `mutates_checkout: false` bypass this executor guard. [Trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy) queues or skips guarded starts on held paths according to `overlap`, including paths held by manual runs or other resources. Read-only starts may proceed beside foreign holders; same-resource checkout serialization still applies. Pending rows older than 5 minutes are ignored by the path guard without changing their lifecycle state. A `workflow:` sub-run shares its parent's checkout unless the node declares `isolation: worktree`, so the path-lock excludes both the run's ancestor chain and its descendants (via `parent_run_id`) — a child never contends with its own parent. Children of the same `fan_out` node share the checkout by design, so the lock also excludes them, their descendants, and the fan-out siblings of each ancestor; each such pair is recorded as `workflow.checkout_shared` events. Other runs on the path, including children of a different node, still contend.
   - Stores workflow state, step progress, and parent conversation linkage
   - Nullable `user_id` records which user triggered the run
   - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.
@@ -394,3 +394,37 @@ when reading an origin-free run.
 Every workflow store exposes `getWorkflowEventHead()` and `readWorkflowEventsAfter(cursor, { limit, eventTypes? })`. The feed covers all runs in commit order. A page carries each event with its opaque cursor and a `next` cursor that also advances past rows excluded by the type filter. Pass cursors back unchanged; only the issuing store interprets them. A malformed cursor or one from a different store kind throws `WorkflowEventCursorError`.
 
 Start at the head to follow new commits, or resume from a cursor saved by an earlier read. This feed observes committed events; it does not report retractions or undo deliveries when fan-out recovery or cleanup removes events. Earlier cursors can still read those payloads: SQL deletion triggers retain them in a feed archive without run foreign keys, and the file store retains deleted run logs. Feed history has no expiry and is retained for the store's lifetime. `getWorkflowRun` and `listWorkflowEvents` remain the current state of record. File-store reads at the head are cheap; reads with new commits use the derived feed index to select run logs.
+
+## Workflow run timestamps
+
+`started_at` is the run's creation time. Resume, including cancelled fan-out recovery,
+keeps it unchanged, so age, duration and listings retain their original baseline.
+Capacity waiters retain their first-refusal `capacity_wait.since`; queued starts retain
+their queue position.
+
+`active_phase_started_at` records the most recent successful resume. It is nullable:
+initial runs and records written before this field existed use `started_at` for checkout
+priority. Checkout priority uses the later of the two timestamps, then the run id, so an
+older writer that advances `started_at` without updating the phase value still orders
+correctly when read by an upgraded executor. Both API run lists expose the nullable phase
+timestamp as ISO text.
+
+Workflow cleanup ages terminal runs by the later of `started_at` and
+`active_phase_started_at`, falling back to `started_at` when the phase is null, in
+PostgreSQL, SQLite and file stores. This also retains runs recently resumed by an
+older writer that advanced `started_at` without updating the phase timestamp. A run created
+10 days ago, resumed yesterday and finished today survives `archon workflow cleanup 7`.
+This preserves cleanup's active-phase age behavior.
+
+Time/ID ordering does not persist incumbent ownership. At exactly equal effective
+priority, a later lower-ID contender can pass a previously admitted higher-ID holder.
+Checkout exclusion is not guaranteed for that case. The timestamp fix retains this
+existing tie behavior; [#5600](https://github.com/coleam00/Archon/issues/5600) remains open
+for the deferred exclusion work.
+
+The upgrade adds a nullable column in SQLite and PostgreSQL; missing phase fields in file
+records read as null. Existing timestamps are retained without backfill. Creation times
+already overwritten by previous resumes cannot be restored exactly by this change.
+Older binaries can still read and write records, but keep their destructive resume behavior
+and do not understand the separate phase clock. Upgrade all executors together before
+relying on creation-time preservation or the new checkout-priority rule.

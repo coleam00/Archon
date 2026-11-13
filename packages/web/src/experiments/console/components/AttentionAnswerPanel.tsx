@@ -71,7 +71,7 @@ export function AttentionAnswerPanel({
     e.stopPropagation();
   };
   const button =
-    'rounded bg-warning/15 px-2 py-1 text-[12px] font-semibold text-warning hover:bg-warning/25 disabled:opacity-50';
+    'rounded bg-warning/15 px-2 py-1 text-console-12 font-semibold text-warning hover:bg-warning/25 disabled:opacity-50';
   const { recommendation } = attention;
   const optionName = (id: string): string =>
     attention.options.find(option => option.id === id)?.label ?? id;
@@ -84,7 +84,7 @@ export function AttentionAnswerPanel({
       onKeyDown={stopPropagation}
     >
       {recommendation !== undefined ? (
-        <p className="text-[12px] text-text-primary">
+        <p className="text-console-12 text-text-primary">
           <span className="font-semibold">Recommended: {optionName(recommendation.option)}</span>
           {recommendation.confidence !== undefined
             ? ` (${recommendation.confidence} confidence)`
@@ -93,7 +93,7 @@ export function AttentionAnswerPanel({
         </p>
       ) : null}
       {described.length > 0 ? (
-        <ul className="flex flex-col gap-1 text-[12px] text-text-secondary">
+        <ul className="flex flex-col gap-1 text-console-12 text-text-secondary">
           {described.map(option => (
             <li key={option.id}>
               <span className="font-semibold text-text-primary">{option.label ?? option.id}</span>:{' '}
@@ -103,7 +103,7 @@ export function AttentionAnswerPanel({
         </ul>
       ) : null}
       {attention.form === 'multi_select' ? (
-        <div className="flex flex-wrap gap-3 text-[12px]">
+        <div className="flex flex-wrap gap-3 text-console-12">
           {attention.options.map(option => (
             <label key={option.id} className="flex items-center gap-1">
               <input
@@ -129,7 +129,7 @@ export function AttentionAnswerPanel({
         }}
         placeholder={textPlaceholder(attention)}
         rows={2}
-        className="rounded border border-border bg-surface px-2 py-1 text-[12px] text-text-primary"
+        className="rounded border border-border bg-surface px-2 py-1 text-console-12 text-text-primary"
       />
       <div className="flex flex-wrap items-center gap-2">
         {attention.form === 'message' || attention.form === 'multi_select' ? (
@@ -156,7 +156,9 @@ export function AttentionAnswerPanel({
             </button>
           ))
         )}
-        {error !== null ? <span className="font-mono text-[12px] text-error">{error}</span> : null}
+        {error !== null ? (
+          <span className="font-mono text-console-12 text-error">{error}</span>
+        ) : null}
       </div>
     </div>
   );

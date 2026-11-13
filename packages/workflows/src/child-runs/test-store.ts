@@ -59,6 +59,9 @@ export class InMemoryStore implements IWorkflowStore {
   admitResourceStart: IWorkflowStore['admitResourceStart'] = async () => {
     throw new Error('Unexpected admitResourceStart');
   };
+  admitPendingRun: IWorkflowStore['admitPendingRun'] = async () => {
+    throw new Error('Unexpected admitPendingRun');
+  };
   drainResourceStarts: IWorkflowStore['drainResourceStarts'] = async () => {
     throw new Error('Unexpected drainResourceStarts');
   };
@@ -177,6 +180,7 @@ export class InMemoryStore implements IWorkflowStore {
       outcome: null,
       user_message: data.user_message,
       metadata: data.metadata ?? {},
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: new Date(),

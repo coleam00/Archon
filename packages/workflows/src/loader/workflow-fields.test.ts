@@ -270,6 +270,7 @@ describe('workflow-level field parity (#2457)', () => {
       yaml: 'mutates_checkout: false',
       present: w => w.mutates_checkout === false,
     },
+    resource: { yaml: 'resource: build', present: w => w.resource?.name === 'build' },
     persist_sessions: {
       yaml: 'persist_sessions: true',
       present: w => w.persist_sessions === true,
@@ -637,6 +638,13 @@ describe('workflow-level policy fields', () => {
       'mutates_checkout',
       undefined,
     ],
+    ['a resource name', 'resource: build', 'resource', { name: 'build' }],
+    [
+      'a resource with a capacity',
+      'resource: { name: build, capacity: 3 }',
+      'resource',
+      { name: 'build', capacity: 3 },
+    ],
   ])('parses %s', (_, field, key, expected) => {
     expect(parseWorkflowYaml(withField(field)).workflow[key] as unknown).toEqual(expected);
   });
@@ -649,6 +657,13 @@ describe('workflow-level policy fields', () => {
       'an empty evidence_policy block (required is mandatory)',
       'evidence_policy: {}',
       'required: boolean',
+    ],
+    // A dropped resource would let every start run without a slot.
+    ['a reserved resource name', 'resource: "provider:claude"', "Invalid 'resource'"],
+    [
+      'a zero resource capacity',
+      'resource: { name: build, capacity: 0 }',
+      "Invalid 'resource' (capacity)",
     ],
   ])('rejects %s', (_, field, message) => {
     const result = parseWorkflow(withField(field), 'evidence.yaml');

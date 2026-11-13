@@ -217,10 +217,10 @@ export class MockContainerBackend {
 export const mockReleaseVerificationImages = mock<typeof Isolation.releaseRunVerificationImages>(
   async () => undefined
 );
-const { VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } = await import(
-  '@archon/isolation'
-);
+const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } =
+  await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  generatedTaskBranch,
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
   dockerCli: mock(async () => ({ stdout: '', stderr: '' })),

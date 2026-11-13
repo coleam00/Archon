@@ -1,4 +1,5 @@
 import { parseArgs } from 'util';
+import type { ArchonStoreKind } from '@archon/paths';
 import { cliArgOptions } from '../args';
 import { DETACHED_RUN_OWNER_ENV } from './detached-run-control';
 
@@ -22,4 +23,20 @@ export function shouldReportCliStart(args: readonly string[], env: NodeJS.Proces
   });
   const bootsServer = positionals[0] === 'serve' && !values.help && !values['download-only'];
   return !bootsServer;
+}
+
+/**
+ * The store this CLI's runs would use, for `archon_started`. An invalid or
+ * ambiguous selection reports no store: the command that needs the store
+ * reports that error itself, and telemetry never fails a command.
+ */
+export async function cliStartStore(): Promise<ArchonStoreKind | undefined> {
+  try {
+    // Lazy like the rest of CLI startup: core loads only when this runs.
+    const { loadStoreSelection } = await import('@archon/core/config/store-selection');
+    if ((await loadStoreSelection()) === 'files') return 'files';
+  } catch {
+    return undefined;
+  }
+  return process.env.DATABASE_URL ? 'postgresql' : 'sqlite';
 }

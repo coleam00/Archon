@@ -248,8 +248,9 @@ export interface IWorkflowStore
    * Pass `self` from the calling dispatch so:
    *   1. Self is never returned (excluded by `id != self.id`).
    *   2. Two near-simultaneous dispatches deterministically agree on which
-   *      is "first" via the `(started_at, id)` tiebreaker — newer aborts.
+   *      is "first" via the `(effective phase time, id)` tiebreaker — newer aborts.
    *
+   * `startedAt` is the effective path priority from `workflowPathPriorityTime`.
    * `id` and `startedAt` must travel together — the tiebreaker requires
    * both. Bundling them as a single optional struct makes the
    * paired-or-nothing invariant structural rather than a doc-only contract.
@@ -390,7 +391,8 @@ export interface IWorkflowStore
    * Atomically fail a pending or running run and persist its matching lifecycle event.
    * `failed` is false when the run was already terminal: a no-op that leaves the winning
    * outcome in place, so the caller must not announce its own failure. Missing runs and
-   * other start states reject.
+   * other start states reject unless a supplied failure condition mismatches.
+   * `pendingOnly` refuses claimed, settled, or missing runs without writing.
    * `exitReason` is recorded on that event as the run's categorical failure cause, and — with
    * `signal`, when a signal arriving at the owning process is what stopped the run —
    * on the run row as `metadata.stop_reason`, which is what the operator surfaces

@@ -61,9 +61,8 @@ export function createServerResourceStartHost(
         }
       })
       .catch((error: unknown) => {
-        // A failure before the engine claims the run leaves it pending and holding its
-        // slot; nothing retries it. Name the run (a request's ID is its run's ID) and
-        // the command that shows the operator's retry and abandon options.
+        // Preparation errors are recorded under ownership; an unowned failure or an
+        // ambiguous submission may still need operator recovery through inspection.
         log.error(
           {
             err: error as Error,

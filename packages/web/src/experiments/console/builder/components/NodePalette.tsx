@@ -40,7 +40,7 @@ export function NodePalette({ onAddVariant }: NodePaletteProps): ReactElement {
       aria-label="Node palette"
       className="flex w-48 shrink-0 flex-col gap-1.5 overflow-y-auto border-r border-border bg-surface-inset p-2.5"
     >
-      <h2 className="px-1 pb-1 font-mono text-[10px] font-bold uppercase tracking-[0.14em] text-text-tertiary">
+      <h2 className="px-1 pb-1 font-mono text-console-10 font-bold uppercase tracking-console-label text-text-tertiary">
         Nodes
       </h2>
       {VARIANTS.map(variant => {
@@ -58,14 +58,14 @@ export function NodePalette({ onAddVariant }: NodePaletteProps): ReactElement {
               onAddVariant(variant);
             }}
             title={`Drag onto the canvas (or click) to add a ${VARIANT_REGISTRY[variant].label} node`}
-            className="flex cursor-grab items-center gap-2.5 rounded-[10px] border border-border bg-surface px-2.5 py-2 text-left transition-colors hover:border-border-bright hover:bg-surface-hover active:cursor-grabbing"
+            className="flex cursor-grab items-center gap-2.5 rounded-lg border border-border bg-surface px-2.5 py-2 text-left transition-colors hover:border-border-bright hover:bg-surface-hover active:cursor-grabbing"
           >
-            <span aria-hidden className="h-7 w-[3px] shrink-0 rounded-sm" style={swatch} />
+            <span aria-hidden className="h-7 w-0.75 shrink-0 rounded-sm" style={swatch} />
             <span className="min-w-0">
-              <span className="block text-[13px] font-medium text-text-primary">
+              <span className="block text-console-13 font-medium text-text-primary">
                 {VARIANT_REGISTRY[variant].label}
               </span>
-              <span className="block truncate text-[10.5px] text-text-tertiary">
+              <span className="block truncate text-console-11 text-text-tertiary">
                 {variantHint(variant)}
               </span>
             </span>

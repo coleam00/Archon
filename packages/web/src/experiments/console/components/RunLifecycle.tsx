@@ -12,7 +12,7 @@ import { RunOutcomeBadge } from './RunOutcomeBadge';
 export function RunStartedLine({ run }: { run: Run }): ReactElement {
   return (
     <>
-      <div className="flex items-center gap-2 py-1 text-[11px]">
+      <div className="flex items-center gap-2 py-1 text-console-11">
         <span aria-hidden className="text-[color:var(--running)]">
           ▶
         </span>
@@ -23,7 +23,7 @@ export function RunStartedLine({ run }: { run: Run }): ReactElement {
         <div className="h-px flex-1 bg-border/50" aria-hidden />
       </div>
       {run.userMessage !== '' ? (
-        <div className="ml-[7px] border-l-2 border-border/60 pl-3 text-[11px] text-text-tertiary">
+        <div className="ml-1.75 border-l-2 border-border/60 pl-3 text-console-11 text-text-tertiary">
           {run.userMessage}
         </div>
       ) : null}
@@ -46,7 +46,7 @@ export function RunFinishedLine({ run }: { run: Run }): ReactElement | null {
     run.costUsd !== null ? ` · Reported cost ${formatCost(run.costUsd)} (may be partial)` : '';
 
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2 py-1 text-[11px]">
+    <div className="mt-2 flex flex-wrap items-center gap-2 py-1 text-console-11">
       <div className="h-px flex-1 bg-border/50" aria-hidden />
       <span aria-hidden className={statusTextClass[run.status]}>
         {GLYPH[run.status]}

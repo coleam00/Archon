@@ -124,7 +124,7 @@ function RefusalBanner({
   return (
     <div
       role="alert"
-      className="rounded border border-error/40 bg-error/10 px-4 py-3 text-[12.5px]"
+      className="rounded border border-error/40 bg-error/10 px-4 py-3 text-console-13"
     >
       <p className="font-medium text-error">
         {refused.length.toString()} metric output{refused.length === 1 ? ' was' : 's were'} refused
@@ -156,7 +156,7 @@ function refusalText(refusal: Refusal): string {
 }
 
 const HEADER_CELL =
-  'px-3 py-2 text-left font-mono text-[10.5px] font-bold uppercase tracking-[0.1em]';
+  'px-3 py-2 text-left font-mono text-console-11 font-bold uppercase tracking-widest';
 
 function MetricsTable({
   rows,
@@ -174,8 +174,8 @@ function MetricsTable({
 }): ReactElement {
   return (
     <div className="flex flex-col gap-1.5">
-      <div className="overflow-x-auto rounded-[12px] border border-border">
-        <table className="w-full border-collapse text-[12.5px]">
+      <div className="overflow-x-auto rounded-console-12 border border-border">
+        <table className="w-full border-collapse text-console-13">
           <thead className="bg-surface-inset/60 text-text-tertiary">
             <tr>
               <th className={HEADER_CELL}>What</th>
@@ -206,7 +206,7 @@ function MetricsTable({
   );
 }
 
-const SMALL = 'text-[11px] text-text-tertiary';
+const SMALL = 'text-console-11 text-text-tertiary';
 
 function MetricRow({
   row,
@@ -331,10 +331,10 @@ function MeasuredBox({
   const hidden = metric.instruments.filter(instrument => !sameIdentity(instrument, identity));
   return (
     <section
-      className="flex flex-col gap-1 rounded-[12px] border border-border px-4 py-3 text-[12.5px] text-text-secondary"
+      className="flex flex-col gap-1 rounded-console-12 border border-border px-4 py-3 text-console-13 text-text-secondary"
       data-measured={metric.name}
     >
-      <h2 className="text-[12px] font-medium text-text-primary">
+      <h2 className="text-console-12 font-medium text-text-primary">
         How {nameOf(metric.name)} is measured
       </h2>
       <p>Measured by {identityLabel(identity)}.</p>
@@ -425,7 +425,7 @@ function UnmatchedCalibrations({ report }: { report: MetricsReport }): ReactElem
   );
   if (orphans.length === 0) return null;
   return (
-    <ul className="flex flex-col gap-1 text-[12px] text-text-tertiary">
+    <ul className="flex flex-col gap-1 text-console-12 text-text-tertiary">
       {orphans.map(metric => {
         const score = headlineOf(metric);
         return (

@@ -12,6 +12,7 @@ export function makeContinuationRun(overrides: Partial<WorkflowRun> = {}): Workf
     outcome: null,
     user_message: 'original prompt',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,

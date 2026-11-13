@@ -71,6 +71,7 @@ export const cliArgOptions: CliArgOptions = {
   'include-closed': { type: 'boolean' },
   'conversation-id': { type: 'string' },
   detach: { type: 'boolean' },
+  'no-wait': { type: 'boolean' },
   all: { type: 'boolean' },
   status: { type: 'string' },
   limit: { type: 'string' },
@@ -122,4 +123,5 @@ export const cliArgOptions: CliArgOptions = {
   'internal-detached-run-config': { type: 'string' },
   // Private handoff: the run row the detached parent created before forking (#2872).
   'internal-detached-run-id': { type: 'string' },
+  'internal-detached-worktree-identifier': { type: 'string' },
 };

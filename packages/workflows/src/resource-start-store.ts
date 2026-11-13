@@ -1,8 +1,15 @@
+import { requestingRun } from './schemas/resource-start';
+import { workflowNoticeDataSchema, WORKFLOW_NOTICE_LIMITS } from './workflow-notice';
 import { createLogger } from '@archon/paths';
-import { AdmissionCheckoutGuardError, readAdmissionCheckoutGuard } from './schemas/resource-start';
+import {
+  AdmissionCheckoutGuardError,
+  DEFAULT_RESOURCE_CAPACITY,
+  readAdmissionCheckoutGuard,
+} from './schemas/resource-start';
 import type { z } from 'zod';
 import type {
   PreparedWorkflowLaunch,
+  ResourceStartBindingIntent,
   ResourceStartDisposition,
   ResourceStartIntent,
   SourceReceiptInput,
@@ -18,22 +25,104 @@ import {
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
+import type { WorkflowResource } from './schemas/resource-name';
 import type { ResumeRefusal, WorkflowResumeCursor } from './store';
+
+export function skippedFireNotice(
+  receipt: Pick<SourceReceiptInput, 'deliveryId' | 'sourceActor'>,
+  binding: Pick<ResourceStartIntent, 'resource' | 'overlap'> & { bindingId: string },
+  disposition: ResourceStartDisposition
+) {
+  const source = requestingRun(receipt.sourceActor);
+  if (receipt.deliveryId === null || source === null || disposition.status !== 'skipped')
+    return null;
+  const label = (value: string): string => {
+    const parts = Array.from(value, char =>
+      /[\u0000-\u001f\u007f-\u009f]/u.test(char)
+        ? `\\u${char.charCodeAt(0).toString(16).padStart(4, '0')}`
+        : char
+    );
+    const printable = parts.join('');
+    const max = WORKFLOW_NOTICE_LIMITS.labelValueLength;
+    if (printable.length <= max) return printable;
+    let prefix = '';
+    for (const part of parts) {
+      if (prefix.length + part.length >= max) break;
+      prefix += part;
+    }
+    return `${prefix}…`;
+  };
+  return {
+    runId: source.runId,
+    data: workflowNoticeDataSchema.parse({
+      text: 'Trigger fire dropped, not queued (overlap=skip).',
+      node: null,
+      labels: {
+        kind: 'trigger_fire_skipped',
+        binding: label(binding.bindingId),
+        resource: label(binding.resource),
+        overlap: binding.overlap,
+        blocker_kind: disposition.blocker.kind,
+        blocker: label(disposition.blocker.id),
+        delivery: label(receipt.deliveryId),
+      },
+    }),
+  };
+}
 
 export class SourceReceiptDigestConflictError extends Error {}
 
-export class ResourceSlotCapacityConflictError extends Error {
-  constructor(
-    public readonly resource: string,
-    public readonly configured: number,
-    public readonly requested: number
-  ) {
-    super(
-      `Resource '${resource}' has capacity ${String(configured)}; a request declared ${String(requested)}. Every binding for one resource must declare the same capacity.`
-    );
-    this.name = 'ResourceSlotCapacityConflictError';
-  }
+export interface PreparedBindingInput {
+  receiptId: string;
+  bindingId: string;
+  launch: PreparedWorkflowLaunch;
+  resource?: WorkflowResource;
 }
+
+/**
+ * The start a prepared binding asks admission for. The run holds its workflow's declared
+ * resource in place of the binding's, so a binding start and a hand start of that workflow
+ * count against one slot. Its capacity is the binding's, else the workflow's, else 1; the
+ * install config's number still wins at admission.
+ */
+export function preparedBindingStart(
+  binding: ResourceStartBindingIntent,
+  { receiptId, bindingId, launch, resource }: PreparedBindingInput
+): ResourceStartIntent {
+  return {
+    resource: resource?.name ?? binding.resource,
+    capacity: binding.capacity ?? resource?.capacity ?? DEFAULT_RESOURCE_CAPACITY,
+    hostId: binding.hostId,
+    overlap: binding.overlap,
+    launch,
+    receipt: { receiptId, bindingId },
+  };
+}
+
+/**
+ * What a slot records as its capacity after a start: the capacity the start declares, or
+ * what the slot already recorded, or the default for a new slot. A declared capacity
+ * replaces the recorded one, so changing it takes effect at the next admission.
+ */
+export function recordedResourceCapacity(
+  recorded: number | undefined,
+  declared: number | undefined
+): number {
+  return declared ?? recorded ?? DEFAULT_RESOURCE_CAPACITY;
+}
+
+/**
+ * The install's own number for a resource (`concurrency.resources.<resource>`), read at
+ * every admission. It wins over the slot's recorded capacity; `undefined` leaves that.
+ */
+export type ResourceCapacityOverride = (resource: string) => Promise<number | undefined>;
+
+/**
+ * The host ID recorded on the admitted request of a start no binding made (a direct
+ * `archon workflow run`, chat or API start). No host drains it: it is admitted at once
+ * or not recorded at all.
+ */
+export const DIRECT_START_HOST_ID = 'direct-start';
 
 export type StartBindingInspection = z.infer<typeof startBindingInspectionSchema> & {
   requestStatus: ResourceStartRequestInspection['status'] | null;
@@ -224,12 +313,14 @@ function checkoutHolder(
 ): string | undefined {
   const checkout = launchCheckout(launch);
   if (checkout === undefined) return undefined;
-  return (
-    slot.heldCheckouts.get(checkout) ??
-    (readAdmissionCheckoutGuard(launch)
-      ? (slot.foreignHeldCheckouts.get(checkout) ?? slot.unknownForeignCheckoutHolder)
-      : undefined)
-  );
+  const holders = [
+    slot.heldCheckouts.get(checkout),
+    ...(readAdmissionCheckoutGuard(launch)
+      ? [slot.foreignHeldCheckouts.get(checkout), slot.unknownForeignCheckoutHolder]
+      : []),
+  ];
+  // A direct start's run row exists before its admission and holds its own checkout.
+  return holders.find(holder => holder !== undefined && holder !== launch.run.id);
 }
 
 function validQueuedStarts(slot: ResourceSlotOccupancy): QueuedStart[] {
@@ -366,6 +457,19 @@ export type PendingStartBindingInspection = StartBindingInspection | DamagedStar
 
 export interface IResourceStartStore {
   admitResourceStart(intent: ResourceStartIntent): Promise<ResourceStartDisposition>;
+  /**
+   * Admit an existing pending run that no binding started onto `resource` now, or return
+   * what blocks it. `capacity` is the number this start declares: the install config's
+   * number wins over it, and it is not recorded on the slot. A refusal records nothing,
+   * so the caller waits by trying again and never holds a queue position a dead process
+   * could strand. A run that already has an admitted request holds its slot: the result
+   * is `null` and nothing changes.
+   */
+  admitPendingRun(input: {
+    resource: string;
+    capacity: number;
+    launch: PreparedWorkflowLaunch;
+  }): Promise<ResourceBlocker | null>;
   drainResourceStarts(options: {
     resource: string;
     hostId: string;
@@ -400,12 +504,13 @@ export interface IResourceStartStore {
     bindingId: string;
     ownerId: string;
   }): Promise<boolean>;
-  completeStartBindingPreparation(input: {
-    receiptId: string;
-    bindingId: string;
-    ownerId: string;
-    launch: PreparedWorkflowLaunch;
-  }): Promise<ResourceStartDisposition | null>;
+  /**
+   * Admit a prepared binding start. `resource` is the bound workflow's declaration; see
+   * `preparedBindingStart` for what it changes.
+   */
+  completeStartBindingPreparation(
+    input: PreparedBindingInput & { ownerId: string }
+  ): Promise<ResourceStartDisposition | null>;
   failStartBindingPreparation(input: {
     receiptId: string;
     bindingId: string;

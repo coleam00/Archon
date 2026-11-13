@@ -15,6 +15,7 @@ import {
 } from './dag-node';
 import type { DagNode, NestedKeySpec } from './dag-node';
 import { jsonValueSchema } from '../output-ref';
+import { workflowResourceSchema } from './resource-name';
 import { rejectRetiredThinking, type EffortLevel } from './effort';
 import { modelRefSchema, type WorkflowModelRef } from './model-binding';
 import type { WorkflowPack } from './pack-settings';
@@ -228,6 +229,13 @@ export const workflowBaseSchema = z.object({
    * Defaults to `true` (safe: serialize runs on the same path).
    */
   mutates_checkout: z.boolean().optional(),
+  /**
+   * The resource every top-level run of this workflow holds a slot on, however it was
+   * started, with the capacity its starts declare unless a binding sets its own. A start
+   * waits while the resource is full. An included workflow's resource is dropped: it runs
+   * inside its parent's run and slot.
+   */
+  resource: workflowResourceSchema.optional(),
   /**
    * Default for `persist_session` on every AI node in this workflow.
    * Individual nodes can override with `persist_session: false`.

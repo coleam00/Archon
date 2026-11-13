@@ -112,7 +112,7 @@ export function ConsoleWorkflowResultCard({
   // would lie about a state we couldn't load.
   if (run === null) {
     return (
-      <div className="rounded-md border border-border bg-surface px-3 py-2 text-[13px] whitespace-pre-wrap text-text-secondary">
+      <div className="rounded-md border border-border bg-surface px-3 py-2 text-console-13 whitespace-pre-wrap text-text-secondary">
         {summary}
       </div>
     );
@@ -128,28 +128,28 @@ export function ConsoleWorkflowResultCard({
 
   return (
     <article
-      className="relative flex items-start gap-[13px] overflow-hidden rounded-[12px] border px-4 py-[14px]"
+      className="relative flex items-start gap-3.25 overflow-hidden rounded-console-12 border px-4 py-3.5"
       style={{ borderColor: accent.cardBorder, background: accent.cardBg }}
     >
       <span
         aria-hidden
-        className="pointer-events-none absolute left-0 top-0 bottom-0 w-[3px]"
+        className="pointer-events-none absolute left-0 top-0 bottom-0 w-0.75"
         style={{ background: accent.bar }}
       />
       <div
         aria-hidden
-        className="flex h-[34px] w-[34px] shrink-0 items-center justify-center rounded-[9px] text-[17px] font-semibold"
+        className="flex h-8.5 w-8.5 shrink-0 items-center justify-center rounded-lg text-console-17 font-semibold"
         style={{ background: accent.badgeBg, color: accent.badgeFg }}
       >
         {glyph}
       </div>
       <div className="min-w-0 flex-1">
-        <div className="flex flex-wrap items-center gap-2 text-[14px] font-bold leading-[1.35]">
+        <div className="flex flex-wrap items-center gap-2 text-console-14 font-bold leading-[1.35]">
           <span className="whitespace-nowrap" style={{ color: accent.badgeFg }}>
             {label}:
           </span>
           <span
-            className="rounded-[6px] border px-[9px] py-[3px] font-mono text-[12px] font-semibold text-text-primary"
+            className="rounded-sm border px-2.25 py-0.75 font-mono text-console-12 font-semibold text-text-primary"
             style={{ background: 'var(--surface)', borderColor: 'var(--border-bright)' }}
           >
             {workflowName}
@@ -157,7 +157,7 @@ export function ConsoleWorkflowResultCard({
           <RunOutcomeBadge outcome={run.outcome} />
           {run.status === 'failed' ? (
             <span
-              className="rounded-full border px-[7px] py-[2px] font-mono text-[10.5px] font-semibold uppercase tracking-[0.6px]"
+              className="rounded-full border px-1.75 py-0.5 font-mono text-console-11 font-semibold uppercase tracking-console-badge"
               style={{
                 color: 'var(--error)',
                 borderColor: 'color-mix(in oklch, var(--error), transparent 60%)',
@@ -167,15 +167,15 @@ export function ConsoleWorkflowResultCard({
             </span>
           ) : null}
         </div>
-        <div className="mt-[5px] flex flex-wrap items-center gap-x-3 gap-y-1 text-[13px] leading-[1.55] text-text-secondary">
-          <span className="font-mono text-[11px] text-text-tertiary">{duration}</span>
+        <div className="mt-1.25 flex flex-wrap items-center gap-x-3 gap-y-1 text-console-13 leading-[1.55] text-text-secondary">
+          <span className="font-mono text-console-11 text-text-tertiary">{duration}</span>
           {total > 0 ? (
-            <span className="font-mono text-[11px] text-text-tertiary">
+            <span className="font-mono text-console-11 text-text-tertiary">
               {completed}/{total} nodes
             </span>
           ) : null}
           {cost !== null ? (
-            <span className="rounded-full bg-surface-hover px-2 py-0.5 font-mono text-[10px] text-text-tertiary">
+            <span className="rounded-full bg-surface-hover px-2 py-0.5 font-mono text-console-10 text-text-tertiary">
               {cost}
             </span>
           ) : null}
@@ -185,14 +185,14 @@ export function ConsoleWorkflowResultCard({
               onClick={(): void => {
                 void navigate(`/console/p/${run.projectId}/r/${runId}`);
               }}
-              className="ml-auto text-[11px] text-text-secondary transition-colors hover:text-text-primary"
+              className="ml-auto text-console-11 text-text-secondary transition-colors hover:text-text-primary"
             >
               Open run →
             </button>
           ) : null}
         </div>
         {summary.trim().length > 0 ? (
-          <div className="mt-2 whitespace-pre-wrap text-[13px] leading-relaxed text-text-secondary">
+          <div className="mt-2 whitespace-pre-wrap text-console-13 leading-relaxed text-text-secondary">
             {summary}
           </div>
         ) : null}

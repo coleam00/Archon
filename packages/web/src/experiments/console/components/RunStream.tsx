@@ -448,7 +448,9 @@ function renderTimelineEntry(entry: TimelineEntry): ReactElement {
             label={label}
             headerRight={
               detail.length > 0 ? (
-                <span className="truncate font-mono text-[11px] text-text-secondary">{detail}</span>
+                <span className="truncate font-mono text-console-11 text-text-secondary">
+                  {detail}
+                </span>
               ) : null
             }
           />
@@ -465,7 +467,7 @@ function renderTimelineEntry(entry: TimelineEntry): ReactElement {
             label={entry.row.label}
             headerRight={
               entry.row.detail.length > 0 ? (
-                <span className="truncate font-mono text-[11px] text-text-secondary">
+                <span className="truncate font-mono text-console-11 text-text-secondary">
                   {entry.row.detail}
                 </span>
               ) : null

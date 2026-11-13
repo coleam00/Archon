@@ -1,3 +1,4 @@
+import { WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { resumeRefusal } from '@archon/workflows/resource-start-store';
@@ -134,7 +135,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
 }
 
 type InMemoryWorkflowStore = IWorkflowStore &
-  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait'>;
+  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait' | 'setResourceCapacity'>;
 
 /**
  * The file store's transaction view over in-memory maps. Every operation runs on a copy and
@@ -216,7 +217,19 @@ export function createInMemoryWorkflowStore(
           codebaseId: row.codebase_id,
           branch: row.workflow_id,
           workingPath: row.working_path,
-        }))
+        })),
+    notice =>
+      apply(async view => {
+        const prior =
+          (await view.listEventsForRuns([notice.runId], ['workflow_notice'])).get(notice.runId) ??
+          [];
+        if (prior.length >= WORKFLOW_NOTICE_LIMITS.perRun) return;
+        await view.persistWorkflowEvent({
+          workflow_run_id: notice.runId,
+          event_type: 'workflow_notice',
+          data: notice.data,
+        });
+      })
   );
   const admit =
     <Args extends unknown[], Result>(
@@ -227,6 +240,7 @@ export function createInMemoryWorkflowStore(
   return {
     ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
+    admitPendingRun: admit(admission.admitPendingRun.bind(admission)),
     drainResourceStarts: admit(admission.drainResourceStarts.bind(admission)),
     hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),
     acceptStartReceipt: admit(admission.acceptStartReceipt.bind(admission)),
@@ -244,6 +258,7 @@ export function createInMemoryWorkflowStore(
     ),
     failStartBindingPreparation: admit(admission.failStartBindingPreparation.bind(admission)),
     resetStartBindingPreparation: admit(admission.resetStartBindingPreparation.bind(admission)),
+    setResourceCapacity: admit(admission.setResourceCapacity.bind(admission)),
     backdate: (id, dates) =>
       serialize(async () => {
         const run = runs.get(id);

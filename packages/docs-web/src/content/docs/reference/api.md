@@ -569,7 +569,7 @@ a run whose owner is `unreachable` or `unknown` as not live and offers Abandon f
 curl 'http://localhost:3090/api/metrics?name=factory.prs_merged&since=7d'
 ```
 
-Query parameters, all optional: `since` (a duration such as `7d`, `24h` or `2w`, or an ISO
+Query parameters, all optional: `since` (a duration such as `40m`, `24h`, `7d` or `2w`, or an ISO
 date or time; default 30 days before `until`), `until` (an ISO date or time; default now),
 `name`, `subject`, `codebaseId`, `compare` (an ISO date or time to split each
 instrument's records at) and `byModel` (a node id to split them by the model that ran it).

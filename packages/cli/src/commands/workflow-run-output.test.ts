@@ -1077,6 +1077,7 @@ describe('workflowRunCommand — progress rendering', () => {
                 isolation: 'container',
                 isolation_env_id: 'container-env-1',
               },
+        active_phase_started_at: null,
         started_at: new Date(),
         completed_at: new Date(),
         last_activity_at: null,

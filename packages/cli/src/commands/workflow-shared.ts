@@ -105,6 +105,8 @@ export interface WorkflowRunOptions {
    * argv. The child executes that run and owns its source capture and worktree.
    */
   detach?: boolean;
+  /** Refuse instead of waiting when the workflow's `resource:` is full. */
+  noWait?: boolean;
   /**
    * Emit a machine-readable JSON ack for the spawned child instead of human
    * text. Only meaningful together with `detach`: without `detach` a foreground
@@ -151,6 +153,8 @@ export interface WorkflowRunOptions {
    * exists. A continuation carries its own run and never sets it.
    */
   detachedRunId?: string;
+  /** @internal Generated worktree identity pinned by the detached parent. */
+  detachedWorktreeIdentifier?: string;
   /**
    * Between-run continuation (#2747): adopt a terminal run's estate — its
    * worktree/branch plus read access to its artifacts via `$ADOPTED_RUN_DIR`.

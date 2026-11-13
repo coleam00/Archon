@@ -140,6 +140,7 @@ export function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
     outcome: null,
     user_message: 'mock message',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -163,6 +164,9 @@ export function createMockStore(): MockWorkflowStore {
     );
   const unexpectedWrite = (): never => {
     throw new Error('Unexpected state document write');
+  };
+  const unexpected = (name: string) => (): never => {
+    throw new Error(`Unexpected ${name}`);
   };
   return {
     getWorkflowEventHead: mock<IWorkflowStore['getWorkflowEventHead']>(() => {
@@ -191,48 +195,45 @@ export function createMockStore(): MockWorkflowStore {
       throw new Error('Unexpected pruneStateRevisions');
     }),
     setToolCallAttention: mock<IWorkflowStore['setToolCallAttention']>(async () => true),
-    admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(() => {
-      throw new Error('Unexpected admitResourceStart');
-    }),
-    drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(() => {
-      throw new Error('Unexpected drainResourceStarts');
-    }),
-    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(() => {
-      throw new Error('Unexpected hasStartReceiptForDelivery');
-    }),
-    acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(() => {
-      throw new Error('Unexpected acceptStartReceipt');
-    }),
-    getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(() => {
-      throw new Error('Unexpected getStartReceipt');
-    }),
-    listStartReceipts: mock<IWorkflowStore['listStartReceipts']>(() => {
-      throw new Error('Unexpected listStartReceipts');
-    }),
-    listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(() => {
-      throw new Error('Unexpected listPendingStartBindings');
-    }),
-    getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(() => {
-      throw new Error('Unexpected getResourceStartRequest');
-    }),
-    listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(() => {
-      throw new Error('Unexpected listQueuedResourceStartsForHost');
-    }),
-    withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(() => {
-      throw new Error('Unexpected withdrawQueuedResourceStart');
-    }),
-    claimStartBindingPreparation: mock<IWorkflowStore['claimStartBindingPreparation']>(() => {
-      throw new Error('Unexpected claimStartBindingPreparation');
-    }),
-    completeStartBindingPreparation: mock<IWorkflowStore['completeStartBindingPreparation']>(() => {
-      throw new Error('Unexpected completeStartBindingPreparation');
-    }),
-    failStartBindingPreparation: mock<IWorkflowStore['failStartBindingPreparation']>(() => {
-      throw new Error('Unexpected failStartBindingPreparation');
-    }),
-    resetStartBindingPreparation: mock<IWorkflowStore['resetStartBindingPreparation']>(() => {
-      throw new Error('Unexpected resetStartBindingPreparation');
-    }),
+    admitResourceStart: mock<IWorkflowStore['admitResourceStart']>(
+      unexpected('admitResourceStart')
+    ),
+    admitPendingRun: mock<IWorkflowStore['admitPendingRun']>(unexpected('admitPendingRun')),
+    drainResourceStarts: mock<IWorkflowStore['drainResourceStarts']>(
+      unexpected('drainResourceStarts')
+    ),
+    hasStartReceiptForDelivery: mock<IWorkflowStore['hasStartReceiptForDelivery']>(
+      unexpected('hasStartReceiptForDelivery')
+    ),
+    acceptStartReceipt: mock<IWorkflowStore['acceptStartReceipt']>(
+      unexpected('acceptStartReceipt')
+    ),
+    getStartReceipt: mock<IWorkflowStore['getStartReceipt']>(unexpected('getStartReceipt')),
+    listStartReceipts: mock<IWorkflowStore['listStartReceipts']>(unexpected('listStartReceipts')),
+    listPendingStartBindings: mock<IWorkflowStore['listPendingStartBindings']>(
+      unexpected('listPendingStartBindings')
+    ),
+    getResourceStartRequest: mock<IWorkflowStore['getResourceStartRequest']>(
+      unexpected('getResourceStartRequest')
+    ),
+    listQueuedResourceStartsForHost: mock<IWorkflowStore['listQueuedResourceStartsForHost']>(
+      unexpected('listQueuedResourceStartsForHost')
+    ),
+    withdrawQueuedResourceStart: mock<IWorkflowStore['withdrawQueuedResourceStart']>(
+      unexpected('withdrawQueuedResourceStart')
+    ),
+    claimStartBindingPreparation: mock<IWorkflowStore['claimStartBindingPreparation']>(
+      unexpected('claimStartBindingPreparation')
+    ),
+    completeStartBindingPreparation: mock<IWorkflowStore['completeStartBindingPreparation']>(
+      unexpected('completeStartBindingPreparation')
+    ),
+    failStartBindingPreparation: mock<IWorkflowStore['failStartBindingPreparation']>(
+      unexpected('failStartBindingPreparation')
+    ),
+    resetStartBindingPreparation: mock<IWorkflowStore['resetStartBindingPreparation']>(
+      unexpected('resetStartBindingPreparation')
+    ),
     listDueWorkflowContinuations: mock<IWorkflowStore['listDueWorkflowContinuations']>(() => {
       throw new Error('Unexpected listDueWorkflowContinuations');
     }),
@@ -728,25 +729,11 @@ export function makeWorkflowRun(
   overrides?: Partial<WorkflowRun>
 ): WorkflowRun {
   return {
+    ...mockWorkflowRun(id),
     origin: { conversationId: 'conv-dag' },
-    id,
     workflow_name: 'dag-test',
     conversation_id: 'conv-dag',
-    parent_conversation_id: null,
-    codebase_id: null,
-    status: 'running',
-    outcome: null,
     user_message: 'dag test message',
-    metadata: {},
-    started_at: new Date(),
-    completed_at: null,
-    last_activity_at: null,
-    working_path: null,
-    user_id: null,
-    parent_run_id: null,
-    output_root: null,
-    checkout_baseline: null,
-    adopted_from_run_id: null,
     ...overrides,
   };
 }

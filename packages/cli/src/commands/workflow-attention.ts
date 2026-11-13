@@ -28,7 +28,7 @@ import {
   type AttentionQueueScope,
   type AttentionQueueSource,
 } from '@archon/workflows/attention-queue';
-import { resolveMetricsWindow } from '@archon/workflows/metrics';
+import { MetricsQueryError, resolveMetricsWindow } from '@archon/workflows/metrics';
 import { countWorkflowNotices, listWorkflowNotices } from '@archon/workflows/workflow-notice';
 import { writeJsonLine, writeStderr, writeStdout } from '../utils/stdout';
 import { attentionItemLines, attentionStreamText, noticeText } from './workflow-attention-text';
@@ -453,7 +453,8 @@ async function attentionCommandFailure(
   json: boolean | undefined
 ): Promise<number> {
   const err = error as Error;
-  getLog().error({ err, runId }, 'cli.workflow_attention_failed');
+  if (!(error instanceof MetricsQueryError))
+    getLog().error({ err, runId }, 'cli.workflow_attention_failed');
   if (!json) throw new Error(`Failed to read the attention queue: ${err.message}`, { cause: err });
   await writeJsonLine({
     ok: false,

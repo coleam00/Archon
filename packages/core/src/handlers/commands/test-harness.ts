@@ -115,6 +115,7 @@ export function makeWorkflowRun(overrides: Partial<WorkflowRun> = {}): WorkflowR
     outcome: null,
     user_message: 'test request',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -424,10 +425,10 @@ export const mockIsolationDestroy = mock(
     })
 );
 
-const { VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } = await import(
-  '@archon/isolation'
-);
+const { generatedTaskBranch, VerificationImageInventoryError, VERIFICATION_IMAGE_RUN_LABEL } =
+  await import('@archon/isolation');
 mock.module('@archon/isolation', () => ({
+  generatedTaskBranch,
   getPrsForCommit: mock<typeof import('@archon/isolation').getPrsForCommit>(async () => ({
     state: 'NONE',
   })),

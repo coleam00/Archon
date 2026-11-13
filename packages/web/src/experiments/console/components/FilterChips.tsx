@@ -38,14 +38,14 @@ export function FilterChips({ value, onChange, counts }: FilterChipsProps): Reac
             onClick={() => {
               onChange(filter);
             }}
-            className={`relative mr-5 inline-flex items-center gap-2 px-1 pb-[13px] pt-2 font-mono text-[11px] font-semibold uppercase tracking-[0.1em] transition-colors ${
+            className={`relative mr-5 inline-flex items-center gap-2 px-1 pb-3.25 pt-2 font-mono text-console-11 font-semibold uppercase tracking-widest transition-colors ${
               active ? 'text-text-primary' : 'text-text-tertiary hover:text-text-secondary'
             }`}
             aria-pressed={active}
           >
             {label}
             <span
-              className={`min-w-[20px] rounded-full border px-[7px] py-px text-center font-mono text-[10.5px] font-bold tabular-nums ${
+              className={`min-w-5 rounded-full border px-1.75 py-px text-center font-mono text-console-11 font-bold tabular-nums ${
                 active
                   ? 'border-transparent bg-accent-bright/20 text-text-primary'
                   : 'bg-surface-elevated text-text-secondary'

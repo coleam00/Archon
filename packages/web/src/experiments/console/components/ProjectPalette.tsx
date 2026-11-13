@@ -123,7 +123,7 @@ export function ProjectPalette({ open, onClose }: ProjectPaletteProps): ReactEle
           aria-controls={listboxId}
           aria-autocomplete="list"
           aria-activedescendant={activeOptionId}
-          className="w-full border-b border-border bg-transparent px-4 py-3 text-[15px] text-text-primary placeholder:text-text-tertiary focus:outline-none"
+          className="w-full border-b border-border bg-transparent px-4 py-3 text-console-15 text-text-primary placeholder:text-text-tertiary focus:outline-none"
         />
         <ul
           id={listboxId}
@@ -132,7 +132,7 @@ export function ProjectPalette({ open, onClose }: ProjectPaletteProps): ReactEle
           className="max-h-[50vh] overflow-y-auto py-1"
         >
           {matches.length === 0 ? (
-            <li className="px-4 py-3 text-[12px] text-text-tertiary">No projects match.</li>
+            <li className="px-4 py-3 text-console-12 text-text-tertiary">No projects match.</li>
           ) : (
             matches.map((p, i) => {
               const selected = i === index;
@@ -159,13 +159,13 @@ export function ProjectPalette({ open, onClose }: ProjectPaletteProps): ReactEle
                         className="brand-bar pointer-events-none absolute left-0 top-1 bottom-1 w-0.5 rounded-full"
                       />
                     ) : null}
-                    <span className="text-[13px] font-medium text-text-primary">{p.name}</span>
+                    <span className="text-console-13 font-medium text-text-primary">{p.name}</span>
                     {p.kind === 'folder' ? (
-                      <span className="rounded-sm bg-surface-hover px-1 py-0.5 font-mono text-[9px] uppercase tracking-wide text-text-tertiary">
+                      <span className="rounded-sm bg-surface-hover px-1 py-0.5 font-mono text-console-9 uppercase tracking-wide text-text-tertiary">
                         folder
                       </span>
                     ) : null}
-                    <span className="truncate font-mono text-[10.5px] text-text-tertiary">
+                    <span className="truncate font-mono text-console-11 text-text-tertiary">
                       {formatProjectLocator(p)}
                     </span>
                   </button>
@@ -174,7 +174,7 @@ export function ProjectPalette({ open, onClose }: ProjectPaletteProps): ReactEle
             })
           )}
         </ul>
-        <footer className="flex items-center justify-between border-t border-border px-4 py-2 font-mono text-[10px] text-text-tertiary">
+        <footer className="flex items-center justify-between border-t border-border px-4 py-2 font-mono text-console-10 text-text-tertiary">
           <span>↑↓ move · ↵ open · esc cancel</span>
           <span>
             {matches.length} of {projects?.length ?? 0}

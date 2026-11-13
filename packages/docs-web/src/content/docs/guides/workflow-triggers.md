@@ -218,12 +218,28 @@ A binding file without `schedule` is fire-only: no clock starts it. A workflow n
 
 `resource` names the work that must not overlap. Use the same sufficiently qualified resource for every schedule or webhook binding that can mutate that work. A trigger ID or workflow name does not imply a resource.
 
-`capacity` sets how many runs can hold the resource at once. It is optional and defaults to `1`, so by default runs for one resource never overlap. Set it higher for work that tolerates a bounded number of concurrent runs, such as `"capacity": 2`. Every binding that names a resource must declare the same capacity. A start that declares a different capacity is rejected and recorded as `resource_capacity_conflict` instead of silently using either value. To change a resource's capacity, use a new resource name.
+`capacity` sets how many runs can hold the resource at once. Admission reads it fresh for every start, drain and resume, from three sources, lowest first:
+
+1. An engine default of `1` for a start that declares no number, so by default runs for one resource never overlap.
+2. The capacity the start declares: a binding's `"capacity": 2` or a pack binding's `capacity:`, or, for a hand start and for a binding that sets none, the workflow's `resource: { name: build, capacity: 2 }`. Each start is checked against its own number, so bindings that share a resource do not need to agree. A drain or resume uses the number the last binding start declared.
+3. The install config in `~/.archon/config.yaml`, which wins:
+
+   ```yaml
+   concurrency:
+     resources:
+       build: 5
+   ```
+
+   The key is the resource exactly as runs hold it: a workflow's `resource:` name, or a binding's full `resource` when its workflow declares none.
+
+Raising a capacity admits queued work at the next drain or start. Lowering it ends no run that holds a slot; it only blocks new admissions until enough holders finish. Capacity `1` means runs for the resource never overlap.
 
 The `overlap` setting controls a request that arrives while the resource is full:
 
 - `skip` records the blocking run and retains no promise to execute later.
 - `queue` retains the prepared request in durable FIFO order.
+
+When a `trigger fire` with a delivery ID and source run is skipped, the engine records one notice on the source run if its shared 50-notice allowance has room, even after the run ends. The notice names the binding, resource and blocking run or request and says the fire was dropped rather than queued. Inspect it with `archon workflow attention --notices --since 24h --json` or follow `archon workflow attention --watch --notices`. Scheduled skips and fires without a delivery ID or source run produce no notice. At or above the ceiling, admission records the skip without a notice. The skip remains visible through `archon trigger inspect`. A storage failure still fails admission and the host reports the preparation failure. Replaying the same delivery adds no second notice.
 
 A queued request also blocks newer requests for the same resource, so a new arrival never passes older queued work, except work held back because another run holds its checkout (below). Different resources can run concurrently. Pending and running root runs hold their resource; a run releases it when it completes, fails, or is cancelled.
 
@@ -253,13 +269,34 @@ When independent slot membership is absent, a historical resume trusts the survi
 
 If an older released holder also loses its request document, the stored data cannot distinguish it from a manual run. It receives foreign-holder behavior, so read-only starts can pass it even on its former resource. Preserve or repair the request and slot membership before relying on same-resource serialization in that damaged state.
 
-If a request was admitted but its run remains `pending`, for example because its host stopped before starting it, inspection supplies an explicit `trigger execute` retry. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs or is abandoned. When a server-hosted start fails this way, the server logs `resource_start.start_failed` with the run ID and the `archon trigger inspect` command to run.
+An owned launch that records a preparation error, such as failing to create isolation, ends its still-pending run as `failed`. The full error remains in `trigger inspect` (by receipt or request ID) and `workflow get`. Attention watchers show the run ID and `launch failed before the first node`, without error text. Terminal runs no longer hold resource capacity, so the next drain can admit queued work.
+
+If a request was admitted but its run remains `pending`, for example because its host stopped or was killed without recording a preparation error, inspection supplies an explicit `trigger execute` retry. The engine admits only one execution claimant. A drain does not retry it automatically, and the run keeps holding its resource until it runs or is abandoned. Archon does not infer failure from process death. Server launch errors log `resource_start.start_failed` with the run ID and the `archon trigger inspect` command for its recorded status and recovery options.
 
 To stop a running run that a `trigger execute` process owns, use `archon workflow cancel <runId>`. Cancel stops its safely targetable process groups, then records the run as `cancelled`, which releases the resource. If node output pipes remain held, cancel warns that an unsignalled process still holds them. POSIX host commands that started or completed also produce a warning about possible untracked background work, including after continuation. Neither a survivor nor cleanup is confirmed. These owner-stop warnings retain owned checkouts; inspect processes with `lsof`, verify ownership, and stop leftovers before checkout reuse or removal. The next drain admits queued work for it. A run the server executes has no detached owner process, so `archon workflow cancel` refuses it and leaves it unchanged; cancel it from that server instead (Web UI, API, or chat).
 
 A `trigger execute` process stopped with SIGTERM or SIGINT marks its own running run failed before it exits, which also releases the resource. A crash or SIGKILL cannot do that and leaves ownership ambiguous.
 
 If an admitted run has ambiguous ownership after a crash, inspect the request and its blocking run. `archon workflow abandon` is the explicit escape hatch here. If the run's owner answers on this host, abandon stops its safely targetable process groups before recording the run cancelled. A waiting start can then be admitted, even if an output-holder warning reports that an unsignalled process still holds node output. Abandon retains owned checkouts when owner-stop warnings report held output or possible untracked background work, including descendant checkouts and their root. Use `lsof` on the retained checkout before reusing or removing it. If no owner answers, abandon records the run cancelled and prints the host and pid the run recorded; an owner on another host cannot be stopped from here, so verify it has stopped before abandoning. Archon does not abandon a run because it is old or unreachable. Automatic queue draining and recovery of ambiguous execution are separate operations.
+
+### Workflows that declare a resource
+
+A workflow can name the resource its runs hold with a top-level `resource:` field:
+
+```yaml
+name: build
+description: Build one item
+resource: build
+nodes: [...]
+```
+
+Every run of that workflow then takes a slot on the resource, however it starts: `archon workflow run`, a chat or API start, a `workflow:` sub-run, or a binding. A binding that starts it admits the run on the workflow's resource instead of the binding's own `resource`, so binding starts and hand starts count against one slot, and the binding's `capacity` is a declared capacity for the workflow's resource. The name is used as written: `concurrency.resources.build` in the install config is the number for every workflow that declares `resource: build`, across projects.
+
+To set the capacity that starts of the workflow declare, write `resource: { name: build, capacity: 3 }`. Hand starts and sub-runs declare it, and so does a binding start whose binding sets no `capacity`; a binding's own `capacity` wins over it. Without either, a start declares 1. The number applies to that start only; a drain uses the number the last binding start declared.
+
+A hand start of a full resource waits as a `pending` run and prints `Waiting for resource 'build'`, then starts when a slot frees. It waits behind runnable queued trigger requests but holds no queue position itself, so a waiting process that dies strands nothing. `archon workflow run --no-wait` refuses instead and names the resource. Interrupting the wait (Ctrl-C or SIGTERM) fails the pending run, so it leaves no pending run and no request. On Windows a signal ends the process at once, so an interrupted wait there leaves a `pending` run to end with `archon workflow abandon`. If admission fails while the start waits, for example because the install config became invalid, the run is cancelled with the reason; a run an operator cancels while it waits ends without a slot.
+
+An included workflow runs inside its parent's run and takes no slot of its own. A `workflow:` sub-run takes none when one of its ancestor runs already holds the same resource, so a workflow that runs another declaring its resource holds one slot. A sub-run whose ancestors hold no slot on its resource waits for one like a hand start. A workflow without `resource:` that no binding starts takes no slot.
 
 ## Configure GitHub event starts
 

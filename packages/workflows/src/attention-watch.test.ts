@@ -858,6 +858,31 @@ describe('watchAttentionQueue', () => {
     await stream.close();
   });
 
+  test('launch failures carry only a fixed indication, including replay after resume', async () => {
+    const store = await makeStore();
+    const run = await store.createWorkflowRun({ workflow_name: 'launch', user_message: '' });
+    const before = await store.getWorkflowEventHead();
+    const stream = await watch(store);
+    await store.failWorkflowRun(run.id, 'missing remote\nsensitive-marker', {
+      pendingOnly: true,
+      exitReason: 'launch_failed',
+    });
+    const terminal = await stream.next(ofRun(run.id, 'terminal'));
+    await stream.close();
+    expect(terminal).toMatchObject({
+      runId: run.id,
+      status: 'failed',
+      cause: null,
+      reason: ['launch failed before the first node'],
+    });
+    expect(JSON.stringify(stream.lines)).not.toContain('missing remote');
+    expect(JSON.stringify(stream.lines)).not.toContain('sensitive-marker');
+    await store.resumeWorkflowRun(run.id);
+    const replay = await watch(store, { after: before });
+    expect(await replay.next(ofRun(run.id, 'terminal'))).toEqual(terminal);
+    await replay.close();
+  });
+
   test("a failed run's terminal line names the failed node and its recorded class, stable on replay", async () => {
     const store = await makeStore();
     const before = await store.getWorkflowEventHead();
