@@ -1,7 +1,12 @@
 import type { NodeExecutionResult } from '../node-record-serialization';
 import type { NodeExecutionMetadata } from '../schemas/node-execution';
 import type { RunUsageFigures } from '../schemas/run-usage';
-import { mergeTokenUsage, tokenUsageSchema, type TokenUsage } from '@archon/provider-contract';
+import {
+  mergeTokenUsage,
+  tokenUsageSchema,
+  modelCallUsageSchema,
+  type TokenUsage,
+} from '@archon/provider-contract';
 import { getLog } from './log';
 
 /**
@@ -84,6 +89,8 @@ const COST_TOLERANCE_USD = 1e-9;
 const RECONCILED_TOKEN_AXES = tokenUsageSchema
   .omit({
     cachePartial: true, // Aggregation floor marker, not a counter.
+    calls: true, // Request evidence belongs to nodes, not aggregate reconciliation.
+    callsPartial: true,
     total: true, // Provider-defined total; not aggregated across nodes.
     cost: true, // Provider-defined cost; run cost is reconciled separately.
   })
@@ -120,6 +127,7 @@ export function incrementalLoopUsage(
   const priorCost = prior.costUsd;
   const tokens = output.tokens === undefined ? undefined : { ...output.tokens };
   if (tokens !== undefined && prior.tokens.source === 'provider') {
+    Object.assign(tokens, incrementalCallUsage(tokens, prior.tokens.value));
     for (const axis of RECONCILED_TOKEN_AXES) {
       const value = tokens[axis];
       const baseline = prior.tokens.value[axis];
@@ -132,5 +140,29 @@ export function incrementalLoopUsage(
         ? undefined
         : output.costUsd - (priorCost.source === 'provider' ? priorCost.value : 0),
     tokens,
+  };
+}
+
+/** Subtract only an exact request prefix; aggregate counters cannot identify old calls. */
+export function incrementalCallUsage(
+  total: TokenUsage,
+  prior: TokenUsage | undefined
+): Pick<TokenUsage, 'calls' | 'callsPartial'> {
+  const evidence = { calls: total.calls, callsPartial: total.callsPartial };
+  if (total.calls === undefined || prior === undefined) return evidence;
+  const previous = prior.calls;
+  if (previous === undefined) {
+    return prior.input === 0 && prior.output === 0
+      ? evidence
+      : { calls: undefined, callsPartial: true };
+  }
+  const keys = modelCallUsageSchema.keyof().options;
+  const prefixMatches =
+    previous.length <= total.calls.length &&
+    previous.every((call, index) => keys.every(key => call[key] === total.calls?.[index]?.[key]));
+  if (!prefixMatches) return { calls: undefined, callsPartial: true };
+  return {
+    calls: total.calls.slice(previous.length),
+    ...(total.callsPartial || prior.callsPartial ? { callsPartial: true } : {}),
   };
 }

@@ -1024,6 +1024,8 @@ describe('explicit registration results', () => {
 
 describe('TokenUsage axis seam guard', () => {
   const specimen: Required<TokenUsage> = {
+    calls: [{ input: 5000, output: 1200 }],
+    callsPartial: true,
     input: 5000,
     output: 1200,
     cacheRead: 4000,
@@ -1033,6 +1035,8 @@ describe('TokenUsage axis seam guard', () => {
     cost: 0.25,
   };
   const wireKeys: Record<keyof TokenUsage, string | null> = {
+    calls: null,
+    callsPartial: null,
     input: 'tokens_in',
     output: 'tokens_out',
     cacheRead: 'cache_read_tokens',

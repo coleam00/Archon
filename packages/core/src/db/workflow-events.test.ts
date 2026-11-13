@@ -1798,6 +1798,8 @@ describe('workflow-events', () => {
 // fails core's normal type-check before this runtime proof can run.
 // ───────────────────────────────────────────────────────────────────────────
 const AXIS_SPECIMEN: Required<TokenUsage> = {
+  calls: [{ input: 5000, output: 1200, cacheRead: 4000, cacheWrite: 250 }],
+  callsPartial: true,
   input: 5000,
   output: 1200,
   cacheRead: 4000,

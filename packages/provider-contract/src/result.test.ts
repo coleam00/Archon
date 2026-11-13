@@ -2,6 +2,19 @@ import { describe, expect, test } from 'bun:test';
 import { addResultUsage, mergeTokenUsage, type TokenUsage } from './result';
 
 describe('mergeTokenUsage', () => {
+  test('preserves request boundaries and marks a mixed breakdown incomplete', () => {
+    const call = { provider: 'foundry', model: 'gpt-6.1-sol', input: 200000, output: 10 };
+    const complete = mergeTokenUsage([
+      { input: 200000, output: 10, calls: [call] },
+      { input: 200000, output: 10, calls: [call] },
+    ]);
+    expect(complete?.input).toBe(400000);
+    expect(complete?.calls).toEqual([call, call]);
+    expect(complete?.callsPartial).toBeUndefined();
+    const mixed = mergeTokenUsage([complete!, { input: 20, output: 1 }]);
+    expect(mixed?.callsPartial).toBe(true);
+    expect(mergeTokenUsage([mixed!])?.callsPartial).toBe(true);
+  });
   test('returns undefined for no contributions', () => {
     expect(mergeTokenUsage([])).toBeUndefined();
   });

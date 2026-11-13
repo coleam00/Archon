@@ -5,6 +5,7 @@ import {
   toolCallSchema,
   truncateToolOutput,
   type ProviderStopReason,
+  type ModelCallUsage,
 } from '@archon/provider-contract';
 
 import type { MessageChunk, ResultChunk, TokenUsage } from '../../types';
@@ -189,7 +190,7 @@ function sumPromptUsage(
   }
   const sum = (pick: (u: Usage) => number): number =>
     calls.reduce((total, u) => total + pick(u), 0);
-  return usageToTokens({
+  const totals = usageToTokens({
     input: sum(u => u.input),
     output: sum(u => u.output),
     cacheRead: sum(u => u.cacheRead),
@@ -203,6 +204,26 @@ function sumPromptUsage(
       total: sum(u => u.cost.total),
     },
   });
+  const counters = (usage: Usage): ModelCallUsage => ({
+    input: usage.input + usage.cacheRead + usage.cacheWrite,
+    output: usage.output,
+    cacheRead: usage.cacheRead,
+    cacheWrite: usage.cacheWrite,
+  });
+  totals.calls = [
+    ...assistants
+      .filter(message => !isZero(message.usage))
+      .map(message => ({
+        ...counters(message.usage),
+        provider: message.provider,
+        model: message.model,
+        ...(message.responseId ? { responseId: message.responseId } : {}),
+      })),
+  ];
+  // Compaction usage may itself combine several requests, and does not reliably
+  // identify their models. It remains in totals, never masquerades as one call.
+  if (sideCalls.length > 0) totals.callsPartial = true;
+  return totals;
 }
 
 /** Pi's stop reason in ACP's names; `undefined` for one ACP has no name for. */
