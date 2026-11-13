@@ -38,7 +38,8 @@ const runWorkflowRoute = createRoute({
     '10 MB each). `message` may be empty: what a run needs to start is decided by the ' +
     "workflow's declared inputs, not by this route. `inputs` supplies values for the workflow's declared `inputs:` " +
     '(#2554); it is validated against the declaration before any worktree, clone, or AI ' +
-    'cost, so a missing required input or an undeclared key is refused up front. `config` ' +
+    'cost, so a missing required input or an undeclared key is refused up front. That refusal ' +
+    'arrives on conversation SSE after an HTTP 200 accepted response. `config` ' +
     'supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. ' +
     'Caller-supplied filesystem config paths are rejected. JSON requests may supply ' +
     '`adopt_run_id` or `supersedes_run_id`, but not both. Unique prefixes resolve in the conversation selected project; ' +
@@ -396,7 +397,6 @@ async function removeLaunchFiles(launch: RunLaunch): Promise<void> {
  * metadata when present. Returns false, with the uploads removed, when the message cannot be
  * saved. A run started with an empty message gets no chat row, which would render as an
  * empty bubble, and no title request, which would have nothing to summarize.
- * Its attachments still reach the run, but with no row their metadata is not recorded.
  */
 async function recordLaunchMessage(
   conv: Conversation,
@@ -409,7 +409,7 @@ async function recordLaunchMessage(
     savedFiles.length > 0
       ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
       : undefined;
-  if (!request.message) {
+  if (!request.message.trim()) {
     webAdapter.setConversationDbId(request.conversationId, conv.id);
     return true;
   }
