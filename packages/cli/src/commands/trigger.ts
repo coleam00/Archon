@@ -216,9 +216,13 @@ async function inheritedItemKey(
   const item = root?.item_id ? await host.deps.store.getItem(root.item_id) : null;
   if (!item) return undefined;
   const project = await registeredStartProjectKey(host, startCwd);
+  if (project === null)
+    throw new Error(
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${startCwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there.`
+    );
   if (project !== item.projectKey)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start runs in ${project ? `project '${project}'` : `a project not registered yet (${startCwd})`}. An item belongs to one project, so the start cannot inherit it: pass --item <key> to name its item there.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start runs in project '${project}'. An item belongs to one project, so the start cannot inherit it: pass --item <key> to name its item there.`
     );
   return item.key;
 }

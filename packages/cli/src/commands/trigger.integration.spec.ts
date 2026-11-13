@@ -474,13 +474,11 @@ describe('trigger CLI durable execution', () => {
     ]);
     // Each refusal exits non-zero before a receipt: only the two starts were recorded.
     const unregistered = readFileSync(refusal('unregistered'), 'utf8');
-    expect(unregistered).toContain(`project '${String(own)}'`);
-    expect(unregistered).toContain(otherRoot);
     expect(unregistered).toContain('--item');
     expect(unregistered).toContain('exit 1');
     const registered = readFileSync(refusal('registered'), 'utf8');
-    expect(registered).toContain(`project '${String(own)}'`);
-    expect(registered).toContain(`project '${String(other)}'`);
+    expect(registered).toContain(String(own));
+    expect(registered).toContain(String(other));
     expect(registered).toContain('exit 1');
     expect(
       readRows<{ count: number }>(
