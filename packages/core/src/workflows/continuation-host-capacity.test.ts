@@ -26,6 +26,7 @@ const run: WorkflowRun = {
   adopted_from_run_id: null,
   output_root: null,
   checkout_baseline: null,
+  item_id: null,
 };
 const close = mock(async () => {});
 mock.module('../services/run-live-owner', () => ({

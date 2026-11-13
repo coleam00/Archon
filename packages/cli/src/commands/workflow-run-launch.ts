@@ -720,6 +720,7 @@ function createSetupRun(
       ...(declaration ? { [CONTINUATION_METADATA_KEY]: declaration.stamp } : {}),
     },
     ...(declaration ? { adopted_from_run_id: declaration.runId } : {}),
+    ...(request.options.item === undefined ? {} : { item_key: request.options.item }),
   });
 }
 

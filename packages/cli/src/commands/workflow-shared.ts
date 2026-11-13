@@ -69,6 +69,8 @@ export interface WorkflowRunOptions {
    */
   container?: boolean;
   resume?: boolean;
+  /** The item this run belongs to (`--item <key>`), written once on the run row. */
+  item?: string;
   codebaseId?: string; // Skips path-based codebase lookup when resume/approve/reject already resolved it
   /**
    * Override the directory used for workflow YAML discovery — and, for a fresh run,

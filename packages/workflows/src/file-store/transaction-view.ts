@@ -4,6 +4,7 @@ import {
   mutableRunMetadata,
 } from '../schemas/run-metadata';
 import { prepareWorkflowRunFailure } from '../workflow-run-failure';
+import { FileStoreUnsupportedError } from './errors';
 import { resumeRun } from './run-resume';
 import { createLogger } from '@archon/paths';
 import {
@@ -75,6 +76,8 @@ export type TransactionView = Omit<
   | 'upsertWorkflowNodeSession'
   | 'deleteWorkflowNodeSessions'
   | 'releasePausedRunSlot'
+  | 'listItemRuns'
+  | 'getItem'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
@@ -187,6 +190,7 @@ export function createTransactionView(
     input
   ): ReturnType<IWorkflowStore['createWorkflowRun']> => {
     validateWorkflowWaitMetadata(input.metadata);
+    if (input.item_key !== undefined) throw new FileStoreUnsupportedError('items');
     const origin =
       input.origin && Object.values(input.origin).some(value => value !== undefined)
         ? structuredClone(input.origin)
@@ -212,6 +216,7 @@ export function createTransactionView(
       checkout_baseline: null,
       parent_run_id: input.parent_run_id ?? null,
       adopted_from_run_id: input.adopted_from_run_id ?? null,
+      item_id: null,
     };
     if (runs.has(run.id)) throw new Error('Duplicate run');
     runs.set(run.id, run);

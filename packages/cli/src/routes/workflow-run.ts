@@ -155,6 +155,7 @@ function buildRunOptions(
     registrationBaseBranch: values['base-branch'] as string | undefined,
     adoptRunId: values.adopt as string | undefined,
     supersedesRunId: values.supersedes as string | undefined,
+    item: values.item as string | undefined,
     // `--workflow-source` selects WHERE the workflow is read from; `--cwd`
     // continues to select what it acts on. Reusing `discoveryCwd` keeps one
     // internal concept: the directory discovery searches, which the run then

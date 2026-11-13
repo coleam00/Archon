@@ -190,6 +190,7 @@ describe('GET /api/runs/:runId/artifacts', () => {
       codebase_id: 'cb-renamed',
       output_root: root,
       checkout_baseline: null,
+      item_id: null,
     }));
     mockGetCodebase.mockImplementationOnce(async () => ({
       name: 'acme/renamed-since',
@@ -222,6 +223,7 @@ describe('GET /api/runs/:runId/artifacts', () => {
       // A root from the OLD home — the shape every run has after a relocation.
       output_root: '/previous/archon/home/workspaces/_local/workspace',
       checkout_baseline: null,
+      item_id: null,
     }));
     mockGetCodebase.mockImplementationOnce(async () => ({
       name: 'workspace',
@@ -247,6 +249,7 @@ describe('GET /api/runs/:runId/artifacts', () => {
       codebase_id: null,
       output_root: '/etc',
       checkout_baseline: null,
+      item_id: null,
     }));
     const { app } = makeApp();
     const response = await app.request('/api/runs/run-escape-root/artifacts');
@@ -474,6 +477,7 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
       codebase_id: 'cb-1',
       output_root: '/previous/archon/home/workspaces/_local/workspace',
       checkout_baseline: null,
+      item_id: null,
     }));
     mockGetCodebase.mockImplementationOnce(async () => ({
       name: 'workspace',
@@ -495,6 +499,7 @@ describe('GET /api/artifacts/:runId/* storage-key resolution', () => {
       codebase_id: null,
       output_root: '/etc',
       checkout_baseline: null,
+      item_id: null,
     }));
     const { app } = makeApp();
     const response = await app.request('/api/artifacts/run-serve-escape-root/passwd');

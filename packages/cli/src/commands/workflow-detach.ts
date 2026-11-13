@@ -571,6 +571,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
           : {}),
       },
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
+      ...(launch.options.item === undefined ? {} : { item_key: launch.options.item }),
     });
     return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
   } catch (error) {

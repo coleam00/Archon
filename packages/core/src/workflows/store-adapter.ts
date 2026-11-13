@@ -17,6 +17,7 @@ import {
 import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { MergedConfig } from '../config/config-types';
+import * as itemsDb from '../db/items';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { toHydratedTimestamp } from '../db/timestamps';
@@ -136,6 +137,8 @@ export function createWorkflowStore(): IWorkflowStore {
     deleteWorkflowNodeSessions: workflowNodeSessionDb.deleteWorkflowNodeSessions,
     listWorkflowRuns: workflowDb.listDashboardRuns,
     findOpenWorkRuns: workflowDb.findOpenWorkRuns,
+    listItemRuns: itemsDb.listItemRuns,
+    getItem: itemsDb.getItem,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),

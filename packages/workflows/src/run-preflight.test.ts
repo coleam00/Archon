@@ -439,6 +439,7 @@ function savedRun(metadata: Record<string, unknown>): WorkflowRun {
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
   };
 }
 

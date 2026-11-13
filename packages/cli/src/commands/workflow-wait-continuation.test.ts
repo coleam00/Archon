@@ -88,6 +88,7 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
             adopted_from_run_id: null,
             output_root: null,
             checkout_baseline: null,
+            item_id: null,
           };
           wait.resumeAt = new Date(Date.now() + 20).toISOString();
           let reads = 0;

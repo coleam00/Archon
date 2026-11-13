@@ -186,6 +186,9 @@ export interface IWorkflowStore
 
   findOpenWorkRuns(options?: { codebaseId?: string; limit?: number }): Promise<WorkflowRun[]>;
   findAdoptingRuns(runId: string): Promise<WorkflowRun[]>;
+  /** Every run of one item in a project, in the order they started. */
+  listItemRuns(projectKey: string, itemKey: string): Promise<WorkflowRun[]>;
+  getItem(id: string): Promise<import('./schemas/workflow-run').WorkflowItem | null>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
@@ -224,6 +227,11 @@ export interface IWorkflowStore
      * resume. Omitted for ordinary fresh runs.
      */
     adopted_from_run_id?: string;
+    /**
+     * The key of the item this run belongs to, in the project of `codebase_id`, which it
+     * needs. The item is created on first use. Absent: the run has no item.
+     */
+    item_key?: string;
   }): Promise<WorkflowRun>;
   /**
    * Fresh execution must win this pending-to-running CAS before doing any work.

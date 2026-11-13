@@ -230,6 +230,16 @@ export const orderedFlags: FlagHelp[] = [
     owners: [{ command: 'workflow', subcommand: 'runs' }],
   },
   {
+    spec: '--item <key>',
+    description:
+      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': list its runs",
+    owners: [
+      { command: 'workflow', subcommand: 'run' },
+      { command: 'workflow', subcommand: 'runs' },
+      { command: 'trigger', subcommand: 'fire' },
+    ],
+  },
+  {
     spec: '--open',
     description:
       "For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded",

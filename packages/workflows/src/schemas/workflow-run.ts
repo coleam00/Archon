@@ -37,6 +37,23 @@ export const workflowRunOriginSchema = z
 
 export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
 
+const ITEM_KEY_MAX_LENGTH = 200;
+/** An item's key within its project. The engine gives it no meaning and never parses it. */
+export const itemKeySchema = z.string().min(1).max(ITEM_KEY_MAX_LENGTH);
+
+/** The durable thing runs are about: a key within a project (`ProjectRef.key`). */
+export interface WorkflowItem {
+  id: string;
+  projectKey: string;
+  key: string;
+}
+
+/** Refuse a key the store cannot hold, in words the operator who named it can act on. */
+export function assertItemKey(key: string): void {
+  if (!itemKeySchema.safeParse(key).success)
+    throw new Error(`An item key must be 1 to ${String(ITEM_KEY_MAX_LENGTH)} characters.`);
+}
+
 export const workflowRunSchema = z.object({
   origin: workflowRunOriginSchema.nullable(),
   id: z.string(),
@@ -89,6 +106,12 @@ export const workflowRunSchema = z.object({
    * started — which is different from a recorded `not_git` or `unavailable` observation.
    */
   checkout_baseline: checkoutObservationSchema.nullable(),
+  /**
+   * The item this run belongs to. Written once at creation and the only place a run's
+   * item is read from. Null for a run started with no item, and for a `workflow:`
+   * sub-run, which belongs to its item through `parent_run_id`.
+   */
+  item_id: z.string().nullable(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

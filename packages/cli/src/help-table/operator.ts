@@ -89,7 +89,7 @@ export const operatorHelp: HelpGroup = {
     {
       command: 'trigger',
       subcommand: 'fire',
-      spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>]',
+      spec: 'trigger fire --config <file> [--delivery-id <key>] [--inputs <file>] [--item <key>]',
       description: 'Record a configured start and drain its execution host',
       scopedFlags: [
         {

@@ -5994,6 +5994,7 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
+      item_id: string | null;
       codebase_name: string | null;
       platform_type: string | null;
       worker_platform_id: string | null;
@@ -7638,6 +7639,7 @@ export interface components {
             reason: 'git_failed' | 'unsupported_backend' | 'probe_failed';
           }
         | unknown;
+      item_id: string | null;
       attention: components['schemas']['RunAttention'] | (never | null);
     };
     /** @enum {string|null} */

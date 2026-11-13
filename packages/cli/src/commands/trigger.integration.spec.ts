@@ -334,6 +334,59 @@ describe('trigger CLI durable execution', () => {
     expect((await invoke(['workflow', 'get', failed.id])).stdout).toContain(metadata.error);
   }, 30_000);
 
+  test('a start names an item, a start fired from inside that run inherits it, and the item lists its runs', async () => {
+    const fixture = await heldTriggerRun('item');
+    const configPath = join(fixture.projectRoot, '..', 'trigger.json');
+    const fired = join(fixture.projectRoot, '..', 'fired');
+    // The first run fires one follow-up start and names no item for it.
+    fixture.writeWorkflow(
+      `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --config '${configPath}'; }`
+    );
+    const invoke = (args: string[]) =>
+      runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args);
+    const runs = () =>
+      readRows<{ id: string; status: string; item_key: string | null }>(
+        join(fixture.archonHome, 'archon.db'),
+        `SELECT r.id, r.status, i.key AS item_key FROM remote_agent_workflow_runs r
+           LEFT JOIN remote_agent_items i ON i.id = r.item_id ORDER BY r.started_at, r.id`
+      );
+    const settled = (count: number) =>
+      waitFor(
+        () =>
+          runs().length === count && runs().every(run => run.status === 'completed')
+            ? runs()
+            : undefined,
+        `${String(count)} completed runs`
+      );
+
+    await invoke(['trigger', 'fire', '--config', configPath, '--item', 'item-1']);
+    // The follow-up start shares the first run's checkout, so it waits for a drain.
+    await waitFor(() => runs().find(run => run.status === 'completed'), 'the first run to end');
+    await invoke(['trigger', 'drain', '--host', fixture.hostId]);
+    const started = await settled(2);
+    expect(started.map(run => run.item_key)).toEqual(['item-1', 'item-1']);
+
+    await invoke(['workflow', 'run', 'item-proof', '--no-worktree', '--item', 'item-2']);
+    await invoke(['workflow', 'run', 'item-proof', '--no-worktree']);
+    const all = await settled(4);
+    expect(all.map(run => run.item_key).sort()).toEqual(['item-1', 'item-1', 'item-2', null]);
+
+    const listed = JSON.parse(
+      (await invoke(['workflow', 'runs', '--item', 'item-1', '--json'])).stdout
+    );
+    expect(listed.total).toBe(2);
+    expect(listed.runs.map((run: { id: string }) => run.id).sort()).toEqual(
+      started.map(run => run.id).sort()
+    );
+    // One row per item; the run with no item added none.
+    expect(
+      readRows<{ key: string }>(
+        join(fixture.archonHome, 'archon.db'),
+        'SELECT key FROM remote_agent_items ORDER BY key'
+      )
+    ).toEqual([{ key: 'item-1' }, { key: 'item-2' }]);
+  }, 60_000);
+
   test.skipIf(process.platform === 'win32')(
     'published polling recipes distinguish delimiter collisions and replay on both hosts',
     async () => {

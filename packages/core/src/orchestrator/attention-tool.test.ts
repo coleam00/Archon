@@ -54,6 +54,7 @@ function pausedRun(
     adopted_from_run_id: null,
     output_root: join(getArchonWorkspacesPath(), ...codebase.name.split('/')),
     checkout_baseline: null,
+    item_id: null,
   };
 }
 
