@@ -240,6 +240,9 @@ export function resetTelemetryId(): string {
  * once filled the whole event quota. The stamp holds the claimed date. A stamp
  * that can't be read or written claims again, so a broken ARCHON_HOME reports
  * every start rather than none. Two processes racing at midnight can both claim.
+ * The day is claimed before the event is delivered: if that one send is lost (a
+ * short CLI exits before its flush completes, or the host is offline), the
+ * surface reports nothing more until the next UTC day.
  */
 export function claimDailyStart(surface: 'cli' | 'server', now: Date = new Date()): boolean {
   const today = now.toISOString().slice(0, 10);

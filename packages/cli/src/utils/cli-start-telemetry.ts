@@ -1,5 +1,4 @@
 import { parseArgs } from 'util';
-import { loadStoreSelection } from '@archon/core/config/store-selection';
 import type { ArchonStoreKind } from '@archon/paths';
 import { cliArgOptions } from '../args';
 import { DETACHED_RUN_OWNER_ENV } from './detached-run-control';
@@ -33,6 +32,8 @@ export function shouldReportCliStart(args: readonly string[], env: NodeJS.Proces
  */
 export async function cliStartStore(): Promise<ArchonStoreKind | undefined> {
   try {
+    // Lazy like the rest of CLI startup: core loads only when this runs.
+    const { loadStoreSelection } = await import('@archon/core/config/store-selection');
     if ((await loadStoreSelection()) === 'files') return 'files';
   } catch {
     return undefined;
