@@ -47,7 +47,12 @@ export function pruneScratch(scratch: string): string[] {
     removed.push(path);
   }
   // The directory as named, never its resolved target: a symlink there loses only the link.
-  rmSync(scratch, { recursive: true, force: true });
+  // Windows can briefly refuse (EBUSY); the engine removes whatever is left when the run ends.
+  try {
+    rmSync(scratch, { recursive: true, force: true, maxRetries: 10, retryDelay: 500 });
+  } catch (error) {
+    console.error(`scratch: left ${scratch} for the engine to remove (${error instanceof Error ? error.message : String(error)})`);
+  }
   return removed;
 }
 
