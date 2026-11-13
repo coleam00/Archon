@@ -207,15 +207,16 @@ test.each(
           getWorkflowRun: workflows.getWorkflowRun,
           getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
           getCodebase: async () => null,
+          getItem: async () => null,
         },
         branchOf: async () => null,
       })
     );
-    expect(result.values.map(item => item.runId)).toContain(valid.id);
-    expect(result.values.find(item => item.runId === missing.id)?.kind).toBe('unreadable');
+    expect(result.values.map(item => item.run?.id)).toContain(valid.id);
+    expect(result.values.find(item => item.run?.id === missing.id)?.kind).toBe('unreadable');
     const parents = nested ? [parent, intermediate] : [parent];
     for (const blockedParent of parents) {
-      expect(result.values.map(item => item.runId)).not.toContain(blockedParent.id);
+      expect(result.values.map(item => item.run?.id)).not.toContain(blockedParent.id);
     }
     const affectedParents = status === 'paused' ? [] : parents;
     const expectedReports = [badPaused, ...affectedParents].map(run => ({
@@ -268,6 +269,7 @@ test('batch attention preserves unexpected descendant read failures', async () =
           getWorkflowRun: workflows.getWorkflowRun,
           getWorkflowRunForAttention: workflows.getWorkflowRunForAttention,
           getCodebase: async () => null,
+          getItem: async () => null,
         },
         branchOf: async () => null,
       })
