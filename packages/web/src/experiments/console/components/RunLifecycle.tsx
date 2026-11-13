@@ -1,5 +1,5 @@
 import type { ReactElement } from 'react';
-import type { Run } from '../primitives/run';
+import { runPhaseStart, type Run } from '../primitives/run';
 import { statusTextClass } from '../lib/run-status';
 import { formatElapsed, elapsedSince, formatCost, formatDateTime, ensureUtc } from '../lib/format';
 import { RunOutcomeBadge } from './RunOutcomeBadge';
@@ -41,7 +41,7 @@ const LABEL: Record<string, string> = {
 
 export function RunFinishedLine({ run }: { run: Run }): ReactElement | null {
   if (!TERMINAL.has(run.status)) return null;
-  const duration = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
+  const duration = formatElapsed(elapsedSince(runPhaseStart(run), run.finishedAt ?? undefined));
   const cost =
     run.costUsd !== null ? ` · Reported cost ${formatCost(run.costUsd)} (may be partial)` : '';
 
@@ -62,6 +62,7 @@ export function RunFinishedLine({ run }: { run: Run }): ReactElement | null {
         <RunOutcomeBadge outcome={run.outcome} terminalRecord={run.terminalRecord} />
         <span className="font-mono text-text-tertiary">
           in {duration}
+          {run.activePhaseStartedAt != null ? ' since it last started' : ''}
           {cost}
         </span>
       </div>

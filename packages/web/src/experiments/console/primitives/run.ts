@@ -53,6 +53,11 @@ export interface Run {
   outcome: RunOutcome;
   terminalRecord: components['schemas']['WorkflowRunDetail']['run']['terminal_record'];
   startedAt: WorkflowRun['started_at'];
+  /**
+   * When the run's current execution phase began: set each time a resume or an answer
+   * continues the run, null for a run that has only its first phase.
+   */
+  activePhaseStartedAt?: WorkflowRun['active_phase_started_at'];
   finishedAt: WorkflowRun['completed_at'];
   /** workflow_runs.working_path — used to join against worktrees. */
   workingPath: WorkflowRun['working_path'];
@@ -102,6 +107,15 @@ export interface Run {
   parentRunId?: WorkflowRun['parent_run_id'];
 }
 
+/**
+ * When the run last began executing: its latest phase start, or its creation when it
+ * has had only one phase. A resumed run keeps its creation time as `startedAt`, so
+ * measuring a duration from there would count the time it sat failed or paused.
+ */
+export function runPhaseStart(run: Pick<Run, 'startedAt' | 'activePhaseStartedAt'>): string {
+  return run.activePhaseStartedAt ?? run.startedAt;
+}
+
 export function runDetailPath(run: Pick<Run, 'id' | 'projectId'>): string {
   const runId = encodeURIComponent(run.id);
   return run.projectId === null
@@ -122,6 +136,7 @@ type RawWorkflowRun = Pick<
       | 'conversation_id'
       | 'outcome'
       | 'completed_at'
+      | 'active_phase_started_at'
       | 'working_path'
       | 'user_message'
       | 'metadata'
@@ -246,6 +261,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     outcome: raw.outcome ?? null,
     terminalRecord: raw.terminal_record ?? null,
     startedAt: raw.started_at,
+    activePhaseStartedAt: raw.active_phase_started_at ?? null,
     finishedAt: raw.completed_at ?? null,
     workingPath: raw.working_path ?? null,
     userMessage: raw.user_message ?? '',
