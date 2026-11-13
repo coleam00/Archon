@@ -146,8 +146,9 @@ nodes:
     depends_on: [queue]
     prompt: |
       Each item in this queue is a delivery run paused because CI failed for a reason
-      outside the change. For every item, read its transcript (context.transcript) and
-      decide whether retrying can succeed.
+      outside the change. For every item, read its transcript (run.context.transcript) and
+      decide whether retrying can succeed. Answer with the item's run.id as runId and its
+      run.occurrence as occurrence.
 
       $queue.output
     output_format:
@@ -230,40 +231,46 @@ With explicit chat scope (`--chat-project-id <id>`), CLI list, count and watch u
 ```json
 {
   "kind": "attention",
-  "runId": "7c1e…",
-  "workflow": "deliver",
+  "ref": "7c1e…:e0f4…",
   "project": { "key": "acme/web", "codebaseId": "c41f…", "name": "acme/web" },
-  "parentRunId": null,
-  "fanOut": null,
   "revision": 1,
   "labels": { "ci": "other" },
   "pausedAt": "2026-10-14T07:58:02.000Z",
-  "context": {
-    "artifactsDir": "/home/me/.archon/workspaces/acme/web/artifacts/runs/7c1e…",
-    "transcript": "/home/me/.archon/workspaces/acme/web/logs/7c1e….jsonl",
-    "workingPath": "/home/me/.archon/workspaces/acme/web/worktrees/fix-ci",
-    "branch": "fix-ci"
+  "run": {
+    "id": "7c1e…",
+    "workflow": "deliver",
+    "parentRunId": null,
+    "fanOut": null,
+    "context": {
+      "artifactsDir": "/home/me/.archon/workspaces/acme/web/artifacts/runs/7c1e…",
+      "transcript": "/home/me/.archon/workspaces/acme/web/logs/7c1e….jsonl",
+      "workingPath": "/home/me/.archon/workspaces/acme/web/worktrees/fix-ci",
+      "branch": "fix-ci"
+    },
+    "node": "base",
+    "occurrence": "e0f4…"
   },
-  "node": "base",
-  "occurrence": "e0f4…",
   "message": "CI on windows failed twice with EPERM. Retry, or stop?",
   "form": "select",
   "options": [{ "id": "retry" }, { "id": "stop" }]
 }
 ```
 
-- **`kind`** is one of the four kinds above. A `usage_limit` item carries `node` and `resetAt` and has no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
-- **`occurrence`** identifies an answerable pause. Pass it back with `--occurrence`. If a refusal does not name the current occurrence, read the item again before retrying.
+- **`kind`** is one of the four kinds above. A `usage_limit` item carries `resetAt`, and its `run` has a `node` and no `occurrence`. An `unreadable` item carries `reason` and `detail`; it also covers these structural failures in a parent's sub-run tree: a sub-run with no row, or a tree that revisits a run or exceeds 500 runs.
+- **`ref`** is the item's identity: it names this item and no other, and changes when the run moves to another pause. Treat it as opaque.
+- **`run`** is the paused run that holds the item: its `id`, `workflow` and the fields below. Every item a workflow pauses for has one. The field is optional on an `attention` item, so read it as `item.run?.id`: an item that no paused run holds has no `run`, and its `ref` is all that names it.
+- **`item`** is `{ id, projectKey, key }` when the run was started for an item (`--item`), and absent otherwise.
+- **`run.occurrence`** identifies an answerable pause. Pass it back with `--occurrence`. If a refusal does not name the current occurrence, read the item again before retrying.
 - **`revision`** starts at 1 and grows by one with every label write on an attention wait. It stays 1 for other kinds, so it does not identify every change to an item.
 - **`project`** is the project the run belongs to, never a label. `key` is the storage key [state documents](/reference/cli/#state) scope by, so `archon state --project <item.project.key>` reaches the same project. Copy it exactly when you pass `--project`. `codebaseId` is null for a project with no codebase row, such as a run in an unregistered directory (`@cwd/<basename>-<digest>`). A run started before its codebase was renamed keeps the key it started with. `project` is null only for a run with no trusted storage root.
-- **`parentRunId`** is the run's direct parent for any child run, such as a `workflow:` sub-run or a fan-out child, and null for a top-level run.
-- **`fanOut`** is `{ parentRunId, nodeId, index }` for a child of a `fan_out:` node, and null otherwise.
+- **`run.parentRunId`** is the run's direct parent for any child run, such as a `workflow:` sub-run or a fan-out child, and null for a top-level run.
+- **`run.fanOut`** is `{ parentRunId, nodeId, index }` for a child of a `fan_out:` node, and null otherwise.
 - **`pausedAt`** is when the pause opened. Gates do not record it, so it is null for them and they sort after timed items.
-- **`context`** holds pointers, never pasted content.
+- **`run.context`** holds pointers, never pasted content.
 
 ### Several items from one workflow
 
-A workflow can [fan out one child per question](/reference/workflow-language/#several-independent-questions) with `max_parallel: all`. Each child pauses at its own attention wait, with its own question, choices and occurrence. A parent blocked on its children is never an item, and reading the parent returns only its first actionable descendant. To find every question, list the queue and select the items whose `fanOut.parentRunId` is the parent; `fanOut.index` keeps the original order.
+A workflow can [fan out one child per question](/reference/workflow-language/#several-independent-questions) with `max_parallel: all`. Each child pauses at its own attention wait, with its own question, choices and occurrence. A parent blocked on its children is never an item, and reading the parent returns only its first actionable descendant. To find every question, list the queue and select the items whose `run.fanOut.parentRunId` is the parent; `run.fanOut.index` keeps the original order.
 
 ```bash
 archon workflow attention --json --all
@@ -326,7 +333,7 @@ Every JSON line carries `needs`, which says what the line asks of you:
 - **`--label` turns a queue or a class on or off.** Labels are the only routing: `--label stage=merge` writes only the items a wait labelled `stage=merge`, and one watcher per class is one process per `--label` set. Labels belong to attention waits, so `terminal` and `owner_lost` lines arrive for every run in scope whatever the filter.
 - **A silent stream proves nothing.** The watch has no heartbeat, so no line can mean that nothing needs you or that the stream stopped reading. A program that must tell the two apart uses `--protocol` and its `bookmark` lines.
 - **A restart starts from the open items.** The snapshot is the current open set. Runs that failed while nothing watched are not replayed; `archon workflow runs` lists them. Replay from a cursor is part of `--protocol`.
-- **Act on the item, then answer by its `runId` and `occurrence`.** An answer to an item someone else answered first is refused, so a `resolved` line you have not read yet cannot make you answer twice.
+- **Act on the item, then answer by its `run.id` and `run.occurrence`.** An answer to an item someone else answered first is refused, so a `resolved` line you have not read yet cannot make you answer twice.
 
 ### Notices: what the work did
 
@@ -373,8 +380,8 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 | `type` | When | Fields |
 |---|---|---|
 | `attention` | An item opened or changed | `cursor`, `snapshot`, `project`, `workflow`, `parentRunId`, `item` |
-| `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia`, `answeredBy`, `answeredFromRun` and `answeredAt` |
-| `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `occurrence`, `revision` |
+| `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `ref`, `runId`, `workflow`, `parentRunId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia`, `answeredBy`, `answeredFromRun` and `answeredAt` |
+| `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `ref`, `runId`, `workflow`, `parentRunId`, `occurrence`, `revision` |
 | `terminal` | A run ended | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status`, `outcome`, `cause`, and `reason` on a launch failure or failed outcome |
 | `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused or stale-running run resumed and cleared a stored error | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status: "running"` |
 | `owner_lost` | A running run's owner process on this host is gone | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `observedStatus` |
@@ -387,12 +394,12 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 - **Every line carries `needs`**, as the [plain watch](#stream-the-queue) describes it. A stream started with `--after` cannot know which items the earlier stream held, so at `level=quiet` it sends every `resolved` and `unmatched` line.
 - **`answeredBy` is who answered an attention wait**, when the answer recorded it: `{ "declared": "<name>" }` for a name given with `--as`, which is a claim Archon does not check, or `{ "userId": "<id>" }` for an answer through a chat platform. It is null for a gate and for an answer that named nobody.
 - **`answeredFromRun` is the run an answer was given from**: `{ "runId", "nodePath" }` when a workflow node answered an attention wait, and null for an answer from outside a run and for a gate. No flag or request field sets it: Archon reads it from the node's environment, which a node process can change. Archon does not verify it, so treat it as attribution and never as proof: an approval or permission rule must not depend on it. An answer can carry both it and `answeredBy`.
-- **Keep an open set keyed by `runId`.** Each `attention` line replaces that run's item, including when its kind or `resetAt` changes while `revision` stays 1. `resolved` removes it. Its `reason` is `answered`, or `withdrawn` when the run resumed, ended, was deleted or moved to a different pause. For a fan-out child, remove only that child.
-- **Deliveries are at least once.** Replacing by `runId` is idempotent. Dedupe answerable pauses on `(runId, occurrence, revision)`, and `terminal` and `resumed` on `(runId, cursor)`. Don't dedupe every kind by occurrence: usage-limit waits have none. `owner_lost` is a live observation and is not replayed. Only a run whose recorded owner is on this host and user can be reported lost.
+- **Keep an open set keyed by the item's `ref`.** Each `attention` line replaces the item with that `ref`, including when its kind or `resetAt` changes while `revision` stays 1. `resolved` and `unmatched` carry the `ref` of the item they close; remove that one. A `resolved` line's `reason` is `answered`, or `withdrawn` when the run resumed, ended, was deleted or moved to a different pause. When a run moves to a different pause, `resolved` closes the old `ref` before the `attention` line with the new one. `runId` on these two lines is the run that held the item, and is absent when no run held it.
+- **Deliveries are at least once.** Replacing by `ref` is idempotent. Dedupe items on `(ref, revision)`, and `terminal` and `resumed` on `(runId, cursor)`. `owner_lost` is a live observation and is not replayed. Only a run whose recorded owner is on this host and user can be reported lost.
 - **Reconnect from a cursor before any event you did not finish.** A cursor names a feed event, and one event can emit two lines with the same cursor (`resolved` then `attention`, or `resolved` then `terminal`). `--after <cursor>` skips the whole event, so checkpoint only on a handled `bookmark` or from before the partly handled event. The new stream sends the snapshot and `ready`, then replays readable changes after the cursor. If the cursor is rejected, reconnect without `--after`.
 - **A silent stream is not reading.** A stream that cannot read the store sends no `bookmark`, so no line for well over 30 seconds means it is stuck.
 - **`degraded` means gaps.** The operator log names the run that failed to project; the warning does not. Repair the read failure, reconnect to refresh the open set, and replay from a cursor before the gap to recover missed transitions. The stream sends no recovered signal.
-- **Filter by parent.** Every run line carries the run's `workflow` and `parentRunId`, the same values as the queue item's. A `workflow` of null means the stream could not read the run's row, because it was deleted, so that line's `parentRunId` says nothing. Keep top-level runs with `workflow != null and parentRunId == null`, or one parent's direct children with `parentRunId == "<run-id>"`. `ready`, `bookmark`, `degraded` and `error` have no `workflow` field and must pass through the filter, for example `jq 'select((has("workflow") | not) or (.workflow != null and .parentRunId == null))'`.
+- **Filter by parent.** Every run line carries the run's `workflow` and `parentRunId`, the same values as the queue item's `run`. A `workflow` of null means the stream had no run row to read, because it was deleted or because no run holds the line's item, so that line's `parentRunId` says nothing. Keep top-level runs with `workflow != null and parentRunId == null`, or one parent's direct children with `parentRunId == "<run-id>"`. `ready`, `bookmark`, `degraded` and `error` have no `workflow` field and must pass through the filter, for example `jq 'select((has("workflow") | not) or (.workflow != null and .parentRunId == null))'`.
 - **A failed run says where it failed.** On a `terminal` line with `status: "failed"`, `cause` is `{ node, errorClass }`: the first failed node from the run's terminal record, and the failure kind that node's failure recorded, such as `exec_failed` or `timeout`. `errorClass` is null when the failure recorded no kind, as older runs did. `cause` is null for other statuses, for a run that failed outside a node, and for a run that ended before terminal records existed. A replayed line keeps the cause it had, even after the run resumed and failed again. For a recorded `launch_failed` event, `reason` is `["launch failed before the first node"]` and `cause` is null. This fixed indication is stable on replay too. The line never carries error text; read it with `archon workflow get <run-id>`, which prints the first line of the failed node's error as `Reason:`, falling back to the run's own error when no failed-node error is available, including launch failures.
 - **A failed outcome says why.** On a `terminal` line with `outcome: "failed"`, `reason` is up to two lines of at most 200 characters from the value the workflow's `returns:` node produced: its first lines when it is text, or its text fields as `key: text` when it is an object. A workflow that reports a failed outcome should put its diagnosis there. `reason` is absent when the node returned no text. The text watch prints these lines under the run, and `archon workflow get <run-id>` prints them as `Reason:` and carries them as `reason` in `--json`.
 - **`--label` filters `attention`, `resolved` and `notice`.** `terminal`, `resumed` and `owner_lost` arrive for every run in scope. A label write that leaves an item outside the filter sends `unmatched`.
