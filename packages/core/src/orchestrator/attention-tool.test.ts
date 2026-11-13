@@ -4,7 +4,11 @@ import { getArchonWorkspacesPath } from '@archon/paths';
 import type { AttentionQueueItem, AttentionQueueSource } from '@archon/workflows/attention-queue';
 import { projectRef } from '@archon/workflows/attention-queue';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
-import type { RunActor } from '../operations/run-authorization';
+import {
+  authorizeRunAction,
+  RunActionForbiddenError,
+  type RunActor,
+} from '../operations/run-authorization';
 import type { WorkflowOperations } from '../operations/workflow-operations';
 import { buildAttentionTool, type AttentionToolContext } from './attention-tool';
 
@@ -73,7 +77,11 @@ const webGate = pausedRun('run-gate', WEB, {
   approval: { nodeId: 'review', pauseId: 'pause-gate', message: 'Ship it?' },
 });
 
-function harness(runs: WorkflowRun[], codebaseId: string | null = null) {
+function harness(
+  runs: WorkflowRun[],
+  codebaseId: string | null = null,
+  actor: RunActor = operator
+) {
   const byId = new Map(runs.map(run => [run.id, run]));
   const queue: AttentionQueueSource = {
     store: {
@@ -92,8 +100,16 @@ function harness(runs: WorkflowRun[], codebaseId: string | null = null) {
     (async () => ({})) as never
   );
   const ctx: AttentionToolContext = {
-    actor: operator,
-    operations: { answerWorkflow, respondToWorkflow },
+    actor,
+    operations: {
+      answerWorkflow,
+      respondToWorkflow,
+      // The real rule, with no admin: an operator, or the user who started the run.
+      assertRunActionAllowed: async (run, by, action) => {
+        if (!authorizeRunAction(by, run.user_id, undefined))
+          throw new RunActionForbiddenError(action, run.user_id);
+      },
+    },
     queue,
     resolveProject: async spec => {
       const codebase = [WEB, API].find(each => each.id === spec || each.name === spec);
@@ -142,6 +158,17 @@ describe('attention tool', () => {
     ).toEqual(['run-api']);
   });
 
+  test('a list shows a user only the items they may answer, and counts the rest', async () => {
+    const mine = { ...webAsk, user_id: 'user-1' };
+    const theirs = { ...apiAsk, user_id: 'user-2' };
+    const { tool } = harness([mine, theirs], null, { kind: 'user', userId: 'user-1' });
+    const out = await tool.handler({ action: 'list' });
+
+    expect(listed(out).map(item => item.runId)).toEqual(['run-web']);
+    expect(out).not.toContain('run-api');
+    expect(out).toContain('1 more paused run(s) in the install are not listed');
+  });
+
   test('an answer without confirm is a preview and records nothing', async () => {
     const { tool, answerWorkflow } = harness([webAsk]);
     const out = await tool.handler({
@@ -188,7 +215,7 @@ describe('attention tool', () => {
         { via: 'attention_tool', expectedGate: { nodeId: 'ask', pauseId: 'pause-api' } },
       ],
     ]);
-    expect(out).toContain('continues on its own');
+    expect(out).toContain('server continues the run');
   });
 
   test('an answer for an occurrence the item has left is refused', async () => {

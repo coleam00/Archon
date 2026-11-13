@@ -1,7 +1,7 @@
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import {
-  listAttentionQueue,
+  attentionQueueItems,
   readAttentionQueueItem,
   selectAttentionQueue,
   type AttentionQueueItem,
@@ -15,7 +15,7 @@ import {
 } from '@archon/workflows/schemas/attention-degraded';
 import { continuablePause } from '@archon/workflows/schemas/workflow-run';
 import { z } from 'zod';
-import type { RunActor } from '../operations/run-authorization';
+import { RunActionForbiddenError, type RunActor } from '../operations/run-authorization';
 import {
   expectedGateForOccurrence,
   workflowOperationErrorMessage,
@@ -31,7 +31,10 @@ const SURFACE = 'attention_tool';
 
 export interface AttentionToolContext {
   actor: RunActor;
-  operations: Pick<WorkflowOperations, 'answerWorkflow' | 'respondToWorkflow'>;
+  operations: Pick<
+    WorkflowOperations,
+    'answerWorkflow' | 'respondToWorkflow' | 'assertRunActionAllowed'
+  >;
   /** The queue the CLI's `workflow attention` and the API's attention routes read. */
   queue: AttentionQueueSource;
   /** Resolve a project the agent named: a codebase id, a codebase name or a project key. */
@@ -97,6 +100,10 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
  * to the agent as the queue describes it, so a field the queue adds reaches the agent
  * without a change here.
  *
+ * A list reaches across projects, so it shows only the items the chat's actor may answer:
+ * the rule an answer is held to. Whoever cannot answer an item does not read its prompt
+ * or its paths through this tool.
+ *
  * An answer is recorded and nothing more: an answered pause is a due continuation that a
  * continuation host continues, so one turn can answer any number of items.
  */
@@ -136,19 +143,45 @@ async function scopeFor(ctx: AttentionToolContext, project: string): Promise<Att
     : { kind: 'project', project: await ctx.resolveProject(spec) };
 }
 
+/** True when the chat's actor may answer `run`, by the rule the answer operations enforce. */
+async function mayAnswer(
+  ctx: AttentionToolContext,
+  run: Parameters<WorkflowOperations['assertRunActionAllowed']>[0]
+): Promise<boolean> {
+  try {
+    await ctx.operations.assertRunActionAllowed(run, ctx.actor, 'respond');
+    return true;
+  } catch (error) {
+    if (error instanceof RunActionForbiddenError) return false;
+    throw error;
+  }
+}
+
 async function listItems(ctx: AttentionToolContext, project: string): Promise<string> {
   const scope = await scopeFor(ctx, project);
-  const { values, degraded } = splitAttentionRead(await listAttentionQueue(ctx.queue));
-  const items = selectAttentionQueue(values, { scope, labels: {}, order: { by: 'age' } });
+  const rows = splitAttentionRead(await ctx.queue.store.listAttentionQueueRows());
+  const answerable = [];
+  for (const run of rows.values) if (await mayAnswer(ctx, run)) answerable.push(run);
+  const read = splitAttentionRead(await attentionQueueItems(ctx.queue, answerable));
+  const items = selectAttentionQueue(read.values, { scope, labels: {}, order: { by: 'age' } });
   const where = scope.kind === 'all' ? 'every project' : `project ${scope.project.name}`;
   log.info({ scope: scope.kind, count: items.length }, 'attention_tool.list_completed');
-  const unreadable = scopeAttentionDegraded(degraded, scope).degraded ?? [];
   const lines = [
     items.length === 0
       ? `No open attention items in ${where}.`
       : `${String(items.length)} open attention item(s) in ${where}, oldest first:`,
   ];
   if (items.length > 0) lines.push(JSON.stringify(items, null, 1), HOW_TO_ANSWER);
+  const withheld = rows.values.length - answerable.length;
+  if (withheld > 0)
+    lines.push(
+      `${String(withheld)} more paused run(s) in the install are not listed: only the user who started a run, or an admin, may answer it.`
+    );
+  // Only someone who may answer every run is told about rows that cannot be read at all.
+  const unreadable =
+    withheld > 0
+      ? []
+      : (scopeAttentionDegraded([...rows.degraded, ...read.degraded], scope).degraded ?? []);
   if (unreadable.length > 0)
     lines.push(
       `${String(unreadable.length)} more paused run(s) could not be read: ${JSON.stringify(unreadable)}`
@@ -282,10 +315,10 @@ async function recordAnswer(
       return `Answered ${subject} with ${describe(answer)}. The gate has no rework path, so the run is cancelled and nothing further runs.`;
   }
   log.info({ runId: item.runId, kind: item.kind }, 'attention_tool.answered');
-  const after = await ctx.queue.store.getWorkflowRun(item.runId);
+  // Judged on the run as it was answered: a host may already have continued it by now.
   const continues =
-    after !== null && continuablePause(after) !== undefined
-      ? 'The run continues on its own.'
+    continuablePause(holder) !== undefined
+      ? `A running Archon server continues the run on its own. With no server running, continue it with \`archon workflow resume ${item.runId}\`.`
       : `It does not continue from here: run \`archon workflow resume ${item.runId}\` from the CLI in its project.`;
   return `Answered ${subject} with ${describe(answer)}. ${continues}`;
 }
