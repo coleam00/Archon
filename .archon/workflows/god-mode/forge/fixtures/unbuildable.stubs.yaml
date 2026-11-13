@@ -1,0 +1,9 @@
+# Every draft is rejected by the validator: the forge cancels with the evidence
+# instead of asking a person to approve something the engine would refuse.
+survey: { catalog: "" }
+author: { name: demo-flow, summary: s }
+check: { attempt: 3, done: true, valid: false, report: "unknown node zz", name: demo-flow, summary: s }
+fixture:
+  inputs: { need: a demo workflow }
+  expect: cancelled
+  reached: [survey, drafts]

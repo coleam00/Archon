@@ -1,0 +1,32 @@
+# A complete charter on a supervised install: the plan gate opens, a person approves,
+# and the missions launch. Dry-run reports the `workflow:` fan-out as unsupported, so
+# this fixture proves routing up to the launch.
+charter:
+  complete: true
+  question: ""
+  brief:
+    problem: p
+    why: w
+    why_now: n
+    outcome: o
+    invariants: [i]
+    acceptance: [a]
+  approach: two independent missions
+  missions:
+    - { id: one, objective: o1, context: c, done_when: d, acceptance: ["true"] }
+    - { id: two, objective: o2, context: c, done_when: d, acceptance: ["true"] }
+plan:
+  missions:
+    - { id: one, objective: o1, context: c, done_when: d, acceptance: ["true"] }
+    - { id: two, objective: o2, context: c, done_when: d, acceptance: ["true"] }
+  count: 2
+  gate: true
+  level: supervised
+  trust: "supervised: only 0 recorded missions"
+  message: "God mode wants to run 2 missions."
+approve: { decision: approve, text: "" }
+go: { go: true, reason: a person approved the plan }
+fixture:
+  expect: failed
+  fail-node: missions
+  reached: [charter, plan, approve, go]

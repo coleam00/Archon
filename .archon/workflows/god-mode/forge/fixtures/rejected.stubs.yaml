@@ -1,0 +1,12 @@
+# The draft validates on the first attempt, a person rejects it, and the real install
+# script records the rejection without committing anything.
+survey: { catalog: "- god-mode: the conductor" }
+author: { name: demo-flow, summary: does a demo }
+check: { attempt: 1, done: true, valid: true, report: "Valid. Dry run ended `completed`.", name: demo-flow, summary: does a demo }
+present: { message: "The forge built `demo-flow`." }
+review: { decision: reject, text: not needed }
+fixture:
+  inputs: { need: a demo workflow }
+  expect: completed
+  reached: [survey, drafts, present, review, install]
+exec-code: true

@@ -1,0 +1,12 @@
+# The acceptance commands pass and the reviewer approves on the first attempt. The
+# deterministic scripts (parse, verify, attempt, result) run for real; only the agents
+# and the memory read are stubbed.
+recall: { lessons: "- none yet" }
+execute: { summary: made the change, blocked: false, blocker: "" }
+judge: { approve: true, findings: "" }
+fixture:
+  inputs:
+    mission: '{"id":"demo","objective":"o","context":"c","done_when":"d","acceptance":["true"]}'
+  expect: completed
+  reached: [parse, recall, attempts, result]
+exec-code: true

@@ -1,0 +1,19 @@
+# A person rejects the plan: the run cancels before any mission launches.
+charter:
+  complete: true
+  question: ""
+  brief: { problem: p, why: w, why_now: n, outcome: o, invariants: [], acceptance: [a] }
+  approach: a
+  missions: [{ id: one, objective: o, context: c, done_when: d, acceptance: ["true"] }]
+plan:
+  missions: [{ id: one, objective: o, context: c, done_when: d, acceptance: ["true"] }]
+  count: 1
+  gate: true
+  level: supervised
+  trust: supervised
+  message: m
+approve: { decision: reject, text: too broad }
+go: { go: false, reason: "the plan was rejected: too broad" }
+fixture:
+  expect: cancelled
+  reached: [charter, plan, approve, go, halt]
