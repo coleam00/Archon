@@ -229,7 +229,8 @@ export interface IWorkflowStore
     adopted_from_run_id?: string;
     /**
      * The key of the item this run belongs to, in the project of `codebase_id`, which it
-     * needs. The item is created on first use. Absent: the run has no item.
+     * needs. The item is created on first use. Absent: a run with `adopted_from_run_id`
+     * belongs to that run's item, and any other run has no item.
      */
     item_key?: string;
   }): Promise<WorkflowRun>;

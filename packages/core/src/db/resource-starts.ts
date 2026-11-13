@@ -79,7 +79,9 @@ async function admitExisting(
     'SELECT item_id FROM remote_agent_resource_start_requests WHERE id = $1',
     [start.id]
   );
-  await insertWorkflowRun(query, start.launch.run, request.rows[0]?.item_id ?? null);
+  await insertWorkflowRun(query, start.launch.run, {
+    itemId: request.rows[0]?.item_id ?? null,
+  });
   await query(
     `UPDATE remote_agent_resource_start_requests
         SET status = 'admitted', admitted_at = ${getDialect().now()}, blocker_run_id = NULL

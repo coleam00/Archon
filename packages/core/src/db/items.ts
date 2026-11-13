@@ -2,6 +2,7 @@
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
   assertItemKey,
+  ContinuedItemProjectError,
   type WorkflowItem,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
@@ -19,13 +20,9 @@ export async function ensureItem(
   key: string
 ): Promise<string> {
   assertItemKey(key);
-  const codebases = await query<{ kind: string | null; name: string; default_cwd: string }>(
-    'SELECT kind, name, default_cwd FROM remote_agent_codebases WHERE id = $1',
-    [codebaseId ?? null]
-  );
-  const codebase = codebases.rows[0];
-  if (!codebase) throw new Error('naming an item needs a registered project');
-  const named = [projectKeyForCodebase(codebase, codebase.default_cwd), key];
+  const project = await codebaseProjectKey(query, codebaseId);
+  if (!project) throw new Error('naming an item needs a registered project');
+  const named = [project, key];
   await query(
     'INSERT INTO remote_agent_items (project_key, key) VALUES ($1, $2) ON CONFLICT DO NOTHING',
     named
@@ -36,6 +33,44 @@ export async function ensureItem(
   );
   if (!found.rows[0]) throw new Error(`Item '${key}' was not written`);
   return found.rows[0].id;
+}
+
+/** The engine's project key of a registered codebase; null when there is none. */
+async function codebaseProjectKey(
+  query: TransactionQuery,
+  codebaseId: string | undefined
+): Promise<string | null> {
+  const codebases = await query<{ kind: string | null; name: string; default_cwd: string }>(
+    'SELECT kind, name, default_cwd FROM remote_agent_codebases WHERE id = $1',
+    [codebaseId ?? null]
+  );
+  const codebase = codebases.rows[0];
+  return codebase ? projectKeyForCodebase(codebase, codebase.default_cwd) : null;
+}
+
+/**
+ * The item of the run a continuation adopts or supersedes: the same row, by id, so a fix
+ * round or a rerun stays on its item. Null when that run has none. An item belongs to one
+ * project, so a continuation in another project is refused instead of leaving the item.
+ */
+export async function continuedItem(
+  query: TransactionQuery,
+  codebaseId: string | undefined,
+  continuedRunId: string
+): Promise<string | null> {
+  const continued = await query<{ id: string; project_key: string; key: string }>(
+    `SELECT i.id, i.project_key, i.key FROM remote_agent_workflow_runs r
+       JOIN remote_agent_items i ON i.id = r.item_id WHERE r.id = $1`,
+    [continuedRunId]
+  );
+  const item = continued.rows[0];
+  if (!item) return null;
+  const project = await codebaseProjectKey(query, codebaseId);
+  if (project !== item.project_key)
+    throw new ContinuedItemProjectError(
+      `Run ${continuedRunId} is on item '${item.key}' in project '${item.project_key}', but its continuation runs in ${project ? `project '${project}'` : 'no registered project'}. An item belongs to one project, so the continuation has to name its own item.`
+    );
+  return item.id;
 }
 
 /** Every run of one item in a project, in the order they started. */

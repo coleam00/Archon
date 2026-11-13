@@ -54,6 +54,12 @@ export function assertItemKey(key: string): void {
     throw new Error(`An item key must be 1 to ${String(ITEM_KEY_MAX_LENGTH)} characters.`);
 }
 
+/**
+ * A continuation cannot stay on the continued run's item because it runs in another
+ * project. Chat and the API reach it as well as the CLI, so the message names no flag.
+ */
+export class ContinuedItemProjectError extends Error {}
+
 export const workflowRunSchema = z.object({
   origin: workflowRunOriginSchema.nullable(),
   id: z.string(),

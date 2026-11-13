@@ -29,7 +29,7 @@ import {
   type ExecutionOwnerRecord,
 } from './schemas';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
-import type { WorkflowRunOrigin } from './schemas/workflow-run';
+import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { holdWorkflowResource } from './resource-hold';
 import { workflowPathPriorityTime } from './workflow-path-lock';
@@ -211,14 +211,16 @@ async function createWorkflowRunRow(
       workflowSource: runSource,
       exitReason: 'run_not_created',
     });
+    // A refused item is the caller's to fix, not a database fault: say what was refused.
+    const refusal = err.cause instanceof ContinuedItemProjectError ? err.cause.message : null;
     await sendCriticalMessage(
       platform,
       conversationId,
-      '❌ **Workflow failed**: Unable to start workflow (database error). Please try again later.'
+      `❌ **Workflow failed**: ${refusal ?? 'Unable to start workflow (database error). Please try again later.'}`
     );
     return {
       stopped: true,
-      result: { success: false, error: 'Database error creating workflow run' },
+      result: { success: false, error: refusal ?? 'Database error creating workflow run' },
     };
   }
 }
