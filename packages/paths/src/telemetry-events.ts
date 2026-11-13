@@ -14,7 +14,7 @@ import type { WORKFLOW_SOURCES } from './workflow-source';
  * Bumped when the captured property set changes (documented in README). 7 is
  * skipped: a fork shipping this embedded key already sends it.
  */
-export const TELEMETRY_SCHEMA_VERSION = 13;
+export const TELEMETRY_SCHEMA_VERSION = 14;
 
 /**
  * Privacy invariants attached to EVERY telemetry event by the transport, not
@@ -188,7 +188,7 @@ export interface WorkflowAncestryProperties {
  * team server deployments.
  */
 export interface DeploymentShapeProperties {
-  dbKind?: 'sqlite' | 'postgresql';
+  dbKind?: Exclude<ArchonStoreKind, 'files'>;
   webAuthEnabled?: boolean;
   /** Per-user credentials mode (TOKEN_ENCRYPTION_KEY configured). */
   multiUser?: boolean;
@@ -201,9 +201,13 @@ export interface DeploymentShapeProperties {
   adapterGitlab?: boolean;
 }
 
-/** Once-per-process startup event — the basis for active-install counting. */
+/** Where an install keeps runs: the file store (CLI only) or a database. */
+export type ArchonStoreKind = 'files' | 'sqlite' | 'postgresql';
+
+/** Once-per-day startup event — the basis for active-install counting. */
 export interface ArchonStartedProperties extends DeploymentShapeProperties {
   surface: 'cli' | 'server';
+  store?: ArchonStoreKind;
 }
 
 export interface TelemetryUsageProperties {
@@ -412,6 +416,7 @@ export function archonSurfaceEventProperties(props: ArchonStartedProperties): Ev
     surface: props.surface,
     schema_version: TELEMETRY_SCHEMA_VERSION,
     ...withoutUndefined({
+      store: props.store,
       db_kind: props.dbKind,
       web_auth_enabled: props.webAuthEnabled,
       multi_user: props.multiUser,

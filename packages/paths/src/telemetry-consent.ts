@@ -234,6 +234,31 @@ export function resetTelemetryId(): string {
 }
 
 /**
+ * Claim today's (UTC) `archon_started` for a surface: true for the first process
+ * of the day, false after. One start per install per day is all active-install
+ * counts need, and per-process starts from scripts that call the CLI in a loop
+ * once filled the whole event quota. The stamp holds the claimed date. A stamp
+ * that can't be read or written claims again, so a broken ARCHON_HOME reports
+ * every start rather than none. Two processes racing at midnight can both claim.
+ */
+export function claimDailyStart(surface: 'cli' | 'server', now: Date = new Date()): boolean {
+  const today = now.toISOString().slice(0, 10);
+  const stampPath = join(getArchonHome(), `telemetry-started-${surface}`);
+  try {
+    if (existsSync(stampPath) && readFileSync(stampPath, 'utf8').trim() === today) return false;
+  } catch (error) {
+    getLog().debug({ err: error as Error, stampPath }, 'telemetry.start_stamp_read_failed');
+  }
+  try {
+    mkdirSync(getArchonHome(), { recursive: true });
+    writeFileSync(stampPath, today, 'utf8');
+  } catch (error) {
+    getLog().debug({ err: error as Error, stampPath }, 'telemetry.start_stamp_write_failed');
+  }
+  return true;
+}
+
+/**
  * Show a one-time stderr notice that telemetry is collected, then stamp the
  * notice file so we don't show it again. Skipped when:
  *   - telemetry is disabled (no point notifying about a no-op)
