@@ -6,7 +6,7 @@
  * is shared between the watcher and the run.
  */
 import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
-import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
+import { attentionQueueItemSchema, isHeldByRun } from '@archon/workflows/attention-queue';
 import { afterEach, expect, test } from 'bun:test';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -177,7 +177,8 @@ const ofRun =
   (runId: string, type: string) =>
   (line: Line): boolean =>
     line.type === type &&
-    (line.runId === runId || (line.item as { runId?: string } | undefined)?.runId === runId);
+    (line.runId === runId ||
+      (line.item as { run?: { id: string } } | undefined)?.run?.id === runId);
 
 const ASK =
   'name: watch-ask\ndescription: Attention watch fixture.\nnodes:\n' +
@@ -309,7 +310,7 @@ test('a run launched after the watch reaches it from the store alone, and --afte
   expect(opened.item).toEqual((JSON.parse(single.stdout) as { item: unknown }).item);
   expect(opened.project).toEqual((opened.item as { project: unknown }).project);
 
-  const occurrence = (opened.item as { occurrence: string }).occurrence;
+  const occurrence = (opened.item as { run: { occurrence: string } }).run.occurrence;
   const answered = await runCli(fixture, [
     'workflow',
     'answer',
@@ -469,35 +470,37 @@ test('fan-out questions have independent stream identities and resolve second fi
     const line = await watch.next(`question ${index}`, line => {
       if (line.type !== 'attention') return false;
       const item = attentionQueueItemSchema.parse(line.item);
-      return item.fanOut?.parentRunId === parentId && item.fanOut.index === index;
+      return item.run?.fanOut?.parentRunId === parentId && item.run.fanOut.index === index;
     });
     expect(line).toMatchObject({ workflow: 'question', parentRunId: parentId });
-    opened.push(attentionQueueItemSchema.parse(line.item));
+    const item = attentionQueueItemSchema.parse(line.item);
+    if (!isHeldByRun(item)) throw new Error('Expected an item a run holds');
+    opened.push(item);
   }
   const [first, second] = opened;
-  expect(first.runId).not.toBe(second.runId);
+  expect(first.run.id).not.toBe(second.run.id);
   const answer = async (item: typeof first, choose: string) => {
     if (item.kind !== 'attention') throw new Error('Expected attention');
     const answered = await runCli(fixture, [
       'workflow',
       'answer',
-      item.runId,
+      item.run.id,
       '--occurrence',
-      item.occurrence,
+      item.run.occurrence,
       '--choose',
       choose,
     ]);
     expect(answered, answered.stdout + answered.stderr).toMatchObject({ exitCode: 0 });
-    expect(await watch.next('resolved', ofRun(item.runId, 'resolved'))).toMatchObject({
-      occurrence: item.occurrence,
+    expect(await watch.next('resolved', ofRun(item.run.id, 'resolved'))).toMatchObject({
+      occurrence: item.run.occurrence,
       reason: 'answered',
     });
   };
   await answer(second, 'defer');
-  const remaining = await runCli(fixture, ['workflow', 'attention', first.runId, '--json']);
+  const remaining = await runCli(fixture, ['workflow', 'attention', first.run.id, '--json']);
   expect(remaining.exitCode).toBe(0);
   expect(JSON.parse(remaining.stdout).item).toEqual(first);
-  expect(watch.lines.filter(ofRun(first.runId, 'resolved'))).toEqual([]);
+  expect(watch.lines.filter(ofRun(first.run.id, 'resolved'))).toEqual([]);
   await statusOf(fixture, parentId, 'paused');
   await answer(first, 'accept');
   expect(await watch.next('parent completed', ofRun(parentId, 'terminal'))).toMatchObject({

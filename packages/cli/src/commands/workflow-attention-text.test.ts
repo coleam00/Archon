@@ -7,22 +7,19 @@ import { attentionItemLines, attentionStreamText } from './workflow-attention-te
 const scope: AttentionQueueScope = { kind: 'all' };
 const cursor = workflowEventCursor('c');
 const run = { cursor, project: null, runId: 'run-1', workflow: 'deliver', parentRunId: null };
-const base = {
-  runId: 'run-1',
+const base = { project: null, revision: 1, labels: { merge: 'pr', pr: '42' }, pausedAt: null };
+const held = {
+  id: 'run-1',
   workflow: 'deliver',
-  project: null,
   parentRunId: null,
   fanOut: null,
-  revision: 1,
-  labels: { merge: 'pr', pr: '42' },
-  pausedAt: null,
   context: { artifactsDir: null, transcript: null, workingPath: null, branch: null },
 };
 const ask: Extract<AttentionQueueItem, { kind: 'attention' }> = {
   ...base,
   kind: 'attention',
-  node: 'decide',
-  occurrence: 'occ-7',
+  ref: 'run-1:occ-7',
+  run: { ...held, node: 'decide', occurrence: 'occ-7' },
   message: '\nMerge pull request 42?\n\nEvidence: three paragraphs nobody reads in a watch line.',
   form: 'select',
   options: [
@@ -73,8 +70,8 @@ test('a gate names its occurrence in the answer command', () => {
   const block = opened({
     ...base,
     kind: 'awaiting_response',
-    node: 'review',
-    occurrence: 'gate-3',
+    ref: 'run-1:gate-3',
+    run: { ...held, node: 'review', occurrence: 'gate-3' },
     message: 'Ship?',
   });
   expect(block).toContain('archon workflow approve run-1 --occurrence gate-3');
@@ -83,7 +80,14 @@ test('a gate names its occurrence in the answer command', () => {
 test('an unreadable item, a failed run and a lost owner say which run and what shows more', () => {
   const more = 'archon workflow get run-1';
   expect(
-    opened({ ...base, kind: 'unreadable', reason: 'malformed_gate', detail: 'no gate recorded' })
+    opened({
+      ...base,
+      kind: 'unreadable',
+      ref: 'run-1',
+      run: held,
+      reason: 'malformed_gate',
+      detail: 'no gate recorded',
+    })
   ).toContain(more);
   const failed = text({
     type: 'terminal',
@@ -120,6 +124,7 @@ test('the close of an ask is one line that says who answered when that was recor
     {
       type: 'resolved',
       ...run,
+      ref: 'run-1:occ-7',
       occurrence: 'occ-7',
       reason: 'answered',
       answeredVia: 'cli',
@@ -135,8 +140,29 @@ test('the close of an ask is one line that says who answered when that was recor
   expect(closed[0]).toContain('from run run-9 (node triage.decide)');
   expect(
     attentionStreamText(
-      { type: 'resolved', ...run, occurrence: 'occ-7', reason: 'withdrawn' },
+      { type: 'resolved', ...run, ref: 'run-1:occ-7', occurrence: 'occ-7', reason: 'withdrawn' },
       scope
     )
   ).toHaveLength(1);
+});
+
+test('an item no run holds is named by its ref and offers no run command', () => {
+  const { run: _, ...withoutRun } = ask;
+  const block = opened({ ...withoutRun, ref: 'ask:1' });
+  expect(block).toContain('ask:1');
+  expect(block).toContain('Merge pull request 42?');
+  expect(block).toContain('option merge: Squash-merge it.');
+  expect(block).not.toContain('archon workflow');
+  expect(
+    text({
+      type: 'resolved',
+      cursor,
+      project: null,
+      ref: 'ask:1',
+      workflow: null,
+      parentRunId: null,
+      occurrence: null,
+      reason: 'withdrawn',
+    })
+  ).toBe('Item ask:1 no longer needs attention.');
 });

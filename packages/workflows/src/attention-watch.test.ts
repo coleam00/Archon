@@ -8,7 +8,13 @@ import { join } from 'node:path';
 import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
 import * as paths from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { readAttentionQueueItem } from './attention-queue';
+import { attentionWatchReader } from './attention-needs';
+import {
+  listAttentionQueue,
+  readAttentionQueueItem,
+  readAttentionQueueItemByRef,
+  type AttentionQueueItemWithoutRun,
+} from './attention-queue';
 import {
   attentionStreamLineSchema,
   watchAttentionQueue,
@@ -17,6 +23,7 @@ import {
 } from './attention-watch';
 import type { AttentionWatchOptions } from './engine-port';
 import { createFileWorkflowStore } from './file-store';
+import { splitAttentionRead } from './schemas/attention-degraded';
 import type { ApprovalContext, WorkflowWaitContext } from './schemas/workflow-run';
 import {
   executionClaim,
@@ -132,7 +139,7 @@ const attentionOf =
   (runId: string, revision?: number) =>
   (line: AttentionStreamLine): boolean =>
     line.type === 'attention' &&
-    line.item.runId === runId &&
+    line.item.run?.id === runId &&
     (revision === undefined || line.item.revision === revision);
 
 describe('watchAttentionQueue', () => {
@@ -728,7 +735,7 @@ describe('watchAttentionQueue', () => {
     });
     await scoped.close();
     expect(
-      scoped.lines.map(line => (line.type === 'attention' ? line.item.runId : line.type))
+      scoped.lines.map(line => (line.type === 'attention' ? line.item.run?.id : line.type))
     ).toEqual([beta.runId, 'ready']);
   });
 
@@ -802,7 +809,10 @@ describe('watchAttentionQueue', () => {
     const wait = ask();
     await store.pauseWorkflowRunForWait(runId, wait, { kind: 'started', stepName: 'ask' });
     const opened = await stream.next(attentionOf(runId));
-    expect(opened).toMatchObject({ snapshot: false, item: { occurrence: wait.pauseId } });
+    expect(opened).toMatchObject({
+      snapshot: false,
+      item: { ref: `${runId}:${wait.pauseId}`, run: { id: runId, occurrence: wait.pauseId } },
+    });
 
     await store.answerAttentionWait(runId, answer(wait.pauseId));
     expect(await stream.next(ofRun(runId, 'resolved'))).toMatchObject({
@@ -840,7 +850,10 @@ describe('watchAttentionQueue', () => {
     const wait = ask();
     await store.pauseWorkflowRunForWait(child.id, wait, { kind: 'started', stepName: 'ask' });
     const context = { workflow: 'child-wf', parentRunId: parentId };
-    expect(await stream.next(attentionOf(child.id))).toMatchObject({ ...context, item: context });
+    expect(await stream.next(attentionOf(child.id))).toMatchObject({
+      ...context,
+      item: { run: context },
+    });
 
     await store.answerAttentionWait(child.id, answer(wait.pauseId));
     expect(await stream.next(ofRun(child.id, 'resolved'))).toMatchObject(context);
@@ -1054,17 +1067,11 @@ describe('watchAttentionQueue', () => {
     await second.close();
     const snapshot = second.lines.filter(line => line.type === 'attention' && line.snapshot);
     const key = (line: AttentionStreamLine): unknown =>
-      line.type === 'attention'
-        ? [
-            line.item.runId,
-            'occurrence' in line.item ? line.item.occurrence : null,
-            line.item.revision,
-          ]
-        : null;
+      line.type === 'attention' ? [line.item.ref, line.item.revision] : null;
     expect(snapshot.map(key)).toEqual(
       expect.arrayContaining([
-        [open.runId, open.wait.pauseId, 1],
-        [late.runId, late.wait.pauseId, 1],
+        [`${open.runId}:${open.wait.pauseId}`, 1],
+        [`${late.runId}:${late.wait.pauseId}`, 1],
       ])
     );
     expect(snapshot).toHaveLength(2);
@@ -1160,10 +1167,7 @@ describe('watchAttentionQueue', () => {
       data: {},
     });
     await stream.next(
-      line =>
-        line.type === 'attention' &&
-        'occurrence' in line.item &&
-        line.item.occurrence === second.pauseId
+      line => line.type === 'attention' && line.item.ref.endsWith(`:${second.pauseId}`)
     );
 
     // An unanswered select wait that a bare resume reaches again reopens the same occurrence.
@@ -1644,7 +1648,11 @@ test.each(['all', 'project'] as const)(
         'degraded',
         'ready',
       ]);
-      expect(handle.lines[0]).toMatchObject({ type: 'attention', snapshot: true, item: { runId } });
+      expect(handle.lines[0]).toMatchObject({
+        type: 'attention',
+        snapshot: true,
+        item: { run: { id: runId } },
+      });
       const start = await store.getWorkflowEventHead();
       for (const line of handle.lines.filter(line => line.type === 'degraded')) {
         expect(line).toEqual({
@@ -1662,3 +1670,64 @@ test.each(['all', 'project'] as const)(
     }
   }
 );
+
+// Nothing stores an item without a run yet, so its source here is a fixture.
+test('an item no run holds is listed, read by its ref, streamed and resolved, with no run in its path', async () => {
+  const store = await makeStore();
+  const paused = await pausedAtAsk(store);
+  const project = { key: '_cwd/alpha', codebaseId: null, name: 'alpha' };
+  const ask: AttentionQueueItemWithoutRun = {
+    kind: 'attention',
+    ref: 'ask:1',
+    project,
+    revision: 1,
+    labels: {},
+    pausedAt: '2026-11-13T00:00:00.000Z',
+    message: 'Ship the fix?',
+    form: 'approval',
+    options: [{ id: 'approve' }, { id: 'reject' }],
+  };
+  const later = { ...ask, ref: 'ask:2', message: 'And the docs?' };
+  let asks = [ask];
+  const withAsks: AttentionWatchHost = { ...host, itemsWithoutRun: async () => asks };
+  const source = { store, ...withAsks };
+
+  const listed = splitAttentionRead(await listAttentionQueue(source)).values;
+  expect(listed.map(item => item.ref)).toEqual([`${paused.runId}:${paused.wait.pauseId}`, 'ask:1']);
+  expect(await readAttentionQueueItemByRef(source, 'ask:1')).toEqual({ kind: 'found', item: ask });
+
+  const stream = await watch(store, {}, withAsks);
+  const about = (ref: string) => (line: AttentionStreamLine) =>
+    (line.type === 'attention' && line.item.ref === ref) ||
+    (line.type === 'resolved' && line.ref === ref);
+  asks = [ask, later];
+  await stream.next(about('ask:2'));
+  asks = [later];
+  await stream.next(line => line.type === 'resolved' && line.ref === 'ask:1');
+  await stream.close();
+
+  const cursor = expect.any(String);
+  const none = { project, workflow: null, parentRunId: null };
+  expect(stream.lines.filter(about('ask:1'))).toEqual([
+    { type: 'attention', cursor, snapshot: true, ...none, item: ask },
+    { type: 'resolved', cursor, ...none, ref: 'ask:1', occurrence: null, reason: 'withdrawn' },
+  ]);
+  expect(stream.lines.filter(about('ask:2'))).toEqual([
+    { type: 'attention', cursor, snapshot: false, ...none, item: later },
+  ]);
+  // The paused run beside them stays open, and a quiet watcher is told to answer each
+  // item and that the first one closed.
+  expect(stream.lines.filter(line => line.type === 'resolved')).toHaveLength(1);
+  const quiet = attentionWatchReader('quiet');
+  expect(
+    stream.lines.flatMap(line => {
+      const shown = quiet(line);
+      return shown === undefined ? [] : [[shown.type, shown.needs]];
+    })
+  ).toEqual([
+    ['attention', 'answer'],
+    ['attention', 'answer'],
+    ['attention', 'answer'],
+    ['resolved', 'nothing'],
+  ]);
+});

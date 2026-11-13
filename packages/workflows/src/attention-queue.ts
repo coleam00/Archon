@@ -1,11 +1,12 @@
 /**
- * The attention queue: every paused run that needs someone, as a typed item an answerer
- * outside Archon can list, filter, count and read without parsing prose (#4039).
+ * The attention queue: everything that needs someone, as a typed item an answerer outside
+ * Archon can list, filter, count and read without parsing prose (#4039).
  *
- * `toAttentionQueueItem` is the one constructor: it builds an item from a run row and its
- * run-attention projection, so the list, the single read and the stream
- * (`attention-watch.ts`) share the readable projection. Labels are data. The queue filters them by exact match and sorts them as
- * plain strings, and nothing here depends on who is asking.
+ * `listAttentionQueue` is the one reader. A paused run is not stored as an item: it is
+ * derived into one each time the list is read (`toAttentionQueueItem`), so the run keeps
+ * owning its pause. An item may also have no run; `AttentionQueueSource.itemsWithoutRun`
+ * is where those come from. Labels are data. The queue filters them by exact match and
+ * sorts them as plain strings, and nothing here depends on who is asking.
  */
 import {
   isAttentionDegraded,
@@ -30,22 +31,21 @@ import {
 } from './schemas/wait-node';
 import {
   attentionLabels,
-  attentionAnswererSchema,
   attentionRevision,
   pausedAttentionWait,
   pausedUsageLimitWait,
   queuedRunAttention,
   runAttentionUnreadableReasonSchema,
   SUBRUN_METADATA_KEYS,
-  type AttentionAnswerer,
+  workflowItemSchema,
   type QueuedRunAttention,
+  type WorkflowItem,
   type WorkflowRun,
 } from './schemas/workflow-run';
 import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
-import type { WorkflowEventRow } from './schemas/workflow-event';
+import type { AttentionQueueCounts } from './attention-counts';
 import type { IWorkflowStore } from './store';
-import { attentionAnswerRecordSchema, attentionAskRecordSchema } from './store/attention-writes';
 
 /**
  * A project as the engine identifies it. `key` is the identity: the project storage key
@@ -77,44 +77,57 @@ export const attentionQueueContextSchema = z.object({
   branch: z.string().nullable(),
 });
 
-/** What an item's run is part of; attention stream lines carry the same two fields. */
-export const attentionItemRunContextFields = {
+/** The paused run that holds an item: what it is part of and where its context is. */
+const heldRunFields = {
+  id: z.string(),
   workflow: z.string(),
   /** The run's direct parent run, for every child run; null for a top-level run. */
   parentRunId: z.string().nullable(),
-};
-
-const itemBase = {
-  runId: z.string(),
-  workflow: attentionItemRunContextFields.workflow,
-  /** Null only when the run has no trusted storage root, so there is no key to give. */
-  project: projectRefSchema.nullable(),
-  parentRunId: attentionItemRunContextFields.parentRunId,
   /** Set when the run is a `fan_out:` child; null for every other run. */
   fanOut: fanOutPositionSchema.nullable(),
-  /** 1, plus one for every label write since the pause opened. */
+  context: attentionQueueContextSchema,
+};
+/** A run paused at a node for an answer; `occurrence` names this pause of it. */
+const answerableRunSchema = z.object({
+  ...heldRunFields,
+  node: z.string(),
+  occurrence: z.string(),
+});
+
+const itemBase = {
+  /**
+   * The item's identity: the one string a surface hands out with an item and takes back
+   * to read or answer it. Opaque to every caller.
+   */
+  ref: z.string().min(1),
+  /** Null only when the item's run has no trusted storage root, so there is no key to give. */
+  project: projectRefSchema.nullable(),
+  /** The item (`workflow run --item`) the work belongs to, when it belongs to one. */
+  item: workflowItemSchema.optional(),
+  /** 1, plus one for every label write since the item opened. */
   revision: z.number().int().positive(),
   labels: attentionLabelsSchema,
-  /** When the pause opened; null when the pause records no time (gates). */
+  /** When the item opened; null when its pause records no time (gates). */
   pausedAt: z.string().datetime().nullable(),
-  context: attentionQueueContextSchema,
 };
 
 /**
- * One queue item. `kind` is the run-attention kind it was built from: `attention` is a
- * `wait: attention` pause, answered with `answer`; `awaiting_response` is a gate,
- * answered with `approve`, `reject` or `respond`; `usage_limit` is a run waiting for a
- * provider usage limit, or a rate limit that outlasted its retries, that tries again by
- * itself at `resetAt` (the provider's reported reset, or a computed backoff for a rate
- * limit) and needs no answer; `unreadable` is a paused run nothing can describe, which someone has to look at
- * and resume or abandon.
+ * One queue item. `kind` says what it asks: `attention` is a question, answered with
+ * `answer`; `awaiting_response` is a gate, answered with `approve`, `reject` or `respond`;
+ * `usage_limit` is a run waiting for a provider usage limit, or a rate limit that outlasted
+ * its retries, that tries again by itself at `resetAt` (the provider's reported reset, or a
+ * computed backoff for a rate limit) and needs no answer; `unreadable` is a paused run
+ * nothing can describe, which someone has to look at and resume or abandon.
+ *
+ * `run` is the paused run that holds the item. A gate, a usage-limit wait and an
+ * unreadable pause are always a run. A question may have none: then nothing is paused on
+ * it, and its `ref` is all that names it.
  */
 export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('attention'),
     ...itemBase,
-    node: z.string(),
-    occurrence: z.string(),
+    run: answerableRunSchema.optional(),
     message: z.string(),
     form: attentionFormSchema,
     options: z.array(attentionOptionSchema),
@@ -125,24 +138,49 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
   z.object({
     kind: z.literal('awaiting_response'),
     ...itemBase,
-    node: z.string(),
-    occurrence: z.string(),
+    run: answerableRunSchema,
     message: z.string(),
   }),
   z.object({
     kind: z.literal('usage_limit'),
     ...itemBase,
-    node: z.string(),
+    run: z.object({ ...heldRunFields, node: z.string() }),
     resetAt: z.string().datetime(),
   }),
   z.object({
     kind: z.literal('unreadable'),
     ...itemBase,
+    run: z.object(heldRunFields),
     reason: runAttentionUnreadableReasonSchema,
     detail: z.string(),
   }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
+/** An item a paused run holds. */
+export type RunAttentionQueueItem = AttentionQueueItem & { run: object };
+/** True when a paused run holds `item`; narrows to its `run`. */
+export function isHeldByRun(item: AttentionQueueItem): item is RunAttentionQueueItem {
+  return item.run !== undefined;
+}
+/** An item no run holds. */
+export type AttentionQueueItemWithoutRun = Extract<AttentionQueueItem, { kind: 'attention' }> & {
+  run?: undefined;
+};
+
+const RUN_REF_SEPARATOR = ':';
+
+/**
+ * The ref of the item a paused run holds: its run and, for an item that takes an answer,
+ * the occurrence of its pause, so a ref to an earlier pause of the same run no longer
+ * matches. `runIdOfRef` reads it back; nothing else builds or parses one.
+ */
+function runItemRef(runId: string, occurrence?: string): string {
+  return occurrence === undefined ? runId : `${runId}${RUN_REF_SEPARATOR}${occurrence}`;
+}
+
+function runIdOfRef(ref: string): string {
+  return ref.split(RUN_REF_SEPARATOR, 1)[0] ?? '';
+}
 
 /** The run facts an item needs beyond the row, read by the host. */
 export interface AttentionQueueItemSources {
@@ -150,6 +188,8 @@ export interface AttentionQueueItemSources {
   codebase: { id: string; kind?: string | null; name: string; default_cwd: string } | null;
   /** The branch of the run's checkout, from the host's isolation records. */
   branch: string | null;
+  /** The item the run belongs to; null when it belongs to none. */
+  item: WorkflowItem | null;
 }
 
 /**
@@ -200,23 +240,26 @@ export function fanOutPosition(
     : null;
 }
 
-/** Build the queue item for `run`, whose run-attention is `attention`. */
+/** Derive the queue item `run` holds, from its run-attention `attention`. */
 export function toAttentionQueueItem(
   run: WorkflowRun,
   attention: QueuedRunAttention,
   sources: AttentionQueueItemSources
-): AttentionQueueItem {
+): RunAttentionQueueItem {
   const root = resolveRunStorageRoot(run, sources.codebase);
   const wait = attention.kind === 'attention' ? pausedAttentionWait(run) : undefined;
   const base = {
-    runId: run.id,
-    workflow: run.workflow_name,
     project: projectRefForRun(run, sources.codebase),
-    parentRunId: run.parent_run_id,
-    fanOut: fanOutPosition(run),
+    ...(sources.item === null ? {} : { item: sources.item }),
     revision: wait === undefined ? 1 : attentionRevision(wait),
     labels: wait === undefined ? {} : attentionLabels(wait),
     pausedAt: (wait ?? pausedUsageLimitWait(run))?.waitingSince ?? null,
+  };
+  const held = {
+    id: run.id,
+    workflow: run.workflow_name,
+    parentRunId: run.parent_run_id,
+    fanOut: fanOutPosition(run),
     context: {
       artifactsDir: root === null ? null : getRunArtifactsDirForRoot(root, run.id),
       transcript: root === null ? null : getRunLogPathForRoot(root, run.id),
@@ -228,9 +271,9 @@ export function toAttentionQueueItem(
     case 'attention':
       return {
         kind: 'attention',
+        ref: runItemRef(run.id, attention.occurrence),
         ...base,
-        node: attention.nodeId,
-        occurrence: attention.occurrence,
+        run: { ...held, node: attention.nodeId, occurrence: attention.occurrence },
         message: attention.message,
         form: attention.form,
         options: attention.options,
@@ -242,15 +285,28 @@ export function toAttentionQueueItem(
     case 'awaiting_response':
       return {
         kind: 'awaiting_response',
+        ref: runItemRef(run.id, attention.occurrence),
         ...base,
-        node: attention.respondTo.nodeId,
-        occurrence: attention.occurrence,
+        run: { ...held, node: attention.respondTo.nodeId, occurrence: attention.occurrence },
         message: attention.message,
       };
     case 'usage_limit':
-      return { kind: 'usage_limit', ...base, node: attention.nodeId, resetAt: attention.resumeAt };
+      return {
+        kind: 'usage_limit',
+        ref: runItemRef(run.id),
+        ...base,
+        run: { ...held, node: attention.nodeId },
+        resetAt: attention.resumeAt,
+      };
     case 'unreadable':
-      return { kind: 'unreadable', ...base, reason: attention.reason, detail: attention.detail };
+      return {
+        kind: 'unreadable',
+        ref: runItemRef(run.id),
+        ...base,
+        run: held,
+        reason: attention.reason,
+        detail: attention.detail,
+      };
   }
 }
 
@@ -258,13 +314,22 @@ export function toAttentionQueueItem(
 export interface AttentionQueueSource {
   store: Pick<
     IWorkflowStore,
-    'listAttentionQueueRows' | 'getWorkflowRun' | 'getWorkflowRunForAttention' | 'getCodebase'
+    | 'listAttentionQueueRows'
+    | 'getWorkflowRun'
+    | 'getWorkflowRunForAttention'
+    | 'getCodebase'
+    | 'getItem'
   >;
   /** The branch of a run's checkout; null when the host has no record of one. */
   branchOf(run: WorkflowRun): Promise<string | null>;
+  /**
+   * The open items no run holds. Nothing stores one yet, so no host sets this; it is
+   * where a source of such items joins the one reader.
+   */
+  itemsWithoutRun?(): Promise<readonly AttentionQueueItemWithoutRun[]>;
 }
 
-type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
+export type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
 
 function codebaseFor(
   source: { store: Pick<IWorkflowStore, 'getCodebase'> },
@@ -291,10 +356,12 @@ async function itemFor(
   run: WorkflowRun,
   attention: QueuedRunAttention,
   codebases: CodebaseCache
-): Promise<AttentionQueueItem> {
+): Promise<RunAttentionQueueItem> {
   return toAttentionQueueItem(run, attention, {
     codebase: await codebaseFor(source, run, codebases),
     branch: await source.branchOf(run),
+    // Only a run started for an item has one, so most reads skip the store.
+    item: run.item_id === null ? null : await source.store.getItem(run.item_id),
   });
 }
 
@@ -324,17 +391,17 @@ export async function attentionQueueItemForRun(
   source: AttentionQueueSource,
   run: WorkflowRun,
   codebases: CodebaseCache = new Map()
-): Promise<AttentionQueueItem | null> {
+): Promise<RunAttentionQueueItem | null> {
   if (run.status !== 'paused') return null;
   const attention = await ownQueuedAttention(source, run);
   return attention === undefined ? null : itemFor(source, run, attention, codebases);
 }
 
-/** The items for rows the store's queue list returned, in their order. */
-export async function attentionQueueItems(
+/** The items the store's queue rows hold, in the rows' order. */
+async function runAttentionQueueItems(
   source: AttentionQueueSource,
   runs: readonly AttentionRead<WorkflowRun>[]
-): Promise<AttentionRead<AttentionQueueItem>[]> {
+): Promise<AttentionRead<RunAttentionQueueItem>[]> {
   const unreadableIds = new Set(splitAttentionRead(runs).degraded.map(report => report.runId));
   const reportedUnreadableRun = new Error('Run already reported unreadable by attention batch');
   const unreadableDescendant = new Error('Unreadable attention descendant');
@@ -344,6 +411,7 @@ export async function attentionQueueItems(
       listAttentionQueueRows: () => source.store.listAttentionQueueRows(),
       getWorkflowRunForAttention: id => source.store.getWorkflowRunForAttention(id),
       getCodebase: id => source.store.getCodebase(id),
+      getItem: id => source.store.getItem(id),
       getWorkflowRun: async id => {
         // The batch already reports this row. Rereading it could log stored parser text;
         // treating it as missing would instead invent a missing-child queue item.
@@ -355,7 +423,7 @@ export async function attentionQueueItems(
     },
   };
   const codebases: CodebaseCache = new Map();
-  const items: AttentionRead<AttentionQueueItem>[] = [];
+  const items: AttentionRead<RunAttentionQueueItem>[] = [];
   for (const run of runs) {
     if (isAttentionDegraded(run)) {
       items.push(run);
@@ -373,11 +441,23 @@ export async function attentionQueueItems(
   return items;
 }
 
-/** Every item in the install, in the store's order: most recently started run first. */
+/**
+ * Every open item in the install: the one entry every surface lists through. The items
+ * paused runs hold come first, in the store's order (most recently started run first),
+ * then the items no run holds. A host that also needs the queue rows passes the ones it
+ * read as `runs`, so both come from one read.
+ */
 export async function listAttentionQueue(
-  source: AttentionQueueSource
+  source: AttentionQueueSource,
+  runs?: readonly AttentionRead<WorkflowRun>[]
 ): Promise<AttentionRead<AttentionQueueItem>[]> {
-  return attentionQueueItems(source, await source.store.listAttentionQueueRows());
+  return [
+    ...(await runAttentionQueueItems(
+      source,
+      runs ?? (await source.store.listAttentionQueueRows())
+    )),
+    ...((await source.itemsWithoutRun?.()) ?? []),
+  ];
 }
 
 /**
@@ -388,7 +468,7 @@ export async function listAttentionQueue(
 export async function readAttentionQueueItem(
   source: AttentionQueueSource,
   runId: string
-): Promise<AttentionQueueItem | null | undefined> {
+): Promise<RunAttentionQueueItem | null | undefined> {
   const run = await source.store.getWorkflowRun(runId);
   if (run === null) return undefined;
   const resolution = await resolveRunAttention(source.store, run);
@@ -401,6 +481,32 @@ export async function readAttentionQueueItem(
   return holder === null || attention === undefined
     ? null
     : itemFor(source, holder, attention, new Map());
+}
+
+/**
+ * What an item ref names now: the item it was handed out with (`found`), a different
+ * item where that one was (`moved`: the pause it named is over and its run holds another),
+ * no open item (`none`), or nothing this install knows (`unknown`).
+ */
+export type AttentionItemRefRead =
+  | { kind: 'found'; item: AttentionQueueItem }
+  | { kind: 'moved'; item: AttentionQueueItem }
+  | { kind: 'none' }
+  | { kind: 'unknown' };
+
+/** Read the item `ref` names: an item no run holds, or else the item of the run it names. */
+export async function readAttentionQueueItemByRef(
+  source: AttentionQueueSource,
+  ref: string
+): Promise<AttentionItemRefRead> {
+  const withoutRun = (await source.itemsWithoutRun?.())?.find(item => item.ref === ref);
+  if (withoutRun !== undefined) return { kind: 'found', item: withoutRun };
+  const runId = runIdOfRef(ref);
+  if (runId === '') return { kind: 'unknown' };
+  const item = await readAttentionQueueItem(source, runId);
+  if (item === undefined) return { kind: 'unknown' };
+  if (item === null) return { kind: 'none' };
+  return { kind: item.ref === ref ? 'found' : 'moved', item };
 }
 
 /** Which items a query covers: one project, or the whole install. */
@@ -524,27 +630,17 @@ export function matchesAttentionLabels(
   );
 }
 
-/** What events say became of one started attention wait. */
-interface AskOutcome {
-  /** Null while the wait is unanswered, and for an answer that recorded nobody. */
-  answeredBy: AttentionAnswerer | null;
-  /** Absent when the wait recorded no recommendation. */
-  recommendation?: { answered: boolean; followed: boolean };
-}
-
-/**
- * What scope, label filters and counts read of an item. `outcome` is set only on a
- * started wait read from events (`countAttentionWaitStarts`); an open item has none.
- */
-type AttentionCounted = Pick<AttentionQueueItem, 'project' | 'labels'> & { outcome?: AskOutcome };
-
-function inQuery(item: AttentionCounted, query: AttentionQueueQuery): boolean {
+/** True when an item's project is in the query's scope and it carries the query's labels. */
+export function inAttentionQuery(
+  item: Pick<AttentionQueueItem, 'project' | 'labels'>,
+  query: AttentionQueueQuery
+): boolean {
   return (
     isInAttentionScope(item.project, query.scope) && matchesAttentionLabels(item, query.labels)
   );
 }
 
-function compareStrings(a: string, b: string): number {
+export function compareAttentionStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
@@ -555,7 +651,7 @@ function compareAge(a: AttentionQueueItem, b: AttentionQueueItem): number {
     if (b.pausedAt === null) return -1;
     return Date.parse(a.pausedAt) - Date.parse(b.pausedAt);
   }
-  return compareStrings(a.runId, b.runId);
+  return compareAttentionStrings(a.ref, b.ref);
 }
 
 /** The items `query` selects, in `order`. Items without the sort label come last. */
@@ -563,7 +659,7 @@ export function selectAttentionQueue(
   items: readonly AttentionQueueItem[],
   query: AttentionQueueQuery & { order: AttentionQueueOrder }
 ): AttentionQueueItem[] {
-  const selected = items.filter(item => inQuery(item, query));
+  const selected = items.filter(item => inAttentionQuery(item, query));
   const { order } = query;
   if (order.by === 'age') return selected.sort(compareAge);
   const labelOf = (item: AttentionQueueItem): string | undefined =>
@@ -573,206 +669,8 @@ export function selectAttentionQueue(
     if (x !== y) {
       if (x === undefined) return 1;
       if (y === undefined) return -1;
-      return compareStrings(x, y);
+      return compareAttentionStrings(x, y);
     }
     return compareAge(a, b);
   });
-}
-
-/**
- * How a group's asks fared against their recommendations: `asked` carried one, `answered`
- * of those were answered, and `followed` of those chose the recommended option. Only a
- * count of started waits reports it; a wait started before recommendations were recorded
- * on its event counts as carrying none.
- */
-const recommendationCountsSchema = z.object({
-  asked: z.number().int(),
-  answered: z.number().int(),
-  followed: z.number().int(),
-});
-type RecommendationCounts = z.infer<typeof recommendationCountsSchema>;
-const groupCountFields = {
-  count: z.number().int(),
-  recommendations: recommendationCountsSchema.optional(),
-};
-
-const countsByProjectSchema = z.object({
-  by: z.literal('project'),
-  counts: z.array(z.object({ project: projectRefSchema.nullable(), ...groupCountFields })),
-});
-const countsByLabelSchema = z.object({
-  by: z.literal('label'),
-  key: z.string(),
-  /** `value` is null for the items that have no such label. */
-  counts: z.array(z.object({ value: z.string().nullable(), ...groupCountFields })),
-});
-
-/** The counts of the items open now. They have no answer yet, so none groups by answerer. */
-export const openAttentionQueueCountsSchema = z.discriminatedUnion('by', [
-  countsByProjectSchema,
-  countsByLabelSchema,
-]);
-
-export const attentionQueueCountsSchema = z.discriminatedUnion('by', [
-  countsByProjectSchema,
-  countsByLabelSchema,
-  z.object({
-    by: z.literal('answerer'),
-    /** `answeredBy` is null for waits still open and for answers that recorded nobody. */
-    counts: z.array(
-      z.object({ answeredBy: attentionAnswererSchema.nullable(), ...groupCountFields })
-    ),
-  }),
-]);
-export type AttentionQueueCounts = z.infer<typeof attentionQueueCountsSchema>;
-
-/**
- * How many items `query` selects under each project, each value of one label, or each
- * answerer, most first. Projects group by the scope rule: a codebase id when the item has
- * one, else its key. A group shows the project of its first item in `items`' order.
- */
-export function countAttentionQueue(
-  items: readonly AttentionCounted[],
-  query: AttentionQueueQuery & { countBy: AttentionQueueCountBy }
-): AttentionQueueCounts {
-  const selected = items.filter(item => inQuery(item, query));
-  const { countBy } = query;
-  switch (countBy.by) {
-    case 'project':
-      return {
-        by: 'project',
-        counts: tally(
-          selected,
-          item => item.project,
-          project =>
-            project === null
-              ? 'none'
-              : project.codebaseId !== null
-                ? `codebase:${project.codebaseId}`
-                : `key:${project.key}`,
-          project => project?.key ?? ''
-        ).map(({ group, ...counts }) => ({ project: group, ...counts })),
-      };
-    case 'label': {
-      const { key } = countBy;
-      return {
-        by: 'label',
-        key,
-        counts: tally(
-          selected,
-          item => (Object.hasOwn(item.labels, key) ? (item.labels[key] ?? '') : null),
-          value => JSON.stringify(value),
-          value => value ?? ''
-        ).map(({ group, ...counts }) => ({ value: group, ...counts })),
-      };
-    }
-    case 'answerer':
-      return {
-        by: 'answerer',
-        counts: tally(
-          selected,
-          item => item.outcome?.answeredBy ?? null,
-          answerer => JSON.stringify(answerer),
-          answerer =>
-            answerer === null ? '' : 'declared' in answerer ? answerer.declared : answerer.userId
-        ).map(({ group, ...counts }) => ({ answeredBy: group, ...counts })),
-      };
-  }
-  return countBy satisfies never;
-}
-
-/** One entry per group of `items`, largest first, then by `sortKey`. */
-function tally<Group>(
-  items: readonly AttentionCounted[],
-  groupOf: (item: AttentionCounted) => Group,
-  idOf: (group: Group) => string,
-  sortKey: (group: Group) => string
-): { group: Group; count: number; recommendations?: RecommendationCounts }[] {
-  const groups = new Map<
-    string,
-    { group: Group; count: number; recommendations?: RecommendationCounts }
-  >();
-  for (const item of items) {
-    const group = groupOf(item);
-    const id = idOf(group);
-    const entry = groups.get(id) ?? { group, count: 0 };
-    groups.set(id, entry);
-    entry.count += 1;
-    if (item.outcome === undefined) continue;
-    const totals = (entry.recommendations ??= { asked: 0, answered: 0, followed: 0 });
-    const { recommendation } = item.outcome;
-    if (recommendation === undefined) continue;
-    totals.asked += 1;
-    if (recommendation.answered) totals.answered += 1;
-    if (recommendation.followed) totals.followed += 1;
-  }
-  return [...groups.values()].sort(
-    (a, b) => b.count - a.count || compareStrings(sortKey(a.group), sortKey(b.group))
-  );
-}
-
-/**
- * `countAttentionQueue` over every attention wait started at or after `since`, answered
- * or still open, from events alone: the labels and ask record each `wait_started` row
- * opened with, and the `wait_answered` row of the same occurrence. A wait started before
- * labels or the ask record were recorded counts as having no labels and no recommendation.
- */
-export async function countAttentionWaitStarts(
-  source: {
-    store: Pick<
-      IWorkflowStore,
-      'listAttentionWaitStarts' | 'getWorkflowRunsByIds' | 'getCodebase' | 'listEventsForRuns'
-    >;
-  },
-  query: AttentionQueueQuery & { countBy: AttentionQueueCountBy; since?: Date }
-): Promise<AttentionQueueCounts> {
-  const { since } = query;
-  const starts = (await source.store.listAttentionWaitStarts()).filter(
-    start => since === undefined || Date.parse(start.startedAt) >= since.getTime()
-  );
-  const runIds = [...new Set(starts.map(start => start.runId))];
-  const runs = new Map((await source.store.getWorkflowRunsByIds(runIds)).map(run => [run.id, run]));
-  const answers = await source.store.listEventsForRuns(runIds, ['wait_answered']);
-  const codebases: CodebaseCache = new Map();
-  const counted: AttentionCounted[] = [];
-  for (const start of starts) {
-    const run = runs.get(start.runId);
-    if (run === undefined) continue;
-    const labels = attentionLabelsSchema.safeParse(start.data.labels);
-    counted.push({
-      project: await runProject(source, run, codebases),
-      labels: labels.success ? labels.data : {},
-      outcome: askOutcome(start.data, answers.get(start.runId) ?? []),
-    });
-  }
-  return countAttentionQueue(counted, query);
-}
-
-/** What became of the wait a `wait_started` row opened, from its run's `wait_answered` rows. */
-function askOutcome(
-  started: Record<string, unknown>,
-  answered: readonly Pick<WorkflowEventRow, 'data'>[]
-): AskOutcome {
-  const ask = attentionAskRecordSchema.safeParse(started);
-  if (!ask.success) return { answeredBy: null };
-  let answer: z.infer<typeof attentionAnswerRecordSchema> | undefined;
-  for (const row of answered) {
-    const record = attentionAnswerRecordSchema.safeParse(row.data);
-    if (record.success && record.data.occurrence === ask.data.occurrence) answer = record.data;
-  }
-  const recommended = ask.data.recommendation?.option;
-  return {
-    answeredBy: answer?.by ?? null,
-    ...(recommended === undefined
-      ? {}
-      : {
-          recommendation: {
-            answered: answer !== undefined,
-            followed:
-              answer !== undefined &&
-              'decision' in answer.answer &&
-              answer.answer.decision === recommended,
-          },
-        }),
-  };
 }

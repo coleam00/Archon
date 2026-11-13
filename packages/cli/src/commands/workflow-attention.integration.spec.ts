@@ -172,23 +172,23 @@ test('the queue scopes by project the way archon state names it, across a rename
   };
 
   const registered = await list(registeredDir);
-  expect(registered.map(item => item.runId).sort()).toEqual([current, renamed].sort());
-  expect(registered.find(item => item.runId === current)?.project).toEqual({
+  expect(registered.map(item => item.run?.id).sort()).toEqual([current, renamed].sort());
+  expect(registered.find(item => item.run?.id === current)?.project).toEqual({
     key: await stateKey(registeredDir),
     codebaseId: codebase.id,
     name: 'beta',
   });
-  expect(registered.find(item => item.runId === renamed)?.project).toEqual({
+  expect(registered.find(item => item.run?.id === renamed)?.project).toEqual({
     key: '_folder/alpha',
     codebaseId: codebase.id,
     name: 'beta',
   });
-  expect((await list(scratchDir, { project: 'beta' })).map(item => item.runId).sort()).toEqual(
+  expect((await list(scratchDir, { project: 'beta' })).map(item => item.run?.id).sort()).toEqual(
     [current, renamed].sort()
   );
 
   const scratch = await list(scratchDir);
-  expect(scratch.map(item => item.runId)).toEqual([unregistered]);
+  expect(scratch.map(item => item.run?.id)).toEqual([unregistered]);
   const scratchKey = await stateKey(scratchDir);
   expect(scratch[0]?.project).toEqual({
     key: scratchKey,
@@ -196,14 +196,16 @@ test('the queue scopes by project the way archon state names it, across a rename
     name: scratchKey.slice(scratchKey.lastIndexOf('/') + 1),
   });
   expect(
-    (await list(registeredDir, { project: await stateKey(scratchDir) })).map(item => item.runId)
+    (await list(registeredDir, { project: await stateKey(scratchDir) })).map(item => item.run?.id)
   ).toEqual([unregistered]);
 
-  expect((await list(registeredDir, { all: true })).map(item => item.runId).sort()).toEqual(
+  expect((await list(registeredDir, { all: true })).map(item => item.run?.id).sort()).toEqual(
     [current, renamed, unregistered].sort()
   );
   expect(
-    (await list(registeredDir, { all: true, labels: ['ci=other'] })).map(item => item.runId).sort()
+    (await list(registeredDir, { all: true, labels: ['ci=other'] }))
+      .map(item => item.run?.id)
+      .sort()
   ).toEqual([current, unregistered].sort());
 
   const labeled = await captured(() =>
@@ -288,7 +290,7 @@ test('the queue scopes by project the way archon state names it, across a rename
   expect(one.json).toMatchObject({
     ok: true,
     runId: unregistered,
-    item: { runId: unregistered, revision: 2, labels: { class: 'ci-other' } },
+    item: { run: { id: unregistered }, revision: 2, labels: { class: 'ci-other' } },
   });
 
   const conflicting = await captured(() =>
@@ -414,7 +416,7 @@ test('watch writes only open items in the label filter and failed runs', async (
   );
   expect(code).toBe(0);
   expect(lines).toMatchObject([
-    { type: 'attention', item: { runId: asked, recommendation, labels: { merge: 'pr' } } },
+    { type: 'attention', item: { run: { id: asked }, recommendation, labels: { merge: 'pr' } } },
     { type: 'terminal', runId: failing, status: 'failed' },
   ]);
   expect(lines).toHaveLength(2);
@@ -568,7 +570,7 @@ test('--recommended answers as the declared answerer, and the notices watch says
   );
   expect(code).toBe(0);
   expect(lines).toMatchObject([
-    { type: 'attention', needs: 'answer', item: { runId: asked } },
+    { type: 'attention', needs: 'answer', item: { run: { id: asked } } },
     {
       type: 'resolved',
       needs: 'nothing',
@@ -644,7 +646,7 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
     );
   const runsOf = (lines: Record<string, unknown>[]): unknown[] =>
     lines.flatMap(line =>
-      line.type === 'attention' ? [[(line.item as AttentionQueueItem).runId, line.project]] : []
+      line.type === 'attention' ? [[(line.item as AttentionQueueItem).run?.id, line.project]] : []
     );
   const alphaKey = projectKeyForCodebase(null, alphaDir);
   const alphaProject = {
@@ -664,7 +666,7 @@ test('watch streams the queue by project, refuses list-only flags, and exits 4 o
   expect(runsOf(own.lines)).toEqual([[alpha, alphaProject]]);
   expect(
     (await watch({ project: betaKey })).lines.filter(line => line.type === 'attention')
-  ).toMatchObject([{ project: betaProject, item: { runId: beta } }]);
+  ).toMatchObject([{ project: betaProject, item: { run: { id: beta } } }]);
   expect(runsOf((await watch({ all: true })).lines)).toEqual(
     expect.arrayContaining([
       [alpha, alphaProject],
@@ -821,15 +823,18 @@ test("watch text names a child run's parent and a failure with no recorded error
     parentRunId: 'p1',
     item: {
       kind: 'unreadable',
-      runId: 'child',
-      workflow: 'w',
+      ref: 'child',
       project: null,
-      parentRunId: 'p1',
-      fanOut: null,
       revision: 1,
       labels: {},
       pausedAt: null,
-      context: { artifactsDir: null, transcript: null, workingPath: null, branch: null },
+      run: {
+        id: 'child',
+        workflow: 'w',
+        parentRunId: 'p1',
+        fanOut: null,
+        context: { artifactsDir: null, transcript: null, workingPath: null, branch: null },
+      },
       reason: 'malformed_gate',
       detail: 'gate unreadable',
     },
@@ -1013,7 +1018,7 @@ test.each(['beta', 'scratch'])(
           project,
         })
       );
-      expect(result).toMatchObject({ code: 0, json: { items: [{ runId: alpha.run.id }] } });
+      expect(result).toMatchObject({ code: 0, json: { items: [{ run: { id: alpha.run.id } }] } });
     }
     const counts = await captured(() =>
       workflowAttentionCommand(host, cwd, undefined, {
@@ -1039,7 +1044,7 @@ test.each(['beta', 'scratch'])(
       lines => lines.some(line => line.type === 'ready')
     );
     expect(watch.lines.filter(line => line.type === 'attention')).toMatchObject([
-      { item: { runId: alpha.run.id } },
+      { item: { run: { id: alpha.run.id } } },
     ]);
     await expect(workflowStatusCommand(host, cwd, { all: true })).rejects.toThrow('--all');
     for (const open of [false, true]) {
@@ -1150,7 +1155,9 @@ test.each([true, false].flatMap(all => [undefined, 'project'].map(countBy => ({ 
       expect(result.json).toMatchObject({ ok: true, degraded: warnings });
       if (countBy === undefined)
         expect(result.json).toMatchObject({
-          items: labels.length ? [] : [expect.objectContaining({ runId: run.id })],
+          items: labels.length
+            ? []
+            : [expect.objectContaining({ run: expect.objectContaining({ id: run.id }) })],
         });
       else
         expect(result.json).toMatchObject({

@@ -52,7 +52,7 @@ export interface WorkflowEventFeedFollowOptions {
   /** Called with each page before its deliveries are handled. */
   beginPage?: (page: WorkflowEventPage) => void;
   /** Called after each tick that read and handled every delivery up to the head. */
-  onCaughtUp?: () => void;
+  onCaughtUp?: () => void | Promise<void>;
   /** Called when a `WorkflowEventCursorError` stops the tail. */
   onStopped?: () => void;
   /** Fields every failure log carries, naming the follower. */
@@ -96,7 +96,7 @@ export async function followWorkflowEventFeed(
     try {
       await drainToHead();
       consecutiveFailures = 0;
-      options.onCaughtUp?.();
+      await options.onCaughtUp?.();
     } catch (error) {
       consecutiveFailures += 1;
       const fields = { ...options.logFields, err: error as Error, consecutiveFailures };

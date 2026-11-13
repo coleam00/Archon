@@ -135,9 +135,7 @@ const ofRun =
   (line: AttentionStreamLine): boolean =>
     line.type === type && 'runId' in line && line.runId === runId;
 const itemKey = (line: AttentionStreamLine): unknown =>
-  line.type === 'attention'
-    ? [line.item.runId, 'occurrence' in line.item ? line.item.occurrence : null, line.item.revision]
-    : null;
+  line.type === 'attention' ? [line.item.ref, line.item.revision] : null;
 
 describe('GET /api/runs/attention/stream', () => {
   test('a reconnect with Last-Event-ID misses no change made while disconnected', async () => {
@@ -182,15 +180,15 @@ describe('GET /api/runs/attention/stream', () => {
         .map(event => itemKey(event.line));
     expect(snapshotKeys(first)).toEqual(
       expect.arrayContaining([
-        [held.runId, held.pauseId, 1],
-        [answered.runId, answered.pauseId, 1],
+        [`${held.runId}:${held.pauseId}`, 1],
+        [`${answered.runId}:${answered.pauseId}`, 1],
       ])
     );
     expect(snapshotKeys(first)).toHaveLength(2);
     expect(snapshotKeys(second)).toEqual(
       expect.arrayContaining([
-        [held.runId, held.pauseId, 1],
-        [late.runId, late.pauseId, 1],
+        [`${held.runId}:${held.pauseId}`, 1],
+        [`${late.runId}:${late.pauseId}`, 1],
       ])
     );
     expect(snapshotKeys(second)).toHaveLength(2);
@@ -257,6 +255,7 @@ describe('GET /api/runs/attention/stream', () => {
       type: 'resolved',
       cursor,
       project: null,
+      ref: 'r:o',
       runId: 'r',
       workflow: 'ci',
       parentRunId: null,
@@ -315,11 +314,12 @@ describe('GET /api/runs/attention/stream', () => {
 test('an SSE id names the last event all of whose lines were sent', () => {
   const at = (text: string) => workflowEventCursor(text);
   const run = { project: null, runId: 'r', workflow: 'wf', parentRunId: null };
+  const closed = { ...run, ref: 'r:o', occurrence: 'o' };
   const idOf = attentionSseIds();
   const ids = [
-    idOf({ type: 'unmatched', cursor: at('S'), ...run, occurrence: 'o', revision: 1 }),
+    idOf({ type: 'unmatched', cursor: at('S'), ...closed, revision: 1 }),
     idOf({ type: 'ready', cursor: at('S') }),
-    idOf({ type: 'resolved', cursor: at('X'), ...run, occurrence: 'o', reason: 'withdrawn' }),
+    idOf({ type: 'resolved', cursor: at('X'), ...closed, reason: 'withdrawn' }),
     idOf({
       type: 'terminal',
       cursor: at('X'),
@@ -328,7 +328,7 @@ test('an SSE id names the last event all of whose lines were sent', () => {
       outcome: null,
       cause: null,
     }),
-    idOf({ type: 'resolved', cursor: at('Y'), ...run, occurrence: 'o', reason: 'withdrawn' }),
+    idOf({ type: 'resolved', cursor: at('Y'), ...closed, reason: 'withdrawn' }),
     // Position-stamped lines interleave at the cursor before the delivery in progress.
     idOf({ type: 'owner_lost', cursor: at('X'), ...run, observedStatus: 'running' }),
     idOf({ type: 'degraded', reason: 'run_unreadable', cursor: at('X') }),

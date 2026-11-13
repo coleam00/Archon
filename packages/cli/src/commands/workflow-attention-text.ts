@@ -5,7 +5,12 @@
  * and why, what each option does, and the exact command that answers this occurrence.
  * `--json` remains the complete machine form.
  */
-import type { AttentionQueueItem, AttentionQueueScope } from '@archon/workflows/attention-queue';
+import {
+  isHeldByRun,
+  type AttentionQueueItem,
+  type AttentionQueueScope,
+  type RunAttentionQueueItem,
+} from '@archon/workflows/attention-queue';
 import type { AttentionStreamLine } from '@archon/workflows/attention-watch';
 import { spellWorkflowCommand } from '@archon/workflows/deps';
 import {
@@ -44,70 +49,79 @@ const question = (message: string, detail: AttentionItemDetail): string =>
   detail === 'full' ? message : firstLine(message);
 
 type Ask = Extract<AttentionQueueItem, { kind: 'attention' }>;
+/** A question a paused run holds, which the run's answer commands answer. */
+type RunAsk = Extract<RunAttentionQueueItem, { kind: 'attention' }>;
 
 /** The command that answers `ask` in its form, pinned to the occurrence the reader saw. */
-function answerCommand(ask: Ask): string {
-  const pin = `--occurrence ${ask.occurrence}`;
+function answerCommand(ask: RunAsk): string {
+  const { id, occurrence } = ask.run;
+  const pin = `--occurrence ${occurrence}`;
   switch (ask.form) {
     case 'message':
-      return command(`answer ${ask.runId} ${pin} --text <your answer>`);
+      return command(`answer ${id} ${pin} --text <your answer>`);
     case 'approval':
-      return command(`respond ${ask.runId} approve|reject ${pin} [text]`);
+      return command(`respond ${id} approve|reject ${pin} [text]`);
     case 'select':
       return (
-        command(`respond ${ask.runId} <option> ${pin} [text]`) +
+        command(`respond ${id} <option> ${pin} [text]`) +
         (ask.other === true ? " ('other' needs text)" : '')
       );
     case 'multi_select':
-      return command(
-        `answer ${ask.runId} ${pin} --choose <option> [--choose <option>]… [--text <text>]`
-      );
+      return command(`answer ${id} ${pin} --choose <option> [--choose <option>]… [--text <text>]`);
   }
 }
 
-/** An attention wait: what is asked, recommended and offered, and how to answer it. */
-function askLines(ask: Ask, detail: AttentionItemDetail): string[] {
-  const lines = [`${ask.node}: ${question(ask.message, detail)}`];
-  // A wait paused before answers existed takes none; it resumes.
-  if (legacyOccurrenceStep(ask.occurrence) !== undefined)
-    return [...lines, `when it is done, resume: ${command(`resume ${ask.runId}`)}`];
-  const { recommendation } = ask;
-  if (recommendation !== undefined)
-    lines.push(`recommended: ${oneLine(describeAttentionRecommendation(recommendation))}`);
+/** What a question recommends and offers. */
+function offerLines(ask: Ask): string[] {
+  const lines: string[] = [];
+  if (ask.recommendation !== undefined)
+    lines.push(`recommended: ${oneLine(describeAttentionRecommendation(ask.recommendation))}`);
   for (const option of ask.options) {
     const label = option.label === undefined ? '' : ` (${option.label})`;
     const does = option.does === undefined ? '' : `: ${oneLine(option.does)}`;
     lines.push(`option ${option.id}${label}${does}`);
   }
-  if (recommendation !== undefined)
-    lines.push(
-      `accept the recommendation: ${command(`respond ${ask.runId} --recommended --occurrence ${ask.occurrence} [--text <why>]`)}`
-    );
-  lines.push(`answer: ${answerCommand(ask)}`);
-  if (detail === 'brief') lines.push(`full question: ${command(`attention ${ask.runId}`)}`);
   return lines;
 }
 
-/** What an item of each kind says under its heading line. */
-function itemBody(item: AttentionQueueItem, detail: AttentionItemDetail): string[] {
+/** An attention wait: what is asked, recommended and offered, and how to answer it. */
+function askLines(ask: RunAsk, detail: AttentionItemDetail): string[] {
+  const { id, node, occurrence } = ask.run;
+  const lines = [`${node}: ${question(ask.message, detail)}`];
+  // A wait paused before answers existed takes none; it resumes.
+  if (legacyOccurrenceStep(occurrence) !== undefined)
+    return [...lines, `when it is done, resume: ${command(`resume ${id}`)}`];
+  lines.push(...offerLines(ask));
+  if (ask.recommendation !== undefined)
+    lines.push(
+      `accept the recommendation: ${command(`respond ${id} --recommended --occurrence ${occurrence} [--text <why>]`)}`
+    );
+  lines.push(`answer: ${answerCommand(ask)}`);
+  if (detail === 'brief') lines.push(`full question: ${command(`attention ${id}`)}`);
+  return lines;
+}
+
+/** What an item a paused run holds says under its heading line. */
+function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): string[] {
+  const { run } = item;
   switch (item.kind) {
     case 'attention':
       return askLines(item, detail);
     case 'awaiting_response':
       return [
-        `gate '${item.node}': ${question(item.message, detail)}`,
-        `answer: ${command(`approve ${item.runId} --occurrence ${item.occurrence} [comment]`)}, or reject or respond <decision> the same way`,
-        ...(detail === 'brief' ? [`full question: ${command(`attention ${item.runId}`)}`] : []),
+        `gate '${item.run.node}': ${question(item.message, detail)}`,
+        `answer: ${command(`approve ${run.id} --occurrence ${item.run.occurrence} [comment]`)}, or reject or respond <decision> the same way`,
+        ...(detail === 'brief' ? [`full question: ${command(`attention ${run.id}`)}`] : []),
       ];
     case 'usage_limit':
       return [
-        `${item.node}: provider usage or rate limit reached; tries again by itself at ${item.resetAt}`,
-        `retry sooner: ${command(`resume ${item.runId}`)}, or stop it: ${command(`abandon ${item.runId}`)}`,
+        `${item.run.node}: provider usage or rate limit reached; tries again by itself at ${item.resetAt}`,
+        `retry sooner: ${command(`resume ${run.id}`)}, or stop it: ${command(`abandon ${run.id}`)}`,
       ];
     case 'unreadable':
       return [
         `needs a look: ${item.detail}`,
-        `show more: ${command(`get ${item.runId}`)}, then resume or abandon it`,
+        `show more: ${command(`get ${run.id}`)}, then resume or abandon it`,
       ];
   }
 }
@@ -117,25 +131,39 @@ export function attentionItemLines(
   item: AttentionQueueItem,
   detail: AttentionItemDetail
 ): string[] {
+  const run = isHeldByRun(item) ? item.run : undefined;
   const paused =
     item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
+  const project = item.project?.name ?? '(no project)';
   const lines = [
-    `  ${item.runId}  ${item.workflow}  ${item.project?.name ?? '(no project)'}  ${paused}`,
+    run === undefined
+      ? `  ${item.ref}  ${project}  ${paused}`
+      : `  ${run.id}  ${run.workflow}  ${project}  ${paused}`,
   ];
-  if (item.fanOut !== null)
-    lines.push(`    fan-out item ${String(item.fanOut.index)} of run ${item.fanOut.parentRunId}`);
-  else if (item.parentRunId !== null) lines.push(`    child of run ${item.parentRunId}`);
+  if (run !== undefined && run.fanOut !== null)
+    lines.push(`    fan-out item ${String(run.fanOut.index)} of run ${run.fanOut.parentRunId}`);
+  else if (run !== undefined && run.parentRunId !== null)
+    lines.push(`    child of run ${run.parentRunId}`);
   const labels = Object.entries(item.labels);
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
-  for (const line of itemBody(item, detail)) lines.push(`    ${line}`);
+  // No run holds it, so no run command answers it: the text says what is asked and offered.
+  const body = isHeldByRun(item)
+    ? itemBody(item, detail)
+    : [question(item.message, detail), ...offerLines(item)];
+  for (const line of body) lines.push(`    ${line}`);
   return lines;
 }
 
-type RunLine = Extract<AttentionStreamLine, { runId: string }>;
+/** How a line names the item that closed: by the run that held it, else by its ref. */
+function closedItemName(line: { ref: string; runId?: string }): string {
+  return line.runId === undefined ? `Item ${line.ref}` : `Run ${line.runId}`;
+}
 
-/** What the run is part of, as a trailing sentence; empty when the stream could not read it. */
-function runContextText(line: RunLine): string {
+type RunContext = Pick<Extract<AttentionStreamLine, { runId: string }>, 'workflow' | 'parentRunId'>;
+
+/** What the run is part of, as a trailing sentence; empty when the stream has no run to read. */
+function runContextText(line: RunContext): string {
   if (line.workflow === null) return '';
   return line.parentRunId === null
     ? ` Workflow ${line.workflow}.`
@@ -186,11 +214,11 @@ export function attentionStreamText(
     case 'resolved':
       return [
         (line.reason === 'answered'
-          ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}${answererText(line.answeredBy)}${line.answeredFromRun === null ? '' : ` from run ${line.answeredFromRun.runId} (node ${line.answeredFromRun.nodePath})`}.`
-          : `Run ${line.runId} no longer needs attention.`) + runContextText(line),
+          ? `${closedItemName(line)} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}${answererText(line.answeredBy)}${line.answeredFromRun === null ? '' : ` from run ${line.answeredFromRun.runId} (node ${line.answeredFromRun.nodePath})`}.`
+          : `${closedItemName(line)} no longer needs attention.`) + runContextText(line),
       ];
     case 'unmatched':
-      return [`Run ${line.runId} no longer matches the label filter.${runContextText(line)}`];
+      return [`${closedItemName(line)} no longer matches the label filter.${runContextText(line)}`];
     case 'terminal':
       return [terminalText(line), ...(line.reason ?? []).map(reason => `  ${reason}`)];
     case 'resumed':
