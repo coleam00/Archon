@@ -1,7 +1,8 @@
 import { afterEach, beforeEach, describe, expect, mock, spyOn, test } from 'bun:test';
-import { mkdir, mkdtemp, rm, writeFile } from 'fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
+import { removeTempTree } from '@archon/paths/test-utils';
 import type { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 
@@ -61,6 +62,75 @@ describe('validateWorkflowsCommand', () => {
       assistants: { claude: {} },
       envVars: undefined,
     });
+  });
+
+  function discoverPackWorkflow(): void {
+    const entry = makeTestWorkflowWithSource({
+      name: 'packed',
+      inputs: { invocation: { required: true } },
+      nodes: [{ id: 'run', bash: 'true' }],
+    });
+    entry.workflow.pack = {
+      key: 'example',
+      source: 'project',
+      settings: {
+        ci: { type: 'enum', values: ['forge', 'none'] },
+        merge_lane: { type: 'enum', values: ['auto', 'manual'] },
+        invocation: { type: 'string', required: true },
+      },
+    };
+    mockDiscoverWorkflowsWithConfig.mockResolvedValue({ workflows: [entry], errors: [] });
+  }
+
+  async function writePackSettings(text: string): Promise<string> {
+    const path = join(validationCwd, '.archon', 'packs', 'example.yaml');
+    await mkdir(join(validationCwd, '.archon', 'packs'), { recursive: true });
+    await writeFile(path, text);
+    return path;
+  }
+
+  test('reports every invalid pack setting with its file and allowed values', async () => {
+    discoverPackWorkflow();
+    const path = await writePackSettings('settings:\n  ci: nonne\n  merge_lane: manul\n');
+    expect(await validateWorkflowsCommand(validationCwd)).toBe(1);
+    const output = mockConsoleLog.mock.calls.flat().join('\n');
+    expect(output).toContain(`${path}: setting 'ci' must be one of forge, none, got 'nonne'`);
+    expect(output).toContain(
+      `${path}: setting 'merge_lane' must be one of auto, manual, got 'manul'`
+    );
+  });
+
+  test('reports undeclared pack settings in JSON with the run-start diagnostic', async () => {
+    discoverPackWorkflow();
+    const path = await writePackSettings('settings:\n  unknown: value\n');
+    const write = spyOn(stdout, 'writeStdout').mockResolvedValue(undefined);
+    try {
+      expect(await validateWorkflowsCommand(validationCwd, 'packed', true)).toBe(1);
+      const output = JSON.parse(String(write.mock.calls[0]?.[0]));
+      expect(output.results).toEqual([
+        {
+          workflowName: 'packed',
+          valid: false,
+          issues: [
+            {
+              level: 'error',
+              field: 'pack_settings',
+              message: `${path}: unknown setting 'unknown'; pack 'example' declares 'ci', 'invocation', 'merge_lane'`,
+            },
+          ],
+        },
+      ]);
+      expect(output.summary.errors).toBe(1);
+    } finally {
+      write.mockRestore();
+    }
+  });
+
+  test('accepts valid or absent pack settings without requiring invocation inputs', async () => {
+    discoverPackWorkflow();
+    expect(await validateWorkflowsCommand(validationCwd)).toBe(0);
+    await writePackSettings('settings:\n  ci: none\n  merge_lane: manual\n');
+    expect(await validateWorkflowsCommand(validationCwd, 'packed')).toBe(0);
   });
 
   test('passes effective Claude config dir and user setting source into resource validation', async () => {
@@ -334,7 +404,7 @@ describe('validateWorkflowsCommand', () => {
   afterEach(async () => {
     console.log = originalLog;
     console.error = originalError;
-    await rm(validationCwd, { recursive: true, force: true });
+    await removeTempTree(validationCwd);
   });
 });
 
