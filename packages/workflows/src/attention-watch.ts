@@ -114,7 +114,7 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
       answeredVia: recordSurfaceSchema.nullable(),
       /** Who answered an attention wait, when the answer recorded it; a declared name is a claim. */
       answeredBy: attentionAnswererSchema.nullable(),
-      /** The run and node the answer was given from; null outside a run and for a gate. */
+      /** Null outside a run and for a gate. Reported by the run's environment, not verified. */
       answeredFromRun: attentionAnsweringRunSchema.nullable(),
       /** Null when the row had already moved past the answer when the stream read it. */
       answeredAt: z.string().nullable(),

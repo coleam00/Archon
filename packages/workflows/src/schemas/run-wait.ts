@@ -79,10 +79,11 @@ export const attentionAnswererSchema = z.union([
 export type AttentionAnswerer = z.infer<typeof attentionAnswererSchema>;
 
 /**
- * The run and node an answer was given from. No flag or request field sets it: the
- * surface reads the identity the engine put in the node's environment, which a node
- * process can change, so it is attribution and not proof. It is recorded on the `wait_answered`
- * event only: the stored wait and `attentionAnswererSchema` are strict, so a binary from
+ * The run and node an answer was given from, as reported by the run's environment and
+ * NOT verified. No flag or request field sets it: the surface reads the identity the
+ * engine put in the node's environment, which a node process can rewrite or clear. It is
+ * attribution, never proof: no approval or permission rule may treat it as one. It is
+ * recorded on the `wait_answered` event only: the stored wait and `attentionAnswererSchema` are strict, so a binary from
  * before this field could not read a row that carried it there.
  */
 export const attentionAnsweringRunSchema = z.object({

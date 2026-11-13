@@ -69,6 +69,7 @@ export const attentionAnswerRecordSchema = z.object({
   occurrence: z.string(),
   answer: attentionAnswerSchema,
   by: attentionAnswererSchema.optional(),
+  /** Reported from the run's environment and not verified; attribution, never proof. */
   fromRun: attentionAnsweringRunSchema.optional(),
 });
 

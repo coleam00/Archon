@@ -1352,8 +1352,9 @@ The answer records `answeredVia` and `answeredAt` on the run's `metadata.wait`, 
 answerer as `by`. When the command runs inside a workflow node, the event also carries
 `fromRun: { runId, nodePath }`, the run and node that answered. No flag sets it and `--as`
 does not replace it: Archon reads it from the run identity it put in the node's
-environment. A node process can change its own environment, so it is attribution, not
-proof. Like `approve`,
+environment. A node process can change its own environment and Archon does not verify
+the value, so it is attribution, not proof: do not let an approval or a permission rule
+depend on it. Like `approve`,
 human mode continues the run inline unless a continuation host claims it first, and `--json` records the answer and returns
 `{ ok, runId, action: "answer", answer, workflowName, resumable }` without continuing
 it; `archon serve` or [`workflow wake`](#workflow-wake) continues it. The HTTP equivalent
