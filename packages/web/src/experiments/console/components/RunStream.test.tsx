@@ -136,6 +136,8 @@ describe('RunStream tool rendering', () => {
     stopReason: null,
     numTurns: null,
     tokens: null,
+    output: null,
+    error: null,
   };
   const message: Message = {
     id: 'm1',
@@ -164,6 +166,8 @@ describe('RunStream tool rendering', () => {
           showToolCalls={showToolCalls}
           showSystem={false}
           selectedNodeId={selectedNodeId}
+          live
+          waitingNodeId={null}
         />
       </StreamContextProvider>
     );
@@ -403,6 +407,8 @@ describe('RunStream tool rendering', () => {
             showToolCalls
             showSystem={false}
             selectedNodeId={null}
+            live
+            waitingNodeId={null}
           />
         </StreamContextProvider>
       );
@@ -431,6 +437,8 @@ describe('RunStream tool rendering', () => {
           showToolCalls={false}
           showSystem={false}
           selectedNodeId={null}
+          live
+          waitingNodeId={null}
         />
       </StreamContextProvider>
     );
@@ -466,6 +474,8 @@ test('RunStream renders the diagnostic message of an error event', () => {
         showToolCalls={false}
         showSystem
         selectedNodeId={null}
+        live
+        waitingNodeId={null}
       />
     </StreamContextProvider>
   );
@@ -497,6 +507,8 @@ describe('RunStream cleanup warnings', () => {
           showToolCalls={false}
           showSystem={showSystem}
           selectedNodeId={null}
+          live
+          waitingNodeId={null}
         />
       </StreamContextProvider>
     );
@@ -541,6 +553,8 @@ test.each(
           showToolCalls={false}
           showSystem={false}
           selectedNodeId={null}
+          live
+          waitingNodeId={null}
         />
       </StreamContextProvider>
     );

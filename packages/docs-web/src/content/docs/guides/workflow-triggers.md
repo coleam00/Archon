@@ -22,7 +22,7 @@ Both hosts use the same admission records, so a server and a scheduled CLI comma
 
 ## Find runs needing your input
 
-The console's **Needs your input** banner lists readable runs that need attention, including triggered runs and runs older than the first page of the feed. Approval gates keep their decision and response controls. A `wait: attention` run shows its question with answer controls for its form and an **Abandon** action; a wait paused before attention waits took answers shows **Resume** instead.
+The console's **Needs your input** banner lists readable runs that need attention, including triggered runs and runs older than the first page of the feed. Approval gates keep their decision and response controls. A `wait: attention` run shows its question with answer controls for its form and an **Abandon** action; a wait paused before attention waits took answers shows **Resume** instead. The run's own page shows the same answer controls under its log.
 
 If stored run data cannot be read, the console shows a separate repair advisory without answer or abandon controls. These runs receive no browser or chat attention notice. Operator logs identify the unreadable runs without exposing stored origin contents; repair the data and read again. See [incomplete attention reads](/getting-started/operate/#the-queue-contract).
 

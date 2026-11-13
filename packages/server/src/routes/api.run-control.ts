@@ -263,6 +263,16 @@ export function registerRunControlRoutes(
           `Cannot resume from web UI: the run's parent conversation is not a web conversation. Use \`archon workflow resume ${runId}\` from the CLI.`
         );
       }
+      if (!run.working_path) {
+        // A run that failed at launch never got a checkout. The orchestrator refuses
+        // its resume in the parent conversation (dispatch/request.ts), which the run
+        // page does not show, so refuse here instead of answering 200.
+        return apiError(
+          c,
+          400,
+          `Cannot resume ${run.workflow_name}: the run stopped before it got a checkout, so there is nothing to resume. Start a new run instead.`
+        );
+      }
       const resumeMessage = `/workflow resume ${run.id}`;
       // Resume executes as the user who clicked resume (sender-first, #1982),
       // not the conversation creator. Undefined on solo installs → fallback.

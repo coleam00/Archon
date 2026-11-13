@@ -2,7 +2,7 @@ import type { ReactElement } from 'react';
 import { useNavigate } from 'react-router';
 import { OriginBadge } from './OriginBadge';
 import { RelativeRunStart } from './RelativeRunStart';
-import { runDetailPath, type Run } from '../primitives/run';
+import { runDetailPath, runPhaseStart, type Run } from '../primitives/run';
 import { shortRunId, formatElapsed, elapsedSince, formatCost } from '../lib/format';
 import { useIsDocker, useIdeEnv, openInIde } from '../lib/health';
 import { statusTextClass } from '../lib/run-status';
@@ -35,7 +35,7 @@ export function RecentRunRow({
   const navigate = useNavigate();
   const isDocker = useIsDocker();
   const ideEnv = useIdeEnv();
-  const elapsed = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
+  const elapsed = formatElapsed(elapsedSince(runPhaseStart(run), run.finishedAt ?? undefined));
   const canOpen = !run.id.startsWith('demo-');
   const canOpenIde =
     !isDocker && run.workingPath !== null && run.workingPath !== '' && !run.id.startsWith('demo-');
