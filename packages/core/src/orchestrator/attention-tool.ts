@@ -78,11 +78,6 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
       description:
         "For action=answer: free text recorded with the answer, in the user's own words. Required for a message item and for the option `other`.",
     },
-    confirm: {
-      kind: 'boolean',
-      description:
-        'For action=answer: true records the answer. Omit first to get a preview to check with the user.',
-    },
   },
   required: ['action'],
 });
@@ -103,12 +98,18 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
  *
  * An answer is recorded and nothing more: an answered pause is a due continuation that a
  * continuation host continues, so one turn can answer any number of items.
+ *
+ * There is no confirm step. A two-call preview was tried and the model passed the confirm
+ * on its first call every time, so it protected nothing while the description promised it
+ * did. What holds is the permission check, the record of who answered through what, and a
+ * result that repeats what was answered. The description's "one instruction answers one
+ * item" is guidance to the model, not a guard.
  */
 export function buildAttentionTool(ctx: AttentionToolContext): NativeTool {
   return {
     name: 'attention',
     description:
-      'The attention queue: runs paused for a person, across projects. action=list shows each item with what it asks, its options and recommendation; action=answer answers one. Answering needs confirm=true.',
+      'The attention queue: runs paused for a person, across projects. action=list shows each item with what it asks, its options and recommendation; action=answer answers one: the answer is recorded at once and cannot be taken back, so answer only the item the user means. One instruction from the user answers one item, unless they name several.',
     inputSchema: INPUT_SCHEMA,
     handler: async (input): Promise<string> => {
       const action = typeof input.action === 'string' ? input.action : '';
@@ -289,13 +290,6 @@ async function answerItem(
   if (typeof item === 'string') return item;
   const answer = answerFor(item, input);
   if (typeof answer === 'string') return answer;
-  if (input.confirm !== true) {
-    log.info({ runId: item.runId }, 'attention_tool.confirm_preview');
-    return (
-      `This will answer run ${item.runId} (${item.workflow}) with ${describe(answer)}. It asks:\n> ${item.message.replace(/\n/g, '\n> ')}\n` +
-      'Confirm with the user, then call attention again with confirm: true to record it.'
-    );
-  }
   return recordAnswer(ctx, item, answer);
 }
 
@@ -329,7 +323,8 @@ async function recordAnswer(
   // Judged on the run as it was answered: a host may already have continued it by now.
   const continues =
     continuablePause(holder) !== undefined
-      ? `A running Archon server continues the run on its own. With no server running, continue it with \`archon workflow resume ${item.runId}\`.`
+      ? `The run continues on its own while an Archon server is running; \`archon workflow resume ${item.runId}\` continues it otherwise.`
       : `It does not continue from here: run \`archon workflow resume ${item.runId}\` from the CLI in its project.`;
-  return `Answered ${subject} with ${describe(answer)}. ${continues}`;
+  // The result repeats what was asked, so the user sees at once what the answer went to.
+  return `Answered ${subject} with ${describe(answer)}. It asked:\n> ${item.message.replace(/\n/g, '\n> ')}\n${continues}`;
 }
