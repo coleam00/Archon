@@ -427,7 +427,10 @@ export function createTransactionView(
         .filter(
           run =>
             isTerminalRunStatus(run.status) &&
-            (run.active_phase_started_at ?? run.started_at).getTime() <
+            Math.max(
+              run.started_at.getTime(),
+              run.active_phase_started_at?.getTime() ?? -Infinity
+            ) <
               Date.now() - days * 86_400_000
         )
         .map(run => run.id);

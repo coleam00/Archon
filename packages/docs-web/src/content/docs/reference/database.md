@@ -409,8 +409,10 @@ older writer that advances `started_at` without updating the phase value still o
 correctly when read by an upgraded executor. Both API run lists expose the nullable phase
 timestamp as ISO text.
 
-Workflow cleanup ages terminal runs by `active_phase_started_at` when present,
-otherwise by `started_at`, in PostgreSQL, SQLite and file stores. A run created
+Workflow cleanup ages terminal runs by the later of `started_at` and
+`active_phase_started_at`, falling back to `started_at` when the phase is null, in
+PostgreSQL, SQLite and file stores. This also retains runs recently resumed by an
+older writer that advanced `started_at` without updating the phase timestamp. A run created
 10 days ago, resumed yesterday and finished today survives `archon workflow cleanup 7`.
 This preserves cleanup's active-phase age behavior.
 

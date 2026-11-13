@@ -258,6 +258,7 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
         `DELETE FROM remote_agent_workflow_events WHERE workflow_run_id IN (
           SELECT id FROM remote_agent_workflow_runs
           WHERE status IN ('completed', 'failed', 'cancelled')
+            AND started_at < ${cutoff}
             AND COALESCE(active_phase_started_at, started_at) < ${cutoff}
         )`,
         [olderThanDays]
@@ -265,6 +266,7 @@ export async function deleteOldWorkflowRuns(olderThanDays: number): Promise<{ co
       const result = await query(
         `DELETE FROM remote_agent_workflow_runs
          WHERE status IN ('completed', 'failed', 'cancelled')
+           AND started_at < ${cutoff}
            AND COALESCE(active_phase_started_at, started_at) < ${cutoff}`,
         [olderThanDays]
       );

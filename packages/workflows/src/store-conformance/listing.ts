@@ -317,7 +317,7 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
       expect(await rejection(store.deleteOldWorkflowRuns(-1))).toBeInstanceOf(Error);
     });
     test.each(['completed', 'failed', 'cancelled'] as const)(
-      'cleanup ages %s runs by their latest active phase, falling back to creation',
+      'cleanup ages %s runs by their latest active phase, including older writers',
       async status => {
         const daysAgo = (days: number) => new Date(Date.now() - days * 86_400_000);
         const finish = async (id: string) => {
@@ -341,6 +341,15 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
         });
         await finish(oldPhase.id);
 
+        const olderWriter = await running(store);
+        await store.failWorkflowRun(olderWriter.id, 'retry');
+        await store.resumeWorkflowRun(olderWriter.id);
+        await harness.backdate(olderWriter.id, {
+          started_at: daysAgo(1),
+          active_phase_started_at: daysAgo(8),
+        });
+        await finish(olderWriter.id);
+
         const oldLegacy = await running(store);
         await harness.backdate(oldLegacy.id, { started_at: daysAgo(10) });
         await finish(oldLegacy.id);
@@ -348,7 +357,7 @@ export function describeListingConformance(getHarness: () => WorkflowStoreHarnes
         await harness.backdate(recentLegacy.id, { started_at: daysAgo(1) });
         await finish(recentLegacy.id);
 
-        const retained = [resumed, recentLegacy];
+        const retained = [resumed, recentLegacy, olderWriter];
         const before = await Promise.all(
           retained.map(async run => ({
             run: await store.getWorkflowRun(run.id),

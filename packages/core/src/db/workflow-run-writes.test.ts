@@ -236,6 +236,7 @@ describe('workflow run writes', () => {
         expect(sql).toContain(
           `COALESCE(active_phase_started_at, started_at) < ${mockPostgresDialect.nowMinusDays(1)}`
         );
+        expect(sql).toContain(`AND started_at < ${mockPostgresDialect.nowMinusDays(1)}`);
         expect(params).toEqual([7]);
       }
     });
