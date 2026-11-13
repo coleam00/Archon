@@ -3,7 +3,7 @@ import { useNavigate, useParams, useSearchParams } from 'react-router';
 import { EmptyState } from '../components/EmptyState';
 import { ActiveRunCard } from '../components/ActiveRunCard';
 import { RecentRunRow } from '../components/RecentRunRow';
-import { FilterChips, type Filter } from '../components/FilterChips';
+import { FilterChips, FILTER_ORDER, type Filter } from '../components/FilterChips';
 import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { DraftRunCard } from '../components/DraftRunCard';
 import { PendingInputBanner } from '../components/PendingInputBanner';
@@ -12,6 +12,7 @@ import { K, type Scope } from '../store/keys';
 import { useKeymap, type Binding } from '../lib/keymap';
 import * as skill from '../skills';
 import { runDetailPath, type Run } from '../primitives/run';
+import { ensureUtc } from '../lib/format';
 import type { RunCounts } from '../skills/runs';
 import type { Project } from '../primitives/project';
 
@@ -174,10 +175,27 @@ function countsFromRuns(runs: Run[]): RunCounts {
   return out;
 }
 
-function filterRuns(runs: Run[], filter: Filter, query: string): Run[] {
+/**
+ * The runs a tab shows. The Running tab also keeps a run that finished after
+ * `watchingSince` (when this page opened), because a short run can finish before the
+ * feed first loads it: without that, starting one leaves the tab empty and the only
+ * sign of it is a counter on another tab.
+ */
+export function filterRuns(
+  runs: Run[],
+  filter: Filter,
+  query: string,
+  watchingSince: number
+): Run[] {
   const q = query.trim().toLowerCase();
   return runs.filter(r => {
-    if (filter !== 'all' && r.status !== filter) return false;
+    if (filter !== 'all' && r.status !== filter) {
+      const finishedWhileWatching =
+        filter === 'running' &&
+        r.finishedAt !== null &&
+        new Date(ensureUtc(r.finishedAt)).getTime() >= watchingSince;
+      if (!finishedWhileWatching) return false;
+    }
     if (q.length === 0) return true;
     return (
       r.workflow.toLowerCase().includes(q) ||
@@ -215,6 +233,8 @@ interface RunsFeedProps {
   selectedRunId: string | null;
   /** Run ids whose actions are currently shown in the pending-input banner. */
   promotedRunIds: ReadonlySet<string>;
+  /** Heading of the finished runs: on the Running tab they are the ones that just ended. */
+  recentLabel: string;
 }
 
 /**
@@ -233,6 +253,7 @@ function RunsFeed({
   draftProject,
   selectedRunId,
   promotedRunIds,
+  recentLabel,
 }: RunsFeedProps): ReactElement {
   const active = runs.filter(r => r.status === 'running' || r.status === 'paused');
   const recent = runs.filter(
@@ -265,7 +286,7 @@ function RunsFeed({
 
       {recent.length > 0 ? (
         <section>
-          <SectionHeader label="Recent" count={recent.length} />
+          <SectionHeader label={recentLabel} count={recent.length} />
           <div className="flex flex-col overflow-hidden rounded-console-12 border border-border bg-surface">
             {recent.map(run => (
               <RecentRunRow
@@ -323,7 +344,18 @@ export function RunsPage(): ReactElement {
 
   const allRuns = [...demoRuns, ...realRuns];
   const counts = demoMode ? mergeCounts(realCounts, demoCounts) : realCounts;
-  const runs = useMemo(() => filterRuns(allRuns, filter, query), [allRuns, filter, query]);
+  // Whole seconds, because the server's finish times carry no finer resolution.
+  const [watchingSince] = useState(() => Math.floor(Date.now() / 1000) * 1000);
+  const runs = useMemo(
+    () => filterRuns(allRuns, filter, query, watchingSince),
+    [allRuns, filter, query, watchingSince]
+  );
+
+  // Runs the search matches in any tab, for the hint under an empty filtered result.
+  const elsewhere = useMemo(
+    () => filterRuns(allRuns, 'all', query, watchingSince).length,
+    [allRuns, query, watchingSince]
+  );
 
   const pending = usePendingInput(demoRuns, scope);
   const selectedRunId = useRunsKeymap(runs, setFilter, searchRef);
@@ -367,7 +399,16 @@ export function RunsPage(): ReactElement {
         onDismiss={pending.dismiss}
       />
 
-      <div className="flex-1 overflow-y-auto px-7.5 pb-7.5 pt-5.5">
+      <div className="min-h-0 flex-1 overflow-y-auto px-7.5 pb-7.5 pt-5.5">
+        <SearchElsewhereHint
+          query={query}
+          filter={filter}
+          shown={runs.length}
+          inAll={elsewhere}
+          onShowAll={() => {
+            setFilter('all');
+          }}
+        />
         <RunsFeedBody
           feedError={demoMode ? undefined : error}
           loading={loading && !demoMode}
@@ -380,6 +421,35 @@ export function RunsPage(): ReactElement {
         />
       </div>
     </section>
+  );
+}
+
+interface SearchElsewhereHintProps {
+  query: string;
+  filter: Filter;
+  /** Runs the search matches in the current tab. */
+  shown: number;
+  /** Runs the search matches across every tab. */
+  inAll: number;
+  onShowAll: () => void;
+}
+
+/** A search that finds nothing in the current tab says where its matches are. */
+function SearchElsewhereHint({
+  query,
+  filter,
+  shown,
+  inAll,
+  onShowAll,
+}: SearchElsewhereHintProps): ReactElement | null {
+  if (query.trim() === '' || filter === 'all' || shown > 0 || inAll === 0) return null;
+  return (
+    <p className="mb-4 text-console-12 text-text-secondary">
+      No {filter} run matches "{query.trim()}". {inAll} in other tabs.{' '}
+      <button type="button" onClick={onShowAll} className="underline hover:text-text-primary">
+        Show all
+      </button>
+    </p>
   );
 }
 
@@ -539,11 +609,13 @@ function useRunsKeymap(
           searchRef.current?.select();
         },
       },
-      { keys: ['1'], label: 'Filter: running', run: (): void => filterTo('running') },
-      { keys: ['2'], label: 'Filter: paused', run: (): void => filterTo('paused') },
-      { keys: ['3'], label: 'Filter: failed', run: (): void => filterTo('failed') },
-      { keys: ['4'], label: 'Filter: completed', run: (): void => filterTo('completed') },
-      { keys: ['5'], label: 'Filter: all', run: (): void => filterTo('all') },
+      ...FILTER_ORDER.map(
+        (filter, index): Binding => ({
+          keys: [(index + 1).toString()],
+          label: `Filter: ${filter}`,
+          run: (): void => filterTo(filter),
+        })
+      ),
     ];
   }, [navigate, runs, selectedIndex, selectedRun, setFilter, searchRef]);
   useKeymap({ bindings });
@@ -626,7 +698,7 @@ function RunsHeader({
   );
 }
 
-interface RunsFeedBodyProps extends Omit<RunsFeedProps, 'showProject'> {
+interface RunsFeedBodyProps extends Omit<RunsFeedProps, 'showProject' | 'recentLabel'> {
   /** The feed's load error; demo mode passes none, since its mocks render regardless. */
   feedError: Error | undefined;
   loading: boolean;
@@ -663,6 +735,7 @@ function RunsFeedBody({
       draftProject={draftProject}
       selectedRunId={selectedRunId}
       promotedRunIds={promotedRunIds}
+      recentLabel={filter === 'running' ? 'Just finished' : 'Recent'}
     />
   );
 }
