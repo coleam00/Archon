@@ -45,18 +45,36 @@ export function RunFinishedLine({ run }: { run: Run }): ReactElement | null {
   const cost =
     run.costUsd !== null ? ` · Reported cost ${formatCost(run.costUsd)} (may be partial)` : '';
 
+  // The engine's own account of why the run failed. A failed node shows its error on
+  // its own row; a launch failure has no node and no message to carry the reason, so
+  // without this the log ends on a bare "Failed".
+  const record = run.status === 'failed' ? run.terminalRecord : null;
+  const failure = record?.first_failed_node == null ? (record?.error ?? null) : null;
+
   return (
-    <div className="mt-2 flex flex-wrap items-center gap-2 py-1 text-console-11">
-      <div className="h-px flex-1 bg-border/50" aria-hidden />
-      <span aria-hidden className={statusTextClass[run.status]}>
-        {GLYPH[run.status]}
-      </span>
-      <span className={`font-medium ${statusTextClass[run.status]}`}>{LABEL[run.status]}</span>
-      <RunOutcomeBadge outcome={run.outcome} terminalRecord={run.terminalRecord} />
-      <span className="font-mono text-text-tertiary">
-        in {duration}
-        {cost}
-      </span>
-    </div>
+    <>
+      <div className="mt-2 flex flex-wrap items-center gap-2 py-1 text-console-11">
+        <div className="h-px flex-1 bg-border/50" aria-hidden />
+        <span aria-hidden className={statusTextClass[run.status]}>
+          {GLYPH[run.status]}
+        </span>
+        <span className={`font-medium ${statusTextClass[run.status]}`}>{LABEL[run.status]}</span>
+        <RunOutcomeBadge outcome={run.outcome} terminalRecord={run.terminalRecord} />
+        <span className="font-mono text-text-tertiary">
+          in {duration}
+          {cost}
+        </span>
+      </div>
+      {failure !== null && failure !== '' ? (
+        <div role="alert" className="mt-2 rounded border border-error/30 bg-error/[0.06] px-4 py-3">
+          <p className="text-console-10 font-semibold uppercase tracking-console-label text-error">
+            Why it failed
+          </p>
+          <p className="mt-1 whitespace-pre-wrap font-mono text-console-12 text-text-primary [overflow-wrap:anywhere]">
+            {failure}
+          </p>
+        </div>
+      ) : null}
+    </>
   );
 }
