@@ -8,63 +8,46 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { execSync } from 'child_process';
 import { execFileAsync } from '@archon/git';
+import { loadGlobalConfig } from '@archon/core/config/config-loader';
+import { PI_PROVIDER_ENV_VARS } from '@archon/providers';
 import { CODEX_SETUP_ENV } from '@archon/providers/codex/setup-env';
+import { parsePiModelRef } from '@archon/providers/pi/model-ref';
 import { getArchonHome as pathsGetArchonHome } from '@archon/paths';
+import { type Document, isMap, parseDocument, type YAMLMap } from 'yaml';
 import { cancelSetup, exitSetup, type CodexTokens } from './setup-shared';
 
-// Pi backends offered by the setup wizard.
+// Pi backends offered by the setup wizard. Each backend's key variable comes from
+// Pi's own map (`piBackendEnvVar`), so setup writes the variable Pi actually reads.
 export const PI_BACKENDS = [
-  {
-    id: 'anthropic',
-    envVar: 'ANTHROPIC_API_KEY',
-    label: 'Anthropic',
-    hint: 'claude-haiku-4-5, claude-opus-4-7, etc.',
-  },
-  { id: 'openai', envVar: 'OPENAI_API_KEY', label: 'OpenAI', hint: 'gpt-4o, gpt-5.6-sol, etc.' },
-  {
-    id: 'google',
-    envVar: 'GEMINI_API_KEY',
-    label: 'Google (Gemini)',
-    hint: 'gemini-2.0-flash, etc.',
-  },
-  {
-    id: 'openrouter',
-    envVar: 'OPENROUTER_API_KEY',
-    label: 'OpenRouter',
-    hint: 'qwen/qwen3-coder, many others',
-  },
-  {
-    id: 'groq',
-    envVar: 'GROQ_API_KEY',
-    label: 'Groq',
-    hint: 'llama-3.3-70b-versatile, etc.',
-  },
-  { id: 'mistral', envVar: 'MISTRAL_API_KEY', label: 'Mistral', hint: 'mistral-large, etc.' },
-  { id: 'xai', envVar: 'XAI_API_KEY', label: 'xAI (Grok)', hint: 'grok-3, etc.' },
-  {
-    id: 'cerebras',
-    envVar: 'CEREBRAS_API_KEY',
-    label: 'Cerebras',
-    hint: 'llama3.1-70b, etc.',
-  },
-  {
-    id: 'huggingface',
-    envVar: 'HUGGINGFACE_API_KEY',
-    label: 'Hugging Face',
-    hint: 'inference API',
-  },
+  { id: 'anthropic', label: 'Anthropic', hint: 'claude-haiku-4-5, claude-opus-4-7, etc.' },
+  { id: 'openai', label: 'OpenAI', hint: 'gpt-4o, gpt-5.6-sol, etc.' },
+  { id: 'google', label: 'Google (Gemini)', hint: 'gemini-2.5-flash, etc.' },
+  { id: 'openrouter', label: 'OpenRouter', hint: 'qwen/qwen3-coder, many others' },
+  { id: 'groq', label: 'Groq', hint: 'llama-3.3-70b-versatile, etc.' },
+  { id: 'mistral', label: 'Mistral', hint: 'mistral-large, etc.' },
+  { id: 'xai', label: 'xAI (Grok)', hint: 'grok-4.7, etc.' },
+  { id: 'cerebras', label: 'Cerebras', hint: 'gpt-oss-120b, etc.' },
+  { id: 'huggingface', label: 'Hugging Face', hint: 'inference API' },
 ] as const;
 
-const PI_DEFAULT_MODELS: Record<string, string> = {
+/** The env var Pi reads for a backend's key, from Pi's generated vendor map. */
+export function piBackendEnvVar(backendId: string): string {
+  const envVar = PI_PROVIDER_ENV_VARS[backendId];
+  if (!envVar) throw new Error(`Pi has no API key variable for backend '${backendId}'`);
+  return envVar;
+}
+
+/** Model setup saves for each backend; each one must be in Pi's built-in catalog. */
+export const PI_DEFAULT_MODELS: Record<string, string> = {
   anthropic: 'anthropic/claude-haiku-4-5',
   openai: 'openai/gpt-4o',
-  google: 'google/gemini-2.0-flash',
+  google: 'google/gemini-2.5-flash',
   openrouter: 'openrouter/qwen/qwen3-coder',
   groq: 'groq/llama-3.3-70b-versatile',
   mistral: 'mistral/mistral-large-latest',
-  xai: 'xai/grok-3',
-  cerebras: 'cerebras/llama3.1-70b',
-  huggingface: 'huggingface/Qwen/Qwen2.5-72B-Instruct',
+  xai: 'xai/grok-4.7',
+  cerebras: 'cerebras/gpt-oss-120b',
+  huggingface: 'huggingface/MiniMaxAI/MiniMax-M2.5',
 };
 
 /**
@@ -188,15 +171,31 @@ function tryReadCodexAuth(): CodexTokens | null {
 }
 
 /**
- * Collect Pi backend selection and optional API key.
+ * Collect the Pi model setup saves and how Pi authenticates to its backend.
+ *
+ * The model is settled first: when `~/.archon/config.yaml` already sets a
+ * different Pi model, the user keeps it or switches to the chosen backend's
+ * default. The credential question then names the backend of the model runs
+ * will use, so a kept model for another backend is not checked against the
+ * wrong key. Cancelling here stops setup before anything is written.
+ *
+ * Pi reads its own `auth.json` (written by `pi /login`), so a user who has
+ * already logged in needs no key in Archon's `.env`. The key prompt is only
+ * shown when the user says they want to provide one.
  *
  * The wizard configures one Pi backend per run; users with multiple backends
  * can re-run setup or hand-edit `.env` and `~/.archon/config.yaml`.
  */
 export async function collectPiConfig(): Promise<{
   model: string;
-  apiKey?: string;
+  /**
+   * The key variable for the model's backend, set for both choices so setup can check it
+   * for conflicts. Absent when Pi has no key variable for that backend.
+   */
   apiKeyEnvVar?: string;
+  /** True when the user chose Pi's own login. */
+  piLogin: boolean;
+  apiKey?: string;
 }> {
   const backendChoice = await select({
     message: 'Which Pi backend will you use as the default?',
@@ -212,22 +211,116 @@ export async function collectPiConfig(): Promise<{
     cancel('Unknown Pi backend selected.');
     exitSetup(1);
   }
-  const model = PI_DEFAULT_MODELS[backendChoice] ?? `${backendChoice}/default`;
+  const model = await resolvePiModel(
+    PI_DEFAULT_MODELS[backendChoice] ?? `${backendChoice}/default`,
+    backend.label
+  );
+  const provider = parsePiModelRef(model)?.provider;
+  const envVar = provider ? PI_PROVIDER_ENV_VARS[provider] : undefined;
+  if (!provider || !envVar) {
+    log.info(
+      `Pi has no API key variable for ${provider ?? model}, so setup does not ask for a key. Pi uses its own credentials for it.`
+    );
+    return { model, piLogin: false };
+  }
+  const label = PI_BACKENDS.find(b => b.id === provider)?.label ?? provider;
+
+  const authType = await select({
+    message: `How do you want Pi to authenticate with ${label}?`,
+    options: [
+      {
+        value: 'piLogin',
+        label: "Use Pi's own login from `pi /login`",
+        hint:
+          provider === 'anthropic'
+            ? 'API key in auth.json only. A Claude Pro/Max login through Pi is not supported; use `provider: claude` for that'
+            : 'Uses the credential Pi already keeps in its auth.json',
+      },
+      { value: 'apiKey', label: `Provide ${envVar}` },
+    ],
+  });
+
+  if (isCancel(authType)) cancelSetup();
+  if (authType === 'piLogin') return { model, apiKeyEnvVar: envVar, piLogin: true };
 
   const apiKey = await password({
-    message: `Enter ${backend.envVar} (press Enter to skip — you can set it later):`,
+    message: `Enter ${envVar} (press Enter to skip — you can set it later):`,
     // Empty input is allowed; users can configure the key later by hand.
     validate: () => undefined,
   });
 
   if (isCancel(apiKey)) cancelSetup();
 
-  const key = apiKey.trim();
+  // clack's password prompt resolves `undefined`, not '', when Enter is
+  // pressed on an empty field.
+  const key = (apiKey ?? '').trim();
 
   return {
     model,
-    ...(key.length > 0 ? { apiKey: key, apiKeyEnvVar: backend.envVar } : {}),
+    apiKeyEnvVar: envVar,
+    piLogin: false,
+    ...(key.length > 0 ? { apiKey: key } : {}),
   };
+}
+
+/**
+ * The Pi model setup will save: `chosen`, or the different model already in
+ * `~/.archon/config.yaml` when the user keeps it. Read through the config loader
+ * runs use, so the saved value is the one a run would see.
+ */
+async function resolvePiModel(chosen: string, chosenLabel: string): Promise<string> {
+  const configPath = join(pathsGetArchonHome(), 'config.yaml');
+  let saved: string | undefined;
+  try {
+    const model = (await loadGlobalConfig(true, { readOnly: true })).assistants?.pi?.model;
+    saved = typeof model === 'string' ? model.trim() : undefined;
+  } catch (error) {
+    // The loader also refuses blocks unrelated to Pi, and the model write edits the raw YAML
+    // without asking, so read the saved model from the raw YAML to keep asking before replacing it.
+    log.warning(
+      `Could not load ${configPath} (${(error as Error).message}). Setup reads its saved Pi model from the file as written.`
+    );
+    saved = readRawPiModel(configPath);
+  }
+  if (!saved || saved === chosen) return chosen;
+
+  const savedProvider = parsePiModelRef(saved)?.provider;
+  const sameBackend = savedProvider === parsePiModelRef(chosen)?.provider;
+  const choice = await select({
+    message: `${configPath} already sets the Pi model to ${saved}. Which one should Archon use?`,
+    options: [
+      {
+        value: 'keep',
+        label: `Keep ${saved}`,
+        ...(sameBackend
+          ? {}
+          : { hint: `Pi then authenticates with ${savedProvider ?? saved}, not ${chosenLabel}` }),
+      },
+      { value: 'switch', label: `Switch to ${chosen}` },
+    ],
+    // A saved model for the same backend is likely a deliberate pick; one for another
+    // backend would leave the backend just chosen unused.
+    initialValue: sameBackend ? 'keep' : 'switch',
+  });
+  if (isCancel(choice)) cancelSetup();
+  return choice === 'keep' ? saved : chosen;
+}
+
+/**
+ * `assistants.pi.model` read the way `writeHomePiModelConfig` reads it. Undefined when the
+ * file cannot be read or parsed, which is safe because the writer then leaves it alone.
+ */
+function readRawPiModel(configPath: string): string | undefined {
+  let content: string;
+  try {
+    content = readFileSync(configPath, 'utf-8');
+  } catch {
+    return undefined;
+  }
+  const doc = parseDocument(content);
+  if (doc.errors.length > 0) return undefined;
+  const model = doc.getIn(['assistants', 'pi', 'model']);
+  return typeof model === 'string' ? model.trim() : undefined;
 }
 
 /**
@@ -461,42 +554,53 @@ export async function collectCodexAuth(): Promise<CodexTokens | null> {
 }
 
 /**
- * Write the Pi model ref to `~/.archon/config.yaml` so Pi knows which backend
- * to use by default. Three branches:
- *   1. File already contains `pi:` — skip (idempotent; avoids duplicate blocks
- *      on re-runs or when the user has already configured this manually).
- *   2. File contains `assistants:` but no `pi:` — show a manual `note()`
- *      because we can't safely splice into existing YAML indentation.
- *   3. Otherwise — append a fresh `assistants: pi: model:` block.
+ * Set `assistants.pi.model` in `~/.archon/config.yaml`, keeping every other
+ * setting and comment. The model was already agreed in `collectPiConfig`, which
+ * asks before replacing a different saved model, so this writes without asking.
+ * A file setup cannot parse, or an `assistants` value that is not a mapping,
+ * is left alone with a note showing the YAML to add.
  */
-export function writeHomePiModelConfig(model: string): void {
+export async function writeHomePiModelConfig(model: string): Promise<void> {
   // Use the paths-package version of getArchonHome so Docker (/.archon) is
   // handled correctly.
   const home = pathsGetArchonHome();
   mkdirSync(home, { recursive: true });
   const configPath = join(home, 'config.yaml');
   const existing = existsSync(configPath) ? readFileSync(configPath, 'utf-8') : '';
+  const doc = parseDocument(existing);
+  const manualNote = (): void =>
+    note(`Add to ${configPath}:\n\nassistants:\n  pi:\n    model: "${model}"`, 'Pi model config');
 
-  // Use a regex to avoid false positives from substrings like `api:`.
-  if (/^\s*pi\s*:/m.test(existing)) {
-    log.info(
-      `Pi model already present in ${configPath} — edit assistants.pi.model manually to change.`
-    );
+  if (doc.errors.length > 0) {
+    log.warning(`Could not parse ${configPath}; the Pi model was not written.`);
+    manualNote();
     return;
   }
-
-  const escaped = model.replace(/"/g, '\\"');
-
-  if (existing.includes('assistants:')) {
-    // Don't risk splicing into the user's existing assistants: block — show
-    // them the YAML to paste in by hand instead of corrupting indentation.
-    note(
-      `Add to ${configPath} under assistants:\n\n  pi:\n    model: "${escaped}"`,
-      'Pi model config'
-    );
+  const current = doc.getIn(['assistants', 'pi', 'model']);
+  if (current === model) {
+    log.info(`Pi model already set to ${model} in ${configPath}`);
     return;
   }
-
-  writeFileSync(configPath, existing + `\nassistants:\n  pi:\n    model: "${escaped}"\n`);
+  if (!setPiModel(doc, model)) {
+    manualNote();
+    return;
+  }
+  writeFileSync(configPath, doc.toString());
   log.info(`Pi model written to ${configPath}`);
+}
+
+/** Create any missing level of `assistants.pi` and set its model. False when a level is not a mapping. */
+function setPiModel(doc: Document, model: string): boolean {
+  if (doc.contents === null) doc.contents = doc.createNode({});
+  if (!isMap(doc.contents)) return false;
+  const childMap = (map: YAMLMap, key: string): YAMLMap | undefined => {
+    if (map.get(key) == null) map.set(key, doc.createNode({}));
+    const child = map.get(key);
+    return isMap(child) ? child : undefined;
+  };
+  const assistants = childMap(doc.contents, 'assistants');
+  const pi = assistants && childMap(assistants, 'pi');
+  if (!pi) return false;
+  pi.set('model', model);
+  return true;
 }

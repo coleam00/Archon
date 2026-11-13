@@ -29,6 +29,8 @@ export interface SetupConfig {
     piApiKey?: string;
     /** Canonical env var name for the chosen Pi backend, e.g. 'ANTHROPIC_API_KEY' */
     piApiKeyEnvVar?: string;
+    /** True when the user chose Pi's own login (`pi /login`) over a key */
+    piLogin?: boolean;
     defaultAssistant: string | undefined;
     /** Gates the config.yaml write so an empty selection preserves the saved default. */
     defaultAssistantSelected?: boolean;

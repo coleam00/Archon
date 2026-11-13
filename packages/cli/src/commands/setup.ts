@@ -46,6 +46,7 @@ import {
   type SetupOptions,
 } from './setup-shared';
 import { writeHomePiModelConfig } from './setup-provider-auth';
+import { reconcilePiCredential } from './setup-pi-credential';
 import {
   checkExistingConfig,
   generateEnvContent,
@@ -149,6 +150,11 @@ export async function setupCommand(options: SetupOptions): Promise<number> {
   }
 }
 
+/**
+ * The wizard in order: add providers and collect answers, settle credential conflicts,
+ * write the env file and config, then finish the project steps. Every credential conflict
+ * is settled before the env file is written, so cancelling one leaves that file unchanged.
+ */
 async function runSetup(options: SetupOptions): Promise<void> {
   if (options.spawn) {
     await openSetupTerminal(options);
@@ -167,6 +173,10 @@ async function runSetup(options: SetupOptions): Promise<void> {
   const mode = await selectSetupMode(existing, force);
   const s = spinner();
   const ai = await collectAIConfig(options);
+  const inheritedEnv = options.inheritedEnv ?? process.env;
+  // Right after the Pi answers, so a conflict is settled before the platform questions
+  // and cancelling here doesn't throw away the platform and bot-name answers.
+  const replaceKeys = await reconcilePiCredential(ai, target, inheritedEnv);
   let config: SetupConfig;
   if (mode === 'add') {
     config = await collectAdditionalConfig(ai, existing, force, s);
@@ -176,16 +186,9 @@ async function runSetup(options: SetupOptions): Promise<void> {
     await collectPlatformCredentials(config, platforms);
     config.botDisplayName = await collectBotDisplayName();
   }
-  const writeResult = await writeConfiguration(
-    config,
-    target,
-    options.inheritedEnv ?? process.env,
-    s
-  );
+  const writeResult = await writeConfiguration(config, target, inheritedEnv, replaceKeys, s);
 
-  writePiModelPreference(config.ai);
-  // The Pi writer must run first: it refuses to append once an assistants block
-  // exists, and writeInstallDefaults can materialize that block.
+  await writePiModelPreference(config.ai);
   await writeInstallDefaults(config.ai);
   if (config.ai.defaultAssistant !== undefined) await confirmModelTiers(config.ai.defaultAssistant);
   reportEnvWrite(writeResult);
@@ -325,10 +328,15 @@ async function collectPlatformCredentials(
   }
 }
 
+/**
+ * Settle GitHub auth against the saved env files, then write the scoped env file. Saved
+ * values for `replaceKeys` are dropped first so the user's Pi choice takes effect.
+ */
 async function writeConfiguration(
   config: SetupConfig,
   target: Parameters<typeof reconcileGitHubAuth>[1],
   inheritedEnv: NodeJS.ProcessEnv,
+  replaceKeys: readonly string[],
   s: ReturnType<typeof spinner>
 ): Promise<ReturnType<typeof writeScopedEnv>> {
   const { scope, force, repoPath, targetEnvPath } = target;
@@ -351,6 +359,7 @@ async function writeConfiguration(
       repoPath,
       force,
       replaceGitHubAuth: githubAuth.replaceGitHubAuth,
+      replaceKeys,
     });
   } catch (error) {
     s.stop('Failed to write configuration');
@@ -365,10 +374,11 @@ async function writeConfiguration(
   return writeResult;
 }
 
-function writePiModelPreference(ai: SetupConfig['ai']): void {
+/** Save the chosen Pi model; a failure only warns, since the env file is already written. */
+async function writePiModelPreference(ai: SetupConfig['ai']): Promise<void> {
   if (!ai.pi || !ai.piModel) return;
   try {
-    writeHomePiModelConfig(ai.piModel);
+    await writeHomePiModelConfig(ai.piModel);
   } catch (err) {
     // Non-fatal: env write already succeeded, so the user can hand-edit
     // ~/.archon/config.yaml later. Surface the error so it's not silent.
