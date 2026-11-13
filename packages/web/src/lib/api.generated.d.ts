@@ -7334,6 +7334,10 @@ export interface components {
                     userId: string;
                   }
                 | unknown;
+              answeredFromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
               answeredAt: string | null;
             }
           | {

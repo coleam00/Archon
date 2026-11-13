@@ -186,7 +186,7 @@ export function attentionStreamText(
     case 'resolved':
       return [
         (line.reason === 'answered'
-          ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}${answererText(line.answeredBy)}.`
+          ? `Run ${line.runId} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}${answererText(line.answeredBy)}${line.answeredFromRun === null ? '' : ` from run ${line.answeredFromRun.runId} (node ${line.answeredFromRun.nodePath})`}.`
           : `Run ${line.runId} no longer needs attention.`) + runContextText(line),
       ];
     case 'unmatched':
