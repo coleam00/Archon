@@ -407,8 +407,8 @@ export function workflowInvokedEventProperties(props: WorkflowInvokedProperties)
 }
 
 /**
- * Serialize deployment-shape fields to wire properties, omitting absent ones
- * (the CLI surface passes none; the server surface passes all). `archon_started`
+ * Serialize start-event fields to wire properties, omitting absent ones (the CLI
+ * surface passes only `store`; the server surface passes the full deployment shape). `archon_started`
  * and `archon_active` both build from this, so they can never drift apart.
  */
 export function archonSurfaceEventProperties(props: ArchonStartedProperties): EventProperties {
