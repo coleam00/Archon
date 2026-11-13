@@ -1,3 +1,4 @@
+import type { RunActor } from '@archon/core/operations/run-authorization';
 import { nodeExecutionMetadataSchema } from '@archon/workflows/schemas/node-execution';
 
 /** The run and node a CLI call made from inside a workflow node acts for. */
@@ -25,4 +26,21 @@ export function readCallingNode(runId: string, env: NodeJS.ProcessEnv): CallingN
   const identity = parsedIdentity.data;
   if (identity.runId !== runId) throw new Error('ARCHON_NODE_EXECUTION does not match WORKFLOW_ID');
   return { runId, nodePath: identity.path };
+}
+
+/**
+ * The CLI's actor: the operator, with the name `--as` declared for whoever is answering.
+ * The name is a claim recorded with an attention wait's answer; a gate answer refuses it.
+ * A call made inside a workflow node also carries that run and node, read from the
+ * identity the engine put in the node's environment and never from an argument.
+ */
+export function cliActor(
+  declared: string | undefined,
+  env: NodeJS.ProcessEnv = process.env
+): RunActor {
+  return {
+    kind: 'operator',
+    ...(declared === undefined ? {} : { declared }),
+    ...(env.WORKFLOW_ID ? { fromRun: readCallingNode(env.WORKFLOW_ID, env) } : {}),
+  };
 }

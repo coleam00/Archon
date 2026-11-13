@@ -234,7 +234,7 @@ export function createTransactionView(
       if (!run || !answered) return { answered: false };
       const stored = workflowWaitContextSchema.parse(answered);
       run.metadata.wait = stored;
-      record(waitAnsweredEvent(id, answered));
+      record(waitAnsweredEvent(id, answered, write.fromRun));
       return { answered: true };
     },
     labelAttentionWait: async (id, write) => {

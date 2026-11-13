@@ -21,6 +21,7 @@ const graphqlActorSchema = z
   .object({
     __typename: z.string().optional(),
     login: z.string().min(1),
+    id: z.string().min(1),
     databaseId: z.number().int().nullable().optional(),
   })
   .nullable();
@@ -45,13 +46,18 @@ const threadNodeSchema = z.object({
   line: z.number().int().nullable(),
   comments: commentConnectionSchema,
 });
-const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{__typename login ... on User{databaseId} ... on Bot{databaseId}} createdAt originalCommit{oid} body url}`;
+const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{__typename login ... on Node{id} ... on User{databaseId} ... on Bot{databaseId} ... on Organization{databaseId} ... on Mannequin{databaseId}} createdAt originalCommit{oid} body url}`;
 
+/**
+ * `id` is the account's database id, the number REST and webhooks report. An author kind
+ * GitHub gives no database id (an enterprise user account) keeps its GraphQL node id, which
+ * survives a rename as the login does not.
+ */
 function threadActor(host: string, author: z.infer<typeof graphqlActorSchema>): SourceActor | null {
   return author
     ? {
         host,
-        id: author.databaseId == null ? author.login : String(author.databaseId),
+        id: author.databaseId == null ? author.id : String(author.databaseId),
         login: author.login,
         type: accountType(author.__typename),
       }

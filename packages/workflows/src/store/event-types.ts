@@ -131,9 +131,7 @@ export const WORKFLOW_EVENT_TYPES = [
   'writeback_requested',
   'writeback_applied',
   'writeback_discarded',
-  // File-presence gate (#2230): `evidence_policy.required` was set but its
-  // conventional `$ARTIFACTS_DIR/evidence.json` marker was absent at completion.
-  // Data carries the expected path; the legacy event name is a persisted contract.
+  // Retired with `evidence_policy` (#5630). Nothing writes it; stored rows still hold it.
   'evidence_validation_failed',
   // #2814 — the run budget refused new work, or a spend-limited run's spend could
   // not be measured. `data` carries the reason, refused node, limits and consumption.

@@ -219,12 +219,12 @@ export async function executeDagWorkflow(
    * — the ordinary case — under-report with no warning.
    *
    * Every disposition below (container pause, external cancel/pause, the two failure
-   * branches, the evidence gate, the write-back gate, completion) is reached from the
+   * branches, the write-back gate, completion) is reached from the
    * one point where the accumulators are settled and identical, so the write belongs
    * HERE rather than in each of them. It goes through `updateWorkflowRun`, not the
    * terminal writers, because that merge carries no `WHERE status = 'running'` guard
    * and so still lands on a row another process has already flipped to `cancelled`.
-   * Same ordering as the evidence gate: metadata first, terminal status after.
+   * Metadata first, terminal status after.
    *
    * Best-effort by design — a bookkeeping write must not fail an otherwise-fine run —
    * but never silent: the whole defect was a number quietly going missing.

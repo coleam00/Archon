@@ -48,6 +48,7 @@ export const detailFixture: Detail = {
     output_root: null,
     checkout_baseline: null,
     item_id: null,
+    platform_type: 'cli',
     conversation_platform_id: null,
     owner_observation: null,
     terminal_record: terminalRecord({

@@ -52,8 +52,8 @@ apparmor=unconfined` because the kernel `mount -t overlay` needs it. With
   A transient in-container env file is a tracked follow-up.
 
 - **`$ARTIFACTS_DIR` is the one writable host bind.** The run's artifacts directory
-  is bind-mounted read-write at the same absolute path, so a node's screenshots,
-  reports, and the `evidence_policy` marker land on the host where the engine and the
+  is bind-mounted read-write at the same absolute path, so a node's screenshots
+  and reports land on the host where the engine and the
   operator read them. Everything the container writes there is run output and is
   treated as untrusted data by the host, never executed. In-container root writes
   root-owned files on a rootful Linux daemon; Archon `chown`s the mount back to the
