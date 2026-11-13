@@ -208,6 +208,15 @@ describe('GitHub inbound normalization', () => {
         status: 'normalized',
         envelope: { event: { actor: null } },
       });
+      expect(labelled({ id: 42, login: 'maintainer', type: 'User' })).toMatchObject({
+        envelope: { event: { actor: { type: 'user' } } },
+      });
+      expect(labelled({ id: 7, login: 'ci[bot]', type: 'Bot' })).toMatchObject({
+        envelope: { event: { actor: { type: 'bot' } } },
+      });
+      expect(labelled({ id: 42, login: 'maintainer' })).toMatchObject({
+        envelope: { event: { actor: { type: null } } },
+      });
     }
   });
 

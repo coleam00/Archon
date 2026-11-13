@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A forge actor carries `type` (`user`, `bot` or `organization`, or null when the forge does not say), so a script can tell a bot's comment from a person's with `pr.threads`, `pr.reviews` and `workitem.comments` instead of a separate GraphQL query. The GitHub plugin fills it. It is optional: a plugin released before it still answers, and a reader treats its absence as unknown.
 - `pr.threads` says when each review thread and comment was created (`createdAt`, ISO-8601) and the commit it was made on (`commit`, null when the forge does not record one), so a script can see a comment that arrived after a reviewed commit. The GitHub plugin fills both. Both are optional: a plugin released before them still answers, and a reader treats their absence as unknown.
 - The SDLC pack has three new settings in `.archon/packs/sdlc.yaml`. `build_lane: manual` launches no build round until a maintainer answered the queue's question about the item, and `merge_lane: manual` merges nothing a maintainer did not approve at its head. `protected_paths` is a list of globs: a pull request that changes a matching path merges only once approved at its head. Scripts enforce all three.
 - The SDLC pack's queues emit notices: `started`, `ready`, `continued`, `parked`, `merged` (with `lane=auto` or `lane=manual`), `returned`, `closed` and `blocked`. `archon workflow attention --notices --since 24h --label kind=merged` lists what merged.

@@ -14,10 +14,15 @@ import {
 } from '@archon/forge/operations';
 import type { PrRef, RepoRef, SourceActor } from '@archon/forge';
 import { GitHubError, githubGraphql, repositoryPath, type Fetch } from './api';
+import { accountType } from './actor';
 import { applied, failure, refused, unverified } from './mutation-outcome';
 
 const graphqlActorSchema = z
-  .object({ login: z.string().min(1), databaseId: z.number().int().nullable().optional() })
+  .object({
+    __typename: z.string().optional(),
+    login: z.string().min(1),
+    databaseId: z.number().int().nullable().optional(),
+  })
   .nullable();
 const threadCommentNodeSchema = z.object({
   id: z.string().min(1),
@@ -40,7 +45,7 @@ const threadNodeSchema = z.object({
   line: z.number().int().nullable(),
   comments: commentConnectionSchema,
 });
-const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{login ... on User{databaseId} ... on Bot{databaseId}} createdAt originalCommit{oid} body url}`;
+const COMMENT_FIELDS = `pageInfo{hasNextPage endCursor} nodes{id author{__typename login ... on User{databaseId} ... on Bot{databaseId}} createdAt originalCommit{oid} body url}`;
 
 function threadActor(host: string, author: z.infer<typeof graphqlActorSchema>): SourceActor | null {
   return author
@@ -48,6 +53,7 @@ function threadActor(host: string, author: z.infer<typeof graphqlActorSchema>): 
         host,
         id: author.databaseId == null ? author.login : String(author.databaseId),
         login: author.login,
+        type: accountType(author.__typename),
       }
     : null;
 }
