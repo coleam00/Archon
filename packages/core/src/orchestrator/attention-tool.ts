@@ -9,10 +9,7 @@ import {
   type AttentionQueueSource,
   type ProjectRef,
 } from '@archon/workflows/attention-queue';
-import {
-  scopeAttentionDegraded,
-  splitAttentionRead,
-} from '@archon/workflows/schemas/attention-degraded';
+import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
 import { continuablePause } from '@archon/workflows/schemas/workflow-run';
 import { z } from 'zod';
 import { RunActionForbiddenError, type RunActor } from '../operations/run-authorization';
@@ -177,14 +174,11 @@ async function listItems(ctx: AttentionToolContext, project: string): Promise<st
     lines.push(
       `${String(withheld)} more paused run(s) in the install are not listed: only the user who started a run, or an admin, may answer it.`
     );
-  // Only someone who may answer every run is told about rows that cannot be read at all.
-  const unreadable =
-    withheld > 0
-      ? []
-      : (scopeAttentionDegraded([...rows.degraded, ...read.degraded], scope).degraded ?? []);
-  if (unreadable.length > 0)
+  // A row that cannot be read has no readable owner, so it is counted and never identified.
+  const unreadable = rows.degraded.length + read.degraded.length;
+  if (unreadable > 0)
     lines.push(
-      `${String(unreadable.length)} more paused run(s) could not be read: ${JSON.stringify(unreadable)}`
+      `${String(unreadable)} more paused run(s) in the install could not be read. \`archon workflow attention\` names them.`
     );
   return lines.join('\n');
 }
