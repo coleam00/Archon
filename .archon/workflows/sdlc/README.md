@@ -153,8 +153,9 @@ besides a Ready review verdict.
   with no checks never merges.
 - `none`: for a project with no CI. Delivery's CI agent runs the project's full
   validation itself and records the commit it ran on and whether it passed. The gate
-  requires a passing validation at exactly the head it merges. This trusts the agent's
-  report of the run, which is weaker than CI.
+  requires a passing validation at exactly the head it merges, and a delivery round
+  does not end ready without one. This trusts the agent's report of the run, which is
+  weaker than CI.
 
 **Ask the user** how much the factory does by itself. Two settings turn it down, and
 they are the off switch:

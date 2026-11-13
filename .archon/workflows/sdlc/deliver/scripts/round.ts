@@ -4,6 +4,11 @@
  * false and the loop completes with it, which `outcome` reports as `round_cap`.
  * Everything else is read from the round's own typed outputs; nothing here judges.
  *
+ * Under the pack's `ci: none` setting the merge gate merges only a commit with a passing
+ * validation recorded at it, so a round ends `delivered` only when the CI agent recorded
+ * one at the head it handed off. A `ready` without one ends `ci_other`, with no further
+ * round: another round reruns the implementer and the review to reach the same CI step.
+ *
  * Bound inputs (canonical text; a skipped producer arrives as "null"):
  * - INPUTS_PREVIOUS / INPUTS_PRIOR_REPORT / INPUTS_PREVIOUS_PR_URL: the previous round's
  *   `round`, `prior_report` and `pr_url` ('' on the first round).
@@ -15,6 +20,8 @@
  *   round ran no review.
  * - INPUTS_SIMPLIFY: whether simplify recorded smaller shapes in shape.md.
  * - INPUTS_CI_STATE: the CI agent's state.
+ * - INPUTS_CI: the pack's `ci` setting, `forge` or `none`.
+ * - INPUTS_CI_VALIDATION: the full validation the CI agent recorded; null when it ran none.
  * - INPUTS_THREADS_OPEN: how many review threads were still unresolved when the round
  *   ended; "null" when the threads node did not run (no pull request).
  * - INPUTS_SETTLE_ASK: whether settle-threads found a thread that needs a decision this run cannot make.
@@ -23,7 +30,9 @@
 
 import { join } from 'node:path';
 import { artifactsDir, emit, input } from 'archon:script';
+import { nodeStartCommit } from '../../.shared/checkout.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
+import type { NodeOutput } from '../../.shared/outputs.generated.ts';
 import { PUBLISHED_REPORT_FILE } from '../../.shared/review-item.ts';
 
 /** Why a round ended. */
@@ -50,6 +59,25 @@ const prUrl = input('pr_url');
 const threadsOpen = input('threads_open');
 const contractLeft = nullableJson(input('review_contract_left'));
 
+/**
+ * Under `ci: none`, why the CI agent's `ready` is not one the merge gate merges; null
+ * when it is, and always under `ci: forge`. The head is this checkout's, which the CI
+ * agent confirmed is the pull request's before it declared `ready`.
+ */
+function unvalidated(): string | null {
+  if (input('ci') !== 'none') return null;
+  const head = nodeStartCommit();
+  const validation = nullableJson(input('ci_validation')) as NodeOutput<'archon-deliver', 'ci'>['validation'];
+  if (validation?.head === head && validation.passed) return null;
+  const recorded =
+    validation === null
+      ? 'recorded none'
+      : validation.head === head
+        ? 'recorded one that failed'
+        : `recorded one for ${validation.head}`;
+  return `\`ci: none\` needs a passing full validation recorded at the head ${head}, and the CI agent ${recorded}. The merge queue does not merge the pull request without it.`;
+}
+
 /** The reason this round ended, whether another round can change it, and the deciding node's summary. */
 function decide(): { reason: Ended; again: boolean; summary: string | undefined } {
   // A validation red the change did not cause still goes to review; CI judges it again.
@@ -68,6 +96,8 @@ function decide(): { reason: Ended; again: boolean; summary: string | undefined 
   const ciSummary = process.env.INPUTS_CI_SUMMARY;
   if (ci === 'pr_caused') return { reason: 'ci_pr_caused', again: true, summary: ciSummary };
   if (ci !== 'ready') return { reason: 'ci_other', again: false, summary: ciSummary };
+  const missing = unvalidated();
+  if (missing !== null) return { reason: 'ci_other', again: false, summary: `${missing} The CI agent's summary: ${ciSummary ?? ''}` };
   // An open thread is unjudged work; one settle-threads could not settle needs a decision.
   if (Number(threadsOpen) > 0) {
     return input('settle_ask') === 'true'
