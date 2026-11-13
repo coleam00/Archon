@@ -7650,6 +7650,8 @@ export interface components {
     };
     WorkflowRunDetail: {
       run: components['schemas']['WorkflowRun'] & {
+        /** @description The platform of the run's own conversation (`web`, `cli`, ...), the same value the dashboard listing serves. Null when the run has no conversation. */
+        platform_type: string | null;
         worker_platform_id?: string;
         parent_platform_id?: string;
         conversation_platform_id: string | null;
