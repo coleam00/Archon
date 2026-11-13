@@ -624,16 +624,52 @@ test.each([
   expect(github.posted).toEqual([]);
 });
 
-test.each([{ oldAttempt: true }, { readFailed: true }])(
-  'acknowledged rerun without newer attempt evidence fails verification: %j',
-  async options => {
-    const github = rerunGitHub(options);
-    expect(
-      await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
-    ).toMatchObject({ ok: false, mutation: { outcome: 'verification_failed' } });
-    expect(github.posted).toEqual(['100']);
-  }
-);
+test('a rerun whose newer attempt appears after the first read-back is applied', async () => {
+  const github = rerunGitHub({ staleReads: 2 });
+  const waits: number[] = [];
+  const response = await handleGithubOperation(rerunRequest, {
+    token: 'token',
+    fetch: github.fetch,
+    sleep: async ms => void waits.push(ms),
+  });
+  expect(response).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied', units: [{ rerun: { id: '100', attempt: 2 } }, {}] } },
+  });
+  expect(waits).toHaveLength(2);
+  expect(github.posted).toEqual(['100']);
+});
+
+test('an accepted rerun whose newer attempt never appears is unverified, not refused', async () => {
+  const github = rerunGitHub({ oldAttempt: true });
+  let waited = 0;
+  const response = await handleGithubOperation(rerunRequest, {
+    token: 'token',
+    fetch: github.fetch,
+    sleep: async ms => void (waited += ms),
+  });
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response' },
+    mutation: {
+      outcome: 'verification_failed',
+      leaveBehind: expect.any(String),
+      rerun: { requested: rerunRequest.units, observed: [] },
+    },
+  });
+  // The wait stays well inside the 30 second limit the host gives a plugin process.
+  expect(waited).toBeGreaterThan(0);
+  expect(waited).toBeLessThanOrEqual(15_000);
+  expect(github.posted).toEqual(['100']);
+});
+
+test('an accepted rerun whose read-back request fails is unverified', async () => {
+  const github = rerunGitHub({ readFailed: true });
+  expect(
+    await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
+  ).toMatchObject({ ok: false, mutation: { outcome: 'verification_failed' } });
+  expect(github.posted).toEqual(['100']);
+});
 
 test.each([
   [403, 'verification_failed'],

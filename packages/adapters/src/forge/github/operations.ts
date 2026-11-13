@@ -10,7 +10,7 @@ import {
   mutationTarget,
   mutationAttempt,
 } from '@archon/forge/operations';
-import { githubErrorDetail, parseRemote, parseSubjectUrl, type Fetch } from './api';
+import { githubErrorDetail, parseRemote, parseSubjectUrl, type Fetch, type Sleep } from './api';
 import { handleGithubChecksLogs } from './check-logs';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
 import { handleGithubWorkItemComments } from './comments';
@@ -75,6 +75,8 @@ export const githubPluginMetadata = {
 export interface GitHubOperationOptions {
   readonly token: string | undefined;
   readonly fetch?: Fetch;
+  /** The wait inside a write's read-back; tests replace it so they do not sleep. */
+  readonly sleep?: Sleep;
 }
 
 function failure(operationId: string, error: ForgeError): ForgeResponse {
@@ -159,7 +161,9 @@ export async function handleGithubOperation(
     }
     const fetchImpl = options.fetch ?? globalThis.fetch;
     const token = options.token;
-    if (isMutationRequest(request)) return await handleGithubMutation(request, fetchImpl, token);
+    const sleep = options.sleep ?? Bun.sleep;
+    if (isMutationRequest(request))
+      return await handleGithubMutation(request, fetchImpl, token, sleep);
     // Keyed by the request's own op, the handler takes that request; TypeScript cannot
     // correlate the table's members with the request union on its own.
     const read = readHandlers[request.op] as ReadHandler<ReadOp>;
