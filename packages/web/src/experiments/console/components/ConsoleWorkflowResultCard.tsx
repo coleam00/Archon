@@ -4,6 +4,7 @@ import { useEntity } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
 import { countTerminalNodes } from '../primitives/event';
+import { runPhaseStart } from '../primitives/run';
 import type { RunStatus } from '../lib/run-status';
 import { statusLabel } from '../lib/run-status';
 import { formatElapsed, elapsedSince, formatCost } from '../lib/format';
@@ -121,7 +122,7 @@ export function ConsoleWorkflowResultCard({
   const { completed, total } = countTerminalNodes(data?.nodes ?? []);
   const glyph = RESULT_GLYPH[run.status] ?? '•';
   const label = RESULT_LABEL[run.status] ?? `Workflow ${statusLabel[run.status].toLowerCase()}`;
-  const duration = formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
+  const duration = formatElapsed(elapsedSince(runPhaseStart(run), run.finishedAt ?? undefined));
   const cost =
     run.costUsd !== null ? `Reported cost ${formatCost(run.costUsd)} (may be partial)` : null;
   const accent = ACCENT_BY_STATUS[run.status] ?? FALLBACK_ACCENT;

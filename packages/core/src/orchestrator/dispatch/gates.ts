@@ -13,9 +13,13 @@ import { toError } from '../../utils/error';
 import { getLog } from '../agent-log';
 import type { DispatchScope } from './scope';
 
+/** What the signature gates decide about one start; a refusal carries the reason to show. */
 export type SignatureGates =
-  | { ok: false }
+  | { ok: false; reason: string }
   | { ok: true; resolvedInputs?: Record<string, string>; deferredInputError?: Error };
+
+/** The part of a dispatch the gates read. Nothing in it can deliver a message. */
+type SignatureSubject = Pick<DispatchScope, 'conversationId' | 'userId' | 'options'>;
 
 /**
  * Input signature gate (#2470, #2554) plus capability gate, judged against ONE
@@ -29,10 +33,25 @@ export async function runSignatureGates(
   definition: ResolvedWorkflow,
   willContinueExistingRun: boolean
 ): Promise<SignatureGates> {
-  const inputs = await resolveInvocationInputs(scope, definition, willContinueExistingRun);
+  const verdict = await judgeSignatureGates(scope, definition, willContinueExistingRun);
+  if (!verdict.ok) await scope.platform.sendMessage(scope.conversationId, verdict.reason);
+  return verdict;
+}
+
+/**
+ * The gates' decision with no delivery, so every caller that must refuse a start gets one
+ * answer: the dispatch sends the reason to the conversation, and the run route's admission
+ * returns it as the request's response.
+ */
+export async function judgeSignatureGates(
+  subject: SignatureSubject,
+  definition: ResolvedWorkflow,
+  willContinueExistingRun: boolean
+): Promise<SignatureGates> {
+  const inputs = resolveInvocationInputs(subject, definition, willContinueExistingRun);
   if (!inputs.ok) return inputs;
-  if (!(await githubRequirementMet(scope, definition))) return { ok: false };
-  return inputs;
+  const unmet = await unmetGithubRequirement(subject, definition);
+  return unmet === undefined ? inputs : { ok: false, reason: unmet };
 }
 
 /**
@@ -41,12 +60,11 @@ export async function runSignatureGates(
  * that supplies nothing still refuses a required-input workflow here. The workflow still
  * lists/loads normally.
  */
-async function resolveInvocationInputs(
-  scope: DispatchScope,
+function resolveInvocationInputs(
+  { options }: SignatureSubject,
   definition: ResolvedWorkflow,
   willContinueExistingRun: boolean
-): Promise<SignatureGates> {
-  const { platform, conversationId, options } = scope;
+): SignatureGates {
   try {
     return { ok: true, resolvedInputs: resolveTopLevelInputs(definition, options?.inputs) };
   } catch (err) {
@@ -64,10 +82,7 @@ async function resolveInvocationInputs(
       },
       'workflow.required_inputs_unsatisfiable'
     );
-    if (!willContinueExistingRun) {
-      await platform.sendMessage(conversationId, err.message);
-      return { ok: false };
-    }
+    if (!willContinueExistingRun) return { ok: false, reason: err.message };
     // A contract violation held back because a resume may make it moot. Only the one
     // branch in `continueForegroundResume` that falls through to a FRESH run row
     // (hydration found nothing worth resuming) still needs it; every other
@@ -81,12 +96,11 @@ async function resolveInvocationInputs(
  * workflow declares `requires: [github]` and the originating user hasn't
  * connected. No-op when per-user GitHub is disabled (solo PAT installs).
  */
-async function githubRequirementMet(
-  scope: DispatchScope,
+async function unmetGithubRequirement(
+  { conversationId, userId }: SignatureSubject,
   definition: ResolvedWorkflow
-): Promise<boolean> {
-  const { platform, conversationId, userId } = scope;
-  if (!isPerUserGitHubEnabled() || !definition.requires?.length) return true;
+): Promise<string | undefined> {
+  if (!isPerUserGitHubEnabled() || !definition.requires?.length) return undefined;
   const githubConnected = userId ? Boolean(await getDecryptedAccessToken(userId)) : false;
   try {
     assertWorkflowRequirementsMet(definition, { githubConnected });
@@ -96,10 +110,9 @@ async function githubRequirementMet(
       { workflowName: definition.name, conversationId, userId, requirement: err.requirement },
       'workflow.requirement_unmet'
     );
-    await platform.sendMessage(conversationId, err.message);
-    return false;
+    return err.message;
   }
-  return true;
+  return undefined;
 }
 
 export async function sendRunStartNotices(

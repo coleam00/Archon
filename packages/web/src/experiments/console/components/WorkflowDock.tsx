@@ -36,7 +36,8 @@ function needsApproval(run: Run): boolean {
  *
  *   0 active  → hidden
  *   1 running → the richer single card directly
- *   2+        → collapsed "Running workflows (N) ▸"; the chevron expands.
+ *   2+        → collapsed "Active workflows (N) ▸"; the chevron expands. "Active", as
+ *               in the runs feed, because the tray also holds runs paused at a wait.
  *
  * Live via the dashboard SSE (which invalidates the shared runs cache).
  */
@@ -75,7 +76,7 @@ export function WorkflowDock({ projectId }: WorkflowDockProps): ReactElement | n
                 {expanded ? '▾' : '▸'}
               </span>
               <span className="text-console-10 font-semibold uppercase tracking-console-label-wide text-text-secondary">
-                Running workflows
+                Active workflows
               </span>
               <span className="font-mono text-console-11 tabular-nums text-text-tertiary">
                 {running.length.toString()}

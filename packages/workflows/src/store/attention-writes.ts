@@ -7,6 +7,7 @@ import {
 import type { RecordSurface } from '../schemas/record-surface';
 import {
   attentionAnswererSchema,
+  attentionAnsweringRunSchema,
   attentionAnswerSchema,
   attentionForm,
   attentionLabels,
@@ -14,6 +15,7 @@ import {
   attentionRevision,
   pausedAttentionWait,
   workflowWaitStepName,
+  type AttentionAnsweringRun,
   type WorkflowAttentionWaitContext,
   type WorkflowRun,
 } from '../schemas/workflow-run';
@@ -59,20 +61,26 @@ export function attentionAskRecord(
   };
 }
 
-/** What a `wait_answered` row records: the surface, the occurrence, the answer, and who. */
+/**
+ * What a `wait_answered` row records: the surface, the occurrence, the answer, who, and
+ * the run the answer was given from when it came from inside one.
+ */
 export const attentionAnswerRecordSchema = z.object({
   occurrence: z.string(),
   answer: attentionAnswerSchema,
   by: attentionAnswererSchema.optional(),
+  /** Reported from the run's environment and not verified; attribution, never proof. */
+  fromRun: attentionAnsweringRunSchema.optional(),
 });
 
 /**
  * The audit row for an attention wait's answer, written in the answer's transaction by
- * every store. `wait` is the answered wait as stored.
+ * every store. `wait` is the answered wait as stored, and `fromRun` the write's.
  */
 export function waitAnsweredEvent(
   workflowRunId: string,
-  wait: WorkflowAttentionWaitContext
+  wait: WorkflowAttentionWaitContext,
+  fromRun: AttentionAnsweringRun | undefined
 ): ObservabilityEventInput {
   return {
     workflow_run_id: workflowRunId,
@@ -83,6 +91,7 @@ export function waitAnsweredEvent(
       occurrence: wait.pauseId,
       answer: wait.answer,
       ...(wait.answeredBy === undefined ? {} : { by: wait.answeredBy }),
+      ...(fromRun === undefined ? {} : { fromRun }),
     },
   };
 }
@@ -91,7 +100,7 @@ export function waitAnsweredEvent(
 export type AttentionAnswerWrite = Required<
   Pick<WorkflowAttentionWaitContext, 'pauseId' | 'answer' | 'answeredVia' | 'answeredAt'>
 > &
-  Pick<WorkflowAttentionWaitContext, 'answeredBy'>;
+  Pick<WorkflowAttentionWaitContext, 'answeredBy'> & { fromRun?: AttentionAnsweringRun };
 
 /**
  * The wait `run` sits at once `write` lands: the stored wait, labels and revision
@@ -105,7 +114,9 @@ export function answeredAttentionWait(
   const wait = pausedAttentionWait(run);
   if (wait === undefined || wait.answer !== undefined || wait.pauseId !== write.pauseId)
     return undefined;
-  return { ...wait, ...write };
+  // `fromRun` goes on the event alone (`attentionAnsweringRunSchema`).
+  const { fromRun: _fromRun, ...answer } = write;
+  return { ...wait, ...answer };
 }
 
 /** One label write on an open attention wait, checked against the occurrence it names. */

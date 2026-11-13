@@ -713,12 +713,13 @@ describe('typed chat tools', () => {
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
   });
 
-  test('every chat gets invoke_workflow and register_project; scoped chats also get manage_run', async () => {
+  test('every chat gets the launch, project and attention tools; scoped chats also get manage_run', async () => {
     await handleMessage(makePlatform(), 'conv-1', 'hello', { actor: operator });
     expect(turnToolNames()).toEqual([
       'invoke_workflow',
       'register_project',
       'report_workflow_no_match',
+      'attention',
     ]);
 
     mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
@@ -728,6 +729,7 @@ describe('typed chat tools', () => {
       'invoke_workflow',
       'register_project',
       'report_workflow_no_match',
+      'attention',
       'manage_run',
     ]);
   });

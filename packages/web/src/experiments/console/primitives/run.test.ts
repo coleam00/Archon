@@ -1,5 +1,11 @@
 import { describe, test, expect } from 'bun:test';
-import { toRun, normalizeOrigin, runDetailPath, runMessageConversationId } from './run';
+import {
+  toRun,
+  normalizeOrigin,
+  runDetailPath,
+  runMessageConversationId,
+  runPhaseStart,
+} from './run';
 import { detailFixture } from './run.test-fixtures';
 import { runStatusLabel } from '../lib/run-status';
 
@@ -172,6 +178,22 @@ describe('toRun — provenance', () => {
   test("normalizes the transient 'pending' status to running", () => {
     const r = toRun(raw({ id: 'r1', workflow_name: 'plan', status: 'pending' }));
     expect(r.status).toBe('running');
+  });
+});
+
+describe('runPhaseStart', () => {
+  test('a resumed run is measured from its resume, a first-phase run from its creation', () => {
+    const first = toRun(raw({ id: 'r', workflow_name: 'w', status: 'failed' }));
+    expect(runPhaseStart(first)).toBe('2026-06-05T10:00:00Z');
+    const resumed = toRun(
+      raw({
+        id: 'r',
+        workflow_name: 'w',
+        status: 'failed',
+        active_phase_started_at: '2026-06-05T10:20:00Z',
+      })
+    );
+    expect(runPhaseStart(resumed)).toBe('2026-06-05T10:20:00Z');
   });
 });
 
