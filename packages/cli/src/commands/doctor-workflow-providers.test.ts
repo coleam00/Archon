@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
+import { afterEach, beforeEach, expect, mock, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -8,11 +8,39 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { clearRegistry, providerRegistry, registerProvider } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { descriptor } from '@archon/providers/claude/descriptor';
-import { doctorCommand } from './doctor';
-import { checkConfigFiles } from './doctor-config';
-import { checkAssistantLogin } from './doctor-assistant-login';
+import type { CheckResult } from './doctor-check';
 import { checkInstalledProviders } from './doctor-providers';
 import { checkWorkflowProviderSelection } from './doctor-workflow-providers';
+
+const hostCheck = async (): Promise<CheckResult> => ({
+  label: 'Host check',
+  status: 'skip',
+  message: 'isolated from workflow-provider acceptance tests',
+});
+mock.module('./doctor-database', () => ({ checkDatabase: hostCheck }));
+mock.module('./doctor-folder-project', () => ({ checkFolderProject: hostCheck }));
+const connectedProviders = await import('./doctor-connected-providers');
+mock.module('./doctor-connected-providers', () => ({
+  ...connectedProviders,
+  checkConnectedProviders: hostCheck,
+}));
+mock.module('./doctor-install', () => ({
+  checkWorkspaceWritable: hostCheck,
+  checkBundledDefaults: hostCheck,
+  checkTelemetry: hostCheck,
+}));
+mock.module('./doctor-skill', () => ({ checkArchonSkill: hostCheck }));
+mock.module('./doctor-platforms', () => ({
+  checkGitHubApp: hostCheck,
+  checkSlack: hostCheck,
+  checkTelegram: hostCheck,
+}));
+const providerChecks = await import('./doctor-providers');
+mock.module('./doctor-providers', () => ({
+  ...providerChecks,
+  checkProviderDiagnostics: async () => [],
+}));
+const { doctorCommand } = await import('./doctor');
 
 const savedEnv = { ...process.env };
 const savedCwd = process.cwd();
@@ -58,12 +86,8 @@ async function workflow(body: string, prefix = '', global = false) {
 
 async function focusedDoctor() {
   const selection = await checkWorkflowProviderSelection();
-  const exit = await doctorCommand([
-    () => checkConfigFiles(),
-    () => checkAssistantLogin(),
-    async () => selection.check,
-    () => checkInstalledProviders(undefined, undefined, selection.allowEmptyProviderInventory),
-  ]);
+  output.mockClear();
+  const exit = await doctorCommand();
   return { ...selection, exit };
 }
 
@@ -80,7 +104,8 @@ test('missing default fails with the remedy; explicit provider scopes remain sup
     expect(result.exit).toBe(1);
     expect(result.check.message).toContain('probe');
     expect(output.mock.calls.flat().join('\n')).toContain('archon ai default <provider>');
-    expect(result.check.message).toContain('archon setup');
+    expect(output.mock.calls.flat().join('\n')).toContain('archon setup');
+    expect(output.mock.calls.flat().join('\n')).toContain('✗ Workflow providers: probe');
   }
   await rm(join(project, '.archon/workflows/probe.yaml'));
   await workflow('  - id: ai\n    prompt: hello\n', '', true);
@@ -116,6 +141,9 @@ test('script and bash workflows, or no workflows, pass with no providers; broken
     expect(result.check.status).toBe('pass');
     expect(result.exit).toBe(0);
     expect(result.allowEmptyProviderInventory).toBe(true);
+    expect(output.mock.calls.flat().join('\n')).toContain(
+      '○ Installed providers: Discovered workflows need no provider'
+    );
     const broken = await checkInstalledProviders(
       providerRegistry,
       async () => ({
