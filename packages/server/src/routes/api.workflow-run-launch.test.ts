@@ -1,6 +1,7 @@
 import {
   mockFindConversationByPlatformId,
   mockHandleMessage,
+  mockWorkflowStartRefusal,
   mockGetWorkflowRun,
   mockFindWorkflowRunsByIdPrefix,
   MOCK_COMPLETED_RUN,
@@ -151,6 +152,8 @@ describe('POST /api/workflows/:name/run', () => {
     mockFindWorkflowRunsByIdPrefix.mockResolvedValue([]);
     mockFindConversationByPlatformId.mockReset();
     mockHandleMessage.mockReset();
+    mockWorkflowStartRefusal.mockReset();
+    mockWorkflowStartRefusal.mockResolvedValue(undefined);
     mockAddMessage.mockReset();
     mockGenerateAndSetTitle.mockReset();
   });
@@ -732,8 +735,51 @@ describe('POST /api/workflows/:name/run', () => {
     }
   );
 
-  // The route has no start rule of its own. The dispatch gate checks the workflow's declared
-  // inputs, as CLI admission does, and refuses a start that misses a required one.
+  test.each(['json', 'multipart'] as const)(
+    'answers a %s start the engine refuses with its reason, writing and dispatching nothing',
+    async transport => {
+      const originalHome = mockArchonHome;
+      const home = await mkdtemp(join(tmpdir(), 'archon-refused-launch-'));
+      setMockArchonHome(home);
+      try {
+        const reason = "This workflow requires input 'issue', and none was supplied.";
+        mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
+        mockWorkflowStartRefusal.mockResolvedValueOnce(reason);
+        const fields = { conversationId: 'web-test-abc', message: 'Fix it' };
+        const inputs = { base: 'dev' };
+        const form = new FormData();
+        for (const [key, value] of Object.entries(fields)) form.append(key, value);
+        form.append('inputs', JSON.stringify(inputs));
+        form.append('files', new File(['details'], 'request.txt', { type: 'text/plain' }));
+
+        const { app, mockWebAdapter } = makeApp();
+        const response = await app.request(
+          '/api/workflows/fix-issue/run',
+          transport === 'json'
+            ? {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ...fields, inputs }),
+              }
+            : { method: 'POST', body: form }
+        );
+        expect(response.status).toBe(400);
+        expect(await response.json()).toEqual({ error: reason });
+        // The engine judges the conversation's own project, name and inputs.
+        expect(mockWorkflowStartRefusal).toHaveBeenCalledWith(MOCK_CONV, 'fix-issue', inputs);
+        expect(mockHandleMessage).not.toHaveBeenCalled();
+        expect(mockAddMessage).not.toHaveBeenCalled();
+        expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+        expect(mockWebAdapter.setConversationDbId).not.toHaveBeenCalled();
+        expect(await fsPromises.readdir(home)).toEqual([]);
+      } finally {
+        setMockArchonHome(originalHome);
+        await removeTempTree(home);
+      }
+    }
+  );
+
+  // The route has no start rule of its own: the engine admits this start, so it is dispatched.
   test('dispatches a run with neither a message nor inputs', async () => {
     mockFindConversationByPlatformId.mockImplementationOnce(async () => MOCK_CONV);
     mockHandleMessage.mockImplementationOnce(async () => {});

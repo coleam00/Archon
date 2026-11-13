@@ -3,6 +3,8 @@ import { providerRegistry } from '@archon/providers';
 import { describe, test, expect, beforeEach, afterAll } from 'bun:test';
 import { makeTestWorkflowWithSource } from '@archon/workflows/test-utils';
 import { handleCommand, startWorkflow } from '../command-handler';
+import { workflowStartRefusal } from '../../operations/workflow-start-admission';
+import { WorkflowMissingInputsError } from '@archon/workflows/utils/workflow-requirements';
 import {
   operator,
   makeConversation,
@@ -519,6 +521,37 @@ describe('CommandHandler', () => {
 
         expect(startRequest(result.workflow).args).toBe(message);
         expect(startRequest(result.workflow).force).toBeUndefined();
+      });
+
+      // The run route's admission: the engine's reason for refusing a start, or nothing.
+      test('workflowStartRefusal answers with the engine reason, and admits a satisfied start', async () => {
+        const discovered = {
+          workflows: [
+            makeTestWorkflowWithSource({
+              name: 'test-workflow',
+              description: 'A test workflow',
+              inputs: { issue: { required: true }, base: { default: 'dev' } },
+            }),
+          ],
+          errors: [],
+        };
+        spyDiscoverWorkflows.mockResolvedValue(discovered);
+        try {
+          expect(await workflowStartRefusal(conversationWithCodebase, 'test-workflow', {})).toBe(
+            new WorkflowMissingInputsError('test-workflow', ['issue']).message
+          );
+          expect(
+            await workflowStartRefusal(conversationWithCodebase, 'test-workflow', { isue: '1' })
+          ).toContain("does not declare input 'isue'");
+          expect(await workflowStartRefusal(null, 'missing-workflow', undefined)).toContain(
+            'Workflow `missing-workflow` not found'
+          );
+          expect(
+            await workflowStartRefusal(conversationWithCodebase, 'test-workflow', { issue: '5608' })
+          ).toBeUndefined();
+        } finally {
+          spyDiscoverWorkflows.mockReset();
+        }
       });
 
       test('should return not-found when no codebase is configured', async () => {

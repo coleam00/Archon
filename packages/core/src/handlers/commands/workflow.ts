@@ -183,7 +183,10 @@ function workflowUsage(input: WorkflowCommand): CommandResult {
 }
 
 /** Workflow commands work with or without a project context. */
-async function resolveWorkflowCwd(conversation: Conversation): Promise<string> {
+/** The part of a conversation that decides where its workflows are discovered. */
+type WorkflowScope = Pick<Conversation, 'codebase_id' | 'cwd'>;
+
+async function resolveWorkflowCwd(conversation: WorkflowScope): Promise<string> {
   const codebase = conversation.codebase_id
     ? await codebaseDb.getCodebase(conversation.codebase_id)
     : null;
@@ -196,7 +199,7 @@ async function resolveWorkflowCwd(conversation: Conversation): Promise<string> {
  * directly so the message is never tokenized as a command.
  */
 export async function startWorkflow(
-  conversation: Conversation,
+  conversation: WorkflowScope,
   workflowName: string,
   workflowArgs: string,
   force: boolean,
