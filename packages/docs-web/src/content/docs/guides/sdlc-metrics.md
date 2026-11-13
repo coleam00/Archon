@@ -91,7 +91,7 @@ A review round is one verdict a delivery round's review published on the pull re
 
 Only merged pull requests are measured: an open one can take another round, and a record cannot be withdrawn. The node's `review_rounds_distribution` output gives the number of pull requests per round count.
 
-A round recorded when its run was released before it decided has no verdicts on the work item. For those rounds only, the metric backfills the verdicts from the run's artifacts. Run artifacts do not last: `archon workflow cleanup` and disk cleanup remove them, and the backfill cannot read a removed run.
+A round recorded when its run was released before it decided has no verdicts on the work item. For those rounds only, the metric backfills the verdicts from the run's artifacts. Run artifacts do not last: the backfill cannot read a run whose artifact directory was removed from disk. `archon workflow cleanup` deletes old run records, not artifact directories, so it does not affect the backfill.
 
 A merged pull request is listed in `review_rounds_skipped`, with the reason, and counts in none of these when a round without verdicts has lost its run's artifacts, when its work item dropped the build rounds that may have carried it, or when it merged without a Ready review on record.
 
