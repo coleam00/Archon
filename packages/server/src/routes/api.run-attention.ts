@@ -18,9 +18,9 @@ import {
 } from '@archon/core/operations/workflow-operations';
 import { createWorkflowHostStore } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
+import { countAttentionQueue } from '@archon/workflows/attention-counts';
 import {
   attentionQueueItems,
-  countAttentionQueue,
   parseAttentionQueueRequest,
   readAttentionQueueItem,
   selectAttentionQueue,
