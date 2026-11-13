@@ -1349,7 +1349,10 @@ The answer records `answeredVia` and `answeredAt` on the run's `metadata.wait`, 
 `answeredBy` when the answerer is known: `{ declared }` is the name `--as` claimed, and
 `{ userId }` is the Archon user that Archon resolved a chat platform's sender to. A
 `wait_answered` event carries the surface as `via`, the `occurrence`, the answer, and the
-answerer as `by`. Like `approve`,
+answerer as `by`. When the command runs inside a workflow node, the event also carries
+`fromRun: { runId, nodePath }`, the run and node that answered. Archon reads it from the
+identity it gave the node's process, so nothing declares it and `--as` does not replace
+it. Like `approve`,
 human mode continues the run inline unless a continuation host claims it first, and `--json` records the answer and returns
 `{ ok, runId, action: "answer", answer, workflowName, resumable }` without continuing
 it; `archon serve` or [`workflow wake`](#workflow-wake) continues it. The HTTP equivalent

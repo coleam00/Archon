@@ -13,7 +13,7 @@ import {
   type ApprovalOperationResult,
   type GateAnswerOrigin,
 } from '@archon/core/operations/workflow-operations';
-import type { RunActor } from '@archon/core/operations/run-authorization';
+import { cliActor } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
 import {
   getLog,
@@ -288,14 +288,6 @@ async function cliAnswerOrigin(
   const run = await host.deps.store.getWorkflowRun(runId);
   if (!run) throw new Error(`Workflow run not found: ${runId}`);
   return cliOriginForRun(run, occurrence);
-}
-
-/**
- * The CLI's actor: the operator, with the name `--as` declared for whoever is answering.
- * The name is a claim recorded with an attention wait's answer; a gate answer refuses it.
- */
-function cliActor(declared: string | undefined): RunActor {
-  return declared === undefined ? { kind: 'operator' } : { kind: 'operator', declared };
 }
 
 function cliOriginForRun(run: WorkflowRun, occurrence: string | undefined): GateAnswerOrigin {

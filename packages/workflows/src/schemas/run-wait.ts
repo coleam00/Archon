@@ -79,6 +79,18 @@ export const attentionAnswererSchema = z.union([
 export type AttentionAnswerer = z.infer<typeof attentionAnswererSchema>;
 
 /**
+ * The run and node an answer was given from. The engine sets it from the identity it
+ * handed the node process; no caller declares it. It is recorded on the `wait_answered`
+ * event only: the stored wait and `attentionAnswererSchema` are strict, so a binary from
+ * before this field could not read a row that carried it there.
+ */
+export const attentionAnsweringRunSchema = z.object({
+  runId: z.string().min(1),
+  nodePath: z.string().min(1),
+});
+export type AttentionAnsweringRun = z.infer<typeof attentionAnsweringRunSchema>;
+
+/**
  * An attention wait paused before answers existed has only `waitingSince` and `message`:
  * no `pauseId`, it reads as the `message` form, and only `resume` continues it. A newer
  * wait carries its occurrence, its form, resolved options and recommendation, and once

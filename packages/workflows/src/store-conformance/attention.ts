@@ -160,20 +160,25 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         expect(await next('attention')).toMatchObject({
           item: { runId: run.id, occurrence: 'ask-1' },
         });
-        await store.answerAttentionWait(
-          run.id,
-          attentionAnswer('use-main', 'ask-1', { declared: 'triage-agent' })
-        );
+        const fromRun = { runId: 'answering-run', nodePath: 'triage.decide' };
+        await store.answerAttentionWait(run.id, {
+          ...attentionAnswer('use-main', 'ask-1', { declared: 'triage-agent' }),
+          fromRun,
+        });
         expect(await next('resolved')).toMatchObject({
           runId: run.id,
           reason: 'answered',
           answeredVia: 'cli',
           answeredBy: { declared: 'triage-agent' },
+          answeredFromRun: fromRun,
         });
         const answered = (await store.listWorkflowEvents(run.id)).find(
           event => event.event_type === 'wait_answered'
         );
-        expect(answered?.data).toMatchObject({ by: { declared: 'triage-agent' } });
+        expect(answered?.data).toMatchObject({ by: { declared: 'triage-agent' }, fromRun });
+        // The answering run is on the event alone: the stored wait is strict, and a
+        // binary from before the field must still read the row.
+        expect((await store.getWorkflowRun(run.id))?.metadata.wait).not.toHaveProperty('fromRun');
         await store.resumeWorkflowRun(run.id);
         await store.completeWorkflowRun(run.id, { duration_ms: 1 });
         expect(await next('terminal')).toMatchObject({ runId: run.id, status: 'completed' });

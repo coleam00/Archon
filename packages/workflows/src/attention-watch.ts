@@ -36,6 +36,7 @@ import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
   attentionAnswererSchema,
+  attentionAnsweringRunSchema,
   attentionOccurrence,
   gateOccurrence,
   isApprovalContext,
@@ -46,6 +47,7 @@ import {
   workflowRunOutcomeSchema,
   workflowRunStatusSchema,
   type AttentionAnswerer,
+  type AttentionAnsweringRun,
   type RunTerminalStatus,
   type WorkflowRun,
   type WorkflowRunStatus,
@@ -112,6 +114,8 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
       answeredVia: recordSurfaceSchema.nullable(),
       /** Who answered an attention wait, when the answer recorded it; a declared name is a claim. */
       answeredBy: attentionAnswererSchema.nullable(),
+      /** The run and node the answer was given from; null outside a run and for a gate. */
+      answeredFromRun: attentionAnsweringRunSchema.nullable(),
       /** Null when the row had already moved past the answer when the stream read it. */
       answeredAt: z.string().nullable(),
     }),
@@ -205,12 +209,21 @@ type Resolution =
       reason: 'answered';
       answeredVia: string | null;
       answeredBy: AttentionAnswerer | null;
+      answeredFromRun: AttentionAnsweringRun | null;
       answeredAt: string | null;
     }
   | { reason: 'withdrawn' };
 
-/** How `occurrence` closed, from the row when it still records the answer. */
-function rowResolution(run: WorkflowRun, occurrence: string | null): Resolution | undefined {
+type Answered = Extract<Resolution, { reason: 'answered' }>;
+
+/**
+ * How `occurrence` closed, from the row when it still records the answer. The row never
+ * records the answering run; that comes from the answer's event.
+ */
+function rowResolution(
+  run: WorkflowRun,
+  occurrence: string | null
+): Omit<Answered, 'answeredFromRun'> | undefined {
   if (occurrence === null) return undefined;
   const { approval, wait } = run.metadata;
   if (isApprovalContext(approval) && gateOccurrence(approval) === occurrence)
@@ -239,20 +252,22 @@ function rowResolution(run: WorkflowRun, occurrence: string | null): Resolution 
 
 const answerKey = (runId: string, occurrence: string): string => `${runId}\u0000${occurrence}`;
 
-type AnswerOrigin = Pick<Extract<Resolution, { reason: 'answered' }>, 'answeredVia' | 'answeredBy'>;
+type AnswerOrigin = Pick<Answered, 'answeredVia' | 'answeredBy' | 'answeredFromRun'>;
 
-/** The surface and answerer of each answer event in a page, by run and occurrence. */
+/** The surface, answerer and answering run of each answer event in a page, by run and occurrence. */
 function indexAnswers(page: WorkflowEventPage): Map<string, AnswerOrigin> {
   const answers = new Map<string, AnswerOrigin>();
   for (const { event } of page.events) {
     if (event.event_type !== 'approval_received' && event.event_type !== 'wait_answered') continue;
-    const { occurrence, via, by } = event.data;
+    const { occurrence, via, by, fromRun } = event.data;
     if (typeof occurrence !== 'string') continue;
     const surface = recordSurfaceSchema.safeParse(via);
     const answerer = attentionAnswererSchema.safeParse(by);
+    const answeringRun = attentionAnsweringRunSchema.safeParse(fromRun);
     answers.set(answerKey(event.workflow_run_id, occurrence), {
       answeredVia: surface.success ? surface.data : null,
       answeredBy: answerer.success ? answerer.data : null,
+      answeredFromRun: answeringRun.success ? answeringRun.data : null,
     });
   }
   return answers;
@@ -589,10 +604,11 @@ export async function watchAttentionQueue(
     const fromRow = run === null ? undefined : rowResolution(run, occurrence);
     const origin = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
     const resolution: Resolution =
-      fromRow ??
-      (origin !== undefined
-        ? { reason: 'answered', ...origin, answeredAt: null }
-        : { reason: 'withdrawn' });
+      fromRow !== undefined
+        ? { ...fromRow, answeredFromRun: origin?.answeredFromRun ?? null }
+        : origin !== undefined
+          ? { reason: 'answered', ...origin, answeredAt: null }
+          : { reason: 'withdrawn' };
     await emit({
       type: 'resolved',
       cursor,

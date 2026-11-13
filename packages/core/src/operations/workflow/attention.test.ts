@@ -189,6 +189,28 @@ describe('answering an attention wait', () => {
     });
   });
 
+  test('an answer given from inside a run records that run and node, and only a run the store knows', async () => {
+    await setup();
+    const answered = async (id: string): Promise<unknown> =>
+      (await store.listWorkflowEvents(id)).find(event => event.event_type === 'wait_answered')
+        ?.data;
+    const outside = await paused('select');
+    await operations.answerWorkflow(outside, { choose: ['a'] }, operator, cli);
+    expect(await answered(outside)).not.toHaveProperty('fromRun');
+
+    const asked = await paused('select');
+    const from = (runId: string) =>
+      ({ kind: 'operator', fromRun: { runId, nodePath: 'triage.decide' } }) as const;
+    await expect(
+      operations.answerWorkflow(asked, { choose: ['a'] }, from('no-such-run'), cli)
+    ).rejects.toThrow('which this store does not know');
+    expect(await storedWait(asked)).not.toHaveProperty('answer');
+    await operations.answerWorkflow(asked, { choose: ['a'] }, from(outside), cli);
+    expect(await answered(asked)).toMatchObject({
+      fromRun: { runId: outside, nodePath: 'triage.decide' },
+    });
+  });
+
   test('approve, reject and respond answer an attention wait as sugar; reject never cancels', async () => {
     await setup();
     const message = await paused('message');
