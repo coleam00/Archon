@@ -1,4 +1,4 @@
-import { assertWorkflowNoticeLimit } from '../workflow-notice';
+import { WORKFLOW_NOTICE_LIMITS } from '../workflow-notice';
 import type { WorkflowEventRow } from '../schemas/workflow-event';
 import {
   slotMembershipSchema,
@@ -446,15 +446,16 @@ export function createAdmissionTransaction(
     if (notice) {
       const state = await readRunState(root, notice.runId);
       if (!state) throw new Error(`Run missing: ${notice.runId}`);
-      runs.set(notice.runId, state.run);
       const history = [
         ...state.events,
         ...events.filter(event => event.workflow_run_id === notice.runId),
       ];
-      assertWorkflowNoticeLimit(
-        notice.runId,
-        history.filter(event => event.event_type === 'workflow_notice').length
-      );
+      if (
+        history.filter(event => event.event_type === 'workflow_notice').length >=
+        WORKFLOW_NOTICE_LIMITS.perRun
+      )
+        return;
+      runs.set(notice.runId, state.run);
       const view = createTransactionView(runs, history, async () => null, new Map());
       await view.persistWorkflowEvent({
         workflow_run_id: notice.runId,
