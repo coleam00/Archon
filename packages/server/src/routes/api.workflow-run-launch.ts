@@ -409,6 +409,7 @@ async function removeLaunchFiles(launch: RunLaunch): Promise<void> {
  * metadata when present. Returns false, with the uploads removed, when the message cannot be
  * saved. A run started from inputs alone has no message: it gets no chat row, which would
  * render as an empty bubble, and no title request, which would have nothing to summarize.
+ * Its attachments still reach the run, but with no row their metadata is not recorded.
  */
 async function recordLaunchMessage(
   conv: Conversation,
