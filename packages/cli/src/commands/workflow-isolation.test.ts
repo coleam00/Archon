@@ -979,10 +979,15 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
     const findActiveCallsBefore = (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mock
       .calls.length;
 
+    // Each start captures its source under its own run id; the harness stub returns one fixed id.
+    const prepareWorkflowSource = (await import('@archon/workflows/run-source'))
+      .prepareWorkflowSource as ReturnType<typeof mock>;
+    const capture = (await prepareWorkflowSource()) as { runId: string };
     const clock = spyOn(Date, 'now').mockReturnValue(1_794_000_000_000);
     const identifiers: string[] = [];
     try {
-      for (let start = 0; start < 2; start++) {
+      for (const runId of ['run-first-start', 'run-second-start']) {
+        prepareWorkflowSource.mockResolvedValueOnce({ ...capture, runId });
         (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
           workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
           errors: [],

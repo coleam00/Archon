@@ -1306,6 +1306,13 @@ describe('submodules', () => {
   });
 
   describe('rollback of a setup that did not finish', () => {
+    /** The path stays and is named, and the notice does not send anyone to remove it. */
+    const expectKeptWithoutRemovalAdvice = (error: Error): void => {
+      const notice = (error as Error & { cleanupFailure?: string }).cleanupFailure ?? '';
+      expect(notice).toContain(issuePath());
+      expect(notice).not.toMatch(/\bremove\b/i);
+    };
+
     test('removes the worktree this call created and leaves the branch alone', async () => {
       gitmodulesPresent();
       failSubmodules(submoduleError);
@@ -1346,7 +1353,7 @@ describe('submodules', () => {
       expect(ranGit('remove')).toBe(false);
       const userMessage = classifyIsolationError(error);
       expect(userMessage).toContain('Submodule initialization failed');
-      expect(userMessage).toContain('was left behind');
+      expectKeptWithoutRemovalAdvice(error);
     });
 
     test.each(['ownership changes', 'status fails'])(
@@ -1373,7 +1380,13 @@ describe('submodules', () => {
         });
         const error = await rejection(provider.create(issueRequest));
         expect(error.message).toContain('Submodule initialization failed');
-        expect(classifyIsolationError(error)).toContain('was left behind');
+        // A failed status is a failure on this attempt's own checkout. A lock that became
+        // another attempt's is not: the notice must not send anyone to remove that path.
+        if (failure === 'status fails') {
+          expect(classifyIsolationError(error)).toContain('was left behind');
+        } else {
+          expectKeptWithoutRemovalAdvice(error);
+        }
         expect(ranGit('remove')).toBe(false);
       }
     );

@@ -382,7 +382,7 @@ Fresh CLI runs do not create a chat conversation, message history, or title. Exe
 
 By default, a run:
 
-- creates a worktree on a generated branch, `archon/task-<workflow>-<timestamp>` (identifiers longer than 50 slug characters use a shortened prefix and a digest of the full identifier);
+- creates a worktree on a generated branch, `archon/task-<workflow>-<run id>` (identifiers longer than 50 slug characters use a shortened prefix and a digest of the full identifier), so starts of one workflow at the same instant each get their own branch and worktree;
 - registers the codebase on first use in a git repository;
 - reads `.archon/config.yaml` from the launch checkout, not the new worktree, so uncommitted and gitignored config applies.
 
