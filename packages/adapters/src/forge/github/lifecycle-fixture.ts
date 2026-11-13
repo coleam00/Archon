@@ -218,12 +218,15 @@ export function rerunGitHub(
     check?: Record<string, unknown>;
     run?: Record<string, unknown>;
     oldAttempt?: boolean;
+    /** How many reads after the rerun still show the old attempt before the new one appears. */
+    staleReads?: number;
     failureGroup?: string;
     failureStatus?: number;
     readFailed?: boolean;
   } = {}
 ) {
   const posted: string[] = [];
+  let staleReads = options.staleReads ?? 0;
   const postRerun = (runId: string) => {
     posted.push(runId);
     if (options.failureGroup === runId) {
@@ -258,7 +261,7 @@ export function rerunGitHub(
       id: Number(runId),
       head_sha: 'headsha',
       check_suite_id: Number(runId),
-      run_attempt: posted.includes(runId) && !options.oldAttempt ? 2 : 1,
+      run_attempt: posted.includes(runId) && !options.oldAttempt && staleReads-- <= 0 ? 2 : 1,
       status: 'completed',
       conclusion: 'failure',
       ...options.run,

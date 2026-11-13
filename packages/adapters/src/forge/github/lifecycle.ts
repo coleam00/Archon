@@ -2,7 +2,8 @@
  * GitHub's work-item and pull-request lifecycle operations.
  *
  * Lifecycle mutations submit at most one write; check reruns submit one per run.
- * Each write is read back before claiming success. The outcome is decided by
+ * Each write is read back before claiming success; a rerun's read-back repeats for a
+ * short bounded time, because GitHub reports the newer attempt late. The outcome is decided by
  * how far the write got: nothing submitted is a refusal, a submitted request whose
  * answer was lost is unknown, and an acknowledged write whose read-back does not
  * agree is a verification failure carrying what may remain on the forge.
@@ -29,9 +30,11 @@ import {
 export async function handleGithubMutation(
   request: ForgeMutationRequest,
   fetchImpl: Fetch,
-  token: string
+  token: string,
+  sleep: (ms: number) => Promise<unknown>
 ): Promise<ForgeResponse> {
-  if (request.op === 'checks.rerun') return handleGithubChecksRerun(request, fetchImpl, token);
+  if (request.op === 'checks.rerun')
+    return handleGithubChecksRerun(request, fetchImpl, token, sleep);
   const progress: { phase: 'not_submitted' | 'submitted' | 'acknowledged' } = {
     phase: 'not_submitted',
   };

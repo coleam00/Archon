@@ -15,7 +15,20 @@ interface RerunContext {
   token: string;
   base: string;
   revision: string;
+  sleep: Sleep;
+  /** The waits still unused; every run in one request draws from the same list. */
+  readBackWaits: Iterator<number>;
 }
+
+type Sleep = (ms: number) => Promise<unknown>;
+
+/**
+ * GitHub accepts a rerun before the workflow run reports its newer attempt, so the read-back
+ * repeats after each of these waits. Their sum must stay well below the time the host gives a
+ * plugin process (`FORGE_PLUGIN_TIMEOUT_MS`): a killed plugin reports a timeout instead of
+ * the acknowledged rerun.
+ */
+const READ_BACK_WAITS_MS = [1_000, 2_000, 3_000, 4_000, 5_000];
 
 /** How far the write phase got, so a failure can say whether a rerun may already have started. */
 interface RerunProgress {
@@ -41,7 +54,8 @@ type CheckRun = z.infer<typeof checkRunSchema>;
 export async function handleGithubChecksRerun(
   request: RerunRequest,
   fetchImpl: Fetch,
-  token: string
+  token: string,
+  sleep: Sleep
 ): Promise<ForgeResponse> {
   const progress: RerunProgress = {
     observed: [],
@@ -56,6 +70,8 @@ export async function handleGithubChecksRerun(
       token,
       base: `${root}/repos/${path}`,
       revision: request.revision,
+      sleep,
+      readBackWaits: READ_BACK_WAITS_MS.values(),
     };
     await requirePullHead(github, request.ref.number);
     const groups = await eligibleRerunGroups(github, request.units);
@@ -145,7 +161,10 @@ function isFailedRunAttempt(
   );
 }
 
-/** Reruns one workflow run's failed jobs and reads it back to prove a newer attempt started. */
+/**
+ * Reruns one workflow run's failed jobs and reads it back to prove a newer attempt started.
+ * The write is sent once; only the read repeats.
+ */
 async function rerunGroup(
   github: RerunContext,
   id: string,
@@ -165,26 +184,45 @@ async function rerunGroup(
     },
     'empty'
   );
-  const run = workflowRunSchema.parse(
-    await githubGet(github, `actions/runs/${encodeURIComponent(id)}`)
-  );
-  if (
-    String(run.id) !== id ||
-    run.head_sha !== github.revision ||
-    run.check_suite_id !== group.suiteId ||
-    run.run_attempt <= group.attempt
-  )
-    throw new GitHubError({
-      kind: 'invalid_response',
-      message: 'Workflow rerun read-back did not establish a newer attempt',
-    });
+  const attempt = await newerAttempt(github, id, group);
   progress.observed.push(
     ...group.units.map(selected => ({
       unit: selected.unit,
-      rerun: { id, attempt: run.run_attempt },
+      rerun: { id, attempt },
     }))
   );
   progress.submitted = false;
+}
+
+/**
+ * Reads the run until it reports an attempt newer than the one rerun, waiting between reads.
+ * A run that is still at the old attempt when the waits run out fails: the rerun was accepted,
+ * but nothing read proves it started.
+ */
+async function newerAttempt(github: RerunContext, id: string, group: RerunGroup): Promise<number> {
+  for (;;) {
+    const run = workflowRunSchema.parse(
+      await githubGet(github, `actions/runs/${encodeURIComponent(id)}`)
+    );
+    if (
+      String(run.id) !== id ||
+      run.head_sha !== github.revision ||
+      run.check_suite_id !== group.suiteId
+    )
+      throw new GitHubError({
+        kind: 'invalid_response',
+        message: 'Workflow rerun read-back returned a different run than the one rerun',
+      });
+    if (run.run_attempt > group.attempt) return run.run_attempt;
+    const wait = github.readBackWaits.next();
+    if (wait.done)
+      throw new GitHubError({
+        kind: 'invalid_response',
+        message:
+          'GitHub accepted the workflow rerun, but the run showed no newer attempt in the time waited',
+      });
+    await github.sleep(wait.value);
+  }
 }
 
 function githubGet(github: RerunContext, path: string): Promise<unknown> {

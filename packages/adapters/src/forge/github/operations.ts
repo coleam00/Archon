@@ -190,11 +190,13 @@ export async function handleGithubOperation(
     }
     const fetchImpl = options.fetch ?? globalThis.fetch;
     const token = options.token;
-    if (isMutationRequest(request)) return await handleGithubMutation(request, fetchImpl, token);
+    const sleep = options.sleep ?? Bun.sleep;
+    if (isMutationRequest(request))
+      return await handleGithubMutation(request, fetchImpl, token, sleep);
     // Keyed by the request's own op, the handler takes that request; TypeScript cannot
     // correlate the table's members with the request union on its own.
     const read = readHandlers[request.op] as ReadHandler<ReadOp>;
-    return await readWithRetry(() => read(request, fetchImpl, token), options.sleep ?? Bun.sleep);
+    return await readWithRetry(() => read(request, fetchImpl, token), sleep);
   } catch (cause) {
     return failure(request.operationId, githubErrorDetail(cause));
   }
