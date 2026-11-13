@@ -385,6 +385,109 @@ describe('trigger CLI durable execution', () => {
         'SELECT key FROM remote_agent_items ORDER BY key'
       )
     ).toEqual([{ key: 'item-1' }, { key: 'item-2' }]);
+
+    // A continuation stays on the item of the run it continues; `--item` still wins, and
+    // continuing a run with no item gives none. `--adopt` writes the same
+    // `adopted_from_run_id` and needs a worktree run, so the store's conformance test covers it.
+    const continued = (args: string[]) =>
+      invoke(['workflow', 'run', 'item-proof', '--no-worktree', ...args]);
+    const [onItem] = started;
+    const bare = all.find(run => run.item_key === null);
+    if (!onItem || !bare) throw new Error('Expected a run on item-1 and a run with no item');
+    await continued(['--supersedes', onItem.id]);
+    await continued(['--supersedes', onItem.id, '--item', 'item-2']);
+    await continued(['--supersedes', bare.id]);
+    await settled(7);
+    expect(
+      readRows<{ continues: string; item_key: string | null }>(
+        join(fixture.archonHome, 'archon.db'),
+        `SELECT r.adopted_from_run_id AS continues, i.key AS item_key
+           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
+          WHERE r.adopted_from_run_id IS NOT NULL ORDER BY i.key`
+      )
+    ).toEqual([
+      { continues: bare.id, item_key: null },
+      { continues: onItem.id, item_key: 'item-1' },
+      { continues: onItem.id, item_key: 'item-2' },
+    ]);
+  }, 90_000);
+
+  test('an inherited item is refused in another project, and an item named there starts', async () => {
+    const fixture = await heldTriggerRun('item-cross');
+    const root = join(fixture.projectRoot, '..');
+    const otherRoot = join(root, 'other');
+    mkdirSync(join(otherRoot, '.archon', 'workflows'), { recursive: true });
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: otherRoot }).exited).toBe(0);
+    writeFileSync(
+      join(otherRoot, '.archon', 'workflows', 'other-proof.yaml'),
+      'name: other-proof\ndescription: other proof.\nmutates_checkout: false\nnodes:\n  - id: done\n    bash: echo done\n'
+    );
+    const config = JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
+    config.binding = {
+      ...config.binding,
+      bindingId: 'other-proof',
+      resource: 'other:resource',
+      launch: { ...config.binding.launch, cwd: otherRoot, workflowName: 'other-proof' },
+    };
+    const otherConfig = join(root, 'other.json');
+    writeFileSync(otherConfig, JSON.stringify(config));
+    // The run fires into the other project three times: with no item while that project
+    // is unregistered, with an item named, and with no item once it is registered.
+    const fire = `'${process.execPath}' '${fixture.cliPath}' trigger fire --config '${otherConfig}'`;
+    const refusal = (name: string) => join(root, `refused-${name}`);
+    const refusedFire = (name: string) =>
+      `${fire} > '${refusal(name)}' 2>&1; echo "exit $?" >> '${refusal(name)}'`;
+    fixture.writeWorkflow(
+      `${refusedFire('unregistered')}; ${fire} --item item-1 || exit 1; ${refusedFire('registered')}`
+    );
+    const database = join(fixture.archonHome, 'archon.db');
+    const runs = () =>
+      readRows<{ workflow_name: string; status: string; item: string | null }>(
+        database,
+        `SELECT r.workflow_name, r.status, i.key || ' in ' || i.project_key AS item
+           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
+          ORDER BY r.workflow_name`
+      );
+
+    await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+      'trigger',
+      'fire',
+      '--config',
+      join(root, 'trigger.json'),
+      '--item',
+      'item-1',
+    ]);
+    const settled = await waitFor(
+      () =>
+        runs().length === 2 && runs().every(run => run.status === 'completed') ? runs() : undefined,
+      'both runs to complete'
+    );
+    const projects = readRows<{ project_key: string }>(
+      database,
+      'SELECT project_key FROM remote_agent_items ORDER BY created_at, project_key'
+    ).map(row => row.project_key);
+    expect(new Set(projects).size).toBe(2);
+    const [own, other] = projects;
+    expect(settled.map(run => run.item)).toEqual([
+      `item-1 in ${String(own)}`,
+      `item-1 in ${String(other)}`,
+    ]);
+    // Each refusal exits non-zero before a receipt: only the two starts were recorded.
+    const unregistered = readFileSync(refusal('unregistered'), 'utf8');
+    expect(unregistered).toContain(`project '${String(own)}'`);
+    expect(unregistered).toContain(otherRoot);
+    expect(unregistered).toContain('--item');
+    expect(unregistered).toContain('exit 1');
+    const registered = readFileSync(refusal('registered'), 'utf8');
+    expect(registered).toContain(`project '${String(own)}'`);
+    expect(registered).toContain(`project '${String(other)}'`);
+    expect(registered).toContain('exit 1');
+    expect(
+      readRows<{ count: number }>(
+        database,
+        'SELECT COUNT(*) AS count FROM remote_agent_start_receipts'
+      )
+    ).toEqual([{ count: 2 }]);
   }, 60_000);
 
   test.skipIf(process.platform === 'win32')(

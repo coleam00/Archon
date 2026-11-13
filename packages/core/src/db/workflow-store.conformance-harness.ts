@@ -479,4 +479,45 @@ export function describeSqlStatusReadConformance(
       await harness.close();
     }
   });
+
+  test('a continuation belongs to the item of the run it continues unless it names its own', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const otherProject = randomUUID();
+      await db.query(
+        "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, 'other', '/other')",
+        [otherProject]
+      );
+      const run = (
+        input: { item_key?: string; adopted_from_run_id?: string },
+        codebase_id = CONFORMANCE_CODEBASE_ID
+      ) =>
+        store.createWorkflowRun({ workflow_name: 'item', user_message: '', codebase_id, ...input });
+      const first = await run({ item_key: 'a' });
+      const round = await run({ adopted_from_run_id: first.id });
+      expect(round.item_id).toBe(first.item_id);
+      // A continuation of a continuation is still the same item.
+      expect((await run({ adopted_from_run_id: round.id })).item_id).toBe(first.item_id);
+
+      const renamed = await run({ adopted_from_run_id: first.id, item_key: 'b' });
+      expect(await store.getItem(renamed.item_id ?? '')).toMatchObject({ key: 'b' });
+
+      const bare = await run({});
+      expect((await run({ adopted_from_run_id: bare.id })).item_id).toBeNull();
+
+      // The item belongs to one project: another project's continuation must name its own.
+      const project = (name: string, cwd: string) =>
+        projectKeyForCodebase({ name, default_cwd: cwd }, '');
+      const refused = run({ adopted_from_run_id: first.id }, otherProject);
+      await expect(refused).rejects.toThrow(project('conformance', '/conformance'));
+      await expect(refused).rejects.toThrow(project('other', '/other'));
+      const named = await run({ adopted_from_run_id: first.id, item_key: 'a' }, otherProject);
+      expect(named.item_id).not.toBe(first.item_id);
+      const runs = await db.query<{ id: string }>('SELECT id FROM remote_agent_workflow_runs');
+      expect(runs.rows).toHaveLength(7);
+    } finally {
+      await harness.close();
+    }
+  });
 }

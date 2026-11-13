@@ -37,7 +37,7 @@ import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
 import type { TransactionQuery } from './resource-slots';
-import { ensureItem } from './items';
+import { continuedItem, ensureItem } from './items';
 import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
@@ -54,7 +54,10 @@ export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[
 export async function insertWorkflowRun(
   query: TransactionQuery,
   data: WorkflowRunInsert,
-  /** The item a start's preparation already resolved; otherwise `data.item_key` names it. */
+  /**
+   * The item a start's preparation already resolved. Otherwise `data.item_key` names it,
+   * and a continuation that names none stays on the item of the run it continues.
+   */
   preparedItemId: string | null = null
 ): Promise<WorkflowRun> {
   validateWorkflowWaitMetadata(data.metadata);
@@ -73,9 +76,11 @@ export async function insertWorkflowRun(
     ]);
     const itemId =
       preparedItemId ??
-      (data.item_key === undefined
-        ? null
-        : await ensureItem(query, data.codebase_id, data.item_key));
+      (data.item_key !== undefined
+        ? await ensureItem(query, data.codebase_id, data.item_key)
+        : data.adopted_from_run_id !== undefined
+          ? await continuedItem(query, data.codebase_id, data.adopted_from_run_id)
+          : null);
     const row = await insertRunRow(
       query,
       data,
