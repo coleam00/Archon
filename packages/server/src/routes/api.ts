@@ -34,6 +34,7 @@ import { registerWebPushRoutes } from './api.web-push';
 import { registerWorkflowRunLaunchRoute } from './api.workflow-run-launch';
 import { registerDashboardRunsRoute, registerWorkflowRunReadRoutes } from './api.workflow-runs';
 import { registerWorkflowDefinitionRoutes, registerWorkflowListRoute } from './api.workflows';
+import type { AppCommit } from './schemas/system.schemas';
 import { RUN_ATTENTION_SCHEMA_NAME, runAttentionSchema } from './schemas/workflow.schemas';
 
 /**
@@ -49,7 +50,8 @@ export function registerApiRoutes(
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[],
   attention?: { webPush: WebPushDestination; router: AttentionRouter },
-  registration: Pick<CloneOptions, 'githubAppAuth'> = {}
+  registration: Pick<CloneOptions, 'githubAppAuth'> = {},
+  commit?: AppCommit
 ): void {
   const operations = createSqlWorkflowOperations();
   const dispatchToOrchestrator = createOrchestratorDispatch(webAdapter, lockManager);
@@ -125,5 +127,5 @@ export function registerApiRoutes(
   registerProviderRoutes(app);
   registerCodebaseEnvironmentRoute(app);
   registerWebPushRoutes(app, attention);
-  registerHealthRoutes(app, { lockManager, activePlatforms, attention });
+  registerHealthRoutes(app, { lockManager, activePlatforms, attention, commit });
 }

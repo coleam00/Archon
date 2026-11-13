@@ -6,6 +6,7 @@ import { getSourceWebDistDir } from '@archon/paths';
 import { serveWebUi } from './static-cache';
 import type { WebAdapter } from './adapters/web';
 import { registerApiRoutes } from './routes/api';
+import type { AppCommit } from './routes/schemas/system.schemas';
 import type { AttentionRouter } from './services/attention-router';
 import type { WebPushDestination } from './services/web-push';
 import {
@@ -29,6 +30,7 @@ export interface ServerRouteDeps {
   webhookSources: WebhookSourcePluginHost | undefined;
   requestResourceStartDrain: (() => void) | undefined;
   webDistPath: string | undefined;
+  commit: AppCommit | undefined;
 }
 
 /** Registers every HTTP route in precedence order; the SPA fallback comes last. */
@@ -44,9 +46,15 @@ export function registerServerRoutes(app: OpenAPIHono, deps: ServerRouteDeps): v
   mountWebAuth(app);
 
   // Register Web UI API routes
-  registerApiRoutes(app, deps.webAdapter, deps.lockManager, deps.activePlatforms, deps.attention, {
-    githubAppAuth: adapters.githubAppAuthProvider ?? undefined,
-  });
+  registerApiRoutes(
+    app,
+    deps.webAdapter,
+    deps.lockManager,
+    deps.activePlatforms,
+    deps.attention,
+    { githubAppAuth: adapters.githubAppAuthProvider ?? undefined },
+    deps.commit
+  );
 
   // GitHub webhook endpoint
   if (adapters.github) {
