@@ -175,6 +175,18 @@ describe('attention tool', () => {
     expect(out).toContain('1 more item(s) in every project are not listed');
   });
 
+  test('a user who may not answer an item learns nothing about it from its reference', async () => {
+    const theirs = { ...apiAsk, user_id: 'user-2' };
+    const { tool, answerWorkflow } = harness([theirs], null, { kind: 'user', userId: 'user-1' });
+    for (const item of ['run-api:pause-api', 'run-api:guessed', 'run-api']) {
+      const out = await tool.handler({ action: 'answer', item, choose: '["merge"]' });
+      expect(out).toContain(`nothing matches item '${item}'`);
+      expect(out).not.toContain('Merge this pull request?');
+      expect(out).not.toContain('pause-api:');
+    }
+    expect(answerWorkflow).not.toHaveBeenCalled();
+  });
+
   test('an answer without confirm is a preview and records nothing', async () => {
     const { tool, answerWorkflow } = harness([webAsk]);
     const out = await tool.handler({

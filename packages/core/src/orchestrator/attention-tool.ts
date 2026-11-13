@@ -243,11 +243,17 @@ function answerFor(item: Answerable, input: Record<string, unknown>): Answer | s
 }
 
 function describe(answer: Answer): string {
-  if (answer.kind === 'gate') return `'${answer.decision}'`;
-  if ('recommended' in answer.request) return 'the recommended option';
+  if (answer.kind === 'gate') return withText(`'${answer.decision}'`, answer.text);
+  const said = answer.request.text;
+  if ('recommended' in answer.request) return withText('the recommended option', said);
   return answer.request.choose.length === 0
-    ? 'the text'
-    : answer.request.choose.map(option => `'${option}'`).join(', ');
+    ? `the text "${said ?? ''}"`
+    : withText(answer.request.choose.map(option => `'${option}'`).join(', '), said);
+}
+
+/** `chosen`, followed by the text that goes with it when there is any. */
+function withText(chosen: string, said: string | undefined): string {
+  return said === undefined ? chosen : `${chosen} and the text "${said}"`;
 }
 
 /** The answerable item `ref` names, or why there is none to answer. */
@@ -256,9 +262,12 @@ async function answerableItem(
   ref: string
 ): Promise<Answerable | string> {
   const read = await readAttentionQueueItemByRef(ctx.queue, ref);
-  if (read.kind === 'unknown')
-    return `attention: nothing matches item '${ref}'. Call action=list and copy an item's ref.`;
+  const unknown = `attention: nothing matches item '${ref}'. Call action=list and copy an item's ref.`;
+  if (read.kind === 'unknown') return unknown;
   if (read.kind === 'none') return `attention: item '${ref}' is no longer open.`;
+  // An item the actor may not answer is answered like one that does not exist, so a
+  // guessed reference reads nothing about it: not its prompt and not its current reference.
+  if (!(await mayAnswer(ctx, read.item))) return unknown;
   if (read.kind === 'moved')
     return `attention: item '${ref}' is over; its run now asks something else, as item '${attentionItemRef(read.item)}'. Call action=list and answer what it asks now.`;
   const { item } = read;
