@@ -361,6 +361,38 @@ test('an invalid mutation request is refused before dispatch begins', async () =
   expect(output[0]).not.toHaveProperty('mutation');
 });
 
+test('a refused request names the fields the schema refused, not their values', async () => {
+  const output: unknown[] = [];
+  const unit = { kind: 'check', id: 'job-secret-id', name: 'e2e' };
+  const code = await forgeCommand(
+    'checks.rerun',
+    {
+      data: JSON.stringify({
+        ref: { repo: { host: 'forge.example', path: 'a/b' }, number: 9 },
+        revision: 'head',
+        // A bare check unit, where the request takes `{unit, rerun}` entries.
+        units: [unit],
+      }),
+    },
+    {
+      readConfig: async () => ({}),
+      dispatch: async () => {
+        throw new Error('must not dispatch');
+      },
+      write: async value => {
+        output.push(value);
+      },
+      env: {},
+    }
+  );
+  expect(code).toBe(1);
+  const { error } = output[0] as { error: { kind: string; message: string } };
+  expect(error.kind).toBe('invalid_request');
+  expect(error.message).toContain('units.0.unit');
+  expect(error.message).toContain('units.0.rerun');
+  expect(error.message).not.toContain(unit.id);
+});
+
 test('new work-item mutations use file requests and record content-free verified audits', async () => {
   const repo = { host: 'forge.example', path: 'a/b' };
   const ref = { repo, number: 4 };
