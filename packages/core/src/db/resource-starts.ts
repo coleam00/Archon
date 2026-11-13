@@ -1,4 +1,4 @@
-import { assertWorkflowNoticeLimit } from '@archon/workflows/workflow-notice';
+import { WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import { insertWorkflowEvent } from './workflow-events';
 import { z } from 'zod';
 import {
@@ -183,7 +183,7 @@ async function recordSkippedFireNotice(
       "SELECT COUNT(*) AS count FROM remote_agent_workflow_events WHERE workflow_run_id = $1 AND event_type = 'workflow_notice'",
       [notice.runId]
     );
-    assertWorkflowNoticeLimit(notice.runId, Number(count.rows[0]?.count ?? 0));
+    if (Number(count.rows[0]?.count ?? 0) >= WORKFLOW_NOTICE_LIMITS.perRun) return;
     await insertWorkflowEvent(query, {
       workflow_run_id: notice.runId,
       event_type: 'workflow_notice',

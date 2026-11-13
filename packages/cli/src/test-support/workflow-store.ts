@@ -1,4 +1,4 @@
-import { assertWorkflowNoticeLimit } from '@archon/workflows/workflow-notice';
+import { WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { resumeRefusal } from '@archon/workflows/resource-start-store';
@@ -223,7 +223,7 @@ export function createInMemoryWorkflowStore(
         const prior =
           (await view.listEventsForRuns([notice.runId], ['workflow_notice'])).get(notice.runId) ??
           [];
-        assertWorkflowNoticeLimit(notice.runId, prior.length);
+        if (prior.length >= WORKFLOW_NOTICE_LIMITS.perRun) return;
         await view.persistWorkflowEvent({
           workflow_run_id: notice.runId,
           event_type: 'workflow_notice',
