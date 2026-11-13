@@ -22,9 +22,10 @@ import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-sta
 import {
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
+  requestingRun,
   type SourceReceiptInput,
 } from '@archon/workflows/schemas/resource-start';
-import { readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
+import { assertItemKey, readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine } from '../utils/stdout';
@@ -154,6 +155,7 @@ type TriggerOptions = {
   limit?: string;
   deliveryId?: string;
   inputs?: string;
+  item?: string;
 };
 
 type TriggerDispatch = (requestId: string, hostId: string) => Promise<void>;
@@ -192,6 +194,19 @@ async function requestingSourceActor(
   return { source: RUN_SOURCE_ACTOR, id: caller.runId, display: caller.nodePath };
 }
 
+/** A fire from inside a run stays on that run's item; the root run of a sub-run holds it. */
+async function inheritedItemKey(
+  host: WorkflowHost,
+  sourceActor: SourceReceiptInput['sourceActor']
+): Promise<string | undefined> {
+  const caller = requestingRun(sourceActor);
+  if (!caller) return undefined;
+  const root =
+    (await host.deps.store.getRunAncestry(caller.runId)).at(-1) ??
+    (await host.deps.store.getWorkflowRun(caller.runId));
+  return root?.item_id ? (await host.deps.store.getItem(root.item_id))?.key : undefined;
+}
+
 async function triggerFire(
   host: WorkflowHost,
   options: TriggerOptions,
@@ -214,8 +229,10 @@ async function triggerFire(
       );
     }
   }
+  if (options.item !== undefined) assertItemKey(options.item);
   const config = await loadFireConfig(options.config);
   const sourceActor = await requestingSourceActor(host, env);
+  const itemKey = options.item ?? (await inheritedItemKey(host, sourceActor));
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
   // must not turn a recorded delivery into a failure; the store answers replay or
   // conflict for it. This lookup is the only run-as gate before persistence. It holds
@@ -242,6 +259,7 @@ async function triggerFire(
         receivedAt: new Date().toISOString(),
         occurredAt: null,
         sourceActor,
+        ...(itemKey === undefined ? {} : { itemKey }),
       },
       outcome: 'matched',
       bindings: [binding],

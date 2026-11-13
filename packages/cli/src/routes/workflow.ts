@@ -259,6 +259,7 @@ export async function runWorkflowRuns(route: WorkflowRoute): Promise<number> {
     status: values.status as string | undefined,
     limit,
     open: values.open as boolean | undefined,
+    item: values.item as string | undefined,
     verbose: values.verbose as boolean | undefined,
     throughput: values.throughput as boolean | undefined,
   });

@@ -190,6 +190,7 @@ async function createWorkflowRunRow(
         [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
       },
       ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
+      ...(opts.item === undefined ? {} : { item_key: opts.item }),
     });
     workflowRun.metadata = {
       ...workflowRun.metadata,

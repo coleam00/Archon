@@ -7,6 +7,7 @@ import { getPluginsPath } from '@archon/paths';
 import { scanReceipts } from '@archon/plugin-manifest/store';
 import { loadConfig } from '@archon/core/config/config-loader';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import { projectRefForCodebase } from '@archon/core/operations/attention-queue';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
 import { resolveDryRunEnvironment } from './workflow-dry-run';
 import { createCliWorkflowHost } from '../utils/workflow-host';
@@ -518,6 +519,7 @@ export async function workflowRunsCommand(
   if (codebase instanceof Error) return refuseRuns(opts, codebase);
   // The open-work inbox contains terminal failed runs with no adopter or successor.
   try {
+    if (opts.item !== undefined) return await listItemRuns(host, opts.item, opts, codebase);
     if (opts.open) return await listOpenWorkRuns(host, opts, codebase);
     return await listRecentRuns(host, cwd, opts, codebase, statusFilter);
   } catch (error) {
@@ -539,6 +541,8 @@ interface RunsOptions {
   status?: string;
   limit?: number;
   open?: boolean;
+  /** List every run of this item in the project, oldest first. */
+  item?: string;
   verbose?: boolean;
 }
 type RunsCodebase = Awaited<ReturnType<typeof findCodebaseForCheckoutPath>> | undefined;
@@ -577,6 +581,32 @@ async function findRunsCodebase(
     getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
     return new Error(`Failed to resolve workflow runs project: ${err.message}`, { cause: err });
   }
+}
+
+async function listItemRuns(
+  host: WorkflowHost,
+  item: string,
+  opts: RunsOptions,
+  codebase: RunsCodebase
+): Promise<number> {
+  if (!codebase) {
+    return refuseRuns(
+      opts,
+      new Error('--item lists the runs of an item in one registered project.')
+    );
+  }
+  const runs = await host.deps.store.listItemRuns(projectRefForCodebase(codebase).key, item);
+  if (opts.json) {
+    await writeJsonLine({ runs, total: runs.length });
+    return 0;
+  }
+  console.log(`\nRuns of item ${item} (${String(runs.length)}):\n`);
+  for (const run of runs) {
+    console.log(
+      `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow_name}${authoredOutcome(run)}  (${formatAge(run.started_at)})`
+    );
+  }
+  return 0;
 }
 
 async function listOpenWorkRuns(

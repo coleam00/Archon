@@ -226,6 +226,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Guards concurrent execution per `working_path`: direct executor dispatch is auto-cancelled with an actionable message when it finds an earlier-priority active run (status `pending`/`running`/`paused`) on the path. At exactly equal priority, a lower-ID contender can pass an admitted higher-ID holder; see the [checkout-priority limitation](#workflow-run-timestamps). Workflows declaring `mutates_checkout: false` bypass this executor guard. [Trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy) queues or skips guarded starts on held paths according to `overlap`, including paths held by manual runs or other resources. Read-only starts may proceed beside foreign holders; same-resource checkout serialization still applies. Pending rows older than 5 minutes are ignored by the path guard without changing their lifecycle state. A `workflow:` sub-run shares its parent's checkout unless the node declares `isolation: worktree`, so the path-lock excludes both the run's ancestor chain and its descendants (via `parent_run_id`) — a child never contends with its own parent. Children of the same `fan_out` node share the checkout by design, so the lock also excludes them, their descendants, and the fan-out siblings of each ancestor; each such pair is recorded as `workflow.checkout_shared` events. Other runs on the path, including children of a different node, still contend.
   - Stores workflow state, step progress, and parent conversation linkage
   - Nullable `user_id` records which user triggered the run
+  - Nullable `item_id` references the [item](/reference/cli/#items) the run belongs to. Written once at creation; null for a run started with no item
   - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.
   - `conversation_id` cascades on conversation delete: a hard `DELETE` of a conversation would erase its run rows and silently drop the live-run cleanup pin for their isolation environments (#2868). Soft delete is the only supported path — a future hard-delete must resolve live runs first.
 
@@ -305,7 +306,13 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 
 - **`remote_agent_start_receipts`** - Source delivery receipts
   - Records source instance, delivery ID, content digest, timestamps, and matching outcome
+  - Nullable `item_key` is the key the start named (`trigger fire --item`, or inherited from the firing run), recorded before the item's project is known
   - Deduplicates deliveries by `(source_instance_id, delivery_id)` when the source supplies a delivery ID; `delivery_id` is nullable, and the unique constraint does not deduplicate receipts without one
+
+- **`remote_agent_items`** - The durable thing runs are about
+  - `id`, `project_key`, `key` and `created_at`; `(project_key, key)` is unique. `project_key` is the engine's project key, the one `remote_agent_state_revisions` scopes by
+  - Holds no status, stage or config. Where an item stands is derived from its runs
+  - Written the first time a start or run names the key in a project. The engine gives `key` no meaning and never parses it
 
 - **`remote_agent_start_receipt_bindings`** - Per-binding preparation state for a source receipt
   - Keyed by `(receipt_id, binding_id)`; deleted with the owning receipt
@@ -323,6 +330,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Stores prepared launches, overlap policy, admission status, and blockers
   - Prepared launches are versioned. Version 2 carries the run's `origin`; version 1 launches queued by older binaries are still admitted, with their conversation and user read as the origin. Older binaries cannot read version 2, so before downgrading, drain or withdraw any queued or admitted request whose run has not started
   - `queue_position` orders waiting requests; optional receipt and binding linkage preserves source provenance
+  - Nullable `item_id` references the item a start named, resolved when the binding is prepared, so a start that waits for capacity already has its item. The run takes it at admission
 
 - **`remote_agent_auth_user` / `remote_agent_auth_session` / `remote_agent_auth_account` / `remote_agent_auth_verification`** - Better Auth tables for opt-in web login
   - **PostgreSQL only.** Always created on Postgres via the idempotent schema apply, but populated only when web auth is enabled (`DATABASE_URL` + `BETTER_AUTH_SECRET`)

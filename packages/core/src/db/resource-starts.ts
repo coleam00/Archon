@@ -48,6 +48,7 @@ import {
 } from './resource-slots';
 import { loadResourceCapacities } from '../config/concurrency-config';
 import { insertWorkflowRun } from './workflows';
+import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 
 interface RequestRow {
@@ -73,7 +74,12 @@ async function admitExisting(
   resource: string,
   start: { id: string; launch: PreparedWorkflowLaunch }
 ): Promise<ResourceStartDisposition> {
-  await insertWorkflowRun(query, start.launch.run);
+  // Preparation resolved the start's item onto its request; the run takes it from there.
+  const request = await query<{ item_id: string | null }>(
+    'SELECT item_id FROM remote_agent_resource_start_requests WHERE id = $1',
+    [start.id]
+  );
+  await insertWorkflowRun(query, start.launch.run, request.rows[0]?.item_id ?? null);
   await query(
     `UPDATE remote_agent_resource_start_requests
         SET status = 'admitted', admitted_at = ${getDialect().now()}, blocker_run_id = NULL
@@ -105,7 +111,8 @@ function disposition(row: RequestRow): ResourceStartDisposition {
 
 async function admitResourceStartWithQuery(
   query: Query,
-  intent: ResourceStartIntent
+  intent: ResourceStartIntent,
+  itemId: string | null = null
 ): Promise<ResourceStartDisposition> {
   await lockCheckoutReservations(query);
   const { capacity } = await lockResourceSlotForAdmission(query, intent.resource, intent.capacity);
@@ -123,8 +130,8 @@ async function admitResourceStartWithQuery(
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
     `INSERT INTO remote_agent_resource_start_requests
-       (id, resource_key, host_id, overlap_policy, status, blocker_run_id, blocker_kind, launch, receipt_id, binding_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)`,
+       (id, resource_key, host_id, overlap_policy, status, blocker_run_id, blocker_kind, launch, receipt_id, binding_id, item_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)`,
     [
       intent.launch.run.id,
       intent.resource,
@@ -136,6 +143,7 @@ async function admitResourceStartWithQuery(
       JSON.stringify(intent.launch),
       intent.receipt?.receiptId ?? null,
       intent.receipt?.bindingId ?? null,
+      itemId,
     ]
   );
   const row: RequestRow = {
@@ -272,8 +280,8 @@ export async function acceptStartReceipt(
   return getDatabase().withTransaction(async query => {
     const inserted = await query(
       `INSERT INTO remote_agent_start_receipts
-       (id, source_instance_id, delivery_id, content_digest, received_at, occurred_at, source_actor, outcome, reason)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)
+       (id, source_instance_id, delivery_id, content_digest, received_at, occurred_at, source_actor, outcome, reason, item_key)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)
        ON CONFLICT DO NOTHING`,
       [
         input.receipt.id,
@@ -285,6 +293,7 @@ export async function acceptStartReceipt(
         JSON.stringify(input.receipt.sourceActor),
         input.outcome,
         input.reason ?? null,
+        input.receipt.itemKey ?? null,
       ]
     );
     if (inserted.rowCount === 0) {
@@ -447,6 +456,7 @@ export async function getStartReceipt(id: string): Promise<StartReceiptInspectio
     sourceActor: sourceReceiptInputSchema.shape.sourceActor.parse(
       parseStoredJson(row.source_actor)
     ),
+    itemKey: typeof row.item_key === 'string' ? row.item_key : null,
     outcome: row.outcome as StartReceiptInspection['outcome'],
     reason: typeof row.reason === 'string' ? row.reason : null,
     bindings: bindings.rows.map(inspectBinding),
@@ -632,7 +642,8 @@ export async function completeStartBindingPreparation(
     const persisted = resourceStartBindingIntentSchema.parse(parseStoredJson(rawIntent));
     const disposition = await admitResourceStartWithQuery(
       query,
-      preparedBindingStart(persisted, input)
+      preparedBindingStart(persisted, input),
+      await namedItem(query, input)
     );
     await query(
       `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete', preparation_error = NULL, updated_at = ${getDialect().now()}
@@ -641,6 +652,20 @@ export async function completeStartBindingPreparation(
     );
     return disposition;
   });
+}
+
+/**
+ * The item the receipt named, in the project preparation resolved. It is written with the
+ * start request, so a start that waits for capacity already has its item.
+ */
+async function namedItem(query: Query, input: PreparedBindingInput): Promise<string | null> {
+  const receipt = await query<{ item_key: string | null }>(
+    'SELECT item_key FROM remote_agent_start_receipts WHERE id = $1',
+    [input.receiptId]
+  );
+  const key = receipt.rows[0]?.item_key;
+  if (!key) return null;
+  return ensureItem(query, input.launch.run.codebase_id, key);
 }
 
 export async function failStartBindingPreparation(input: {

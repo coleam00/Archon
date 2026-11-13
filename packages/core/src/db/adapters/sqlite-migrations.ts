@@ -151,6 +151,12 @@ const sqliteMigrations: readonly Migration[] = [
   {
     kind: 'tolerated',
     scope: 'schema',
+    failureEvent: 'db.sqlite_migration_item_columns_failed',
+    apply: addItemColumns,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
     failureEvent: 'db.sqlite_migration_state_revisions_columns_failed',
     apply: addStateRevisionColumns,
   },
@@ -445,6 +451,26 @@ function addReceiptBindingColumns(db: Database): void {
   if (!columnNames(db, 'remote_agent_start_receipt_bindings').has('event_input_names')) {
     db.run('ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN event_input_names TEXT');
   }
+}
+
+// A receipt records the key a start named; its start request and the run point at the item.
+function addItemColumns(db: Database): void {
+  if (!columnNames(db, 'remote_agent_start_receipts').has('item_key')) {
+    db.run('ALTER TABLE remote_agent_start_receipts ADD COLUMN item_key TEXT');
+  }
+  if (!columnNames(db, 'remote_agent_resource_start_requests').has('item_id')) {
+    db.run(
+      'ALTER TABLE remote_agent_resource_start_requests ADD COLUMN item_id TEXT REFERENCES remote_agent_items(id)'
+    );
+  }
+  if (!columnNames(db, 'remote_agent_workflow_runs').has('item_id')) {
+    db.run(
+      'ALTER TABLE remote_agent_workflow_runs ADD COLUMN item_id TEXT REFERENCES remote_agent_items(id)'
+    );
+  }
+  db.run(
+    'CREATE INDEX IF NOT EXISTS idx_workflow_runs_item ON remote_agent_workflow_runs(item_id) WHERE item_id IS NOT NULL'
+  );
 }
 
 // writer_via: the surface a state write outside a run came through; older rows came

@@ -249,8 +249,10 @@ export function createInMemoryResourceStartStore(
           throw new SourceReceiptDigestConflictError();
         return { receiptId: previous.id, replay: true };
       }
+      if (input.receipt.itemKey !== undefined) throw new Error('The test store has no items');
       receipts.set(input.receipt.id, {
         ...structuredClone(input.receipt),
+        itemKey: null,
         outcome: input.outcome,
         reason: input.reason ?? null,
         bindings: [

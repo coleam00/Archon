@@ -149,6 +149,7 @@ export function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
   };
 }
@@ -280,6 +281,12 @@ export function createMockStore(): MockWorkflowStore {
       throw new Error('Unexpected deleteWorkflowNodeSessions');
     }),
     findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    listItemRuns: mock<IWorkflowStore['listItemRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    getItem: mock<IWorkflowStore['getItem']>(async () => {
       throw new Error('Not used by this test');
     }),
     findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {

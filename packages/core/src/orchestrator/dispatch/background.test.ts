@@ -189,6 +189,7 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
   });
 });
 const mockFailWorkflowRun = mock<IWorkflowStore['failWorkflowRun']>(() =>

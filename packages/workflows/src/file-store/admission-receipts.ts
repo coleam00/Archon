@@ -24,6 +24,7 @@ import {
   type StartBindingInspection,
 } from '../resource-start-store';
 import { readJson } from './commit';
+import { FileStoreUnsupportedError } from './errors';
 import { disposition, documentPaths, type AdmissionTransaction } from './admission-transaction';
 
 export type AdmissionWrite = <T>(
@@ -73,6 +74,7 @@ export function createReceiptOperations(
     acceptStartReceipt: input =>
       write(async tx => {
         sourceReceiptAcceptanceSchema.parse(input);
+        if (input.receipt.itemKey !== undefined) throw new FileStoreUnsupportedError('items');
         const deliveryPath =
           input.receipt.deliveryId === null
             ? null
@@ -134,6 +136,7 @@ export function createReceiptOperations(
         return row
           ? {
               ...receiptFieldsSchema.parse(row),
+              itemKey: null,
               outcome: row.outcome,
               reason: row.reason,
               bindings: await Promise.all(
