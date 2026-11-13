@@ -1619,9 +1619,11 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
 - **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
 - **Don't run the workflow concurrently.** A workflow with `worktree: enabled: false` shares
   one working path. With the default `mutates_checkout: true`, direct executor dispatch
-  rejects a second run on a held path with "This worktree is in use"; the operator must
-  re-run it afterwards. Trigger admission instead queues or skips the request according
-  to `overlap`, naming the holding run as its blocker. See
+  rejects a second run when it finds an earlier-priority holder with "This worktree is in
+  use"; the operator must re-run it afterwards. Exact-priority ties can bypass an admitted
+  holder; see the [checkout-priority limitation](/reference/database/#workflow-run-timestamps).
+  Trigger admission instead queues or skips the request according to `overlap`, naming the
+  holding run as its blocker. See
   [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
   `mutates_checkout: false` bypasses the executor's path lock, so it does not prevent
   concurrent state writes.
@@ -2585,13 +2587,16 @@ happens next depends on whether those children share a checkout.
 Children **in their own worktrees** (`isolation: worktree`) never interact: separate
 directories, separate branches.
 
-Children **sharing the parent's checkout** meet the engine's path-exclusive lock. Every run
-takes a lock on its working path at start, and a run that finds the path already held by
-another active run **cancels itself**. The lock excludes a run's own ancestors and
-descendants: a child never blocks against its own parent. Children of the **same
-`fan_out` node** are also excluded and may share the checkout. Children of different
-`workflow:` nodes are not excluded. Two such children in one layer over one checkout collide:
-the older run keeps the path, the younger one cancels itself, and the parent run fails.
+Children **sharing the parent's checkout** meet the engine's path-priority guard. At start,
+a run that finds an earlier-priority active run on its working path **cancels itself**.
+At exactly equal effective priority, a later lower-ID contender can pass an already
+admitted higher-ID holder, so overlapping execution is possible; see the
+[checkout-priority limitation](/reference/database/#workflow-run-timestamps).
+The guard excludes a run's own ancestors and descendants: a child never blocks against
+its own parent. Children of the **same `fan_out` node** are also excluded and may share the
+checkout. Children of different `workflow:` nodes are not excluded. When two such children
+in one layer collide, the earlier-priority run keeps the path, the other cancels itself,
+and the parent run fails.
 
 > **Resume does not recover from this.** A parent's resume re-drives a *failed* child, but a
 > *cancelled* one is threaded straight through as it stands, so a parent that failed this
@@ -2611,9 +2616,11 @@ nodes:
 ```
 
 `mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
-to its checkout, so the engine skips the path lock for it. It defaults to `true` (take the
-lock, prevent overlapping execution on the same path). Direct executor dispatch rejects a
-run on a held path; [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy)
+to its checkout, so the engine skips the path lock for it. It defaults to `true` (apply the
+path-priority guard, subject to the
+[exact-priority tie limitation](/reference/database/#workflow-run-timestamps)).
+Direct executor dispatch rejects a run when it finds an earlier-priority holder;
+[trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy)
 queues or skips it according to `overlap`. It is author-declared on purpose: the author of a
 review or research workflow is the one who knows it only reads. Children launched by
 separate `workflow:` nodes still compete for the path lock unless they declare it.
