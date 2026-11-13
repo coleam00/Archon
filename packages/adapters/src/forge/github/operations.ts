@@ -16,6 +16,7 @@ import {
   parseSubjectUrl,
   TransientGitHubError,
   type Fetch,
+  type Sleep,
 } from './api';
 import { handleGithubChecksLogs } from './check-logs';
 import { handleGithubChecksCommit, handleGithubChecksState } from './commit-checks';
@@ -81,7 +82,7 @@ export const githubPluginMetadata = {
 export interface GitHubOperationOptions {
   readonly token: string | undefined;
   readonly fetch?: Fetch;
-  readonly sleep?: (ms: number) => Promise<unknown>;
+  readonly sleep?: Sleep;
 }
 
 /** The waits before each repeat of a read; their count is the number of repeats. */
@@ -95,7 +96,7 @@ const READ_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
  */
 async function readWithRetry(
   read: () => Promise<ForgeResponse>,
-  sleep: (ms: number) => Promise<unknown>
+  sleep: Sleep
 ): Promise<ForgeResponse> {
   for (let attempt = 0; ; attempt++) {
     try {

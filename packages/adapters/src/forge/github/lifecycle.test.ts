@@ -659,7 +659,7 @@ test('an accepted rerun whose newer attempt never appears is unverified, not ref
   });
   // The wait stays well inside the 30 second limit the host gives a plugin process.
   expect(waited).toBeGreaterThan(0);
-  expect(waited).toBeLessThanOrEqual(20_000);
+  expect(waited).toBeLessThanOrEqual(15_000);
   expect(github.posted).toEqual(['100']);
 });
 

@@ -4,7 +4,14 @@ import {
   type ForgeResponse,
   type SelectedCheck,
 } from '@archon/forge/operations';
-import { GitHubError, githubErrorDetail, githubRequest, location, type Fetch } from './api';
+import {
+  GitHubError,
+  githubErrorDetail,
+  githubRequest,
+  location,
+  type Fetch,
+  type Sleep,
+} from './api';
 import { workflowRunSchema, type WorkflowRun } from './workflow-runs';
 
 type RerunRequest = Extract<ForgeMutationRequest, { op: 'checks.rerun' }>;
@@ -19,8 +26,6 @@ interface RerunContext {
   /** The waits still unused; every run in one request draws from the same list. */
   readBackWaits: Iterator<number>;
 }
-
-type Sleep = (ms: number) => Promise<unknown>;
 
 /**
  * GitHub accepts a rerun before the workflow run reports its newer attempt, so the read-back

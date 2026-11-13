@@ -10,7 +10,7 @@
  */
 
 import type { ForgeMutationRequest, ForgeResponse } from '@archon/forge/operations';
-import { GitHubError, githubErrorDetail, type Fetch } from './api';
+import { GitHubError, githubErrorDetail, type Fetch, type Sleep } from './api';
 import { handleGithubChecksRerun } from './checks-rerun';
 import { refused, unknown, unverified, type Submit } from './mutation-outcome';
 import { createPullRequest, editPullRequestBody, setDraftState } from './pull-requests';
@@ -31,7 +31,7 @@ export async function handleGithubMutation(
   request: ForgeMutationRequest,
   fetchImpl: Fetch,
   token: string,
-  sleep: (ms: number) => Promise<unknown>
+  sleep: Sleep
 ): Promise<ForgeResponse> {
   if (request.op === 'checks.rerun')
     return handleGithubChecksRerun(request, fetchImpl, token, sleep);
