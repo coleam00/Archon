@@ -14,7 +14,7 @@ import { K } from '../store/keys';
 import * as skill from '../skills';
 import { HttpError } from '../lib/http';
 import { orderWithRecommended } from '../lib/recommended';
-import { missingRequiredInputs, collectSuppliedInputs } from '../lib/workflow-inputs';
+import { collectSuppliedInputs } from '../lib/workflow-inputs';
 import { collectRunModelOverrides, type RunModelOverrideRow } from '../lib/run-model-overrides';
 
 interface DraftRunCardProps {
@@ -156,7 +156,6 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   // Declared inputs of the selected workflow (#2554). Empty for the overwhelming
   // majority of workflows, which declare none and render exactly as before.
   const declaredInputs = sortedWorkflows.find(w => w.name === workflowName)?.inputs ?? [];
-  const missingRequired = missingRequiredInputs(declaredInputs, inputValues);
 
   // Switching workflows discards values collected for the previous one — they were
   // typed against a different declaration and would be rejected as undeclared keys.
@@ -208,12 +207,6 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   const submit = async (): Promise<void> => {
     if (workflowName.length === 0) {
       setError('Pick a workflow first.');
-      return;
-    }
-    if (missingRequired.length > 0) {
-      setError(
-        `Fill in ${missingRequired.map(n => `"${n}"`).join(', ')} before starting this run.`
-      );
       return;
     }
     setError(null);
@@ -365,10 +358,7 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
         <button
           type="button"
           onClick={() => void submit()}
-          disabled={submitting || workflowName.length === 0 || missingRequired.length > 0}
-          title={
-            missingRequired.length > 0 ? `Fill in ${missingRequired.join(', ')} first` : undefined
-          }
+          disabled={submitting || workflowName.length === 0}
           className="brand-bar flex items-center gap-1.5 rounded-lg px-3.75 py-2.25 text-console-13 font-bold text-white shadow-[0_6px_18px_-8px_color-mix(in_oklch,var(--brand-magenta),transparent_30%)] transition-all hover:-translate-y-px hover:brightness-110 active:brightness-95 disabled:translate-y-0 disabled:opacity-50 disabled:shadow-none"
         >
           {submitting ? 'Starting…' : 'Start run'}
@@ -377,14 +367,6 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
           </span>
         </button>
       </div>
-
-      {/* Say WHY the button is disabled — a dead control with no reason is the
-              failure mode this replaces. */}
-      {error === null && missingRequired.length > 0 ? (
-        <p className="mt-1 font-mono text-console-11 text-text-tertiary">
-          needs {missingRequired.join(', ')}
-        </p>
-      ) : null}
 
       {error !== null ? <p className="mt-1 font-mono text-console-11 text-error">{error}</p> : null}
     </>
@@ -479,9 +461,9 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
           </button>
         </div>
 
-        {/* Declared inputs (#2554) — only for workflows that declare a signature.
-            Values are validated server-side against the same contract a composing
-            `with:` map goes through, before any worktree, clone, or AI cost. */}
+        {/* Declared inputs (#2554) — only for workflows that declare a signature. The card
+            shows the declaration and checks nothing itself: the run route answers with the
+            engine's refusal, which is shown below, before any worktree, clone, or AI cost. */}
         {declaredInputs.length > 0 ? (
           <div className="mt-3 space-y-2.5 rounded-lg border border-border bg-surface-inset px-3 py-2.5">
             <p className="font-mono text-console-10 uppercase tracking-console-label text-text-tertiary">

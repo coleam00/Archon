@@ -26,6 +26,10 @@ const mockUpdateConversationTitle = mock(async (_id: string, _title: string) => 
 import { generateAndSetTitle } from '../../../core/src/services/title-generator';
 import { generateTitleForUser } from '../../../core/src/services/user-title-generator';
 import { resolveTitleRequest } from '../../../core/src/orchestrator/chat-request';
+// The run route asks the engine before it dispatches; these suites test who may reach it.
+mock.module('@archon/core/operations/workflow-start-admission', () => ({
+  workflowStartRefusal: mock(async () => undefined),
+}));
 mock.module('@archon/core', () => ({
   handleMessage: mock(async () => {}),
   getDatabaseType: () => 'sqlite',
