@@ -11,7 +11,7 @@ import { executeWorkflow } from './executor';
 import { hydrateResumableRun } from './run-resume';
 import { discoverWorkflows } from './workflow-discovery';
 import { createFileWorkflowStore } from './file-store';
-import { listAttentionQueue } from './attention-queue';
+import { isHeldByRun, listAttentionQueue } from './attention-queue';
 import { runAttention } from './schemas/workflow-run';
 
 const roots = trackTempRoots();
@@ -118,11 +118,12 @@ test('all questions open together and apply independently, second first, across 
     return result.values;
   };
   const items = (await queue())
+    .filter(isHeldByRun)
     .filter(item => item.kind === 'attention')
-    .sort((a, b) => a.fanOut!.index - b.fanOut!.index);
+    .sort((a, b) => a.run.fanOut!.index - b.run.fanOut!.index);
   expect(items).toHaveLength(2);
   const [first, second] = items;
-  expect(items.map(item => item.fanOut)).toEqual([
+  expect(items.map(item => item.run.fanOut)).toEqual([
     { parentRunId: parentId, nodeId: 'answers', index: 0 },
     { parentRunId: parentId, nodeId: 'answers', index: 1 },
   ]);
@@ -130,7 +131,7 @@ test('all questions open together and apply independently, second first, across 
     'First? Recommended accept',
     'Second? Recommended defer',
   ]);
-  const firstBefore = await store.getWorkflowRun(first.runId);
+  const firstBefore = await store.getWorkflowRun(first.run.id);
   const answer = async (runId: string, decision: string) => {
     const run = (await store.getWorkflowRun(runId))!;
     const attention = runAttention(run);
@@ -158,24 +159,24 @@ test('all questions open together and apply independently, second first, across 
     expect(done.success).toBe(true);
     expect((await store.getWorkflowRun(runId))?.status).toBe('completed');
   };
-  await answer(second.runId, 'defer');
+  await answer(second.run.id, 'defer');
   expect((await store.getWorkflowRun(parentId))?.status).toBe('paused');
-  expect((await store.getWorkflowRun(first.runId))?.metadata.wait).toEqual(
+  expect((await store.getWorkflowRun(first.run.id))?.metadata.wait).toEqual(
     firstBefore?.metadata.wait
   );
   expect(await queue()).toEqual([first]);
   expect(
-    (await store.listWorkflowEvents(first.runId)).filter(e => e.step_name === 'apply')
+    (await store.listWorkflowEvents(first.run.id)).filter(e => e.step_name === 'apply')
   ).toEqual([]);
 
   store = await createFileWorkflowStore({ root: join(root, 'store') });
   deps = makeDeps(store);
   expect(await queue()).toEqual([first]);
-  expect((await store.getWorkflowRun(second.runId))?.status).toBe('completed');
-  await answer(first.runId, 'accept');
+  expect((await store.getWorkflowRun(second.run.id))?.status).toBe('completed');
+  await answer(first.run.id, 'accept');
   expect((await store.getWorkflowRun(parentId))?.status).toBe('completed');
   expect((await store.findChildRuns(parentId)).map(run => run.id).sort()).toEqual(
-    items.map(item => item.runId).sort()
+    items.map(item => item.run.id).sort()
   );
   expect(await queue()).toEqual([]);
   const events = await store.listWorkflowEvents(parentId);
@@ -187,10 +188,10 @@ test('all questions open together and apply independently, second first, across 
     { key: 'second', decision: 'defer' },
   ]);
   for (const item of items) {
-    const childEvents = await store.listWorkflowEvents(item.runId);
+    const childEvents = await store.listWorkflowEvents(item.run.id);
     const answered = childEvents.filter(e => e.event_type === 'wait_answered');
     expect(answered).toHaveLength(1);
-    expect(answered[0].data.occurrence).toBe(item.occurrence);
+    expect(answered[0].data.occurrence).toBe(item.run.occurrence);
     expect(
       childEvents.filter(e => e.event_type === 'node_completed' && e.step_name === 'apply')
     ).toHaveLength(1);
@@ -219,5 +220,5 @@ test('all opens every question even when the list exceeds the default window', a
   );
   expect(degraded).toEqual([]);
   expect(items).toHaveLength(questions.length);
-  expect(items.map(item => item.fanOut?.index).sort()).toEqual([0, 1, 2, 3, 4, 5]);
+  expect(items.map(item => item.run?.fanOut?.index).sort()).toEqual([0, 1, 2, 3, 4, 5]);
 });

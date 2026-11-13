@@ -42,11 +42,12 @@ const ITEM_KEY_MAX_LENGTH = 200;
 export const itemKeySchema = z.string().min(1).max(ITEM_KEY_MAX_LENGTH);
 
 /** The durable thing runs are about: a key within a project (`ProjectRef.key`). */
-export interface WorkflowItem {
-  id: string;
-  projectKey: string;
-  key: string;
-}
+export const workflowItemSchema = z.object({
+  id: z.string(),
+  projectKey: z.string(),
+  key: itemKeySchema,
+});
+export type WorkflowItem = z.infer<typeof workflowItemSchema>;
 
 /** Refuse a key the store cannot hold, in words the operator who named it can act on. */
 export function assertItemKey(key: string): void {

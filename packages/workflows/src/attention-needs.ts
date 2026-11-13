@@ -58,20 +58,20 @@ export function attentionWatchReader(
         switch (line.item.kind) {
           case 'attention':
           case 'awaiting_response':
-            shown.add(line.item.runId);
+            shown.add(line.item.ref);
             return { needs: 'answer' };
           case 'unreadable':
-            shown.add(line.item.runId);
+            shown.add(line.item.ref);
             return { needs: 'look' };
           case 'usage_limit':
-            return { needs: shown.delete(line.item.runId) ? 'look' : 'nothing' };
+            return { needs: shown.delete(line.item.ref) ? 'look' : 'nothing' };
         }
         return line.item satisfies never;
       case 'resolved':
       case 'unmatched':
         return {
           needs: 'nothing',
-          closesShown: shown.delete(line.runId) || options.resumed === true,
+          closesShown: shown.delete(line.ref) || options.resumed === true,
         };
       case 'terminal':
         // A run that ran to the end and judged its work unsuccessful needs a look too.

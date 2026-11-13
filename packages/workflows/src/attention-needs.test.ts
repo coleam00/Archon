@@ -12,16 +12,15 @@ test('every line type has a needs, and each level shows its lines and the close 
   const cursor = workflowEventCursor('c');
   const run = { cursor, project: null, runId: 'r', workflow: 'ci', parentRunId: null };
   const terminal = { type: 'terminal', ...run, outcome: null, cause: null } as const;
-  const resolved = { type: 'resolved', ...run, occurrence: 'o', reason: 'withdrawn' } as const;
-  const item = {
-    runId: 'r',
+  // The lines that close the ask: they name it by the ref it was shown with.
+  const closed = { ...run, ref: 'r:o', occurrence: 'o' };
+  const resolved = { type: 'resolved', ...closed, reason: 'withdrawn' } as const;
+  const item = { project: null, revision: 1, labels: {}, pausedAt: null };
+  const held = {
+    id: 'r',
     workflow: 'ci',
-    project: null,
     parentRunId: null,
     fanOut: null,
-    revision: 1,
-    labels: {},
-    pausedAt: null,
     context: { artifactsDir: null, transcript: null, workingPath: null, branch: null },
     node: 'ask',
   };
@@ -35,7 +34,8 @@ test('every line type has a needs, and each level shows its lines and the close 
     item: {
       ...item,
       kind: 'attention',
-      occurrence: 'o',
+      ref: 'r:o',
+      run: { ...held, occurrence: 'o' },
       message: 'Go?',
       form: 'message',
       options: [],
@@ -43,11 +43,24 @@ test('every line type has a needs, and each level shows its lines and the close 
   };
   const limited: AttentionStreamLine = {
     ...opened,
-    item: { ...item, kind: 'usage_limit', resetAt: '2026-01-01T00:00:00.000Z' },
+    item: {
+      ...item,
+      kind: 'usage_limit',
+      ref: 'r',
+      run: held,
+      resetAt: '2026-01-01T00:00:00.000Z',
+    },
   };
   const unreadable: AttentionStreamLine = {
     ...opened,
-    item: { ...item, kind: 'unreadable', reason: 'malformed_gate', detail: 'd' },
+    item: {
+      ...item,
+      kind: 'unreadable',
+      ref: 'r',
+      run: held,
+      reason: 'malformed_gate',
+      detail: 'd',
+    },
   };
   // One stream in order: a usage-limit wait nobody was shown opens and closes, then an ask
   // opens and closes, then an unreadable item is replaced by a usage-limit wait. The
@@ -60,10 +73,10 @@ test('every line type has a needs, and each level shows its lines and the close 
     [opened, 'answer'],
     [resolved, 'nothing', 'close'],
     [opened, 'answer'],
-    [{ type: 'unmatched', ...run, occurrence: 'o', revision: 2 }, 'nothing', 'close'],
+    [{ type: 'unmatched', ...closed, revision: 2 }, 'nothing', 'close'],
     [unreadable, 'look'],
     [limited, 'look'],
-    [{ type: 'unmatched', ...run, occurrence: 'o', revision: 2 }, 'nothing'],
+    [{ type: 'unmatched', ...closed, revision: 2 }, 'nothing'],
     [{ type: 'resumed', ...run, status: 'running' }, 'nothing'],
     [
       {
