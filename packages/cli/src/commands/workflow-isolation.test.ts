@@ -967,7 +967,7 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
     ).rejects.toThrow('requires a worktree');
   });
 
-  it('creates worktree with auto-generated branch when no --branch given', async () => {
+  it('gives two starts of one workflow at the same clock value different generated branches', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
     const conversationDb = await import('@archon/core/db/conversations');
@@ -979,39 +979,49 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
     const findActiveCallsBefore = (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mock
       .calls.length;
 
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
-      errors: [],
-    });
-    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'conv-123',
-    });
-    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-123',
-      default_cwd: '/test/path',
-    });
-    (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(undefined);
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'run-123',
-    });
+    const clock = spyOn(Date, 'now').mockReturnValue(1_794_000_000_000);
+    const identifiers: string[] = [];
+    try {
+      for (let start = 0; start < 2; start++) {
+        (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+          workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+          errors: [],
+        });
+        (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+          id: 'conv-123',
+        });
+        (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+          id: 'cb-123',
+          default_cwd: '/test/path',
+        });
+        (conversationDb.updateConversation as ReturnType<typeof mock>).mockResolvedValueOnce(
+          undefined
+        );
+        (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+          success: true,
+          workflowRunId: 'run-123',
+        });
 
-    // No branchName, no noWorktree — should auto-isolate
-    await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {});
+        // No branchName, no noWorktree — should auto-isolate
+        await workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {});
 
-    const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
-    const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
-      | { create: ReturnType<typeof mock> }
-      | undefined;
-
-    // provider.create should have been called with an auto-generated identifier
-    expect(provider?.create).toHaveBeenCalled();
-    const lastCreateCall = provider?.create.mock.calls.at(-1)?.[0] as {
-      identifier: string;
-      workflowType: string;
-    };
-    expect(lastCreateCall.workflowType).toBe('task');
-    expect(lastCreateCall.identifier).toMatch(/^assist-\d+$/);
+        const getIsolationProviderMock = isolation.getIsolationProvider as ReturnType<typeof mock>;
+        const provider = getIsolationProviderMock.mock.results.at(-1)?.value as
+          | { create: ReturnType<typeof mock> }
+          | undefined;
+        const request = provider?.create.mock.calls.at(-1)?.[0] as {
+          identifier: string;
+          workflowType: string;
+        };
+        expect(request.workflowType).toBe('task');
+        identifiers.push(request.identifier);
+      }
+    } finally {
+      clock.mockRestore();
+    }
+    const branches = identifiers.map(identifier => isolation.generatedTaskBranch(identifier));
+    expect(new Set(identifiers).size).toBe(2);
+    expect(new Set(branches).size).toBe(2);
 
     // findActiveByWorkflow should NOT have been called during this test (no explicit --branch)
     const findActiveCallsAfter = (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mock
