@@ -35,7 +35,8 @@ const runWorkflowRoute = createRoute({
     '`multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields ' +
     'holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, ' +
     'and optional file attachments (max 5 files, ' +
-    "10 MB each). `inputs` supplies values for the workflow's declared `inputs:` " +
+    '10 MB each). `message` may be empty when `inputs` supplies at least one value; a run with ' +
+    "neither is refused. `inputs` supplies values for the workflow's declared `inputs:` " +
     '(#2554); it is validated against the declaration before any worktree, clone, or AI ' +
     'cost, so a missing required input or an undeclared key is refused up front. `config` ' +
     'supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. ' +
@@ -167,6 +168,15 @@ type RunLaunchOptions = Omit<RunLaunchRequest, 'conversationId' | 'message' | 'f
 
 const CONFIG_PATH_REFUSAL = 'configPath is not supported; send validated config content';
 
+/**
+ * A run needs something to work from: its message, or values for its declared inputs. Any
+ * supplied input counts, because only the workflow knows which of its inputs carry the brief.
+ */
+function missingRunBrief(message: string, options: RunLaunchOptions): Parsed<never> | undefined {
+  if (message || options.workflowInputs) return undefined;
+  return { ok: false, error: 'message is required when no inputs are supplied' };
+}
+
 function parseInlineRunConfig(raw: unknown): Parsed<WorkflowRunConfigInput | undefined> {
   if (raw === undefined) return { ok: true, value: undefined };
   try {
@@ -259,9 +269,7 @@ async function parseMultipartRunRequest(
   }
 
   const { message, conversationId } = body;
-  if (typeof message !== 'string' || !message) {
-    return { ok: false, error: 'message must be a non-empty string' };
-  }
+  if (typeof message !== 'string') return { ok: false, error: 'message must be a string' };
   if (typeof conversationId !== 'string' || !conversationId || !/^[\w-]+$/.test(conversationId)) {
     return { ok: false, error: 'conversationId must be a non-empty alphanumeric string' };
   }
@@ -269,6 +277,8 @@ async function parseMultipartRunRequest(
 
   const options = parseMultipartRunOptions(body, workflowName);
   if (!options.ok) return options;
+  const missingBrief = missingRunBrief(message, options.value);
+  if (missingBrief) return missingBrief;
   const files =
     body.files === undefined ? [] : Array.isArray(body.files) ? body.files : [body.files];
   const fileEntries: File[] = [];
@@ -326,13 +336,13 @@ async function parseJsonRunRequest(c: Context): Promise<Parsed<RunLaunchRequest>
   if (typeof conversationId !== 'string' || !conversationId) {
     return { ok: false, error: 'conversationId must be a non-empty string' };
   }
-  if (typeof message !== 'string' || !message) {
-    return { ok: false, error: 'message must be a non-empty string' };
-  }
+  if (typeof message !== 'string') return { ok: false, error: 'message must be a string' };
   if (body.configPath !== undefined) return { ok: false, error: CONFIG_PATH_REFUSAL };
 
   const inputs = parseRunInputsField(body.inputs);
   if (!inputs.ok) return inputs;
+  const missingBrief = missingRunBrief(message, { workflowInputs: inputs.inputs });
+  if (missingBrief) return missingBrief;
   const continuation = parseContinuationFields(body);
   if (!continuation.ok) return continuation;
   const overrides = parseRunModelOverridesFields(body.tiers, body.aliases);
@@ -397,7 +407,8 @@ async function removeLaunchFiles(launch: RunLaunch): Promise<void> {
  * Persist the user message and register its DB ID (same as the message endpoint). File
  * metadata (name/mime/size — no path, since the on-disk file is ephemeral) goes into message
  * metadata when present. Returns false, with the uploads removed, when the message cannot be
- * saved.
+ * saved. A run started from inputs alone has no message: it gets no chat row, which would
+ * render as an empty bubble, and no title request, which would have nothing to summarize.
  */
 async function recordLaunchMessage(
   conv: Conversation,
@@ -410,6 +421,10 @@ async function recordLaunchMessage(
     savedFiles.length > 0
       ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
       : undefined;
+  if (!request.message) {
+    webAdapter.setConversationDbId(request.conversationId, conv.id);
+    return true;
+  }
   try {
     await messageDb.addMessage(conv.id, 'user', request.message, meta, userId);
   } catch (e: unknown) {

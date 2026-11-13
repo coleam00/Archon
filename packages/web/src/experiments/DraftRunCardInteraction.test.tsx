@@ -97,6 +97,17 @@ function draft() {
   return {
     render,
     button,
+    fillInput: (value: string) => {
+      const input = elements(tree).find(
+        element =>
+          element.type === 'input' &&
+          isValidElement<{ type?: string }>(element) &&
+          element.props.type === 'text'
+      );
+      if (!isValidElement<{ onChange: (event: { target: { value: string } }) => void }>(input))
+        throw new Error('Missing declared input');
+      input.props.onChange({ target: { value } });
+    },
     attach: () => {
       const input = elements(tree).find(
         element =>
@@ -185,3 +196,32 @@ for (const attached of [false, true]) {
     });
   }
 }
+
+test('a filled input makes the run message optional and starts the run without one', async () => {
+  const bodies: unknown[] = [];
+  globalThis.window = { location: { origin: 'http://localhost' } } as Window & typeof globalThis;
+  set(K.workflows(projectCwd), {
+    workflows: [
+      toWorkflow({
+        workflow: { name: 'review-block', inputs: { issue: {} } },
+        source: 'project',
+      }),
+    ],
+    recommended: [],
+  });
+  globalThis.fetch = Object.assign(
+    async (_input: RequestInfo | URL, init?: RequestInit) => {
+      bodies.push(JSON.parse(String(init?.body)));
+      return Response.json({ conversationId: 'web-test' });
+    },
+    { preconnect: originalFetch.preconnect }
+  );
+
+  const card = draft();
+  expect(card.render()).toContain('what should `review-block` work on?');
+  card.fillInput('5608');
+  expect(card.render()).toContain('optional: anything to add for `review-block`?');
+  card.button('Start run')();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(bodies[1]).toEqual({ conversationId: 'web-test', message: '', inputs: { issue: '5608' } });
+});

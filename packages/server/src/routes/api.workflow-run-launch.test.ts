@@ -230,7 +230,8 @@ describe('POST /api/workflows/:name/run', () => {
     const form = resolve(body.content['multipart/form-data']?.schema);
     for (const schema of [json, form]) {
       expect(schema.required).toEqual(['conversationId', 'message']);
-      expect(resolve(schema.properties?.message).minLength).toBe(1);
+      // Empty is valid alongside inputs, so the published schema sets no minimum.
+      expect(resolve(schema.properties?.message).minLength).toBeUndefined();
     }
     expect(resolve(json.properties?.conversationId).pattern).toBeUndefined();
     expect(resolve(form.properties?.conversationId).pattern).toBe('^[\\w-]+$');
@@ -690,6 +691,73 @@ describe('POST /api/workflows/:name/run', () => {
     const body = (await response.json()) as { error: string };
     expect(body.error).toContain('message');
   });
+
+  test.each(['json', 'multipart'] as const)(
+    'starts a %s run from inputs alone and records no empty chat message',
+    async transport => {
+      mockFindConversationByPlatformId.mockImplementationOnce(async () => ({
+        ...MOCK_CONV,
+        title: null,
+      }));
+      mockHandleMessage.mockImplementationOnce(async () => {});
+      const fields = { conversationId: 'web-test-abc', message: '' };
+      const inputs = { issue: '5608' };
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) form.append(key, value);
+      form.append('inputs', JSON.stringify(inputs));
+
+      const { app, mockWebAdapter } = makeApp();
+      const response = await app.request(
+        '/api/workflows/fix-issue/run',
+        transport === 'json'
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...fields, inputs }),
+            }
+          : { method: 'POST', body: form }
+      );
+      expect(response.status).toBe(200);
+
+      expect(mockHandleMessage).toHaveBeenCalledWith(
+        expect.anything(),
+        'web-test-abc',
+        '',
+        expect.objectContaining({ workflowInputs: inputs })
+      );
+      await new Promise(resolve => setTimeout(resolve, 0));
+      expect(mockAddMessage).not.toHaveBeenCalled();
+      expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();
+      expect(mockWebAdapter.setConversationDbId).toHaveBeenCalledWith('web-test-abc', MOCK_CONV.id);
+    }
+  );
+
+  test.each(['json', 'multipart'] as const)(
+    'refuses a %s run that has neither a message nor inputs',
+    async transport => {
+      const fields = { conversationId: 'web-test-abc', message: '' };
+      const form = new FormData();
+      for (const [key, value] of Object.entries(fields)) form.append(key, value);
+      form.append('inputs', '{}');
+
+      const { app } = makeApp();
+      const response = await app.request(
+        '/api/workflows/fix-issue/run',
+        transport === 'json'
+          ? {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ ...fields, inputs: {} }),
+            }
+          : { method: 'POST', body: form }
+      );
+      expect(response.status).toBe(400);
+      expect(await response.json()).toEqual({
+        error: 'message is required when no inputs are supplied',
+      });
+      expect(mockHandleMessage).not.toHaveBeenCalled();
+    }
+  );
 
   test('returns 400 for invalid workflow name (path traversal)', async () => {
     const { app } = makeApp();

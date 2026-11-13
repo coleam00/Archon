@@ -21,7 +21,8 @@ export const workflowRunLaunchConfigSchema = workflowRunConfigLayerSchema
 const modelSpecSchema = z.string().trim().min(1);
 const sharedLaunchSchema = z.object({
   conversationId: z.string().min(1),
-  message: z.string().min(1),
+  // May be empty when `inputs` carries the brief; the route refuses a run with neither.
+  message: z.string(),
   inputs: z.record(z.string(), z.string()).nullable().optional(),
   tiers: z.object(tierFields(modelSpecSchema.optional())).strict().nullable().optional(),
   aliases: z.record(z.string().regex(/^@/), modelSpecSchema).nullable().optional(),

@@ -157,6 +157,9 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
   // majority of workflows, which declare none and render exactly as before.
   const declaredInputs = sortedWorkflows.find(w => w.name === workflowName)?.inputs ?? [];
   const missingRequired = missingRequiredInputs(declaredInputs, inputValues);
+  // The server starts a run from inputs alone; the message is then optional steering.
+  const messageOptional =
+    Object.keys(collectSuppliedInputs(declaredInputs, inputValues)).length > 0;
 
   // Switching workflows discards values collected for the previous one — they were
   // typed against a different declaration and would be rejected as undeclared keys.
@@ -612,9 +615,11 @@ export function DraftRunCard({ projectId, projectCwd }: DraftRunCardProps): Reac
             onKeyDown={onTextareaKey}
             onPaste={onPaste}
             placeholder={
-              workflowName.length > 0
-                ? `what should \`${workflowName}\` work on?`
-                : 'Pick a workflow to start…'
+              workflowName.length === 0
+                ? 'Pick a workflow to start…'
+                : messageOptional
+                  ? `optional: anything to add for \`${workflowName}\`?`
+                  : `what should \`${workflowName}\` work on?`
             }
             rows={2}
             disabled={submitting}
