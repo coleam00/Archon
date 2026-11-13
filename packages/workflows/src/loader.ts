@@ -26,7 +26,6 @@ import {
   parseBetas,
   parseContainerPolicy,
   parseDeprecation,
-  parseEvidencePolicy,
   parseFallbackModel,
   parseWorkflowModel,
   inputEnvKeyCollision,
@@ -83,6 +82,9 @@ function parseWorkflowHeader(
 
   if (Object.hasOwn(raw, 'thinking')) {
     return "'thinking:' has been removed; use 'effort:' instead";
+  }
+  if (Object.hasOwn(raw, 'evidence_policy')) {
+    return "'evidence_policy:' has been removed; use a 'bash:' or 'script:' node that exits non-zero to fail the run instead";
   }
 
   // A load failure reaches the author through the returned `error`, which discovery
@@ -234,7 +236,6 @@ interface WorkflowFields {
   readonly sandbox: WorkflowDefinition['sandbox'];
   readonly worktree: ReturnType<typeof parseWorktreePolicy>;
   readonly container: ReturnType<typeof parseContainerPolicy>;
-  readonly evidencePolicy: WorkflowDefinition['evidence_policy'];
   readonly budget: WorkflowDefinition['budget'];
   readonly tags: ReturnType<typeof parseTags>;
   readonly requires: ReturnType<typeof parseRequires>;
@@ -291,8 +292,6 @@ function parseWorkflowFields(
 
   const worktree = parseWorktreePolicy(raw.worktree, filename);
   const container = parseContainerPolicy(raw.container, filename);
-  const evidencePolicy = parseEvidencePolicy(raw.evidence_policy);
-  if ('error' in evidencePolicy) return evidencePolicy.error;
   const budget = parseRunBudget(raw.budget);
   if ('error' in budget) return budget.error;
   const deprecated = parseDeprecation(raw.deprecated);
@@ -335,7 +334,6 @@ function parseWorkflowFields(
     sandbox,
     worktree,
     container,
-    evidencePolicy: evidencePolicy.value,
     budget: budget.value,
     tags,
     requires,
@@ -384,7 +382,6 @@ function runPolicies(fields: WorkflowFields): Partial<WorkflowDefinition> {
   return {
     ...(fields.worktree ? { worktree: fields.worktree } : {}),
     ...(fields.container ? { container: fields.container } : {}),
-    ...(fields.evidencePolicy !== undefined ? { evidence_policy: fields.evidencePolicy } : {}),
     ...(fields.budget !== undefined ? { budget: fields.budget } : {}),
     ...(fields.tags !== undefined ? { tags: fields.tags } : {}),
     ...(fields.requires !== undefined ? { requires: fields.requires } : {}),

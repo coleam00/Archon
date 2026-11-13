@@ -5422,9 +5422,6 @@ export interface components {
         /** @enum {string} */
         write_back?: 'approve' | 'auto';
       };
-      evidence_policy?: {
-        required: boolean;
-      };
       budget?: {
         max_work_units?: number;
         max_spend_usd?: number;

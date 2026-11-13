@@ -396,7 +396,7 @@ export function createMockStore(): MockWorkflowStore {
  * written through `updateWorkflowRun` at the run tail on EVERY disposition, so this is
  * the single surface a usage assertion should read — regardless of whether the run then
  * completed, failed, was cancelled, or paused. Other `updateWorkflowRun` writes
- * (output_root, evidence_validation, …) are filtered out by key.
+ * (output_root, …) are filtered out by key.
  */
 export function runUsageWrites(
   store: ReturnType<typeof createMockStore>

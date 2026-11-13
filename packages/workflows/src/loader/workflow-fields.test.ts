@@ -258,10 +258,6 @@ describe('workflow-level field parity (#2457)', () => {
       yaml: 'container:\n  enabled: true',
       present: w => w.container?.enabled === true,
     },
-    evidence_policy: {
-      yaml: 'evidence_policy:\n  required: true',
-      present: w => w.evidence_policy?.required === true,
-    },
     budget: {
       yaml: 'budget:\n  max_work_units: 3',
       present: w => w.budget?.max_work_units === 3,
@@ -595,19 +591,6 @@ describe('workflow-level policy fields', () => {
       { enabled: true },
     ],
     ['no container block', '', 'container', undefined],
-    [
-      'evidence_policy.required: true (#2230)',
-      'evidence_policy:\n  required: true',
-      'evidence_policy',
-      { required: true },
-    ],
-    [
-      'evidence_policy.required: false',
-      'evidence_policy:\n  required: false',
-      'evidence_policy',
-      { required: false },
-    ],
-    ['no evidence_policy', '', 'evidence_policy', undefined],
     ['an explicit tags array', 'tags: [GitLab, Review]', 'tags', ['GitLab', 'Review']],
     ['no tags', '', 'tags', undefined],
     // An explicit empty list suppresses tag inference, so it is kept rather than omitted.
@@ -649,15 +632,8 @@ describe('workflow-level policy fields', () => {
     expect(parseWorkflowYaml(withField(field)).workflow[key] as unknown).toEqual(expected);
   });
 
-  // Silently dropping a declared terminal-success gate would let runs complete
-  // ungated, so a malformed block fails validation instead of warn-and-ignore.
+  // A malformed block fails validation instead of warn-and-ignore.
   it.each([
-    ['a malformed evidence_policy block', 'evidence_policy:\n  required: "yes"', 'evidence_policy'],
-    [
-      'an empty evidence_policy block (required is mandatory)',
-      'evidence_policy: {}',
-      'required: boolean',
-    ],
     // A dropped resource would let every start run without a slot.
     ['a reserved resource name', 'resource: "provider:claude"', "Invalid 'resource'"],
     [

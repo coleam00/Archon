@@ -37,7 +37,7 @@ function getLog(): ReturnType<typeof createLogger> {
  * workflow-level layer be REMOVED afterwards (see `collapseWorkflowScope`).
  *
  * Absent on purpose:
- *   - Run-owned fields (`worktree`, `container`, `evidence_policy`, `budget`,
+ *   - Run-owned fields (`worktree`, `container`, `budget`,
  *     `mutates_checkout`) — decisions belonging to whoever started the run, not to the
  *     file that happens to hold a node. These stay workflow-level and are warned about
  *     when a composed workflow declares them.
@@ -217,7 +217,7 @@ const SAFETY_WORKFLOW_KEYS: ReadonlySet<string> = new Set(['mutates_checkout', '
 
 /**
  * What remains of the included file's workflow-level configuration after the collapse is
- * RUN-owned: isolation, evidence policy, concurrency safety. Those are
+ * RUN-owned: isolation, budget, concurrency safety. Those are
  * decisions belonging to whoever started the run, so a composed workflow cannot carry
  * them — emit a one-line load-time WARN so the author who wrote them gets a signal.
  *

@@ -256,8 +256,7 @@ export type WorkflowExitReason =
   | 'no_nodes_completed'
   | 'node_error'
   | 'unhandled_error'
-  // File-presence gate (#2230): all nodes succeeded but `evidence_policy.required`
-  // found no conventional `$ARTIFACTS_DIR/evidence.json` marker, so the run failed.
+  // Retired with `evidence_policy` (#5630). Nothing sends it; kept to mirror the engine enum.
   | 'evidence_missing'
   // The run budget refused new work, or its spend could not be measured (#2814).
   | 'budget_refused'
