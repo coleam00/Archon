@@ -187,33 +187,18 @@ describe('attention tool', () => {
     expect(answerWorkflow).not.toHaveBeenCalled();
   });
 
-  test('an answer without confirm is a preview and records nothing', async () => {
-    const { tool, answerWorkflow } = harness([webAsk]);
-    const out = await tool.handler({
-      action: 'answer',
-      item: 'run-web:pause-web',
-      choose: '["merge"]',
-    });
-
-    expect(out).toContain('confirm: true');
-    expect(out).toContain('Merge this pull request?');
-    expect(answerWorkflow).not.toHaveBeenCalled();
-  });
-
   test('one turn can answer several items, each pinned to the occurrence it was listed at', async () => {
     const { tool, answerWorkflow } = harness([webAsk, apiAsk]);
     await tool.handler({
       action: 'answer',
       item: 'run-web:pause-web',
       recommended: true,
-      confirm: true,
     });
     const out = await tool.handler({
       action: 'answer',
       item: 'run-api:pause-api',
       choose: '["return"]',
       text: 'needs a test',
-      confirm: true,
     });
 
     expect(answerWorkflow.mock.calls).toEqual([
@@ -230,7 +215,9 @@ describe('attention tool', () => {
         { via: 'attention_tool', expectedGate: { nodeId: 'ask', pauseId: 'pause-api' } },
       ],
     ]);
-    expect(out).toContain('server continues the run');
+    // The result repeats the question, so the user sees what the answer went to.
+    expect(out).toContain('> Merge this pull request?');
+    expect(out).toContain('continues on its own while an Archon server is running');
   });
 
   test('an answer for an occurrence the item has left is refused', async () => {
@@ -239,7 +226,6 @@ describe('attention tool', () => {
       action: 'answer',
       item: 'run-web:pause-earlier',
       choose: '["merge"]',
-      confirm: true,
     });
 
     expect(out).toContain("'run-web:pause-web'");
@@ -252,7 +238,6 @@ describe('attention tool', () => {
       action: 'answer',
       item: 'no-such-run:pause-web',
       choose: '["merge"]',
-      confirm: true,
     });
 
     expect(out).toContain("nothing matches item 'no-such-run:pause-web'");
@@ -265,7 +250,6 @@ describe('attention tool', () => {
       action: 'answer',
       item: 'run-gate:pause-gate',
       recommended: true,
-      confirm: true,
     });
     expect(refused).toContain('no recommendation');
 
@@ -274,7 +258,6 @@ describe('attention tool', () => {
       item: 'run-gate:pause-gate',
       choose: '["approve"]',
       text: 'ship it',
-      confirm: true,
     });
     expect(respondToWorkflow.mock.calls).toEqual([
       [
