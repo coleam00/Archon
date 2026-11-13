@@ -35,6 +35,7 @@ import {
 import { CLIAdapter } from '../adapters/cli-adapter';
 import {
   destinationCorrelationId,
+  generatedWorktreeIdentifier,
   getLog,
   resolveRunDestination,
   type RunDestination,
@@ -594,11 +595,10 @@ async function provisionWorktree(
 ): Promise<void> {
   const { request, admission, workspace } = launch;
   const { host, options } = request;
-  // Auto-generate branch identifier from workflow name + timestamp when --branch not provided
   const branchIdentifier =
     options.branchName ??
     options.detachedWorktreeIdentifier ??
-    `${request.workflowName}-${Date.now()}`;
+    generatedWorktreeIdentifier(request.workflowName, setupRunId(admission));
 
   // Configure isolation with repo config loader (same as orchestrator)
   configureWorktreeIsolation();
@@ -642,6 +642,13 @@ async function provisionWorktree(
   getLog().info({ path: workspace.workingCwd }, 'worktree_created');
 }
 
+/** The run a worktree is set up for: the detached launcher's pending row, or the capture's reserved id. */
+function setupRunId(admission: OwnedRunAdmission): string {
+  const runId = admission.preCreatedRun?.id ?? admission.preparedSource?.runId;
+  if (runId === undefined) throw new Error('Worktree setup requires a captured workflow source');
+  return runId;
+}
+
 /**
  * Cut the run's worktree. Setup runs inside the run, so its row exists first: the
  * detached launcher's pending row, or a fresh one under the capture's reserved id.
@@ -656,7 +663,7 @@ async function createRunWorktree(
   const { host, options } = request;
   const { preparedSource } = admission;
   if (!preparedSource) throw new Error('Worktree setup requires a captured workflow source');
-  await lease.start(admission.preCreatedRun?.id ?? preparedSource.runId);
+  await lease.start(setupRunId(admission));
   const setupRun =
     admission.preCreatedRun ?? (await createSetupRun(launch, codebase, preparedSource.runId));
   admission.preCreatedRun = setupRun;

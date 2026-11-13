@@ -409,3 +409,12 @@ export async function resolveDiscoveryCwdForCodebase(
     );
   }
 }
+
+/**
+ * The worktree identity of a start that names no branch. The run id is what makes it
+ * unique: any number of starts of one workflow at the same instant each get their own
+ * branch and worktree, which a clock value cannot promise at any resolution.
+ */
+export function generatedWorktreeIdentifier(workflowName: string, runId: string): string {
+  return `${workflowName}-${runId}`;
+}

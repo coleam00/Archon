@@ -163,9 +163,12 @@ describe('workflowRunCommand — detach', () => {
       const cwdIdx = spawnCmd.indexOf('--cwd');
       expect(spawnCmd[cwdIdx + 1]).toBe('/test/path');
       expect(spawnOptions?.cwd).toBe('/test/path');
-      // Generated identity is carried separately from an explicit branch.
+      // Generated identity is carried separately from an explicit branch, and takes its
+      // uniqueness from the run the child executes, never from the clock.
       const branchIdx = spawnCmd.indexOf('--internal-detached-worktree-identifier');
-      expect(spawnCmd[branchIdx + 1]).toMatch(/^assist-\d+$/);
+      const runId = spawnCmd[spawnCmd.indexOf('--internal-detached-run-id') + 1];
+      expect(runId).toBeTruthy();
+      expect(spawnCmd[branchIdx + 1]).toBe(`assist-${runId}`);
       // executeWorkflow must NOT run in the detaching parent
       const execAfter = (executeWorkflow as ReturnType<typeof mock>).mock.calls.length;
       expect(execAfter).toBe(execBefore);
