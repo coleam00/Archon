@@ -59,7 +59,7 @@ installPipeSafeConsole();
 
 import { parseArgs } from 'util';
 import { cliArgOptions } from './args';
-import { shouldReportCliStart } from './utils/cli-start-telemetry';
+import { cliStartStore, shouldReportCliStart } from './utils/cli-start-telemetry';
 import { resolve } from 'path';
 import { existsSync } from 'fs';
 import { type CliRouteContext, fail, getLog, printUsageFor } from './routes/context';
@@ -139,12 +139,13 @@ interface ParsedCliArgs {
 async function main(): Promise<number> {
   const args = process.argv.slice(2);
 
-  // Anonymous startup event (self-gates on opt-out). Emitted before any early
-  // return so every invocation — including bare `archon`, `--help`, and
-  // `--version` — is counted once; `serve` and detached run owners are counted
+  // Anonymous startup event (self-gates on opt-out, sent once per day). Emitted
+  // before any early return so every invocation — including bare `archon`,
+  // `--help`, and `--version` — can count; `serve` and detached run owners are counted
   // by another process (see shouldReportCliStart). Each early-return path below
   // flushes via shutdownTelemetry(); the main command path flushes in its finally.
-  if (shouldReportCliStart(args, process.env)) captureArchonStarted({ surface: 'cli' });
+  if (shouldReportCliStart(args, process.env))
+    captureArchonStarted({ surface: 'cli', store: await cliStartStore() });
 
   if (args.length === 0) return await printIndexHelp();
 
