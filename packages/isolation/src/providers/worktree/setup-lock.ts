@@ -20,6 +20,7 @@ import {
   SETUP_LOCK_PREFIX,
   directoryExists,
   getLog,
+  setupAttemptOf,
 } from './shared';
 
 export class WorktreeAddError extends Error {
@@ -125,7 +126,7 @@ export async function refuseUnfinishedWorktree(worktreePath: string): Promise<vo
       `Cannot adopt the worktree at ${worktreePath}: an abandoned run is removing it. Retry once the removal finishes.`
     );
   }
-  if (lock?.reason !== SETUP_LOCK_PREFIX && !lock?.reason.startsWith(`${SETUP_LOCK_PREFIX}: `)) {
+  if (lock?.reason !== SETUP_LOCK_PREFIX && setupAttemptOf(lock?.reason) === null) {
     return;
   }
   getLog().warn({ worktreePath }, 'worktree.adoption_refused_setup_unfinished');
@@ -220,10 +221,10 @@ function keptCheckoutNotice(worktreePath: string, kept: KeptCheckout): string {
 
 /** Whose a path is when its lock is not this attempt's: another start's setup, or unknown. */
 function lockedByAnother(lockReason: string | null | undefined, otherwise: string): KeptCheckout {
-  const prefix = `${SETUP_LOCK_PREFIX}: `;
-  return lockReason?.startsWith(prefix)
-    ? { owner: 'other_setup', attemptId: lockReason.slice(prefix.length) }
-    : { owner: 'unproven', reason: otherwise };
+  const attemptId = setupAttemptOf(lockReason);
+  return attemptId === null
+    ? { owner: 'unproven', reason: otherwise }
+    : { owner: 'other_setup', attemptId };
 }
 
 /**

@@ -449,7 +449,8 @@ describe('detached run worktree ownership', () => {
       expect(fixture.git('worktree', 'list', '--porcelain').split('worktree ')).toHaveLength(
         branch ? 3 : 2
       );
-      expect(env.branch_name).toMatch(branch ? /^operator-branch$/ : /^archon\/task-release-\d+$/);
+      // The branch the launcher acknowledged is the one the child's worktree is on.
+      expect(env.branch_name).toBe(branch ?? ack.branch);
     },
     30_000
   );

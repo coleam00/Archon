@@ -1383,7 +1383,9 @@ describe('submodules', () => {
         // A failed status is a failure on this attempt's own checkout. A lock that became
         // another attempt's is not: the notice must not send anyone to remove that path.
         if (failure === 'status fails') {
-          expect(classifyIsolationError(error)).toContain('was left behind');
+          expect((error as Error & { cleanupFailure?: string }).cleanupFailure).toMatch(
+            /\bremove\b/i
+          );
         } else {
           expectKeptWithoutRemovalAdvice(error);
         }
