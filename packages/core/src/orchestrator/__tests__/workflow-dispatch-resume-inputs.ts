@@ -19,9 +19,11 @@ import {
   mockLogger,
   mockResolveContinuationWorkflow,
   mockStartRunLiveOwner,
+  mockStartWorkflow,
   mockWithRunLiveOwner,
   operator,
 } from '../../test/orchestrator-agent-harness';
+import { workflowStartRefusal } from '../../operations/workflow-start-admission';
 import { handleMessage } from '../orchestrator-agent';
 import type { setupRoutingTests } from './workflow-dispatch-adoption';
 export function registerResumeInputTests(fixture: ReturnType<typeof setupRoutingTests>) {
@@ -56,6 +58,45 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     expect(mockStartRunLiveOwner).toHaveBeenCalledWith('implicit-resume-1');
     expect(mockCloseRunLiveOwner).toHaveBeenCalledTimes(1);
     expect(mockExecuteWorkflow.mock.calls[0][3]).toBe('/repos/test-repo/worktrees/paused');
+  });
+
+  // The run route asks before it dispatches. Its answer has to be the dispatch's own: the
+  // same refusal for a fresh start, and none for the continuation the test above accepts.
+  test('run-route admission refuses a fresh start and admits the continuation the dispatch accepts', async () => {
+    const start = {
+      conversationId: 'conv-1',
+      conversation: makeDispatchConversation(),
+      workflowName: 'test-workflow',
+      inputs: undefined,
+      actor: operator,
+    };
+    const prepare = (): void => {
+      mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+      mockStartWorkflow.mockReturnValueOnce(
+        Promise.resolve(fixture.makeWorkflowResult({ inputs: { diff: { required: true } } }))
+      );
+    };
+
+    prepare();
+    expect(await workflowStartRefusal(start)).toContain("requires input 'diff'");
+
+    prepare();
+    mockFindResumableRunByParentConversation.mockReturnValueOnce(
+      Promise.resolve(
+        makeResumableRun({
+          id: 'implicit-resume-1',
+          working_path: '/repos/test-repo/worktrees/paused',
+          status: 'paused',
+        })
+      )
+    );
+    expect(await workflowStartRefusal(start)).toBeUndefined();
+
+    prepare();
+    expect(await workflowStartRefusal({ ...start, inputs: { diff: 'D1' } })).toBeUndefined();
+    // Asking changes nothing: no run is resumed, started or queued.
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
   });
 
   test('tells the caller when supplied inputs could not be applied to an auto-resumed run', async () => {

@@ -4,7 +4,7 @@
  * runs for real, in its own process, against one scratch home.
  */
 import { expect, test } from 'bun:test';
-import { spawnSync } from 'node:child_process';
+import { type SpawnSyncReturns, spawnSync } from 'node:child_process';
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -36,7 +36,7 @@ test('the CLI and the run route refuse a start that misses a required input with
       '',
     ].join('\n')
   );
-  const run = (args: string[]): ReturnType<typeof spawnSync<string>> =>
+  const run = (args: string[]): SpawnSyncReturns<string> =>
     spawnSync(process.execPath, ['--no-env-file', ...args], {
       cwd: project,
       env: { ...process.env, ARCHON_HOME: home, ARCHON_TELEMETRY_DISABLED: '1' },

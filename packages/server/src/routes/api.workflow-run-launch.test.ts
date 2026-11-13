@@ -766,7 +766,14 @@ describe('POST /api/workflows/:name/run', () => {
         expect(response.status).toBe(400);
         expect(await response.json()).toEqual({ error: reason });
         // The engine judges the conversation's own project, name and inputs.
-        expect(mockWorkflowStartRefusal).toHaveBeenCalledWith(MOCK_CONV, 'fix-issue', inputs);
+        expect(mockWorkflowStartRefusal).toHaveBeenCalledWith(
+          expect.objectContaining({
+            conversation: MOCK_CONV,
+            workflowName: 'fix-issue',
+            inputs,
+            actor: { kind: 'operator' },
+          })
+        );
         expect(mockHandleMessage).not.toHaveBeenCalled();
         expect(mockAddMessage).not.toHaveBeenCalled();
         expect(mockGenerateAndSetTitle).not.toHaveBeenCalled();

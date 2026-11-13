@@ -17,6 +17,18 @@ export type SignatureGates =
   | { ok: false }
   | { ok: true; resolvedInputs?: Record<string, string>; deferredInputError?: Error };
 
+/** What the signature gates decide about one start, before anyone is told. */
+export type SignatureVerdict =
+  | Extract<SignatureGates, { ok: true }>
+  | { ok: false; reason: string };
+
+/** The facts the signature gates judge. Nothing here can deliver a message. */
+export interface SignatureSubject {
+  readonly conversationId: string;
+  readonly userId: string | undefined;
+  readonly inputs: Readonly<Record<string, string>> | undefined;
+}
+
 /**
  * Input signature gate (#2470, #2554) plus capability gate, judged against ONE
  * workflow definition. A checkout-branch adoption swaps the definition for the
@@ -29,10 +41,30 @@ export async function runSignatureGates(
   definition: ResolvedWorkflow,
   willContinueExistingRun: boolean
 ): Promise<SignatureGates> {
-  const inputs = await resolveInvocationInputs(scope, definition, willContinueExistingRun);
+  const verdict = await judgeSignatureGates(
+    { conversationId: scope.conversationId, userId: scope.userId, inputs: scope.options?.inputs },
+    definition,
+    willContinueExistingRun
+  );
+  if (verdict.ok) return verdict;
+  await scope.platform.sendMessage(scope.conversationId, verdict.reason);
+  return { ok: false };
+}
+
+/**
+ * The gates' decision with no delivery, so every caller that must refuse a start gets one
+ * answer: the dispatch sends the reason to the conversation, and the run route's admission
+ * returns it as the request's response.
+ */
+export async function judgeSignatureGates(
+  subject: SignatureSubject,
+  definition: ResolvedWorkflow,
+  willContinueExistingRun: boolean
+): Promise<SignatureVerdict> {
+  const inputs = resolveInvocationInputs(subject, definition, willContinueExistingRun);
   if (!inputs.ok) return inputs;
-  if (!(await githubRequirementMet(scope, definition))) return { ok: false };
-  return inputs;
+  const unmet = await unmetGithubRequirement(subject, definition);
+  return unmet === undefined ? inputs : { ok: false, reason: unmet };
 }
 
 /**
@@ -41,14 +73,13 @@ export async function runSignatureGates(
  * that supplies nothing still refuses a required-input workflow here. The workflow still
  * lists/loads normally.
  */
-async function resolveInvocationInputs(
-  scope: DispatchScope,
+function resolveInvocationInputs(
+  { inputs }: SignatureSubject,
   definition: ResolvedWorkflow,
   willContinueExistingRun: boolean
-): Promise<SignatureGates> {
-  const { platform, conversationId, options } = scope;
+): SignatureVerdict {
   try {
-    return { ok: true, resolvedInputs: resolveTopLevelInputs(definition, options?.inputs) };
+    return { ok: true, resolvedInputs: resolveTopLevelInputs(definition, inputs) };
   } catch (err) {
     // Both are user-facing contract violations: a missing required input, and — now
     // that a caller can supply values — a key the workflow does not declare.
@@ -59,15 +90,12 @@ async function resolveInvocationInputs(
         workflowName: definition.name,
         // Names only, never values — a supplied value is user content (logging rules).
         missing: err instanceof WorkflowMissingInputsError ? err.missing : undefined,
-        suppliedKeys: options?.inputs ? Object.keys(options.inputs) : [],
+        suppliedKeys: inputs ? Object.keys(inputs) : [],
         deferred: willContinueExistingRun,
       },
       'workflow.required_inputs_unsatisfiable'
     );
-    if (!willContinueExistingRun) {
-      await platform.sendMessage(conversationId, err.message);
-      return { ok: false };
-    }
+    if (!willContinueExistingRun) return { ok: false, reason: err.message };
     // A contract violation held back because a resume may make it moot. Only the one
     // branch in `continueForegroundResume` that falls through to a FRESH run row
     // (hydration found nothing worth resuming) still needs it; every other
@@ -81,12 +109,11 @@ async function resolveInvocationInputs(
  * workflow declares `requires: [github]` and the originating user hasn't
  * connected. No-op when per-user GitHub is disabled (solo PAT installs).
  */
-async function githubRequirementMet(
-  scope: DispatchScope,
+async function unmetGithubRequirement(
+  { conversationId, userId }: SignatureSubject,
   definition: ResolvedWorkflow
-): Promise<boolean> {
-  const { platform, conversationId, userId } = scope;
-  if (!isPerUserGitHubEnabled() || !definition.requires?.length) return true;
+): Promise<string | undefined> {
+  if (!isPerUserGitHubEnabled() || !definition.requires?.length) return undefined;
   const githubConnected = userId ? Boolean(await getDecryptedAccessToken(userId)) : false;
   try {
     assertWorkflowRequirementsMet(definition, { githubConnected });
@@ -96,10 +123,9 @@ async function githubRequirementMet(
       { workflowName: definition.name, conversationId, userId, requirement: err.requirement },
       'workflow.requirement_unmet'
     );
-    await platform.sendMessage(conversationId, err.message);
-    return false;
+    return err.message;
   }
-  return true;
+  return undefined;
 }
 
 export async function sendRunStartNotices(

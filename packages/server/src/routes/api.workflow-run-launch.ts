@@ -38,9 +38,11 @@ const runWorkflowRoute = createRoute({
     'and optional file attachments (max 5 files, ' +
     '10 MB each). `message` may be empty: what a run needs to start is decided by the ' +
     "workflow's declared inputs, not by this route. `inputs` supplies values for the workflow's declared `inputs:` " +
-    '(#2554). A workflow that does not resolve, a missing required input and an undeclared key ' +
-    "return HTTP 400 with the engine's reason, the text `archon workflow run` prints, before " +
-    'anything is written or queued. `config` ' +
+    '(#2554). A start the engine refuses returns HTTP 400 with its reason before anything is ' +
+    'written or queued: a workflow that does not resolve, a missing required input, an ' +
+    'undeclared key, or an unmet `requires:`. For the input refusals the reason is the text ' +
+    '`archon workflow run` prints. A start that continues a paused run of the same workflow in ' +
+    'the conversation is not refused for its inputs. `config` ' +
     'supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. ' +
     'Caller-supplied filesystem config paths are rejected. JSON requests may supply ' +
     '`adopt_run_id` or `supersedes_run_id`, but not both. Unique prefixes resolve in the conversation selected project; ' +
@@ -511,11 +513,13 @@ async function launchWorkflowRun(
   // The engine's answer to this start, given before anything is written or queued, so a
   // refused start is this request's response and never a later chat message.
   try {
-    const refusal = await workflowStartRefusal(
-      access.conversation,
+    const refusal = await workflowStartRefusal({
+      conversationId: request.conversationId,
+      conversation: access.conversation,
       workflowName,
-      request.workflowInputs
-    );
+      inputs: request.workflowInputs,
+      actor: access.actor,
+    });
     if (refusal !== undefined) return apiError(c, 400, refusal);
   } catch (error) {
     getLog().error({ err: error, workflowName }, 'run_start_admission_failed');

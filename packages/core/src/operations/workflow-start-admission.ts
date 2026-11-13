@@ -1,40 +1,61 @@
-import {
-  resolveTopLevelInputs,
-  WorkflowMissingInputsError,
-} from '@archon/workflows/utils/workflow-requirements';
-import { WorkflowInputContractError } from '@archon/workflows/workflow-inputs';
-import { startWorkflow } from '../handlers/commands/workflow';
+import * as codebaseDb from '../db/codebases';
+import { startWorkflow } from '../handlers/command-handler';
+import { judgeSignatureGates } from '../orchestrator/dispatch/gates';
+import { readContinuation } from '../orchestrator/dispatch/request';
 import type { Conversation } from '../types';
+import type { RunActor } from './run-authorization';
+
+/** One start by workflow name, as the run route receives it. */
+export interface WorkflowStart {
+  /** The web conversation id, for the gates' log lines. */
+  conversationId: string;
+  /** The conversation's row; `null` when the dispatch will create it. */
+  conversation: Conversation | null;
+  workflowName: string;
+  inputs: Readonly<Record<string, string>> | undefined;
+  actor: RunActor;
+}
 
 /**
- * Why a start of `workflowName` with these inputs cannot run, or `undefined` when it can:
- * the workflow does not resolve, or its declared inputs refuse the supplied values. The
- * run route asks before it writes or dispatches anything, so it can answer the request
- * itself. It is the check CLI admission makes, through the same {@link resolveTopLevelInputs},
- * against the workflow the conversation's project resolves. The dispatch gate still judges
- * the definition a run executes, which an adopted branch can replace.
+ * Why this start cannot run, or `undefined` when it can. The run route asks before it writes
+ * or dispatches anything, so a refusal is the request's response and never a later chat
+ * message.
  *
- * A conversation with no row yet resolves workflows as one with no project does.
+ * The answer is the dispatch's own: the workflow resolves the way a start by name resolves
+ * it, and the signature gates judge it with the continuation the dispatch would detect. An
+ * input error is therefore deferred here exactly when the dispatch defers it. The dispatch
+ * still runs the gates, because an adopted branch can replace the definition after this.
+ *
+ * A conversation with no project resolves workflows as the dispatch does for it, and has no
+ * run to continue.
  */
-export async function workflowStartRefusal(
-  conversation: Pick<Conversation, 'codebase_id' | 'cwd'> | null,
-  workflowName: string,
-  inputs: Readonly<Record<string, string>> | undefined
-): Promise<string | undefined> {
-  const start = await startWorkflow(
+export async function workflowStartRefusal(start: WorkflowStart): Promise<string | undefined> {
+  const { conversation, workflowName, actor } = start;
+  const command = await startWorkflow(
     conversation ?? { codebase_id: null, cwd: null },
     workflowName,
     '',
     false,
     {}
   );
-  if (start.workflow?.kind !== 'start') return start.message;
-  try {
-    resolveTopLevelInputs(start.workflow.definition, inputs);
-  } catch (err) {
-    if (err instanceof WorkflowMissingInputsError || err instanceof WorkflowInputContractError)
-      return err.message;
-    throw err;
-  }
-  return undefined;
+  const request = command.workflow;
+  if (request?.kind !== 'start') return command.message;
+
+  const codebase = conversation?.codebase_id
+    ? await codebaseDb.getCodebase(conversation.codebase_id)
+    : null;
+  const continuation =
+    conversation && codebase
+      ? await readContinuation({ conversation, codebase }, request, request.definition)
+      : undefined;
+  const verdict = await judgeSignatureGates(
+    {
+      conversationId: start.conversationId,
+      userId: actor.kind === 'user' ? actor.userId : undefined,
+      inputs: start.inputs,
+    },
+    request.definition,
+    continuation?.willContinueExistingRun ?? false
+  );
+  return verdict.ok ? undefined : verdict.reason;
 }
