@@ -247,13 +247,12 @@ export interface IWorkflowStore
    *
    * Pass `self` from the calling dispatch so:
    *   1. Self is never returned (excluded by `id != self.id`).
-   *   2. Two near-simultaneous dispatches deterministically agree on which
-   *      is "first" via the `(effective phase time, id)` tiebreaker — newer aborts.
+   *   2. Only a holder whose effective phase time is earlier than or equal to
+   *      `startedAt` is returned. Equal times block whatever the ids: the store
+   *      does not record which run passed the guard first, so the caller yields.
    *
    * `startedAt` is the effective path priority from `workflowPathPriorityTime`.
-   * `id` and `startedAt` must travel together — the tiebreaker requires
-   * both. Bundling them as a single optional struct makes the
-   * paired-or-nothing invariant structural rather than a doc-only contract.
+   * `id` and `startedAt` describe one run, so they travel as a single optional struct.
    *
    * Stale `pending` rows (older than ~5 minutes) are treated as orphaned
    * and ignored, so leaks from crashed dispatches don't permanently block

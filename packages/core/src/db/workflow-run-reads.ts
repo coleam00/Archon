@@ -228,10 +228,11 @@ export function activeWorkflowPathHolderCondition(): string {
  * When called from a dispatch that already pre-created its own row, pass
  * `self` (`id` + `startedAt`) so:
  *   1. Self is never returned.
- *   2. If two dispatches both have rows, the deterministic older-wins
- *      tiebreaker `(effective phase time, id)` ensures both agree on which is "first."
- *      The newer dispatch sees the older row and aborts; the older dispatch
- *      sees nothing.
+ *   2. A holder whose effective phase time is earlier than or equal to the caller's
+ *      is returned, so the caller aborts. Equal times block whatever the ids: the
+ *      rows do not record which run passed the guard first, so a run that already
+ *      holds the path cannot be told from one arriving at the same instant. Two
+ *      runs that become active together at exactly equal times both abort.
  *
  * `self.excludeRunIds` (#2121 Phase 2) additionally excludes the caller's
  * ancestor run-id chain: a `workflow:` sub-run shares its parent's checkout, so
@@ -247,14 +248,13 @@ export async function getActiveWorkflowRunByPath(
   const priority = isPostgres
     ? 'GREATEST(started_at, COALESCE(active_phase_started_at, started_at))'
     : 'MAX(julianday(started_at), julianday(COALESCE(active_phase_started_at, started_at)))';
-  // Build params + clauses dynamically. Self exclusion + tiebreaker travel
-  // together — the tiebreaker references both ids and timestamps.
+  // Build params + clauses dynamically.
   const params: unknown[] = [workingPath];
   const clauses: string[] = ['working_path = $1', activeWorkflowPathHolderCondition()];
   let selfIdParam: string | undefined;
   if (self !== undefined) {
     params.push(self.id);
-    // Captured at push time — the tiebreaker below must reference THIS
+    // Captured at push time — the PostgreSQL self read below must reference THIS
     // placeholder, and excludeRunIds params may land in between.
     selfIdParam = `$${String(params.length)}`;
     clauses.push(`id != ${selfIdParam}`);
@@ -274,17 +274,13 @@ export async function getActiveWorkflowRunByPath(
     // Julian days preserve subsecond ordering across SQLite's ISO and UTC text formats.
     params.push(self.startedAt.toISOString());
     const startedAtParam = `$${String(params.length)}`;
-    // NOT params.length - 1: excludeRunIds placeholders may sit between the self
-    // id and startedAt — a positional back-reference here once pointed the id
-    // tiebreak at an ancestor id instead of self (caught by the SQL-shape test).
     // selfIdParam is always set when `self` is (same guard above).
     const idParam = selfIdParam ?? '$2';
-    const colExpr = priority;
     // Read self in SQL to retain PostgreSQL microseconds lost during Date hydration.
     const paramExpr = isPostgres
       ? `COALESCE((SELECT ${priority} FROM remote_agent_workflow_runs WHERE id = ${idParam}), ${startedAtParam}::timestamptz)`
       : `julianday(${startedAtParam})`;
-    clauses.push(`(${colExpr} < ${paramExpr} OR (${colExpr} = ${paramExpr} AND id < ${idParam}))`);
+    clauses.push(`${priority} <= ${paramExpr}`);
   }
 
   try {

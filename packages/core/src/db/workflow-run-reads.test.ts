@@ -214,7 +214,7 @@ describe('workflow run reads', () => {
       expect(query).toMatch(/started_at >.*INTERVAL.*milliseconds/);
     });
 
-    test('excludes self and applies older-wins tiebreaker when self is provided', async () => {
+    test('excludes self and blocks on an earlier or equal priority when self is provided', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
       const startedAt = new Date('2026-04-14T10:00:00Z');
 
@@ -223,22 +223,19 @@ describe('workflow run reads', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('id != $2');
       expect(query).toContain(
-        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) < COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $3::timestamptz)'
-      );
-      expect(query).toContain(
-        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) = COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $3::timestamptz) AND id < $2'
+        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) <= COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $3::timestamptz)'
       );
       // selfStartedAt serialized to ISO — bun:sqlite rejects Date bindings.
       expect(params).toEqual(['/repo/path', 'self-id', startedAt.toISOString()]);
     });
 
-    test('skips self exclusion + tiebreaker when self is omitted (no caller context)', async () => {
+    test('skips self exclusion and the priority filter when self is omitted (no caller context)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
       await getActiveWorkflowRunByPath('/repo/path');
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      // Without `self`, neither the id-exclusion nor the tiebreaker apply.
+      // Without `self`, neither the id-exclusion nor the priority filter apply.
       expect(query).not.toContain('id !=');
       expect(query).not.toContain('started_at <');
       expect(params).toEqual(['/repo/path']);
@@ -287,11 +284,10 @@ describe('workflow run reads', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain('id != $2');
       expect(query).toContain('id NOT IN ($3, $4)');
-      // The tiebreaker's id comparison must reference SELF ($2) — a positional
-      // back-reference once pointed it at $4 (an ancestor id) when excludeRunIds
-      // params landed between the self id and startedAt.
+      // The self priority read must reference SELF ($2), not an ancestor id:
+      // excludeRunIds params land between the self id and startedAt.
       expect(query).toContain(
-        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) = COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $5::timestamptz) AND id < $2'
+        'GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) <= COALESCE((SELECT GREATEST(started_at, COALESCE(active_phase_started_at, started_at)) FROM remote_agent_workflow_runs WHERE id = $2), $5::timestamptz)'
       );
       expect(params).toEqual([
         '/repo/path',

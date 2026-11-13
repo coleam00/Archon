@@ -64,7 +64,29 @@ export function describeResumeTransitionConformance(getHarness: () => WorkflowSt
     }
   });
 
-  test('path priority agrees on phase ties, milliseconds, null phases and newer legacy-writer creation times', async () => {
+  test("a run resumed at exactly the holder's priority time yields despite its lower id", async () => {
+    const { store, backdate } = getHarness();
+    const path = '/equal-priority';
+    const tie = new Date('2021-01-01T00:00:00.000Z');
+    const create = (id: string) =>
+      store.createWorkflowRun({ id, workflow_name: 'tie', user_message: '', working_path: path });
+    const contender = await create('00000000-0000-4000-8000-0000000000a1');
+    await store.claimPendingWorkflowRun(contender.id);
+    await store.failWorkflowRun(contender.id, 'failed');
+    const holder = await create('00000000-0000-4000-8000-0000000000b2');
+    await store.claimPendingWorkflowRun(holder.id);
+    await backdate(holder.id, { started_at: tie });
+    const resumed = await store.resumeWorkflowRun(contender.id);
+    await backdate(resumed.id, {
+      started_at: new Date('2020-01-01T00:00:00.000Z'),
+      active_phase_started_at: tie,
+    });
+    expect(
+      (await store.getActiveWorkflowRunByPath(path, { id: resumed.id, startedAt: tie }))?.id
+    ).toBe(holder.id);
+  });
+
+  test('path priority agrees on milliseconds, null phases and newer legacy-writer creation times', async () => {
     const { store, backdate } = getHarness();
     const path = '/priority-compatibility';
     const runs = await Promise.all(
@@ -100,9 +122,10 @@ export function describeResumeTransitionConformance(getHarness: () => WorkflowSt
         )?.id
       ).toBe(first);
     };
-    await backdate(a.id, { started_at: new Date('2019-01-01') });
-    await check(a.id, b.id);
-    await backdate(a.id, { active_phase_started_at: new Date(phase.getTime() + 1) });
+    await backdate(a.id, {
+      started_at: new Date('2019-01-01'),
+      active_phase_started_at: new Date(phase.getTime() + 1),
+    });
     await check(b.id, a.id);
     await backdate(a.id, { active_phase_started_at: null });
     await check(a.id, b.id);

@@ -224,10 +224,7 @@ export function createTransactionReads(
               run.id !== self?.id &&
               !self?.excludeRunIds?.includes(run.id) &&
               holdsWorkflowPath(run) &&
-              (!self ||
-                workflowPathPriorityTime(run) < self.startedAt ||
-                (workflowPathPriorityTime(run).getTime() === self.startedAt.getTime() &&
-                  run.id < self.id))
+              (!self || workflowPathPriorityTime(run) <= self.startedAt)
           )
           .sort(
             (a, b) =>

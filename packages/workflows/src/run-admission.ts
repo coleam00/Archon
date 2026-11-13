@@ -415,8 +415,8 @@ function freshInvocationMetadata(
  * block under `mutates_checkout: false`, only to record those events.
  *
  * Runs after workflowRun is finalized (pre-created, resumed, or freshly
- * created) so we always have self-ID + path priority for the deterministic
- * older-wins tiebreaker. The query treats `pending` rows older than 5 min
+ * created) so we always have self-ID + path priority: the run yields to any other
+ * holder with an earlier or equal priority. The query treats `pending` rows older than 5 min
  * as orphaned, so leaks from crashed dispatches or resume orphans don't
  * permanently block the path.
  */

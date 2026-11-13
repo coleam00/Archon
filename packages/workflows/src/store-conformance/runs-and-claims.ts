@@ -313,7 +313,7 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       );
       expect(await store.claimWriteback(run.id)).toEqual({ claimed: true });
     });
-    test('path holders exclude stale pending, self and ancestors and agree on the id tiebreak', async () => {
+    test('path holders exclude stale pending, self and ancestors, and block at equal priority', async () => {
       const path = '/locked';
       const first = await create(store, {
         id: '00000000-0000-4000-8000-000000000001',
@@ -326,8 +326,8 @@ export function describeRunsAndClaimsConformance(getHarness: () => WorkflowStore
       const tie = new Date(Date.now() - 60_000);
       for (const run of [first, second]) await harness.backdate(run.id, { started_at: tie });
       expect(
-        await store.getActiveWorkflowRunByPath(path, { id: first.id, startedAt: tie })
-      ).toBeNull();
+        (await store.getActiveWorkflowRunByPath(path, { id: first.id, startedAt: tie }))?.id
+      ).toBe(second.id);
       expect(
         (await store.getActiveWorkflowRunByPath(path, { id: second.id, startedAt: tie }))?.id
       ).toBe(first.id);

@@ -1619,9 +1619,9 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
 - **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
 - **Don't run the workflow concurrently.** A workflow with `worktree: enabled: false` shares
   one working path. With the default `mutates_checkout: true`, direct executor dispatch
-  rejects a second run when it finds an earlier-priority holder with "This worktree is in
-  use"; the operator must re-run it afterwards. Exact-priority ties can bypass an admitted
-  holder; see the [checkout-priority limitation](/reference/database/#workflow-run-timestamps).
+  rejects a second run when it finds a holder with an earlier or equal priority with "This
+  worktree is in use"; the operator must re-run it afterwards. See
+  [checkout priority](/reference/database/#workflow-run-timestamps).
   Trigger admission instead queues or skips the request according to `overlap`, naming the
   holding run as its blocker. See
   [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
@@ -2593,15 +2593,13 @@ Children **in their own worktrees** (`isolation: worktree`) never interact: sepa
 directories, separate branches.
 
 Children **sharing the parent's checkout** meet the engine's path-priority guard. At start,
-a run that finds an earlier-priority active run on its working path **cancels itself**.
-At exactly equal effective priority, a later lower-ID contender can pass an already
-admitted higher-ID holder, so overlapping execution is possible; see the
-[checkout-priority limitation](/reference/database/#workflow-run-timestamps).
+a run that finds an active run with an earlier or equal priority on its working path
+**cancels itself**; see [checkout priority](/reference/database/#workflow-run-timestamps).
 The guard excludes a run's own ancestors and descendants: a child never blocks against
 its own parent. Children of the **same `fan_out` node** are also excluded and may share the
 checkout. Children of different `workflow:` nodes are not excluded. When two such children
 in one layer collide, the earlier-priority run keeps the path, the other cancels itself,
-and the parent run fails.
+and the parent run fails. At exactly equal priority both cancel themselves.
 
 > **Resume does not recover from this.** A parent's resume re-drives a *failed* child, but a
 > *cancelled* one is threaded straight through as it stands, so a parent that failed this
@@ -2622,9 +2620,8 @@ nodes:
 
 `mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
 to its checkout, so the engine skips the path lock for it. It defaults to `true` (apply the
-path-priority guard, subject to the
-[exact-priority tie limitation](/reference/database/#workflow-run-timestamps)).
-Direct executor dispatch rejects a run when it finds an earlier-priority holder;
+path-priority guard).
+Direct executor dispatch rejects a run when it finds a holder with an earlier or equal priority;
 [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy)
 queues or skips it according to `overlap`. It is author-declared on purpose: the author of a
 review or research workflow is the one who knows it only reads. Children launched by
