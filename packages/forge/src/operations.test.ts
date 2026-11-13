@@ -80,6 +80,25 @@ test('merge conditions cannot disappear during validation and reruns cannot dupl
     ).toBe(false);
 });
 
+test('checks.rerun takes a check entry exactly as checks.state returned it', async () => {
+  const { forgeRequestSchema } = await import('./operations');
+  const entry: CheckObservation = {
+    ...failed,
+    unit: { kind: 'check', id: '7', name: 'e2e' },
+    rerun: { id: 'run', attempt: 1 },
+  };
+  const request = forgeRequestSchema.parse({
+    operationId: '3',
+    op: 'checks.rerun',
+    ref: { repo: { host: 'forge', path: 'repo' }, number: 1 },
+    revision: 'head',
+    units: [entry],
+  });
+  // Only what identifies the check and its rerun group reaches the plugin.
+  expect(request).toMatchObject({ units: [{ unit: entry.unit, rerun: entry.rerun }] });
+  expect(Object.keys((request as { units: object[] }).units[0]!)).toEqual(['unit', 'rerun']);
+});
+
 test('failure evidence cannot belong to another operation or call observed reruns a refusal', async () => {
   const { mutationFailureSchema } = await import('./operations');
   const target = { repo: { host: 'forge', path: 'repo' }, number: 1 };
