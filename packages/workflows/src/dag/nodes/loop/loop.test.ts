@@ -32,7 +32,6 @@ import { foldDagResumeSnapshot } from '../../../dag-resume-snapshot';
 import { workflowRunStatusSchema } from '../../../schemas/workflow-run';
 import { providerEventEnvelopeSchema } from '../../../schemas/provider-event';
 import type { DagNode } from '../../../schemas';
-import type { IWorkflowPlatform } from '../../../deps';
 import type { IWorkflowStore } from '../../../store';
 import { buildAiProfile } from '../../../model-validation';
 
