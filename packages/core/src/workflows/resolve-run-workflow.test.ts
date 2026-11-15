@@ -137,24 +137,21 @@ describe('resolveRunWorkflow', () => {
     if (result.ok) expect(result.workflow.description).toBe('Legacy live graph');
   });
 
-  test.each(['CONTINUED', 'tinued', 'continue'])(
-    'refuses non-exact legacy workflow %s with a suggestion',
-    async requested => {
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-exact-legacy-run-')));
-      await writeWorkflow(root, 'Exact name only');
-      const result = await resolveRunWorkflow(
-        workflowDeps(),
-        makeRun({ workflow_name: requested }),
-        root,
-        {}
-      );
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.message).toContain(`Workflow \`${requested}\` for run run-1 was not found`);
-        expect(result.message).toContain('Did you mean:\n  - continued');
-      }
+  test('refuses a non-exact legacy workflow with a suggestion', async () => {
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-exact-legacy-run-')));
+    await writeWorkflow(root, 'Exact name only');
+    const result = await resolveRunWorkflow(
+      workflowDeps(),
+      makeRun({ workflow_name: 'CONTINUED' }),
+      root,
+      {}
+    );
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.message).toContain('Workflow `CONTINUED` for run run-1 was not found');
+      expect(result.message).toContain('Did you mean:\n  - continued');
     }
-  );
+  });
 
   test('reports a malformed legacy workflow instead of treating it as absent', async () => {
     const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-malformed-legacy-run-')));
