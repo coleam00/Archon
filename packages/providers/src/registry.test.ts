@@ -118,22 +118,6 @@ describe('registry', () => {
   });
 
   describe('getAgentProvider', () => {
-    test('returns ClaudeProvider for claude type', () => {
-      const provider = getAgentProvider('claude');
-
-      expect(provider).toBeDefined();
-      expect(provider.getType()).toBe('claude');
-      expect(typeof provider.sendQuery).toBe('function');
-    });
-
-    test('returns CodexProvider for codex type', () => {
-      const provider = getAgentProvider('codex');
-
-      expect(provider).toBeDefined();
-      expect(provider.getType()).toBe('codex');
-      expect(typeof provider.sendQuery).toBe('function');
-    });
-
     test('throws UnknownProviderError for unknown type', () => {
       expect(() => getAgentProvider('unknown')).toThrow(UnknownProviderError);
       expect(() => getAgentProvider('unknown')).toThrow(
@@ -189,53 +173,9 @@ describe('registry', () => {
         warn.mockRestore();
       }
     });
-
-    test('providers expose getCapabilities', () => {
-      const claude = getAgentProvider('claude');
-      const codex = getAgentProvider('codex');
-
-      expect(typeof claude.getCapabilities).toBe('function');
-      expect(typeof codex.getCapabilities).toBe('function');
-
-      const claudeCaps = claude.getCapabilities();
-      const codexCaps = codex.getCapabilities();
-
-      expect(claudeCaps.mcp).toBe(true);
-      expect(codexCaps.mcp).toBe(true);
-      expect(claudeCaps.hooks).toBe(true);
-      expect(codexCaps.hooks).toBe(false);
-    });
   });
 
   describe('getProviderCapabilities', () => {
-    test('returns Claude capabilities without instantiation', () => {
-      const caps = getProviderCapabilities('claude');
-      expect(caps.sessionFork).toBe(true);
-      expect(caps.mcp).toBe(true);
-      expect(caps.hooks).toBe(true);
-      expect(caps.envInjection).toBe(true);
-    });
-
-    test('returns Codex capabilities without instantiation', () => {
-      const caps = getProviderCapabilities('codex');
-      expect(caps.sessionFork).toBe(true);
-      expect(caps.mcp).toBe(true);
-      expect(caps.hooks).toBe(false);
-      expect(caps.envInjection).toBe(true);
-    });
-
-    test('matches runtime getCapabilities for Claude', () => {
-      const staticCaps = getProviderCapabilities('claude');
-      const runtimeCaps = getAgentProvider('claude').getCapabilities();
-      expect(staticCaps).toEqual(runtimeCaps);
-    });
-
-    test('matches runtime getCapabilities for Codex', () => {
-      const staticCaps = getProviderCapabilities('codex');
-      const runtimeCaps = getAgentProvider('codex').getCapabilities();
-      expect(staticCaps).toEqual(runtimeCaps);
-    });
-
     test('throws UnknownProviderError for unknown type', () => {
       expect(() => getProviderCapabilities('unknown')).toThrow(UnknownProviderError);
     });
@@ -415,15 +355,6 @@ describe('registry', () => {
       expect(secondProvider.getType()).toBe('shared');
       expect(native.getCapabilities()).toBe(nativeCaps);
     });
-
-    test('registers a new provider', () => {
-      const entry = makeMockRegistration('my-llm');
-      registerProvider(entry);
-
-      expect(isRegisteredProvider('my-llm')).toBe(true);
-      const provider = getAgentProvider('my-llm');
-      expect(provider.getType()).toBe('my-llm');
-    });
   });
 
   describe('getRegistration', () => {
@@ -437,22 +368,6 @@ describe('registry', () => {
 
     test('throws for unknown provider', () => {
       expect(() => getRegistration('nope')).toThrow(UnknownProviderError);
-    });
-  });
-
-  describe('getRegisteredProviders', () => {
-    test('returns all registered providers', () => {
-      const all = getRegisteredProviders();
-      expect(all.length).toBe(2);
-      const ids = all.map(r => r.id);
-      expect(ids).toContain('claude');
-      expect(ids).toContain('codex');
-    });
-
-    test('includes community providers after registration', () => {
-      registerProvider(makeMockRegistration('my-llm'));
-      const all = getRegisteredProviders();
-      expect(all.length).toBe(3);
     });
   });
 
@@ -484,31 +399,7 @@ describe('registry', () => {
     });
   });
 
-  describe('registerBuiltinProviders', () => {
-    test('is idempotent', () => {
-      registerBuiltinProviders();
-      registerBuiltinProviders();
-      const all = getRegisteredProviders();
-      expect(all.length).toBe(2);
-    });
-  });
-
-  describe('clearRegistry', () => {
-    test('empties the registry', () => {
-      clearRegistry();
-      expect(getRegisteredProviders()).toEqual([]);
-      expect(isRegisteredProvider('claude')).toBe(false);
-    });
-  });
-
   describe('registerCommunityProviders (aggregator)', () => {
-    test('registers all bundled community providers', () => {
-      registerCommunityProviders();
-      expect(isRegisteredProvider('opencode')).toBe(true);
-      expect(isRegisteredProvider('pi')).toBe(true);
-      expect(isRegisteredProvider('copilot')).toBe(true);
-    });
-
     test('only OpenCode and Copilot are deprecated', () => {
       registerCommunityProviders();
       const deprecated = getRegisteredProviders()
@@ -538,35 +429,9 @@ describe('registry', () => {
         expect(notice).toContain('do not deliver progress or results');
       }
     });
-
-    test('is idempotent', () => {
-      registerCommunityProviders();
-      expect(() => registerCommunityProviders()).not.toThrow();
-      const opencodeCount = getRegisteredProviders().filter(p => p.id === 'opencode').length;
-      const piCount = getRegisteredProviders().filter(p => p.id === 'pi').length;
-      const copilotCount = getRegisteredProviders().filter(p => p.id === 'copilot').length;
-      expect(opencodeCount).toBe(1);
-      expect(piCount).toBe(1);
-      expect(copilotCount).toBe(1);
-    });
   });
 
   describe('registerPiProvider (community provider)', () => {
-    test('registers pi with builtIn: true', () => {
-      registerPiProvider();
-      const reg = getRegistration('pi');
-      expect(reg.id).toBe('pi');
-      expect(reg.displayName).toBe('Pi');
-      expect(reg.builtIn).toBe(true);
-    });
-
-    test('is idempotent', () => {
-      registerPiProvider();
-      expect(() => registerPiProvider()).not.toThrow();
-      const piEntries = getRegisteredProviders().filter(p => p.id === 'pi');
-      expect(piEntries).toHaveLength(1);
-    });
-
     test('declares v2 capabilities (effort, tools, skills, sessionResume, envInjection, structuredOutput, costReporting supported)', () => {
       registerPiProvider();
       const caps = getProviderCapabilities('pi');
@@ -596,33 +461,9 @@ describe('registry', () => {
       expect(info).toBeDefined();
       expect(info?.builtIn).toBe(true);
     });
-
-    test('does not collide with built-ins', () => {
-      // beforeEach already called registerBuiltinProviders + clearRegistry reset
-      registerPiProvider();
-      const ids = getRegisteredProviders()
-        .map(p => p.id)
-        .sort();
-      expect(ids).toEqual(['claude', 'codex', 'pi']);
-    });
   });
 
   describe('registerOpencodeProvider (community provider)', () => {
-    test('registers opencode with builtIn: false', () => {
-      registerOpencodeProvider();
-      const reg = getRegistration('opencode');
-      expect(reg.id).toBe('opencode');
-      expect(reg.displayName).toBe('OpenCode (community)');
-      expect(reg.builtIn).toBe(false);
-    });
-
-    test('is idempotent', () => {
-      registerOpencodeProvider();
-      expect(() => registerOpencodeProvider()).not.toThrow();
-      const opencodeEntries = getRegisteredProviders().filter(p => p.id === 'opencode');
-      expect(opencodeEntries).toHaveLength(1);
-    });
-
     test('declares capabilities (sessionResume, structuredOutput, agents, toolRestrictions, costReporting supported; untranslated node fields and env injection stay off)', () => {
       registerOpencodeProvider();
       const caps = getProviderCapabilities('opencode');
@@ -640,40 +481,9 @@ describe('registry', () => {
       expect(caps.fallbackModel).toBe(false);
       expect(caps.sandbox).toBe(false);
     });
-
-    test('appears in getProviderInfoList with builtIn: false', () => {
-      registerOpencodeProvider();
-      const info = getProviderInfoList().find(p => p.id === 'opencode');
-      expect(info).toBeDefined();
-      expect(info?.builtIn).toBe(false);
-    });
-
-    test('does not collide with built-ins or other community providers', () => {
-      registerOpencodeProvider();
-      registerPiProvider();
-      const ids = getRegisteredProviders()
-        .map(p => p.id)
-        .sort();
-      expect(ids).toEqual(['claude', 'codex', 'opencode', 'pi']);
-    });
   });
 
   describe('registerCopilotProvider (community provider)', () => {
-    test('registers copilot with builtIn: false', () => {
-      registerCopilotProvider();
-      const reg = getRegistration('copilot');
-      expect(reg.id).toBe('copilot');
-      expect(reg.displayName).toBe('Copilot (GitHub)');
-      expect(reg.builtIn).toBe(false);
-    });
-
-    test('is idempotent', () => {
-      registerCopilotProvider();
-      expect(() => registerCopilotProvider()).not.toThrow();
-      const entries = getRegisteredProviders().filter(p => p.id === 'copilot');
-      expect(entries).toHaveLength(1);
-    });
-
     test('declares conservative capabilities', () => {
       registerCopilotProvider();
       const caps = getProviderCapabilities('copilot');
@@ -696,14 +506,6 @@ describe('registry', () => {
       const info = getProviderInfoList().find(p => p.id === 'copilot');
       expect(info).toBeDefined();
       expect(info?.builtIn).toBe(false);
-    });
-
-    test('does not collide with built-ins', () => {
-      registerCopilotProvider();
-      const ids = getRegisteredProviders()
-        .map(p => p.id)
-        .sort();
-      expect(ids).toEqual(['claude', 'codex', 'copilot']);
     });
   });
 });

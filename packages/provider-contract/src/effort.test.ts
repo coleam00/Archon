@@ -4,7 +4,8 @@ import { EFFORT_LADDER, clampEffort, isEffortRung } from './effort';
 const CLAUDE = ['low', 'medium', 'high', 'xhigh', 'max'] as const;
 const CODEX = EFFORT_LADDER;
 const PI = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
-const COPILOT = ['low', 'medium', 'high', 'xhigh'] as const;
+// A vocabulary whose deepest rung is xhigh, for the clamp-down cases. Not any provider's list.
+const WITHOUT_MAX = ['low', 'medium', 'high', 'xhigh'] as const;
 
 describe('isEffortRung', () => {
   test('accepts every rung on the ladder and nothing else', () => {
@@ -24,17 +25,17 @@ describe('clampEffort', () => {
   test('clamps down to the nearest supported rung', () => {
     expect(clampEffort('persistent', CLAUDE)).toBe('max');
     expect(clampEffort('persistent', PI)).toBe('max');
-    expect(clampEffort('persistent', COPILOT)).toBe('xhigh');
+    expect(clampEffort('persistent', WITHOUT_MAX)).toBe('xhigh');
     expect(clampEffort('ultra', CLAUDE)).toBe('max');
     expect(clampEffort('ultra', PI)).toBe('max');
-    expect(clampEffort('ultra', COPILOT)).toBe('xhigh');
-    expect(clampEffort('max', COPILOT)).toBe('xhigh');
+    expect(clampEffort('ultra', WITHOUT_MAX)).toBe('xhigh');
+    expect(clampEffort('max', WITHOUT_MAX)).toBe('xhigh');
     expect(clampEffort('max', PI)).toBe('max');
   });
 
   test('clamps up when no weaker rung is supported', () => {
     expect(clampEffort('minimal', CLAUDE)).toBe('low');
-    expect(clampEffort('minimal', COPILOT)).toBe('low');
+    expect(clampEffort('minimal', WITHOUT_MAX)).toBe('low');
   });
 
   test('prefers a weaker rung over a stronger one', () => {
@@ -49,8 +50,8 @@ describe('clampEffort', () => {
     expect(clampEffort('high', [] as const)).toBeUndefined();
   });
 
-  test('resolves every rung for every provider vocabulary', () => {
-    for (const vocabulary of [CLAUDE, CODEX, PI, COPILOT]) {
+  test('resolves every rung for every vocabulary', () => {
+    for (const vocabulary of [CLAUDE, CODEX, PI, WITHOUT_MAX]) {
       for (const rung of EFFORT_LADDER) {
         expect(vocabulary as readonly string[]).toContain(clampEffort(rung, vocabulary) as string);
       }
