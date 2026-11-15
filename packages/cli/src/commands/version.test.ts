@@ -2,8 +2,14 @@
  * Tests for version command
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
+import { mkdtemp } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import * as archonCommit from '@archon/git/archon-commit';
+import { trackTempRoots } from '@archon/paths/test-utils';
 import { versionCommand } from './version';
+
+const trackTempRoot = trackTempRoots();
 
 describe('versionCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
@@ -73,5 +79,31 @@ describe('versionCommand', () => {
 
     const buildCall = consoleSpy.mock.calls[2][0] as string;
     expect(buildCall).toContain('source (bun)');
+  });
+
+  it("names Archon's commit when run from another repository", async () => {
+    commitSpy.mockRestore();
+    const spawn = (cwd: string, ...args: string[]): string => {
+      const result = Bun.spawnSync(
+        ['git', '-c', 'user.name=Test', '-c', 'user.email=test@example.com', ...args],
+        { cwd, env: archonCommit.withoutRepositorySelectors(process.env) }
+      );
+      if (result.exitCode !== 0) throw new Error(result.stderr.toString());
+      return result.stdout.toString().trim();
+    };
+    const elsewhere = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-version-')));
+    spawn(elsewhere, 'init', '-q');
+    spawn(elsewhere, 'commit', '-q', '--allow-empty', '--no-gpg-sign', '-m', 'elsewhere');
+    const archonHead = spawn(import.meta.dir, 'rev-parse', '--short', 'HEAD');
+    const before = process.cwd();
+    process.chdir(elsewhere);
+    try {
+      await versionCommand();
+    } finally {
+      process.chdir(before);
+    }
+
+    const lines = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(lines).toContain(`  Git commit: ${archonHead}`);
   });
 });

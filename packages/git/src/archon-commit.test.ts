@@ -83,41 +83,45 @@ describe('readArchonCommit', () => {
     expect(await readArchonCommit(root)).toBeUndefined();
   });
 
-  test('names the hash, not signature text, when the commit is signed and log.showSignature is on', async () => {
-    const root = await repoWithCommit('unsigned');
-    // A stand-in for gpg: signs with a fixed block and, when verifying, prints a signature
-    // report that `git log` would put in front of its format with log.showSignature.
-    const fakeGpg = join(root, 'fake-gpg.sh');
-    await writeFile(
-      fakeGpg,
-      [
-        '#!/bin/sh',
-        'case "$*" in',
-        '  *--verify*)',
-        '    echo "[GNUPG:] GOODSIG 0 Test <test@example.com>"',
-        '    echo "gpg: Signature made Sun Nov 15 21:31:16 2026 EET" >&2',
-        '    ;;',
-        '  *)',
-        '    cat >/dev/null',
-        '    echo "[GNUPG:] SIG_CREATED D 1 8 00 0 0 0" >&2',
-        '    printf -- "-----BEGIN PGP SIGNATURE-----\\n\\nZmFrZQ==\\n-----END PGP SIGNATURE-----\\n"',
-        '    ;;',
-        'esac',
-        '',
-      ].join('\n'),
-      { mode: 0o755 }
-    );
-    git(root, 'config', 'gpg.program', fakeGpg);
-    git(root, 'commit', '-q', '--allow-empty', '-S', '-m', 'signed');
-    git(root, 'config', 'log.showSignature', 'true');
-    // Guard against a vacuous test: git must really print signature text here.
-    expect(git(root, 'log', '-1', '--format=%h')).toContain('Signature made');
+  // The stand-in gpg is a POSIX shell script.
+  test.skipIf(process.platform === 'win32')(
+    'names the hash, not signature text, when the commit is signed and log.showSignature is on',
+    async () => {
+      const root = await repoWithCommit('unsigned');
+      // A stand-in for gpg: signs with a fixed block and, when verifying, prints a signature
+      // report that `git log` would put in front of its format with log.showSignature.
+      const fakeGpg = join(root, 'fake-gpg.sh');
+      await writeFile(
+        fakeGpg,
+        [
+          '#!/bin/sh',
+          'case "$*" in',
+          '  *--verify*)',
+          '    echo "[GNUPG:] GOODSIG 0 Test <test@example.com>"',
+          '    echo "gpg: Signature made Sun Nov 15 21:31:16 2026 EET" >&2',
+          '    ;;',
+          '  *)',
+          '    cat >/dev/null',
+          '    echo "[GNUPG:] SIG_CREATED D 1 8 00 0 0 0" >&2',
+          '    printf -- "-----BEGIN PGP SIGNATURE-----\\n\\nZmFrZQ==\\n-----END PGP SIGNATURE-----\\n"',
+          '    ;;',
+          'esac',
+          '',
+        ].join('\n'),
+        { mode: 0o755 }
+      );
+      git(root, 'config', 'gpg.program', fakeGpg);
+      git(root, 'commit', '-q', '--allow-empty', '-S', '-m', 'signed');
+      git(root, 'config', 'log.showSignature', 'true');
+      // Guard against a vacuous test: git must really print signature text here.
+      expect(git(root, 'log', '-1', '--format=%h')).toContain('Signature made');
 
-    expect(await readArchonCommit(root)).toEqual({
-      sha: git(root, 'rev-parse', '--short', 'HEAD'),
-      committedAt: '2026-11-12T14:03:21+01:00',
-    });
-  });
+      expect(await readArchonCommit(root)).toEqual({
+        sha: git(root, 'rev-parse', '--short', 'HEAD'),
+        committedAt: '2026-11-12T14:03:21+01:00',
+      });
+    }
+  );
 
   test('without a source root, names the Archon checkout, not the working directory', async () => {
     const elsewhere = await repoWithCommit('elsewhere');

@@ -71,6 +71,9 @@
     ],
     [
       "src/archon-commit.test.ts"
+    ],
+    [
+      "src/archon-commit.binary.test.ts"
     ]
   ]
 }
