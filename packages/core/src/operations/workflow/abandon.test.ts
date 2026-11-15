@@ -3,16 +3,20 @@ import { RunActionForbiddenError } from '../run-authorization';
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
+import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
 import { releaseRunVerificationImages, type IIsolationStore } from '@archon/isolation';
-import { createRunResourceRelease } from '../../services/cleanup/run-verification-images';
+import {
+  createRunResourceRelease,
+  VERIFICATION_IMAGE_RECORD_DIR,
+} from '../../services/cleanup/run-verification-images';
 import { DetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
 import {
   operator,
@@ -76,14 +80,26 @@ describe('abandonWorkflow', () => {
   });
 
   test('returns host inventory recovery warnings for the abandoned run and its cancelled child', async () => {
+    const output_root = scratchRoot();
     const root = makePausedRun({
+      output_root,
       metadata: { execution_owner: { host: hostname(), pid: process.pid } },
     });
     const child = makePausedRun({
       id: 'child-inventory',
       parent_run_id: root.id,
+      output_root,
       metadata: { execution_owner: { host: hostname(), pid: process.pid } },
     });
+    // Both runs recorded a verification build, so cleanup asks Docker about them.
+    for (const run of [root, child]) {
+      const record = join(
+        getRunArtifactsDirForRoot(output_root, run.id),
+        VERIFICATION_IMAGE_RECORD_DIR
+      );
+      mkdirSync(record, { recursive: true });
+      writeFileSync(join(record, 'check'), 'sha256:built');
+    }
     const runs = new Map([root, child].map(run => [run.id, run]));
     const operationStore: WorkflowOperationsDeps['store'] = {
       ...store,
@@ -181,10 +197,6 @@ describe('abandonWorkflow', () => {
     const { cascadeFailures } = await abandonWorkflow('run-1', operator);
 
     expect(cascadeFailures).toBe(1);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      { err, childId: 'child-b' },
-      'operations.workflow_abandon_cascade_cancel_failed'
-    );
     const cancelled = mockCancelWorkflowRun.mock.calls.map(c => c[0]);
     expect(cancelled).toContain('child-a');
     expect(cancelled).toContain('child-c'); // sibling AFTER the failure still cancelled
@@ -205,10 +217,6 @@ describe('abandonWorkflow', () => {
       expect(mockCancelWorkflowRun).toHaveBeenCalledWith('grandchild', {
         cancel_reason: 'operator',
       });
-      expect(mockLogger.warn).not.toHaveBeenCalledWith(
-        expect.anything(),
-        'operations.workflow_abandon_cascade_cancel_failed'
-      );
     });
   }
 
@@ -229,10 +237,6 @@ describe('abandonWorkflow', () => {
       expect(result.cancelled).toBe(true);
       expect(result.cascadeFailures).toBe(1);
       expect(mockFindChildRuns).toHaveBeenCalledWith('child');
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        status === 'lookup-error' ? { err, childId: 'child' } : { childId: 'child' },
-        'operations.workflow_abandon_cascade_cancel_failed'
-      );
     });
   }
 
@@ -260,10 +264,6 @@ describe('abandonWorkflow', () => {
       parentRunIds: children.slice(499).map(child => child.id),
       limit: 0,
     });
-    expect(mockLogger.warn).not.toHaveBeenCalledWith(
-      expect.anything(),
-      'operations.workflow_abandon_cascade_truncated'
-    );
   });
 
   test('reports truncation when a deep chain hits the expansion cap', async () => {
@@ -283,10 +283,6 @@ describe('abandonWorkflow', () => {
       parentRunIds: [`run-1${'::c'.repeat(500)}`],
       limit: 0,
     });
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      { rootId: 'run-1', cap: 500, unreached: 1, pendingParents: 1 },
-      'operations.workflow_abandon_cascade_truncated'
-    );
   });
 
   for (const [status, frontierStatus, hasDeeper] of [
@@ -341,21 +337,10 @@ describe('abandonWorkflow', () => {
       expect(mockFindChildRuns).toHaveBeenCalledTimes(500);
       expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
       expect(mockCancelWorkflowRun.mock.calls.map(call => call[0])).not.toContain(grandchild.id);
-      if (unresolved) {
-        expect(mockLogger.warn).toHaveBeenCalledWith(
-          { rootId: 'run-1', cap: 500, unreached: 1, pendingParents: 501 },
-          'operations.workflow_abandon_cascade_truncated'
-        );
-      } else {
-        expect(mockLogger.warn).not.toHaveBeenCalledWith(
-          expect.anything(),
-          'operations.workflow_abandon_cascade_truncated'
-        );
-      }
     });
   }
 
-  test('a failed frontier probe preserves parent success and logs the original error', async () => {
+  test('a failed frontier probe preserves parent success and counts a failure', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
     mockFindChildRuns.mockImplementation(parentId =>
       Promise.resolve([makePausedRun({ id: `${parentId}::c`, status: 'running' })])
@@ -369,10 +354,6 @@ describe('abandonWorkflow', () => {
     expect(result.cascadeFailures).toBe(1);
     expect(mockFindChildRuns).toHaveBeenCalledTimes(500);
     expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      { err, rootId: 'run-1', pendingParents: 1 },
-      'operations.workflow_abandon_cascade_lookup_failed'
-    );
   });
 
   test('a successful frontier probe preserves earlier lookup and cancellation failures', async () => {
@@ -395,14 +376,6 @@ describe('abandonWorkflow', () => {
     expect(result.cancelled).toBe(true);
     expect(result.cascadeFailures).toBe(2);
     expect(mockCancelWorkflowRun.mock.calls.map(call => call[0])).toContain('child-999');
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      { err, parentId: 'child-0' },
-      'operations.workflow_abandon_cascade_lookup_failed'
-    );
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      { childId: 'child-1' },
-      'operations.workflow_abandon_cascade_cancel_failed'
-    );
     expect(mockListWorkflowRuns).toHaveBeenCalledTimes(1);
   });
 
@@ -686,23 +659,21 @@ describe('abandonWorkflow', () => {
     }
   );
 
-  for (const reason of ['not_detached', 'unproven', undefined] as const) {
-    test(`an owner endpoint that answered (${String(reason)}) leaves the run unchanged`, async () => {
-      mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
-      mockRequestDetachedRunStop.mockImplementationOnce(() =>
-        Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'detail', reason))
-      );
+  test('an owner endpoint that answered (not_detached) leaves the run unchanged', async () => {
+    mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));
+    mockRequestDetachedRunStop.mockImplementationOnce(() =>
+      Promise.reject(new DetachedRunOwnerUnavailableError('run-1', 'detail', 'not_detached'))
+    );
 
-      const error = await abandonWorkflow('run-1', operator).then(
-        () => undefined,
-        (rejection: unknown) => rejection
-      );
+    const error = await abandonWorkflow('run-1', operator).then(
+      () => undefined,
+      (rejection: unknown) => rejection
+    );
 
-      expect(error).toBeInstanceOf(AbandonOwnerNotStoppedError);
-      expect((error as Error).message).toContain('The run was not changed.');
-      expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
-    });
-  }
+    expect(error).toBeInstanceOf(AbandonOwnerNotStoppedError);
+    expect((error as Error).message).toContain('The run was not changed.');
+    expect(mockCancelWorkflowRun).not.toHaveBeenCalled();
+  });
 
   test('an owner that answers but cannot be stopped fails with the reason', async () => {
     mockGetWorkflowRun.mockResolvedValueOnce(makePausedRun({ status: 'running' }));

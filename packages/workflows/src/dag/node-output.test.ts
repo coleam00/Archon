@@ -261,7 +261,7 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     expect(mockSendQueryDag.mock.calls.length).toBe(0);
   });
 
-  it('artifact write failure is non-fatal — the node still completes', async () => {
+  it('artifact write failure is non-fatal — the run still completes', async () => {
     // Force writeNodeArtifact to throw by putting a FILE where the nodes/ dir must
     // go, so its mkdir fails. The node must still complete (best-effort write).
     const artifactsDir = join(testDir, 'artifacts');
@@ -269,9 +269,10 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
     await writeFile(join(artifactsDir, 'nodes'), 'not a directory', 'utf8');
 
     // Resolves without throwing — the best-effort catch swallows the write failure.
+    const store = createMockStore();
     await executeDagWorkflow(
       dagOptions({
-        deps: createMockDeps(),
+        deps: createMockDeps(store),
         cwd: testDir,
         workflow: {
           name: 'typed-fail',
@@ -289,8 +290,9 @@ describe('executeDagWorkflow -- typed artifacts (output_type)', () => {
       })
     );
 
-    // The node executed despite the artifact write being impossible.
-    expect(mockSendQueryDag.mock.calls.length).toBeGreaterThan(0);
+    // The run completed despite the artifact write being impossible.
+    expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
+    expect(store.failWorkflowRun).not.toHaveBeenCalled();
   });
 
   it('node without output_type writes no sidecar artifact', async () => {

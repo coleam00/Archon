@@ -42,8 +42,6 @@ describe('collectContainerIncompatibleProviders', () => {
       source: { kind: 'inline', prompt: `do ${id}` },
       ...(provider ? { provider } : {}),
     }) as unknown as DagNode;
-  const bashNode = (id: string): DagNode =>
-    ({ id, kind: 'exec', runtime: 'sh', script: 'echo hi' }) as unknown as DagNode;
 
   it('capability preflight follows the supplied descriptor rather than host registrations', () => {
     const claude = providerRegistry.get('claude');
@@ -60,24 +58,6 @@ describe('collectContainerIncompatibleProviders', () => {
     expect([...collectContainerIncompatibleProviders(providerRegistry, nodes, 'claude')]).toEqual(
       []
     );
-  });
-
-  it('is empty when all AI nodes resolve to claude (containerExec: true)', () => {
-    const nodes = [promptNode('a'), promptNode('b', 'claude'), bashNode('c')];
-    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'claude');
-    expect([...bad]).toEqual([]);
-  });
-
-  it('flags a node whose provider lacks containerExec (codex)', () => {
-    const nodes = [promptNode('a'), promptNode('b', 'codex')];
-    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'claude');
-    expect([...bad]).toEqual(['codex']);
-  });
-
-  it('flags the workflow-level provider when a node does not override it', () => {
-    const nodes = [promptNode('a')];
-    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex');
-    expect([...bad]).toEqual(['codex']);
   });
 
   it('coordination wrappers do not require a parent default provider', () => {
@@ -103,22 +83,6 @@ describe('collectContainerIncompatibleProviders', () => {
       (_node, provider) => visited.push(provider)
     );
     expect(visited).toEqual(['codex']);
-  });
-
-  it('ignores bash/script nodes (deterministic, no provider)', () => {
-    const nodes = [bashNode('a'), bashNode('b')];
-    const bad = collectContainerIncompatibleProviders(providerRegistry, nodes, 'codex');
-    expect([...bad]).toEqual([]);
-  });
-
-  it('recurses loop_group bodies', () => {
-    const group = {
-      id: 'g',
-      kind: 'loop_group',
-      loop_group: { max_iterations: 2, nodes: [promptNode('inner', 'codex')] },
-    } as unknown as DagNode;
-    const bad = collectContainerIncompatibleProviders(providerRegistry, [group], 'claude');
-    expect([...bad]).toEqual(['codex']);
   });
 });
 

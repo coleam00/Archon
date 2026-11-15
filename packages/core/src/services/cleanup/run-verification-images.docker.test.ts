@@ -1,10 +1,11 @@
 import { expect, test } from 'bun:test';
-import { mkdtemp, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { hostname, tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { getArchonHome, getRunArtifactsDirForRoot } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { mockWorkflowRun } from '../../test/mocks/workflow-run';
-import { createRunResourceRelease } from './run-verification-images';
+import { createRunResourceRelease, VERIFICATION_IMAGE_RECORD_DIR } from './run-verification-images';
 
 const trackTempRoot = trackTempRoots();
 
@@ -14,6 +15,12 @@ test.skipIf(process.env.ARCHON_TEST_DOCKER !== '1')(
     const runId = `verification-${crypto.randomUUID()}`;
     const prefix = `archon-${runId}`;
     const context = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-verification-')));
+    const outputRoot = trackTempRoot(await mkdtemp(join(getArchonHome(), 'image-run-')));
+    const record = join(
+      getRunArtifactsDirForRoot(outputRoot, runId),
+      VERIFICATION_IMAGE_RECORD_DIR
+    );
+    await mkdir(record, { recursive: true });
     const containers: string[] = [];
     const base = `${prefix}:base`;
     const unused = `${prefix}:unused`;
@@ -67,7 +74,7 @@ test.skipIf(process.env.ARCHON_TEST_DOCKER !== '1')(
         join(context, 'Dockerfile'),
         `FROM ${base}\nLABEL archon.run_id="${runId}"\n`
       );
-      await docker('build', '-t', unused, context);
+      await docker('build', '--iidfile', join(record, 'unused'), '-t', unused, context);
       await docker('tag', unused, second);
       await writeFile(
         join(context, 'Dockerfile'),
@@ -97,6 +104,7 @@ test.skipIf(process.env.ARCHON_TEST_DOCKER !== '1')(
         ...mockWorkflowRun,
         id: runId,
         status: 'completed' as const,
+        output_root: outputRoot,
         metadata: { execution_owner: { host: hostname(), pid: process.pid } },
       };
       const release = createRunResourceRelease({ getWorkflowRun: async () => run });

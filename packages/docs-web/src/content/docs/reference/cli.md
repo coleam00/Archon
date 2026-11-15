@@ -156,7 +156,7 @@ The server executable is cached at `~/.archon/server/<version>/` and the web UI 
 
 ### `version`
 
-Show version, build type, and database info.
+Show version, platform, build type, database, and the Archon commit it was built or started from. The commit line is left out when that commit is unknown.
 
 ```bash
 archon version

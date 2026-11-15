@@ -2,8 +2,7 @@
  * Database operations for sessions
  */
 import { pool, getDialect, getDatabase } from './connection';
-import type { Session, SessionMetadata } from '../types';
-import { sessionMetadataSchema } from '../types';
+import type { Session } from '../types';
 import type { TransitionTrigger } from '../state/session-transitions';
 import { createLogger } from '@archon/paths';
 
@@ -79,18 +78,6 @@ export async function deactivateSession(id: string, reason: TransitionTrigger): 
   }
 }
 
-export async function updateSessionMetadata(id: string, metadata: SessionMetadata): Promise<void> {
-  sessionMetadataSchema.parse(metadata); // throws ZodError if invalid
-  const dialect = getDialect();
-  const result = await pool.query(
-    `UPDATE remote_agent_sessions SET metadata = ${dialect.jsonMerge('metadata', 1)} WHERE id = $2`,
-    [JSON.stringify(metadata), id]
-  );
-  if (result.rowCount === 0) {
-    throw new SessionNotFoundError(id);
-  }
-}
-
 /**
  * Transition to a new session, linking to the previous one.
  * This creates audit trail by linking sessions via parent_session_id.
@@ -153,38 +140,6 @@ export async function transitionSession(
     );
     return newSession;
   });
-}
-
-/**
- * Get session history for a conversation (most recent first).
- * Useful for debugging agent decision history.
- */
-export async function getSessionHistory(conversationId: string): Promise<readonly Session[]> {
-  const result = await pool.query<Session>(
-    `SELECT * FROM remote_agent_sessions
-     WHERE conversation_id = $1
-     ORDER BY started_at DESC`,
-    [conversationId]
-  );
-  return result.rows;
-}
-
-/**
- * Walk the session chain from a given session back to the root.
- * Returns sessions in chronological order (oldest first).
- */
-export async function getSessionChain(sessionId: string): Promise<readonly Session[]> {
-  const result = await pool.query<Session>(
-    `WITH RECURSIVE chain AS (
-       SELECT * FROM remote_agent_sessions WHERE id = $1
-       UNION ALL
-       SELECT s.* FROM remote_agent_sessions s
-       JOIN chain c ON s.id = c.parent_session_id
-     )
-     SELECT * FROM chain ORDER BY started_at ASC`,
-    [sessionId]
-  );
-  return result.rows;
 }
 
 /**

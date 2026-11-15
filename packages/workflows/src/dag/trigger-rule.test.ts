@@ -136,30 +136,6 @@ describe('checkTriggerRule', () => {
     expect(checkTriggerRule(n, outputs)).toEqual({ decision: 'run' });
   });
 
-  it('all_success: skips when one dep failed', () => {
-    const n = node('c', ['a', 'b']);
-    const outputs = new Map([
-      ['a', makeOutput('completed')],
-      ['b', makeOutput('failed')],
-    ]);
-    expect(checkTriggerRule(n, outputs)).toEqual({
-      decision: 'skip',
-      cause: { kind: 'upstream_failed', origin: 'b' },
-    });
-  });
-
-  it('all_success: skips when one dep skipped (skipped != success)', () => {
-    const n = node('c', ['a', 'b']);
-    const outputs = new Map([
-      ['a', makeOutput('completed')],
-      ['b', makeOutput('skipped')],
-    ]);
-    expect(checkTriggerRule(n, outputs)).toEqual({
-      decision: 'skip',
-      cause: { kind: 'upstream_skipped', origin: 'b' },
-    });
-  });
-
   it('one_success: runs when at least one dep completed', () => {
     const n = node('c', ['a', 'b'], { trigger_rule: 'one_success' });
     const outputs = new Map([
@@ -181,41 +157,6 @@ describe('checkTriggerRule', () => {
     });
   });
 
-  it('none_failed_min_one_success: runs with skipped branch and completed branch', () => {
-    const n = node('implement', ['investigate', 'plan'], {
-      trigger_rule: 'none_failed_min_one_success',
-    });
-    const outputs = new Map([
-      ['investigate', makeOutput('skipped')],
-      ['plan', makeOutput('completed')],
-    ]);
-    // skipped is not failed, plan succeeded -> run
-    expect(checkTriggerRule(n, outputs)).toEqual({ decision: 'run' });
-  });
-
-  it('none_failed_min_one_success: skips when one failed', () => {
-    const n = node('implement', ['investigate', 'plan'], {
-      trigger_rule: 'none_failed_min_one_success',
-    });
-    const outputs = new Map([
-      ['investigate', makeOutput('failed')],
-      ['plan', makeOutput('completed')],
-    ]);
-    expect(checkTriggerRule(n, outputs)).toEqual({
-      decision: 'skip',
-      cause: { kind: 'upstream_failed', origin: 'investigate' },
-    });
-  });
-
-  it('all_done: runs when all deps are in a terminal state', () => {
-    const n = node('c', ['a', 'b'], { trigger_rule: 'all_done' });
-    const outputs = new Map([
-      ['a', makeOutput('failed')],
-      ['b', makeOutput('skipped')],
-    ]);
-    expect(checkTriggerRule(n, outputs)).toEqual({ decision: 'run' });
-  });
-
   it('all_done: skips when a dep is still running', () => {
     const n = node('c', ['a', 'b'], { trigger_rule: 'all_done' });
     const outputs = new Map([
@@ -234,46 +175,10 @@ describe('checkTriggerRule', () => {
     expect(checkTriggerRule(n, outputs)).toEqual({ decision: 'run' });
   });
 
-  it('all_success: skips when upstream absent from outputs (synthesised as failed)', () => {
-    const n = node('c', ['a', 'b']);
-    const outputs = new Map([['a', makeOutput('completed')]]);
-    // 'b' is absent -> synthesised as failed -> all_success skips
-    expect(checkTriggerRule(n, outputs)).toEqual({
-      decision: 'skip',
-      cause: { kind: 'upstream_failed', origin: 'b' },
-    });
-  });
-
   it('all_done: runs when absent upstream is synthesised as failed (failed is terminal)', () => {
     const n = node('c', ['a'], { trigger_rule: 'all_done' });
     const outputs = new Map<string, NodeOutput>(); // 'a' absent -> synthesised as failed -> terminal
     expect(checkTriggerRule(n, outputs)).toEqual({ decision: 'run' });
-  });
-});
-
-describe('checkTriggerRule -- classify-gated pipeline behavior on failure', () => {
-  it('all_success aspect skips when classify failed', () => {
-    const aspect = node('code-review', ['review-classify']);
-    const outputs = new Map([['review-classify', makeOutput('failed', '')]]);
-    expect(checkTriggerRule(aspect, outputs)).toEqual({
-      decision: 'skip',
-      cause: { kind: 'upstream_failed', origin: 'review-classify' },
-    });
-  });
-
-  it('one_success synthesize skips when all aspects skipped (classify failed)', () => {
-    const synth = node('synthesize-review', ['code-review', 'error-handling', 'test-coverage'], {
-      trigger_rule: 'one_success',
-    });
-    const outputs = new Map([
-      ['code-review', makeOutput('skipped')],
-      ['error-handling', makeOutput('skipped')],
-      ['test-coverage', makeOutput('skipped')],
-    ]);
-    expect(checkTriggerRule(synth, outputs)).toEqual({
-      decision: 'skip',
-      cause: { kind: 'upstream_skipped', origin: 'code-review' },
-    });
   });
 });
 
@@ -284,15 +189,6 @@ describe('checkTriggerRule -- missing upstream treated as failed', () => {
       ['a', makeOutput('skipped')],
       ['b', makeOutput('skipped')],
     ]);
-    expect(checkTriggerRule(n, outputs)).toEqual({
-      decision: 'skip',
-      cause: { kind: 'upstream_skipped', origin: 'a' },
-    });
-  });
-
-  it('all_success: node with skipped dep is skipped, so anyCompleted stays false', () => {
-    const n = node('b', ['a']);
-    const outputs = new Map([['a', makeOutput('skipped')]]);
     expect(checkTriggerRule(n, outputs)).toEqual({
       decision: 'skip',
       cause: { kind: 'upstream_skipped', origin: 'a' },

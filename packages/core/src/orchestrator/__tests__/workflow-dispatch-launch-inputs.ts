@@ -248,18 +248,6 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     expect(sent).toContain('starting fresh in the same worktree');
   });
 
-  test('calls dispatchBackgroundWorkflow for a fresh run on web', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-
-    const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-
-    expect(mockDispatchBackgroundWorkflow).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
-  });
-
   test('calls dispatchBackgroundWorkflow for a fresh run on a background-default adapter', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));

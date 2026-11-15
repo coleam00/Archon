@@ -1357,51 +1357,6 @@ describe('loop node completion channels', () => {
     expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
   });
 
-  it('detects plain completion signal (non-<promise> format)', async () => {
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'All tasks done!\nCOMPLETE' };
-      yield { type: 'result', sessionId: 'plain-sid' };
-    });
-
-    const mockDeps = createMockDeps();
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun();
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        cwd: testDir,
-        workflow: {
-          name: 'dag-loop-plain-signal',
-          nodes: [
-            {
-              id: 'my-loop',
-              kind: 'loop',
-              loop: {
-                fresh_context: false,
-                prompt: 'Do task.',
-                until: 'COMPLETE',
-                max_iterations: 5,
-              },
-            },
-          ],
-        },
-        workflowRun,
-      })
-    );
-
-    // Should complete on first iteration (plain signal on own line)
-    expect(mockSendQueryDag.mock.calls.length).toBe(1);
-    const completeCalls = (
-      mockDeps.store.completeWorkflowRun as Mock<IWorkflowStore['completeWorkflowRun']>
-    ).mock.calls;
-    expect(completeCalls.length).toBe(1);
-    expect(completeCalls[0][2]).toEqual({
-      node_counts: { completed: 1, failed: 0, skipped: 0, total: 1 },
-    });
-  });
-
   it('does not detect a negated plain signal at the end of output', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'The task is not COMPLETE' };

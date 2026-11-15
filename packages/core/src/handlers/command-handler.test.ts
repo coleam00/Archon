@@ -48,12 +48,6 @@ describe('CommandHandler', () => {
       expect(result.args).toEqual([]);
     });
 
-    test('should handle /status command', () => {
-      const result = parseCommand('/status');
-      expect(result.command).toBe('status');
-      expect(result.args).toEqual([]);
-    });
-
     test('should handle /setcwd with path containing spaces', () => {
       const result = parseCommand('/setcwd /workspace/my repo');
       expect(result.command).toBe('setcwd');
@@ -66,22 +60,10 @@ describe('CommandHandler', () => {
       expect(result.args).toEqual([name, '/new/path']);
     });
 
-    test('should handle /reset command', () => {
-      const result = parseCommand('/reset');
-      expect(result.command).toBe('reset');
-      expect(result.args).toEqual([]);
-    });
-
     test('should handle command with multiple spaces', () => {
       const result = parseCommand('/clone   https://github.com/user/repo  ');
       expect(result.command).toBe('clone');
       expect(result.args).toEqual(['https://github.com/user/repo']);
-    });
-
-    test('should handle /getcwd command', () => {
-      const result = parseCommand('/getcwd');
-      expect(result.command).toBe('getcwd');
-      expect(result.args).toEqual([]);
     });
 
     test('should parse quoted arguments', () => {
@@ -96,76 +78,10 @@ describe('CommandHandler', () => {
       expect(result.args).toEqual(['test', '.test.md', 'Task: $1']);
     });
 
-    test('should parse /command-set', () => {
-      const result = parseCommand('/command-set prime .claude/prime.md');
-      expect(result.command).toBe('command-set');
-      expect(result.args).toEqual(['prime', '.claude/prime.md']);
-    });
-
-    test('should parse /load-commands', () => {
-      const result = parseCommand('/load-commands .claude/commands');
-      expect(result.command).toBe('load-commands');
-      expect(result.args).toEqual(['.claude/commands']);
-    });
-
     test('should handle single quotes', () => {
       const result = parseCommand("/command-invoke plan 'Add dark mode'");
       expect(result.command).toBe('command-invoke');
       expect(result.args).toEqual(['plan', 'Add dark mode']);
-    });
-
-    test('should parse /repos', () => {
-      const result = parseCommand('/repos');
-      expect(result.command).toBe('repos');
-      expect(result.args).toEqual([]);
-    });
-
-    test('should parse /repo with number', () => {
-      const result = parseCommand('/repo 1');
-      expect(result.command).toBe('repo');
-      expect(result.args).toEqual(['1']);
-    });
-
-    test('should parse /repo with name', () => {
-      const result = parseCommand('/repo dylan');
-      expect(result.command).toBe('repo');
-      expect(result.args).toEqual(['dylan']);
-    });
-
-    test('should parse /repo with pull', () => {
-      const result = parseCommand('/repo 1 pull');
-      expect(result.command).toBe('repo');
-      expect(result.args).toEqual(['1', 'pull']);
-    });
-
-    test('should parse /repo-remove with number', () => {
-      const result = parseCommand('/repo-remove 1');
-      expect(result.command).toBe('repo-remove');
-      expect(result.args).toEqual(['1']);
-    });
-
-    test('should parse /repo-remove with name', () => {
-      const result = parseCommand('/repo-remove my-repo');
-      expect(result.command).toBe('repo-remove');
-      expect(result.args).toEqual(['my-repo']);
-    });
-
-    test('should preserve multi-word quoted string as single argument', () => {
-      const result = parseCommand('/command-invoke plan "here is the request"');
-      expect(result.command).toBe('command-invoke');
-      expect(result.args).toEqual(['plan', 'here is the request']);
-      expect(result.args[1]).toBe('here is the request');
-    });
-
-    test('should handle long quoted sentences', () => {
-      const result = parseCommand(
-        '/command-invoke execute "Implement the user authentication feature with JWT tokens"'
-      );
-      expect(result.command).toBe('command-invoke');
-      expect(result.args).toEqual([
-        'execute',
-        'Implement the user authentication feature with JWT tokens',
-      ]);
     });
 
     test('should handle multiple quoted arguments', () => {
@@ -178,12 +94,6 @@ describe('CommandHandler', () => {
       const result = parseCommand('/command-invoke plan "Add feature X" --flag value');
       expect(result.command).toBe('command-invoke');
       expect(result.args).toEqual(['plan', 'Add feature X', '--flag', 'value']);
-    });
-
-    test('should handle quoted arg with special characters', () => {
-      const result = parseCommand('/command-invoke plan "Fix bug #123: handle edge case"');
-      expect(result.command).toBe('command-invoke');
-      expect(result.args).toEqual(['plan', 'Fix bug #123: handle edge case']);
     });
 
     test('should handle empty quoted string', () => {

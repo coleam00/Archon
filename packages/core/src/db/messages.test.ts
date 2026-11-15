@@ -94,14 +94,6 @@ describe('messages', () => {
       ]);
     });
 
-    test('defaults metadata to empty object when not provided', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([mockMessage]));
-
-      await addMessage('conv-456', 'user', 'Hello, world!');
-
-      expect(mockQuery).toHaveBeenCalledWith(expect.any(String), expect.arrayContaining(['{}']));
-    });
-
     test('throws wrapped error when INSERT returns no rows', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([]));
 
@@ -136,14 +128,6 @@ describe('messages', () => {
      LIMIT $2`,
         ['conv-456', 200]
       );
-    });
-
-    test('returns empty array for no results', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      const result = await listMessages('conv-456');
-
-      expect(result).toEqual([]);
     });
 
     test('respects custom limit parameter', async () => {

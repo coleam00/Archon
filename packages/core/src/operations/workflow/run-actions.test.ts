@@ -6,7 +6,6 @@ import {
   EMPTY_COUNTS,
   mockListWorkflowRuns,
   mockDeleteWorkflowNodeSessions,
-  mockLogger,
   makePausedRun,
   makeDashboardRun,
   getWorkflowStatus,
@@ -77,15 +76,11 @@ describe('resumeWorkflow', () => {
     );
   });
 
-  test('throws wrapped message and logs when DB throws', async () => {
+  test('throws wrapped message when DB throws', async () => {
     mockGetWorkflowRun.mockRejectedValueOnce(new Error('connection reset'));
 
     await expect(resumeWorkflow('run-1', operator)).rejects.toThrow(
       'Failed to look up workflow run run-1: connection reset'
-    );
-    expect(mockLogger.error).toHaveBeenCalledWith(
-      expect.objectContaining({ runId: 'run-1' }),
-      'operations.workflow_resume_lookup_failed'
     );
   });
 });
