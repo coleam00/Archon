@@ -105,7 +105,10 @@ beforeEach(async () => {
   out = join(root, 'binding files');
   process.env.ARCHON_HOME = join(root, 'home');
   // A shell's provider default would make config loading require a provider
-  // this test never registers. An empty value counts as unset.
+  // this test never registers. An empty value counts as unset. The hostile
+  // value first stands in for a developer's shell: CI leaves the key unset, so
+  // without it CI would stay green if the clear below were removed.
+  process.env.DEFAULT_AI_ASSISTANT = 'claude';
   process.env.DEFAULT_AI_ASSISTANT = '';
   logSpy = spyOn(console, 'log').mockImplementation(() => {});
 });
