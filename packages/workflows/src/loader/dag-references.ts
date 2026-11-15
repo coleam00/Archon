@@ -7,6 +7,7 @@ import {
   definedOutputPaths,
   isWaitNode,
   isIncludeDirective,
+  collectLoopBodyNodeIds,
 } from '../schemas';
 import { attentionOptionSchema } from '../schemas/wait-node';
 import {
@@ -26,6 +27,7 @@ import {
   parseWholeOutputRef,
   COMPOSITION_KEYWORDS,
   declaredOutputPathsFromSchema,
+  similarNodeIds,
 } from '../output-ref';
 import { visitNodeTemplateSlots, type TemplateSurface } from '../template-walker';
 import { z } from 'zod';
@@ -222,6 +224,7 @@ export interface DagScope {
   readonly enclosingNodes: ReadonlyMap<string, DagNode | IncludeDirective> | undefined;
   readonly includeAliases: ReadonlyMap<string, string> | undefined;
   readonly eligibleResumeSources: ReadonlyMap<string, DagNode | IncludeDirective> | undefined;
+  readonly loopBodyIds: ReadonlySet<string> | undefined;
   transitiveDepsOf(nodeId: string): Set<string>;
 }
 
@@ -300,9 +303,63 @@ function checkTemplateReferenceSource(
   const refs = outputPathRefs(nodeId, source, scope);
   if (typeof refs === 'string') return refs;
   return (
+    unknownPriorNodeError(nodeId, source, refs, scope) ??
     declaredOutputPathError(nodeId, source, refs, scope) ??
     unknownTemplateNodeError(nodeId, source, scope)
   );
+}
+
+/**
+ * The ids a `$LOOP_PREV.<id>` ref may name inside `body`: the body's own ids with its
+ * nested descendants, plus every enclosing body's. Undefined while a body in that chain
+ * still holds an `include:` directive, because the ids it expands to are not known
+ * yet; the pass over the flattened graph checks those refs.
+ */
+export function priorRefIds(
+  body: readonly (DagNode | IncludeDirective)[],
+  scope: DagScope
+): ReadonlySet<string> | undefined {
+  const enclosing = scope.enclosingNodes === undefined ? new Set<string>() : scope.loopBodyIds;
+  if (enclosing === undefined || holdsInclude(body)) return undefined;
+  return collectLoopBodyNodeIds(body, new Set(enclosing));
+}
+
+function holdsInclude(body: readonly (DagNode | IncludeDirective)[]): boolean {
+  return body.some(
+    n => isIncludeDirective(n) || (isLoopGroupNode(n) && holdsInclude(n.loop_group.nodes))
+  );
+}
+
+/**
+ * Inside a loop_group body, a `$LOOP_PREV.<id>` ref must name a node of an enclosing body
+ * (or, in `until_bash`, of the group's own body). The runtime reads any other id as empty,
+ * so a `when:` gated on it is silently false every round. Expansion rebinds an include id
+ * to the node its workflow returns; a ref it could not rebind reaches this check unchanged.
+ *
+ * A workflow's top level is not checked: a reusable block may read its own nodes'
+ * previous round, which exists once it is included in a loop body. The pass over the
+ * flattened graph checks those refs where they land.
+ */
+function unknownPriorNodeError(
+  nodeId: string,
+  source: TemplateReferenceSource,
+  refs: readonly OutputPathRef[],
+  scope: DagScope
+): string | null {
+  const allowed = source.bodyNodes ? priorRefIds(source.bodyNodes, scope) : scope.loopBodyIds;
+  if (allowed === undefined) return null;
+  for (const ref of refs) {
+    if (!ref.prior || allowed.has(ref.nodeId)) continue;
+    const alias = scope.includeAliases?.get(ref.nodeId);
+    const named =
+      alias === undefined
+        ? `'${outputRefText(ref.nodeId, undefined, 'prior')}'`
+        : `'${outputRefText(alias, undefined, 'prior')}' (include returns '${ref.nodeId}')`;
+    const candidates = similarNodeIds(ref.nodeId, allowed);
+    const hint = candidates.length > 0 ? `. Did you mean '${candidates[0]}'?` : '';
+    return `Node '${nodeId}' field '${source.field}' references ${named}, which is not a node in an enclosing loop_group body${hint}`;
+  }
+  return null;
 }
 
 function unsupportedReferenceError(nodeId: string, source: TemplateReferenceSource): string | null {
@@ -398,14 +455,13 @@ function declaredOutputPathRefError(
   if (!producer || isIncludeDirective(producer)) return null;
   const paths = definedOutputPaths(producer);
   if (paths === undefined) return null;
-  // `$LOOP_PREV` refs are never rewritten to an include's sink, so only a current
-  // ref can carry an alias.
-  const alias = ref.prior ? undefined : scope.includeAliases?.get(ref.nodeId);
+  const alias = scope.includeAliases?.get(ref.nodeId);
   try {
     if (alias === undefined) {
       assertDeclaredOutputPath(paths, ref.nodeId, ref.field, ref.reference);
     } else {
-      assertDeclaredOutputPath(paths, alias, ref.field, outputRefText(alias, ref.field));
+      const reference = outputRefText(alias, ref.field, ref.prior ? 'prior' : 'current');
+      assertDeclaredOutputPath(paths, alias, ref.field, reference);
     }
   } catch (error) {
     return `Node '${nodeId}' field '${source.field}': ${error instanceof Error ? error.message : String(error)}`;

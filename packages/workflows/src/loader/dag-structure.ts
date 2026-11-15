@@ -32,7 +32,15 @@ import {
 import { readComposedBindings } from '../compiled-command';
 import { transitiveDepsLookup } from '../depends-on';
 import { indexDependencies } from '../graph-plan';
-import { checkNodeReferences, type DagScope } from './dag-references';
+import { checkNodeReferences, priorRefIds, type DagScope } from './dag-references';
+
+/** What a nested `validateDagStructure` call inherits from the scopes around it. */
+export interface DagContext {
+  readonly enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>;
+  readonly includeAliases?: ReadonlyMap<string, string>;
+  readonly eligibleResumeSources?: ReadonlyMap<string, DagNode | IncludeDirective>;
+  readonly loopBodyIds?: ReadonlySet<string>;
+}
 
 type NodeCheck = (node: DagNode | IncludeDirective, scope: DagScope) => string | null;
 
@@ -59,15 +67,17 @@ interface BindingRead {
  * `includeAliases` maps a flattened producer id back to the include alias the author
  * referenced, so an output-contract error names `$alias.output.x` as written.
  *
+ * `loopBodyIds` is every id a `$LOOP_PREV.<id>` ref in this list may name (see
+ * `priorRefIds`). Undefined outside any body, or while an id set is not yet known.
+ *
  * The checks run in a fixed order and the first error wins, so a graph with two problems
  * always reports the same one.
  */
 export function validateDagStructure(
   nodes: readonly (DagNode | IncludeDirective)[],
-  enclosingNodes?: ReadonlyMap<string, DagNode | IncludeDirective>,
-  includeAliases?: ReadonlyMap<string, string>,
-  eligibleResumeSources?: ReadonlyMap<string, DagNode | IncludeDirective>
+  context: DagContext = {}
 ): string | null {
+  const { enclosingNodes, includeAliases, eligibleResumeSources, loopBodyIds } = context;
   const nodesById = indexNodeIds(nodes, enclosingNodes);
   if (typeof nodesById === 'string') return nodesById;
   const dependsOnError = checkDependsOn(nodes, nodesById);
@@ -80,6 +90,7 @@ export function validateDagStructure(
     enclosingNodes,
     includeAliases,
     eligibleResumeSources,
+    loopBodyIds,
     transitiveDepsOf: transitiveDepsLookup(nodes),
   };
   return (
@@ -451,12 +462,12 @@ function checkLoopGroupBody(node: DagNode | IncludeDirective, scope: DagScope): 
     const ancestor = nodesById.get(id);
     if (ancestor !== undefined) eligible.set(id, ancestor);
   }
-  const bodyError = validateDagStructure(
-    node.loop_group.nodes,
-    scopeNodes,
-    scope.includeAliases,
-    eligible
-  );
+  const bodyError = validateDagStructure(node.loop_group.nodes, {
+    enclosingNodes: scopeNodes,
+    includeAliases: scope.includeAliases,
+    eligibleResumeSources: eligible,
+    loopBodyIds: priorRefIds(node.loop_group.nodes, scope),
+  });
   if (bodyError) {
     return `loop_group '${node.id}' body: ${bodyError}`;
   }

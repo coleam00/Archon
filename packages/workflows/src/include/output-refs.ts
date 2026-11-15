@@ -54,7 +54,7 @@ function applyExecutionCheckoutRefRename(text: string, rename: (id: string) => s
   });
 }
 
-function applyLoopPrevOutputRefRename(text: string, rename: (id: string) => string): string {
+export function applyLoopPrevOutputRefRename(text: string, rename: (id: string) => string): string {
   return text.replace(LOOP_PREV_OUTPUT_REF_PATTERN, (match, id: string) => {
     const renamed = rename(id);
     return renamed === id ? match : `$LOOP_PREV.${renamed}.output`;
@@ -96,8 +96,9 @@ export function attachIncludeOutputAliases(node: DagNode, aliases: IncludeOutput
  *
  * Three field classes, each with the right ref grammar:
  *   - `when:` — dual grammar (`$id.output[.field]` AND shorthand `$id.field`), never
- *     markdown → `applyWhenRefRename`. Missing the shorthand would leave e.g.
- *     `$verify.exit_code` pointing at a renamed sibling (silent fail-closed skip).
+ *     markdown → `applyWhenRefRename`, plus the `$LOOP_PREV.<id>.output` rename. Missing
+ *     either would leave e.g. `$verify.exit_code` pointing at a renamed sibling (silent
+ *     fail-closed skip).
  *   - Prompt text (prompt / loop.prompt / approval fields) — canonical `.output` refs are
  *     live everywhere, including Markdown code spans, because runtime substitution is
  *     syntax-agnostic.
@@ -127,7 +128,10 @@ export function rewriteNodeOutputRefs(
       applyLoopPrevOutputRefRename(applyOutputRefRename(text, renameOutputRef), renameLoopPrevRef),
       renameOutputRef
     );
-  const whenExpr = (text: string): string => applyWhenRefRename(text, renameOutputRef);
+  // `$LOOP_PREV.<id>` first: WHEN_REF_PATTERN sees `$LOOP_PREV` itself as the id
+  // `LOOP_PREV`, which no rename maps, so the two passes never touch the same segment.
+  const whenExpr = (text: string): string =>
+    applyWhenRefRename(applyLoopPrevOutputRefRename(text, renameLoopPrevRef), renameOutputRef);
 
   if (node.when !== undefined) node.when = whenExpr(node.when);
 

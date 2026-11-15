@@ -66,6 +66,7 @@ import {
 } from './include/inline';
 import type { ExecInputSource } from './exec-input-validation';
 import {
+  applyLoopPrevOutputRefRename,
   applyOutputRefRename,
   attachIncludeOutputAliases,
   rewriteNodeOutputRefs,
@@ -220,7 +221,7 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
   // hand-written node, cycles introduced by edge rewiring, unknown deps, and the
   // equivalent failures inside every recursively expanded loop_group body.
   const structureError =
-    validateDagStructure(expanded.nodes, undefined, expanded.includeAliases) ||
+    validateDagStructure(expanded.nodes, { includeAliases: expanded.includeAliases }) ||
     validateLoopGroupProseCompletion(expanded.nodes) ||
     // Only here: a producer inside an included block is invisible before flattening.
     validateTypedOutputOrder(expanded.nodes);
@@ -420,10 +421,16 @@ function expandLoopGroupBody(
     loop_group: {
       ...node.loop_group,
       // The completion script runs against THIS body's output map. Rebind an
-      // authored `$include.output` to the included workflow's declared return,
-      // just as refs on ordinary sibling body nodes are rebound below.
+      // authored `$include.output` (and `$LOOP_PREV.<include>.output`) to the included
+      // workflow's declared return, just as refs on ordinary sibling body nodes are
+      // rebound below.
       ...(node.loop_group.until_bash !== undefined
-        ? { until_bash: applyOutputRefRename(node.loop_group.until_bash, body.renameIncludeRef) }
+        ? {
+            until_bash: applyLoopPrevOutputRefRename(
+              applyOutputRefRename(node.loop_group.until_bash, body.renameIncludeRef),
+              body.renameIncludeRef
+            ),
+          }
         : {}),
       nodes: body.nodes,
     },
@@ -443,10 +450,9 @@ function bindIncludeRefs(list: NodeListExpansion): ExpandedNodeList {
     if (node.depends_on !== undefined) {
       node.depends_on = node.depends_on.flatMap(expandIncludeDependency);
     }
-    // `$include.output` is a current-iteration composition alias. It deliberately does
-    // not create a parallel `$LOOP_PREV.<includeId>` grammar: previous-iteration refs
-    // continue to name only the executable body ids produced by `inlineInclude()`.
-    rewriteNodeOutputRefs(node, renameIncludeRef, expandIncludeDependency, id => id);
+    // An include id names the node its workflow returns, in the current round
+    // (`$include.output`) and the previous one (`$LOOP_PREV.<include>.output`) alike.
+    rewriteNodeOutputRefs(node, renameIncludeRef, expandIncludeDependency, renameIncludeRef);
   }
   if (includesById.size > 0) {
     const aliases = Object.fromEntries(

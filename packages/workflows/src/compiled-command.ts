@@ -1,6 +1,6 @@
 import type { BindingDirective, DagNode, IncludeDirective, TriggerRule } from './schemas';
 import { isIncludeDirective, isLoopGroupNode, isLoopNode } from './schemas';
-import { OUTPUT_REF_SOURCE, type JsonValue } from './output-ref';
+import { LOOP_PREV_OUTPUT_REF_SOURCE, OUTPUT_REF_SOURCE, type JsonValue } from './output-ref';
 import type { BoundaryProvenance } from './schemas/node-state';
 import type { WorkflowPack } from './schemas/pack-settings';
 
@@ -85,13 +85,20 @@ export function setIncludeOutputAliases(
   else (node as NodeWithIncludeOutputAliases)[INCLUDE_OUTPUT_ALIASES] = aliases;
 }
 
-/** Rename a command body's `$<include>.output` refs to the include's primary sink. */
+/**
+ * Rename a command body's `$<include>.output` and `$LOOP_PREV.<include>.output` refs to
+ * the include's primary sink.
+ */
 export function resolveIncludeOutputAliases(node: object, body: string): string {
   const aliases = readIncludeOutputAliases(node);
   if (aliases === undefined) return body;
-  return body.replace(new RegExp(OUTPUT_REF_SOURCE, 'g'), (match, id: string) =>
-    Object.hasOwn(aliases, id) ? `$${aliases[id]}.output` : match
-  );
+  return body
+    .replace(new RegExp(LOOP_PREV_OUTPUT_REF_SOURCE, 'g'), (match, id: string) =>
+      Object.hasOwn(aliases, id) ? `$LOOP_PREV.${aliases[id]}.output` : match
+    )
+    .replace(new RegExp(OUTPUT_REF_SOURCE, 'g'), (match, id: string) =>
+      Object.hasOwn(aliases, id) ? `$${aliases[id]}.output` : match
+    );
 }
 
 // A composed node keeps the directory of its declaring home YAML, not its includer's.
