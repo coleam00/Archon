@@ -112,15 +112,19 @@ Runs with an already recorded output root keep using it when resumed.
 
 ### Disposable Docker verification images
 
-Use the current run's identity to opt disposable images into terminal cleanup:
+Label a disposable image with the current run's identity, and record the build in the run's `verification-images` directory:
 
 ```bash
-docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
+mkdir -p "$ARTIFACTS_DIR/verification-images"
+docker build --label "archon.run_id=$WORKFLOW_ID" \
+  --iidfile "$ARTIFACTS_DIR/verification-images/check" -t "verify-$WORKFLOW_ID:check" .
 ```
 
-`docker buildx build --load` takes the same `--label`. Give each run unique tags, one tag per image, and use the same Docker context as the Archon host. A child run uses its own `$WORKFLOW_ID`. Remove verification containers when the check finishes, including stopped containers.
+The label marks which run owns an image. The record tells Archon the run built one: Archon asks Docker about a run's images only when `$ARTIFACTS_DIR/verification-images/` holds a file, in host and container runs alike. A run without a record is never inventoried, so with Docker stopped it prints nothing about images. Give each build its own `--iidfile` name.
 
-**When images are removed.** Archon attempts cleanup when a completed run, or a cancelled run that cannot resume, stops writing. Nothing watches for containers removed later. These keep their images:
+`docker buildx build --load` takes the same `--label` and `--iidfile`. Give each run unique tags, one tag per image, and use the same Docker context as the Archon host. A child run uses its own `$WORKFLOW_ID`. Remove verification containers when the check finishes, including stopped containers.
+
+**When images are removed.** For a run that recorded a build, Archon attempts cleanup when a completed run, or a cancelled run that cannot resume, stops writing. Nothing watches for containers removed later. These keep their images:
 
 - Failed runs, including ones interrupted by SIGINT or SIGTERM, because they can resume under the same run ID. Abandon the run, or recover by hand as below, to release them.
 - Fan-out children cancelled in a way that can resume. Abandoning does not release their images; recover by hand.
@@ -129,7 +133,7 @@ docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check"
 
 Docker errors are reported, and the run's terminal status is unchanged.
 
-**When cleanup cannot list images.** If the first listing of a host run's verification images fails, Archon keeps the run's own exit code and reports a warning that names the run, with manual recovery guidance, whatever caused the failure. Cleanup is then inconclusive and images may remain: restore access to the intended Docker context and recover by hand. A failure after the listing (inspection, container-use checks or removal) fails an otherwise successful foreground command, as does a container run's cleanup failure. A host run skips image cleanup only when Docker is absent at both host setup and cleanup. Container runs always require Docker.
+**When cleanup cannot list images.** If the first listing of a host run's recorded verification images fails, Archon keeps the run's own exit code and reports a warning that names the run, with manual recovery guidance, whatever caused the failure. Cleanup is then inconclusive and images may remain: restore access to the intended Docker context and recover by hand. A failure after the listing (inspection, container-use checks or removal) fails an otherwise successful foreground command, as does a container run's cleanup failure.
 
 **Recover by hand.** Cleanup deletes immutable image IDs without force or parent pruning, and Docker refuses an ID with several repository references, so an image with several tags needs manual cleanup under exclusive control of its tags. After removing late test containers and confirming the run cannot resume or write:
 

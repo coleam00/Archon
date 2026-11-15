@@ -7,25 +7,36 @@ import {
   VerificationImageInventoryError,
   VERIFICATION_IMAGE_RUN_LABEL,
 } from '@archon/isolation';
+import { readdir } from 'node:fs/promises';
+import { join } from 'node:path';
 import { createLogger } from '@archon/paths';
+import { getRunArtifactsDirForRoot, resolveRunStorageRoot } from '@archon/paths/archon-paths';
 import { noExecutorCanWrite } from '@archon/workflows/run-scratch';
 import type { ReleaseVerificationImages, WorkflowDeps } from '@archon/workflows/deps';
 import {
   isContainerRun,
   isTerminalRunStatus,
   RESUMABLE_WORKFLOW_STATUSES,
+  type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import { FAN_OUT_CANCEL_REASONS, type IWorkflowStore } from '@archon/workflows/store';
 
-/** A supplied factory effect binds the resource owner for calls without a live backend. */
+/**
+ * The `$ARTIFACTS_DIR` child a node records its verification builds in, one
+ * `docker build --iidfile` file per build. A run with no file there built no image, so
+ * cleanup never asks Docker about it.
+ */
+export const VERIFICATION_IMAGE_RECORD_DIR = 'verification-images';
+
+/**
+ * Releases a terminal run's recorded verification images. A supplied factory effect
+ * binds the resource owner for calls without a live backend.
+ */
 export function createRunResourceRelease(
   store: Pick<IWorkflowStore, 'getWorkflowRun'>,
   release?: typeof releaseRunVerificationImages
 ): NonNullable<WorkflowDeps['releaseRunResources']> {
   const hostRelease = release ?? releaseRunVerificationImages;
-  const usesDocker = hostRelease === releaseRunVerificationImages;
-  const dockerInstalledAtSetup =
-    usesDocker && Bun.which('docker', { PATH: process.env.PATH }) !== null;
   return async (runId, releaseVerificationImages) => {
     const log = createLogger('cleanup.verification-images');
     try {
@@ -46,21 +57,16 @@ export function createRunResourceRelease(
         log.debug({ runId }, 'verification_images.kept_for_resumable_run');
         return;
       }
+      if (!(await recordsVerificationImages(run))) {
+        log.debug({ runId }, 'verification_images.none_recorded');
+        return;
+      }
       if (isContainerRun(run)) {
         return await releaseContainerImages(
           runId,
           run.metadata[ISOLATION_ENV_ID_METADATA_KEY],
           releaseVerificationImages ?? release
         );
-      }
-      // Docker is optional on host runs, but it may have appeared during execution.
-      if (
-        usesDocker &&
-        !dockerInstalledAtSetup &&
-        !Bun.which('docker', { PATH: process.env.PATH })
-      ) {
-        log.debug({ runId }, 'verification_images.skipped_docker_not_installed');
-        return;
       }
       return await hostRelease(runId, undefined).catch((err: unknown) => {
         if (!(err instanceof VerificationImageInventoryError)) throw err;
@@ -81,6 +87,21 @@ export function createRunResourceRelease(
       throw err;
     }
   };
+}
+
+async function recordsVerificationImages(
+  run: Pick<WorkflowRun, 'id' | 'output_root'>
+): Promise<boolean> {
+  // A row with no trusted output_root has no locatable $ARTIFACTS_DIR, so it holds no record.
+  const root = resolveRunStorageRoot(run, null);
+  if (!root) return false;
+  const dir = join(getRunArtifactsDirForRoot(root, run.id), VERIFICATION_IMAGE_RECORD_DIR);
+  try {
+    return (await readdir(dir, { withFileTypes: true })).some(entry => entry.isFile());
+  } catch (err) {
+    if (err instanceof Error && 'code' in err && err.code === 'ENOENT') return false;
+    throw err;
+  }
 }
 
 async function releaseContainerImages(

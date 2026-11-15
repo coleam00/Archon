@@ -3,16 +3,20 @@ import { RunActionForbiddenError } from '../run-authorization';
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
+import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
 import { releaseRunVerificationImages, type IIsolationStore } from '@archon/isolation';
-import { createRunResourceRelease } from '../../services/cleanup/run-verification-images';
+import {
+  createRunResourceRelease,
+  VERIFICATION_IMAGE_RECORD_DIR,
+} from '../../services/cleanup/run-verification-images';
 import { DetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
 import {
   operator,
@@ -76,14 +80,26 @@ describe('abandonWorkflow', () => {
   });
 
   test('returns host inventory recovery warnings for the abandoned run and its cancelled child', async () => {
+    const output_root = scratchRoot();
     const root = makePausedRun({
+      output_root,
       metadata: { execution_owner: { host: hostname(), pid: process.pid } },
     });
     const child = makePausedRun({
       id: 'child-inventory',
       parent_run_id: root.id,
+      output_root,
       metadata: { execution_owner: { host: hostname(), pid: process.pid } },
     });
+    // Both runs recorded a verification build, so cleanup asks Docker about them.
+    for (const run of [root, child]) {
+      const record = join(
+        getRunArtifactsDirForRoot(output_root, run.id),
+        VERIFICATION_IMAGE_RECORD_DIR
+      );
+      mkdirSync(record, { recursive: true });
+      writeFileSync(join(record, 'check'), 'sha256:built');
+    }
     const runs = new Map([root, child].map(run => [run.id, run]));
     const operationStore: WorkflowOperationsDeps['store'] = {
       ...store,
