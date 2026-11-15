@@ -6,7 +6,8 @@
   "types": "./src/index.ts",
   "exports": {
     ".": "./src/index.ts",
-    "./test-utils": "./src/test-utils.ts"
+    "./test-utils": "./src/test-utils.ts",
+    "./archon-commit": "./src/archon-commit.ts"
   },
   "scripts": {
     "test": "bun run ../../scripts/package-tests.ts",
@@ -67,6 +68,12 @@
     ],
     [
       "src/branch-history.test.ts"
+    ],
+    [
+      "src/archon-commit.test.ts"
+    ],
+    [
+      "src/archon-commit.binary.test.ts"
     ]
   ]
 }

@@ -1,23 +1,17 @@
 /**
  * Version command - displays version info
  *
- * For compiled binaries, version and git commit are embedded via `@archon/paths`
- * build-time constants (rewritten by `scripts/build-binaries.sh`).
- * For development (Bun), reads from package.json and retrieves git commit at runtime.
+ * For compiled binaries, the version is embedded via `@archon/paths` build-time constants
+ * (rewritten by `scripts/build-binaries.sh`); from source it is read from package.json.
+ * The commit comes from `readArchonCommit`, which names Archon's own commit, never the
+ * caller's working directory; the line is omitted when no commit is known.
  */
 import { readFile } from 'fs/promises';
 import { join, dirname } from 'path';
 import { fileURLToPath } from 'url';
-import { execFileAsync } from '@archon/git';
-import {
-  BUNDLED_GIT_COMMIT,
-  BUNDLED_IS_BINARY,
-  BUNDLED_VERSION,
-  createLogger,
-} from '@archon/paths';
+import { readArchonCommit } from '@archon/git/archon-commit';
+import { BUNDLED_IS_BINARY, BUNDLED_VERSION } from '@archon/paths';
 import { getDatabaseType } from '@archon/core';
-
-const log = createLogger('cli:version');
 
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
@@ -56,23 +50,6 @@ async function getDevVersion(): Promise<{ name: string; version: string }> {
   return { name: pkg.name, version: pkg.version };
 }
 
-/**
- * Get the git commit hash at runtime (dev mode).
- * Returns 'unknown' if git is unavailable or the command fails.
- */
-async function getDevGitCommit(): Promise<string> {
-  try {
-    const { stdout } = await execFileAsync('git', ['rev-parse', '--short', 'HEAD'], {
-      timeout: 5000,
-    });
-    return stdout.trim();
-  } catch (err) {
-    // Non-blocking: git may not be installed or cwd may not be a git repo
-    log.debug({ err }, 'version.git_commit_lookup_failed');
-    return 'unknown';
-  }
-}
-
 /** The running Archon version: embedded in a binary, read from package.json from source. */
 export async function getArchonVersion(): Promise<string> {
   return BUNDLED_IS_BINARY ? BUNDLED_VERSION : (await getDevVersion()).version;
@@ -80,7 +57,7 @@ export async function getArchonVersion(): Promise<string> {
 
 export async function versionCommand(): Promise<void> {
   const version = await getArchonVersion();
-  const gitCommit = BUNDLED_IS_BINARY ? BUNDLED_GIT_COMMIT : await getDevGitCommit();
+  const commit = await readArchonCommit();
 
   const platform = process.platform;
   const arch = process.arch;
@@ -91,5 +68,5 @@ export async function versionCommand(): Promise<void> {
   console.log(`  Platform: ${platform}-${arch}`);
   console.log(`  Build: ${buildType}`);
   console.log(`  Database: ${dbType}`);
-  console.log(`  Git commit: ${gitCommit}`);
+  if (commit) console.log(`  Git commit: ${commit.sha}`);
 }
