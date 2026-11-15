@@ -256,7 +256,9 @@ test.each([false, true])(
   async binaryMode => {
     const name = 'private-bundle';
     const filename = `${name}.yaml`;
-    const yaml = 'name: private\ndescription: ARCHON_BUNDLE_SECRET_SENTINEL\nnodes: [';
+    // The sentinel sits on the offending line, so the diagnostic quotes it: the test then
+    // proves the author sees the line while the logs do not.
+    const yaml = 'name: private\ndescription: ARCHON_BUNDLE_SECRET_SENTINEL: stray\nnodes: []';
     const path = join(app, 'workflows', 'shipped', name, filename);
     const lines: string[] = [];
     await write(path, yaml);
@@ -271,8 +273,10 @@ test.each([false, true])(
       expect(result.errors).toContainEqual({
         filename,
         errorType: 'parse_error',
-        error: expect.stringContaining(`${filename}:3:9: YAML syntax error:`),
+        error: expect.stringContaining(`${filename}:2:14: YAML syntax error:`),
       });
+      const diagnostic = result.errors.find(entry => entry.filename === filename)?.error;
+      expect(diagnostic).toContain('ARCHON_BUNDLE_SECRET_SENTINEL');
       expect(lines.join('')).not.toContain('ARCHON_BUNDLE_SECRET_SENTINEL');
       expect(lines.join('')).not.toContain('name: private');
       const event = lines
