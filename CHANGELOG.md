@@ -48,6 +48,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
+- A start without `--branch` names its worktree and branch from its run id (`archon/task-<workflow>-<run id>`, shortened with a digest past 50 characters) in place of the start time. Two starts of one workflow in the same millisecond used to derive one name, and one of them failed at `git worktree add` (#5649).
+- When worktree setup fails and the path is not provably this start's own, the error no longer says to remove it. A path that carries another start's setup lock is reported as that start's, with its setup attempt id; before, the message told the operator to remove what could be a running start's checkout (#5649).
 - `archon forge` names the refused fields when it refuses a request as `invalid_request` (for example `units.0.rerun: Invalid input: expected object, received undefined`), so a caller can correct the request. It never includes the supplied values.
 - The SDLC pack's forge preflights (delivery, the merge queue and the test-value metric) ask `archon forge check` for the plugin, its operations and its credential instead of comparing plugin metadata themselves. Delivery still makes one authenticated read. A missing operation is refused in the host's words (`plugin <name> does not support <operations>`).
 - The SDLC pack's scripts call the forge and the state store through `archon:script` instead of the pack's own clients. A failed forge operation is reported in the script API's words: the message no longer carries the credential source or the write's mutation record, and the plugin setup hint is added only by the forge preflights.

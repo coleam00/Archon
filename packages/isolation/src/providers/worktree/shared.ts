@@ -33,6 +33,17 @@ export function getLog(): ReturnType<typeof createLogger> {
  */
 export const SETUP_LOCK_PREFIX = 'archon: worktree setup in progress';
 
+/** The lock reason one setup attempt holds. */
+export function setupLockReasonFor(attemptId: string): string {
+  return `${SETUP_LOCK_PREFIX}: ${attemptId}`;
+}
+
+/** The attempt id in a setup lock reason, or null for the bare prefix and any other lock. */
+export function setupAttemptOf(lockReason: string | null | undefined): string | null {
+  const prefix = setupLockReasonFor('');
+  return lockReason?.startsWith(prefix) ? lockReason.slice(prefix.length) : null;
+}
+
 /** Lock reason held while an abandoned run's checkout is being removed. */
 export const RELEASE_LOCK_REASON = 'archon: worktree release in progress';
 
