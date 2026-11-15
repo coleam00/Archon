@@ -55,6 +55,7 @@ let cwd: string;
 let out: string;
 let logSpy: ReturnType<typeof spyOn>;
 const originalArchonHome = process.env.ARCHON_HOME;
+const originalDefaultAssistant = process.env.DEFAULT_AI_ASSISTANT;
 
 async function writePack(declaration: string): Promise<void> {
   const pack = join(cwd, '.archon', 'workflows', 'fixture');
@@ -103,6 +104,9 @@ beforeEach(async () => {
   // A space in the path: the printed commands must still pass it as one argument.
   out = join(root, 'binding files');
   process.env.ARCHON_HOME = join(root, 'home');
+  // A shell's provider default would make config loading require a provider
+  // this test never registers. An empty value counts as unset.
+  process.env.DEFAULT_AI_ASSISTANT = '';
   logSpy = spyOn(console, 'log').mockImplementation(() => {});
 });
 
@@ -111,6 +115,8 @@ afterEach(async () => {
   await removeTempTree(root);
   if (originalArchonHome === undefined) delete process.env.ARCHON_HOME;
   else process.env.ARCHON_HOME = originalArchonHome;
+  if (originalDefaultAssistant === undefined) delete process.env.DEFAULT_AI_ASSISTANT;
+  else process.env.DEFAULT_AI_ASSISTANT = originalDefaultAssistant;
 });
 
 describe('archon pack bindings', () => {
