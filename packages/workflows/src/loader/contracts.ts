@@ -20,7 +20,7 @@ import { stringEnumValues } from '../completed-outcome';
  * on the final flat workflow, where every selected node is executable.
  */
 export function validateWorkflowResultContract(
-  workflow: Pick<WorkflowDefinition, 'returns' | 'result'> & {
+  workflow: Pick<WorkflowDefinition, 'name' | 'returns' | 'result'> & {
     readonly nodes: readonly (DagNode | IncludeDirective)[];
   }
 ): string | null {
@@ -46,10 +46,17 @@ export function validateWorkflowResultContract(
     return `${subject} cannot select composed fan-out node '${workflow.returns}' because its runtime output is an aggregate array; select a collector node with a required outcome property instead`;
   }
 
-  return validateOutcomeFieldSchema(subject, workflow.returns, field, selectedNode.output_format);
+  return validateOutcomeFieldSchema(
+    workflow.name,
+    subject,
+    workflow.returns,
+    field,
+    selectedNode.output_format
+  );
 }
 
 function validateOutcomeFieldSchema(
+  workflowName: string,
   subject: string,
   nodeId: string,
   field: string,
@@ -69,8 +76,15 @@ function validateOutcomeFieldSchema(
   if (!constraints.required) {
     return `${subject} must be listed in node '${nodeId}' output_format.required`;
   }
-  if (!constraints.boolean && stringEnumValues(schema, field) === undefined) {
+  if (constraints.boolean) return null;
+  const values = stringEnumValues(schema, field);
+  if (values === undefined) {
     return `${subject} on node '${nodeId}' must declare type: boolean, or type: string with a non-empty enum of strings`;
+  }
+  // An outcome is a name an operator and a later stage read. An empty one says nothing,
+  // and admitting it would make every reader special-case '' against "no outcome".
+  if (values.includes('')) {
+    return `Workflow '${workflowName}' returns.outcome: '${field}' on node '${nodeId}' declares an empty string in its enum; an outcome must be a name, so give it one`;
   }
   return null;
 }

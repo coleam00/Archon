@@ -117,6 +117,23 @@ nodes:
     expect(error?.error).toContain('type: string with a non-empty enum of strings');
   });
 
+  it('refuses an outcome enum with an empty-string member, naming workflow and node', () => {
+    const { workflow, error } = parseOutcomeWorkflow(
+      'returns: { node: result, outcome: stage }',
+      `
+    output_format:
+      type: object
+      properties:
+        stage: { type: string, enum: ['', built] }
+      required: [stage]`
+    );
+
+    expect(workflow).toBeNull();
+    expect(error?.error).toContain("'authored-outcome'");
+    expect(error?.error).toContain("node 'result'");
+    expect(error?.error).toContain('empty string');
+  });
+
   it('refuses the removed outcome_field, naming the declaration that replaces it', () => {
     const { workflow, error } = parseOutcomeWorkflow('returns: result\noutcome_field: green');
 

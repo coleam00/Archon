@@ -2039,7 +2039,8 @@ nodes:
     `false` with `failed`.
   - **A named outcome.** A root property declared `type: string` with a non-empty `enum` of
     strings, such as `{ type: string, enum: [built, stop] }`. The run completes with the value
-    as it is. A string with no `enum` fails to load.
+    as it is. A string with no `enum` fails to load, and so does an `enum` with an empty
+    string among its values: an outcome is a name an operator and a later stage read.
 
   It cannot select a `loop_group` (which returns raw text) or a fan-out `workflow:` node (which
   returns an aggregate array); add a structured collector node after either one. The removed
