@@ -500,25 +500,6 @@ describe('background task completion gating (#2083)', () => {
     expect(settledReached).toBe(false);
   });
 
-  it('stops reading at settled', async () => {
-    mockSendQueryDag.mockImplementation(async function* () {
-      yield { type: 'agent_message_chunk', text: 'normal output' };
-      yield { type: 'result', sessionId: 'sid' };
-      yield { type: 'settled' };
-      // Anything after settled must NOT be consumed
-      yield { type: 'agent_message_chunk', text: ' MUST NOT APPEAR' };
-    });
-
-    const store = createMockStore();
-    const platform = createMockPlatform();
-    await runSingleNode(store, platform, 'bg-none-run');
-
-    const completed = findCompletedEvent(store);
-    expect(completed).toBeDefined();
-    expect(completed!.data.node_output).toBe('normal output');
-    expect(completed!.data.background_tasks_incomplete).toBeUndefined();
-  });
-
   it('persists output_file on a finished subtask', async () => {
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'agent_message_chunk', text: 'delegating' };

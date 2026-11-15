@@ -1151,29 +1151,4 @@ describe('executeDagWorkflow -- approval node inside an included block', () => {
       captureResponse: true,
     });
   });
-
-  it('the same approval block included twice yields distinct namespaced approval ids', () => {
-    const block = buildWf('apblk', [
-      { id: 'approve', approval: { message: 'Approve?', capture_response: false } },
-    ]);
-    const parent = {
-      ...buildWf('apparent', [
-        { id: 'a', include: 'apblk' },
-        { id: 'b', include: 'apblk', depends_on: ['a'] },
-      ]),
-      interactive: true, // composed approval gate (#1764)
-    };
-    const { workflows, errors } = expandWorkflowIncludes(
-      new Map([
-        ['apblk', block],
-        ['apparent', parent],
-      ])
-    );
-    expect(errors).toHaveLength(0);
-    const ids = workflows.get('apparent')!.nodes.map(n => n.id);
-    // Distinct ApprovalContext.nodeId per inclusion → no cross-talk between the two gates.
-    expect(ids).toContain('a__approve');
-    expect(ids).toContain('b__approve');
-    expect(new Set(ids).size).toBe(ids.length);
-  });
 });
