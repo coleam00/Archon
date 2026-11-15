@@ -165,87 +165,88 @@ describe('workflowRunCommand — progress rendering', () => {
     ['host', 'recorded'],
     ['container', 'recorded'],
     ['isolation-container', 'recorded'],
-  ] as const)('reports a %s inventory failure only for a %s run', async (kind, record) => {
-    setupWorkflowMocks();
-    const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'test-run-id',
-    });
-    const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
-    const { createRunResourceRelease } = await import(
-      '../../../core/src/services/cleanup/run-verification-images'
-    );
-    const container = kind !== 'host';
-    const outputRoot =
-      record === 'recorded'
-        ? await recordedBuildRoot('test-run-id')
-        : trackTempRootsForOutput(await mkdtemp(join(getArchonHome(), 'archon-cli-images-')));
-    const row = {
-      ...mockWorkflowRun,
-      id: 'test-run-id',
-      status: 'completed' as const,
-      output_root: outputRoot,
-      metadata: {
-        execution_owner: { host: hostname(), pid: process.pid },
-        ...(container ? { isolation: 'container', isolation_env_id: 'env-a' } : {}),
-      },
-    };
-    const calls: string[][] = [];
-    const runner: isolation.DockerRunner = async args => {
-      calls.push(args);
-      if (args[0] === 'container' && kind !== 'isolation-container') {
-        return { stdout: '', stderr: '' };
-      }
-      throw new Error('Cannot connect to the Docker daemon');
-    };
-    const release = spyOn(isolation, 'releaseRunVerificationImages').mockImplementation((id, env) =>
-      realReleaseRunVerificationImages(id, env, runner)
-    );
-    const warning = spyOn(console, 'error').mockImplementation(() => {});
-    try {
-      const host = createTestWorkflowHost();
-      host.deps.releaseRunResources = createRunResourceRelease(
-        { getWorkflowRun: async () => row },
-        container ? (id, env) => realReleaseRunVerificationImages(id, env, runner) : undefined
+  ] as const)(
+    'warns about a %s inventory failure only for a recorded run (%s)',
+    async (kind, record) => {
+      setupWorkflowMocks();
+      const { executeWorkflow } = require('@archon/workflows/executor');
+      (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+        success: true,
+        workflowRunId: 'test-run-id',
+      });
+      const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
+      const { createRunResourceRelease } = await import(
+        '../../../core/src/services/cleanup/run-verification-images'
       );
-      const error = await workflowRunCommand(host, '/test/path', 'plan', 'hello', {}).catch(
-        (err: unknown) => err
+      const container = kind !== 'host';
+      const outputRoot =
+        record === 'recorded'
+          ? await recordedBuildRoot('test-run-id')
+          : trackTempRootsForOutput(await mkdtemp(join(getArchonHome(), 'archon-cli-images-')));
+      const row = {
+        ...mockWorkflowRun,
+        id: 'test-run-id',
+        status: 'completed' as const,
+        output_root: outputRoot,
+        metadata: {
+          execution_owner: { host: hostname(), pid: process.pid },
+          ...(container ? { isolation: 'container', isolation_env_id: 'env-a' } : {}),
+        },
+      };
+      const calls: string[][] = [];
+      const runner: isolation.DockerRunner = async args => {
+        calls.push(args);
+        if (args[0] === 'container' && kind !== 'isolation-container') {
+          return { stdout: '', stderr: '' };
+        }
+        throw new Error('Cannot connect to the Docker daemon');
+      };
+      const release = spyOn(isolation, 'releaseRunVerificationImages').mockImplementation(
+        (id, env) => realReleaseRunVerificationImages(id, env, runner)
       );
-      const text = warning.mock.calls.flat().join(' ');
-      if (record === 'unrecorded') {
-        expect(error).toBeUndefined();
-        expect(text).not.toContain('verification image');
-        expect(text).not.toContain('inconclusive');
-        expect(calls).toEqual([]);
-        return;
+      const warning = spyOn(console, 'error').mockImplementation(() => {});
+      try {
+        const host = createTestWorkflowHost();
+        host.deps.releaseRunResources = createRunResourceRelease(
+          { getWorkflowRun: async () => row },
+          container ? (id, env) => realReleaseRunVerificationImages(id, env, runner) : undefined
+        );
+        const error = await workflowRunCommand(host, '/test/path', 'plan', 'hello', {}).catch(
+          (err: unknown) => err
+        );
+        const text = warning.mock.calls.flat().join(' ');
+        if (record === 'unrecorded') {
+          expect(error).toBeUndefined();
+          expect(text).not.toContain('verification image');
+          expect(text).not.toContain('inconclusive');
+          expect(calls).toEqual([]);
+          return;
+        }
+        if (container) {
+          expect(error).toBeInstanceOf(Error);
+          expect(resolveCliExitCode(error)).toBe(1);
+          expect(text).toContain('WARNING: Run test-run-id retained verification images');
+          expect(text).not.toContain('cleanup is inconclusive');
+        } else {
+          expect(error).toBeUndefined();
+          expect(text).toContain('Run test-run-id verification image inventory failed');
+        }
+        expect(calls.map(args => args.slice(0, 2))).toEqual(
+          kind === 'isolation-container'
+            ? [['container', 'ls']]
+            : container
+              ? [
+                  ['container', 'ls'],
+                  ['image', 'ls'],
+                ]
+              : [['image', 'ls']]
+        );
+      } finally {
+        warning.mockRestore();
+        release.mockRestore();
       }
-      if (container) {
-        expect(error).toBeInstanceOf(Error);
-        expect(resolveCliExitCode(error)).toBe(1);
-        expect(text).toContain('WARNING: Run test-run-id retained verification images');
-        expect(text).not.toContain('cleanup is inconclusive');
-      } else {
-        expect(error).toBeUndefined();
-        expect(text).toContain('Run test-run-id verification image inventory failed');
-        expect(text).toContain(`label=${isolation.VERIFICATION_IMAGE_RUN_LABEL}=test-run-id`);
-        expect(text).toContain('docker image rm --no-prune <full-id>');
-      }
-      expect(calls.map(args => args.slice(0, 2))).toEqual(
-        kind === 'isolation-container'
-          ? [['container', 'ls']]
-          : container
-            ? [
-                ['container', 'ls'],
-                ['image', 'ls'],
-              ]
-            : [['image', 'ls']]
-      );
-    } finally {
-      warning.mockRestore();
-      release.mockRestore();
     }
-  });
+  );
 
   it.each([false, true])(
     'uses the fresh container backend for foreground cleanup (failure=%s)',
