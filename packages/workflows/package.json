@@ -21,7 +21,6 @@
     "./store": "./src/store.ts",
     "./attention-queue": "./src/attention-queue.ts",
     "./attention-counts": "./src/attention-counts.ts",
-    "./attention-item-ref": "./src/attention-item-ref.ts",
     "./attention-watch": "./src/attention-watch.ts",
     "./attention-needs": "./src/attention-needs.ts",
     "./workflow-notice": "./src/workflow-notice.ts",

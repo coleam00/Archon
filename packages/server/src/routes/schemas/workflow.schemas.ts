@@ -405,7 +405,7 @@ export const attentionStreamLineResponseSchema =
   classifiedAttentionStreamLineSchema.openapi('AttentionStreamLine');
 
 /**
- * GET /api/runs/attention list response. `items` is the queue; `runs` holds the same runs
+ * GET /api/runs/attention list response. `items` is the queue; `runs` holds the runs that hold them
  * as dashboard rows for the console.
  */
 export const runsNeedingAttentionResponseSchema = z

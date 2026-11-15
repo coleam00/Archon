@@ -12,9 +12,9 @@ import { isDeepStrictEqual } from 'node:util';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths';
 import {
-  attentionItemRunContextFields,
   attentionQueueItemForRun,
   attentionQueueItemSchema,
+  isHeldByRun,
   isInAttentionScope,
   listAttentionQueue,
   matchesAttentionLabels,
@@ -24,6 +24,7 @@ import {
   type AttentionQueueItem,
   type AttentionQueueSource,
   type ProjectRef,
+  type RunAttentionQueueItem,
 } from './attention-queue';
 import type {
   AttentionWatch,
@@ -74,7 +75,10 @@ const DEFAULT_BOOKMARK_INTERVAL_MS = 30_000;
 const RUNNING_PAGE_LIMIT = 100;
 
 const cursorSchema = z.string().min(1).transform(workflowEventCursor);
-/** What a run is part of, from its row; both null when the stream could not read the row. */
+/**
+ * What a run is part of, from its row; both null when the stream could not read the row,
+ * and on a line about an item no run holds.
+ */
 const runContextFields = { workflow: z.string().nullable(), parentRunId: z.string().nullable() };
 const lineBase = {
   cursor: cursorSchema,
@@ -82,13 +86,21 @@ const lineBase = {
   runId: z.string(),
   ...runContextFields,
 };
+/** A line about an item that closed: `ref` names it; `runId` is absent when no run held it. */
+const itemLineBase = {
+  cursor: cursorSchema,
+  project: projectRefSchema.nullable(),
+  ref: z.string(),
+  runId: z.string().optional(),
+  ...runContextFields,
+};
 
 /**
  * One line of the stream. `cursor` is the feed position the line was produced at;
  * `--after` it replays later readable feed events, excluding every line at that cursor.
- * `attention` carries the queue item exactly as the snapshot and
- * `workflow attention <run>` build it. Every run line carries the run's `workflow` and
- * `parentRunId` (null for a top-level run), so a consumer can filter on them.
+ * `attention` carries the queue item exactly as the list builds it. Every line about a run
+ * carries the run's `workflow` and `parentRunId` (null for a top-level run), so a consumer
+ * can filter on them; a line about an item carries those of the run that holds it.
  */
 export const attentionStreamLineSchema = z.discriminatedUnion('type', [
   z.object({
@@ -97,14 +109,14 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     /** True for the open items sent before `ready`. */
     snapshot: z.boolean(),
     project: projectRefSchema.nullable(),
-    ...attentionItemRunContextFields,
+    ...runContextFields,
     item: attentionQueueItemSchema,
   }),
   z.discriminatedUnion('reason', [
     z.object({
       type: z.literal('resolved'),
-      ...lineBase,
-      /** Null for `usage_limit` and `unreadable` items, which have no occurrence. */
+      ...itemLineBase,
+      /** Null for an item with no occurrence: `usage_limit`, `unreadable`, or one no run holds. */
       occurrence: z.string().nullable(),
       reason: z.literal('answered'),
       answeredVia: recordSurfaceSchema.nullable(),
@@ -117,15 +129,25 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
     }),
     z.object({
       type: z.literal('resolved'),
-      ...lineBase,
+      ...itemLineBase,
       occurrence: z.string().nullable(),
       /** The item closed without an answer: resumed, ended, deleted or replaced. */
       reason: z.literal('withdrawn'),
     }),
+    z.object({
+      type: z.literal('resolved'),
+      ...itemLineBase,
+      occurrence: z.string().nullable(),
+      /**
+       * An item no run holds is no longer in the list. That is all the stream observed:
+       * it does not know whether the item was answered or withdrawn.
+       */
+      reason: z.literal('no_longer_listed'),
+    }),
   ]),
   z.object({
     type: z.literal('unmatched'),
-    ...lineBase,
+    ...itemLineBase,
     occurrence: z.string(),
     revision: z.number().int().positive(),
   }),
@@ -175,8 +197,8 @@ export type RunOwnerLossWatch = (
 ) => Promise<{ observedStatus: WorkflowRunStatus } | null>;
 
 /** What a host gives the watch beyond the store. */
-export interface AttentionWatchHost {
-  branchOf: AttentionQueueSource['branchOf'];
+export interface AttentionWatchHost
+  extends Pick<AttentionQueueSource, 'branchOf' | 'itemsWithoutRun'> {
   /** Without it the stream reports no `owner_lost`. */
   ownerLoss?: RunOwnerLossWatch;
   doorbell?: WorkflowEventDoorbell;
@@ -191,13 +213,14 @@ export type AttentionWatchStore = Pick<
   | 'getWorkflowRun'
   | 'getWorkflowRunForAttention'
   | 'getCodebase'
+  | 'getItem'
   | 'listWorkflowRuns'
   | 'listEventsForRuns'
 >;
 
 /** The occurrence an answer resolves; null for an item nobody answers. */
 function occurrenceOf(item: AttentionQueueItem): string | null {
-  return item.kind === 'unreadable' || item.kind === 'usage_limit' ? null : item.occurrence;
+  return item.run !== undefined && 'occurrence' in item.run ? item.run.occurrence : null;
 }
 
 /** What the queue reports for one run now: its row, its own item, its project. */
@@ -229,10 +252,18 @@ function lifecycleFields(
   };
 }
 
-function itemContext(
-  item: AttentionQueueItem
-): Pick<AttentionQueueItem, 'workflow' | 'parentRunId'> {
-  return { workflow: item.workflow, parentRunId: item.parentRunId };
+/** The run fields of a line about `item`, from the run that holds it. */
+function itemContext(item: AttentionQueueItem): RunContext {
+  return { workflow: item.run?.workflow ?? null, parentRunId: item.run?.parentRunId ?? null };
+}
+
+/** How a line names an item that closed. */
+function closedItemFields(item: AttentionQueueItem): { ref: string; runId?: string } & RunContext {
+  return {
+    ref: item.ref,
+    ...(item.run === undefined ? {} : { runId: item.run.id }),
+    ...itemContext(item),
+  };
 }
 
 /**
@@ -251,14 +282,24 @@ export async function watchAttentionQueue(
   const { scope } = options;
   const labels = options.labels ?? {};
   const filtersLabels = Object.keys(labels).length > 0;
-  const source: AttentionQueueSource = { store, branchOf: host.branchOf };
+  const source: AttentionQueueSource = {
+    store,
+    branchOf: host.branchOf,
+    ...(host.itemsWithoutRun === undefined ? {} : { itemsWithoutRun: host.itemsWithoutRun }),
+  };
   const bookmarkIntervalMs = options.bookmarkIntervalMs ?? DEFAULT_BOOKMARK_INTERVAL_MS;
   const pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
 
   const start = options.after ?? (await store.getWorkflowEventHead());
   if (options.after !== undefined) await store.readWorkflowEventsAfter(options.after, { limit: 1 });
 
+  /** The items this stream holds open, by ref. */
   const open = new Map<string, AttentionQueueItem>();
+  /** The open item `runId` holds; a run holds at most one. */
+  const heldBy = (runId: string): RunAttentionQueueItem | undefined => {
+    for (const item of open.values()) if (isHeldByRun(item) && item.run.id === runId) return item;
+    return undefined;
+  };
   let follower: WorkflowEventFeedFollower | undefined;
   let closed = false;
   let chain: Promise<void> = Promise.resolve();
@@ -282,6 +323,22 @@ export async function watchAttentionQueue(
 
   const inQuery = (item: AttentionQueueItem): boolean =>
     isInAttentionScope(item.project, scope) && matchesAttentionLabels(item, labels);
+  const emitOpen = async (
+    item: AttentionQueueItem,
+    cursor: WorkflowEventCursor,
+    snapshot: boolean
+  ): Promise<void> => {
+    await emit({
+      type: 'attention',
+      cursor,
+      snapshot,
+      project: item.project,
+      ...itemContext(item),
+      item,
+    });
+    // Held only once the listener took the line, so a failed delivery sends it again.
+    open.set(item.ref, item);
+  };
 
   // A replayed event is not new life: only a new execution claim re-arms a lost run.
   const waiters = new Map<string, { claim: string | null; controller: AbortController }>();
@@ -355,17 +412,7 @@ export async function watchAttentionQueue(
     labels,
     order: { by: 'age' },
   });
-  for (const item of snapshot) {
-    open.set(item.runId, item);
-    await emit({
-      type: 'attention',
-      cursor: start,
-      snapshot: true,
-      project: item.project,
-      ...itemContext(item),
-      item,
-    });
-  }
+  for (const item of snapshot) await emitOpen(item, start, true);
   for (const report of degraded) {
     await emit({ type: report.type, reason: report.reason, cursor: start });
   }
@@ -510,11 +557,11 @@ export async function watchAttentionQueue(
   };
 
   const resolve = async (
-    runId: string,
-    prev: AttentionQueueItem,
+    prev: RunAttentionQueueItem,
     cursor: WorkflowEventCursor,
     run: WorkflowRun | null
   ): Promise<void> => {
+    const runId = prev.run.id;
     const occurrence = occurrenceOf(prev);
     const fromRow = run === null ? undefined : rowResolution(run, occurrence);
     const origin = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
@@ -529,11 +576,11 @@ export async function watchAttentionQueue(
       type: 'resolved',
       cursor,
       project: prev.project,
-      runId,
-      ...itemContext(prev),
+      ...closedItemFields(prev),
       occurrence,
       ...resolution,
     });
+    open.delete(prev.ref);
   };
 
   const reconcile = async (
@@ -541,30 +588,47 @@ export async function watchAttentionQueue(
     view: RunView | null,
     cursor: WorkflowEventCursor
   ): Promise<void> => {
-    const prev = open.get(runId);
+    const prev = heldBy(runId);
     const item = view?.item ?? null;
     if (item !== null && inQuery(item)) {
-      const occurrence = occurrenceOf(item);
-      const replaced = prev !== undefined && occurrenceOf(prev) !== occurrence;
-      if (replaced) await resolve(runId, prev, cursor, view?.run ?? null);
-      if (prev === undefined || !isDeepStrictEqual(prev, item))
-        await emit({
-          type: 'attention',
-          cursor,
-          snapshot: false,
-          project: item.project,
-          ...itemContext(item),
-          item,
-        });
-      open.set(runId, item);
+      // A new pause of the run has a new ref: the item it replaces closes first.
+      if (prev !== undefined && prev.ref !== item.ref)
+        await resolve(prev, cursor, view?.run ?? null);
+      if (!isDeepStrictEqual(open.get(item.ref), item)) await emitOpen(item, cursor, false);
       return;
     }
     if (prev === undefined) return;
-    // Still open at the same occurrence but no longer matching the labels: the stream
-    // stops tracking it, and `unmatched` tells the consumer.
-    if (item === null || occurrenceOf(item) !== occurrenceOf(prev))
-      await resolve(runId, prev, cursor, view?.run ?? null);
-    open.delete(runId);
+    // Still open at the same ref but no longer matching the labels: the stream stops
+    // tracking it, and `unmatched` tells the consumer.
+    if (item === null || item.ref !== prev.ref) await resolve(prev, cursor, view?.run ?? null);
+    else open.delete(prev.ref);
+  };
+
+  /**
+   * Items no run holds commit no event to the feed, so they are read again each time the
+   * tail reaches the head and compared with the open set. One that is gone closes as
+   * `no_longer_listed`: the stream saw it leave the list, and nothing it reads says why.
+   */
+  const reconcileItemsWithoutRun = async (): Promise<void> => {
+    if (source.itemsWithoutRun === undefined) return;
+    const cursor = position();
+    const now = new Map(
+      (await source.itemsWithoutRun()).filter(inQuery).map(item => [item.ref, item])
+    );
+    for (const prev of [...open.values()])
+      if (!isHeldByRun(prev) && !now.has(prev.ref)) {
+        await emit({
+          type: 'resolved',
+          cursor,
+          project: prev.project,
+          ...closedItemFields(prev),
+          occurrence: null,
+          reason: 'no_longer_listed',
+        });
+        open.delete(prev.ref);
+      }
+    for (const item of now.values())
+      if (!isDeepStrictEqual(open.get(item.ref), item)) await emitOpen(item, cursor, false);
   };
 
   // Only the events before the delivered terminal event count, so a replayed line keeps
@@ -593,7 +657,6 @@ export async function watchAttentionQueue(
     { cursor, event }: WorkflowRunDelivery,
     view: RunView | null
   ): Promise<void> => {
-    const runId = event.workflow_run_id;
     if (filtersLabels && event.event_type === 'attention_labeled' && view?.item) {
       const { item } = view;
       const occurrence = occurrenceOf(item);
@@ -607,8 +670,7 @@ export async function watchAttentionQueue(
           type: 'unmatched',
           cursor,
           project: item.project,
-          runId,
-          ...itemContext(item),
+          ...closedItemFields(item),
           occurrence,
           revision: item.revision,
         });
@@ -677,7 +739,8 @@ export async function watchAttentionQueue(
         isolated.clear();
         answers = indexAnswers(page);
       },
-      onCaughtUp: () => {
+      onCaughtUp: async () => {
+        await reconcileItemsWithoutRun();
         if (Date.now() - lastLineAt >= bookmarkIntervalMs)
           emit({ type: 'bookmark', cursor: position() });
       },

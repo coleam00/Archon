@@ -14,6 +14,7 @@ import {
 import { join } from 'node:path';
 import { getArchonWorkspacesPath, projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
+  isHeldByRun,
   listAttentionQueue,
   readAttentionQueueItem,
   selectAttentionQueue,
@@ -157,7 +158,7 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
           stepName: 'ask',
         });
         expect(await next('attention')).toMatchObject({
-          item: { runId: run.id, occurrence: 'ask-1' },
+          item: { ref: `${run.id}:ask-1`, run: { id: run.id, occurrence: 'ask-1' } },
         });
         const fromRun = { runId: 'answering-run', nodePath: 'triage.decide' };
         await store.answerAttentionWait(run.id, {
@@ -165,6 +166,7 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
           fromRun,
         });
         expect(await next('resolved')).toMatchObject({
+          ref: `${run.id}:ask-1`,
           runId: run.id,
           reason: 'answered',
           answeredVia: 'cli',
@@ -402,10 +404,11 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         store,
         branchOf: async run => (run.id === a.id ? 'feat/a' : null),
       };
-      const { values: items, degraded } = splitAttentionRead(await listAttentionQueue(source));
+      const { values, degraded } = splitAttentionRead(await listAttentionQueue(source));
       expect(degraded).toEqual([]);
-      const ids = (selected: readonly AttentionQueueItem[]): string[] =>
-        selected.map(item => item.runId);
+      const items = values.filter(isHeldByRun);
+      const ids = (selected: readonly AttentionQueueItem[]): (string | undefined)[] =>
+        selected.map(item => item.run?.id);
       const select = (
         query: Partial<Parameters<typeof selectAttentionQueue>[1]>
       ): AttentionQueueItem[] =>
@@ -435,38 +438,42 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         gate.id,
       ]);
 
-      const byId = new Map(items.map(item => [item.runId, item]));
+      const byId = new Map(items.map(item => [item.run.id, item]));
       expect(byId.get(a.id)).toMatchObject({
         kind: 'attention',
-        workflow: 'conformance',
+        ref: `${a.id}:ask-${a.id}`,
         project: registered,
-        fanOut: null,
         revision: 1,
         labels: { ci: 'other', team: 'web' },
         pausedAt: '2026-01-01T00:02:00.000Z',
-        node: 'ask',
-        occurrence: `ask-${a.id}`,
+        run: {
+          id: a.id,
+          workflow: 'conformance',
+          fanOut: null,
+          node: 'ask',
+          occurrence: `ask-${a.id}`,
+          context: { branch: 'feat/a' },
+        },
         message: 'Which base?',
         form: 'select',
         options: [{ id: 'use-main' }, { id: 'use-dev' }],
-        context: { branch: 'feat/a' },
       });
-      expect(byId.get(a.id)?.context.transcript).toEndWith(`${a.id}.jsonl`);
+      expect(byId.get(a.id)?.run.context.transcript).toEndWith(`${a.id}.jsonl`);
       expect(byId.get(b.id)?.project).toEqual({
         key: '_cwd/old-name',
         codebaseId: CONFORMANCE_CODEBASE_ID,
         name: 'conformance',
       });
       expect(byId.get(c.id)?.project).toEqual(scratch);
-      expect(byId.get(child.id)?.fanOut).toEqual({
+      expect(byId.get(child.id)?.run.fanOut).toEqual({
         parentRunId: parent.id,
         nodeId: 'each',
         index: 2,
       });
       expect(byId.get(gate.id)).toMatchObject({
         kind: 'awaiting_response',
-        node: 'review',
-        occurrence: 'first',
+        ref: `${gate.id}:first`,
+        run: { node: 'review', occurrence: 'first' },
         pausedAt: null,
         labels: {},
         revision: 1,
@@ -637,9 +644,9 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
         unspawnedItems: 0,
       });
       const source: AttentionQueueSource = { store, branchOf: async () => null };
-      const listed = splitAttentionRead(await listAttentionQueue(source)).values.filter(
-        item => item.runId === parent.id
-      );
+      const listed = splitAttentionRead(await listAttentionQueue(source))
+        .values.filter(isHeldByRun)
+        .filter(item => item.run.id === parent.id);
       expect(listed).toEqual([
         expect.objectContaining({ kind: 'unreadable', reason: 'child_run_missing' }),
       ]);
@@ -659,15 +666,15 @@ export function describeAttentionConformance(getHarness: () => WorkflowStoreHarn
       await blockOn(a.id, b.id);
       await blockOn(b.id, a.id);
       const source: AttentionQueueSource = { store, branchOf: async () => null };
-      const listed = splitAttentionRead(await listAttentionQueue(source)).values.filter(
-        item => item.runId === a.id || item.runId === b.id
-      );
-      expect(listed.map(item => item.runId).sort()).toEqual([a.id, b.id].sort());
+      const listed = splitAttentionRead(await listAttentionQueue(source))
+        .values.filter(isHeldByRun)
+        .filter(item => item.run.id === a.id || item.run.id === b.id);
+      expect(listed.map(item => item.run.id).sort()).toEqual([a.id, b.id].sort());
       for (const item of listed) {
         expect(item).toEqual(
           expect.objectContaining({ kind: 'unreadable', reason: 'child_chain_too_deep' })
         );
-        expect(await readAttentionQueueItem(source, item.runId)).toEqual(item);
+        expect(await readAttentionQueueItem(source, item.run.id)).toEqual(item);
       }
     });
     test('a notice is recorded only for a running run, listed with its labels, and bounded per run', async () => {
