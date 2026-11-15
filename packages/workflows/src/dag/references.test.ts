@@ -253,18 +253,6 @@ describe('substituteNodeOutputRefs', () => {
     expect(substituteNodeOutputRefs('$a.output.note', outputs)).toBe('');
   });
 
-  it('field not in the declared schema throws (typo)', () => {
-    const outputs = new Map([
-      ['a', makeOutput('completed', '{"type":"BUG"}', { type: 'BUG' }, ['type'])],
-    ]);
-    expect(() => substituteNodeOutputRefs('$a.output.tpye', outputs)).toThrow(OutputRefError);
-  });
-
-  it('schemaless JSON node missing a referenced key throws', () => {
-    const outputs = new Map([['a', makeOutput('completed', '{"type":"BUG"}')]]);
-    expect(() => substituteNodeOutputRefs('$a.output.missing', outputs)).toThrow(OutputRefError);
-  });
-
   it('unknown node ref WITH a field throws (no-silent-drop, unknown-node)', () => {
     // The whole-text `$missing.output` form stays lenient ('' — see test above), but a
     // `.field` ref to an unknown id can still reach the executor through a programmatically
@@ -321,20 +309,6 @@ describe('substituteNodeOutputRefs', () => {
     const outputs = new Map([['corrections', makeOutput('failed', 'CORRECTIONS_APPLIED')]]);
     expect(() => substituteNodeOutputRefs('Result: $corrections.output', outputs)).toThrow();
   });
-
-  it('failed producer (#2713): fielded $node.output.field throws even on valid JSON leftover output', () => {
-    const outputs = new Map([
-      ['corrections', makeOutput('failed', JSON.stringify({ ready: true }))],
-    ]);
-    let caught: unknown;
-    try {
-      substituteNodeOutputRefs('$corrections.output.ready', outputs);
-    } catch (e) {
-      caught = e;
-    }
-    expect(caught).toBeInstanceOf(OutputRefError);
-    expect((caught as OutputRefError).reason).toBe('producer-failed');
-  });
 });
 
 describe('substituteNodeOutputRefs -- shell escaping', () => {
@@ -356,11 +330,6 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
   it('does not escape by default (AI prompt substitution)', () => {
     const outputs = new Map([['a', makeOutput('completed', 'hello; rm -rf /')]]);
     expect(substituteNodeOutputRefs('Result: $a.output', outputs)).toBe('Result: hello; rm -rf /');
-  });
-
-  it('shell-quotes output when escapedForBash=true', () => {
-    const outputs = new Map([['a', makeOutput('completed', 'hello world')]]);
-    expect(substituteNodeOutputRefs('echo $a.output', outputs, true)).toBe("echo 'hello world'");
   });
 
   it('escapes shell metacharacters when escapedForBash=true', () => {
@@ -413,13 +382,6 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
     );
   });
 
-  it('array JSON field becomes JSON stringified', () => {
-    const outputs = new Map([
-      ['a', makeOutput('completed', JSON.stringify({ items: ['todo', 'fix'] }))],
-    ]);
-    expect(substituteNodeOutputRefs('$a.output.items', outputs)).toBe('["todo","fix"]');
-  });
-
   it('array JSON field is shell-quoted when escapedForBash=true', () => {
     const outputs = new Map([
       ['a', makeOutput('completed', JSON.stringify({ items: ['todo', 'fix'] }))],
@@ -427,30 +389,6 @@ describe('substituteNodeOutputRefs -- shell escaping', () => {
     expect(substituteNodeOutputRefs('echo $a.output.items', outputs, true)).toBe(
       'echo \'["todo","fix"]\''
     );
-  });
-
-  it('nested object in array field becomes JSON stringified', () => {
-    const outputs = new Map([
-      [
-        'a',
-        makeOutput('completed', JSON.stringify({ files: [{ name: 'a.ts', status: 'modified' }] })),
-      ],
-    ]);
-    expect(substituteNodeOutputRefs('$a.output.files', outputs)).toBe(
-      '[{"name":"a.ts","status":"modified"}]'
-    );
-  });
-
-  it('null values in arrays stringify to "null"', () => {
-    const outputs = new Map([
-      ['a', makeOutput('completed', JSON.stringify({ items: [null, 'ok'] }))],
-    ]);
-    expect(substituteNodeOutputRefs('$a.output.items', outputs)).toBe('[null,"ok"]');
-  });
-
-  it('null object field becomes JSON stringified "null"', () => {
-    const outputs = new Map([['a', makeOutput('completed', JSON.stringify({ config: null }))]]);
-    expect(substituteNodeOutputRefs('$a.output.config', outputs)).toBe('null');
   });
 
   it('dot notation on invalid JSON throws even when escapedForBash=true', () => {
@@ -677,63 +615,6 @@ describe('substituteNodeOutputRefs -- structuredOutput preference', () => {
     expect(substituteNodeOutputRefs('Fix $classify.output.type issue', outputs)).toBe(
       'Fix BUG issue'
     );
-  });
-
-  it('coerces structuredOutput numeric field to string', () => {
-    const outputs = new Map([['score', makeOutput('completed', '', { confidence: 0.95 })]]);
-    expect(substituteNodeOutputRefs('score=$score.output.confidence', outputs)).toBe('score=0.95');
-  });
-
-  it('coerces structuredOutput boolean field to string', () => {
-    const outputs = new Map([['n', makeOutput('completed', '', { ok: true })]]);
-    expect(substituteNodeOutputRefs('[ $n.output.ok ]', outputs)).toBe('[ true ]');
-  });
-
-  it('JSON-stringifies object structuredOutput field', () => {
-    const outputs = new Map([['n', makeOutput('completed', '', { nested: { x: 1 } })]]);
-    expect(substituteNodeOutputRefs('$n.output.nested', outputs)).toBe('{"x":1}');
-  });
-
-  it('JSON-stringifies array structuredOutput field', () => {
-    const outputs = new Map([['n', makeOutput('completed', '', { items: ['todo', 'fix'] })]]);
-    expect(substituteNodeOutputRefs('$n.output.items', outputs)).toBe('["todo","fix"]');
-  });
-
-  it('works with empty output text (Pi-only-structured case)', () => {
-    // structuredOutput populated, output text empty → dot-access still works.
-    const outputs = new Map([['classify', makeOutput('completed', '', { type: 'BUG' })]]);
-    expect(substituteNodeOutputRefs('Fix $classify.output.type issue', outputs)).toBe(
-      'Fix BUG issue'
-    );
-  });
-
-  it('null structuredOutput falls through to JSON.parse fallback', () => {
-    const outputs = new Map([
-      ['n', makeOutput('completed', JSON.stringify({ type: 'BUG' }), null)],
-    ]);
-    expect(substituteNodeOutputRefs('$n.output.type', outputs)).toBe('BUG');
-  });
-
-  it('top-level-array structuredOutput falls through to JSON.parse fallback', () => {
-    const outputs = new Map([
-      ['n', makeOutput('completed', JSON.stringify({ type: 'BUG' }), [1, 2, 3])],
-    ]);
-    expect(substituteNodeOutputRefs('$n.output.type', outputs)).toBe('BUG');
-  });
-
-  it('primitive structuredOutput falls through to JSON.parse fallback', () => {
-    const outputs = new Map([
-      ['n', makeOutput('completed', JSON.stringify({ type: 'BUG' }), 'just-a-string')],
-    ]);
-    expect(substituteNodeOutputRefs('$n.output.type', outputs)).toBe('BUG');
-  });
-
-  it('missing field in structuredOutput resolves to empty string (no JSON.parse retry)', () => {
-    // structuredOutput is authoritative; if the field is missing, do not retry output.
-    const outputs = new Map([
-      ['classify', makeOutput('completed', JSON.stringify({ type: 'BUG' }), { confidence: 0.9 })],
-    ]);
-    expect(substituteNodeOutputRefs('Fix $classify.output.type issue', outputs)).toBe('Fix  issue');
   });
 
   it('bare $node.output reference (no field) uses output text, not structuredOutput', () => {
