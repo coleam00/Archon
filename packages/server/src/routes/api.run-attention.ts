@@ -18,9 +18,9 @@ import {
 } from '@archon/core/operations/workflow-operations';
 import { createWorkflowHostStore } from '@archon/core/workflows/sql-host';
 import { createWorkflowStore } from '@archon/core/workflows/store-adapter';
+import { countAttentionQueue } from '@archon/workflows/attention-counts';
 import {
-  attentionQueueItems,
-  countAttentionQueue,
+  listAttentionQueue,
   parseAttentionQueueRequest,
   readAttentionQueueItem,
   selectAttentionQueue,
@@ -276,10 +276,11 @@ export function registerRunAttentionRoutes(
         return apiError(c, 400, (refusal as Error).message);
       }
       const { scope, request } = parsed;
-      // One read backs both the items and the console's dashboard rows for the same runs.
+      // One read backs both the items and the console's dashboard rows for the same runs:
+      // the queue builds the items from the rows read here.
       const rows = await workflowDb.listAttentionQueueRows();
       const { values: items, degraded } = splitAttentionRead(
-        await attentionQueueItems(attentionQueue, rows)
+        await listAttentionQueue(attentionQueue, rows)
       );
       const reports = scopeAttentionDegraded(degraded, scope);
       const { labels, order, countBy } = request;
@@ -289,9 +290,9 @@ export function registerRunAttentionRoutes(
           ...reports,
         });
       const selected = selectAttentionQueue(items, { scope, labels, order });
-      const ids = new Set(selected.map(item => item.runId));
+      const ids = new Set(selected.map(item => item.run?.id));
       const runs = splitAttentionRead(rows).values.filter(run => ids.has(run.id));
-      // The queue lists only paused runs, and only a running run has an owner to observe.
+      // A row is a paused run, and only a running run has an owner to observe.
       return c.json({
         runs: runs.map(run => toApiDashboardWorkflowRun(run, null)),
         items: selected,

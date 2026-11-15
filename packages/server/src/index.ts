@@ -108,7 +108,7 @@ import {
   removeServerRecord,
   writeServerRecord,
 } from '@archon/paths/server-discovery';
-import { appVersion } from './app-version';
+import { appVersion, readAppCommit } from './app-version';
 import { registerServerRoutes } from './server-routes';
 import { getLog } from './server-log';
 
@@ -235,6 +235,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     webhookSources: resourceStarts.webhookSources,
     requestResourceStartDrain: resourceStarts.requestDrain,
     webDistPath: opts.webDistPath,
+    commit: await readAppCommit(),
   });
 
   const hostname = process.env.HOST || '0.0.0.0';

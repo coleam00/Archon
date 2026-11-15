@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import * as processTools from '@archon/paths/plugin-process';
 import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
-import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
+import { attentionQueueItemSchema, isHeldByRun } from '@archon/workflows/attention-queue';
 import {
   resourceStartDispositionSchema,
   type ResourceStartDisposition,
@@ -1638,13 +1638,16 @@ test('independent questions survive separate CLI processes and apply second firs
   const queue = async () => {
     const result = await cli(f, ['workflow', 'attention', '--json']);
     expect(result, result.error).toMatchObject({ code: 0 });
-    return attentionQueueItemSchema.array().parse(JSON.parse(result.output).items);
+    return attentionQueueItemSchema
+      .array()
+      .parse(JSON.parse(result.output).items)
+      .filter(isHeldByRun);
   };
-  const items = (await queue()).sort((a, b) => a.fanOut!.index - b.fanOut!.index);
+  const items = (await queue()).sort((a, b) => a.run.fanOut!.index - b.run.fanOut!.index);
   expect(items).toHaveLength(2);
   const [first, second] = items;
   for (const item of items) {
-    const read = await cli(f, ['workflow', 'attention', item.runId, '--json']);
+    const read = await cli(f, ['workflow', 'attention', item.run.id, '--json']);
     expect(read, read.error).toMatchObject({ code: 0 });
     expect(JSON.parse(read.output).item).toEqual(item);
   }
@@ -1653,9 +1656,9 @@ test('independent questions survive separate CLI processes and apply second firs
     const answered = await cli(f, [
       'workflow',
       'answer',
-      item.runId,
+      item.run.id,
       '--occurrence',
-      item.occurrence,
+      item.run.occurrence,
       '--choose',
       choose,
     ]);
@@ -1664,17 +1667,17 @@ test('independent questions survive separate CLI processes and apply second firs
   await answer(second, 'defer');
   expect(await queue()).toEqual([first]);
   const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
-  const parentId = first.fanOut!.parentRunId;
+  const parentId = first.run.fanOut!.parentRunId;
   expect((await store.getWorkflowRun(parentId))?.status).toBe('paused');
-  expect((await store.getWorkflowRun(second.runId))?.status).toBe('completed');
+  expect((await store.getWorkflowRun(second.run.id))?.status).toBe('completed');
   expect(
-    (await store.listWorkflowEvents(first.runId)).filter(e => e.step_name === 'apply')
+    (await store.listWorkflowEvents(first.run.id)).filter(e => e.step_name === 'apply')
   ).toEqual([]);
   await answer(first, 'accept');
   expect(await queue()).toEqual([]);
   expect((await store.getWorkflowRun(parentId))?.status).toBe('completed');
   expect((await store.findChildRuns(parentId)).map(r => r.id).sort()).toEqual(
-    items.map(i => i.runId).sort()
+    items.map(i => i.run.id).sort()
   );
   expect(
     (await store.listWorkflowEvents(parentId)).find(
@@ -1685,7 +1688,7 @@ test('independent questions survive separate CLI processes and apply second firs
     { key: 'second', decision: 'defer' },
   ]);
   for (const item of items) {
-    const events = await store.listWorkflowEvents(item.runId);
+    const events = await store.listWorkflowEvents(item.run.id);
     expect(events.filter(e => e.event_type === 'wait_answered')).toHaveLength(1);
     expect(
       events.filter(e => e.event_type === 'node_completed' && e.step_name === 'apply')

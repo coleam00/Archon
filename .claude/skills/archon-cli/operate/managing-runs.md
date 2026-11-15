@@ -137,9 +137,10 @@ undeclared option is refused. A `legacy:` occurrence is a wait paused before ans
 existed: it takes no answer, so `workflow resume` it once its action is done.
 
 To work the whole queue instead of one run, `archon workflow attention --json` lists
-every item that needs someone, each with its `kind`, `occurrence`, `form`, `options`,
-`labels`, typed `project` and pointers to its transcript and artifacts. Answer an item
-by its `runId` and `occurrence` exactly as above. Labels are the user's routing data:
+every item that needs someone, each with its `kind`, `ref`, `form`, `options`,
+`labels`, typed `project` and its `run`: the paused run's `id`, `occurrence` and
+pointers to its transcript and artifacts. Answer an item by its `run.id` and
+`run.occurrence` exactly as above. Labels are the user's routing data:
 `--label ci=other` selects one class, and `attention label` writes a classification
 without answering. Archon never routes by them.
 
@@ -151,10 +152,10 @@ the CLI process that started the run) runs the failed nodes again. Cancel or aba
 run to stop it.
 
 A workflow can ask several independent questions at once by fanning out one child run
-per question. Each child is its own item, with its own `runId` and `occurrence`, and
-its `fanOut.parentRunId` names the parent. `attention <parent-run-id>` returns only the
+per question. Each child is its own item, with its own `run.id` and `run.occurrence`,
+and its `run.fanOut.parentRunId` names the parent. `attention <parent-run-id>` returns only the
 first open child, so list the queue to find them all, and answer each child by its own
-`runId`. Answers can arrive in any order; the parent stays paused until every child
+`run.id`. Answers can arrive in any order; the parent stays paused until every child
 finishes.
 
 `workflow wait` follows one run whose id you hold. If the shell that called it times
@@ -167,7 +168,7 @@ including runs started later by triggers, schedules or other sessions, run
 JSON line only when someone has to act. That is the default: without `--protocol`
 there are no heartbeat or sync lines, so every line is worth a turn. Each `attention` line is an item that needs
 attention, carrying the same item the list returns, so treat it as a wake and answer by
-its `runId` and `occurrence`. `resolved` means an item you were sent no longer needs
+its `run.id` and `run.occurrence`. `resolved` means an item you were sent no longer needs
 you, and `terminal` means a run failed or completed with `outcome: "failed"`; a failed outcome carries `reason`, the run's own short account of why, and `archon workflow get <run-id>` prints a `Reason:` line for either. The items already open come first, so a
 restarted watch needs no cursor. Exit `4` means the store cannot read the stream's
 position: start it again.

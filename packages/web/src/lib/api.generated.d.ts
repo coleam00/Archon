@@ -6781,33 +6781,41 @@ export interface components {
       | {
           /** @enum {string} */
           kind: 'attention';
-          runId: string;
-          workflow: string;
+          ref: string;
           project: {
             key: string;
             codebaseId: string | null;
             name: string;
           } | null;
-          parentRunId: string | null;
-          fanOut: {
-            parentRunId: string;
-            nodeId: string;
-            index: number;
-          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
           revision: number;
           labels: {
             [key: string]: string;
           };
           /** Format: date-time */
           pausedAt: string | null;
-          context: {
-            artifactsDir: string | null;
-            transcript: string | null;
-            workingPath: string | null;
-            branch: string | null;
+          run?: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
+            occurrence: string;
           };
-          node: string;
-          occurrence: string;
           message: string;
           /** @enum {string} */
           form: 'message' | 'approval' | 'select' | 'multi_select';
@@ -6829,94 +6837,118 @@ export interface components {
       | {
           /** @enum {string} */
           kind: 'awaiting_response';
-          runId: string;
-          workflow: string;
+          ref: string;
           project: {
             key: string;
             codebaseId: string | null;
             name: string;
           } | null;
-          parentRunId: string | null;
-          fanOut: {
-            parentRunId: string;
-            nodeId: string;
-            index: number;
-          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
           revision: number;
           labels: {
             [key: string]: string;
           };
           /** Format: date-time */
           pausedAt: string | null;
-          context: {
-            artifactsDir: string | null;
-            transcript: string | null;
-            workingPath: string | null;
-            branch: string | null;
+          run: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
+            occurrence: string;
           };
-          node: string;
-          occurrence: string;
           message: string;
         }
       | {
           /** @enum {string} */
           kind: 'usage_limit';
-          runId: string;
-          workflow: string;
+          ref: string;
           project: {
             key: string;
             codebaseId: string | null;
             name: string;
           } | null;
-          parentRunId: string | null;
-          fanOut: {
-            parentRunId: string;
-            nodeId: string;
-            index: number;
-          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
           revision: number;
           labels: {
             [key: string]: string;
           };
           /** Format: date-time */
           pausedAt: string | null;
-          context: {
-            artifactsDir: string | null;
-            transcript: string | null;
-            workingPath: string | null;
-            branch: string | null;
+          run: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
+            node: string;
           };
-          node: string;
           /** Format: date-time */
           resetAt: string;
         }
       | {
           /** @enum {string} */
           kind: 'unreadable';
-          runId: string;
-          workflow: string;
+          ref: string;
           project: {
             key: string;
             codebaseId: string | null;
             name: string;
           } | null;
-          parentRunId: string | null;
-          fanOut: {
-            parentRunId: string;
-            nodeId: string;
-            index: number;
-          } | null;
+          item?: {
+            id: string;
+            projectKey: string;
+            key: string;
+          };
           revision: number;
           labels: {
             [key: string]: string;
           };
           /** Format: date-time */
           pausedAt: string | null;
-          context: {
-            artifactsDir: string | null;
-            transcript: string | null;
-            workingPath: string | null;
-            branch: string | null;
+          run: {
+            id: string;
+            workflow: string;
+            parentRunId: string | null;
+            fanOut: {
+              parentRunId: string;
+              nodeId: string;
+              index: number;
+            } | null;
+            context: {
+              artifactsDir: string | null;
+              transcript: string | null;
+              workingPath: string | null;
+              branch: string | null;
+            };
           };
           /** @enum {string} */
           reason:
@@ -6976,33 +7008,41 @@ export interface components {
         | {
             /** @enum {string} */
             kind: 'attention';
-            runId: string;
-            workflow: string;
+            ref: string;
             project: {
               key: string;
               codebaseId: string | null;
               name: string;
             } | null;
-            parentRunId: string | null;
-            fanOut: {
-              parentRunId: string;
-              nodeId: string;
-              index: number;
-            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
             revision: number;
             labels: {
               [key: string]: string;
             };
             /** Format: date-time */
             pausedAt: string | null;
-            context: {
-              artifactsDir: string | null;
-              transcript: string | null;
-              workingPath: string | null;
-              branch: string | null;
+            run?: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+              occurrence: string;
             };
-            node: string;
-            occurrence: string;
             message: string;
             /** @enum {string} */
             form: 'message' | 'approval' | 'select' | 'multi_select';
@@ -7024,94 +7064,118 @@ export interface components {
         | {
             /** @enum {string} */
             kind: 'awaiting_response';
-            runId: string;
-            workflow: string;
+            ref: string;
             project: {
               key: string;
               codebaseId: string | null;
               name: string;
             } | null;
-            parentRunId: string | null;
-            fanOut: {
-              parentRunId: string;
-              nodeId: string;
-              index: number;
-            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
             revision: number;
             labels: {
               [key: string]: string;
             };
             /** Format: date-time */
             pausedAt: string | null;
-            context: {
-              artifactsDir: string | null;
-              transcript: string | null;
-              workingPath: string | null;
-              branch: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
+              occurrence: string;
             };
-            node: string;
-            occurrence: string;
             message: string;
           }
         | {
             /** @enum {string} */
             kind: 'usage_limit';
-            runId: string;
-            workflow: string;
+            ref: string;
             project: {
               key: string;
               codebaseId: string | null;
               name: string;
             } | null;
-            parentRunId: string | null;
-            fanOut: {
-              parentRunId: string;
-              nodeId: string;
-              index: number;
-            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
             revision: number;
             labels: {
               [key: string]: string;
             };
             /** Format: date-time */
             pausedAt: string | null;
-            context: {
-              artifactsDir: string | null;
-              transcript: string | null;
-              workingPath: string | null;
-              branch: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
+              node: string;
             };
-            node: string;
             /** Format: date-time */
             resetAt: string;
           }
         | {
             /** @enum {string} */
             kind: 'unreadable';
-            runId: string;
-            workflow: string;
+            ref: string;
             project: {
               key: string;
               codebaseId: string | null;
               name: string;
             } | null;
-            parentRunId: string | null;
-            fanOut: {
-              parentRunId: string;
-              nodeId: string;
-              index: number;
-            } | null;
+            item?: {
+              id: string;
+              projectKey: string;
+              key: string;
+            };
             revision: number;
             labels: {
               [key: string]: string;
             };
             /** Format: date-time */
             pausedAt: string | null;
-            context: {
-              artifactsDir: string | null;
-              transcript: string | null;
-              workingPath: string | null;
-              branch: string | null;
+            run: {
+              id: string;
+              workflow: string;
+              parentRunId: string | null;
+              fanOut: {
+                parentRunId: string;
+                nodeId: string;
+                index: number;
+              } | null;
+              context: {
+                artifactsDir: string | null;
+                transcript: string | null;
+                workingPath: string | null;
+                branch: string | null;
+              };
             };
             /** @enum {string} */
             reason:
@@ -7152,39 +7216,47 @@ export interface components {
             codebaseId: string | null;
             name: string;
           } | null;
-          workflow: string;
+          workflow: string | null;
           parentRunId: string | null;
           item:
             | {
                 /** @enum {string} */
                 kind: 'attention';
-                runId: string;
-                workflow: string;
+                ref: string;
                 project: {
                   key: string;
                   codebaseId: string | null;
                   name: string;
                 } | null;
-                parentRunId: string | null;
-                fanOut: {
-                  parentRunId: string;
-                  nodeId: string;
-                  index: number;
-                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
                 revision: number;
                 labels: {
                   [key: string]: string;
                 };
                 /** Format: date-time */
                 pausedAt: string | null;
-                context: {
-                  artifactsDir: string | null;
-                  transcript: string | null;
-                  workingPath: string | null;
-                  branch: string | null;
+                run?: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
+                  node: string;
+                  occurrence: string;
                 };
-                node: string;
-                occurrence: string;
                 message: string;
                 /** @enum {string} */
                 form: 'message' | 'approval' | 'select' | 'multi_select';
@@ -7206,94 +7278,118 @@ export interface components {
             | {
                 /** @enum {string} */
                 kind: 'awaiting_response';
-                runId: string;
-                workflow: string;
+                ref: string;
                 project: {
                   key: string;
                   codebaseId: string | null;
                   name: string;
                 } | null;
-                parentRunId: string | null;
-                fanOut: {
-                  parentRunId: string;
-                  nodeId: string;
-                  index: number;
-                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
                 revision: number;
                 labels: {
                   [key: string]: string;
                 };
                 /** Format: date-time */
                 pausedAt: string | null;
-                context: {
-                  artifactsDir: string | null;
-                  transcript: string | null;
-                  workingPath: string | null;
-                  branch: string | null;
+                run: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
+                  node: string;
+                  occurrence: string;
                 };
-                node: string;
-                occurrence: string;
                 message: string;
               }
             | {
                 /** @enum {string} */
                 kind: 'usage_limit';
-                runId: string;
-                workflow: string;
+                ref: string;
                 project: {
                   key: string;
                   codebaseId: string | null;
                   name: string;
                 } | null;
-                parentRunId: string | null;
-                fanOut: {
-                  parentRunId: string;
-                  nodeId: string;
-                  index: number;
-                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
                 revision: number;
                 labels: {
                   [key: string]: string;
                 };
                 /** Format: date-time */
                 pausedAt: string | null;
-                context: {
-                  artifactsDir: string | null;
-                  transcript: string | null;
-                  workingPath: string | null;
-                  branch: string | null;
+                run: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
+                  node: string;
                 };
-                node: string;
                 /** Format: date-time */
                 resetAt: string;
               }
             | {
                 /** @enum {string} */
                 kind: 'unreadable';
-                runId: string;
-                workflow: string;
+                ref: string;
                 project: {
                   key: string;
                   codebaseId: string | null;
                   name: string;
                 } | null;
-                parentRunId: string | null;
-                fanOut: {
-                  parentRunId: string;
-                  nodeId: string;
-                  index: number;
-                } | null;
+                item?: {
+                  id: string;
+                  projectKey: string;
+                  key: string;
+                };
                 revision: number;
                 labels: {
                   [key: string]: string;
                 };
                 /** Format: date-time */
                 pausedAt: string | null;
-                context: {
-                  artifactsDir: string | null;
-                  transcript: string | null;
-                  workingPath: string | null;
-                  branch: string | null;
+                run: {
+                  id: string;
+                  workflow: string;
+                  parentRunId: string | null;
+                  fanOut: {
+                    parentRunId: string;
+                    nodeId: string;
+                    index: number;
+                  } | null;
+                  context: {
+                    artifactsDir: string | null;
+                    transcript: string | null;
+                    workingPath: string | null;
+                    branch: string | null;
+                  };
                 };
                 /** @enum {string} */
                 reason:
@@ -7317,7 +7413,8 @@ export interface components {
                 codebaseId: string | null;
                 name: string;
               } | null;
-              runId: string;
+              ref: string;
+              runId?: string;
               workflow: string | null;
               parentRunId: string | null;
               occurrence: string | null;
@@ -7347,12 +7444,30 @@ export interface components {
                 codebaseId: string | null;
                 name: string;
               } | null;
-              runId: string;
+              ref: string;
+              runId?: string;
               workflow: string | null;
               parentRunId: string | null;
               occurrence: string | null;
               /** @enum {string} */
               reason: 'withdrawn';
+            }
+          | {
+              /** @enum {string} */
+              type: 'resolved';
+              cursor: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              ref: string;
+              runId?: string;
+              workflow: string | null;
+              parentRunId: string | null;
+              occurrence: string | null;
+              /** @enum {string} */
+              reason: 'no_longer_listed';
             }
         )
       | {
@@ -7364,7 +7479,8 @@ export interface components {
             codebaseId: string | null;
             name: string;
           } | null;
-          runId: string;
+          ref: string;
+          runId?: string;
           workflow: string | null;
           parentRunId: string | null;
           occurrence: string;
@@ -8583,6 +8699,7 @@ export interface components {
       };
       runningWorkflows: number;
       version?: string;
+      commit?: components['schemas']['AppCommit'];
       is_docker: boolean;
       is_wsl: boolean;
       wsl_distro?: string;
@@ -8599,6 +8716,12 @@ export interface components {
         appVersion: string;
         appliedAt: string | null;
       };
+    };
+    AppCommit: {
+      /** @description Short hash of the commit the running server was built or started from */
+      sha: string;
+      /** @description Committer date of that commit (ISO 8601). Null in a compiled binary, which embeds only the hash. */
+      committedAt: string | null;
     };
     UpdateCheckResponse: {
       updateAvailable: boolean;

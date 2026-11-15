@@ -26,7 +26,7 @@ import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
 import { toBranchName, toRepoPath } from '@archon/git';
 import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
-import { createLogger, canonicalizeProjectPath } from '@archon/paths';
+import { createLogger, canonicalizeProjectPath, projectKeyForCodebase } from '@archon/paths';
 import type { WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -99,6 +99,19 @@ async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<
     throw new Error(`Cannot prepare a resource start from '${cwd}': register the project first.`);
   }
   return registered;
+}
+
+/**
+ * The project a start from `cwd` runs in, or null when none is registered there yet.
+ * Preparation resolves `cwd` the same way and registers an unknown checkout as a new
+ * project, so null is never a project that already exists.
+ */
+export async function registeredStartProjectKey(
+  host: WorkflowHost,
+  cwd: string
+): Promise<string | null> {
+  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
+  return codebase ? projectKeyForCodebase(codebase, codebase.default_cwd) : null;
 }
 
 async function selectBindingWorkflow(

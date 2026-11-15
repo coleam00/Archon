@@ -396,7 +396,17 @@ export type LoadCommandResult =
  */
 export type WorkflowExecutionResult =
   | { success: true; workflowRunId: string; summary?: string }
-  | { success: false; workflowRunId?: string; error: string }
+  | {
+      success: false;
+      workflowRunId?: string;
+      error: string;
+      /**
+       * No run was created: the continuation could not stay on the continued run's item
+       * (`ContinuedItemProjectError`). `error` names no flag, so a surface that has a way
+       * to name an item adds it.
+       */
+      continuedItemRefused?: true;
+    }
   | {
       success: true;
       paused: true;

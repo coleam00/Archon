@@ -1,26 +1,23 @@
 import { defineNativeToolInputSchema, type NativeTool } from '@archon/providers/types';
 import { createLogger } from '@archon/paths';
 import {
-  attentionItemRef,
-  readAttentionQueueItemByRef,
-} from '@archon/workflows/attention-item-ref';
-import {
   listAttentionQueue,
   selectAttentionQueue,
-  type AttentionQueueItem,
   type AttentionQueueScope,
   type AttentionQueueSource,
   type ProjectRef,
 } from '@archon/workflows/attention-queue';
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
-import { continuablePause } from '@archon/workflows/schemas/workflow-run';
 import { z } from 'zod';
-import { RunActionForbiddenError, type RunActor } from '../operations/run-authorization';
 import {
-  expectedGateForOccurrence,
+  answerAttentionItem,
+  mayAnswerAttentionItem,
+  type AttentionItemAnswerResult,
+} from '../operations/attention-items';
+import type { RunActor } from '../operations/run-authorization';
+import {
   workflowOperationErrorMessage,
   type AttentionAnswerRequest,
-  type GateAnswerOrigin,
   type WorkflowOperations,
 } from '../operations/workflow-operations';
 
@@ -87,8 +84,8 @@ const INPUT_SCHEMA = defineNativeToolInputSchema({
  * what needs someone across projects and answers one item, through the queue reader and
  * the answer operations every other surface uses.
  *
- * An item is addressed by the reference the queue builds for it (`attentionItemRef`),
- * which this tool hands out and takes back without reading. A list hands every item to
+ * An item is addressed by its `ref`, which this tool hands out and takes back without
+ * reading: the answer operation (`answerAttentionItem`) reads it. A list hands every item to
  * the agent as the queue describes it, so a field the queue adds reaches the agent without
  * a change here.
  *
@@ -141,28 +138,12 @@ async function scopeFor(ctx: AttentionToolContext, project: string): Promise<Att
     : { kind: 'project', project: await ctx.resolveProject(spec) };
 }
 
-/**
- * True when the chat's actor may answer `item`, by the rule the answer operations
- * enforce. Today an item's permission is its run's.
- */
-async function mayAnswer(ctx: AttentionToolContext, item: AttentionQueueItem): Promise<boolean> {
-  const run = await ctx.queue.store.getWorkflowRun(item.runId);
-  if (run === null) return false;
-  try {
-    await ctx.operations.assertRunActionAllowed(run, ctx.actor, 'respond');
-    return true;
-  } catch (error) {
-    if (error instanceof RunActionForbiddenError) return false;
-    throw error;
-  }
-}
-
 async function listItems(ctx: AttentionToolContext, project: string): Promise<string> {
   const scope = await scopeFor(ctx, project);
   const { values, degraded } = splitAttentionRead(await listAttentionQueue(ctx.queue));
   const open = selectAttentionQueue(values, { scope, labels: {}, order: { by: 'age' } });
   const items = [];
-  for (const item of open) if (await mayAnswer(ctx, item)) items.push(item);
+  for (const item of open) if (await mayAnswerAttentionItem(ctx, item, ctx.actor)) items.push(item);
   const where = scope.kind === 'all' ? 'every project' : `project ${scope.project.name}`;
   log.info({ scope: scope.kind, count: items.length }, 'attention_tool.list_completed');
   const lines = [
@@ -170,15 +151,7 @@ async function listItems(ctx: AttentionToolContext, project: string): Promise<st
       ? `No open attention items in ${where}.`
       : `${String(items.length)} open attention item(s) in ${where}, oldest first:`,
   ];
-  if (items.length > 0)
-    lines.push(
-      JSON.stringify(
-        items.map(item => ({ ref: attentionItemRef(item), ...item })),
-        null,
-        1
-      ),
-      HOW_TO_ANSWER
-    );
+  if (items.length > 0) lines.push(JSON.stringify(items, null, 1), HOW_TO_ANSWER);
   const withheld = open.length - items.length;
   if (withheld > 0)
     lines.push(
@@ -215,14 +188,8 @@ function parseChoose(raw: unknown): string[] | undefined | null {
   return parsed.success ? parsed.data : null;
 }
 
-type Answerable = Extract<AttentionQueueItem, { kind: 'attention' | 'awaiting_response' }>;
-
-/** What the agent asked to answer with, checked only for what this tool can tell. */
-type Answer =
-  | { kind: 'attention'; request: AttentionAnswerRequest }
-  | { kind: 'gate'; decision: string; text: string | undefined };
-
-function answerFor(item: Answerable, input: Record<string, unknown>): Answer | string {
+/** What the agent asked to answer with, or why its arguments cannot be one. */
+function answerFrom(input: Record<string, unknown>): AttentionAnswerRequest | string {
   const choose = parseChoose(input.choose);
   if (choose === null)
     return 'attention: choose must be a JSON array of option ids, e.g. ["approve"].';
@@ -231,25 +198,15 @@ function answerFor(item: Answerable, input: Record<string, unknown>): Answer | s
     return 'attention: pass either choose or recommended, not both.';
   const said = text(input.text);
   const withText = said === '' ? {} : { text: said };
-  if (item.kind === 'attention') {
-    if (recommended) return { kind: 'attention', request: { recommended: true, ...withText } };
-    return { kind: 'attention', request: { choose: choose ?? [], ...withText } };
-  }
-  // A gate takes one of its declared decisions; the operation names them when it is not one.
-  if (recommended) return 'attention: a gate has no recommendation. Pass choose with one decision.';
-  const [decision, ...rest] = choose ?? [];
-  if (decision === undefined || rest.length > 0)
-    return 'attention: a gate takes exactly one decision in choose, e.g. ["approve"].';
-  return { kind: 'gate', decision, text: said === '' ? undefined : said };
+  return recommended ? { recommended: true, ...withText } : { choose: choose ?? [], ...withText };
 }
 
-function describe(answer: Answer): string {
-  if (answer.kind === 'gate') return withText(`'${answer.decision}'`, answer.text);
-  const said = answer.request.text;
-  if ('recommended' in answer.request) return withText('the recommended option', said);
-  return answer.request.choose.length === 0
+function describe(answer: AttentionAnswerRequest): string {
+  const said = answer.text;
+  if ('recommended' in answer) return withText('the recommended option', said);
+  return answer.choose.length === 0
     ? `the text "${said ?? ''}"`
-    : withText(answer.request.choose.map(option => `'${option}'`).join(', '), said);
+    : withText(answer.choose.map(option => `'${option}'`).join(', '), said);
 }
 
 /** `chosen`, followed by the text that goes with it when there is any. */
@@ -257,28 +214,30 @@ function withText(chosen: string, said: string | undefined): string {
   return said === undefined ? chosen : `${chosen} and the text "${said}"`;
 }
 
-/** The answerable item `ref` names, or why there is none to answer. */
-async function answerableItem(
-  ctx: AttentionToolContext,
-  ref: string
-): Promise<Answerable | string> {
-  const read = await readAttentionQueueItemByRef(ctx.queue, ref);
-  const unknown = `attention: nothing matches item '${ref}'. Call action=list and copy an item's ref.`;
-  if (read.kind === 'unknown') return unknown;
-  if (read.kind === 'none') return `attention: item '${ref}' is no longer open.`;
-  // An item the actor may not answer is answered like one that does not exist, so a
-  // guessed reference reads nothing about it: not its prompt and not its current reference.
-  if (!(await mayAnswer(ctx, read.item))) return unknown;
-  if (read.kind === 'moved')
-    return `attention: item '${ref}' is over; its run now asks something else, as item '${attentionItemRef(read.item)}'. Call action=list and answer what it asks now.`;
-  const { item } = read;
-  if (item.kind === 'usage_limit')
-    return `attention: item '${ref}' waits for a usage limit and continues by itself at ${item.resetAt}. It takes no answer.`;
-  if (item.kind === 'unreadable')
-    return `attention: item '${ref}' cannot be read (${item.reason}: ${item.detail}). Someone has to look at its run; it takes no answer.`;
-  return item;
+/** Why the item `ref` names was not answered, in words the agent can act on. */
+function notAnswered(
+  ref: string,
+  result: Exclude<AttentionItemAnswerResult, { kind: 'answered' }>
+): string {
+  switch (result.kind) {
+    case 'unknown':
+      return `attention: nothing matches item '${ref}'. Call action=list and copy an item's ref.`;
+    case 'none':
+      return `attention: item '${ref}' is no longer open.`;
+    case 'moved':
+      return `attention: item '${ref}' is over; its run now asks something else, as item '${result.item.ref}'. Call action=list and answer what it asks now.`;
+    case 'takes_no_answer':
+      return result.item.kind === 'usage_limit'
+        ? `attention: item '${ref}' waits for a usage limit and continues by itself at ${result.item.resetAt}. It takes no answer.`
+        : `attention: item '${ref}' cannot be read (${result.item.reason}: ${result.item.detail}). Someone has to look at its run; it takes no answer.`;
+    case 'refused':
+      return result.reason === 'gate_has_no_recommendation'
+        ? 'attention: a gate has no recommendation. Pass choose with one decision.'
+        : 'attention: a gate takes exactly one decision in choose, e.g. ["approve"].';
+  }
 }
 
+/** Answer the item the agent named, through the one answer operation, and say what follows. */
 async function answerItem(
   ctx: AttentionToolContext,
   input: Record<string, unknown>
@@ -286,45 +245,18 @@ async function answerItem(
   const ref = text(input.item);
   if (ref === '')
     return "attention: action=answer requires item, the item's ref as list reports it.";
-  const item = await answerableItem(ctx, ref);
-  if (typeof item === 'string') return item;
-  const answer = answerFor(item, input);
+  const answer = answerFrom(input);
   if (typeof answer === 'string') return answer;
-  return recordAnswer(ctx, item, answer);
-}
-
-/** Record `answer` on the item, pinned to the occurrence it was read at, and say what follows. */
-async function recordAnswer(
-  ctx: AttentionToolContext,
-  item: Answerable,
-  answer: Answer
-): Promise<string> {
-  const subject = `run ${item.runId} (${item.workflow})`;
-  const holder = await ctx.queue.store.getWorkflowRun(item.runId);
-  if (holder === null) return `attention: run ${item.runId} no longer exists.`;
-  const origin: GateAnswerOrigin = {
-    via: SURFACE,
-    expectedGate: expectedGateForOccurrence(holder, item.occurrence),
-  };
-  if (answer.kind === 'attention') {
-    await ctx.operations.answerWorkflow(item.runId, answer.request, ctx.actor, origin);
-  } else {
-    const result = await ctx.operations.respondToWorkflow(
-      item.runId,
-      answer.decision,
-      answer.text,
-      ctx.actor,
-      origin
-    );
-    if ('cancelled' in result && result.cancelled)
-      return `Answered ${subject} with ${describe(answer)}. The gate has no rework path, so the run is cancelled and nothing further runs.`;
-  }
-  log.info({ runId: item.runId, kind: item.kind }, 'attention_tool.answered');
-  // Judged on the run as it was answered: a host may already have continued it by now.
-  const continues =
-    continuablePause(holder) !== undefined
-      ? `The run continues on its own while an Archon server is running; \`archon workflow resume ${item.runId}\` continues it otherwise.`
-      : `It does not continue from here: run \`archon workflow resume ${item.runId}\` from the CLI in its project.`;
+  const result = await answerAttentionItem(ctx, ref, answer, ctx.actor, SURFACE);
+  if (result.kind !== 'answered') return notAnswered(ref, result);
+  const { item } = result;
+  const subject = `run ${item.run.id} (${item.run.workflow})`;
+  if (result.cancelled)
+    return `Answered ${subject} with ${describe(answer)}. The gate has no rework path, so the run is cancelled and nothing further runs.`;
+  log.info({ runId: item.run.id, kind: item.kind }, 'attention_tool.answered');
+  const continues = result.continues
+    ? `The run continues on its own while an Archon server is running; \`archon workflow resume ${item.run.id}\` continues it otherwise.`
+    : `It does not continue from here: run \`archon workflow resume ${item.run.id}\` from the CLI in its project.`;
   // The result repeats what was asked, so the user sees at once what the answer went to.
   return `Answered ${subject} with ${describe(answer)}. It asked:\n> ${item.message.replace(/\n/g, '\n> ')}\n${continues}`;
 }

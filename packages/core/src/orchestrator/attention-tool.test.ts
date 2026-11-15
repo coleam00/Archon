@@ -1,7 +1,11 @@
 import { describe, test, expect, mock } from 'bun:test';
 import { join } from 'node:path';
 import { getArchonWorkspacesPath } from '@archon/paths';
-import type { AttentionQueueItem, AttentionQueueSource } from '@archon/workflows/attention-queue';
+import type {
+  AttentionQueueItem,
+  AttentionQueueItemWithoutRun,
+  AttentionQueueSource,
+} from '@archon/workflows/attention-queue';
 import { projectRef } from '@archon/workflows/attention-queue';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
@@ -81,7 +85,8 @@ const webGate = pausedRun('run-gate', WEB, {
 function harness(
   runs: WorkflowRun[],
   codebaseId: string | null = null,
-  actor: RunActor = operator
+  actor: RunActor = operator,
+  itemsWithoutRun: AttentionQueueItemWithoutRun[] = []
 ) {
   const byId = new Map(runs.map(run => [run.id, run]));
   const queue: AttentionQueueSource = {
@@ -90,8 +95,10 @@ function harness(
       getWorkflowRun: async id => byId.get(id) ?? null,
       getWorkflowRunForAttention: async id => byId.get(id) ?? null,
       getCodebase: async id => [WEB, API].find(codebase => codebase.id === id) ?? null,
+      getItem: async () => null,
     },
     branchOf: async () => null,
+    itemsWithoutRun: async () => itemsWithoutRun,
   };
   const answerWorkflow = mock<WorkflowOperations['answerWorkflow']>(async () => {
     throw new Error('the tool reads no result of an answer');
@@ -134,19 +141,22 @@ describe('attention tool', () => {
     const { tool } = harness([webAsk, apiAsk, webGate]);
     const items = listed(await tool.handler({ action: 'list' }));
 
-    expect(items.map(item => item.runId)).toEqual(['run-api', 'run-web', 'run-gate']);
+    expect(items.map(item => item.run?.id)).toEqual(['run-api', 'run-web', 'run-gate']);
     expect(items[0]).toMatchObject({
       kind: 'attention',
-      occurrence: 'pause-api',
+      run: { id: 'run-api', occurrence: 'pause-api' },
       message: 'Merge this pull request?',
       form: 'select',
       options: [{ id: 'merge' }, { id: 'return' }],
       recommendation: { option: 'merge', why: 'Review is ready.' },
       project: { codebaseId: API.id, name: API.name },
     });
-    expect(items[2]).toMatchObject({ kind: 'awaiting_response', occurrence: 'pause-gate' });
+    expect(items[2]).toMatchObject({
+      kind: 'awaiting_response',
+      run: { occurrence: 'pause-gate' },
+    });
     // Each item carries the reference an answer names it by.
-    expect(items.map(item => (item as { ref?: string }).ref)).toEqual([
+    expect(items.map(item => item.ref)).toEqual([
       'run-api:pause-api',
       'run-web:pause-web',
       'run-gate:pause-gate',
@@ -156,12 +166,12 @@ describe('attention tool', () => {
   test("a project chat lists its own project unless asked for 'all' or another project", async () => {
     const { tool } = harness([webAsk, apiAsk], WEB.id);
 
-    expect(listed(await tool.handler({ action: 'list' })).map(i => i.runId)).toEqual(['run-web']);
+    expect(listed(await tool.handler({ action: 'list' })).map(i => i.run?.id)).toEqual(['run-web']);
     expect(
-      listed(await tool.handler({ action: 'list', project: 'all' })).map(i => i.runId)
+      listed(await tool.handler({ action: 'list', project: 'all' })).map(i => i.run?.id)
     ).toEqual(['run-api', 'run-web']);
     expect(
-      listed(await tool.handler({ action: 'list', project: API.name })).map(i => i.runId)
+      listed(await tool.handler({ action: 'list', project: API.name })).map(i => i.run?.id)
     ).toEqual(['run-api']);
   });
 
@@ -171,7 +181,7 @@ describe('attention tool', () => {
     const { tool } = harness([mine, theirs], null, { kind: 'user', userId: 'user-1' });
     const out = await tool.handler({ action: 'list' });
 
-    expect(listed(out).map(item => item.runId)).toEqual(['run-web']);
+    expect(listed(out).map(item => item.run?.id)).toEqual(['run-web']);
     expect(out).not.toContain('run-api');
     expect(out).toContain('1 more item(s) in every project are not listed');
   });
@@ -270,5 +280,33 @@ describe('attention tool', () => {
       ],
     ]);
     expect(answerWorkflow).not.toHaveBeenCalled();
+  });
+
+  // Who may answer is the run's rule today, so an item no run holds is nobody's to answer yet.
+  test('an item no run holds is counted, not listed, and takes no answer', async () => {
+    const withoutRun: AttentionQueueItemWithoutRun = {
+      kind: 'attention',
+      ref: 'ask:1',
+      project: null,
+      revision: 1,
+      labels: {},
+      pausedAt: '2026-06-03T10:00:00.000Z',
+      message: 'Ship the fix?',
+      form: 'approval',
+      options: [{ id: 'approve' }, { id: 'reject' }],
+    };
+    const { tool, answerWorkflow, respondToWorkflow } = harness([webAsk], null, operator, [
+      withoutRun,
+    ]);
+    const out = await tool.handler({ action: 'list' });
+
+    expect(listed(out).map(item => item.ref)).toEqual(['run-web:pause-web']);
+    expect(out).toContain('1 more item(s) in every project are not listed');
+    expect(out).not.toContain('Ship the fix?');
+    expect(
+      await tool.handler({ action: 'answer', item: 'ask:1', choose: '["approve"]' })
+    ).toContain("nothing matches item 'ask:1'");
+    expect(answerWorkflow).not.toHaveBeenCalled();
+    expect(respondToWorkflow).not.toHaveBeenCalled();
   });
 });
