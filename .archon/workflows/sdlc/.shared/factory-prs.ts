@@ -24,8 +24,9 @@ export const MAX_RUNS = 20;
 
 /**
  * One pull request's facts as the forge's `pr.view` reports them. A merged pull request's
- * facts are kept as this object under `SETTLED_PREFIX`: change this shape, and that
- * prefix's version with it, so a run never serves a kept document of the old shape.
+ * facts are kept as this object under `SETTLED_PREFIX`: change this shape, or how
+ * `prFacts()` derives a kept value, and bump that prefix's version with it, so a run
+ * never serves a kept document of the old shape or with an old derivation.
  */
 export interface PrFacts {
   readonly url: string;
@@ -103,7 +104,9 @@ export function prFacts(url: string, view: ForgeOperations['pr.view']['result'])
  * of a run then grows with those, not with every pull request ever recorded.
  *
  * The version is in the prefix: a document holds `PrFacts` as of that version, so a
- * change to `PrFacts` bumps it and the old documents are left unread.
+ * change to `PrFacts` bumps it and the old documents are left unread. Bump it also when
+ * the way `prFacts()` derives a kept value (such as `isCrossRepository` or the state
+ * mapping) changes while the shape stays the same, or kept documents keep the old values.
  */
 const SETTLED_PREFIX = 'pr-facts/v1/';
 
