@@ -3,7 +3,7 @@ import { mkdir, mkdtemp, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { captureLogLines, trackTempRoots } from '@archon/paths/test-utils';
-import { readAppCommit, withoutRepositorySelectors } from './app-version';
+import { readArchonCommit, withoutRepositorySelectors } from './archon-commit';
 
 const trackTempRoot = trackTempRoots();
 
@@ -20,7 +20,7 @@ function git(cwd: string, ...args: string[]): string {
 }
 
 async function repoWithCommit(message: string): Promise<string> {
-  const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-app-commit-')));
+  const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-commit-')));
   git(root, 'init', '-q');
   git(root, 'commit', '-q', '--allow-empty', '--no-gpg-sign', '-m', message);
   return root;
@@ -45,11 +45,11 @@ describe('withoutRepositorySelectors', () => {
   });
 });
 
-describe('readAppCommit', () => {
+describe('readArchonCommit', () => {
   test("names the source checkout's HEAD by short hash and committer date", async () => {
     const root = await repoWithCommit('first');
 
-    expect(await readAppCommit(root)).toEqual({
+    expect(await readArchonCommit(root)).toEqual({
       sha: git(root, 'rev-parse', '--short', 'HEAD'),
       committedAt: '2026-11-12T14:03:21+01:00',
     });
@@ -60,16 +60,16 @@ describe('readAppCommit', () => {
     const sourceRoot = join(enclosing, 'archon');
     await mkdir(sourceRoot);
 
-    expect(await readAppCommit(sourceRoot)).toBeUndefined();
+    expect(await readArchonCommit(sourceRoot)).toBeUndefined();
   });
 
-  test('reads the source checkout even when the server inherited a GIT_DIR', async () => {
+  test('reads the source checkout even when the process inherited a GIT_DIR', async () => {
     const root = await repoWithCommit('source');
     const other = await repoWithCommit('other');
     const inherited = process.env.GIT_DIR;
     process.env.GIT_DIR = join(other, '.git');
     try {
-      expect((await readAppCommit(root))?.sha).toBe(git(root, 'rev-parse', '--short', 'HEAD'));
+      expect((await readArchonCommit(root))?.sha).toBe(git(root, 'rev-parse', '--short', 'HEAD'));
     } finally {
       if (inherited === undefined) delete process.env.GIT_DIR;
       else process.env.GIT_DIR = inherited;
@@ -77,13 +77,13 @@ describe('readAppCommit', () => {
   });
 
   test('warns, and names no commit, when git fails on a checkout that has git metadata', async () => {
-    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-app-commit-')));
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-commit-')));
     await writeFile(join(root, '.git'), `gitdir: ${join(root, 'missing')}\n`);
     const logs = captureLogLines();
     try {
-      expect(await readAppCommit(root)).toBeUndefined();
+      expect(await readArchonCommit(root)).toBeUndefined();
       expect(logs.lines).toContainEqual(
-        expect.objectContaining({ level: 40, msg: 'app_commit.read_failed', sourceRoot: root })
+        expect.objectContaining({ level: 40, msg: 'archon_commit.read_failed', sourceRoot: root })
       );
     } finally {
       logs.restore();

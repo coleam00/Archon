@@ -2,21 +2,24 @@
  * Tests for version command
  */
 import { describe, it, expect, beforeEach, afterEach, spyOn } from 'bun:test';
-import * as git from '@archon/git';
+import * as archonCommit from '@archon/git/archon-commit';
 import { versionCommand } from './version';
 
 describe('versionCommand', () => {
   let consoleSpy: ReturnType<typeof spyOn>;
-  let execSpy: ReturnType<typeof spyOn>;
+  let commitSpy: ReturnType<typeof spyOn>;
 
   beforeEach(() => {
     consoleSpy = spyOn(console, 'log').mockImplementation(() => {});
-    execSpy = spyOn(git, 'execFileAsync').mockResolvedValue({ stdout: 'abc1234\n', stderr: '' });
+    commitSpy = spyOn(archonCommit, 'readArchonCommit').mockResolvedValue({
+      sha: 'abc1234',
+      committedAt: '2026-11-12T14:03:21+01:00',
+    });
   });
 
   afterEach(() => {
     consoleSpy.mockRestore();
-    execSpy.mockRestore();
+    commitSpy.mockRestore();
   });
 
   it('should output version and system info', async () => {
@@ -42,19 +45,19 @@ describe('versionCommand', () => {
     const fourthCall = consoleSpy.mock.calls[3][0] as string;
     expect(fourthCall).toContain('Database:');
 
-    // Fifth call should contain git commit with the mocked SHA
+    // Fifth call names Archon's commit
     const fifthCall = consoleSpy.mock.calls[4][0] as string;
-    expect(fifthCall).toMatch(/Git commit: ([0-9a-f]{7,}|unknown)/);
     expect(fifthCall).toBe('  Git commit: abc1234');
   });
 
-  it('should return unknown git commit when git is unavailable', async () => {
-    execSpy.mockRejectedValueOnce(new Error('not a git repository'));
+  it("omits the git commit line when Archon's commit is unknown", async () => {
+    commitSpy.mockResolvedValueOnce(undefined);
 
     await versionCommand();
 
-    const fifthCall = consoleSpy.mock.calls[4][0] as string;
-    expect(fifthCall).toBe('  Git commit: unknown');
+    const lines = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
+    expect(lines).toHaveLength(4);
+    expect(lines.some((line: string) => line.includes('Git commit'))).toBe(false);
   });
 
   it('should output correct format for version line', async () => {

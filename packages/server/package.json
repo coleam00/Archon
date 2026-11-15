@@ -216,9 +216,6 @@
     ],
     [
       "src/routes/api.title-credentials.test.ts"
-    ],
-    [
-      "src/app-version.test.ts"
     ]
   ]
 }
