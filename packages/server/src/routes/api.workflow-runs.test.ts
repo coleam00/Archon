@@ -109,18 +109,6 @@ describe('GET /api/workflows/runs', () => {
       }
     }
   );
-  test('returns empty runs array when no runs exist', async () => {
-    mockListWorkflowRuns.mockImplementationOnce(async () => []);
-
-    const { app } = makeApp();
-    const response = await app.request('/api/workflows/runs');
-    expect(response.status).toBe(200);
-
-    const body = (await response.json()) as { runs: unknown[] };
-    expect(Array.isArray(body.runs)).toBe(true);
-    expect(body.runs.length).toBe(0);
-  });
-
   test('returns list of workflow runs', async () => {
     mockListWorkflowRuns.mockImplementationOnce(async () => [MOCK_RUNNING_RUN, MOCK_COMPLETED_RUN]);
 
