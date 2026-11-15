@@ -10,12 +10,10 @@ import {
   mockSendQueryDag,
   mockGetAgentProviderDag,
   createMockDeps,
-  createMockPlatform,
   dagOptions,
   makeWorkflowRun,
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
-import type { ExecNode } from '../schemas';
 
 describe('executeDagWorkflow -- persisted node output', () => {
   let testDir: string;
@@ -47,42 +45,6 @@ describe('executeDagWorkflow -- persisted node output', () => {
       getCapabilities: mockClaudeCapabilities,
     }));
     await removeTempTree(testDir);
-  });
-
-  it('stores node_output in node_completed event data for bash nodes', async () => {
-    const store = createMockStore();
-    const mockDeps = createMockDeps(store);
-    const platform = createMockPlatform();
-    const workflowRun = makeWorkflowRun('bash-output-persist-run');
-
-    const bashNode: ExecNode = {
-      id: 'stats',
-      kind: 'exec',
-      runtime: 'sh',
-      script: 'echo "bash output"',
-    };
-
-    await executeDagWorkflow(
-      dagOptions({
-        deps: mockDeps,
-        platform,
-        conversationId: 'conv-bash-output',
-        cwd: testDir,
-        workflow: { name: 'bash-output-test', nodes: [bashNode] },
-        workflowRun,
-      })
-    );
-
-    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
-    const completedEvent = eventCalls.find(
-      (call: unknown[]) =>
-        (call[0] as { event_type: string }).event_type === 'node_completed' &&
-        (call[0] as { step_name: string }).step_name === 'stats'
-    );
-    expect(completedEvent).toBeDefined();
-    expect((completedEvent![0] as { data: { node_output: string } }).data.node_output).toContain(
-      'bash output'
-    );
   });
 
   it('persists bash output at or below the byte cap unchanged without truncation metadata', async () => {
