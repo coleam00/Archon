@@ -41,7 +41,7 @@ Agentic engineering changes too quickly for a monolith to stay right. Projects t
 
 - **The engine stands alone as an SDK.** Its public surface defines, validates, runs, resumes, governs, and queries workflows without requiring the server, Web UI, platform adapters, provider implementations, or a database.
 - **Core plus CLI is a complete local install.** The engine and CLI must be downloadable and installable without the rest of Archon. Worktree isolation is part of that baseline because it is the default local workspace primitive.
-- **Append-only files are the default persistence.** A standalone install uses append-only JSON or JSONL run records and event logs. A database is an optional persistence adapter, not a prerequisite for the engine.
+- **SQLite is the default store; files are the minimal one.** An in-process SQLite database needs no service and holds everything durable across runs: items, what was asked and answered, and what each run concluded. The file store runs and records a workflow with no database at all, for an embedded or single-run use, and does not carry items. The engine reaches persistence only through the store contract, so neither is closed to the other.
 - **Providers and platform adapters are plugins.** AI providers, Slack, Telegram, GitHub, Discord, Web, and future integrations attach through stable extension seams. None belongs to the required core distribution.
 - **Additional isolation backends are plugins.** Worktrees remain built in; containers, VMs, microVMs, remote execution, and future isolation forms are optional add-ons behind the isolation contract.
 - **Engine capabilities have pluggable hosts.** Continuation wakes, schedules, triggers, and similar lifecycle functions belong to core surfaces that a CLI command, server loop, OS timer, or third-party host can drive. The server is a batteries-included host, not the owner of the capability.
@@ -83,14 +83,18 @@ Archon maintains the provider and platform integrations it explicitly designates
 
 When citing this policy in a PR comment: `direction.md §community-plugins`.
 
-## SDLC pack as a software factory
+## A software factory, built from engine primitives
 
-The SDLC pack is the Archon team's own delivery workflow, a reference pack (§user-owns-policy, §defaults-reference-implementations). Its target shape is a software factory built only from primitives the engine offers every workflow: triggers, the durable pause, state documents and the forge seam.
+A software factory takes work items in and lands changes, and asks an operator only when the decision is theirs. Archon's own is a reference pack (§user-owns-policy, §defaults-reference-implementations), built only from primitives the engine offers every workflow.
 
-- **Stages are queues joined by forge labels.** Triage labels an incoming issue, the label starts the matching check or delivery, a ready pull request gets a label, and that label starts the merge queue. Each queue is a standing workflow a trigger starts. Its work item is a state document that links the item's runs and is claimed with a conditional write. The implement-review-fix loop stays one composed run. Label names are pack configuration the user owns.
-- **A new failure class pauses; a recurring one gets a handler.** The run pauses as an attention item labelled with its class. A small handler workflow, started by a trigger on that label, answers through the normal answer channel; a class with no handler waits for any answerer. Counts per label show which handler to build next. Adding a handler changes neither the pack's main path nor the engine.
+- **Work is about an item.** The engine holds a small durable item that runs, questions and answers belong to. Where an item stands is derived from what was recorded about it; nothing stores a position, and no workflow edits a document that says where it is.
+- **A stage finishes; it does not wait.** A stage is one run on one item that ends in a declared outcome. What it could not decide it leaves as questions on the item, and an answer runs that stage again (the automatic rerun is part of #5650). A build and the rounds of checking and fixing it are one run, so the builder keeps its context.
+- **The pack declares what follows; the engine starts it.** Which stage an item event starts is declared data the engine validates and any surface can draw. No script hands work on, and no agent names the next stage while it runs. Starting a stage on an item event is planned, not shipped (#5650); until then an operator or a script starts the next stage.
+- **A forge is optional.** A tracker, a change host and checks attach at seams. Everything works on a local repository with a command that proves a change.
 - **Policy is a project document.** Pack policy lives in markdown documents the project can reword, found the same way as its architecture, engineering and direction documents. The pack ships defaults, and a project's own document adds to one, winning where they conflict; a policy document may just point at docs the project already has. Each judging node reads only the policy its decision needs, and agents interpret it; nothing parses it. Values that must be exact, such as label names, user allow-lists and numeric caps, stay typed configuration.
-- **The factory asks nothing pack-specific of the engine.** When it needs a capability the engine lacks, the engine gains a general primitive any workflow can use, never behavior that knows the pack's stages, labels or failure classes.
+- **The factory asks nothing pack-specific of the engine.** When it needs a capability the engine lacks, the engine gains a general primitive any workflow can use, never behavior that knows the pack's stages, labels or outcomes.
+
+The bundled SDLC pack predates this shape: its stages are queues joined by forge labels, its work item is a state document, and a stop it cannot answer pauses the run. It stays the working reference until a pack built on the primitives above replaces it.
 
 Triage clause: cite this direction as `direction.md §software-factory`.
 
