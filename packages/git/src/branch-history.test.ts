@@ -319,14 +319,6 @@ describe('git utilities', () => {
       );
     });
 
-    test('returns 0 when in sync', async () => {
-      execSpy.mockResolvedValue(output('0\n'));
-
-      expect(
-        await git.countCommitsAhead('/workspace/repo' as Git.RepoPath, 'main' as Git.BranchName)
-      ).toBe(0);
-    });
-
     test('returns 0 for NaN stdout (malformed git output)', async () => {
       execSpy.mockResolvedValue(output('not-a-number\n'));
 

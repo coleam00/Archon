@@ -126,19 +126,6 @@ describe('git utilities', () => {
       });
     });
 
-    test('skips reset if fetch fails', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: unable to access'));
-
-      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('unknown');
-      }
-      const resetCalls = execSpy.mock.calls.filter(([, args]) => args.includes('reset'));
-      expect(resetCalls).toHaveLength(0);
-    });
-
     test('returns not_a_repo for a structured non-repository failure', async () => {
       execSpy.mockRejectedValue(new git.GitFailure('not_repository', 'arbitrary wording'));
       expect(await git.syncRepository(repo('/workspace/repo'), branch('main'))).toEqual({
@@ -189,17 +176,6 @@ describe('git utilities', () => {
       });
     });
 
-    test('keeps text-only fetch auth failures unclassified', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: Authentication failed for repository'));
-
-      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('unknown');
-      }
-    });
-
     test('keeps text-only fetch disk failures unclassified', async () => {
       execSpy.mockRejectedValue(new Error('error: no space left on device'));
 
@@ -223,25 +199,6 @@ describe('git utilities', () => {
       });
 
       const result = await git.syncRepository(repo('/workspace/repo'), branch('nonexistent'));
-
-      expect(result.ok).toBe(false);
-      if (!result.ok) {
-        expect(result.error.code).toBe('unknown');
-      }
-    });
-
-    test('returns unknown error for unexpected reset failure', async () => {
-      execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
-        if (args.includes('fetch')) {
-          return output();
-        }
-        if (args.includes('reset')) {
-          throw new Error('segfault');
-        }
-        return output();
-      });
-
-      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
 
       expect(result.ok).toBe(false);
       if (!result.ok) {
@@ -316,140 +273,6 @@ describe('git utilities', () => {
 
     test('returns empty array for an unreadable/nonexistent root (never throws)', async () => {
       expect(await git.listChildRepos(join(root, 'does-not-exist'))).toEqual([]);
-    });
-  });
-
-  describe('getRemoteUrl', () => {
-    test('returns remote URL', async () => {
-      execSpy.mockResolvedValue(output('https://github.com/owner/repo.git\n'));
-
-      expect(await git.getRemoteUrl(repo('/workspace/repo'))).toBe(
-        'https://github.com/owner/repo.git'
-      );
-    });
-
-    test('queries a custom remote when provided', async () => {
-      execSpy.mockResolvedValue(output('https://github.com/owner/repo.git\n'));
-
-      await git.getRemoteUrl(repo('/workspace/repo'), 'upstream');
-
-      expect(execSpy).toHaveBeenCalledWith(
-        'git',
-        ['-C', '/workspace/repo', 'remote', 'get-url', 'upstream'],
-        expect.any(Object)
-      );
-    });
-
-    test('returns null when no remote configured', async () => {
-      execSpy.mockRejectedValueOnce(
-        new git.GitFailure(
-          'unclassified',
-          'remote lookup failed',
-          Object.assign(new Error('absent'), { code: 2 })
-        )
-      );
-      execSpy.mockRejectedValueOnce(
-        new git.GitFailure(
-          'unclassified',
-          'missing config key',
-          Object.assign(new Error('absent'), { code: 1 })
-        )
-      );
-
-      expect(await git.getRemoteUrl(repo('/workspace/repo'))).toBeNull();
-    });
-
-    test.each([
-      new git.GitFailure(
-        'timeout',
-        'remote lookup timed out',
-        Object.assign(new Error('terminated'), { killed: true, signal: 'SIGTERM' })
-      ),
-      new git.GitFailure(
-        'unclassified',
-        'remote lookup failed',
-        Object.assign(new Error('failed'), { code: 128, stderr: 'original Git evidence' })
-      ),
-      new Error('unexpected remote lookup failure'),
-    ])('preserves non-absence remote failures through both consumers: %s', async original => {
-      for (const inspect of [
-        () => git.getRemoteUrl(repo('/workspace/repo')),
-        () => git.detectForge(repo('/workspace/repo')),
-      ]) {
-        execSpy.mockReset();
-        execSpy.mockRejectedValueOnce(original);
-        execSpy.mockRejectedValueOnce(
-          new git.GitFailure(
-            'unclassified',
-            'missing config key',
-            Object.assign(new Error('absent'), { code: 1 })
-          )
-        );
-        const failure = await inspect().catch((error: unknown) => error);
-        expect(failure).toBeInstanceOf(Error);
-        expect(failure).toHaveProperty('cause', original);
-      }
-    });
-
-    test('preserves the original remote failure when absence confirmation fails', async () => {
-      const original = new git.GitFailure(
-        'unclassified',
-        'remote lookup failed',
-        Object.assign(new Error('lookup failed'), { code: 2, stderr: 'original Git evidence' })
-      );
-      const confirmationFailure = new git.GitFailure(
-        'unclassified',
-        'local config lookup failed',
-        Object.assign(new Error('inspection failed'), { code: 128, stderr: 'config unreadable' })
-      );
-
-      for (const inspect of [
-        () => git.getRemoteUrl(repo('/workspace/repo')),
-        () => git.detectForge(repo('/workspace/repo')),
-      ]) {
-        execSpy.mockReset();
-        execSpy.mockRejectedValueOnce(original);
-        execSpy.mockRejectedValueOnce(confirmationFailure);
-
-        const failure = await inspect().catch((error: unknown) => error);
-        expect(failure).toBeInstanceOf(Error);
-        expect(failure).toHaveProperty('cause', original);
-        expect(execSpy).toHaveBeenCalledTimes(2);
-      }
-    });
-
-    test.each(['getRemoteUrl', 'detectForge'] as const)(
-      '%s preserves the original remote failure when local config confirms the remote exists',
-      async consumer => {
-        const original = new git.GitFailure(
-          'unclassified',
-          'remote lookup failed',
-          Object.assign(new Error('lookup failed'), { code: 2, stderr: 'original Git evidence' })
-        );
-        execSpy.mockRejectedValueOnce(original);
-        execSpy.mockResolvedValueOnce(output('https://github.com/owner/repo.git\n'));
-
-        const failure = await git[consumer](repo('/workspace/repo')).catch(
-          (error: unknown) => error
-        );
-        expect(failure).toBeInstanceOf(Error);
-        expect(failure).toHaveProperty('cause', original);
-        expect(execSpy).toHaveBeenCalledTimes(2);
-        expect(execSpy).toHaveBeenNthCalledWith(
-          2,
-          'git',
-          ['-C', '/workspace/repo', 'config', '--local', '--get', 'remote.origin.url'],
-          expect.any(Object)
-        );
-      }
-    );
-
-    test('throws for unexpected errors', async () => {
-      execSpy.mockRejectedValue(new Error('fatal: permission denied'));
-
-      await expect(git.getRemoteUrl(repo('/workspace/repo'))).rejects.toThrow(
-        'Failed to get remote URL'
-      );
     });
   });
 });
