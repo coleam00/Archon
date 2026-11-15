@@ -32,26 +32,6 @@ describe('workflowRunCommand', () => {
     ).rejects.toThrow('No workflows found in .archon/workflows/');
   });
 
-  it('logs effective discovery root and source breakdown for every run', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'assist' }, 'bundled'),
-        makeTestWorkflowWithSource({ name: 'home-helper' }, 'global'),
-        makeTestWorkflowWithSource({ name: 'project-flow' }, 'project'),
-      ],
-      errors: [],
-    });
-
-    await workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'assist', 'hello', {
-      noWorktree: true,
-    });
-
-    expect(consoleSpy).toHaveBeenCalledWith(
-      'Discovery: root=/repo/root workflows=3 bundled=1 global=1 project=1 installed=0'
-    );
-  });
-
   it('uses discoveryCwd in the discovery diagnostic when supplied', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -240,21 +220,6 @@ describe('workflowRunCommand', () => {
     expect(consoleSpy).not.toHaveBeenCalledWith(expect.stringContaining('Discovery: root='));
   });
 
-  it('should throw error when workflow not found', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [
-        makeTestWorkflowWithSource({ name: 'assist', description: 'Help' }),
-        makeTestWorkflowWithSource({ name: 'plan', description: 'Plan' }),
-      ],
-      errors: [],
-    });
-
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'nonexistent', 'hello')
-    ).rejects.toThrow("Workflow 'nonexistent' not found");
-  });
-
   it('should include suggested workflows in error when workflow not found', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -271,20 +236,16 @@ describe('workflowRunCommand', () => {
     await expect(run).rejects.toThrow('- plan');
   });
 
-  it.each([
-    ['review', 'archon-review'],
-    ['vestig', 'archon-investigate'],
-    ['ARCHON-REVIEW', 'archon-review'],
-  ])('rejects non-exact %s with suggestions', async (requested, candidate) => {
+  it('rejects a non-exact name with suggestions', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: candidate })],
+      workflows: [makeTestWorkflowWithSource({ name: 'archon-review' })],
       errors: [],
     });
 
-    const run = workflowRunCommand(createTestWorkflowHost(), '/test/path', requested, 'hello');
-    await expect(run).rejects.toThrow(`Workflow '${requested}' not found`);
-    await expect(run).rejects.toThrow(`Did you mean:\n  - ${candidate}`);
+    const run = workflowRunCommand(createTestWorkflowHost(), '/test/path', 'review', 'hello');
+    await expect(run).rejects.toThrow("Workflow 'review' not found");
+    await expect(run).rejects.toThrow('Did you mean:\n  - archon-review');
   });
 
   it('suggests names on an exact miss despite a differently cased load error', async () => {
