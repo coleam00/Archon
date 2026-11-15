@@ -1,4 +1,5 @@
 import { createFileAdmissionStore } from './admission';
+import { FileStoreUnsupportedError } from './errors';
 import { createAdmissionTransaction } from './admission-transaction';
 import {
   type ReusableCheckout,
@@ -351,6 +352,12 @@ export async function createFileWorkflowStore(
       query('all', view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => query('all', view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => query('all', view => view.findOpenWorkRuns(options)),
+    listItemRuns: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    getItem: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listWorkflowRuns: async options => {
       const result = await query('all', view => view.listWorkflowRuns(options));
       result.runs = await Promise.all(

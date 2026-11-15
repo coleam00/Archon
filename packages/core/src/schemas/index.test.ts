@@ -29,6 +29,7 @@ const validDashboardWorkflowRun = {
   outcome: null,
   user_message: 'deploy please',
   metadata: {},
+  active_phase_started_at: null,
   started_at: new Date(),
   completed_at: null,
   last_activity_at: new Date(),
@@ -37,6 +38,7 @@ const validDashboardWorkflowRun = {
   parent_run_id: null,
   output_root: null,
   checkout_baseline: null,
+  item_id: null,
   adopted_from_run_id: null,
   // dashboard extensions
   codebase_name: 'my-repo',

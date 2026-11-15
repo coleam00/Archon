@@ -519,10 +519,25 @@ test('--recommended answers as the declared answerer, and the notices watch says
     code: 0,
     json: { ok: true, answer: { decision: 'merge', text: 'Agreed.' } },
   });
-  expect(
-    (await store.listWorkflowEvents(accepted)).find(event => event.event_type === 'wait_answered')
-      ?.data
-  ).toMatchObject({ by: { declared: 'triage-agent' } });
+  const answerEvent = async (id: string): Promise<unknown> =>
+    (await store.listWorkflowEvents(id)).find(event => event.event_type === 'wait_answered')?.data;
+  expect(await answerEvent(accepted)).toMatchObject({ by: { declared: 'triage-agent' } });
+  expect(await answerEvent(accepted)).not.toHaveProperty('fromRun');
+
+  // Inside a node the answer also records the node's run, from the engine's environment.
+  const answering = await running();
+  const fromNode = await paused(true);
+  process.env.WORKFLOW_ID = answering;
+  process.env.ARCHON_NODE_EXECUTION = JSON.stringify({ runId: answering, path: 'triage.decide' });
+  expect(await captured(() => answer(fromNode))).toMatchObject({ code: 0, json: { ok: true } });
+  process.env.WORKFLOW_ID = '';
+  process.env.ARCHON_NODE_EXECUTION = '';
+  expect(await answerEvent(fromNode)).toMatchObject({
+    by: { declared: 'triage-agent' },
+    fromRun: { runId: answering, nodePath: 'triage.decide' },
+  });
+  await store.cancelWorkflowRun(fromNode);
+  await store.cancelWorkflowRun(answering);
 
   // The stream shares stdout with the command, so the answer under watch skips the CLI.
   const asked = await paused(true);
@@ -576,7 +591,7 @@ test('--recommended answers as the declared answerer, and the notices watch says
   );
   expect(counted.json).toMatchObject({
     counts: {
-      counts: [{ value: 'pr', count: 3, recommendations: { asked: 2, answered: 2, followed: 1 } }],
+      counts: [{ value: 'pr', count: 4, recommendations: { asked: 3, answered: 3, followed: 2 } }],
     },
   });
 });

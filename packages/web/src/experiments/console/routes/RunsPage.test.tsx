@@ -1,7 +1,7 @@
 import { afterEach, expect, test } from 'bun:test';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { MemoryRouter, Route, Routes } from 'react-router';
-import { RunsPage } from './RunsPage';
+import { RunsPage, filterRuns } from './RunsPage';
 import { invalidate, set, subscribeKey } from '../store/cache';
 import { K } from '../store/keys';
 import { toRun } from '../primitives/run';
@@ -186,3 +186,22 @@ test.each([false, true])(
     expect(html).not.toContain('/console/r/bad-');
   }
 );
+
+test('the Running tab keeps a run that finished while the page was open, and only that', () => {
+  const finished = (id: string, completed_at: string) =>
+    toRun({
+      id,
+      workflow_name: 'quick',
+      codebase_id: null,
+      status: 'completed',
+      started_at: '2026-10-12T00:00:00.000Z',
+      completed_at,
+    });
+  const runs = [
+    finished('before-open', '2026-10-12 00:00:05'),
+    finished('after-open', '2026-10-12 00:01:05'),
+  ];
+  const opened = Date.parse('2026-10-12T00:01:00.000Z');
+  expect(filterRuns(runs, 'running', '', opened).map(run => run.id)).toEqual(['after-open']);
+  expect(filterRuns(runs, 'paused', '', opened)).toEqual([]);
+});

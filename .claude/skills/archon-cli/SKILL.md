@@ -26,6 +26,7 @@ Route by intent:
 |---|---|
 | Run a workflow on real work | `operate/running.md` |
 | Inspect, answer, cancel or resume runs | `operate/managing-runs.md` |
+| Set up the SDLC pack on a project | the pack README's setup guide (see `operate/queues.md`, "Setting up the pack"), then `operate/queues.md` |
 | Drive the SDLC pack's queues | `operate/queues.md` |
 | Find out why a run failed or hangs | `operate/troubleshooting.md` |
 | Set up Archon or change config | `setup/setup-and-config.md` |

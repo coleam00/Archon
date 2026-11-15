@@ -14,7 +14,7 @@ import type { WORKFLOW_SOURCES } from './workflow-source';
  * Bumped when the captured property set changes (documented in README). 7 is
  * skipped: a fork shipping this embedded key already sends it.
  */
-export const TELEMETRY_SCHEMA_VERSION = 13;
+export const TELEMETRY_SCHEMA_VERSION = 14;
 
 /**
  * Privacy invariants attached to EVERY telemetry event by the transport, not
@@ -188,7 +188,7 @@ export interface WorkflowAncestryProperties {
  * team server deployments.
  */
 export interface DeploymentShapeProperties {
-  dbKind?: 'sqlite' | 'postgresql';
+  dbKind?: Exclude<ArchonStoreKind, 'files'>;
   webAuthEnabled?: boolean;
   /** Per-user credentials mode (TOKEN_ENCRYPTION_KEY configured). */
   multiUser?: boolean;
@@ -201,9 +201,13 @@ export interface DeploymentShapeProperties {
   adapterGitlab?: boolean;
 }
 
-/** Once-per-process startup event — the basis for active-install counting. */
+/** Where an install keeps runs: the file store (CLI only) or a database. */
+export type ArchonStoreKind = 'files' | 'sqlite' | 'postgresql';
+
+/** Once-per-day startup event — the basis for active-install counting. */
 export interface ArchonStartedProperties extends DeploymentShapeProperties {
   surface: 'cli' | 'server';
+  store?: ArchonStoreKind;
 }
 
 export interface TelemetryUsageProperties {
@@ -252,8 +256,7 @@ export type WorkflowExitReason =
   | 'no_nodes_completed'
   | 'node_error'
   | 'unhandled_error'
-  // File-presence gate (#2230): all nodes succeeded but `evidence_policy.required`
-  // found no conventional `$ARTIFACTS_DIR/evidence.json` marker, so the run failed.
+  // Retired with `evidence_policy` (#5630). Nothing sends it; kept to mirror the engine enum.
   | 'evidence_missing'
   // The run budget refused new work, or its spend could not be measured (#2814).
   | 'budget_refused'
@@ -403,8 +406,8 @@ export function workflowInvokedEventProperties(props: WorkflowInvokedProperties)
 }
 
 /**
- * Serialize deployment-shape fields to wire properties, omitting absent ones
- * (the CLI surface passes none; the server surface passes all). `archon_started`
+ * Serialize start-event fields to wire properties, omitting absent ones (the CLI
+ * surface passes only `store`; the server surface passes the full deployment shape). `archon_started`
  * and `archon_active` both build from this, so they can never drift apart.
  */
 export function archonSurfaceEventProperties(props: ArchonStartedProperties): EventProperties {
@@ -412,6 +415,7 @@ export function archonSurfaceEventProperties(props: ArchonStartedProperties): Ev
     surface: props.surface,
     schema_version: TELEMETRY_SCHEMA_VERSION,
     ...withoutUndefined({
+      store: props.store,
       db_kind: props.dbKind,
       web_auth_enabled: props.webAuthEnabled,
       multi_user: props.multiUser,

@@ -164,6 +164,7 @@ test.each(['checkout', 'local branch', 'remote branch'])(
       outcome: null,
       user_message: '',
       metadata: {},
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,
@@ -173,6 +174,7 @@ test.each(['checkout', 'local branch', 'remote branch'])(
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      item_id: null,
       origin: null,
     };
     const request = { parentRun, nodeId: 'build', childIndex: 2, codebaseId, setupEnvironment: {} };

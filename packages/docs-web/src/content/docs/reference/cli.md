@@ -51,7 +51,9 @@ archon doctor
 
 Doctor does not check forge access for the bundled SDLC pack. Run `archon workflow run archon-forge-check` from the checkout for that; it names the credential source it used or says why it refused. See [Use the forge path in the SDLC pack](/reference/forge/#use-the-forge-path-in-the-sdlc-pack).
 
-With no registered providers, doctor fails and prints `archon provider add <claude|codex|pi>`. Stale maintained plugins fail with their installed and CLI versions and the reinstall command. The AI credentials check uses each connected credential the way a database-store run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant only if the credential it refreshed is still stored). It prints one line per credential and fails when one cannot be used (it cannot be read, the vendor rejected the refresh, or the refresh replaced the refresh token and the new grant could not be saved), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable or a concurrent credential change superseded the refresh. Run doctor again to verify the replacement. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it.
+Without a resolved default provider, doctor checks discoverable workflows using the runtime provider resolver. If a workflow needs a default, doctor fails and names `archon ai default <provider>` and `archon setup`. Workflows that explicitly select their providers remain supported without a default. When discovery succeeds and no workflow needs a provider (including an empty workflow set), a healthy empty provider inventory is skipped. Otherwise, no registered providers fails and prints `archon provider add <claude|codex|pi>`. Discovery errors and broken installed plugins still fail. Stale maintained plugins fail with their installed and CLI versions and the reinstall command.
+
+The AI credentials check uses each connected credential the way a database-store run would: it decrypts it and refreshes an expired subscription grant (saving the rotated grant only if the credential it refreshed is still stored). It prints one line per credential and fails when one cannot be used (it cannot be read, the vendor rejected the refresh, or the refresh replaced the refresh token and the new grant could not be saved), naming the command that reconnects it. It warns when a credential could not be verified, for example because the vendor was unreachable or a concurrent credential change superseded the refresh. Run doctor again to verify the replacement. An API key is reported usable once it decrypts; only a model request proves the vendor accepts it.
 
 The assistant login check uses the merged configuration and the provider's own runtime, unless that model's vendor already has a credential connected in Archon that the assistant can use. Provider specifics:
 
@@ -361,6 +363,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--resume` | Select the newest eligible run by start time for this workflow name and working path: a failed or paused run, or a `running` run whose last activity timestamp is missing or more than one day old. With a SQL store, a `running` run is excluded while its resource-start request is `admitted`; see [trigger inspection](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). Resume skips completed nodes and reuses the run's recorded AI configuration. Missing or old activity does not prove the owner is gone; verify that before resuming a `running` run. Rejected with `--branch`. Prefer [`workflow resume <run-id>`](#workflow-resume) when you hold the id of a failed or paused run. |
 | `--adopt <run-id>` | Start a new run in a terminal run's exact worktree or branch, with `adopted_from_run_id` provenance and `$ADOPTED_RUN_DIR` access. Inherits its recorded AI configuration; conflicting AI config or model overrides are rejected. A unique run-id prefix resolves within the launch project; ambiguous prefixes fail with candidate IDs unless `--chat-project-id` scopes selection. With that flag, use a longer prefix or full ID. Adoption never infers a run from workflow name or prompt text. |
 | `--supersedes <run-id>` | Start in a fresh estate while recording that this run replaces a terminal prior run. Accepts a unique prefix within the launch project; ambiguous prefixes fail with candidate IDs unless `--chat-project-id` scopes selection. With that flag, use a longer prefix or full ID. Full IDs select the exact run, including another project unless `--chat-project-id` restricts selection. Unlike `--adopt`, it inherits no checkout. |
+| `--item <key>` | Name the [item](#items) this fresh run belongs to. Rejected with `--resume`: a resumed run keeps its own. |
 | `--quiet`, `-q` | Suppress the progress lines on stderr |
 | `--verbose`, `-v` | Also print tool calls (name and duration) in the progress lines, and debug logs |
 | `--detach` | Run in a detached background child and return before completion. Human output names the transcript and the child's log file; the `--json` acknowledgement carries `runId`, `transcriptPath` (the run's JSONL transcript) and `logPath` (the child process's stdout and stderr). Follow execution with [`workflow logs <run-id> --follow`](#workflow-logs) and wait for the next terminal or gate transition with [`workflow wait <run-id>`](#workflow-wait). `approve`, `reject`, `respond` and `resume` accept it too; see [Detached control verbs](#detached-control-verbs). |
@@ -633,6 +636,7 @@ archon workflow runs --throughput      # effective output tok/s by run and model
 archon workflow runs --throughput --json --verbose
 archon workflow runs --all             # list across all projects
 archon workflow runs --open            # failed runs nothing has adopted or superseded
+archon workflow runs --item issue-42   # every run of one item, oldest first
 ```
 
 `--throughput` adds effective output throughput per listed run and an aggregate grouped
@@ -645,6 +649,8 @@ and a summary; the top-level `throughput` contains `runIds`, `runCount` and `mod
 reads events in batches of up to 20 runs; without the flag, listing costs are unchanged.
 Unreadable history or invalid typed execution metadata fails the opted-in request rather
 than returning a partial report.
+
+`--item <key>` lists every run of one [item](#items) in the current project, in the order they started, and ignores the other filters. It needs a registered project; `--json` prints `{ runs, total }`.
 
 With the SQL store, the recent-run list rejects the entire result if a returned row or a
 status-count group contains an unsupported persisted status; it never returns a partial
@@ -1153,7 +1159,7 @@ The default scope is the current project, resolved from the working directory as
 
 `--count-by` counts the items open now. Add `--since` to count the attention waits opened in a window instead, whether each has been answered or is still open, so a class of question that recurs stays visible after its runs continue. `--since` takes a duration in minutes, hours, days or weeks back from now (`40m`, `24h`, `7d`, `2w`) or an ISO date or time. Scope and `--label` filters apply as they do to the open count. This count reads each wait's `wait_started` event, so it uses the labels the wait opened with and ignores later [`attention label`](#workflow-attention-label) writes. A wait opened by an Archon version that did not record labels on that event counts under no label (`value: null`, shown as `(no '<key>' label)`). Gates, usage-limit waits and waits of deleted runs are not counted. `--since` needs `--count-by`.
 
-Each group of a `--since` count also carries `recommendations: { asked, answered, followed }`: the waits that opened with a recommendation, those of them that were answered, and those answers that chose the recommended option. Text output prints them after the group when any wait carried one. `--count-by answerer`, which needs `--since`, groups the waits by who answered: each entry has `answeredBy`, which is `{ declared }` for a name given with [`--as`](#workflow-answer), `{ userId }` for an answer through a chat platform, and null for waits still open and answers that named nobody. These numbers come from the `wait_started` and `wait_answered` events alone. `wait_started` records the wait's `occurrence`, `form`, the `options` ids offered, `other` when the reserved option is offered, and the recommendation's `option` and `confidence`; it never records the message, an option's label or the recommendation's reason. A wait opened by an Archon version that did not record them counts as carrying no recommendation.
+Each group of a `--since` count also carries `recommendations: { asked, answered, followed }`: the waits that opened with a recommendation, those of them that were answered, and those answers that chose the recommended option. Text output prints them after the group when any wait carried one. `--count-by answerer`, which needs `--since`, groups the waits by who answered: each entry has `answeredBy`, which is `{ declared }` for a name given with [`--as`](#workflow-answer), `{ userId }` for an answer through a chat platform, and null for waits still open and answers that named nobody. The count groups on `answeredBy` alone: the run an answer was given from (`fromRun`) forms no group, so an answer from inside a run without `--as` counts under null. These numbers come from the `wait_started` and `wait_answered` events alone. `wait_started` records the wait's `occurrence`, `form`, the `options` ids offered, `other` when the reserved option is offered, and the recommendation's `option` and `confidence`; it never records the message, an option's label or the recommendation's reason. A wait opened by an Archon version that did not record them counts as carrying no recommendation.
 
 `--json` prints `{ ok, action: "attention", scope, items }`, or `counts` in place of
 `items` with `--count-by`. With a run id it prints `{ ok, action, runId, item }`, where
@@ -1347,7 +1353,12 @@ The answer records `answeredVia` and `answeredAt` on the run's `metadata.wait`, 
 `answeredBy` when the answerer is known: `{ declared }` is the name `--as` claimed, and
 `{ userId }` is the Archon user that Archon resolved a chat platform's sender to. A
 `wait_answered` event carries the surface as `via`, the `occurrence`, the answer, and the
-answerer as `by`. Like `approve`,
+answerer as `by`. When the command runs inside a workflow node, the event also carries
+`fromRun: { runId, nodePath }`, the run and node that answered. No flag sets it and `--as`
+does not replace it: Archon reads it from the run identity it put in the node's
+environment. A node process can change its own environment and Archon does not verify
+the value, so it is attribution, not proof: do not let an approval or a permission rule
+depend on it. Like `approve`,
 human mode continues the run inline unless a continuation host claims it first, and `--json` records the answer and returns
 `{ ok, runId, action: "answer", answer, workflowName, resumable }` without continuing
 it; `archon serve` or [`workflow wake`](#workflow-wake) continues it. The HTTP equivalent
@@ -1768,7 +1779,7 @@ invalid, or a required event write fails.
 
 ### `validate workflows [name]`
 
-Validate workflow YAML definitions and their referenced resources (command files, MCP configs, skill directories).
+Validate workflow YAML definitions, project pack settings, and referenced resources (command files, MCP configs, skill directories).
 
 ```bash
 archon validate workflows                 # Validate all workflows
@@ -1777,6 +1788,8 @@ archon validate workflows my-workflow --json  # Machine-readable JSON output
 ```
 
 Checks: YAML syntax, DAG structure (cycles, dependency refs), command file existence, MCP config files, skill directories, provider compatibility, tier/alias model refs, and supported static environment reads in inline or named exec sources. An unprovided `INPUTS_*` read is an error when the workflow declares an input contract; other unprovided Python or JavaScript/TypeScript environment reads warn. See [Variables](/reference/variables/#shell-quoting-in-bash-vs-script) for the supported forms and fixes. For bundled and global workflows, validation rejects a bare `@custom` model alias because it isn't portable across projects; use `small`, `medium`, `large`, a literal provider model string, or a preference list that ends in one, such as `['@reviewer', medium]`. Returns actionable error messages with "did you mean?" suggestions for typos.
+
+Project pack settings in `.archon/packs/<pack>.yaml` are checked against each discovered workflow's pack declaration using the same value rules as run start. Errors name the file and setting, including allowed values for enum settings. Validation checks values present in the file; required values that an invocation can supply are checked at run start.
 
 Exit code: 0 = all valid, 1 = errors found.
 
@@ -2385,6 +2398,14 @@ Start workflows from deployment bindings and inspect durable resource admission;
 When a binding fails launch preparation, `trigger fire` exits nonzero and prints the refusal (with `--json`, in `error`). The stored receipt keeps only the failed stage, for example `launch_preparation_failed`. `trigger whoami` prints the Archon user ID of your CLI identity, for a binding's `runAsUserId`.
 
 Run from inside a workflow node, `trigger fire` records the calling run and node as the receipt's `sourceActor` (`{source: "archon-run", id: <run id>, display: <node path>}`); outside a run it records none. A set `WORKFLOW_ID` makes `fire` act as a call from that node: it then requires a matching `ARCHON_NODE_EXECUTION`, and refuses a run the opened store does not know before a receipt is written, so a shell left with a stale `WORKFLOW_ID` fails instead of firing. `trigger inspect <request-id>` and `workflow get <run-id> --json` always carry the requesting run, as `requestedBy` and `requested_by` (`{runId, nodePath}`, or `null` when no run asked for the start), and the plain `workflow get` view prints a `Requested by` line when there is one. The started run still acts as its binding's `runAsUserId`; the requesting run is provenance only.
+
+#### Items
+
+An item is the durable thing runs are about: a key within a project, such as an issue reference. The engine gives the key no meaning and never parses it; it is 1 to 200 characters. `trigger fire --item <key>` and `workflow run --item <key>` name the item of the run they start, and that run's `item_id` points at it. The item is created the first time a start or run names it, before a queued start is admitted; naming the same key again in the same project is the same item, and the same key in another project is a different one.
+
+A `trigger fire` from inside a run that names no item inherits that run's item, so follow-up starts stay on it; from inside a `workflow:` sub-run it inherits the item of the top-level run. Every run a fire starts gets the fire's item, in that run's own project. A run started with no item has none. `archon workflow runs --item <key>` lists an item's runs.
+
+Items need the database store and a registered project. With `store: files`, or in a directory with no project, naming an item fails.
 
 ### `pack bindings`
 

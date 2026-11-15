@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto';
 import { Pool } from 'pg';
 import { resourceStartFixtures } from '@archon/workflows/store-conformance';
 import { executionClaim } from '@archon/workflows/store';
+import { workflowPathPriorityTime } from '@archon/workflows/workflow-path-lock';
 import {
   describeWorkflowStoreConformance,
   CONFORMANCE_CONVERSATION_ID,
@@ -48,6 +49,103 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
     }
   };
   describeWorkflowStoreConformance('PostgreSQL', makeHarness);
+  test.each(['initial', 'resumed', 'recovered', 'legacy-writer'] as const)(
+    '%s preserves an admitted holder across submillisecond arrivals in either id order',
+    async mode => {
+      const harness = await makeHarness();
+      try {
+        const { db, store } = harness;
+        const activate = async (id: string) => {
+          await store.claimPendingWorkflowRun(id);
+          if (mode === 'resumed') {
+            await store.failWorkflowRun(id, 'retry');
+            await store.resumeWorkflowRun(id);
+          } else if (mode === 'recovered') {
+            await store.cancelFanOutRun(id, 'fan_out_orphan');
+            await store.recoverCancelledFanOutRun(id);
+          }
+        };
+        const setPriority = async (id: string, fraction: string) => {
+          const priority = `2021-01-01T00:00:00.${fraction}Z`;
+          const phaseOwnsPriority = mode === 'resumed' || mode === 'recovered';
+          await db.query(
+            'UPDATE remote_agent_workflow_runs SET started_at = $2, active_phase_started_at = $3 WHERE id = $1',
+            [
+              id,
+              phaseOwnsPriority ? '2020-01-01T00:00:00Z' : priority,
+              phaseOwnsPriority
+                ? priority
+                : mode === 'legacy-writer'
+                  ? '2020-01-01T00:00:00Z'
+                  : null,
+            ]
+          );
+        };
+        const blocker = async (id: string, path: string) => {
+          const hydrated = await store.getWorkflowRun(id);
+          if (!hydrated) throw new Error('Missing priority fixture');
+          return store.getActiveWorkflowRunByPath(path, {
+            id,
+            startedAt: workflowPathPriorityTime(hydrated),
+          });
+        };
+        for (const holderFirst of [false, true]) {
+          const path = `/submillisecond-priority/${holderFirst}`;
+          const firstId = randomUUID();
+          const secondId = randomUUID();
+          const ascending = firstId < secondId;
+          const [holderId, contenderId] =
+            ascending === holderFirst
+              ? ([firstId, secondId] as const)
+              : ([secondId, firstId] as const);
+          const create = (id: string) =>
+            store.createWorkflowRun({
+              id,
+              workflow_name: 'priority',
+              user_message: '',
+              working_path: path,
+            });
+          const holder = await create(holderId);
+          await activate(holder.id);
+          await setPriority(holder.id, '123100');
+          expect(await blocker(holder.id, path)).toBeNull();
+
+          const contender = await create(contenderId);
+          await activate(contender.id);
+          await setPriority(contender.id, '123900');
+          expect((await blocker(contender.id, path))?.id).toBe(holder.id);
+          expect(await blocker(holder.id, path)).toBeNull();
+          expect((await store.getActiveWorkflowRunByPath(path))?.id).toBe(holder.id);
+          expect((await store.getWorkflowRun(holder.id))?.status).toBe('running');
+        }
+      } finally {
+        await harness.close();
+      }
+    }
+  );
+  test('a pre-phase schema upgrades legacy rows and accepts old-style inserts', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const run = await store.createWorkflowRun({ workflow_name: 'legacy', user_message: '' });
+      await store.failWorkflowRun(run.id, 'failure');
+      await harness.backdate(run.id, { started_at: new Date('2020-01-01') });
+      await db.query('ALTER TABLE remote_agent_workflow_runs DROP COLUMN active_phase_started_at');
+      await db.query(getSchemaSQL());
+      expect((await store.getWorkflowRun(run.id))?.active_phase_started_at).toBeNull();
+      const resumed = await store.resumeWorkflowRun(run.id);
+      expect(resumed.started_at).toEqual(new Date('2020-01-01'));
+      expect(resumed.active_phase_started_at).toBeInstanceOf(Date);
+      const id = randomUUID();
+      await db.query(
+        "INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message) VALUES ($1, $2, 'old-writer', '')",
+        [id, CONFORMANCE_CONVERSATION_ID]
+      );
+      expect((await store.getWorkflowRun(id))?.active_phase_started_at).toBeNull();
+    } finally {
+      await harness.close();
+    }
+  });
   test('foreign slot membership blocks guarded starts after its request is lost', async () => {
     const harness = await makeHarness();
     try {

@@ -185,8 +185,8 @@ async function runContainerInMode(
     '-v',
     `${volume}:/mnt/upper`,
     // The run's artifacts directory, read-write at the SAME absolute path: `$ARTIFACTS_DIR`
-    // is the run's output channel on both sides of the boundary, so a screenshot or the
-    // evidence marker written here lands on the host where the engine and the operator
+    // is the run's output channel on both sides of the boundary, so a screenshot or a
+    // report written here lands on the host where the engine and the operator
     // read it. Root inside the container writes root-owned files on a rootful Linux
     // daemon; `restoreHostOwnership` hands them back on suspend and destroy.
     ...(mounts.artifacts ? ['-v', `${mounts.artifacts}:${mounts.artifacts}`] : []),

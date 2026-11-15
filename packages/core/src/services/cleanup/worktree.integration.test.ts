@@ -244,6 +244,7 @@ beforeEach(async () => {
     outcome: null,
     user_message: '',
     metadata: { owned_worktree: { envId: env.id, creationId: created.metadata.creationId } },
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -253,6 +254,7 @@ beforeEach(async () => {
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     origin: null,
   };
   store = isolationDb.createIsolationStore();

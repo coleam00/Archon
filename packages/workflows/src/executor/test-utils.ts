@@ -93,6 +93,7 @@ mock.module('@archon/paths', () => ({
   ),
   captureWorkflowInvoked: mockCaptureWorkflowInvoked,
   captureWorkflowTerminal: mockCaptureWorkflowTerminal,
+  isTelemetryDisabled: () => true,
 }));
 
 export const mockGetDefaultBranch = mock(async () => 'main');
@@ -199,6 +200,8 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     cancelResumableRunsForConversation: mock(unexpected('cancelResumableRunsForConversation')),
     deleteWorkflowNodeSessions: mock(unexpected('deleteWorkflowNodeSessions')),
     findOpenWorkRuns: mock(unexpected('findOpenWorkRuns')),
+    listItemRuns: mock(unexpected('listItemRuns')),
+    getItem: mock(unexpected('getItem')),
     findAdoptingRuns: mock(unexpected('findAdoptingRuns')),
     deleteOldWorkflowRuns: mock(unexpected('deleteOldWorkflowRuns')),
     listWorkflowEvents: mock(unexpected('listWorkflowEvents')),
@@ -345,6 +348,7 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     outcome: null,
     user_message: 'test message',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -353,6 +357,7 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
     ...overrides,
   };

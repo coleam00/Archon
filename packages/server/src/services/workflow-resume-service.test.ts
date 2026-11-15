@@ -145,6 +145,7 @@ function run(
     outcome: null,
     user_message: 'deliver',
     metadata,
+    active_phase_started_at: null,
     started_at: new Date('2026-08-24T10:00:00.000Z'),
     completed_at: status === 'failed' ? new Date('2026-08-24T10:01:00.000Z') : null,
     last_activity_at: null,
@@ -154,6 +155,7 @@ function run(
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
   };
 }
 

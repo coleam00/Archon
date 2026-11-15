@@ -22,6 +22,9 @@ interface PendingInputBannerProps {
  * Pinned above the feed regardless of its filters and pagination. While promoted
  * here, a run's feed card collapses its action panel to avoid duplicate forms.
  * Dismissal lasts only for this occurrence in the current browser session.
+ *
+ * The banner scrolls inside a bounded height: a card is several hundred pixels
+ * tall, so an unbounded list pushes the feed and the draft card off screen.
  */
 export function PendingInputBanner({
   runs,
@@ -31,8 +34,8 @@ export function PendingInputBanner({
   if (runs.length === 0) return null;
 
   return (
-    <div className="shrink-0 border-b border-warning/25 bg-warning/[0.04] px-6 py-3">
-      <div className="mb-2 flex items-center gap-2">
+    <div className="flex max-h-[45%] shrink-0 flex-col border-b border-warning/25 bg-warning/[0.04] py-3">
+      <div className="mb-2 flex shrink-0 items-center gap-2 px-6">
         <span aria-hidden className="text-console-13 leading-none text-warning">
           ⚠
         </span>
@@ -43,7 +46,7 @@ export function PendingInputBanner({
           {runs.length}
         </span>
       </div>
-      <div className="flex flex-col gap-2">
+      <div className="flex min-h-0 flex-col gap-2 overflow-y-auto px-6">
         {runs.map(run => (
           <PendingInputCard
             key={run.id}
@@ -69,7 +72,7 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
   return (
     <article
       data-pending-run-id={run.id}
-      className="relative overflow-hidden rounded border border-warning/40 bg-surface"
+      className="relative shrink-0 overflow-hidden rounded border border-warning/40 bg-surface"
     >
       <StatusStrip status="paused" />
       <div className="py-3 pl-4 pr-3">
@@ -106,6 +109,16 @@ function PendingInputCard({ run, showProject, onDismiss }: PendingInputCardProps
             </button>
           </div>
         </div>
+
+        {/* Several runs of one workflow ask the same question; the input tells them apart. */}
+        {run.userMessage !== '' ? (
+          <div className="mt-2 flex min-w-0 items-baseline gap-2 text-console-12">
+            <span className="shrink-0 font-mono text-text-tertiary">input</span>
+            <span className="truncate font-mono text-text-secondary" title={run.userMessage}>
+              {run.userMessage}
+            </span>
+          </div>
+        ) : null}
 
         {run.attention?.kind === 'attention' ? (
           <>

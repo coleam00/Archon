@@ -87,6 +87,28 @@ describe('GET /api/workflows/runs', () => {
     mockListWorkflowRuns.mockReset();
   });
 
+  test.each([null, new Date('2026-11-12T12:00:00.123Z')])(
+    'serializes phase time %s independently of creation on both list surfaces',
+    async phase => {
+      const creation = new Date('2020-01-01');
+      const run = { ...MOCK_RUNNING_RUN, started_at: creation, active_phase_started_at: phase };
+      mockListWorkflowRuns.mockImplementationOnce(async () => [run]);
+      mockListDashboardRuns.mockImplementationOnce(async () =>
+        makeDashboardRunsResult({ runs: [makeDashboardWorkflowRun(run)] })
+      );
+      const { app } = makeApp();
+      for (const [path, schema] of [
+        ['/api/workflows/runs', apiWorkflowRunSchema],
+        ['/api/dashboard/runs', apiDashboardWorkflowRunSchema],
+      ] as const) {
+        const response = await app.request(path);
+        expect(response.status).toBe(200);
+        const body = z.object({ runs: z.array(schema) }).parse(await response.json());
+        expect(body.runs[0]?.started_at).toBe(creation.toISOString());
+        expect(body.runs[0]?.active_phase_started_at).toBe(phase?.toISOString() ?? null);
+      }
+    }
+  );
   test('returns empty runs array when no runs exist', async () => {
     mockListWorkflowRuns.mockImplementationOnce(async () => []);
 
@@ -119,6 +141,7 @@ describe('GET /api/workflows/runs', () => {
     mockListWorkflowRuns.mockImplementationOnce(async () => [
       {
         ...MOCK_RUNNING_RUN,
+        active_phase_started_at: null,
         started_at: now,
         completed_at: null,
         last_activity_at: undefined,

@@ -185,3 +185,34 @@ for (const attached of [false, true]) {
     });
   }
 }
+
+test('a required input does not block Start run, and the engine refusal is shown on the card', async () => {
+  const refusal = "This workflow requires input 'issue', and none was supplied.";
+  const urls: string[] = [];
+  globalThis.window = { location: { origin: 'http://localhost' } } as Window & typeof globalThis;
+  set(K.workflows(projectCwd), {
+    workflows: [
+      toWorkflow({
+        workflow: { name: 'review-block', inputs: { issue: { required: true } } },
+        source: 'project',
+      }),
+    ],
+    recommended: [],
+  });
+  globalThis.fetch = Object.assign(
+    async (input: RequestInfo | URL) => {
+      urls.push(String(input));
+      return String(input) === '/api/conversations'
+        ? Response.json({ conversationId: 'web-test' })
+        : Response.json({ error: refusal }, { status: 400 });
+    },
+    { preconnect: originalFetch.preconnect }
+  );
+
+  const card = draft();
+  // `button` fails on a disabled control: nothing is filled, and the card still sends the start.
+  card.button('Start run')();
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(urls).toEqual(['/api/conversations', '/api/workflows/review-block/run']);
+  expect(card.render()).toContain(refusal.replaceAll("'", '&#x27;'));
+});

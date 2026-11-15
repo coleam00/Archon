@@ -43,12 +43,18 @@ If you are an agent doing this for a user:
 
 ```bash
 archon doctor
+archon validate workflows
 archon workflow list archon-forge-check
 ```
 
-`doctor` exits 0 when no check fails. The second command lists the workflow when the
-pack is available in this checkout. If `doctor` reports no provider, add one with
-`archon provider add <claude|codex|pi>`.
+`doctor` exits 0 when no check fails. `validate workflows` reports every bundled
+workflow as `ok`; it also checks the pack settings from step 6 once they exist. The
+third command lists the workflow when the pack is available in this checkout.
+
+If `doctor` reports no provider, add one with `archon provider add <claude|codex|pi>`.
+If it reports no default provider, set one: `archon ai default <claude|codex|pi>`.
+Adding a provider does not make it the default, and the pack's workflows do not load
+without one.
 
 ### 2. Install the forge plugin and give it a credential
 
@@ -94,6 +100,9 @@ git show origin/<default-branch>:.archon/sdlc/policy/maintainers.json
 
 The file is a JSON array of forge logins, such as `["alice", "bob"]`. With no file,
 every author is outside and nothing is triaged or merged.
+
+The login the pack acts as is the one its credential resolves to. On GitHub with the
+`gh` login, `gh api user --jq .login` prints it. That login must be on the list.
 
 **Ask the user** who is a maintainer. The list decides two things:
 
@@ -170,8 +179,13 @@ The settings are checked by scripts, not by an agent's reading of them: the buil
 queue's checkout refuses a launch, and the merge gate refuses a merge, that the setting
 does not allow.
 
-Check: `.pack/pack.yaml` lists every setting under `inputs:` with its values. A value
-it does not declare is refused when a run starts.
+Check: `archon validate workflows` reports a setting the pack does not declare, or a
+value it does not allow, naming the file and the key. [`.pack/pack.yaml`](.pack/pack.yaml)
+lists every setting under `inputs:` with its values.
+
+A run reads the settings file from its own checkout. A run in a worktree is cut from the
+remote's default branch, so the file has to be on that branch on the remote, not only
+committed locally.
 
 ### 7. Adjust policy (optional)
 
@@ -180,6 +194,49 @@ are the documents in [`.shared/policy/`](.shared/policy). To change one, put onl
 lines to add or override in `.archon/sdlc/policy/<same file name>` in the project. The
 project's lines win where the two conflict. **Ask the user** before changing what the
 pack may merge or close on its own.
+
+### Choose the models (optional)
+
+Nothing to set up for a first run. Every agent step in the pack names a tier, `small`,
+`medium` or `large`, and the install decides which model each tier is:
+
+```bash
+archon ai tier list                               # what each tier runs on now
+archon ai tier set large claude opus --effort high
+```
+
+Each step also has its own alias, which falls back to its tier when nothing is set. Set
+one to run that step on a different model without touching the others:
+
+```bash
+archon ai alias set @planner claude opus --effort high
+archon ai alias set @review-code codex <model>
+archon ai alias list
+archon ai alias unset @planner
+```
+
+| Alias | The step | Falls back to |
+|---|---|---|
+| `@triage` | Triage of one item, in intake | `medium` |
+| `@build-route`, `@build-interpret`, `@build-answer` | The build queue's decisions: what a round does, reading an answer, what to ask | `large` |
+| `@build-revisit` | The build queue's second look at a blocked item | `medium` |
+| `@investigator` | Investigating a problem before a plan | `medium` |
+| `@planner` | Planning a change | `large` |
+| `@implementer` | Writing the change | `large` |
+| `@ci` | Running the project's validation and reading CI | `medium` |
+| `@pr-prepare`, `@update-pr-body`, `@settle-threads` | Opening the pull request, keeping its description current, answering review threads | `medium` |
+| `@reviewer` | Every review lens that has no alias of its own, and the review's summary | `medium` |
+| `@review-code`, `@review-ux` | The code and UX review lenses | `@reviewer`, then `large` |
+| `@review-seams`, `@review-tests`, `@review-errors`, `@review-docs`, `@review-simplify` | The other review lenses | `@reviewer`, then `medium` |
+| `@review-route` | Choosing which lenses a change needs | `small` |
+| `@sweep` | The merge queue's judgment of each ready pull request | `large` |
+| `@discoveries` | Filing, tracking or dropping what runs noticed | `large` |
+| `@split` | Splitting a large item into issues | `large` |
+
+**Ask the user** before setting any: the defaults work, and an alias is an install-wide
+setting unless `--scope user` is passed. A run keeps the models it started with. Set
+them before starting an item, not between its rounds: a later round started by the
+queue reads the install's settings again.
 
 ### 8. Run each queue once by hand
 
@@ -287,7 +344,9 @@ archon pack bindings sdlc \
 `--host` is the id of the execution host that starts the runs: a name you choose for
 this install, which `archon trigger fire` then serves. Use the one this install already
 uses, the `hostId` in a binding file written earlier or the server's
-`ARCHON_TRIGGER_HOST`; no command reports it. `--out` has no default: give it a
+`ARCHON_TRIGGER_HOST`; no command reports it. On a first install, the machine's short
+name works: `hostname -s`. `--repo` is `<host>/<owner>/<name>` from `git remote get-url
+origin`. `--out` has no default: give it a
 directory outside the checkout, such as `~/.archon/bindings`, so the binding files do
 not show up as changes in it. `--cwd` is the checkout the runs launch in; point
 it at one that tracks the default branch. The command writes one file per binding and
@@ -313,6 +372,18 @@ Registering a file starts runs, so ask first:
   [Configure GitHub event starts](https://archon.diy/guides/workflow-triggers/#configure-github-event-starts).
   Until then, run intake by hand for each new issue.
 
+**Something has to continue a run after it is answered.** A run that paused for an
+answer continues only when a continuation host picks it up. A running `archon serve`
+is one. Without a server, install the wake timer, once per machine:
+
+```bash
+archon workflow wake schedule install   # macOS
+```
+
+On Linux or Windows, run `archon workflow wake` from cron, systemd or Task Scheduler
+every minute. Without either, an answered run waits forever, and it keeps its place in
+the queue, so the runs behind it wait too.
+
 Later changes:
 
 - A generated file is the user's from then on. Write it again with `--force` after the
@@ -330,6 +401,7 @@ Later changes:
 The setup is complete when all of these hold:
 
 ```bash
+archon validate workflows                                                 # every workflow ok
 archon workflow run archon-forge-check                                    # passes
 git show origin/<default-branch>:.archon/sdlc/policy/maintainers.json    # lists the pack's account
 archon state get work/42                                                  # the item from step 8
@@ -337,7 +409,8 @@ archon workflow attention                                                 # list
 archon trigger list                                                       # a receipt per binding fired
 ```
 
-The last line applies only when step 10 enabled a binding.
+The last line applies only when step 10 enabled a binding. With a binding enabled and no
+server running, also confirm the wake timer from step 10 is installed.
 
 ## Author conventions
 

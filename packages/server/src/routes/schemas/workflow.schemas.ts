@@ -198,6 +198,7 @@ export const workflowRunSchema = engineWorkflowRunSchema
     metadata: workflowRunMetadataSchema,
     attention: nullableRunAttentionSchema,
     started_at: z.string(),
+    active_phase_started_at: z.string().nullable(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
   })
@@ -223,6 +224,10 @@ export const workflowEventSchema = workflowEventRowSchema
 export const workflowRunDetailSchema = z
   .object({
     run: workflowRunSchema.extend({
+      platform_type: z.string().nullable().openapi({
+        description:
+          "The platform of the run's own conversation (`web`, `cli`, ...), the same value the dashboard listing serves. Null when the run has no conversation.",
+      }),
       worker_platform_id: z.string().optional(),
       parent_platform_id: z.string().optional(),
       conversation_platform_id: z.string().nullable(),
@@ -365,6 +370,7 @@ export const dashboardWorkflowRunSchema = coreDashboardWorkflowRunSchema
     attention: nullableRunAttentionSchema,
     owner_observation: ownerObservationSchema,
     started_at: z.string(),
+    active_phase_started_at: z.string().nullable(),
     completed_at: z.string().nullable(),
     last_activity_at: z.string().nullable(),
   })

@@ -8,6 +8,7 @@ import { RunActionBar } from '../components/RunActionBar';
 import { StreamToolbar, type DetailView } from '../components/StreamToolbar';
 import { ApprovalContext } from '../components/ApprovalContext';
 import { ApprovalPanel } from '../components/ApprovalPanel';
+import { AttentionAnswerPanel } from '../components/AttentionAnswerPanel';
 import { RunGraphPanel } from '../components/RunGraphPanel';
 import { ArtifactPanel } from '../components/ArtifactPanel';
 import { RunStartedLine, RunFinishedLine } from '../components/RunLifecycle';
@@ -252,6 +253,27 @@ function ApprovalGate({ run }: { run: RunDetailView['run'] }): ReactElement | nu
       <div className="mt-2">
         <ApprovalPanel run={run} />
       </div>
+    </div>
+  );
+}
+
+/**
+ * The attention wait answered in place, with the same panel and API call as the
+ * runs page's banner, so a person who opened the run does not have to go back.
+ */
+function AttentionGate({ run }: { run: RunDetailView['run'] }): ReactElement | null {
+  const attention = run.attention;
+  if (run.status !== 'paused' || attention?.kind !== 'attention') return null;
+  return (
+    <div className="mt-6 rounded border border-warning/30 bg-warning/[0.04] p-4">
+      <div className="mb-2 flex items-center gap-2">
+        <span aria-hidden className="h-2 w-2 animate-pulse rounded-full bg-warning" />
+        <span className="text-console-11 font-semibold uppercase tracking-console-label text-warning">
+          Waiting for your answer
+        </span>
+      </div>
+      <p className="whitespace-pre-wrap text-sm text-text-primary">{attention.message}</p>
+      <AttentionAnswerPanel run={run} attention={attention} />
     </div>
   );
 }
@@ -539,12 +561,15 @@ export function RunDetailPage(): ReactElement {
                   showToolCalls={showToolCalls}
                   showSystem={showSystem}
                   selectedNodeId={selectedNodeId}
+                  live={run.status === 'running' || run.status === 'paused'}
+                  waitingNodeId={run.status === 'paused' ? (run.wait?.nodeId ?? null) : null}
                 />
               </div>
 
               <RunFinishedLine run={run} />
 
               <ApprovalGate run={run} />
+              <AttentionGate run={run} />
             </div>
           </div>
         </div>

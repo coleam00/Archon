@@ -1242,6 +1242,38 @@ describe('watchAttentionQueue', () => {
     ).toHaveLength(6);
   });
 
+  test('the answering run reaches the line when the answer event is in a later page', async () => {
+    const store = await makeStore();
+    let held = false;
+    const paging: IWorkflowStore = Object.create(store);
+    paging.readWorkflowEventsAfter = (cursor, options) =>
+      held
+        ? Promise.resolve({ events: [], next: cursor })
+        : store.readWorkflowEventsAfter(cursor, { ...options, limit: 1 });
+    const asked = await pausedAtAsk(store);
+    const stream = await watch(paging);
+    await stream.next(line => line.type === 'ready');
+
+    // The label event closes the item from the answered row, a page before the answer event.
+    held = true;
+    await store.labelAttentionWait(asked.runId, {
+      pauseId: asked.wait.pauseId,
+      set: { ci: 'pr' },
+      unset: [],
+      via: 'cli',
+    });
+    const fromRun = { runId: 'answering-run', nodePath: 'triage.decide' };
+    await store.answerAttentionWait(asked.runId, { ...answer(asked.wait.pauseId), fromRun });
+    held = false;
+
+    expect(await stream.next(ofRun(asked.runId, 'resolved'))).toMatchObject({
+      reason: 'answered',
+      answeredAt: '2026-10-15T00:00:00.000Z',
+      answeredFromRun: fromRun,
+    });
+    await stream.close();
+  });
+
   test('terminal and owner_lost reach a label-filtered stream for every run in scope', async () => {
     const store = await makeStore();
     const orphan = await running(store);

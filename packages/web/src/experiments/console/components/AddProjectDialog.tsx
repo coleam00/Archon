@@ -266,9 +266,7 @@ export function AddProjectDialog({
             }}
             autoFocus
             spellCheck={false}
-            placeholder={
-              isGit ? 'https://github.com/owner/repo' : 'C:\\Users\\you\\projects\\my-repo'
-            }
+            placeholder={isGit ? 'https://github.com/owner/repo' : '/path/to/my-repo'}
             className="min-w-0 flex-1 bg-transparent font-mono text-console-14 text-text-primary outline-none placeholder:text-text-tertiary"
             disabled={submitting}
           />

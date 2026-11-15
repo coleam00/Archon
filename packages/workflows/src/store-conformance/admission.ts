@@ -196,6 +196,10 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
       const since = readCapacityWait(waiting?.metadata);
       expect(since).toBeDefined();
       await rejection(store.resumeWorkflowRun(a, answeredCursor));
+      expect((await store.getWorkflowRun(a))?.started_at).toEqual(waiting?.started_at);
+      expect((await store.getWorkflowRun(a))?.active_phase_started_at).toEqual(
+        waiting?.active_phase_started_at
+      );
       expect(readCapacityWait((await store.getWorkflowRun(a))?.metadata)).toEqual(since);
       // A release that removes nothing leaves the waiter's place intact.
       expect(await store.releasePausedRunSlot(a, gateCursor)).toEqual({ released: false });
@@ -368,8 +372,18 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
     });
     test('capacity waiters keep their refusal order and block a failed run resume', async () => {
       const first = await admitPaused(start());
+      await claimAnswered(first);
+      await store.pauseWorkflowRun(first, approval);
+      await harness.backdate(first, {
+        started_at: new Date('2020-01-01'),
+        active_phase_started_at: new Date('2022-01-01'),
+      });
       await store.releasePausedRunSlot(first, gateCursor);
       const second = await admitPaused(start());
+      await harness.backdate(second, {
+        started_at: new Date('2019-01-01'),
+        active_phase_started_at: new Date('2021-01-01'),
+      });
       await store.releasePausedRunSlot(second, gateCursor);
       const holder = start();
       expect(await store.admitResourceStart(holder)).toMatchObject({ status: 'admitted' });

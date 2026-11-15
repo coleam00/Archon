@@ -30,6 +30,7 @@ function runRow(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     outcome: 'failed',
     user_message: '',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: new Date(),
     last_activity_at: new Date(),
@@ -39,6 +40,7 @@ function runRow(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     adopted_from_run_id: null,
     output_root: '/root/artifacts',
     checkout_baseline: null,
+    item_id: null,
     ...overrides,
   };
 }
@@ -257,6 +259,7 @@ describe('resolveWorkflowAdoption', () => {
           ...makeDeps({
             run: runRow({
               working_path: '/ws/repo/.worktrees/vanished',
+              active_phase_started_at: null,
               started_at: startedAt,
               completed_at: completedAt,
             }),
@@ -298,6 +301,7 @@ describe('resolveWorkflowAdoption', () => {
           ...makeDeps({
             run: runRow({
               working_path: '/ws/repo/.worktrees/vanished',
+              active_phase_started_at: null,
               started_at: startedAt,
               completed_at: null,
             }),

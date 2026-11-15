@@ -218,7 +218,11 @@ export function subscribeKey(
       // arriving before it settles runs its OWN loader via `ensureLoad` instead
       // of inheriting this abandoned request's eventual result (#2101).
       inflight.delete(key);
-      pendingRevalidation.delete(key);
+      // An invalidation that arrived during that load is still owed a fresh read.
+      // With no subscriber left to make it, settle it the way `invalidate` settles
+      // a subscriber-less key: otherwise the abandoned load, already known stale,
+      // lands in the cache and the next mount reads it warm and never reloads.
+      if (pendingRevalidation.delete(key)) revalidate(key);
     }
   };
 }

@@ -486,6 +486,26 @@ export function registerLaunchInputTests(fixture: ReturnType<typeof setupRouting
     expect(sent).not.toContain('reusable block');
   });
 
+  // The run route's start: a workflow name and an empty message. The route has no rule of
+  // its own, so this gate is what refuses it, with the text CLI admission also prints.
+  test('refuses a run-route start with an empty message that misses a required input', async () => {
+    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
+    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
+    mockStartWorkflow.mockReturnValueOnce(
+      Promise.resolve(
+        fixture.makeWorkflowResult({ args: '', inputs: { issue: { required: true } } })
+      )
+    );
+
+    const platform = makePlatform();
+    await handleMessage(platform, 'conv-1', '', { actor: operator, workflowName: 'test-workflow' });
+
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const sent = platform.sendMessage.mock.calls.map(c => String(c[1])).join('\n');
+    expect(sent).toContain("requires input 'issue'");
+  });
+
   test('hands the capture to a fresh foreground run', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));

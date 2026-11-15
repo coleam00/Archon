@@ -449,6 +449,7 @@ function submitRun(
       ? { adoptedFromRunId: declaration.runId, continuationMode: declaration.stamp.mode }
       : {}),
     ...(preCreatedRun ? { preCreatedRun } : {}),
+    ...(request.options.item === undefined ? {} : { item: request.options.item }),
     ...(workspace.cutFromCommit !== undefined ? { cutFromCommit: workspace.cutFromCommit } : {}),
     ownedWorktree: workspace.ownedWorktree,
   };

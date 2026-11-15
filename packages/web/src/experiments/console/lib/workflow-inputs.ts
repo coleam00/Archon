@@ -1,26 +1,11 @@
 /**
- * The two decisions the run form makes about declared workflow inputs (#2554).
+ * The decision the run form makes about declared workflow inputs (#2554).
  *
- * Kept out of the component so they are provable without a React DOM harness — the
+ * Kept out of the component so it is provable without a React DOM harness — the
  * console's existing convention (see `lib/recommended.ts`) is that the interesting
  * decision is a pure function and the component only renders it.
  */
 import type { WorkflowInput } from '../primitives/workflow';
-
-/**
- * Required inputs the user has not filled, in declaration order.
- *
- * Whitespace is not a value: a field holding only spaces reads as unfilled, so the
- * form cannot start a run that would immediately be refused server-side.
- */
-export function missingRequiredInputs(
-  declared: readonly WorkflowInput[],
-  values: Readonly<Record<string, string>>
-): string[] {
-  return declared
-    .filter(input => input.required && (values[input.name] ?? '').trim().length === 0)
-    .map(input => input.name);
-}
 
 /**
  * The map to send: only inputs the user actually filled.

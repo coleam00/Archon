@@ -11,6 +11,7 @@
  * is fire-and-forget: it never awaits and never throws.
  */
 import {
+  claimDailyStart,
   isTelemetryDisabled,
   maybeShowFirstRunNotice,
   resetConsentForTests,
@@ -43,17 +44,18 @@ export function captureWorkflowInvoked(props: WorkflowInvokedProperties): void {
 }
 
 /**
- * Capture an `archon_started` event. Call once per CLI invocation and per server
- * boot (the single call sites in `cli.ts` / the server entrypoint enforce that —
- * there is no in-function dedup guard; the CLI leaves `serve` and detached run
- * owners to the process that reports them). This (not just `workflow_invoked`) is
- * what makes active-install / DAU metrics honest, since users who only run
+ * Capture an `archon_started` event, at most once per surface per UTC day
+ * (`claimDailyStart`). Call sites in `cli.ts` and the server entrypoint call it
+ * on every invocation and boot; the CLI leaves `serve` and detached run owners to
+ * the process that reports them. This (not just `workflow_invoked`) is what makes
+ * active-install / DAU metrics honest, since users who only run
  * `doctor`/`serve`/chat would otherwise be invisible. Machine context rides
  * along via the registered super-properties. Also shows the first-run notice.
  */
 export function captureArchonStarted(props: ArchonStartedProperties): void {
   if (isTelemetryDisabled()) return;
   maybeShowFirstRunNotice();
+  if (!claimDailyStart(props.surface)) return;
   sendEvent('archon_started', () => archonSurfaceEventProperties(props));
 }
 
@@ -62,8 +64,8 @@ export function captureArchonStarted(props: ArchonStartedProperties): void {
  * `archon_started` once per boot and then go silent, which would make a
  * server-only install drop out of active-install (DAU/WAU) metrics after day one.
  * The server entrypoint calls this on a daily interval so "active installs"
- * stays honest for the server surface. CLI invocations do NOT need this — each
- * one already emits `archon_started`. Carries the same categorical properties as
+ * stays honest for the server surface. The CLI does NOT need this — its first
+ * invocation each day already emits `archon_started`. Carries the same categorical properties as
  * `archon_started`. Intentionally does not show the first-run notice (heartbeats
  * are background, never interactive).
  */

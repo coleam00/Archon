@@ -6,7 +6,9 @@
  * - Can answer directly or invoke workflows
  * - Does NOT require a project to be selected before starting a conversation
  */
-import { createSqlWorkflowOperations } from '../workflows/sql-host';
+import { createSqlWorkflowOperations, createWorkflowHostStore } from '../workflows/sql-host';
+import { createWorkflowStore } from '../workflows/store-adapter';
+import { attentionQueueSource, resolveAttentionProject } from '../operations/attention-queue';
 import { existsSync } from 'fs';
 import type {
   IPlatformAdapter,
@@ -25,6 +27,7 @@ import { toError } from '../utils/error';
 import { quoteCommandArg } from '../utils/command-args';
 import { getAgentProvider } from '../services/provider-admission';
 import { buildManageRunTool } from './manage-run-tool';
+import { buildAttentionTool } from './attention-tool';
 import {
   buildInvokeWorkflowTool,
   buildRegisterProjectTool,
@@ -690,10 +693,11 @@ function attachNativeTools(
   // reason: on a foreground surface the run would otherwise block the agent loop.
   const pendingLaunch: { launch: ChatLaunch | null } = { launch: null };
 
-  // Providers with in-process native tools launch workflows and
-  // register projects through typed tools in every chat. Project-scoped chats also
-  // get `manage_run` to inspect and operate that project's runs.
+  // Providers with in-process native tools launch workflows, register projects and
+  // read and answer the attention queue through typed tools in every chat.
+  // Project-scoped chats also get `manage_run` to inspect and operate that project's runs.
   if (caps.nativeTools) {
+    const operations = createSqlWorkflowOperations();
     const tools = [
       buildInvokeWorkflowTool({
         workflows: workflowsWithSource,
@@ -706,12 +710,19 @@ function attachNativeTools(
       }),
       buildRegisterProjectTool({ registerProject }),
       buildReportWorkflowNoMatchTool(),
+      buildAttentionTool({
+        actor,
+        operations,
+        queue: attentionQueueSource(createWorkflowStore(), createWorkflowHostStore().isolation),
+        resolveProject: spec => resolveAttentionProject(codebaseDb, spec),
+        codebaseId: conversation.codebase_id,
+      }),
     ];
     if (conversation.codebase_id !== null) {
       tools.push(
         buildManageRunTool({
           actor,
-          operations: createSqlWorkflowOperations(),
+          operations,
           codebaseId: conversation.codebase_id,
           surface: platform,
           // One continuation per turn: the resume runs in this conversation and

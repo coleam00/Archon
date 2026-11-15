@@ -137,6 +137,7 @@ export interface StartReceiptInspection {
   receivedAt: string;
   occurredAt: string | null;
   sourceActor: SourceReceiptInput['sourceActor'];
+  itemKey: string | null;
   outcome: SourceReceiptAcceptance['outcome'];
   reason: string | null;
   bindings: StartBindingInspection[];

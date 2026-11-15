@@ -217,6 +217,8 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * dispatch; the executor only records provenance.
    */
   adoptedFromRunId?: string;
+  /** The item a fresh run belongs to, written once on the row this call creates. */
+  item?: string;
   /** How `adoptedFromRunId` continues: estate adoption or fresh-lane supersession. */
   continuationMode?: ContinuationMode;
   /** One model-binding phase: raw at invocation boundaries, resolved for child runs. */

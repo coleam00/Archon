@@ -73,11 +73,10 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
 | `inputs`, `returns`, `outcome_field` | The workflow's signature. See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
-| `evidence_policy` | `{ required: true }` fails a run that finishes without `$ARTIFACTS_DIR/evidence.json`. See [Deterministic checks, authored outcomes, and evidence markers](#deterministic-checks-authored-outcomes-and-evidence-markers). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
-Some fields are retired. Workflow-level `interactive:` loads with a warning and has no effect. `modelReasoningEffort:` is applied as `effort:` with a warning. The old sequential `steps:` format fails to load, and so does `thinking:` on a workflow, node, tier or alias, with an error pointing at `effort:`.
+Some fields are retired. Workflow-level `interactive:` loads with a warning and has no effect. `modelReasoningEffort:` is applied as `effort:` with a warning. The old sequential `steps:` format fails to load, and so does `thinking:` on a workflow, node, tier or alias, with an error pointing at `effort:`. Workflow-level `evidence_policy:` also fails to load: it only checked that a file named `evidence.json` existed, so use a `bash:` or `script:` node that exits non-zero when a check must fail the run.
 
 ### Execution order
 
@@ -1619,9 +1618,11 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
 - **Accept last-writer-wins.** Fine when the state is a cache or a cursor that self-corrects.
 - **Don't run the workflow concurrently.** A workflow with `worktree: enabled: false` shares
   one working path. With the default `mutates_checkout: true`, direct executor dispatch
-  rejects a second run on a held path with "This worktree is in use"; the operator must
-  re-run it afterwards. Trigger admission instead queues or skips the request according
-  to `overlap`, naming the holding run as its blocker. See
+  rejects a second run when it finds an earlier-priority holder with "This worktree is in
+  use"; the operator must re-run it afterwards. Exact-priority ties can bypass an admitted
+  holder; see the [checkout-priority limitation](/reference/database/#workflow-run-timestamps).
+  Trigger admission instead queues or skips the request according to `overlap`, naming the
+  holding run as its blocker. See
   [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy).
   `mutates_checkout: false` bypasses the executor's path lock, so it does not prevent
   concurrent state writes.
@@ -1764,7 +1765,7 @@ reference it from many workflows, instead of copy-pasting the nodes and letting 
 drift apart.
 
 **A node runs with the configuration its own workflow file declares; the run owns isolation,
-interactivity and evidence policy.** That one sentence is the whole rule. A composed workflow
+interactivity and budget.** That one sentence is the whole rule. A composed workflow
 that declares `provider: codex` / `model: large` / `effort: high` runs on exactly those,
 whichever workflow composed it, and a composed workflow that declares nothing resolves from
 your config, tier presets and personal AI preferences at run time, exactly as it would on its
@@ -1800,7 +1801,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition: `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
 | `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
-| `worktree`, `container`, `evidence_policy`, `budget` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
+| `worktree`, `container`, `budget` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
 | `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow, where it then applies to every node in the run. |
 
@@ -2059,7 +2060,7 @@ and continues to control CLI exit codes and fixture `expect` checks. Fixtures ca
 assert the authored verdict with `fixture.authored: succeeded` or `failed`. Generated placeholder
 stubs, including tolerated `all_done` joins, never author a verdict.
 
-### Deterministic checks, authored outcomes, and evidence markers
+### Deterministic checks and authored outcomes
 
 These are independent signals:
 
@@ -2069,14 +2070,10 @@ These are independent signals:
 - `outcome_field` records the workflow author's schema-declared boolean verdict. It does not control
   lifecycle status. A succeeded outcome can remain on a run that later fails, and a failed outcome can
   coexist with a completed run.
-- `evidence_policy: { required: true }` is only a terminal file-presence convention. It requires a
-  host file at `$ARTIFACTS_DIR/evidence.json` before lifecycle completion. Any contents, including a
-  self-asserted or unsupported claim, satisfy it. The marker proves neither that a check ran nor that
-  an outcome was authored.
 
 There is no special verification node or verification status. Put a check in a deterministic node
 when its execution must govern success, and use `outcome_field` only when the workflow must record its
-own conclusion. Use `evidence_policy` only when a conventionally named deliverable must exist.
+own conclusion.
 
 ### Binding time: includes resolve at load, runs at runtime
 
@@ -2269,6 +2266,11 @@ An unknown key, a value of the wrong type, or any top-level key other than `sett
 the run at that point, before any node runs, naming the file and the key; for an isolated run
 that is after its worktree was created. A `required` setting must be set there, given a default
 by a workflow `inputs:` entry of the same name, or passed with `--input`.
+
+Run [`archon validate workflows`](/reference/cli/#validate-workflows-name) to check project
+pack settings before starting a run. It reports invalid values and undeclared names against
+each discovered workflow's pack declaration. Required values that an invocation can supply
+are checked only at run start.
 
 Pack folders of the same name in the project, home and bundled scopes share one file, and each
 reads it against its own declaration. A bundled pack ships its `.pack/pack.yaml` with it, so its
@@ -2585,13 +2587,16 @@ happens next depends on whether those children share a checkout.
 Children **in their own worktrees** (`isolation: worktree`) never interact: separate
 directories, separate branches.
 
-Children **sharing the parent's checkout** meet the engine's path-exclusive lock. Every run
-takes a lock on its working path at start, and a run that finds the path already held by
-another active run **cancels itself**. The lock excludes a run's own ancestors and
-descendants: a child never blocks against its own parent. Children of the **same
-`fan_out` node** are also excluded and may share the checkout. Children of different
-`workflow:` nodes are not excluded. Two such children in one layer over one checkout collide:
-the older run keeps the path, the younger one cancels itself, and the parent run fails.
+Children **sharing the parent's checkout** meet the engine's path-priority guard. At start,
+a run that finds an earlier-priority active run on its working path **cancels itself**.
+At exactly equal effective priority, a later lower-ID contender can pass an already
+admitted higher-ID holder, so overlapping execution is possible; see the
+[checkout-priority limitation](/reference/database/#workflow-run-timestamps).
+The guard excludes a run's own ancestors and descendants: a child never blocks against
+its own parent. Children of the **same `fan_out` node** are also excluded and may share the
+checkout. Children of different `workflow:` nodes are not excluded. When two such children
+in one layer collide, the earlier-priority run keeps the path, the other cancels itself,
+and the parent run fails.
 
 > **Resume does not recover from this.** A parent's resume re-drives a *failed* child, but a
 > *cancelled* one is threaded straight through as it stands, so a parent that failed this
@@ -2611,9 +2616,11 @@ nodes:
 ```
 
 `mutates_checkout: false` is a **workflow-level** field asserting that the run does not write
-to its checkout, so the engine skips the path lock for it. It defaults to `true` (take the
-lock, prevent overlapping execution on the same path). Direct executor dispatch rejects a
-run on a held path; [trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy)
+to its checkout, so the engine skips the path lock for it. It defaults to `true` (apply the
+path-priority guard, subject to the
+[exact-priority tie limitation](/reference/database/#workflow-run-timestamps)).
+Direct executor dispatch rejects a run when it finds an earlier-priority holder;
+[trigger admission](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy)
 queues or skips it according to `overlap`. It is author-declared on purpose: the author of a
 review or research workflow is the one who knows it only reads. Children launched by
 separate `workflow:` nodes still compete for the path lock unless they declare it.
@@ -3372,7 +3379,7 @@ Node 'plan': 'interactive' is only honoured inside 'loop:' or 'loop_group:';
 
 An AI field on a node that runs no AI, such as `model:` on a `bash:` node, only warns.
 
-The check covers the workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`, `evidence_policy:`) and every node in a `loop_group` body. Three blocks are exempt: `output_format:` is free-form JSON Schema, `sandbox:` passes unknown keys through, and `hooks:` already rejects an unknown key as an error.
+The check covers the workflow root, every node, the nested config blocks (`wait:`, the deprecated `approval:` and `approval.on_reject:`, `retry:`, `loop:`, `loop_group:`, `pi:`, each `agents:` entry, `worktree:`, `container:`) and every node in a `loop_group` body. Three blocks are exempt: `output_format:` is free-form JSON Schema, `sandbox:` passes unknown keys through, and `hooks:` already rejects an unknown key as an error.
 
 Dropped-key warnings appear in `archon validate workflows`, inline in `archon workflow list` (`parseWarnings` in `--json`), on stderr before `archon workflow run` starts, in chat `/workflow list`, and as a marker in the console's workflow picker. Every run that starts also records them as a `workflow_parse_warnings` event, which `archon workflow get <run-id> --verbose` shows. Chat and the console post them to the conversation at run start on a best-effort basis.
 

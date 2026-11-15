@@ -285,6 +285,8 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
           error: 'EACCES',
           retryAt: new Date().toISOString(),
         };
+        const creation = new Date('2020-01-01');
+        await harness.backdate(recovered.id, { started_at: creation });
         await store.cancelFanOutRun(recovered.id, reason);
         const results = await Promise.allSettled(
           Array.from({ length: 8 }, () => store.recoverCancelledFanOutRun(recovered.id))
@@ -295,6 +297,8 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
         });
         const resumed = await store.getWorkflowRun(recovered.id);
         expect(resumed?.status).toBe('running');
+        expect(resumed?.started_at).toEqual(creation);
+        expect(resumed?.active_phase_started_at?.getTime()).toBeGreaterThan(creation.getTime());
         expect(await types(store, recovered.id)).toEqual(['workflow_resumed']);
         expect(
           await store.releaseRunForUnreadableSource(recovered.id, {

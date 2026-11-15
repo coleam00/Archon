@@ -181,6 +181,8 @@ function createMockStore(): IWorkflowStore {
     deleteWorkflowNodeSessions: mock<IWorkflowStore['deleteWorkflowNodeSessions']>(() => {
       throw new Error('Unexpected deleteWorkflowNodeSessions');
     }),
+    listItemRuns: mock<IWorkflowStore['listItemRuns']>(async () => []),
+    getItem: mock<IWorkflowStore['getItem']>(async () => null),
     findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
@@ -215,6 +217,7 @@ function createMockStore(): IWorkflowStore {
         outcome: null,
         user_message: 'mock message',
         metadata: {},
+        active_phase_started_at: null,
         started_at: new Date(),
         completed_at: null,
         last_activity_at: null,
@@ -223,6 +226,7 @@ function createMockStore(): IWorkflowStore {
         parent_run_id: null,
         output_root: null,
         checkout_baseline: null,
+        item_id: null,
         adopted_from_run_id: null,
       })
     ),
@@ -248,6 +252,7 @@ function createMockStore(): IWorkflowStore {
         outcome: null,
         user_message: 'mock message',
         metadata: {},
+        active_phase_started_at: null,
         started_at: new Date(),
         completed_at: null,
         last_activity_at: null,
@@ -256,6 +261,7 @@ function createMockStore(): IWorkflowStore {
         parent_run_id: null,
         output_root: null,
         checkout_baseline: null,
+        item_id: null,
         adopted_from_run_id: null,
       })
     ),
@@ -381,6 +387,7 @@ function makeWorkflowRun(id: string): WorkflowRun {
     outcome: null,
     user_message: 'test',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -389,6 +396,7 @@ function makeWorkflowRun(id: string): WorkflowRun {
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
   };
 }
