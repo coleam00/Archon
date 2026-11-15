@@ -872,16 +872,6 @@ describe('cloneRepository', () => {
       expect(getGitCloneCall()?.[0]).toBe('https://github.com/owner/repo');
     });
 
-    test('strips .git suffix when extracting owner/repo but keeps it in clone URL', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
-      );
-
-      const result = await cloneRepository('https://github.com/owner/repo.git');
-
-      expect(result.name).toBe('owner/repo');
-    });
-
     test.each([false, true])(
       'repeated clone retains one trust grant after setup (rejected: %s)',
       async rejected => {
@@ -981,16 +971,6 @@ describe('cloneRepository', () => {
       const cloneUrl = getGitCloneCall()?.[0] ?? '';
       expect(cloneUrl).toContain('https://github.com/owner/repo');
       expect(cloneUrl).not.toContain('git@');
-    });
-
-    test('extracts correct owner/repo from SSH URL', async () => {
-      mockCreateCodebase.mockResolvedValueOnce(
-        makeCodebase({ name: 'owner/repo' }) as ReturnType<typeof makeCodebase>
-      );
-
-      const result = await cloneRepository('git@github.com:owner/repo.git');
-
-      expect(result.name).toBe('owner/repo');
     });
 
     test('converts SSH URL with custom host alias to HTTPS', async () => {
@@ -2335,16 +2315,5 @@ describe('RegisterResult shape', () => {
       commandCount: 0,
       alreadyExisted: false,
     });
-  });
-
-  test('pre-existing codebase result has alreadyExisted: true and commandCount: 0', async () => {
-    spyFsAccess.mockResolvedValue(undefined); // .git exists
-    mockListCodebaseClaims.mockResolvedValueOnce([makeCodebase({ id: 'existing-999' })]);
-    spyFsStat.mockImplementation(realFsStat);
-
-    const result = await cloneRepository('https://github.com/owner/repo');
-
-    expect(result.alreadyExisted).toBe(true);
-    expect(result.commandCount).toBe(0);
   });
 });

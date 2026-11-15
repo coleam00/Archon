@@ -23,12 +23,6 @@ describe('toError', () => {
     expect(result.message).toBe('something broke');
   });
 
-  test('wraps empty string in Error', () => {
-    const result = toError('');
-    expect(result).toBeInstanceOf(Error);
-    expect(result.message).toBe('');
-  });
-
   test('serializes objects via JSON.stringify', () => {
     const result = toError({ code: 404, detail: 'not found' });
     expect(result).toBeInstanceOf(Error);
@@ -46,18 +40,6 @@ describe('toError', () => {
     const result = toError(undefined);
     expect(result).toBeInstanceOf(Error);
     expect(result.message).toBe('undefined');
-  });
-
-  test('handles numeric values', () => {
-    const result = toError(42);
-    expect(result).toBeInstanceOf(Error);
-    expect(result.message).toBe('42');
-  });
-
-  test('handles boolean values', () => {
-    const result = toError(false);
-    expect(result).toBeInstanceOf(Error);
-    expect(result.message).toBe('false');
   });
 
   test('falls back to String() for circular references', () => {

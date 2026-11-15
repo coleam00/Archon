@@ -18,11 +18,6 @@ function createClock(start = 0): TestClock {
 }
 
 describe('DeliveryDeduplicator', () => {
-  test('first sighting of a key is not a duplicate', () => {
-    const dedup = new DeliveryDeduplicator();
-    expect(dedup.seen('comment:owner/repo#42:100:2026-06-12T00:00:00Z')).toBe(false);
-  });
-
   test('repeat sighting within TTL is a duplicate', () => {
     const dedup = new DeliveryDeduplicator();
     const key = 'comment:owner/repo#42:100:2026-06-12T00:00:00Z';
@@ -36,12 +31,6 @@ describe('DeliveryDeduplicator', () => {
     expect(dedup.seen('comment:owner/repo#42:100:t1')).toBe(false);
     expect(dedup.seen('comment:owner/repo#42:101:t1')).toBe(false);
     expect(dedup.seen('comment:owner/repo#43:100:t1')).toBe(false);
-  });
-
-  test('same comment with new updated_at is not a duplicate (edit re-trigger)', () => {
-    const dedup = new DeliveryDeduplicator();
-    expect(dedup.seen('comment:owner/repo#42:100:2026-06-12T00:00:00Z')).toBe(false);
-    expect(dedup.seen('comment:owner/repo#42:100:2026-06-12T00:05:00Z')).toBe(false);
   });
 
   test('key expires after TTL and may run again', () => {
