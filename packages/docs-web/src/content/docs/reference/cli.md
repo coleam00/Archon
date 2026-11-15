@@ -1609,9 +1609,11 @@ cancelled `workflow:` sub-run. Owner warnings retain affected checkouts for insp
 use `lsof` on the checkout when output is still held, then retry abandonment after
 resolving the warning. When removal proceeds, it is forced, so
 uncommitted, untracked, and ignored files (including copied `.env` files) and
-initialized submodules are deleted with it. The branch is kept, so committed work,
-pushed or not, stays recoverable. The result lists each removed worktree and its
-branch (`releasedWorktrees` in `--json`), and the isolation record is marked `destroyed`.
+initialized submodules are deleted with it. A branch with commits of its own is kept,
+so committed work, pushed or not, stays recoverable. A branch Archon generated for the
+run that is still at the commit it was cut from is deleted with the worktree; a branch
+the launch named is always kept. The result lists each removed worktree, its branch,
+and whether the branch was deleted (`releasedWorktrees[].branchDeleted` in `--json`), and the isolation record is marked `destroyed`.
 
 When the selected run is a sub-run and no owner answers at its own endpoint,
 Archon retains its subtree's owned checkouts. A sub-run can execute inside an enclosing
@@ -1888,7 +1890,7 @@ To explicitly discard a resumable run and attempt removal of the worktree it cre
 of this section. Abandon removes a checkout only when the run holds its matching creation
 proof, even if the checkout has since been adopted. Owner warnings retain the checkout:
 inspect it (`lsof` when output is still held), resolve the warning, then retry abandonment.
-When removal proceeds, it deletes uncommitted work there and keeps the branch; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
+When removal proceeds, it deletes uncommitted work there and keeps a branch that holds commits; see [`workflow abandon`](#workflow-abandon) for what it keeps and how to retry.
 
 ```bash
 # Default: 7 days

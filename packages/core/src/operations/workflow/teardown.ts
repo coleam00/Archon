@@ -93,7 +93,7 @@ export interface AbandonWorkflowResult {
    */
   cascadeFailures: number;
   cleanupWarnings?: string[];
-  /** Worktrees removed because their run was abandoned; each branch is kept. */
+  /** Worktrees removed because their run was abandoned; `branchDeleted` says whether its branch went too. */
   releasedWorktrees?: ReleasedWorktree[];
   /**
    * When the abandoned run was itself a `workflow:` sub-run and its parent is
