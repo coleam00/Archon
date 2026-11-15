@@ -17,7 +17,7 @@ import type { ExpectedApprovalGate } from './schemas/workflow-run';
 import type { ListDashboardRunsOptions, DashboardRunsResult } from './schemas/workflow-run-listing';
 import type {
   WorkflowRun,
-  WorkflowRunOutcome,
+  RunCompletedOutcome,
   WorkflowRunStatus,
   ApprovalContext,
   WorkflowAttentionWaitContext,
@@ -371,7 +371,6 @@ export interface IWorkflowStore
     id: string,
     updates: Partial<Pick<WorkflowRun, 'metadata' | 'output_root'>> & {
       status?: Exclude<WorkflowRunStatus, 'completed' | 'failed' | 'cancelled'>;
-      outcome?: WorkflowRunOutcome;
       working_path?: string;
     }
   ): Promise<void>;
@@ -390,11 +389,16 @@ export interface IWorkflowStore
    * only when it won the status change, it reports `buildRunTerminalTelemetry` over the
    * run's row and event log. The engine sends no terminal event itself. The SQL store
    * does this in `packages/core/src/db/workflow-terminal-telemetry.ts`.
+   *
+   * This is the only writer of the run's outcome. `result.outcome` sets
+   * `completed_outcome` to its value, and `outcome` to it for the boolean form; both are
+   * null when it is absent, replacing anything an older binary wrote while the run ran.
    */
   completeWorkflowRun(
     id: string,
     completion: { duration_ms: number },
-    metadata?: Record<string, unknown>
+    metadata?: Record<string, unknown>,
+    result?: { outcome?: RunCompletedOutcome }
   ): Promise<void>;
   /**
    * Atomically fail a pending or running run and persist its matching lifecycle event.

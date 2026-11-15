@@ -54,7 +54,7 @@ import { validateDagStructure } from './loader/dag-structure';
 import {
   validateLoopGroupProseCompletion,
   validateRunBudgetShape,
-  validateWorkflowOutcomeDeclaration,
+  validateWorkflowResultContract,
 } from './loader/contracts';
 import { resolveWorkflow } from './graph-plan';
 import type { IncludeCommandContent } from './compiled-command';
@@ -242,7 +242,7 @@ function expandOne(expansion: IncludeExpansion, name: string, stack: string[]): 
     ...(dedupedRequires.length > 0 ? { requires: dedupedRequires } : {}),
   };
   const contractError =
-    validateWorkflowOutcomeDeclaration(authoredResult) ?? validateRunBudgetShape(authoredResult);
+    validateWorkflowResultContract(authoredResult) ?? validateRunBudgetShape(authoredResult);
   if (contractError !== null) {
     throw new IncludeExpansionError(contractError);
   }

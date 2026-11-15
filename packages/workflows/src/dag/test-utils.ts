@@ -138,6 +138,7 @@ export function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'mock message',
     metadata: {},
     active_phase_started_at: null,
@@ -417,15 +418,6 @@ export function runUsageWrites(
           'total_tokens_in' in metadata ||
           'total_tokens_out' in metadata)
     );
-}
-
-/** Authored-outcome writes, excluding lifecycle/metadata/root updates. */
-export function authoredOutcomeWrites(
-  store: ReturnType<typeof createMockStore>
-): Array<'succeeded' | 'failed'> {
-  return (store.updateWorkflowRun as ReturnType<typeof mock>).mock.calls
-    .map((call: unknown[]) => (call[1] as { outcome?: 'succeeded' | 'failed' }).outcome)
-    .filter((outcome): outcome is 'succeeded' | 'failed' => outcome !== undefined);
 }
 
 export function withProviderCapabilities(

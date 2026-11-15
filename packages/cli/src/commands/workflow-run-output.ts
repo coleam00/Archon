@@ -7,7 +7,7 @@ import { readNodeEmitterEvent } from '@archon/workflows/node-event-write';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
 import { deadlineWaitCursor, resumeCursorMatches } from '@archon/workflows/store';
 import type { ResolvedWorkflow, WorkflowExecutionResult } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { CLIAdapter } from '../adapters/cli-adapter';
 import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import { formatRunUsage } from './workflow-usage';
@@ -151,7 +151,7 @@ export async function presentRunResult(
   const { host, workflow, result, adapter, conversationId, destination, detachedProcessOwner } =
     input;
   if ('handedOff' in result) return presentHandoff(result, detachedProcessOwner);
-  const run = await readRunForPresentation(host, workflow, result);
+  const run = await readRunForPresentation(host, result);
 
   // Check result and exit appropriately
   if ('paused' in result) {
@@ -160,9 +160,8 @@ export async function presentRunResult(
     if (result.waitCursor !== undefined) {
       return presentDurableWait(host, result.workflowRunId, result.waitCursor, destination);
     }
-    if (!printRunFacts(workflow, run, '\nWorkflow paused — waiting for approval.', 'paused')) {
-      console.log('\nWorkflow paused — waiting for approval.');
-    }
+    // A paused run has no outcome: it is written only when the run completes.
+    console.log('\nWorkflow paused — waiting for approval.');
   } else if (result.success) {
     // Surface workflow result to Web UI as a result card (mirrors the background dispatch
     // result message in core's orchestrator/dispatch/background-run.ts).
@@ -176,13 +175,11 @@ export async function presentRunResult(
         result.summary
       );
     }
-    if (!printRunFacts(workflow, run, '\nWorkflow finished.', 'completed')) {
+    if (!printRunFacts(workflow, run, '\nWorkflow finished.')) {
       console.log('\nWorkflow completed successfully.');
     }
     printRunUsage(run);
   } else {
-    if (result.workflowRunId !== undefined)
-      printRunFacts(workflow, run, '\nWorkflow finished.', 'failed');
     printRunUsage(run);
     throw new WorkflowRunFailedError(failureReason(result), detachedProcessOwner);
   }
@@ -207,11 +204,9 @@ function presentHandoff(
 
 async function readRunForPresentation(
   host: WorkflowHost,
-  workflow: ResolvedWorkflow,
   result: WorkflowExecutionResult
 ): Promise<WorkflowRun | null> {
-  if (result.success && 'paused' in result && result.paused && workflow.outcome_field === undefined)
-    return null;
+  if (result.success && 'paused' in result && result.paused) return null;
   const { workflowRunId } = result;
   if (workflowRunId === undefined) return null;
   try {
@@ -222,21 +217,17 @@ async function readRunForPresentation(
   }
 }
 
-function printRunFacts(
-  workflow: ResolvedWorkflow,
-  run: WorkflowRun | null,
-  lead: string,
-  executionStatus: WorkflowRunStatus
-): boolean {
-  if (workflow.outcome_field === undefined) return false;
+/** The outcome a completed run declared, which only the completing write records. */
+function printRunFacts(workflow: ResolvedWorkflow, run: WorkflowRun | null, lead: string): boolean {
+  if (workflow.result?.outcome === undefined) return false;
   if (run === null) {
     console.log(
-      `${lead}\n  Status: ${executionStatus}\n  Authored outcome: unavailable — failed to read persisted run`
+      `${lead}\n  Status: completed\n  Authored outcome: unavailable — failed to read persisted run`
     );
     return true;
   }
-  if (run.outcome == null) return false;
-  console.log(`${lead}\n  Status: ${run.status}\n  Authored outcome: ${run.outcome}`);
+  if (run.completed_outcome === null) return false;
+  console.log(`${lead}\n  Status: ${run.status}\n  Authored outcome: ${run.completed_outcome}`);
   return true;
 }
 

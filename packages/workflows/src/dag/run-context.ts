@@ -204,12 +204,6 @@ export interface RunLayersContext extends RunInputs, RunDerived {
   /** Prior body outputs available to a loop-group iteration's `when:` conditions. */
   loopPrevOutputs?: ReadonlyMap<string, NodeOutput>;
   /**
-   * Awaited after a complete layer has been aggregated and before lifecycle status is
-   * observed. The top-level DAG uses this to durably capture authored run state at
-   * the first point it exists; loop_group bodies have no run-level hook.
-   */
-  afterLayer?: () => Promise<void>;
-  /**
    * Finish an already-claimed deterministic subgraph when a sibling pauses the parent.
    * Composed fan-out bodies set this after their durable start claim: load-time
    * validation proves they cannot create the pause themselves, and finishing the outer

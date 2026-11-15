@@ -333,26 +333,33 @@ export async function cancelResumableRunsForConversation(
 export async function completeWorkflowRun(
   id: string,
   completion: { duration_ms: number },
-  metadata?: Record<string, unknown>
+  metadata?: Record<string, unknown>,
+  result?: Parameters<IWorkflowStore['completeWorkflowRun']>[3]
 ): Promise<void> {
   validateWorkflowWaitMetadata(metadata);
   const dialect = getDialect();
-  let result: Awaited<ReturnType<IDatabase['query']>>;
+  const outcome = result?.outcome;
+  // The only write of either outcome column (#5660), in the UPDATE that completes the run.
+  const outcomeValues = [
+    outcome?.kind === 'boolean' ? outcome.value : null,
+    outcome?.value ?? null,
+  ];
+  let written: Awaited<ReturnType<IDatabase['query']>>;
   try {
     const artifacts = await observeRunTerminalArtifacts(id);
-    result = await getDatabase().withTransaction(async query => {
+    written = await getDatabase().withTransaction(async query => {
       const update = metadata
         ? await query(
             `UPDATE remote_agent_workflow_runs
-             SET status = 'completed', completed_at = ${dialect.now()}, metadata = ${dialect.jsonMerge('metadata', 2)}
+             SET status = 'completed', completed_at = ${dialect.now()}, outcome = $2, completed_outcome = $3, metadata = ${dialect.jsonMerge('metadata', 4)}
              WHERE id = $1 AND status = 'running'`,
-            [id, JSON.stringify(mutableRunMetadata(metadata))]
+            [id, ...outcomeValues, JSON.stringify(mutableRunMetadata(metadata))]
           )
         : await query(
             `UPDATE remote_agent_workflow_runs
-             SET status = 'completed', completed_at = ${dialect.now()}
+             SET status = 'completed', completed_at = ${dialect.now()}, outcome = $2, completed_outcome = $3
              WHERE id = $1 AND status = 'running'`,
-            [id]
+            [id, ...outcomeValues]
           );
       if ((update.rowCount ?? 0) > 0) {
         await insertTerminalWorkflowEvent(
@@ -372,7 +379,7 @@ export async function completeWorkflowRun(
     getLog().error({ err }, 'db.workflow_run_complete_failed');
     throw new Error(`Failed to complete workflow run: ${err.message}`);
   }
-  if (result.rowCount === 0) {
+  if (written.rowCount === 0) {
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_complete_no_match');
     throw new Error(`Workflow run not found or not in running state (id: ${id})`);
   }

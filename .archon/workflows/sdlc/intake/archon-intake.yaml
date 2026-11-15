@@ -54,9 +54,8 @@ inputs:
       capacity and overlap policy, at most once per run. Empty starts nothing; the
       next build-queue run takes the item.
 
-returns: outcome
 # False only when a run that claimed nothing found stored items no pickup can act on.
-outcome_field: healthy
+returns: { node: outcome, outcome: healthy }
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:

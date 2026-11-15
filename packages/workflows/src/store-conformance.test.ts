@@ -52,6 +52,7 @@ function makeRaceStore(): RaceStore {
         codebase_id: null,
         user_id: null,
         outcome: null,
+        completed_outcome: null,
         parent_run_id: null,
         adopted_from_run_id: null,
         active_phase_started_at: null,

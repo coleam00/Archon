@@ -167,19 +167,17 @@ describe('parseFixtureFile', () => {
     expect(parsed.stubs).toEqual({ 'node-a': 'stub' });
   });
 
-  it('accepts authored verdict expectations and rejects invalid values', () => {
-    for (const authored of ['succeeded', 'failed']) {
+  it('accepts authored outcome expectations of either form and rejects invalid values', () => {
+    for (const authored of ['succeeded', 'failed', 'built']) {
       expect(parseFixtureFile(`fixture:\n  authored: ${authored}`, 'x').declaration).toMatchObject({
         expect: 'completed',
         authored,
       });
     }
-    expect(() => parseFixtureFile('fixture:\n  authored: completed', 'x')).toThrow(
-      "'fixture' block"
-    );
+    expect(() => parseFixtureFile('fixture:\n  authored: ""', 'x')).toThrow("'fixture' block");
   });
 
-  it.each(['authoredOutcome', 'expected', 'failNode', 'reachd', 'input', 'resolvedTextContains'])(
+  it.each(['completedOutcome', 'expected', 'failNode', 'reachd', 'input', 'resolvedTextContains'])(
     'rejects unknown fixture declaration key %s',
     key => {
       expect(() => parseFixtureFile(`fixture:\n  ${key}: failed`, 'x')).toThrow(
@@ -271,13 +269,13 @@ describe('runFixtures', () => {
     expect(report.passed).toBe(1);
     expect(report.failed).toBe(0);
     expect(report.results[0].outcome).toBe('completed');
-    expect(report.results[0].authoredOutcome).toBeNull();
+    expect(report.results[0].completedOutcome).toBeNull();
   });
 
   it('reports authored outcome without changing execution-outcome expectations', async () => {
     const { cwd } = writeTempProject({
       workflowYaml:
-        'name: test-wf\ndescription: test\nreturns: node-a\noutcome_field: green\nnodes:\n' +
+        'name: test-wf\ndescription: test\nreturns: { node: node-a, outcome: green }\nnodes:\n' +
         '  - id: node-a\n    prompt: verdict\n    output_format:\n' +
         '      type: object\n      properties:\n        green: { type: boolean }\n' +
         '      required: [green]\n',
@@ -292,7 +290,7 @@ describe('runFixtures', () => {
     expect(report).toMatchObject({
       passed: 1,
       failed: 0,
-      results: [{ outcome: 'completed', authoredOutcome: 'failed', pass: true }],
+      results: [{ outcome: 'completed', completedOutcome: 'failed', pass: true }],
     });
     expect(formatFixtureReport(report)).toContain('Simulation outcome: completed');
     expect(formatFixtureReport(report)).toContain('Authored outcome: failed');
@@ -310,8 +308,7 @@ describe('runFixtures', () => {
       const workflowYaml = [
         'name: test-wf',
         'description: stubbed verdict',
-        'returns: node-a',
-        'outcome_field: green',
+        'returns: { node: node-a, outcome: green }',
         'nodes:',
         '  - id: node-a',
         node,
@@ -338,8 +335,8 @@ describe('runFixtures', () => {
         passed: 2,
         failed: 0,
         results: [
-          { outcome: 'completed', authoredOutcome: authored, pass: true },
-          { outcome: 'completed', authoredOutcome: authored, pass: true },
+          { outcome: 'completed', completedOutcome: authored, pass: true },
+          { outcome: 'completed', completedOutcome: authored, pass: true },
         ],
       });
     }
@@ -357,7 +354,7 @@ describe('runFixtures', () => {
       expect(report.results[0]).toMatchObject({
         outcome,
         pass: false,
-        authoredOutcome: null,
+        completedOutcome: null,
         failureReason: 'expected authored outcome succeeded, dry-run reported undeclared',
       });
     }
@@ -1406,8 +1403,7 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       workflowYaml: [
         'name: test-wf',
         'description: executed verdict',
-        'returns: verdict',
-        'outcome_field: succeeded',
+        'returns: { node: verdict, outcome: succeeded }',
         'nodes:',
         '  - id: verdict',
         '    runtime: bun',
@@ -1434,11 +1430,11 @@ describe('runFixtures exec-code isolation (#2851)', () => {
       results: [
         {
           outcome: 'completed',
-          authoredOutcome: 'failed',
+          completedOutcome: 'failed',
           pass: false,
           failureReason: 'expected authored outcome succeeded, dry-run reported failed',
         },
-        { outcome: 'completed', authoredOutcome: 'failed', pass: true },
+        { outcome: 'completed', completedOutcome: 'failed', pass: true },
       ],
     });
     expect(formatFixtureReport(report)).toContain('Authored outcome: failed');

@@ -490,7 +490,7 @@ describe('workflowStatusCommand', () => {
     }
   });
 
-  it('should label authored outcome separately from active execution status', async () => {
+  it('shows no outcome for an active run, even one an older binary wrote early', async () => {
     mockListDashboardRuns.mockResolvedValueOnce(
       statusRuns([
         {
@@ -508,7 +508,7 @@ describe('workflowStatusCommand', () => {
     await workflowStatusCommand(createTestWorkflowHost(), '/test/path', { all: true });
 
     expect(consoleSpy).toHaveBeenCalledWith('  Status: paused');
-    expect(consoleSpy).toHaveBeenCalledWith('  Authored outcome: succeeded');
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
   });
 
   it('should output JSON when json=true', async () => {

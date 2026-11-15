@@ -6,7 +6,7 @@ import type { IWorkflowPlatform, WorkflowConfig, WorkflowDeps } from './deps';
 import type { ExecuteWorkflowOptions } from './executor';
 import { safeSendMessage } from './platform-messages';
 import { type RunPhase } from './executor-shared';
-import { validateRunBudgetShape, validateWorkflowOutcomeDeclaration } from './loader/contracts';
+import { validateRunBudgetShape, validateWorkflowResultContract } from './loader/contracts';
 import { hasRunModelOverrides, runOverrideAppliesToRef, selectModelRef } from './model-validation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import { isFolderCodebase } from './run-paths';
@@ -212,7 +212,7 @@ function refuseInvalidDispatch(
   opts: ExecuteWorkflowOptions,
   isContinuation: boolean
 ): void {
-  const outcomeDeclarationError = validateWorkflowOutcomeDeclaration(workflow);
+  const outcomeDeclarationError = validateWorkflowResultContract(workflow);
   if (outcomeDeclarationError !== null) {
     throw new Error(`Invalid workflow '${workflow.name}': ${outcomeDeclarationError}`);
   }

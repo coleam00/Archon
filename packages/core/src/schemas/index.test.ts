@@ -27,6 +27,7 @@ const validDashboardWorkflowRun = {
   codebase_id: null,
   status: 'running',
   outcome: null,
+  completed_outcome: null,
   user_message: 'deploy please',
   metadata: {},
   active_phase_started_at: null,

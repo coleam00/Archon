@@ -216,6 +216,7 @@ export type {
   WorkflowInputSpec,
   WorkflowBase,
   WorkflowDefinition,
+  WorkflowResultContract,
 } from './workflow';
 
 // Workflow run state
@@ -275,6 +276,7 @@ export {
 export type {
   WorkflowRunStatus,
   WorkflowRunOutcome,
+  RunCompletedOutcome,
   WorkflowStepStatus,
   NodeState,
   SkipCause,

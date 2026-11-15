@@ -154,15 +154,11 @@ describe('workflow run transitions', () => {
 
       await completeWorkflowRun('workflow-run-123', { duration_ms: 123 });
 
-      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining("status = 'completed'"), [
-        'workflow-run-123',
-      ]);
-      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining('completed_at = NOW()'), [
-        'workflow-run-123',
-      ]);
-      expect(mockQuery).toHaveBeenCalledWith(expect.stringContaining("AND status = 'running'"), [
-        'workflow-run-123',
-      ]);
+      const [update, updateParams] = mockQuery.mock.calls[0] as [string, unknown[]];
+      expect(update).toContain("status = 'completed'");
+      expect(update).toContain('completed_at = NOW()');
+      expect(update).toContain("AND status = 'running'");
+      expect(updateParams).toEqual(['workflow-run-123', null, null]);
       const [eventQuery, eventParams] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(eventQuery).toContain('INSERT INTO remote_agent_workflow_events');
       expect(eventParams[2]).toBe('workflow_completed');
@@ -191,7 +187,7 @@ describe('workflow run transitions', () => {
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).toContain("status = 'completed'");
       expect(query).toContain('metadata = metadata ||');
-      expect(params).toEqual(['workflow-run-123', JSON.stringify(metadata)]);
+      expect(params).toEqual(['workflow-run-123', null, null, JSON.stringify(metadata)]);
     });
 
     test('uses simple query without metadata merge when no metadata provided', async () => {
@@ -202,7 +198,7 @@ describe('workflow run transitions', () => {
 
       const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(query).not.toContain('metadata =');
-      expect(params).toEqual(['workflow-run-123']);
+      expect(params).toEqual(['workflow-run-123', null, null]);
     });
 
     test('does not commit completion when its audit insert fails', async () => {

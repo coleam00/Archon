@@ -54,8 +54,7 @@ inputs:
 # `delivered:false` is a valid completion: an honest "no work is owed" is a
 # successful run that shipped nothing, and lifecycle status and work outcome are
 # separate facts.
-returns: build
-outcome_field: delivered
+returns: { node: build, outcome: delivered }
 
 nodes:
   # Refuses the run before any agent spends when the forge plugin cannot

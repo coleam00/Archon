@@ -5442,7 +5442,6 @@ export interface components {
         };
       };
       returns?: string;
-      outcome_field?: string;
       deprecated?: {
         message: string;
       };
@@ -5934,6 +5933,7 @@ export interface components {
       status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       /** @enum {string|null} */
       outcome: 'succeeded' | 'failed' | null;
+      completed_outcome: string | null;
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
@@ -7695,6 +7695,7 @@ export interface components {
       /** @enum {string} */
       status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       outcome: components['schemas']['WorkflowRunOutcome'];
+      completed_outcome: string | null;
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;

@@ -6,6 +6,7 @@ import type { WorkflowDeps } from '../deps';
 import type {
   NodeOutput,
   ResolvedWorkflow,
+  RunCompletedOutcome,
   WorkflowRun,
   WorkflowUsageLimitWaitContext,
 } from '../schemas';
@@ -18,6 +19,7 @@ import {
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths } from '../output-ref';
+import { readCompletedOutcome } from '../completed-outcome';
 import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../logger';
 import { isProviderLimit, rootFailures, type ProviderLimitFailure } from '../executor-shared';
 import { safeSendMessage } from '../platform-messages';
@@ -97,6 +99,14 @@ export async function finishRun(
   // skipped and lands here again with `pending_writeback` set — it applies or
   // discards and falls through to completion. A pause receipt short-circuits after
   // the suspension attempt; other outcomes fall through to completeWorkflowRun.
+  // The outcome is read before the write-back gate, so a returns node that broke its
+  // declared outcome fails the run before anyone is asked to approve its changes.
+  const outcome = readCompletedOutcome(workflow, nodeOutputs);
+  if (outcome.kind === 'invalid') {
+    await failForInvalidOutcome(ctx, outcome.error, runTranscriptUsage);
+    return;
+  }
+
   if (ctx.execContext.kind === 'container' && ctx.containerCtx) {
     const gate = await runContainerWriteBackGate(
       deps,
@@ -110,8 +120,42 @@ export async function finishRun(
   }
 
   const terminal = selectTerminalOutput(workflow, workflowRun, nodeOutputs);
-  await completeRun(ctx, nodeCounts, terminal, runTranscriptUsage);
+  await completeRun(
+    ctx,
+    nodeCounts,
+    terminal,
+    runTranscriptUsage,
+    outcome.kind === 'outcome' ? outcome.outcome : undefined
+  );
   return terminal.output;
+}
+
+/** Fail a run whose returns node completed with a value its declared outcome does not admit. */
+async function failForInvalidOutcome(
+  ctx: RunTerminalContext,
+  failMsg: string,
+  runTranscriptUsage: WorkflowUsage
+): Promise<void> {
+  const { deps, platform, conversationId, workflow, workflowRun, logDir } = ctx;
+  await logWorkflowError(logDir, workflowRun.id, failMsg, runTranscriptUsage).catch(
+    (logErr: Error) => {
+      getLog().error(
+        { err: logErr, workflowRunId: workflowRun.id },
+        'dag.workflow_error_log_write_failed'
+      );
+    }
+  );
+  await safeSendMessage(platform, conversationId, `\u274c ${failMsg}`, {
+    workflowId: workflowRun.id,
+  });
+  await failRun(
+    deps,
+    workflowRun,
+    workflow.name,
+    failMsg,
+    'node_error',
+    'dag.outcome_invalid_fail'
+  );
 }
 
 function countNodeStates(nodeOutputs: ReadonlyMap<string, NodeOutput>, total: number): NodeCounts {
@@ -240,7 +284,8 @@ async function completeRun(
   ctx: RunTerminalContext,
   nodeCounts: NodeCounts,
   terminal: TerminalOutput,
-  runTranscriptUsage: WorkflowUsage
+  runTranscriptUsage: WorkflowUsage,
+  outcome: RunCompletedOutcome | undefined
 ): Promise<void> {
   const { deps, workflow, workflowRun, logDir } = ctx;
   const duration = Date.now() - ctx.startedAt;
@@ -296,7 +341,10 @@ async function completeRun(
         ...(worktreeDisposition
           ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
           : {}),
-      }
+      },
+      // The one write of the run's outcome (#5660): it lands with the completed status,
+      // so no reader sees an outcome on a run that has not ended.
+      outcome !== undefined ? { outcome } : undefined
     ),
     { workflowRunId: workflowRun.id, site: 'dag_db_complete_failed' }
   );

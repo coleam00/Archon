@@ -32,6 +32,7 @@ describe('artifact pointers (#2453)', () => {
       codebase_id: null,
       status: 'running',
       outcome: null,
+      completed_outcome: null,
       user_message: 'msg',
       metadata: {},
       active_phase_started_at: null,

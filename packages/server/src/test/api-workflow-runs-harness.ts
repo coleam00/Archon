@@ -520,6 +520,7 @@ export const MOCK_RUNNING_RUN = {
   codebase_id: 'cb-uuid-1',
   status: 'running',
   outcome: null,
+  completed_outcome: null,
   user_message: 'Deploy to staging',
   active_phase_started_at: null,
   started_at: NOW_DATE,

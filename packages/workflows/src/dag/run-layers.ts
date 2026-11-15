@@ -79,8 +79,6 @@ export async function runLayers(ctx: RunLayersContext): Promise<void> {
     const layer = ctx.layers[layerIdx];
     await runLayer(ctx, layer, layerIdx);
 
-    await ctx.afterLayer?.();
-
     if (await stopsBetweenLayers(ctx, layerIdx)) break;
   }
 }

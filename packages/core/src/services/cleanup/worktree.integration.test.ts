@@ -242,6 +242,7 @@ beforeEach(async () => {
     codebase_id: codebaseId,
     status: 'cancelled',
     outcome: null,
+    completed_outcome: null,
     user_message: '',
     metadata: { owned_worktree: { envId: env.id, creationId: created.metadata.creationId } },
     active_phase_started_at: null,

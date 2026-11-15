@@ -55,7 +55,7 @@ describe('workflowRunCommand — progress rendering', () => {
           name: 'plan',
           description: 'Plan work',
           returns: 'result',
-          outcome_field: 'ready',
+          result: { outcome: 'ready' },
           nodes: [
             {
               id: 'result',
@@ -101,11 +101,14 @@ describe('workflowRunCommand — progress rendering', () => {
     const { executeWorkflow } = require('@archon/workflows/executor');
     const workflowDb = require('@archon/core/db/workflows');
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce(execution);
-    if (!('handedOff' in execution)) {
+    // A handed-off or paused run is never read back: neither can carry an outcome.
+    const readsRun = !('handedOff' in execution) && !('paused' in execution);
+    if (readsRun) {
       (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
         id: execution.workflowRunId,
         status,
         outcome,
+        completed_outcome: outcome,
         metadata: { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
       });
     }
@@ -119,9 +122,7 @@ describe('workflowRunCommand — progress rendering', () => {
     } catch (error) {
       return error;
     } finally {
-      expect(workflowDb.getWorkflowRun.mock.calls.length - readsBefore).toBe(
-        'handedOff' in execution ? 0 : 1
-      );
+      expect(workflowDb.getWorkflowRun.mock.calls.length - readsBefore).toBe(readsRun ? 1 : 0);
     }
   }
 
@@ -425,31 +426,27 @@ describe('workflowRunCommand — progress rendering', () => {
     );
   });
 
-  it('keeps a failed execution non-zero when the authored outcome succeeded', async () => {
+  it('claims no outcome for a failed run, which never completed with one', async () => {
     const thrown = await runOutcomeFixture(
       { success: false, workflowRunId: 'run-1', error: 'later node failed' },
       'failed',
-      'succeeded'
+      null
     );
 
     expect(resolveCliExitCode(thrown)).toBe(1);
     expect(consoleSpy).toHaveBeenCalledWith('    Cost: $0.024');
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '\nWorkflow finished.\n  Status: failed\n  Authored outcome: succeeded'
-    );
+    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
   });
 
-  it('renders a persisted succeeded outcome while execution is paused', async () => {
+  it('claims no outcome for a paused run', async () => {
     await runOutcomeFixture(
       { success: true, paused: true, workflowRunId: 'run-1' },
       'paused',
-      'succeeded'
+      null
     );
 
     expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Usage');
-    expect(consoleSpy).toHaveBeenCalledWith(
-      '\nWorkflow paused — waiting for approval.\n  Status: paused\n  Authored outcome: succeeded'
-    );
+    expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow paused — waiting for approval.');
   });
 
   it('preserves the existing completion text when authored outcome is null', async () => {
@@ -508,7 +505,7 @@ describe('workflowRunCommand — progress rendering', () => {
     expect(mockLogger.warn).not.toHaveBeenCalled();
   });
 
-  it('does not look up usage for an approval pause without an authored outcome', async () => {
+  it('does not look up the run for an approval pause', async () => {
     setupWorkflowMocks();
     const { executeWorkflow } = require('@archon/workflows/executor');
     (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -577,6 +574,7 @@ describe('workflowRunCommand — progress rendering', () => {
                 id: 'run-usage',
                 status: 'completed',
                 outcome: 'failed',
+                completed_outcome: 'failed',
                 metadata,
               }
         );
@@ -1068,6 +1066,7 @@ describe('workflowRunCommand — progress rendering', () => {
         codebase_id: 'cb-folder',
         status: end === 'unresolved-writeback' ? 'failed' : (status ?? 'running'),
         outcome: null,
+        completed_outcome: null,
         user_message: 'go',
         metadata:
           end === 'unresolved-writeback'

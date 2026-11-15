@@ -66,6 +66,7 @@ describe('run-id prefix resolution (short ids from `workflow runs`)', () => {
       codebase_id: 'cb-1',
       status: 'completed',
       outcome: null,
+      completed_outcome: null,
       user_message: 'task',
       metadata: {},
       active_phase_started_at: null,

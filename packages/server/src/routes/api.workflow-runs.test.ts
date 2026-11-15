@@ -373,6 +373,7 @@ describe('GET /api/workflows/runs/:runId', () => {
       run_id: MOCK_FAILED_RUN.id,
       status: 'failed',
       outcome: null,
+      completed_outcome: null,
       error: 'producer failed',
       first_failed_node: 'producer',
       nodes: [{ node_id: 'producer', state: 'failed', error: 'producer failed' }],

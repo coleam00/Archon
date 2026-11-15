@@ -41,6 +41,7 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: 'test message',
     metadata: {},
     active_phase_started_at: null,

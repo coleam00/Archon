@@ -43,6 +43,7 @@ function notice(
       codebase_id: null,
       status,
       outcome,
+      completed_outcome: outcome,
       user_message: 'private input',
       metadata,
       active_phase_started_at: null,

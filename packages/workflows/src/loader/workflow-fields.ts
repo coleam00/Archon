@@ -22,6 +22,7 @@ import type {
   WorkflowRunBudget,
   WorkflowDeprecation,
   WorkflowInputSpec,
+  WorkflowResultContract,
 } from '../schemas/workflow';
 import { getLog } from './log';
 
@@ -290,55 +291,54 @@ export function inputEnvKeyCollision(names: Iterable<string>): string | null {
   return null;
 }
 
+/** The parsed `returns:` declaration: the selected node id and what the engine reads from it. */
+export interface ParsedReturns {
+  readonly node: string;
+  readonly result: WorkflowResultContract | undefined;
+}
+
+const returnsObjectSchema = z.strictObject({
+  node: z.string().trim().min(1),
+  outcome: z.string().trim().min(1).optional(),
+});
+
 /**
- * Parse optional returns — the node id whose output IS this workflow's result
- * (#2470). Accept a non-empty string; reject every other present value. Silently
- * dropping an invalid selector would change the workflow result by falling back to
- * positional sink selection.
+ * Parse optional returns: the node id whose output IS this workflow's result (#2470),
+ * as `returns: <id>` or `returns: { node: <id>, outcome: <field> }`. Every part the
+ * engine reads from that output is a key of the object form, never a sibling field and
+ * never inferred from a name. An unknown key is refused rather than dropped: dropping
+ * one would silently ignore a declared contract. A present but invalid value is refused
+ * too; dropping it would fall back to positional sink selection.
  *
  * `returns` must name a top-level node id. Checked here (not in validateDagStructure,
  * which takes nodes and is reused for loop_group bodies / the expander with no
- * `returns` in scope) against the parsed top-level nodes.
+ * `returns` in scope) against the parsed top-level nodes. The outcome's schema is
+ * checked on the assembled workflow, and again after include expansion when the node
+ * is an include alias.
  */
 export function parseReturns(
   raw: unknown,
   dagNodes: readonly (DagNode | IncludeDirective)[],
   filename: string
-): ParsedField<string> {
+): ParsedField<ParsedReturns> {
   if (raw === undefined) return { value: undefined };
-  if (typeof raw !== 'string' || raw.trim().length === 0) {
+  const parsed =
+    typeof raw === 'string'
+      ? returnsObjectSchema.safeParse({ node: raw })
+      : returnsObjectSchema.safeParse(raw);
+  if (!parsed.success) {
     getLog().debug({ filename, value: raw }, 'invalid_workflow_returns_value_rejected');
     return {
-      error:
-        "Invalid 'returns': expected the non-empty id of a top-level node whose output is this workflow's result",
+      error: `Invalid 'returns': expected the non-empty id of a top-level node whose output is this workflow's result, or { node: <id>, outcome: <field> } (${z.prettifyError(parsed.error)})`,
     };
   }
-  const returns = raw.trim();
-  if (!dagNodes.some(n => n.id === returns)) {
+  const { node, outcome } = parsed.data;
+  if (!dagNodes.some(n => n.id === node)) {
     return {
-      error: `Workflow declares returns: '${returns}' but no top-level node has that id`,
+      error: `Workflow declares returns: '${node}' but no top-level node has that id`,
     };
   }
-  return { value: returns };
-}
-
-/**
- * Authored run outcome (#2618). Unlike cosmetic or provider-default fields,
- * a malformed selector cannot be dropped: doing so would silently turn a
- * declared verdict into outcome=null. The node-schema relationship is
- * validated on the assembled workflow (and again after include
- * expansion when `returns:` names an include alias).
- */
-export function parseOutcomeField(raw: unknown, filename: string): ParsedField<string> {
-  if (raw === undefined) return { value: undefined };
-  if (typeof raw !== 'string' || raw.trim().length === 0) {
-    getLog().debug({ filename, value: raw }, 'invalid_workflow_outcome_field_value_rejected');
-    return {
-      error:
-        "Invalid 'outcome_field': expected a non-empty required boolean property name relative to 'returns'",
-    };
-  }
-  return { value: raw.trim() };
+  return { value: { node, result: outcome === undefined ? undefined : { outcome } } };
 }
 
 /** `resource: build` or `resource: { name: build, capacity: 3 }`, as one shape. */

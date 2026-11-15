@@ -323,10 +323,10 @@ export function createInMemoryWorkflowStore(
         run => run.id === id,
         view => view.resolveAndCancelApprovalGate(id, gateEvents, cancellation, expected)
       ),
-    completeWorkflowRun: (id, completion, metadata) =>
+    completeWorkflowRun: (id, completion, metadata, result) =>
       terminalWrite(
         run => run.id === id,
-        view => view.completeWorkflowRun(id, completion, metadata)
+        view => view.completeWorkflowRun(id, completion, metadata, result)
       ),
     failWorkflowRun: (id, error, options) =>
       terminalWrite(
