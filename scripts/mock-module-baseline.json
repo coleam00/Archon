@@ -2760,7 +2760,6 @@
       "readWorktreeCreationId",
       "recordWorktreeAdoption",
       "registerWorktree",
-      "resetIsolationProvider",
       "resolveFolderBackend",
       "resolveRepoLocalOverride",
       "validateWorktreePostCreate",

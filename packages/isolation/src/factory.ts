@@ -34,10 +34,3 @@ export function getIsolationProvider(): IIsolationProvider {
   provider ??= new WorktreeProvider(configuredLoader, configuredExecutor);
   return provider;
 }
-
-/**
- * Reset the isolation provider (for testing)
- */
-export function resetIsolationProvider(): void {
-  provider = null;
-}
