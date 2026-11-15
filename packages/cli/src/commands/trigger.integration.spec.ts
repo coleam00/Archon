@@ -498,6 +498,17 @@ describe('trigger CLI durable execution', () => {
       false
     );
     expect(refused.exitCode).not.toBe(0);
+    // The engine's refusal names no flag; the CLI names its own way to name the item.
+    expect(refused.stderr).toContain('--item');
+    const detached = await runCli(
+      fixture.cliPath,
+      fixture.projectRoot,
+      fixture.archonHome,
+      [...superseding, otherRun?.id ?? '', '--detach'],
+      false
+    );
+    expect(detached.exitCode).not.toBe(0);
+    expect(detached.stderr).toContain('--item');
     expect(runs()).toHaveLength(2);
   }, 60_000);
 

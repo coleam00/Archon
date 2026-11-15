@@ -220,7 +220,10 @@ async function createWorkflowRunRow(
     );
     return {
       stopped: true,
-      result: { success: false, error: refusal ?? 'Database error creating workflow run' },
+      result:
+        refusal === null
+          ? { success: false, error: 'Database error creating workflow run' }
+          : { success: false, error: refusal, continuedItemRefused: true },
     };
   }
 }

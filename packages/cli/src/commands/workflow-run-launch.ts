@@ -37,6 +37,7 @@ import {
   destinationCorrelationId,
   getLog,
   resolveRunDestination,
+  withItemHint,
   type RunDestination,
 } from './workflow-shared';
 import {
@@ -658,7 +659,10 @@ async function createRunWorktree(
   if (!preparedSource) throw new Error('Worktree setup requires a captured workflow source');
   await lease.start(admission.preCreatedRun?.id ?? preparedSource.runId);
   const setupRun =
-    admission.preCreatedRun ?? (await createSetupRun(launch, codebase, preparedSource.runId));
+    admission.preCreatedRun ??
+    (await createSetupRun(launch, codebase, preparedSource.runId).catch((error: unknown) => {
+      throw withItemHint(error);
+    }));
   admission.preCreatedRun = setupRun;
   lease.setupRun = setupRun;
   admission.preparedSource = await retainSetupRunSource(

@@ -36,6 +36,7 @@ import {
   printJsonWriteError,
   resolveRunTranscriptPath,
   spelledForCli,
+  withItemHint,
   type RunDestination,
   type WorkflowRunOptions,
 } from './workflow-shared';
@@ -576,7 +577,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
   } catch (error) {
     throw new Error(
-      `Failed to create the workflow run: ${(error as Error).message}\nNothing was started.`
+      `Failed to create the workflow run: ${(withItemHint(error) as Error).message}\nNothing was started.`
     );
   }
 }
