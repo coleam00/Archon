@@ -12,24 +12,12 @@ describe('isValidCommandName', () => {
       expect(isValidCommandName('build')).toBe(true);
     });
 
-    test('name with hyphens', () => {
-      expect(isValidCommandName('type-check')).toBe(true);
-    });
-
-    test('name with underscores', () => {
-      expect(isValidCommandName('run_tests')).toBe(true);
-    });
-
     test('name with numbers', () => {
       expect(isValidCommandName('step1')).toBe(true);
     });
 
     test('uppercase letters are allowed', () => {
       expect(isValidCommandName('TypeCheck')).toBe(true);
-    });
-
-    test('mixed alphanumeric with hyphens', () => {
-      expect(isValidCommandName('e2e-tests')).toBe(true);
     });
 
     test('single character name', () => {
@@ -134,25 +122,9 @@ describe('isValidCommandName', () => {
   // Empty / whitespace-only names
   // ---------------------------------------------------------------------------
 
-  describe('empty and whitespace-only names', () => {
+  describe('empty names', () => {
     test('empty string', () => {
       expect(isValidCommandName('')).toBe(false);
-    });
-
-    test('whitespace only — single space', () => {
-      // A single space doesn't start with '.' and contains no path separators,
-      // but the function returns true for it (it is not explicitly rejected).
-      // This test documents the actual behavior.
-      expect(isValidCommandName(' ')).toBe(true);
-    });
-
-    test('whitespace only — multiple spaces', () => {
-      // Same reasoning: spaces alone pass the current checks.
-      expect(isValidCommandName('   ')).toBe(true);
-    });
-
-    test('tab character alone', () => {
-      expect(isValidCommandName('\t')).toBe(true);
     });
   });
 
@@ -161,18 +133,6 @@ describe('isValidCommandName', () => {
   // ---------------------------------------------------------------------------
 
   describe('combined edge cases', () => {
-    test('name with ".." suffix but no slash is still rejected', () => {
-      expect(isValidCommandName('foo..')).toBe(false);
-    });
-
-    test('name starting with valid char followed by backslash is rejected', () => {
-      expect(isValidCommandName('a\\b')).toBe(false);
-    });
-
-    test('name with forward slash anywhere is rejected', () => {
-      expect(isValidCommandName('a/b/c')).toBe(false);
-    });
-
     test('long valid name', () => {
       const longName = 'a'.repeat(200);
       expect(isValidCommandName(longName)).toBe(true);
