@@ -23,7 +23,7 @@ For how the SDLC pack makes that choice (agents first, scripts for fixed rules a
 
 **The one narrow case that argues for determinism** — and it is a reliability argument, not a constitutional one: a check with **no judgment content** (a boolean with exactly one correct answer, like "does this file exist") whose failure has **irreversible external consequences** is better expressed as a node that cannot decline to fire. Not because a prompt cannot evaluate it, but because the cost of it not firing is unrecoverable. Cite reliability when you make that argument; do not cite this page.
 
-This is not an aesthetic preference. The declarative surface is what makes Archon's core promises possible: load-time validation, the visual builder, resumability, audit trails, and approval gates all depend on the engine being able to *statically see* the workflow's structure. Every unit of computation that leaks into the YAML is a unit the engine can no longer validate, render, resume, or audit — and a unit that a script node would have handled better.
+This is not an aesthetic preference. The declarative surface is what makes Archon's core promises possible: load-time validation, a graph any surface can render, resumability, audit trails, and approval gates all depend on the engine being able to *statically see* the workflow's structure. Every unit of computation that leaks into the YAML is a unit the engine can no longer validate, render, resume, or audit — and a unit that a script node would have handled better.
 
 ## The admissibility test
 
@@ -154,4 +154,4 @@ For **contributors**: cite this page in `feat(workflows)` PRs that touch the YAM
 
 For **workflow authors**: if you're fighting the YAML — wanting arithmetic in `when:`, string manipulation in a field, cleverness in structure — the language is telling you the logic belongs one level down — into a `script:`/`bash:` node or a `prompt:`, whichever fits the problem (see *The rule*: that choice is yours, not the constitution's) — leaving the YAML to do what it's for: wiring the pieces the engine governs.
 
-For **the roadmap**: the constitution is why Archon can keep its declarative surface while workflows-as-code frameworks exist. The trade — auditability, the visual builder, non-engineer operators — stays won exactly as long as the YAML stays a coordination language. The day it computes, it loses to both alternatives at once.
+For **the roadmap**: the constitution is why Archon can keep its declarative surface while workflows-as-code frameworks exist. The trade — auditability, a graph any surface can render, operators who are not engineers — stays won exactly as long as the YAML stays a coordination language. The day it computes, it loses to both alternatives at once.

@@ -1,6 +1,8 @@
 # Working on Archon
 
-Archon is a self-hostable, governed agentic automation engine. It runs workflows that mix deterministic steps, AI agents, human gates, and audit trails. Coding automation is its most mature surface, but the engine is intended for general business operations too.
+Archon is a self-hostable, governed agentic automation engine. It runs workflows that mix deterministic steps, AI agents, approval gates, and audit trails. Coding automation is its most mature surface, but the engine is intended for general business operations too.
+
+An **operator** is whoever uses Archon: a person, or more often that person's agent. Write for both; do not assume a person is reading or answering.
 
 This file is the canonical project guidance for coding agents. Keep it short, durable, and about judgment. Put changing product direction in [`.archon/direction.md`](.archon/direction.md), workflow-language design in [`.archon/workflow-language-constitution.md`](.archon/workflow-language-constitution.md), aspirational engineering craft and review values in [`.archon/engineering.md`](.archon/engineering.md), user documentation in the docs site, and machine-checkable rules in code, types, tests, lint, or CI.
 
@@ -112,7 +114,7 @@ The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [
 - Workflow execution depends on injected contracts, not on core database or adapter implementations.
 - Platform-specific parsing and authorization belong inside the owning adapter. Core receives normalized intent and identity.
 - The Web client consumes generated API types through its local API layer; it does not import server or workflow runtime packages.
-- The engine (`packages/`) and the bundled SDLC pack (`.archon/workflows`, `.archon/scripts`) don't import each other's code, in source or in tests. They meet through the workflow language, the CLI and the provider and forge contracts.
+- The engine (`packages/`) and the bundled SDLC pack (`.archon/workflows`, `.archon/scripts`) don't import each other's code, in source or in tests. They meet through the workflow language, the CLI, the `archon:script` module a workflow script imports, and the provider and forge contracts.
 - Shared schemas are the source of truth for persisted and API shapes. Keep OpenAPI generation and runtime validation on the same schema path.
 - Use the type system, schema validation, and package boundaries to enforce architecture before adding prose rules.
 
@@ -120,6 +122,7 @@ The governing rule is: **YAML coordinates. Code computes. Agents judge.** Read [
 
 - Database schema evolution is additive-only. There is no migration ledger or version gate, and older binaries may open the same database.
 - Never rename, retype, or drop a shipped table or column. A new `NOT NULL` column needs a default that remains valid for older writers.
+- A JSON document stored in a column is a persisted shape too. One that more than one binary version reads must be able to gain a field: a reader that rejects a key it does not know breaks the older binary the moment a newer one writes.
 - Keep SQLite and PostgreSQL schemas aligned unless a narrow, documented exception is already enforced.
 - Test upgrades from shipped schema shapes, not only fresh database creation.
 - Keep generated or mirrored artifacts synchronized through their owning scripts. Find those scripts in `package.json` and adjacent tests instead of copying a list here.
