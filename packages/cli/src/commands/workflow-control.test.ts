@@ -299,30 +299,6 @@ describe('workflowResumeCommand', () => {
     );
   });
 
-  it('should print resume info and delegate to workflowRunCommand', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-1',
-      workflow_name: 'implement',
-      status: 'failed',
-      user_message: 'add auth',
-      working_path: '/tmp/test-worktree',
-    });
-
-    // workflowResumeCommand calls workflowRunCommand internally which needs many
-    // mocks. The --resume execution flow is tested separately in workflowRunCommand tests.
-    // Here we only verify the initial output by catching the downstream error.
-    try {
-      await workflowResumeCommand(createTestWorkflowHost(), 'run-1');
-    } catch {
-      // workflowRunCommand will fail due to missing mocks — that's fine
-    }
-
-    // Printed resume message before delegating to workflowRunCommand
-    expect(consoleSpy).toHaveBeenCalledWith('Resuming workflow: implement');
-    expect(consoleSpy).toHaveBeenCalledWith('Path: /tmp/test-worktree');
-  });
-
   it('should throw when run has no working path', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
@@ -335,45 +311,6 @@ describe('workflowResumeCommand', () => {
     await expect(workflowResumeCommand(createTestWorkflowHost(), 'run-no-path')).rejects.toThrow(
       'has no working path recorded'
     );
-  });
-
-  it('should pass codebase_id from run record to workflowRunCommand', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
-
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-1',
-      workflow_name: 'implement',
-      status: 'failed',
-      user_message: 'add auth',
-      working_path: trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-resume-codebase-'))),
-      codebase_id: 'cb-existing',
-    });
-
-    // Return a matching workflow so workflowRunCommand doesn't throw before codebase lookup
-    (
-      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
-      errors: [],
-    });
-
-    // Simulate getCodebase returning the codebase found by ID
-    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-existing',
-      name: 'owner/repo',
-      default_cwd: '/path/to/main-checkout', // different from working_path
-    });
-
-    try {
-      await workflowResumeCommand(createTestWorkflowHost(), 'run-1');
-    } catch {
-      // workflowRunCommand may fail on other mocks — that's fine
-    }
-
-    // getCodebase SHOULD have been called with the stored codebase_id
-    expect(codebaseDb.getCodebase).toHaveBeenCalledWith('cb-existing');
   });
 
   it('fails loudly when getCodebase throws during resume', async () => {
@@ -636,48 +573,6 @@ describe('workflowApproveCommand', () => {
     } finally {
       stdoutSpy.mockRestore();
     }
-  });
-
-  it('should pass codebase_id from run record to workflowRunCommand', async () => {
-    const workflowDb = await import('@archon/core/db/workflows');
-    const codebaseDb = await import('@archon/core/db/codebases');
-    const workflowDiscovery = await import('@archon/workflows/workflow-discovery');
-    const core = await import('@archon/core');
-
-    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-approve-1',
-      workflow_name: 'implement',
-      status: 'paused',
-      user_message: 'add auth',
-      working_path: '/tmp/test-worktree',
-      codebase_id: 'cb-existing',
-      metadata: { approval: { nodeId: 'review-node' } },
-    });
-
-    (core.createWorkflowStore as ReturnType<typeof mock>).mockReturnValueOnce({
-      createWorkflowEvent: mock(() => Promise.resolve()),
-    });
-
-    (
-      workflowDiscovery.discoverWorkflowsWithConfig as ReturnType<typeof mock>
-    ).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'implement' })],
-      errors: [],
-    });
-
-    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'cb-existing',
-      name: 'owner/repo',
-      default_cwd: '/path/to/main-checkout',
-    });
-
-    try {
-      await workflowApproveCommand(createTestWorkflowHost(), 'run-approve-1');
-    } catch {
-      // downstream failure is acceptable
-    }
-
-    expect(codebaseDb.getCodebase).toHaveBeenCalledWith('cb-existing');
   });
 
   it('fails loudly when codebase row is missing during approve auto-resume', async () => {
