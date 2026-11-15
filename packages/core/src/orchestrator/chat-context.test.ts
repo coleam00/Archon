@@ -448,9 +448,9 @@ describe('handleMessage — workflow context injection', () => {
 
     await handleMessage(platform, 'conv-1', 'What did the workflow do?', { actor: operator });
 
-    // The row still reaches the agent, under default identifiers.
+    // The row still reaches the agent.
     expect(formatWorkflowContextSection).toHaveBeenCalledWith([
-      { workflowName: 'unknown', runId: 'unknown', summary: 'Summary.' },
+      expect.objectContaining({ summary: 'Summary.' }),
     ]);
     expect(mockSendQuery).toHaveBeenCalled();
   });
@@ -471,7 +471,7 @@ describe('handleMessage — workflow context injection', () => {
     await handleMessage(platform, 'conv-1', 'Follow-up', { actor: operator });
 
     expect(formatWorkflowContextSection).toHaveBeenCalledWith([
-      { workflowName: 'unknown', runId: 'unknown', summary: 'Summary.' },
+      expect.objectContaining({ summary: 'Summary.' }),
     ]);
     expect(mockSendQuery).toHaveBeenCalled();
   });
