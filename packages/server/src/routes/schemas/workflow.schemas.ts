@@ -12,10 +12,8 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
  * Zod schemas for workflow API endpoints.
  */
 import { z } from '@hono/zod-openapi';
-import {
-  openAttentionQueueCountsSchema,
-  attentionQueueItemSchema,
-} from '@archon/workflows/attention-queue';
+import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
+import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import {
   attentionWatchLevelSchema,
   classifiedAttentionStreamLineSchema,
