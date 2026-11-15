@@ -114,7 +114,7 @@ export async function resolveCodebaseForPath(
   if (exact?.kind === 'folder') return { codebase: exact, repoRoot: null };
   // Repository roots always come from Git: runs record this string as their working
   // path, and on Windows it differs from the canonical `default_cwd` (separators,
-  // 8.3 short names), so returning `cwd` would hide runs from `--resume`.
+  // 8.3 short names), so returning `cwd` would mismatch the runs recorded there.
   const repoRoot = await findRepoRoot(cwd);
   if (exact) return { codebase: exact, repoRoot };
   const parent = await deps.findCodebaseByPathPrefix(cwd);

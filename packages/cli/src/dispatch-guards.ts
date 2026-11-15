@@ -9,7 +9,7 @@
  * undefined when the invocation is allowed.
  */
 
-export const RUN_PROJECT_CONFLICT_FLAGS = ['folder', 'base-branch', 'resume', 'dry-run'] as const;
+export const RUN_PROJECT_CONFLICT_FLAGS = ['folder', 'base-branch', 'dry-run'] as const;
 
 /** Workflow subcommands that continue an existing run. */
 const CONTINUE_SUBCOMMANDS: readonly string[] = [
@@ -26,9 +26,6 @@ const CONTINUE_SUBCOMMANDS: readonly string[] = [
 export function isContinueSubcommand(subcommand: string | undefined): boolean {
   return subcommand !== undefined && CONTINUE_SUBCOMMANDS.includes(subcommand);
 }
-
-export const RESUME_RUN_CONFIG_CONFLICT =
-  '--resume and --config are mutually exclusive. A resumed run keeps its original run config.';
 
 /**
  * Rejects --model on subcommands that continue an existing workflow run: the
@@ -67,27 +64,4 @@ export function rejectConfigOutsideRun(
     return 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.';
   }
   return undefined;
-}
-
-/**
- * Rejects a fresh --config or --config-from-run on `workflow run --resume`: the resumed
- * run keeps the config it started with.
- */
-export function rejectConfigOnContinue(
-  resume: boolean | undefined,
-  config: unknown,
-  configFromRun?: unknown
-): string | undefined {
-  if (!resume) return undefined;
-  const flag =
-    config !== undefined
-      ? '--config'
-      : configFromRun !== undefined
-        ? '--config-from-run'
-        : undefined;
-  if (flag === undefined) return undefined;
-  return (
-    `Error: ${flag} cannot be used when continuing an existing workflow run. ` +
-    'The run keeps the config it started with.'
-  );
 }

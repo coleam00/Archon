@@ -555,7 +555,9 @@ describe('CommandHandler', () => {
 
         expect(result.success).toBe(false);
         expect(result.message).toContain('/workflow status');
-        expect(result.message).toContain('/workflow resume <id> - Resume a failed or paused run');
+        expect(result.message).toContain(
+          '/workflow resume <id> - Resume a failed, paused or killed run'
+        );
       });
     });
   });

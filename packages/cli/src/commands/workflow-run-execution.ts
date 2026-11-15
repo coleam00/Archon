@@ -399,8 +399,8 @@ function nothingToResumeError(launch: ForegroundLaunch, resumable: WorkflowRun):
   const { workflowName } = launch.request;
   // `--branch` is only runnable when the prior run used worktree isolation:
   // folder projects reject worktree options outright, and an in-place repo run
-  // cannot be relaunched onto the branch its own checkout holds. A stale-running
-  // orphan cannot be superseded until it is released, so name that step first.
+  // cannot be relaunched onto the branch its own checkout holds. A run still marked
+  // running cannot be superseded until it is released, so name that step first.
   const worktreeBranch = launch.isFolderCodebase ? undefined : launch.resumeBranch;
   const unblock = isTerminalRunStatus(resumable.status)
     ? ''

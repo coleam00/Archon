@@ -1,3 +1,4 @@
+import { makeContinuationRun } from '../test-support/workflow-continuation-fixture';
 import {
   mockFolderBackendPrepare,
   recordCapturedSourceCalls,
@@ -62,7 +63,6 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       const { hydrateResumableRun } = await import('@archon/workflows/run-resume');
       const conversationDb = await import('@archon/core/db/conversations');
       const codebaseDb = await import('@archon/core/db/codebases');
-      const workflowDb = await import('@archon/core/db/workflows');
       const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
 
       const frozen = makeTestResolvedWorkflow({ name: 'review-block', description: 'frozen' });
@@ -84,11 +84,6 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       mockResolveContinuationWorkflow
         .mockResolvedValueOnce(frozenContinuation)
         .mockResolvedValueOnce(frozenContinuation);
-      (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-        id: 'run-prior',
-        working_path: null,
-        workflow_name: 'review-block',
-      });
       (hydrateResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
         preCreatedRun: { id: 'run-prior', workflow_name: 'review-block' },
         priorCompletedNodes: new Map([['node-a', 'done']]),
@@ -109,6 +104,12 @@ describe('workflowRunCommand — continuation and capture ownership (#2646)', ()
       try {
         await workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'review-block', 'go', {
           resume: true,
+          continuationRun: makeContinuationRun({
+            id: 'run-prior',
+            working_path: null,
+            workflow_name: 'review-block',
+            codebase_id: null,
+          }),
         });
       } finally {
         discoverMock.mockResolvedValue({ workflows: [], errors: [] });

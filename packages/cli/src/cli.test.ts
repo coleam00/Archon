@@ -31,7 +31,6 @@ import { pathToFileURL } from 'node:url';
 import { sealWorkflowRunConfig } from '@archon/core/config';
 import {
   isContinueSubcommand,
-  rejectConfigOnContinue,
   rejectConfigOutsideRun,
   rejectModelOnContinue,
 } from './dispatch-guards';
@@ -725,20 +724,6 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     expect(parsed.values.config).toBe('./config.minimax.yaml');
   });
 
-  it('rejects a new config on run --resume before reading it', () => {
-    // Pure pre-dispatch argv guard — no I/O, so asserted in-process.
-    const message = rejectConfigOnContinue(true, './does-not-exist.yaml');
-    expect(message).toBeDefined();
-    expect(message).toContain('--config cannot be used when continuing');
-  });
-
-  it('names --config-from-run when it is the flag passed on run --resume', () => {
-    expect(rejectConfigOnContinue(true, undefined, 'paused-run')).toBe(
-      'Error: --config-from-run cannot be used when continuing an existing workflow run. ' +
-        'The run keeps the config it started with.'
-    );
-  });
-
   it('refuses --config-from-run on the trigger commands that take --config', () => {
     for (const subcommand of ['fire', 'schedule']) {
       expect(rejectConfigOutsideRun('trigger', subcommand, undefined, 'paused-run')).toBe(
@@ -807,16 +792,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
     try {
       const result = spawnSync(
         process.execPath,
-        [
-          CLI_ENTRY,
-          'workflow',
-          'run',
-          'x',
-          '--dry-run',
-          '--resume',
-          '--internal-detached-run-config',
-          payload,
-        ],
+        [CLI_ENTRY, 'workflow', 'run', 'x', '--dry-run', '--internal-detached-run-config', payload],
         {
           cwd: repo,
           encoding: 'utf8',
@@ -832,7 +808,7 @@ mock.module(${JSON.stringify(join(import.meta.dir, 'utils/workflow-host.ts'))}, 
       );
       expect(result.status).toBe(1);
       expect(result.stderr).not.toContain('could not be decrypted');
-      expect(result.stderr).toContain('--resume and --config are mutually exclusive');
+      expect(result.stderr).toContain("Workflow 'x' not found");
     } finally {
       await removeTempTree(repo);
     }
@@ -2116,20 +2092,6 @@ describe('workflow run flag conflicts', () => {
       'base with no-worktree',
       ['--no-worktree', '--base', 'main'],
       'Error: --base has no effect with --no-worktree.\nRemove --base or drop --no-worktree.',
-    ],
-    [
-      'resume with branch',
-      ['--resume', '--branch', 'b'],
-      'Error: --resume and --branch are mutually exclusive.\n' +
-        '  --resume reuses the existing worktree from the failed run.\n' +
-        '  Remove --branch when using --resume.',
-    ],
-    [
-      'workflow-source with resume',
-      ['--workflow-source', tmpdir(), '--resume'],
-      'Error: --workflow-source and --resume are mutually exclusive.\n' +
-        '  A resumed run executes the source it captured when it started.\n' +
-        '  Drop --workflow-source, or start a fresh run to pick up new source.',
     ],
     [
       'workflow-source with container',

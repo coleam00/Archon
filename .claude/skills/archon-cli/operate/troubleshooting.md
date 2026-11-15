@@ -122,7 +122,7 @@ archon workflow get <run-id>
 archon workflow resume <run-id>
 ```
 
-`archon workflow resume <run-id>` targets that exact run and reuses its recorded working path/worktree. As a convenience, `archon workflow run my-workflow --resume` resumes the most recent resumable run for that workflow at the invocation cwd. A bare `archon workflow run my-workflow` starts a fresh run.
+`archon workflow resume <run-id>` targets that exact run and reuses its recorded working path/worktree. It takes a failed or paused run, or a run its killed process left `running` when no owner answers for it. A bare `archon workflow run my-workflow` starts a fresh run.
 
 **Session caveat:** A cold resume does not reconstruct the ambient sequential
 `context: shared` cursor. Explicit `context: { resume: node-id }` ancestry is

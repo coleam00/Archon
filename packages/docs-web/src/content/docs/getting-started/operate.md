@@ -383,7 +383,7 @@ A stream starts with one `attention` line per readable open item, with `snapshot
 | `resolved` | An item this stream sent closed or was replaced | `cursor`, `project`, `ref`, `runId`, `workflow`, `parentRunId`, `occurrence`, `reason`; with `reason: "answered"`, also `answeredVia`, `answeredBy`, `answeredFromRun` and `answeredAt` |
 | `unmatched` | A label write moved an open item outside `--label` | `cursor`, `project`, `ref`, `runId`, `workflow`, `parentRunId`, `occurrence`, `revision` |
 | `terminal` | A run ended | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status`, `outcome`, `cause`, and `reason` on a launch failure or failed outcome |
-| `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused or stale-running run resumed and cleared a stored error | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status: "running"` |
+| `resumed` | A failed run resumed, an engine-cancelled fan-out child recovered, or a paused run, or a running run whose owner was gone, resumed and cleared a stored error | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `status: "running"` |
 | `owner_lost` | A running run's owner process on this host is gone | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `observedStatus` |
 | `notice` | A node or the engine [recorded a notice for a run](#notices-what-the-work-did) | `cursor`, `project`, `runId`, `workflow`, `parentRunId`, `at`, `node`, `text`, `labels` |
 | `ready` | Initial snapshot delivery finished; coverage may be degraded | `cursor` |

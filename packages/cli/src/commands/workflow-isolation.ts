@@ -139,7 +139,7 @@ function folderWorktreeOptionError(): Error {
 
 /**
  * Warn that `--base` is only HALF applied when an existing worktree is adopted
- * (`--branch` reuse or `--resume`): its cut-from is already fixed, but the
+ * by `--branch` reuse: its cut-from is already fixed, but the
  * override still reaches `$BASE_BRANCH` and retargets the PR.
  *
  * Deliberately not `--from`'s "was not applied" wording — that is accurate for

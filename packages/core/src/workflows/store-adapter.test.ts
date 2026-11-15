@@ -13,7 +13,6 @@ const mockGetWorkflowRun = mock(() => Promise.resolve(null));
 const mockFindChildRuns = mock(() => Promise.resolve([]));
 const mockGetRunAncestry = mock(() => Promise.resolve([]));
 const mockGetActiveWorkflowRunByPath = mock(() => Promise.resolve(null));
-const mockFindResumableRun = mock(() => Promise.resolve(null));
 const mockResumeWorkflowRun = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockRecoverCancelledFanOutRun = mock(() => Promise.resolve({ id: 'run-1' }));
 const mockUpdateWorkflowRun = mock(() => Promise.resolve());
@@ -51,7 +50,6 @@ mock.module('../db/workflows', () => ({
   findChildRuns: mockFindChildRuns,
   getRunAncestry: mockGetRunAncestry,
   getActiveWorkflowRunByPath: mockGetActiveWorkflowRunByPath,
-  findResumableRun: mockFindResumableRun,
   resumeWorkflowRun: mockResumeWorkflowRun,
   recoverCancelledFanOutRun: mockRecoverCancelledFanOutRun,
   updateWorkflowRun: mockUpdateWorkflowRun,
@@ -280,7 +278,6 @@ describe('createWorkflowStore', () => {
       'findChildRuns',
       'getRunAncestry',
       'getActiveWorkflowRunByPath',
-      'findResumableRun',
       'resumeWorkflowRun',
       'recoverCancelledFanOutRun',
       'updateWorkflowRun',

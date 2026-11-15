@@ -90,16 +90,6 @@ describe('workflowRunCommand — sparse model bindings (#2481)', () => {
     ).rejects.toThrow(/Duplicate/);
     expect(executeWorkflow).not.toHaveBeenCalled();
   });
-
-  it('refuses new model bindings on resume', async () => {
-    await stubWorkflow();
-    await expect(
-      workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'bench', 'go', {
-        resume: true,
-        modelAssignments: ['large=openai/gpt-5.6'],
-      })
-    ).rejects.toThrow(/--resume and --model/);
-  });
 });
 
 describe('workflowRunCommand — sparse config file (#2482)', () => {
@@ -292,7 +282,7 @@ describe('workflowRunCommand — sparse config file (#2482)', () => {
         resume: true,
         configFromRun: 'paused-run',
       })
-    ).rejects.toThrow('--resume and --config-from-run are mutually exclusive.');
+    ).rejects.toThrow('A continued run keeps its original run config');
     expect((workflowDb.getWorkflowRun as ReturnType<typeof mock>).mock.calls).toHaveLength(reads);
   });
 
@@ -319,6 +309,6 @@ describe('workflowRunCommand — sparse config file (#2482)', () => {
         resume: true,
         configPath: join(tempRoot, 'does-not-exist.yaml'),
       })
-    ).rejects.toThrow(/--resume and --config/);
+    ).rejects.toThrow('A continued run keeps its original run config');
   });
 });

@@ -6,6 +6,7 @@ import {
   WorkflowNotResumableError,
   WorkflowResourceBusyError,
   deadlineWaitCursor,
+  ownerlessResumeCursor,
   type PauseCursor,
   type IWorkflowStore,
 } from '../store';
@@ -52,27 +53,29 @@ export function describeAdmissionConformance(getHarness: () => WorkflowStoreHarn
         expect(await harness.store.admitResourceStart(intent)).toEqual(decisions[index]);
       }
     });
-    for (const activity of ['null', 'stale'] as const) {
-      test(`admitted running runs cannot resume with ${activity} activity`, async () => {
-        const intent = start();
-        const id = intent.launch.run.id;
-        await store.admitResourceStart(intent);
-        await store.updateWorkflowRun(id, { status: 'running' });
-        await harness.backdate(id, {
-          last_activity_at: activity === 'null' ? null : new Date('2020-01-01T00:00:00Z'),
-        });
-        const before = await store.getWorkflowRun(id);
-        expect(before?.last_activity_at).toEqual(
-          activity === 'null' ? null : new Date('2020-01-01T00:00:00Z')
-        );
-        const events = await store.listWorkflowEvents(id);
-        expect(await rejection(store.resumeWorkflowRun(id))).toBeInstanceOf(
-          WorkflowNotResumableError
-        );
-        expect(await store.getWorkflowRun(id)).toEqual(before);
-        expect(await store.listWorkflowEvents(id)).toEqual(events);
+    test('an admitted running run resumed without its owner keeps exactly its one slot', async () => {
+      const intent = start('queue', 'host', 2);
+      const id = intent.launch.run.id;
+      await store.admitResourceStart(intent);
+      await store.updateWorkflowRun(id, { status: 'running' });
+      const before = await store.getWorkflowRun(id);
+      if (!before) throw new Error('run missing');
+      // Without a cursor, a running run is never resumable, however old its activity.
+      await harness.backdate(id, { last_activity_at: null });
+      expect(await rejection(store.resumeWorkflowRun(id))).toBeInstanceOf(
+        WorkflowNotResumableError
+      );
+      expect((await store.resumeWorkflowRun(id, ownerlessResumeCursor(before))).status).toBe(
+        'running'
+      );
+      // Capacity two: the resumed run holds one slot, so one more start fits and the next queues.
+      expect(await store.admitResourceStart(start('queue', 'host', 2))).toMatchObject({
+        status: 'admitted',
       });
-    }
+      expect(await store.admitResourceStart(start('queue', 'host', 2))).toMatchObject({
+        status: 'queued',
+      });
+    });
     test('a failed admitted run cannot resume past a new holder or a queued promise', async () => {
       const first = start(),
         holder = start(),

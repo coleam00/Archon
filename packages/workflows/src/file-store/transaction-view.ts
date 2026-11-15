@@ -28,7 +28,7 @@ import {
   WorkflowRunPauseConflictError,
   type IWorkflowStore,
   type WorkflowEventInput,
-  type WorkflowResumeCursor,
+  type ResumeClaimCursor,
   waitCompletionEvents,
   FAN_OUT_CANCEL_REASONS,
   resumeCursorMatches,
@@ -83,7 +83,7 @@ export type TransactionView = Omit<
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
    * otherwise. Lets a store decide slot admission before the resume changes anything.
    */
-  resumableRun(id: string, cursor?: WorkflowResumeCursor): WorkflowRun;
+  resumableRun(id: string, cursor?: ResumeClaimCursor): WorkflowRun;
   recordCapacityWait(id: string): void;
   clearCapacityWait(id: string): void;
 };
@@ -121,9 +121,10 @@ export function createTransactionView(
       event_order: ++eventOrder,
     });
   };
-  const resumableRun = (id: string, cursor?: WorkflowResumeCursor): WorkflowRun => {
+  const resumableRun = (id: string, cursor?: ResumeClaimCursor): WorkflowRun => {
     const run = row(id);
-    if (!isResumable(run) || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
+    const statusAllows = isResumable(run) || cursor?.kind === 'ownerless';
+    if (!statusAllows || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
       throw new WorkflowNotResumableError(id, run.status);
     return run;
   };

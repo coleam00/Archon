@@ -94,6 +94,7 @@ export const {
   createWorkflowOperations,
   AbandonOwnerNotStoppedError,
   CancelRefusedError,
+  ResumeRefusedError,
   describeAbandonOwner,
   assertAnswerable,
   assertApprovable,

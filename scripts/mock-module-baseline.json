@@ -2417,7 +2417,6 @@
       "findAdoptingRuns",
       "findChildRuns",
       "findOpenWorkRuns",
-      "findResumableRun",
       "findResumableRunByParentConversation",
       "findWorkflowRunsByIdPrefix",
       "getActiveWorkflowRun",

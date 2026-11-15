@@ -1,5 +1,5 @@
 import { expect, test } from 'bun:test';
-import { executionClaim, WorkflowNotResumableError } from '../store';
+import { executionClaim, ownerlessResumeCursor, WorkflowNotResumableError } from '../store';
 import { workflowPathPriorityTime } from '../workflow-path-lock';
 import type { WorkflowStoreHarness } from '../store-conformance';
 
@@ -195,7 +195,12 @@ export function describeResumeTransitionConformance(getHarness: () => WorkflowSt
       const creation = new Date('2000-01-01');
       await harness.backdate(run.id, { started_at: creation, last_activity_at: creation });
       const before = await store.listWorkflowEvents(run.id);
-      const resumed = await store.resumeWorkflowRun(run.id);
+      const current = await store.getWorkflowRun(run.id);
+      if (!current) throw new Error('Missing run');
+      const resumed =
+        status === 'running'
+          ? await store.resumeWorkflowRun(run.id, ownerlessResumeCursor(current))
+          : await store.resumeWorkflowRun(run.id);
       expect(resumed.started_at).toEqual(creation);
       expect(resumed.active_phase_started_at?.getTime()).toBeGreaterThan(creation.getTime());
       expect(resumed.last_activity_at).toEqual(resumed.active_phase_started_at);

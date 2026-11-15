@@ -467,7 +467,6 @@ export class InMemoryStore implements IWorkflowStore {
   upsertWorkflowRunNodeSession: IWorkflowStore['upsertWorkflowRunNodeSession'] = () =>
     Promise.resolve();
   upsertWorkflowNodeSession = (): Promise<void> => Promise.resolve();
-  findResumableRun = (): Promise<null> => Promise.resolve(null);
 
   // --- test helpers ---
   /** Mimic approveWorkflow for a standard approval gate: write node_completed for

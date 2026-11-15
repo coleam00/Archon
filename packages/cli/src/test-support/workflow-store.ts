@@ -390,7 +390,6 @@ export function createInMemoryWorkflowStore(
     getRunAncestry: id => write(view => view.getRunAncestry(id)),
     getActiveWorkflowRunByPath: (path, self) =>
       write(view => view.getActiveWorkflowRunByPath(path, self)),
-    findResumableRun: (name, path) => write(view => view.findResumableRun(name, path)),
     findWorkflowRunsByIdPrefix: (prefix, codebase) =>
       write(view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => write(view => view.findAdoptingRuns(id)),

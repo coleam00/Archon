@@ -541,61 +541,6 @@ describe('workflowRunCommand — detach', () => {
     expect(spawnCmd).not.toContain('--conversation-id');
   });
 
-  // #2872 — a continuation already owns a run row, so the ack names it without
-  // creating anything. `wait <run-id>` behind `run --resume --detach` needs the id
-  // just as much as behind a fresh launch.
-  it('--resume --detach acks the continuation run id without creating a row', async () => {
-    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
-    const workflowDb = await import('@archon/core/db/workflows');
-    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
-      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
-      errors: [],
-    });
-    (workflowDb.findResumableRun as ReturnType<typeof mock>).mockResolvedValueOnce({
-      id: 'run-paused',
-      workflow_name: 'assist',
-      working_path: null,
-    });
-    mockCreateWorkflowRun.mockClear();
-
-    const child = createDetachedChildFixture();
-    const spawnSpy = spyOn(Bun, 'spawn').mockReturnValue(child.child);
-    const savedArgv = process.argv;
-    process.argv = [
-      'bun',
-      '/abs/cli.ts',
-      'workflow',
-      'run',
-      'assist',
-      'hello',
-      '--resume',
-      '--detach',
-      '--json',
-    ];
-
-    try {
-      const commandPromise = workflowRunCommand(
-        createTestWorkflowHost(),
-        '/test/path',
-        'assist',
-        'hello',
-        {
-          resume: true,
-          detach: true,
-          json: true,
-        }
-      );
-      await finishStartupWindow(commandPromise, spawnSpy);
-    } finally {
-      process.argv = savedArgv;
-      spawnSpy.mockRestore();
-    }
-
-    const parsed = JSON.parse(firstJsonPayload(stdoutSpy)) as Record<string, unknown>;
-    expect(parsed.runId).toBe('run-paused');
-    expect(mockCreateWorkflowRun).not.toHaveBeenCalled();
-  });
-
   it('--detach --json emits a structured ack', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const tempHome = testHome;
