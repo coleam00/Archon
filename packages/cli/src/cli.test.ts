@@ -2386,7 +2386,7 @@ describe('receipt policies in the CLI host', () => {
     }
   });
 
-  it.each(['--version', 'version'])(
+  it.each(['--version', '-V', '-v', 'version'])(
     '%s works with a malformed installed receipt',
     async command => {
       const root = mkdtempSync(join(tmpdir(), 'cli-version-receipt-'));

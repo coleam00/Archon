@@ -313,6 +313,32 @@ describe('workflowResumeCommand', () => {
     );
   });
 
+  it('resumes in the codebase recorded on the run, not one looked up from its working path', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const runOwned = await import('./workflow-run-owned');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-1',
+      workflow_name: 'implement',
+      status: 'failed',
+      user_message: 'add auth',
+      working_path: '/tmp/test-worktree',
+      codebase_id: 'cb-existing',
+    });
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-existing',
+      name: 'owner/repo',
+      default_cwd: '/path/to/main-checkout',
+    });
+    const runSpy = spyOn(runOwned, 'workflowRunCommand').mockResolvedValueOnce(undefined);
+    try {
+      await workflowResumeCommand(createTestWorkflowHost(), 'run-1');
+      expect(runSpy.mock.calls[0]?.[4]).toMatchObject({ resume: true, codebaseId: 'cb-existing' });
+    } finally {
+      runSpy.mockRestore();
+    }
+  });
+
   it('fails loudly when getCodebase throws during resume', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
@@ -572,6 +598,37 @@ describe('workflowApproveCommand', () => {
       expect(payload.error).not.toContain('/workflow ');
     } finally {
       stdoutSpy.mockRestore();
+    }
+  });
+
+  it('auto-resumes in the codebase recorded on the run', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const core = await import('@archon/core');
+    const runOwned = await import('./workflow-run-owned');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-approve-1',
+      workflow_name: 'implement',
+      status: 'paused',
+      user_message: 'add auth',
+      working_path: '/tmp/test-worktree',
+      codebase_id: 'cb-existing',
+      metadata: { approval: { nodeId: 'review-node', message: 'Approve?' } },
+    });
+    (core.createWorkflowStore as ReturnType<typeof mock>).mockReturnValueOnce({
+      createWorkflowEvent: mock(() => Promise.resolve()),
+    });
+    (codebaseDb.getCodebase as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-existing',
+      name: 'owner/repo',
+      default_cwd: '/path/to/main-checkout',
+    });
+    const runSpy = spyOn(runOwned, 'workflowRunCommand').mockResolvedValueOnce(undefined);
+    try {
+      await workflowApproveCommand(createTestWorkflowHost(), 'run-approve-1');
+      expect(runSpy.mock.calls[0]?.[4]).toMatchObject({ resume: true, codebaseId: 'cb-existing' });
+    } finally {
+      runSpy.mockRestore();
     }
   });
 
