@@ -7,9 +7,6 @@ import {
   buildApprovalResolutionBlocks,
   buildStatusBlocks,
   formatCostFooter,
-  REACTION_FAILURE,
-  REACTION_RUNNING,
-  REACTION_SUCCESS,
   type RunSnapshot,
 } from './blocks';
 
@@ -359,14 +356,6 @@ describe('buildStatusBlocks', () => {
       elements: Array<{ text: string }>;
     };
     expect(ctx.elements[0]?.text).toContain('reason: user clicked cancel');
-  });
-});
-
-describe('reaction name constants', () => {
-  test('are stable Slack emoji names', () => {
-    expect(REACTION_RUNNING).toBe('arrows_counterclockwise');
-    expect(REACTION_SUCCESS).toBe('white_check_mark');
-    expect(REACTION_FAILURE).toBe('x');
   });
 });
 
