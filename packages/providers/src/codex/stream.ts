@@ -293,6 +293,8 @@ interface TurnObservation {
   readonly liveTasks: Set<string>;
   readonly agentThreads: Set<string>;
   pendingFailure: ResultChunk | undefined;
+  /** What the turn's result reported, so a later result carries only what followed. */
+  reported: Pick<ResultChunk, 'tokens' | 'structuredOutput'> | undefined;
   readonly errors: string[];
   lastAgentMessage: string;
   // `last` is one request and is re-sent unchanged with later snapshots, so the turn's usage
@@ -302,12 +304,12 @@ interface TurnObservation {
   // usage-limit failure before the first request), a resumed turn over-counts by one earlier
   // request; Codex sends no pre-turn total on this resume path to correct it.
   usageSpan: UsageSpan | undefined;
-  // Codex reports a subagent's usage on the subagent's own thread, never on the parent's, so
-  // each recognized subagent thread gets a span of its own, across all of its turns. A span
-  // starts at the thread's first snapshot, so a subagent resumed from an earlier turn counts
-  // only what it used during this one.
+  // Codex reports a subagent's usage on its own thread, so each subagent this turn saw start
+  // gets a span, across all of its turns. A span starts at the thread's first snapshot because
+  // a forked subagent, the default for `spawn_agent`, starts from its parent's running total.
+  // Only a `subAgentActivity` start makes a thread a subagent: one from an earlier turn that
+  // this turn only messages is not counted, nor one from Codex's v1 tools, which report none.
   readonly agentUsageSpans: Map<string, UsageSpan>;
-  lateAgentUsageReported: boolean;
   rateLimits: RateLimitSnapshot | undefined;
   retries: number;
 }
@@ -365,11 +367,11 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
     liveTasks: new Set(),
     agentThreads: new Set(),
     pendingFailure: undefined,
+    reported: undefined,
     errors: [],
     lastAgentMessage: '',
     usageSpan: undefined,
     agentUsageSpans: new Map(),
-    lateAgentUsageReported: false,
     rateLimits: undefined,
     retries: 0,
   };
@@ -382,12 +384,39 @@ export async function* streamTurn(request: TurnRequest): AsyncGenerator<MessageC
     // descendant threads are still accepted after parent completion. An empty set ends
     // observation; it does not establish that Codex cannot report another start later.
     if (observation.parentCompleted && observation.liveTasks.size === 0) {
-      if (observation.pendingFailure) yield observation.pendingFailure;
+      yield* remainingResult(ids, observation);
       return;
     }
   }
-  if (observation.pendingFailure) yield observation.pendingFailure;
+  yield* remainingResult(ids, observation);
   throw connection.closedError(await connection.ended, observation.errors);
+}
+
+/**
+ * The result owed once observation ends: the held failure with all of the turn's usage, or a
+ * later result with the usage reported since the sent one. The engine sums the results' tokens
+ * and takes each one's structured output, so the later result repeats it.
+ */
+function* remainingResult(ids: TurnIds, observation: TurnObservation): Generator<ResultChunk> {
+  const usage = turnUsageOf(observation);
+  if (observation.pendingFailure) {
+    if (usage) observation.pendingFailure.tokens = usage;
+    yield observation.pendingFailure;
+    return;
+  }
+  const { reported } = observation;
+  const tokens = reported && usage && usageAfter(reported.tokens, usage);
+  if (!tokens) return;
+  const { structuredOutput } = reported;
+  yield { type: 'result', sessionId: ids.threadId, tokens, structuredOutput };
+}
+
+/** What `usage` holds beyond `reported`, axis by axis, or undefined when nothing grew. */
+function usageAfter(reported: TokenUsage | undefined, usage: TokenUsage): TokenUsage | undefined {
+  const later: TokenUsage = { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 };
+  for (const key of ['input', 'output', 'cacheRead', 'cacheWrite'] as const)
+    later[key] = Math.max(0, (usage[key] ?? 0) - (reported?.[key] ?? 0));
+  return Object.values(later).some(Boolean) ? later : undefined;
 }
 
 /**
@@ -497,7 +526,7 @@ async function* observeNotification(
       return;
 
     case 'thread/tokenUsage/updated':
-      yield* observeTokenUsage(request, ids, observation, notification.params);
+      observeTokenUsage(request, ids, observation, notification.params);
       return;
 
     case 'error':
@@ -536,12 +565,12 @@ type NotificationParams<M extends ServerNotification['method']> = Extract<
   { method: M }
 >['params'];
 
-function* observeTokenUsage(
+function observeTokenUsage(
   request: TurnRequest,
   ids: TurnIds,
   observation: TurnObservation,
   params: NotificationParams<'thread/tokenUsage/updated'>
-): Generator<MessageChunk> {
+): void {
   if (params.threadId === ids.threadId) {
     // Usage reported for another turn of the thread is not this turn's.
     if (params.turnId !== ids.turnId) return;
@@ -551,24 +580,8 @@ function* observeTokenUsage(
     return;
   }
   if (!observation.agentThreads.has(params.threadId)) return;
-  if (!observation.parentCompleted) {
-    const span = observation.agentUsageSpans.get(params.threadId);
-    observation.agentUsageSpans.set(params.threadId, extendedSpan(span, params.tokenUsage));
-    return;
-  }
-  // The result was built at the parent's completion, so it cannot take this usage.
-  if (observation.lateAgentUsageReported) return;
-  observation.lateAgentUsageReported = true;
-  getLog().warn(
-    { sessionIdPreview: sessionPreview(params.threadId) },
-    'codex.subagent_usage_after_result'
-  );
-  yield {
-    type: 'warning',
-    code: 'codex.subagent_usage_after_result',
-    message:
-      "A Codex subagent used tokens after its parent's turn completed; the node's usage leaves them out",
-  };
+  const span = observation.agentUsageSpans.get(params.threadId);
+  observation.agentUsageSpans.set(params.threadId, extendedSpan(span, params.tokenUsage));
 }
 
 /**
@@ -674,15 +687,18 @@ async function* observeTurnCompleted(
     return;
   observation.parentCompleted = true;
   await request.connection.finishToolCalls();
+  const usage = turnUsageOf(observation);
   for (const chunk of completeTurn(turn.status, turn.error, request, {
     threadId: ids.threadId,
-    usage: turnUsageOf(observation),
+    usage,
     rateLimits: observation.rateLimits,
     lastAgentMessage: observation.lastAgentMessage,
   })) {
     // The executor stops reading on failure results, so live work must drain first.
     if (chunk.type === 'result' && chunk.failure) observation.pendingFailure = chunk;
     else yield chunk;
+    if (chunk.type !== 'result') continue;
+    observation.reported = { tokens: usage, structuredOutput: chunk.structuredOutput };
   }
 }
 

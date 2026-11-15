@@ -652,7 +652,8 @@ async function* reportedTurn(
   for await (const chunk of closeOpenToolCalls(stream, { resultEndsTurn: true })) {
     if (chunk.type === 'result') {
       if (turn.holdsSuccess && !chunk.failure) {
-        call.toolTurnResult = chunk;
+        // A turn's later result adds the usage its subagents reported after its first.
+        call.toolTurnResult = withToolTurnOf(chunk, call.toolTurnResult);
         continue;
       }
       withToolTurnOf(chunk, call.toolTurnResult);
