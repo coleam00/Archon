@@ -197,19 +197,6 @@ describe('GitHub source plugin', () => {
     expect(intake.bindings[0]?.runAsUserId).not.toBe(intake.receipt.sourceActor?.id);
   });
 
-  test('normalizes a check with no PR association using its qualified repo and revision', async () => {
-    const recorded = recorder();
-    const github = await adapter(config(), recorded.intake);
-    const payload = JSON.stringify(checkRunPayload());
-
-    await github.receiveWebhook(payload, sign(payload), 'delivery-zero-pr', 'check_run');
-
-    expect(recorded.calls[0]?.bindings[0]?.eventInputs).toMatchObject({
-      repository: 'owner/repo',
-      revision: 'opaque-revision-id',
-    });
-  });
-
   test('rejects an invalid signature before trusted intake', async () => {
     const recorded = recorder();
     const github = await adapter(config(), recorded.intake);

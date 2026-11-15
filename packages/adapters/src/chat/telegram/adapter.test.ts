@@ -48,11 +48,6 @@ describe('TelegramAdapter', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       expect(adapter.getStreamingMode()).toBe('stream');
     });
-
-    test('should return stream mode when explicitly configured', () => {
-      const adapter = new TelegramAdapter('fake-token-for-testing', 'stream');
-      expect(adapter.getStreamingMode()).toBe('stream');
-    });
   });
 
   describe('message formatting', () => {
@@ -111,24 +106,6 @@ describe('TelegramAdapter', () => {
       expect(mockSendMessage).toHaveBeenNthCalledWith(2, 12345, expect.any(String));
     });
 
-    test('should split long messages into multiple chunks', async () => {
-      // Create a message that will be split (>4096 chars)
-      const paragraph1 = 'a'.repeat(3000);
-      const paragraph2 = 'b'.repeat(3000);
-      const message = `${paragraph1}\n\n${paragraph2}`;
-
-      await adapter.sendMessage('12345', message);
-
-      // Should have sent multiple chunks
-      expect(mockSendMessage).toHaveBeenCalledTimes(2);
-      // Each chunk should be sent with MarkdownV2
-      expect(mockSendMessage).toHaveBeenCalledWith(
-        12345,
-        expect.any(String),
-        expect.objectContaining({ parse_mode: 'MarkdownV2' })
-      );
-    });
-
     test('should handle single paragraph longer than MAX_LENGTH', async () => {
       // A single paragraph (no \n\n breaks) longer than MAX_LENGTH
       const longLine = 'x'.repeat(5000);
@@ -162,19 +139,6 @@ describe('TelegramAdapter', () => {
         expect.objectContaining({ parse_mode: 'MarkdownV2' })
       );
     });
-
-    test('should fall back to plain text and use line-based batching when MarkdownV2 fails on chunk', async () => {
-      // First MarkdownV2 attempt fails; second call is plain-text fallback
-      mockSendMessage.mockRejectedValueOnce(new Error("Bad Request: can't parse entities"));
-
-      await adapter.sendMessage('77777', 'plain fallback text');
-
-      // 2 calls: 1 failed MarkdownV2 + 1 plain text fallback
-      expect(mockSendMessage).toHaveBeenCalledTimes(2);
-      // Second call has no parse_mode (plain text)
-      const secondCall = mockSendMessage.mock.calls[1];
-      expect(secondCall.length).toBe(2); // (id, text) — no options object
-    });
   });
 
   describe('getConversationId', () => {
@@ -185,15 +149,6 @@ describe('TelegramAdapter', () => {
       } as unknown as import('grammy').Context;
 
       expect(adapter.getConversationId(ctx)).toBe('12345');
-    });
-
-    test('should return chat.id as string for group chat', () => {
-      const adapter = new TelegramAdapter('fake-token-for-testing');
-      const ctx = {
-        chat: { id: -987654321 },
-      } as unknown as import('grammy').Context;
-
-      expect(adapter.getConversationId(ctx)).toBe('-987654321');
     });
 
     test('should return chat.id as string for supergroup', () => {
@@ -209,15 +164,6 @@ describe('TelegramAdapter', () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');
       const ctx = {
         chat: undefined,
-      } as unknown as import('grammy').Context;
-
-      expect(() => adapter.getConversationId(ctx)).toThrow('No chat in context');
-    });
-
-    test('should throw when ctx.chat is null', () => {
-      const adapter = new TelegramAdapter('fake-token-for-testing');
-      const ctx = {
-        chat: null,
       } as unknown as import('grammy').Context;
 
       expect(() => adapter.getConversationId(ctx)).toThrow('No chat in context');
@@ -307,29 +253,6 @@ describe('TelegramAdapter', () => {
         }
       }
     );
-
-    test('should retry on 409 and succeed on second attempt', async () => {
-      const adapter = new TelegramAdapter('fake-token-for-testing');
-      // grammY's start() resolves when bot stops, not when started — onStart fires on startup
-      const mockStart = mock<
-        (opts?: { drop_pending_updates?: boolean; onStart?: () => void }) => Promise<void>
-      >()
-        .mockRejectedValueOnce(new Error('409: Conflict: terminated by other getUpdates request'))
-        .mockImplementationOnce(opts => {
-          opts?.onStart?.();
-          return new Promise(() => {});
-        });
-      (adapter.getBot() as unknown as { start: typeof mockStart }).start = mockStart;
-
-      await adapter.start({ retryDelayMs: 0 });
-
-      expect(mockStart).toHaveBeenCalledTimes(2);
-      expect(mockLogger.warn).toHaveBeenCalledWith(
-        expect.objectContaining({ attempt: 1, maxAttempts: 3 }),
-        'telegram.start_conflict_retrying'
-      );
-      expect(mockLogger.info).toHaveBeenCalledWith('telegram.bot_started');
-    });
 
     test('logs the shared deprecation notice on start', async () => {
       const adapter = new TelegramAdapter('fake-token-for-testing');

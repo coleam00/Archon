@@ -93,13 +93,6 @@ export class DiscordAdapter implements IPlatformAdapter {
   }
 
   /**
-   * Get the discord.js Client instance
-   */
-  getClient(): Client {
-    return this.client;
-  }
-
-  /**
    * Get the configured streaming mode
    */
   getStreamingMode(): 'stream' | 'batch' {
