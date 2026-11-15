@@ -36,6 +36,7 @@ import {
   type IncludeCommandContent,
   type LoopWithCompiledCommand,
 } from '../compiled-command';
+import { parsePackagedResourceReference } from '../packaged-workflow';
 import { z } from 'zod';
 
 // OUTPUT_REF_SOURCE (output-ref.ts) is the one shape of a `$nodeId.output` reference, shared
@@ -325,10 +326,21 @@ function commandBodySource(node: DagNode, scope: DagScope): TemplateReferenceSou
   const body = scope.commandContents?.get(name);
   if (typeof body !== 'string' || body.trim().length === 0) return undefined;
   return {
-    field: `${field} ${name}.md`,
+    field: `${field} ${commandFileLabel(name)}`,
     text: resolveIncludeOutputAliases(node, body),
     surface: 'prompt',
   };
+}
+
+/**
+ * The command file as its author knows it. A packaged command's name is an internal
+ * qualified id; its file is `commands/<name>.md` beside the owning workflow's YAML.
+ */
+function commandFileLabel(name: string): string {
+  const packaged = parsePackagedResourceReference(name);
+  if (packaged === null) return `${name}.md`;
+  const { pack, workflow } = packaged.owner;
+  return `${pack}/${workflow}/commands/${packaged.name}.md`;
 }
 
 function checkTemplateReferences(node: DagNode | IncludeDirective, scope: DagScope): string | null {

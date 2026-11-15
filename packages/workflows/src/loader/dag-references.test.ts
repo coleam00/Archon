@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import {
   discoverFiles,
+  discoverWorkflows,
   expectRejected,
   inlinePrompt,
   parseError,
@@ -832,14 +833,35 @@ ${bodyNodes}`);
     expect(check(withoutWork, shared)).toContain(
       "Node 'ask' field 'command hello.md' references '$LOOP_PREV.work.output', which is not a node in an enclosing loop_group body"
     );
+    // Two consumers of one file in one workflow: only the body without 'work' is refused.
+    const twoLoops = body(`  - id: first
+    loop_group:
+      until_bash: "true"
+      max_iterations: 2
+      nodes:
+        - id: work
+          bash: echo work
+        - id: ask
+          command: hello
+          depends_on: [work]
+  - id: second
+    depends_on: [first]
+    loop_group:
+      until_bash: "true"
+      max_iterations: 2
+      nodes:
+        - id: again
+          command: hello
+`);
+    expect(check(twoLoops, shared)).toBe(
+      "loop_group 'second' body: Node 'again' field 'command hello.md' references '$LOOP_PREV.work.output', which is not a node in an enclosing loop_group body"
+    );
     // At top level a $LOOP_PREV ref is left to the pass where an include lands it.
     expect(check(body('  - id: ask\n    command: hello\n'), shared)).toBeNull();
   });
 
-  it('leaves a missing or empty command to the command validator', () => {
-    const yaml = body('  - id: b\n    command: hello\n');
-    expect(check(yaml, { hello: null })).toBeNull();
-    expect(check(yaml, { hello: '  \n' })).toBeNull();
+  it('leaves a missing command to the command validator', () => {
+    expect(check(body('  - id: b\n    command: hello\n'), { hello: null })).toBeNull();
   });
 
   describe('at discovery', () => {
@@ -866,6 +888,22 @@ ${bodyNodes}`);
       );
       expect(error('missing.yaml')).toBeUndefined();
       expect(result.workflows.map(w => w.workflow.name)).toEqual(['missing']);
+    });
+
+    it('names a packaged command by its file in the pack', async () => {
+      const flow = join(root(), '.archon', 'workflows', 'demo', 'check');
+      await mkdir(join(flow, 'commands'), { recursive: true });
+      await writeFile(join(flow, 'commands', 'hello.md'), 'Prior: $nosuch.output');
+      await writeFile(
+        join(flow, 'check.yaml'),
+        'name: check\ndescription: Packaged.\nnodes:\n  - id: b\n    command: hello\n'
+      );
+      const result = await discoverWorkflows(root(), { loadDefaults: false });
+      expect(result.errors.map(e => e.error)).toContainEqual(
+        expect.stringContaining(
+          "Node 'b' field 'command demo/check/commands/hello.md' references unknown node '$nosuch.output'"
+        )
+      );
     });
   });
 });
