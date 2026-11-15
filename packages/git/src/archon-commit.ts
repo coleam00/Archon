@@ -64,11 +64,15 @@ export async function readArchonCommit(
     return undefined;
   }
   try {
-    const { stdout } = await execFileAsync('git', ['log', '-1', '--format=%h%n%cI'], {
-      cwd: sourceRoot,
-      env: withoutRepositorySelectors(process.env),
-      timeout: 5000,
-    });
+    const { stdout } = await execFileAsync(
+      'git',
+      ['log', '-1', '--no-show-signature', '--format=%h%n%cI'],
+      {
+        cwd: sourceRoot,
+        env: withoutRepositorySelectors(process.env),
+        timeout: 5000,
+      }
+    );
     const [sha, committedAt] = stdout.trim().split('\n');
     if (!sha || !committedAt) throw new Error(`unexpected git log output: ${stdout}`);
     return { sha, committedAt };
