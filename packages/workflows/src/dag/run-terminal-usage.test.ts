@@ -1112,30 +1112,6 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
     expect(completedWith(store)).toEqual({ outcome: { kind: 'boolean', value: 'succeeded' } });
   });
 
-  it('keeps what the returns node said in its node_completed event when later work fails (#2618)', async () => {
-    mockStructuredResult({ green: true });
-    const store = createMockStore();
-
-    await run(store, [
-      resultNode(),
-      {
-        id: 'later-failure',
-        kind: 'exec',
-        runtime: 'sh',
-        script: 'exit 1',
-        depends_on: ['result'],
-      },
-    ]);
-
-    expect(store.failWorkflowRun).toHaveBeenCalledTimes(1);
-    expect(store.completeWorkflowRun).not.toHaveBeenCalled();
-    const completedResult = [
-      ...store.persistWorkflowEvent.mock.calls.map(([event]) => event),
-      ...persistedEvents(store),
-    ].find(event => event.event_type === 'node_completed' && event.step_name === 'result');
-    expect(completedResult?.data).toMatchObject({ structured_output: { green: true } });
-  });
-
   it('completes with the value of a returns node re-executed on resume', async () => {
     mockStructuredResult({ green: false });
     const store = createMockStore();

@@ -107,7 +107,8 @@ describe('workflowRunCommand — progress rendering', () => {
       (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
         id: execution.workflowRunId,
         status,
-        outcome,
+        // The CLI reads completed_outcome; the legacy column stays empty so it cannot stand in.
+        outcome: null,
         completed_outcome: outcome,
         metadata: { total_cost_usd: 0.024, total_tokens_in: 8420, total_tokens_out: 2180 },
       });

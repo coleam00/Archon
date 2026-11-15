@@ -244,11 +244,13 @@ function readRunProvenance(raw: RawWorkflowRun) {
 /**
  * The rule `displayedRunOutcome` in @archon/workflows owns: a run completed by a binary
  * from before `completed_outcome` has only `outcome`, and a run that did not complete
- * shows none, though an older binary may have written `outcome` while it ran.
+ * shows none, though an older binary may have written `outcome` while it ran. The console
+ * cannot import the engine; `scripts/run-outcome-parity.test.ts` holds the two equal.
  */
-function readOutcome(raw: RawWorkflowRun): RunOutcome {
-  if (raw.completed_outcome) return raw.completed_outcome;
-  return raw.status === 'completed' ? (raw.outcome ?? null) : null;
+export function readOutcome(
+  raw: Pick<RawWorkflowRun, 'status' | 'outcome' | 'completed_outcome'>
+): RunOutcome {
+  return raw.completed_outcome ?? (raw.status === 'completed' ? (raw.outcome ?? null) : null);
 }
 
 export function toRun(raw: RawWorkflowRun): Run {
