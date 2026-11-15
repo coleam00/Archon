@@ -2386,7 +2386,7 @@ describe('receipt policies in the CLI host', () => {
     }
   });
 
-  it.each(['--version', '-V', '-v', 'version'])(
+  it.each(['--version', '-V', '-v', 'version', '--cwd . --version'])(
     '%s works with a malformed installed receipt',
     async command => {
       const root = mkdtempSync(join(tmpdir(), 'cli-version-receipt-'));
@@ -2395,7 +2395,7 @@ describe('receipt policies in the CLI host', () => {
       mkdirSync(join(home, 'plugins', 'installed', 'owner', 'broken'), { recursive: true });
       writeFileSync(file, '{invalid json');
       try {
-        const result = spawnSync(process.execPath, [CLI_ENTRY, command], {
+        const result = spawnSync(process.execPath, [CLI_ENTRY, ...command.split(' ')], {
           cwd: root,
           encoding: 'utf8',
           env: {
@@ -2413,6 +2413,25 @@ describe('receipt policies in the CLI host', () => {
       }
     }
   );
+
+  it('reads -v before a command as --verbose, not as a version request', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'cli-verbose-not-version-'));
+    try {
+      const result = spawnSync(process.execPath, [CLI_ENTRY, '-v', 'workflow', 'list'], {
+        cwd: root,
+        encoding: 'utf8',
+        env: {
+          ...process.env,
+          ARCHON_HOME: join(root, 'home'),
+          DATABASE_URL: '',
+          ARCHON_TELEMETRY_DISABLED: '1',
+        },
+      });
+      expect(`${result.stdout}${result.stderr}`).not.toContain('Archon CLI v');
+    } finally {
+      await removeTempTree(root);
+    }
+  });
 
   it(
     'registers a receipt without executing its binary, then keeps and reports its workspace after removal',

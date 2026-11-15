@@ -326,6 +326,18 @@ describe('GET /api/codebases', () => {
     mockListCodebaseClaims.mockReset();
   });
 
+  test('returns empty array when no codebases exist', async () => {
+    mockListCodebaseClaims.mockImplementationOnce(async () => []);
+
+    const app = makeApp();
+    const response = await app.request('/api/codebases');
+    expect(response.status).toBe(200);
+
+    const body = (await response.json()) as unknown[];
+    expect(Array.isArray(body)).toBe(true);
+    expect(body.length).toBe(0);
+  });
+
   test('returns list of codebases sorted by name', async () => {
     mockListCodebaseClaims.mockImplementationOnce(async () => [
       { ...MOCK_CODEBASE, id: 'b', name: 'zebra-project', repository_url: null },
