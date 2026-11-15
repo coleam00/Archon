@@ -115,8 +115,10 @@ export async function releaseSetupLock(
  * The setup marker means one of two things, and neither is adoptable: another
  * process is setting this checkout up right now and may yet roll it back, or a
  * setup died before finishing and left a checkout with no submodules, no git
- * identity, and none of the configured files. Ownership here is ambiguous, so
- * the operator gets an explicit action instead of a silent handover.
+ * identity, and none of the configured files. The lock cannot tell the two apart,
+ * so the refusal says whose lock it is, with the same wording as a rollback that
+ * kept the path, and never advises removal: the checkout may be another start's
+ * live one. The bare marker, with no attempt id, is what v0.11.0 and v0.11.1 wrote.
  */
 export async function refuseUnfinishedWorktree(worktreePath: string): Promise<void> {
   const lock = await readWorktreeLock(toWorktreePath(worktreePath));
@@ -132,9 +134,12 @@ export async function refuseUnfinishedWorktree(worktreePath: string): Promise<vo
   getLog().warn({ worktreePath }, 'worktree.adoption_refused_setup_unfinished');
   throw new IsolationFailure(
     'setup_unfinished',
-    `Cannot adopt the worktree at ${worktreePath}: its setup did not finish. ` +
-      'Another run may be creating it right now — retry once that run ends. ' +
-      `Otherwise remove it with \`git worktree remove --force --force ${worktreePath}\`.`
+    `Cannot adopt the existing worktree: its setup did not finish. ${keptCheckoutNotice(
+      worktreePath,
+      lockedByAnother(lock?.reason, 'its setup lock names no setup attempt'),
+      'Retry once that start has ended. If it stopped partway, find what became of it ' +
+        'before changing the workspace.'
+    )}`
   );
 }
 
@@ -186,9 +191,10 @@ async function rollBackIncompleteWorktree(
 }
 
 /**
- * Why a rollback left the path in place, by who the path belongs to. Only `this_attempt`
+ * Why a path was left in place, by who the path belongs to. Only `this_attempt`
  * is proven to be this call's own remains; telling an operator to remove anything else
- * would point them at a checkout another run may be using.
+ * would point them at a checkout another run may be using. A rollback that kept the path
+ * and an adoption that refused it both report through `keptCheckoutNotice`.
  */
 type KeptCheckout =
   | { owner: 'this_attempt'; reason: string }
@@ -196,7 +202,12 @@ type KeptCheckout =
   | { owner: 'other_setup'; attemptId: string }
   | { owner: 'unproven'; reason: string };
 
-function keptCheckoutNotice(worktreePath: string, kept: KeptCheckout): string {
+function keptCheckoutNotice(
+  worktreePath: string,
+  kept: KeptCheckout,
+  /** What the caller does about another start's lock; a rollback starts again under a new name. */
+  afterOtherSetup = 'Start this run again.'
+): string {
   switch (kept.owner) {
     case 'this_attempt':
       return (
@@ -208,12 +219,12 @@ function keptCheckoutNotice(worktreePath: string, kept: KeptCheckout): string {
         `The workspace at ${worktreePath} carries the setup lock of another start (setup ` +
         `attempt ${kept.attemptId}, the id in that worktree's Git lock), which is either still ` +
         "creating it or stopped partway. It is not this start's, and this start left it " +
-        'untouched. Start this run again.'
+        `untouched. ${afterOtherSetup}`
       );
     case 'unproven':
       return (
-        `The workspace at ${worktreePath} was left in place (${kept.reason}). This start can no ` +
-        'longer prove the workspace is its own, so another run may be using it: find the run ' +
+        `The workspace at ${worktreePath} was left in place (${kept.reason}). This start ` +
+        'cannot prove the workspace is its own, so another run may be using it: find the run ' +
         'that owns it before changing it.'
       );
   }

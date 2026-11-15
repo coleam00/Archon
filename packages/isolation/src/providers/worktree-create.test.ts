@@ -494,23 +494,30 @@ describe('adopting an existing checkout', () => {
     await expect(provider.create(issueRequest)).rejects.toThrow(/belongs to a different clone/);
   });
 
-  test('refuses a worktree whose setup never finished instead of adopting it', async () => {
-    worktreeExistsSpy.mockResolvedValue(true);
-    // A previous run died between `git worktree add` and the end of its setup,
-    // so its lock is still on the checkout.
-    readWorktreeLockSpy.mockResolvedValue({ reason: 'archon: worktree setup in progress' });
+  test.each([
+    // Another start's setup holds the checkout, or died holding it: its id is named.
+    { reason: 'archon: worktree setup in progress: another-attempt', attempt: 'another-attempt' },
+    // The marker v0.11 wrote names no attempt, so nobody's ownership can be shown.
+    { reason: 'archon: worktree setup in progress', attempt: undefined },
+  ])(
+    'refuses a worktree locked by an unfinished setup without advising its removal ($reason)',
+    async ({ reason, attempt }) => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      readWorktreeLockSpy.mockResolvedValue({ reason });
 
-    const error = await rejection(provider.create(issueRequest));
+      const error = await rejection(provider.create(issueRequest));
 
-    expect(error.message).toMatch(/its setup did not finish/);
-    expect(adoptionWarnings()).toHaveLength(0);
-    // The operator is told which checkout and the command that clears it.
-    expect(classifyIsolationError(error)).toContain(
-      `git worktree remove --force --force ${issuePath()}`
-    );
-    // Refusing is the whole point: nothing may be created over it either.
-    expect(ranGit('add')).toBe(false);
-  });
+      expect(error.message).toMatch(/its setup did not finish/);
+      expect(adoptionWarnings()).toHaveLength(0);
+      const userMessage = classifyIsolationError(error);
+      expect(userMessage).toContain(issuePath());
+      // The checkout may be another start's live one: nothing here may say to remove it.
+      expect(userMessage).not.toMatch(/\bremove\b/i);
+      if (attempt) expect(userMessage).toContain(attempt);
+      // Refusing is the whole point: nothing may be created over it either.
+      expect(ranGit('add')).toBe(false);
+    }
+  );
 
   test('adopts a worktree locked by someone other than a setup in progress', async () => {
     worktreeExistsSpy.mockResolvedValue(true);
