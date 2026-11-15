@@ -617,6 +617,28 @@ describe('substituteNodeOutputRefs -- structuredOutput preference', () => {
     );
   });
 
+  it('null structuredOutput falls through to JSON.parse fallback', () => {
+    const outputs = new Map([
+      ['n', makeOutput('completed', JSON.stringify({ type: 'BUG' }), null)],
+    ]);
+    expect(substituteNodeOutputRefs('$n.output.type', outputs)).toBe('BUG');
+  });
+
+  it('primitive structuredOutput falls through to JSON.parse fallback', () => {
+    const outputs = new Map([
+      ['n', makeOutput('completed', JSON.stringify({ type: 'BUG' }), 'just-a-string')],
+    ]);
+    expect(substituteNodeOutputRefs('$n.output.type', outputs)).toBe('BUG');
+  });
+
+  it('missing field in structuredOutput resolves to empty string (no JSON.parse retry)', () => {
+    // structuredOutput is authoritative; if the field is missing, do not retry output.
+    const outputs = new Map([
+      ['classify', makeOutput('completed', JSON.stringify({ type: 'BUG' }), { confidence: 0.9 })],
+    ]);
+    expect(substituteNodeOutputRefs('Fix $classify.output.type issue', outputs)).toBe('Fix  issue');
+  });
+
   it('bare $node.output reference (no field) uses output text, not structuredOutput', () => {
     const outputs = new Map([['n', makeOutput('completed', 'prose text', { type: 'BUG' })]]);
     expect(substituteNodeOutputRefs('Got: $n.output', outputs)).toBe('Got: prose text');
