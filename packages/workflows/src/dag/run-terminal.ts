@@ -290,64 +290,69 @@ async function completeRun(
   const { deps, workflow, workflowRun, logDir } = ctx;
   const duration = Date.now() - ctx.startedAt;
 
-  // Emit completion, then record it. The transcript and the live event do not depend
-  // on the status write and used to run whether or not it succeeded, so the
-  // (now-throwing) write goes last. Terminal telemetry is reported by the run store
-  // after the write commits.
+  // Record completion, then emit it. A reader of the live event re-reads the run for its
+  // outcome, which lands only in the completion write (#5660), so the event follows the
+  // write. It is still emitted when the write throws, as it was before the write could
+  // throw. Terminal telemetry is reported by the run store after the write commits.
   await logWorkflowComplete(logDir, workflowRun.id, runTranscriptUsage);
-  const emitter = getWorkflowEventEmitter();
-  emitter.emit({
-    type: 'workflow_completed',
-    runId: workflowRun.id,
-    workflowName: workflow.name,
-    duration,
-  });
-  emitter.unregisterRun(workflowRun.id);
 
   const { completedRun, worktreeDisposition } = await assessCompletedWorktree(deps, workflowRun);
 
-  await requireTerminalStatusWrite(
-    deps.store.completeWorkflowRun(
-      workflowRun.id,
-      { duration_ms: duration },
-      {
-        node_counts: nodeCounts,
-        // Cost and token totals are NOT written here — `persistRunUsage` already wrote
-        // them at the run tail, before this branch was chosen (#2469). Keeping a second
-        // copy here would be two writers of the same three keys, free to drift.
-        // A sub-run persists its terminal summary so the parent can thread it as
-        // `$<node>.output` on re-entry. Gated on parent_run_id to bound metadata
-        // growth to child runs only (top-level runs return the summary directly).
-        // `summary_value` is the additive logical sibling (#2637): old binaries keep
-        // reading `summary`, new parents prefer the typed value when present.
-        ...(workflowRun.parent_run_id && terminal.output ? { summary: terminal.output } : {}),
-        ...(workflowRun.parent_run_id && terminal.output && terminal.structuredOutput !== undefined
-          ? { [SUBRUN_METADATA_KEYS.summaryValue]: terminal.structuredOutput }
-          : {}),
-        // The callee-owned field contract (#2453). Gated on the same terminal output as
-        // the two keys above, so a blank/incomplete `returns:` node stamps no contract
-        // at all rather than one nothing satisfies. `summary_declared_fields` is derived
-        // from the paths and still written for older binaries, which read only it.
-        ...(workflowRun.parent_run_id &&
-        terminal.output &&
-        terminal.declaredOutputPaths !== undefined
-          ? {
-              [SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths]: terminal.declaredOutputPaths,
-              [SUBRUN_METADATA_KEYS.summaryDeclaredFields]: rootOutputFields(
-                terminal.declaredOutputPaths
-              ),
-            }
-          : {}),
-        ...(worktreeDisposition
-          ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
-          : {}),
-      },
-      // The one write of the run's outcome (#5660): it lands with the completed status,
-      // so no reader sees an outcome on a run that has not ended.
-      outcome !== undefined ? { outcome } : undefined
-    ),
-    { workflowRunId: workflowRun.id, site: 'dag_db_complete_failed' }
-  );
+  try {
+    await requireTerminalStatusWrite(
+      deps.store.completeWorkflowRun(
+        workflowRun.id,
+        { duration_ms: duration },
+        {
+          node_counts: nodeCounts,
+          // Cost and token totals are NOT written here — `persistRunUsage` already wrote
+          // them at the run tail, before this branch was chosen (#2469). Keeping a second
+          // copy here would be two writers of the same three keys, free to drift.
+          // A sub-run persists its terminal summary so the parent can thread it as
+          // `$<node>.output` on re-entry. Gated on parent_run_id to bound metadata
+          // growth to child runs only (top-level runs return the summary directly).
+          // `summary_value` is the additive logical sibling (#2637): old binaries keep
+          // reading `summary`, new parents prefer the typed value when present.
+          ...(workflowRun.parent_run_id && terminal.output ? { summary: terminal.output } : {}),
+          ...(workflowRun.parent_run_id &&
+          terminal.output &&
+          terminal.structuredOutput !== undefined
+            ? { [SUBRUN_METADATA_KEYS.summaryValue]: terminal.structuredOutput }
+            : {}),
+          // The callee-owned field contract (#2453). Gated on the same terminal output as
+          // the two keys above, so a blank/incomplete `returns:` node stamps no contract
+          // at all rather than one nothing satisfies. `summary_declared_fields` is derived
+          // from the paths and still written for older binaries, which read only it.
+          ...(workflowRun.parent_run_id &&
+          terminal.output &&
+          terminal.declaredOutputPaths !== undefined
+            ? {
+                [SUBRUN_METADATA_KEYS.summaryDeclaredOutputPaths]: terminal.declaredOutputPaths,
+                [SUBRUN_METADATA_KEYS.summaryDeclaredFields]: rootOutputFields(
+                  terminal.declaredOutputPaths
+                ),
+              }
+            : {}),
+          ...(worktreeDisposition
+            ? { [WORKTREE_DISPOSITION_METADATA_KEY]: worktreeDisposition }
+            : {}),
+        },
+        // The one write of the run's outcome (#5660): it lands with the completed status,
+        // so no reader sees an outcome on a run that has not ended.
+        outcome !== undefined ? { outcome } : undefined
+      ),
+      { workflowRunId: workflowRun.id, site: 'dag_db_complete_failed' }
+    );
+  } finally {
+    const emitter = getWorkflowEventEmitter();
+    emitter.emit({
+      type: 'workflow_completed',
+      runId: workflowRun.id,
+      workflowName: workflow.name,
+      duration,
+    });
+    emitter.unregisterRun(workflowRun.id);
+  }
 
   // The terminal record already carries the decision. Removing the checkout is cleanup
   // of terminal data, so a refusal or failure leaves it in place, the run completed, and
