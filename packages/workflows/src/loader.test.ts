@@ -142,6 +142,17 @@ nodes:
     expect(result.error?.error).toContain('effort:');
   });
 
+  it('should reject retired evidence_policy and name the replacement', () => {
+    const result = parseWorkflow(
+      'name: retired-evidence\ndescription: retired option\nevidence_policy:\n  required: true\nnodes:\n  - id: only\n    prompt: p\n',
+      'retired.yaml'
+    );
+    expect(result.workflow).toBeNull();
+    expect(result.error?.errorType).toBe('validation_error');
+    expect(result.error?.error).toContain("'evidence_policy:' has been removed");
+    expect(result.error?.error).toContain('bash:');
+  });
+
   it('should accept the widened effort ladder on NODES, not just at workflow level', () => {
     // `effortLevelSchema` backs both the workflow field and the node field, but
     // only the workflow one was proven against real YAML. The node field is the
@@ -1567,8 +1578,6 @@ describe('discovery', () => {
         'container:',
         '  enabled: true',
         '  write_back: auto',
-        'evidence_policy:',
-        '  required: true',
         'tags: [GitLab, Review]',
         'mutates_checkout: false',
         'budget:',
@@ -1585,7 +1594,6 @@ describe('discovery', () => {
     expect(result.workflows[0].workflow).toMatchObject({
       worktree: { enabled: false },
       container: { enabled: true, write_back: 'auto' },
-      evidence_policy: { required: true },
       tags: ['GitLab', 'Review'],
       mutates_checkout: false,
       budget: { max_work_units: 3 },

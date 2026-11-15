@@ -149,6 +149,7 @@ export function mockWorkflowRun(id = 'mock-run-id'): WorkflowRun {
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
   };
 }
@@ -282,6 +283,12 @@ export function createMockStore(): MockWorkflowStore {
     findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
+    listItemRuns: mock<IWorkflowStore['listItemRuns']>(async () => {
+      throw new Error('Not used by this test');
+    }),
+    getItem: mock<IWorkflowStore['getItem']>(async () => {
+      throw new Error('Not used by this test');
+    }),
     findAdoptingRuns: mock<IWorkflowStore['findAdoptingRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
@@ -396,7 +403,7 @@ export function createMockStore(): MockWorkflowStore {
  * written through `updateWorkflowRun` at the run tail on EVERY disposition, so this is
  * the single surface a usage assertion should read — regardless of whether the run then
  * completed, failed, was cancelled, or paused. Other `updateWorkflowRun` writes
- * (output_root, evidence_validation, …) are filtered out by key.
+ * (output_root, …) are filtered out by key.
  */
 export function runUsageWrites(
   store: ReturnType<typeof createMockStore>

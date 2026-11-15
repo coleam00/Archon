@@ -212,9 +212,14 @@ describe('readProjectPackSettings', () => {
     ['settings:\n  strict: maybe\n', "setting 'strict' must be true or false"],
     ['settings:\n  forge: svn\n', "setting 'forge' must be one of gh, glab"],
     ['config:\n  forge: gh\n', "unknown key 'config'"],
+    ...Object.keys(SPECS).flatMap(name => [
+      [`settings:\n  ${name}: &a [*a]\n`, `setting '${name}' must be a string`],
+      [`settings:\n  ${name}: &a {self: *a}\n`, `setting '${name}' must be a string`],
+    ]),
   ])('refuses %p, naming the file and key', async (yaml, reason) => {
     await writeProject(yaml);
     const loading = readProjectPackSettings(cwd, pack);
+    await expect(loading).rejects.toThrow(PackSettingsError);
     await expect(loading).rejects.toThrow(reason);
     await expect(readProjectPackSettings(cwd, pack)).rejects.toThrow(projectFile());
   });

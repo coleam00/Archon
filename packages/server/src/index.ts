@@ -108,7 +108,7 @@ import {
   removeServerRecord,
   writeServerRecord,
 } from '@archon/paths/server-discovery';
-import { appVersion } from './app-version';
+import { appVersion, readAppCommit } from './app-version';
 import { registerServerRoutes } from './server-routes';
 import { getLog } from './server-log';
 
@@ -235,6 +235,7 @@ export async function startServer(opts: ServerOptions = {}): Promise<void> {
     webhookSources: resourceStarts.webhookSources,
     requestResourceStartDrain: resourceStarts.requestDrain,
     webDistPath: opts.webDistPath,
+    commit: await readAppCommit(),
   });
 
   const hostname = process.env.HOST || '0.0.0.0';
@@ -313,7 +314,7 @@ async function assertSqlStore(): Promise<void> {
 }
 
 /**
- * Anonymous once-per-boot startup event (self-gates on opt-out), plus a daily
+ * Anonymous startup event (self-gates on opt-out, sent at most once a day), plus a daily
  * heartbeat. Flushed by the shutdownTelemetry() call in the SIGINT/SIGTERM
  * shutdown handler. Deployment shape is categorical only — booleans/enums
  * derived from which integrations are configured, never the config values
@@ -331,7 +332,8 @@ function reportDeploymentShape(chatPlugins: readonly InstalledChatPlugin[]): voi
     adapterGitea: giteaEnv(process.env) !== undefined,
     adapterGitlab: gitlabEnv(process.env) !== undefined,
   };
-  captureArchonStarted({ surface: 'server', ...deploymentShape });
+  // assertSqlStore refused the file store at boot, so the store is the database.
+  captureArchonStarted({ surface: 'server', store: deploymentShape.dbKind, ...deploymentShape });
 
   // Daily heartbeat so long-running servers stay visible in active-install
   // metrics (a boot-only event undercounts server installs after day one).

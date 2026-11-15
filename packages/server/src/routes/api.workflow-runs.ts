@@ -229,8 +229,10 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
       // For CLI runs (no parent): conversation_id is the single conversation → set conversation_platform_id only
       let workerPlatformId: string | undefined;
       let conversationPlatformId: string | undefined;
+      let platformType: string | null = null;
       if (run.conversation_id) {
         const conv = await conversationDb.getConversationById(run.conversation_id);
+        platformType = conv?.platform_type ?? null;
         if (run.parent_conversation_id) {
           // Web run: conversation_id points to the worker conversation
           workerPlatformId = conv?.platform_conversation_id;
@@ -251,6 +253,7 @@ export function registerWorkflowRunReadRoutes(app: OpenAPIHono): void {
       return c.json({
         run: {
           ...toApiWorkflowRun(run),
+          platform_type: platformType,
           worker_platform_id: workerPlatformId,
           parent_platform_id: parentPlatformId,
           conversation_platform_id: conversationPlatformId ?? null,

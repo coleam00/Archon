@@ -5,14 +5,13 @@
  * so it is durable, ordered with the run's other events and countable by label like an ask.
  */
 import { z } from 'zod';
+import { countAttentionQueue, type AttentionQueueCounts } from './attention-counts';
 import {
-  countAttentionQueue,
   isInAttentionScope,
   matchesAttentionLabels,
   projectRefSchema,
   runProject,
   type AttentionQueueCountBy,
-  type AttentionQueueCounts,
   type AttentionQueueQuery,
 } from './attention-queue';
 import { attentionLabelsSchema } from './schemas/wait-node';

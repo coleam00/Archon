@@ -18,12 +18,14 @@ import {
 import {
   countAttentionQueue,
   countAttentionWaitStarts,
+  type AttentionQueueCounts,
+} from '@archon/workflows/attention-counts';
+import {
   listAttentionQueue,
   parseAttentionLabelPairs,
   parseAttentionQueueRequest,
   readAttentionQueueItem,
   selectAttentionQueue,
-  type AttentionQueueCounts,
   type AttentionQueueItem,
   type AttentionQueueScope,
   type AttentionQueueSource,

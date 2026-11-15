@@ -24,7 +24,7 @@ import type {
   WorkflowSource,
   WorkflowWithSource,
 } from '@archon/workflows/schemas/workflow';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { assertItemKey, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { resolveRunContinuation } from '@archon/core/operations/workflow-continuation';
 import {
   CONTINUATION_MODES,
@@ -394,6 +394,11 @@ export function assertInvocationFlags(options: WorkflowRunOptions, isContinuatio
  * workflowRunCommand is the authoritative boundary for programmatic callers.
  */
 export function assertExecutionFlags(options: WorkflowRunOptions): void {
+  if (options.item !== undefined) {
+    if (options.resume)
+      throw new Error('--item names the item of a new run; a resumed run keeps its own.');
+    assertItemKey(options.item);
+  }
   if (options.branchName !== undefined && options.noWorktree) {
     throw new Error(
       '--branch and --no-worktree are mutually exclusive.\n' +

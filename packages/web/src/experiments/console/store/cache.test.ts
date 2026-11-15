@@ -517,6 +517,40 @@ describe('invalidation during a subscribed load', () => {
   );
 });
 
+describe('invalidation during a load its last subscriber abandons', () => {
+  test('the stale result is not kept: a remount loads fresh', async () => {
+    const key = 'test:abandoned-stale-load';
+    let resolveFirst: (value: string) => void = () => {};
+    const unsubscribe = subscribeKey(
+      key,
+      () => {},
+      () =>
+        new Promise<string>(resolve => {
+          resolveFirst = resolve;
+        })
+    );
+    // The server state changes while the first load is in flight, then the page unmounts.
+    invalidate(key);
+    unsubscribe();
+    resolveFirst('before the change');
+    await flush();
+
+    let loads = 0;
+    const unsubscribe2 = subscribeKey(
+      key,
+      () => {},
+      () => {
+        loads += 1;
+        return Promise.resolve('after the change');
+      }
+    );
+    await flush();
+    expect(loads).toBe(1);
+    expect(get(key)).toBe('after the change');
+    unsubscribe2();
+  });
+});
+
 describe('subscribeKey — revalidateOnSubscribe', () => {
   test('a warm key reloads on its first resubscribe, keeping the old value until the new lands', async () => {
     const key = 'test:revalidate-on-subscribe';

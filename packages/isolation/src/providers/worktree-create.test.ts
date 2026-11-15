@@ -494,23 +494,30 @@ describe('adopting an existing checkout', () => {
     await expect(provider.create(issueRequest)).rejects.toThrow(/belongs to a different clone/);
   });
 
-  test('refuses a worktree whose setup never finished instead of adopting it', async () => {
-    worktreeExistsSpy.mockResolvedValue(true);
-    // A previous run died between `git worktree add` and the end of its setup,
-    // so its lock is still on the checkout.
-    readWorktreeLockSpy.mockResolvedValue({ reason: 'archon: worktree setup in progress' });
+  test.each([
+    // Another start's setup holds the checkout, or died holding it: its id is named.
+    { reason: 'archon: worktree setup in progress: another-attempt', attempt: 'another-attempt' },
+    // The marker v0.11 wrote names no attempt, so nobody's ownership can be shown.
+    { reason: 'archon: worktree setup in progress', attempt: undefined },
+  ])(
+    'refuses a worktree locked by an unfinished setup without advising its removal ($reason)',
+    async ({ reason, attempt }) => {
+      worktreeExistsSpy.mockResolvedValue(true);
+      readWorktreeLockSpy.mockResolvedValue({ reason });
 
-    const error = await rejection(provider.create(issueRequest));
+      const error = await rejection(provider.create(issueRequest));
 
-    expect(error.message).toMatch(/its setup did not finish/);
-    expect(adoptionWarnings()).toHaveLength(0);
-    // The operator is told which checkout and the command that clears it.
-    expect(classifyIsolationError(error)).toContain(
-      `git worktree remove --force --force ${issuePath()}`
-    );
-    // Refusing is the whole point: nothing may be created over it either.
-    expect(ranGit('add')).toBe(false);
-  });
+      expect(error.message).toMatch(/its setup did not finish/);
+      expect(adoptionWarnings()).toHaveLength(0);
+      const userMessage = classifyIsolationError(error);
+      expect(userMessage).toContain(issuePath());
+      // The checkout may be another start's live one: nothing here may say to remove it.
+      expect(userMessage).not.toMatch(/\bremove\b/i);
+      if (attempt) expect(userMessage).toContain(attempt);
+      // Refusing is the whole point: nothing may be created over it either.
+      expect(ranGit('add')).toBe(false);
+    }
+  );
 
   test('adopts a worktree locked by someone other than a setup in progress', async () => {
     worktreeExistsSpy.mockResolvedValue(true);
@@ -1306,6 +1313,13 @@ describe('submodules', () => {
   });
 
   describe('rollback of a setup that did not finish', () => {
+    /** The path stays and is named, and the notice does not send anyone to remove it. */
+    const expectKeptWithoutRemovalAdvice = (error: Error): void => {
+      const notice = (error as Error & { cleanupFailure?: string }).cleanupFailure ?? '';
+      expect(notice).toContain(issuePath());
+      expect(notice).not.toMatch(/\bremove\b/i);
+    };
+
     test('removes the worktree this call created and leaves the branch alone', async () => {
       gitmodulesPresent();
       failSubmodules(submoduleError);
@@ -1346,17 +1360,20 @@ describe('submodules', () => {
       expect(ranGit('remove')).toBe(false);
       const userMessage = classifyIsolationError(error);
       expect(userMessage).toContain('Submodule initialization failed');
-      expect(userMessage).toContain('was left behind');
+      expectKeptWithoutRemovalAdvice(error);
     });
 
-    test.each(['ownership changes', 'status fails'])(
-      'preserves the checkout when %s during cleanup',
-      async failure => {
+    test.each([
+      { lockChanges: true, statusFails: false },
+      { lockChanges: true, statusFails: true },
+      { lockChanges: false, statusFails: true },
+    ])(
+      'preserves the checkout during cleanup (lock changes: $lockChanges, status fails: $statusFails)',
+      async ({ lockChanges, statusFails }) => {
         gitmodulesPresent();
         execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
           if (args.includes('submodule')) throw submoduleError;
-          if (failure === 'status fails' && args.includes('status'))
-            throw new Error('status unavailable');
+          if (statusFails && args.includes('status')) throw new Error('status unavailable');
           return { stdout: '', stderr: '' };
         });
         let lockReads = 0;
@@ -1366,14 +1383,23 @@ describe('submodules', () => {
           lockReads++;
           return {
             reason:
-              failure === 'ownership changes' && lockReads > 1
+              lockChanges && lockReads > 1
                 ? 'archon: worktree setup in progress: another-attempt'
                 : add[add.indexOf('--reason') + 1],
           };
         });
         const error = await rejection(provider.create(issueRequest));
         expect(error.message).toContain('Submodule initialization failed');
-        expect(classifyIsolationError(error)).toContain('was left behind');
+        // A failed status is a failure on this attempt's own checkout only while its lock
+        // is still on the path. Once the lock is another attempt's, whatever the content
+        // check said, the notice must not send anyone to remove that path.
+        if (lockChanges) {
+          expectKeptWithoutRemovalAdvice(error);
+        } else {
+          expect((error as Error & { cleanupFailure?: string }).cleanupFailure).toMatch(
+            /\bremove\b/i
+          );
+        }
         expect(ranGit('remove')).toBe(false);
       }
     );

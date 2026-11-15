@@ -228,6 +228,7 @@ declare module 'archon:script' {
           readonly host: string;
           readonly id: string;
           readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
         } | null;
       };
     };
@@ -289,6 +290,7 @@ declare module 'archon:script' {
           readonly host: string;
           readonly id: string;
           readonly login: string | null;
+          readonly type?: 'user' | 'bot' | 'organization' | null;
         } | null;
         readonly timestamps?: {
           readonly created_at: string;
@@ -343,6 +345,7 @@ declare module 'archon:script' {
             readonly host: string;
             readonly id: string;
             readonly login: string | null;
+            readonly type?: 'user' | 'bot' | 'organization' | null;
           } | null;
           readonly commit: string | null;
           readonly state: string | null;
@@ -386,6 +389,7 @@ declare module 'archon:script' {
               readonly host: string;
               readonly id: string;
               readonly login: string | null;
+              readonly type?: 'user' | 'bot' | 'organization' | null;
             } | null;
             readonly createdAt?: string;
             readonly commit?: string | null;
@@ -507,6 +511,7 @@ declare module 'archon:script' {
             readonly host: string;
             readonly id: string;
             readonly login: string | null;
+            readonly type?: 'user' | 'bot' | 'organization' | null;
           } | null;
           readonly url: string;
           readonly body: string;
@@ -1465,7 +1470,7 @@ declare module 'archon:script' {
     readonly operationId: string;
     readonly ok: false;
     readonly error: {
-      readonly kind: 'unsupported_op' | 'conflict' | 'authorization' | 'no_plugin_for_host' | 'no_credential' | 'not_found' | 'forge_error' | 'invalid_request' | 'invalid_response' | 'duplicate_host' | 'process_failed' | 'timeout';
+      readonly kind: 'unavailable' | 'rate_limited' | 'unsupported_op' | 'conflict' | 'authorization' | 'no_plugin_for_host' | 'no_credential' | 'not_found' | 'forge_error' | 'invalid_request' | 'invalid_response' | 'duplicate_host' | 'process_failed' | 'timeout';
       readonly message: string;
       readonly status?: number;
       readonly exitCode?: number | null;

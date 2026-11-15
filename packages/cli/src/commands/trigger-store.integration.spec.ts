@@ -4,7 +4,11 @@ import {
   attentionWatchReader,
   type ClassifiedAttentionStreamLine,
 } from '@archon/workflows/attention-needs';
-import { workflowNoticeSchema } from '@archon/workflows/workflow-notice';
+import {
+  emitWorkflowNotice,
+  WORKFLOW_NOTICE_LIMITS,
+  workflowNoticeSchema,
+} from '@archon/workflows/workflow-notice';
 import { workflowAttentionCommand } from './workflow-attention';
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
@@ -1419,6 +1423,98 @@ test('a skipped hand-off from an ended run appears in the notice window and watc
     expect((await store.getWorkflowRun(source.id))?.status).toBe('completed');
   } finally {
     await watch.close();
+    stdout.mockRestore();
+    restore();
+  }
+});
+
+test('a hand-off at the notice limit is skipped and remains inspectable', async () => {
+  const { host, project, configPath, restore } = await fireFixture(true);
+  const store = host.deps.store;
+  const output: string[] = [];
+  const stdout = spyOn(process.stdout, 'write').mockImplementation(((
+    chunk: unknown,
+    callback?: () => void
+  ) => {
+    output.push(String(chunk));
+    callback?.();
+    return true;
+  }) as typeof process.stdout.write);
+  try {
+    const codebase = await host.records.codebases.findCodebaseByDefaultCwd(project);
+    if (!codebase) throw new Error('Expected registered project');
+    const config = JSON.parse(await readFile(configPath, 'utf8'));
+    config.binding.overlap = 'skip';
+    await writeFile(configPath, JSON.stringify(config));
+    const holder = launch(codebase.id);
+    holder.execution.cwd = project;
+    await store.admitResourceStart({
+      resource: 'portable',
+      capacity: 1,
+      overlap: 'skip',
+      hostId: 'host',
+      launch: holder,
+    });
+    const source = await store.createWorkflowRun({
+      workflow_name: 'requester',
+      codebase_id: codebase.id,
+      user_message: '',
+    });
+    await store.claimPendingWorkflowRun(source.id);
+    for (let i = 0; i < WORKFLOW_NOTICE_LIMITS.perRun; i++)
+      await emitWorkflowNotice(store, {
+        runId: source.id,
+        text: 'Author notice',
+        node: 'author',
+        labels: {},
+      });
+    await store.completeWorkflowRun(source.id, { duration_ms: 1 });
+    output.length = 0;
+    await triggerCommand(
+      host,
+      'fire',
+      [],
+      { config: configPath, deliveryId: 'limited-handoff' },
+      {
+        dispatch: noDispatch,
+        env: {
+          WORKFLOW_ID: source.id,
+          ARCHON_NODE_EXECUTION: JSON.stringify({ runId: source.id, path: 'handoff' }),
+        },
+      }
+    );
+    const receipt = JSON.parse(output.at(-1) ?? '');
+    expect(receipt.bindings).toMatchObject([
+      {
+        status: 'complete',
+        error: null,
+        disposition: { status: 'skipped', blocker: { kind: 'run', id: holder.run.id } },
+      },
+    ]);
+    const requestId = receipt.bindings[0].disposition.requestId;
+    for (const id of [receipt.id, requestId]) {
+      output.length = 0;
+      await triggerCommand(host, 'inspect', [id], {});
+      const inspected = JSON.parse(output.join(''));
+      if (id === receipt.id)
+        expect(inspected.bindings).toMatchObject([
+          { status: 'complete', error: null, disposition: { status: 'skipped', requestId } },
+        ]);
+      else expect(inspected).toMatchObject({ status: 'skipped', id: requestId });
+    }
+    expect(await store.getWorkflowRun(requestId)).toBeNull();
+    expect((await store.getWorkflowRun(source.id))?.status).toBe('completed');
+    const notices =
+      (await store.listEventsForRuns([source.id], ['workflow_notice'])).get(source.id) ?? [];
+    expect(notices).toHaveLength(WORKFLOW_NOTICE_LIMITS.perRun);
+    expect(notices.map(event => event.data)).toEqual(
+      Array.from({ length: WORKFLOW_NOTICE_LIMITS.perRun }, () => ({
+        text: 'Author notice',
+        node: 'author',
+        labels: {},
+      }))
+    );
+  } finally {
     stdout.mockRestore();
     restore();
   }

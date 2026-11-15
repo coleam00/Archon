@@ -48,6 +48,7 @@ function runningRun(metadata: Record<string, unknown> = localOwner): WorkflowRun
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
   };
   rows.set(run.id, run);
   return run;

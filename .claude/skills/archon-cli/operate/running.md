@@ -160,7 +160,7 @@ in scope, including runs started later by triggers, schedules or other sessions,
 prints a JSON line only when someone has to act:
 
 - `attention`: a run needs a decision. The line carries the whole item, with its
-  options and recommendation; answer it by its `runId` and `occurrence` (see
+  options and recommendation; answer it by its `run.id` and `run.occurrence` (see
   `managing-runs.md`). The items already open come first.
 - `resolved`: an item you were sent no longer needs attention. Stop working on it.
 - `terminal`: a run failed, or completed with `outcome: "failed"`. On a failed run `cause` names the node; read the run.

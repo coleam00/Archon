@@ -109,27 +109,6 @@ export const workflowContainerPolicySchema = z.object({
 });
 
 // ---------------------------------------------------------------------------
-// Workflow-level evidence policy (#2230)
-// ---------------------------------------------------------------------------
-
-/**
- * Terminal file-presence gate. When `required: true`, the DAG executor
- * refuses to flip the run to `completed` unless `$ARTIFACTS_DIR/evidence.json`
- * exists — a missing file marks the run `failed` with a structured note at
- * `metadata.evidence_validation`. The engine gates only on file presence; any
- * contents satisfy it, and their presence does not prove that a check ran or
- * author a workflow outcome. Deterministic checks remain ordinary bash/script
- * nodes. Deliberately narrow — no schema validation, no content checks, and no
- * configurable path (see #2230).
- */
-export const workflowEvidencePolicySchema = z.object({
-  /** Refuse terminal `completed` unless the conventional marker file exists. */
-  required: z.boolean(),
-});
-
-export type WorkflowEvidencePolicy = z.infer<typeof workflowEvidencePolicySchema>;
-
-// ---------------------------------------------------------------------------
 // Workflow-level run budget (#2814)
 // ---------------------------------------------------------------------------
 
@@ -214,7 +193,6 @@ export const workflowBaseSchema = z.object({
   sandbox: sandboxSettingsSchema.optional(),
   worktree: workflowWorktreePolicySchema.optional(),
   container: workflowContainerPolicySchema.optional(),
-  evidence_policy: workflowEvidencePolicySchema.optional(),
   /**
    * Run-wide ceiling on total work and spend (#2814). Bounds total consumption,
    * not concurrency (that is `fan_out.max_parallel`), and applies alongside a
@@ -377,10 +355,6 @@ export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = ne
     'container',
     { kind: 'object', keys: new Set(Object.keys(workflowContainerPolicySchema.shape)) },
   ],
-  [
-    'evidence_policy',
-    { kind: 'object', keys: new Set(Object.keys(workflowEvidencePolicySchema.shape)) },
-  ],
   ['deprecated', { kind: 'object', keys: new Set(Object.keys(workflowDeprecationSchema.shape)) }],
   // First `record` entry in this map: `inputs` is a record of input-name → spec,
   // so unknown keys under an individual spec (e.g. `inputs.diff.typo`) warn.
@@ -422,7 +396,17 @@ export type LoadCommandResult =
  */
 export type WorkflowExecutionResult =
   | { success: true; workflowRunId: string; summary?: string }
-  | { success: false; workflowRunId?: string; error: string }
+  | {
+      success: false;
+      workflowRunId?: string;
+      error: string;
+      /**
+       * No run was created: the continuation could not stay on the continued run's item
+       * (`ContinuedItemProjectError`). `error` names no flag, so a surface that has a way
+       * to name an item adds it.
+       */
+      continuedItemRefused?: true;
+    }
   | {
       success: true;
       paused: true;

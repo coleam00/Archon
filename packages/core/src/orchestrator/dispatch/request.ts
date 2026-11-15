@@ -118,18 +118,11 @@ export async function detectContinuation(
   // would forfeit the pre-cost refusal. This lookup is a single indexed DB read — no
   // worktree, no clone, no AI — so it is safe to do before gating. Its inputs
   // (`conversation.id`, `codebase.id`) are parameters and nothing in the dispatch mutates them.
-  const explicitResumeRequested = request.kind === 'resume';
-  const resumableRun = await findResumableRun(scope, request, workflow);
-  // Whether this dispatch will CONTINUE existing work rather than create a fresh run
-  // row. Deliberately the exact negation of the resume/abandon/force menu's condition
-  // (`offerResumeChoice`): a candidate that is neither paused nor the explicitly-targeted run does not
-  // continue — it shows that menu and returns. Only a genuine continuation may defer the
-  // signature gate, so an invocation that was never going to continue is still refused
-  // immediately, with the specific input error rather than a generic menu, and before
-  // isolation resolution can create a worktree.
-  const willContinueExistingRun =
-    Boolean(resumableRun?.working_path) &&
-    (resumableRun?.status === 'paused' || explicitResumeRequested);
+  const { resumableRun, explicitResumeRequested, willContinueExistingRun } = await readContinuation(
+    scope,
+    request,
+    workflow
+  );
 
   if (willContinueExistingRun && resumableRun) {
     try {
@@ -171,12 +164,37 @@ export async function detectContinuation(
 }
 
 /**
+ * Which existing run a dispatch of this request would continue, read without acting on it.
+ * The run route's admission asks the same question before it dispatches, and leaves a
+ * start that continues a run to the dispatch.
+ */
+export async function readContinuation(
+  scope: Pick<DispatchScope, 'conversation' | 'codebase'>,
+  request: WorkflowRequest,
+  workflow: ResolvedWorkflow
+): Promise<Continuation> {
+  const explicitResumeRequested = request.kind === 'resume';
+  const resumableRun = await findResumableRun(scope, request, workflow);
+  // Whether this dispatch will CONTINUE existing work rather than create a fresh run
+  // row. Deliberately the exact negation of the resume/abandon/force menu's condition
+  // (`offerResumeChoice`): a candidate that is neither paused nor the explicitly-targeted run does not
+  // continue — it shows that menu and returns. Only a genuine continuation may defer the
+  // signature gate, so an invocation that was never going to continue is still refused
+  // immediately, with the specific input error rather than a generic menu, and before
+  // isolation resolution can create a worktree.
+  const willContinueExistingRun =
+    Boolean(resumableRun?.working_path) &&
+    (resumableRun?.status === 'paused' || explicitResumeRequested);
+  return { resumableRun, explicitResumeRequested, willContinueExistingRun };
+}
+
+/**
  * The run this request continues: the one an explicit resume carries, or the
  * conversation's resumable run for this workflow unless the request forces a fresh
  * one. An attention wait is only ever continued explicitly.
  */
 async function findResumableRun(
-  { conversation, codebase }: DispatchScope,
+  { conversation, codebase }: Pick<DispatchScope, 'conversation' | 'codebase'>,
   request: WorkflowRequest,
   workflow: ResolvedWorkflow
 ): Promise<WorkflowRun | null> {

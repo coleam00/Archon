@@ -345,7 +345,7 @@ describe('GitHub mutations report which of the four outcomes happened', () => {
     const dropped = await run(create, fakeGitHub({ network: (_url, method) => method === 'POST' }));
     expect(dropped).toMatchObject({
       ok: false,
-      error: { kind: 'forge_error' },
+      error: { kind: 'unavailable' },
       mutation: { op: 'pr.create', outcome: 'outcome_unknown' },
     });
 
@@ -624,16 +624,52 @@ test.each([
   expect(github.posted).toEqual([]);
 });
 
-test.each([{ oldAttempt: true }, { readFailed: true }])(
-  'acknowledged rerun without newer attempt evidence fails verification: %j',
-  async options => {
-    const github = rerunGitHub(options);
-    expect(
-      await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
-    ).toMatchObject({ ok: false, mutation: { outcome: 'verification_failed' } });
-    expect(github.posted).toEqual(['100']);
-  }
-);
+test('a rerun whose newer attempt appears after the first read-back is applied', async () => {
+  const github = rerunGitHub({ staleReads: 2 });
+  const waits: number[] = [];
+  const response = await handleGithubOperation(rerunRequest, {
+    token: 'token',
+    fetch: github.fetch,
+    sleep: async ms => void waits.push(ms),
+  });
+  expect(response).toMatchObject({
+    ok: true,
+    result: { value: { outcome: 'applied', units: [{ rerun: { id: '100', attempt: 2 } }, {}] } },
+  });
+  expect(waits).toHaveLength(2);
+  expect(github.posted).toEqual(['100']);
+});
+
+test('an accepted rerun whose newer attempt never appears is unverified, not refused', async () => {
+  const github = rerunGitHub({ oldAttempt: true });
+  let waited = 0;
+  const response = await handleGithubOperation(rerunRequest, {
+    token: 'token',
+    fetch: github.fetch,
+    sleep: async ms => void (waited += ms),
+  });
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'invalid_response' },
+    mutation: {
+      outcome: 'verification_failed',
+      leaveBehind: expect.any(String),
+      rerun: { requested: rerunRequest.units, observed: [] },
+    },
+  });
+  // The wait stays well inside the 30 second limit the host gives a plugin process.
+  expect(waited).toBeGreaterThan(0);
+  expect(waited).toBeLessThanOrEqual(15_000);
+  expect(github.posted).toEqual(['100']);
+});
+
+test('an accepted rerun whose read-back request fails is unverified', async () => {
+  const github = rerunGitHub({ readFailed: true });
+  expect(
+    await handleGithubOperation(rerunRequest, { token: 'token', fetch: github.fetch })
+  ).toMatchObject({ ok: false, mutation: { outcome: 'verification_failed' } });
+  expect(github.posted).toEqual(['100']);
+});
 
 test.each([
   [403, 'verification_failed'],
@@ -677,7 +713,7 @@ test('reviews paginate submissions and root diff comments, retaining author and 
     id: 1,
     html_url: 'https://github.com/a/b/pull/7#review-1',
     body: 'private body',
-    user: { id: 2, login: 'reviewer' },
+    user: { id: 2, login: 'reviewer', type: 'User' },
     commit_id: 'headsha',
     state: 'COMMENTED',
     submitted_at: '2026-10-06T10:00:00Z',
@@ -704,24 +740,36 @@ test('reviews paginate submissions and root diff comments, retaining author and 
           { ...item, state: undefined },
           { ...item, id: 2, in_reply_to_id: 1 },
           { ...item, id: 3, user: null, commit_id: null, created_at: null },
+          { ...item, id: 4, user: { id: 3, login: 'ci[bot]', type: 'Bot' } },
+          { ...item, id: 5, user: { id: 4, login: 'acme', type: 'Organization' } },
+          { ...item, id: 6, user: { id: 5, login: 'old' } },
+          { ...item, id: 7, user: { id: 6, login: 'ghost', type: 'Mannequin' } },
         ]);
       },
     }
   );
   expect(response).toMatchObject({ ok: true, result: { op: 'pr.reviews' } });
   if (!response.ok || response.result.op !== 'pr.reviews') throw new Error('expected reviews');
-  expect(response.result.value.items).toHaveLength(103);
-  expect(response.result.value.items.at(-2)).toMatchObject({
+  expect(response.result.value.items).toHaveLength(107);
+  const items = response.result.value.items;
+  expect(items.at(-6)).toMatchObject({
     kind: 'review_comment',
-    author: { host: repo.host, id: '2', login: 'reviewer' },
+    author: { host: repo.host, id: '2', login: 'reviewer', type: 'user' },
     commit: 'headsha',
     state: null,
   });
-  expect(response.result.value.items.at(-1)).toMatchObject({
+  expect(items.at(-5)).toMatchObject({
     author: null,
     commit: null,
     createdAt: null,
   });
+  expect(items.slice(-4).map(entry => entry.author?.type)).toEqual([
+    'bot',
+    'organization',
+    null,
+    null,
+  ]);
+  expect(forgeResponseSchema.safeParse(response).success).toBe(true);
   expect(calls.some(url => url.endsWith('page=2'))).toBe(true);
 });
 
@@ -854,22 +902,18 @@ describe('GitHub draft conversion', () => {
   });
 });
 
-test('a mutation GitHub answers 502 is sent once, never repeated', async () => {
+test('a mutation GitHub answers 502 is sent once and keeps its unknown outcome', async () => {
   const github = fakeGitHub({
     status: (_url: string, method: string) => (method === 'PATCH' ? 502 : undefined),
   });
-  const waits: number[] = [];
   const response = await handleGithubOperation(
     { operationId: 'edit', op: 'pr.edit-body', ref, body: 'next' },
-    {
-      token: 'token',
-      fetch: github.fetch,
-      sleep: async ms => {
-        waits.push(ms);
-      },
-    }
+    { token: 'token', fetch: github.fetch }
   );
-  expect(response).toMatchObject({ ok: false, mutation: { outcome: 'outcome_unknown' } });
+  expect(response).toMatchObject({
+    ok: false,
+    error: { kind: 'unavailable', status: 502 },
+    mutation: { outcome: 'outcome_unknown' },
+  });
   expect(github.calls.filter(call => call.method === 'PATCH')).toHaveLength(1);
-  expect(waits).toEqual([]);
 });

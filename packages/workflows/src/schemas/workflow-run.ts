@@ -37,6 +37,30 @@ export const workflowRunOriginSchema = z
 
 export type WorkflowRunOrigin = z.infer<typeof workflowRunOriginSchema>;
 
+const ITEM_KEY_MAX_LENGTH = 200;
+/** An item's key within its project. The engine gives it no meaning and never parses it. */
+export const itemKeySchema = z.string().min(1).max(ITEM_KEY_MAX_LENGTH);
+
+/** The durable thing runs are about: a key within a project (`ProjectRef.key`). */
+export const workflowItemSchema = z.object({
+  id: z.string(),
+  projectKey: z.string(),
+  key: itemKeySchema,
+});
+export type WorkflowItem = z.infer<typeof workflowItemSchema>;
+
+/** Refuse a key the store cannot hold, in words the operator who named it can act on. */
+export function assertItemKey(key: string): void {
+  if (!itemKeySchema.safeParse(key).success)
+    throw new Error(`An item key must be 1 to ${String(ITEM_KEY_MAX_LENGTH)} characters.`);
+}
+
+/**
+ * A continuation cannot stay on the continued run's item because it runs in another
+ * project. Chat and the API reach it as well as the CLI, so the message names no flag.
+ */
+export class ContinuedItemProjectError extends Error {}
+
 export const workflowRunSchema = z.object({
   origin: workflowRunOriginSchema.nullable(),
   id: z.string(),
@@ -89,6 +113,12 @@ export const workflowRunSchema = z.object({
    * started — which is different from a recorded `not_git` or `unavailable` observation.
    */
   checkout_baseline: checkoutObservationSchema.nullable(),
+  /**
+   * The item this run belongs to. Written once at creation and the only place a run's
+   * item is read from. Null for a run started with no item, and for a `workflow:`
+   * sub-run, which belongs to its item through `parent_run_id`.
+   */
+  item_id: z.string().nullable(),
 });
 
 export type WorkflowRun = z.infer<typeof workflowRunSchema>;

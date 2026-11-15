@@ -130,6 +130,13 @@ export const mockFindConversationByPlatformId = mock(
 export const mockHandleMessage = mock<typeof import('@archon/core')['handleMessage']>(
   async () => {}
 );
+/** The engine's answer to a run start; `undefined` admits it. */
+export const mockWorkflowStartRefusal = mock<
+  typeof import('@archon/core/operations/workflow-start-admission')['workflowStartRefusal']
+>(async () => undefined);
+mock.module('@archon/core/operations/workflow-start-admission', () => ({
+  workflowStartRefusal: mockWorkflowStartRefusal,
+}));
 export const mockAddMessage = mock(async () => ({
   id: 'msg-1',
   conversation_id: 'conv-1',
@@ -525,6 +532,7 @@ export const MOCK_RUNNING_RUN = {
   adopted_from_run_id: null,
   output_root: null,
   checkout_baseline: null,
+  item_id: null,
 } satisfies MockWorkflowRun;
 
 export const MOCK_COMPLETED_RUN = {

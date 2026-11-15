@@ -27,8 +27,14 @@ interface NodeDividerProps {
   skipExpr?: string | null;
   /** A fan-out node's slot record; unfinished child work qualifies a completed node. */
   fanOutOutcome?: NodeRun['fanOutOutcome'];
+  /** A `bash:` or `script:` node's stdout. */
+  output?: NodeRun['output'];
+  /** A failed node's error. */
+  error?: string | null;
   /** When true, surface skip reason / stop reason inline. */
   showDetail?: boolean;
+  /** The run is paused at this node; its engine state is still `running`. */
+  waiting?: boolean;
 }
 
 type FanOutOutcome = NonNullable<NodeRun['fanOutOutcome']>;
@@ -122,6 +128,38 @@ function formatNodeCost(
   return ` · ${costScope === 'total' ? 'total ' : ''}${costPartial ? 'at least ' : ''}$${amount}`;
 }
 
+/** What the node left behind: a failed node's error, a `bash:` or `script:` node's stdout. */
+function NodeResult({
+  nodeName,
+  output,
+  error,
+}: Pick<NodeDividerProps, 'nodeName' | 'output' | 'error'>): ReactElement {
+  return (
+    <>
+      {error !== null && error !== undefined && error !== '' ? (
+        <pre className="ml-17 max-h-60 overflow-y-auto whitespace-pre-wrap rounded border border-error/30 bg-error/[0.06] px-3 py-2 font-mono text-console-12 text-text-primary [overflow-wrap:anywhere]">
+          {error}
+        </pre>
+      ) : null}
+      {output !== null && output !== undefined ? (
+        <div className="ml-17">
+          <pre
+            aria-label={`Output of ${nodeName}`}
+            className="max-h-60 overflow-y-auto whitespace-pre-wrap rounded border border-border/60 bg-surface-inset px-3 py-2 font-mono text-console-12 text-text-secondary [overflow-wrap:anywhere]"
+          >
+            {output.text}
+          </pre>
+          {output.truncated ? (
+            <p className="mt-1 font-mono text-console-10 text-text-tertiary">
+              Output truncated; this is the head the engine stored with the node.
+            </p>
+          ) : null}
+        </div>
+      ) : null}
+    </>
+  );
+}
+
 /**
  * Thin divider heading one DAG node — exactly one per node.
  *   left gutter:  relative timestamp (mono)
@@ -145,7 +183,10 @@ export function NodeDivider({
   skipReason,
   skipExpr,
   fanOutOutcome,
+  output,
+  error,
   showDetail = false,
+  waiting = false,
 }: NodeDividerProps): ReactElement {
   const { runStartedAt } = useStreamContext();
   const displayed = formatRelativeToBaseline(timestamp, runStartedAt);
@@ -199,8 +240,10 @@ export function NodeDivider({
           }}
           aria-hidden
         />
-        <span className={`font-mono text-console-12 ${STATUS_COLOR[status]}`}>
-          {STATUS_LABEL[status]}
+        <span
+          className={`font-mono text-console-12 ${waiting ? 'text-warning' : STATUS_COLOR[status]}`}
+        >
+          {waiting ? 'waiting' : STATUS_LABEL[status]}
           {dur}
           {cost}
           {turns}
@@ -231,6 +274,7 @@ export function NodeDivider({
           ) : null}
         </div>
       ) : null}
+      <NodeResult nodeName={nodeName} output={output} error={error} />
       <FanOutQualifier outcome={fanOutOutcome} />
     </div>
   );

@@ -26,6 +26,7 @@ Route by intent:
 |---|---|
 | Run a workflow on real work | `operate/running.md` |
 | Inspect, answer, cancel or resume runs | `operate/managing-runs.md` |
+| Set up the SDLC pack on a project | the pack README's setup guide (see `operate/queues.md`, "Setting up the pack"), then `operate/queues.md` |
 | Drive the SDLC pack's queues | `operate/queues.md` |
 | Find out why a run failed or hangs | `operate/troubleshooting.md` |
 | Set up Archon or change config | `setup/setup-and-config.md` |
@@ -85,7 +86,7 @@ Route by intent:
 - **Launch and answer with `--detach`.** A detached run starts its own session and
   survives your shell. A foreground `respond` or `resume` continues the run inside
   your shell, and closing the shell stops it.
-- **Never put a shell `timeout` on a run.** A full pipeline outlasts any wrapper you would pick, and the wrapper kills it mid-node. The task's exit status is then the wrapper's, not the run's, so a killed run can read as success. Launch with `--detach` or as a background task with no timeout, and read `archon workflow get <run-id>` for the real status. A killed or failed run is resumable: `archon workflow resume <run-id>` skips completed nodes, so resume it instead of relaunching.
+- **Never put a shell `timeout` on a run.** A full pipeline outlasts any wrapper you would pick, and the wrapper kills it mid-node. The task's exit status is then the wrapper's, not the run's, so a killed run can read as success. Launch with `--detach` or as a background task with no timeout, and read `archon workflow get <run-id>` for the real status. A `failed` or `paused` run is resumable: `archon workflow resume <run-id> --detach` skips completed nodes, so resume it instead of relaunching. A killed run can still show `running`, and `workflow resume` refuses that status. Confirm its owner process is gone, then see `operate/managing-runs.md` for `abandon` and `workflow run <name> --resume`.
 - **One watcher, not one per run.** One `workflow attention --watch` stream covers
   every run in scope, including runs that triggers or other sessions start. A
   `workflow wait <run-id>` per run is fine for one or two runs; with dozens it

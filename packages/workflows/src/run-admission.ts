@@ -29,7 +29,7 @@ import {
   type ExecutionOwnerRecord,
 } from './schemas';
 import type { CheckoutSharedEventData } from './schemas/workflow-event';
-import type { WorkflowRunOrigin } from './schemas/workflow-run';
+import { ContinuedItemProjectError, type WorkflowRunOrigin } from './schemas/workflow-run';
 import { requireTerminalStatusWrite } from './terminal-status-write';
 import { holdWorkflowResource } from './resource-hold';
 import { workflowPathPriorityTime } from './workflow-path-lock';
@@ -190,6 +190,7 @@ async function createWorkflowRunRow(
         [EXECUTION_OWNER_METADATA_KEY]: executionOwner,
       },
       ...(adoptedFromRunId ? { adopted_from_run_id: adoptedFromRunId } : {}),
+      ...(opts.item === undefined ? {} : { item_key: opts.item }),
     });
     workflowRun.metadata = {
       ...workflowRun.metadata,
@@ -210,14 +211,19 @@ async function createWorkflowRunRow(
       workflowSource: runSource,
       exitReason: 'run_not_created',
     });
+    // A refused item is the caller's to fix, not a database fault: say what was refused.
+    const refusal = err.cause instanceof ContinuedItemProjectError ? err.cause.message : null;
     await sendCriticalMessage(
       platform,
       conversationId,
-      '❌ **Workflow failed**: Unable to start workflow (database error). Please try again later.'
+      `❌ **Workflow failed**: ${refusal ?? 'Unable to start workflow (database error). Please try again later.'}`
     );
     return {
       stopped: true,
-      result: { success: false, error: 'Database error creating workflow run' },
+      result:
+        refusal === null
+          ? { success: false, error: 'Database error creating workflow run' }
+          : { success: false, error: refusal, continuedItemRefused: true },
     };
   }
 }

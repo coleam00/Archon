@@ -25,7 +25,8 @@ export const SHORTCUTS: readonly KeymapGroup[] = [
       { keys: ['2'], label: 'Filter: paused' },
       { keys: ['3'], label: 'Filter: failed' },
       { keys: ['4'], label: 'Filter: completed' },
-      { keys: ['5'], label: 'Filter: all' },
+      { keys: ['5'], label: 'Filter: cancelled' },
+      { keys: ['6'], label: 'Filter: all' },
     ],
   },
   {

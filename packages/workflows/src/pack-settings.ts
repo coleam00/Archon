@@ -63,7 +63,9 @@ export function packSettingValue(
 ): { value: string } | { error: string } {
   if (typeof raw === 'boolean' && spec.type === 'bool') return { value: String(raw) };
   if (typeof raw !== 'string') {
-    return { error: `must be a string (quote it in YAML), got ${JSON.stringify(raw)}` };
+    return {
+      error: `must be a string (quote it in YAML), got ${Bun.inspect(raw, { depth: 0, colors: false })}`,
+    };
   }
   switch (spec.type) {
     case 'string':
@@ -225,6 +227,24 @@ export async function readProjectPackSettings(
   return readProjectValues(cwd, pack.key, pack.settings ?? {});
 }
 
+/** Check project values without requiring inputs that an invocation may supply. */
+export async function validateProjectPackSettings(
+  cwd: string,
+  pack: WorkflowPack
+): Promise<string[]> {
+  const errors: string[] = [];
+  const path = projectPackSettingsPath(cwd, pack.key);
+  try {
+    await readProjectValues(cwd, pack.key, pack.settings ?? {}, detail => {
+      errors.push(`${path}: ${detail}`);
+    });
+  } catch (error) {
+    if (!(error instanceof PackSettingsError)) throw error;
+    errors.push(error.message);
+  }
+  return errors;
+}
+
 function packSettingDefaults(pack: WorkflowPack | undefined): Record<string, string> {
   const values: Record<string, string> = {};
   for (const [name, spec] of Object.entries(pack?.settings ?? {})) {
@@ -236,10 +256,12 @@ function packSettingDefaults(pack: WorkflowPack | undefined): Record<string, str
 async function readProjectValues(
   cwd: string,
   packKey: string,
-  declared: Readonly<Record<string, PackSettingSpec>>
+  declared: Readonly<Record<string, PackSettingSpec>>,
+  reportSettingError?: (detail: string) => void
 ): Promise<Record<string, string>> {
   const path = projectPackSettingsPath(cwd, packKey);
   const fail = failIn(path);
+  const report = reportSettingError ?? fail;
   const text = await readOptionalFile(path, fail);
   const settings =
     text === undefined ? undefined : topLevelMappings(text, ['settings'], fail).settings;
@@ -249,10 +271,14 @@ async function readProjectValues(
   for (const [name, rawValue] of Object.entries(settings ?? {})) {
     const spec = Object.hasOwn(declared, name) ? declared[name] : undefined;
     if (spec === undefined) {
-      return fail(`unknown setting '${name}'; pack '${packKey}' declares ${declaredList}`);
+      report(`unknown setting '${name}'; pack '${packKey}' declares ${declaredList}`);
+      continue;
     }
     const checked = packSettingValue(spec, rawValue);
-    if ('error' in checked) return fail(`setting '${name}' ${checked.error}`);
+    if ('error' in checked) {
+      report(`setting '${name}' ${checked.error}`);
+      continue;
+    }
     values[name] = checked.value;
   }
   return values;

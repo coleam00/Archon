@@ -37,6 +37,7 @@ export const RESUME_FORBIDDEN_OPTIONS = [
   'preparedSource',
   'capturedSourceOwner',
   'adoptedFromRunId',
+  'item',
   'continuationMode',
   'cutFromCommit',
 ] as const satisfies readonly (keyof ExecuteWorkflowOptions)[];

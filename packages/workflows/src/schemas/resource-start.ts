@@ -1,6 +1,6 @@
 import { z } from 'zod';
 import { jsonValueSchema } from '../output-ref';
-import { workflowRunOriginSchema } from './workflow-run';
+import { itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
   DEFAULT_RESOURCE_CAPACITY,
   declaredCapacitySchema,
@@ -220,6 +220,8 @@ export const sourceReceiptInputSchema = z
       })
       .strict()
       .nullable(),
+    /** The item this start is for. Every run the receipt starts belongs to it. */
+    itemKey: itemKeySchema.optional(),
   })
   .strict();
 export type SourceReceiptInput = z.infer<typeof sourceReceiptInputSchema>;

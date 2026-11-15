@@ -4,7 +4,7 @@ import { Link } from 'react-router';
 import { RunningDot } from './LiveDot';
 import { OwnerObservationHint } from './OwnerObservationHint';
 import { OriginBadge } from './OriginBadge';
-import type { Run } from '../primitives/run';
+import { runPhaseStart, type Run } from '../primitives/run';
 import {
   shortRunId,
   formatElapsed,
@@ -34,7 +34,7 @@ function useLiveElapsed(run: Run, live: boolean): string {
       clearInterval(handle);
     };
   }, [live]);
-  return formatElapsed(elapsedSince(run.startedAt, run.finishedAt ?? undefined));
+  return formatElapsed(elapsedSince(runPhaseStart(run), run.finishedAt ?? undefined));
 }
 
 export function RunDetailHeader({
@@ -125,6 +125,14 @@ export function RunDetailHeader({
         <span className="font-mono text-console-12 text-text-tertiary">
           Started <time dateTime={ensureUtc(run.startedAt)}>{formatDateTime(run.startedAt)}</time>
         </span>
+        {run.activePhaseStartedAt != null ? (
+          <span className="font-mono text-console-12 text-text-tertiary">
+            Last started{' '}
+            <time dateTime={ensureUtc(run.activePhaseStartedAt)}>
+              {formatDateTime(run.activePhaseStartedAt)}
+            </time>
+          </span>
+        ) : null}
         {run.finishedAt !== null ? (
           <span className="font-mono text-console-12 text-text-tertiary">
             Finished{' '}

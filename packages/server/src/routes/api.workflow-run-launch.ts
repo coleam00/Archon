@@ -8,6 +8,7 @@ import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import type { Context } from 'hono';
 import type { AttachedFile, Conversation, HandleMessageContext, RunActor } from '@archon/core';
 import { generateTitleForUser, resolveTitleRequest, createWorkflowDeps } from '@archon/core';
+import { workflowStartRefusal } from '@archon/core/operations/workflow-start-admission';
 import { parseWorkflowRunConfig } from '@archon/core/config';
 import * as messageDb from '@archon/core/db/messages';
 import { getArchonWorkspacesPath } from '@archon/paths';
@@ -35,9 +36,15 @@ const runWorkflowRoute = createRoute({
     '`multipart/form-data` with `conversationId`, `message`, optional `inputs` and `config` fields ' +
     'holding their objects JSON-encoded, optional `tiers` and `aliases` JSON object fields, ' +
     'and optional file attachments (max 5 files, ' +
-    "10 MB each). `inputs` supplies values for the workflow's declared `inputs:` " +
-    '(#2554); it is validated against the declaration before any worktree, clone, or AI ' +
-    'cost, so a missing required input or an undeclared key is refused up front. `config` ' +
+    '10 MB each). `message` may be empty: what a run needs to start is decided by the ' +
+    "workflow's declared inputs, not by this route. `inputs` supplies values for the workflow's declared `inputs:` " +
+    '(#2554). A start the engine refuses returns HTTP 400 with its reason before anything is ' +
+    'written or queued: a workflow that does not resolve, a missing required input, an ' +
+    'undeclared key, or an unmet `requires:`. For the input refusals the reason is the text ' +
+    '`archon workflow run` prints. A start that names `adopt_run_id`, whose conversation sits ' +
+    'in a worktree, or that continues a paused run of the same workflow in the conversation, ' +
+    'is judged by the dispatch on the definition it will run and is answered on conversation ' +
+    'SSE after an HTTP 200. `config` ' +
     'supplies a sparse runtime layer; `tiers` and `aliases` rebind named model presets above it. ' +
     'Caller-supplied filesystem config paths are rejected. JSON requests may supply ' +
     '`adopt_run_id` or `supersedes_run_id`, but not both. Unique prefixes resolve in the conversation selected project; ' +
@@ -259,9 +266,7 @@ async function parseMultipartRunRequest(
   }
 
   const { message, conversationId } = body;
-  if (typeof message !== 'string' || !message) {
-    return { ok: false, error: 'message must be a non-empty string' };
-  }
+  if (typeof message !== 'string') return { ok: false, error: 'message must be a string' };
   if (typeof conversationId !== 'string' || !conversationId || !/^[\w-]+$/.test(conversationId)) {
     return { ok: false, error: 'conversationId must be a non-empty alphanumeric string' };
   }
@@ -326,9 +331,7 @@ async function parseJsonRunRequest(c: Context): Promise<Parsed<RunLaunchRequest>
   if (typeof conversationId !== 'string' || !conversationId) {
     return { ok: false, error: 'conversationId must be a non-empty string' };
   }
-  if (typeof message !== 'string' || !message) {
-    return { ok: false, error: 'message must be a non-empty string' };
-  }
+  if (typeof message !== 'string') return { ok: false, error: 'message must be a string' };
   if (body.configPath !== undefined) return { ok: false, error: CONFIG_PATH_REFUSAL };
 
   const inputs = parseRunInputsField(body.inputs);
@@ -397,7 +400,8 @@ async function removeLaunchFiles(launch: RunLaunch): Promise<void> {
  * Persist the user message and register its DB ID (same as the message endpoint). File
  * metadata (name/mime/size — no path, since the on-disk file is ephemeral) goes into message
  * metadata when present. Returns false, with the uploads removed, when the message cannot be
- * saved.
+ * saved. A run started with an empty message gets no chat row, which would render as an
+ * empty bubble, and no title request, which would have nothing to summarize.
  */
 async function recordLaunchMessage(
   conv: Conversation,
@@ -410,6 +414,10 @@ async function recordLaunchMessage(
     savedFiles.length > 0
       ? { files: savedFiles.map(f => ({ name: f.name, mimeType: f.mimeType, size: f.size })) }
       : undefined;
+  if (!request.message.trim()) {
+    webAdapter.setConversationDbId(request.conversationId, conv.id);
+    return true;
+  }
   try {
     await messageDb.addMessage(conv.id, 'user', request.message, meta, userId);
   } catch (e: unknown) {
@@ -502,6 +510,23 @@ async function launchWorkflowRun(
     if (error instanceof WorkflowContinuationError) return apiError(c, 400, error.message);
     getLog().error({ err: error }, 'run_continuation_resolution_failed');
     return apiError(c, 500, 'Failed to resolve workflow continuation');
+  }
+
+  // The engine's answer to this start, given before anything is written or queued, so a
+  // refused start is this request's response and never a later chat message.
+  try {
+    const refusal = await workflowStartRefusal({
+      conversationId: request.conversationId,
+      conversation: access.conversation,
+      workflowName,
+      inputs: request.workflowInputs,
+      adoptRunId: request.adoptRunId,
+      actor: access.actor,
+    });
+    if (refusal !== undefined) return apiError(c, 400, refusal);
+  } catch (error) {
+    getLog().error({ err: error, workflowName }, 'run_start_admission_failed');
+    return apiError(c, 500, 'Failed to check workflow start');
   }
 
   const uploaded = await persistLaunchFiles(request, workflowName);

@@ -67,6 +67,8 @@ curl http://localhost:3090/api/health
 
 `/api/health` also returns `storeId`, the opaque id of the Archon home the server serves. It is random and carries no path. To check that a server serves the home you mean, compare it with that home's `store-id` file; a running server for a home is recorded in `<ARCHON_HOME>/server.json`. See [Archon directories](/reference/archon-directories/).
 
+`commit` names the code the server is running: `sha` is the short commit hash and `committedAt` its commit date (ISO 8601). A server started from a source checkout reads it from the checkout once at startup, so it changes only on restart, not on a later `git pull`. A compiled binary reports the hash it was built from, with `committedAt` set to `null`. The key is omitted when there is no commit to name, for example in a source tree without its own `.git`. Settings → System shows the same value.
+
 ---
 
 ## Conversations
@@ -309,7 +311,7 @@ Only user-defined workflows can be deleted. Bundled defaults cannot be removed.
 
 | Method | Path | Description |
 |--------|------|-------------|
-| POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart) |
+| POST | `/api/workflows/{name}/run` | Run a workflow (JSON or multipart). A start the engine refuses (a workflow that does not resolve, a missing required input, an undeclared input, an unmet `requires:`) returns **400** with the engine's reason, and nothing is written or queued; for the input refusals it is the text `archon workflow run` prints. A start that names `adopt_run_id`, whose conversation sits in a worktree, or that continues a paused run of the same workflow in the conversation, is judged on the definition it will run and is answered on the conversation after a **200** |
 | GET | `/api/workflows/runs` | List workflow runs |
 | GET | `/api/workflows/runs/{runId}` | Get run details with events (provider events are served by the route below). `run.nodes[]` is the engine's per-node state; a `workflow:` fan-out node also carries `fan_out_outcome`, its [per-slot record and tally](/reference/workflow-language/#a-completed-fan-out-node-is-not-completed-child-work). See [node execution records](/reference/node-execution/) for event fields, reporting availability, and cost scope |
 | GET | `/api/workflows/runs/{runId}/provider-events` | The run's provider events as `{events: ProviderEventRecord[]}`: each is `{runId, stepName, attemptId, seq, observedAt, event}`, grouped by node and in emission order within one. `?step=` limits it to one node. `?attemptId=&afterSeq=` (both, and with `step`) returns only the events after that one: the attempt's later events and every later attempt's. Rows written before the engine recorded envelopes come back translated, with `attemptId: null`. Returns **400** for a partial cursor |

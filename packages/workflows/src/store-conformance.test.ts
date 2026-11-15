@@ -61,6 +61,7 @@ function makeRaceStore(): RaceStore {
         working_path: null,
         output_root: null,
         checkout_baseline: null,
+        item_id: null,
       };
       return structuredClone(run);
     },

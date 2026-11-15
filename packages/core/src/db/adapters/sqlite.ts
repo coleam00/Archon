@@ -553,7 +553,17 @@ export class SqliteAdapter implements IDatabase {
         last_activity_at TEXT DEFAULT (datetime('now')),
         working_path TEXT,
         output_root TEXT,
-        checkout_baseline TEXT
+        checkout_baseline TEXT,
+        item_id TEXT REFERENCES remote_agent_items(id)
+      );
+
+      -- The durable thing runs are about; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_items (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        project_key TEXT NOT NULL,
+        key TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(project_key, key)
       );
 
       CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
@@ -585,6 +595,7 @@ export class SqliteAdapter implements IDatabase {
         outcome TEXT NOT NULL CHECK (outcome IN ('matched', 'unmatched', 'unsupported', 'malformed')),
         reason TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        item_key TEXT,
         UNIQUE(source_instance_id, delivery_id)
       );
 
@@ -625,6 +636,7 @@ export class SqliteAdapter implements IDatabase {
         binding_id TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         admitted_at TEXT,
+        item_id TEXT REFERENCES remote_agent_items(id),
         FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
       );
 

@@ -12,10 +12,8 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
  * Zod schemas for workflow API endpoints.
  */
 import { z } from '@hono/zod-openapi';
-import {
-  openAttentionQueueCountsSchema,
-  attentionQueueItemSchema,
-} from '@archon/workflows/attention-queue';
+import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
+import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import {
   attentionWatchLevelSchema,
   classifiedAttentionStreamLineSchema,
@@ -224,6 +222,10 @@ export const workflowEventSchema = workflowEventRowSchema
 export const workflowRunDetailSchema = z
   .object({
     run: workflowRunSchema.extend({
+      platform_type: z.string().nullable().openapi({
+        description:
+          "The platform of the run's own conversation (`web`, `cli`, ...), the same value the dashboard listing serves. Null when the run has no conversation.",
+      }),
       worker_platform_id: z.string().optional(),
       parent_platform_id: z.string().optional(),
       conversation_platform_id: z.string().nullable(),
@@ -403,7 +405,7 @@ export const attentionStreamLineResponseSchema =
   classifiedAttentionStreamLineSchema.openapi('AttentionStreamLine');
 
 /**
- * GET /api/runs/attention list response. `items` is the queue; `runs` holds the same runs
+ * GET /api/runs/attention list response. `items` is the queue; `runs` holds the runs that hold them
  * as dashboard rows for the console.
  */
 export const runsNeedingAttentionResponseSchema = z

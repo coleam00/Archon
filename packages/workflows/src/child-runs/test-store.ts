@@ -139,6 +139,12 @@ export class InMemoryStore implements IWorkflowStore {
   deleteWorkflowNodeSessions: IWorkflowStore['deleteWorkflowNodeSessions'] = () => {
     throw new Error('Unexpected deleteWorkflowNodeSessions');
   };
+  listItemRuns: IWorkflowStore['listItemRuns'] = async () => {
+    throw new Error('not used');
+  };
+  getItem: IWorkflowStore['getItem'] = async () => {
+    throw new Error('not used');
+  };
   findOpenWorkRuns: IWorkflowStore['findOpenWorkRuns'] = async () => {
     throw new Error('Not used by this test');
   };
@@ -189,6 +195,7 @@ export class InMemoryStore implements IWorkflowStore {
       parent_run_id: data.parent_run_id ?? null,
       output_root: null,
       checkout_baseline: null,
+      item_id: null,
       adopted_from_run_id: null,
     };
     this.runs.set(id, row);

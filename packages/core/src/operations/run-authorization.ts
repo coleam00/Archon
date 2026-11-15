@@ -1,13 +1,20 @@
 import type { ChatActor } from '@archon/chat-contract';
-import type { AttentionAnswerer } from '@archon/workflows/schemas/workflow-run';
+import type {
+  AttentionAnswerer,
+  AttentionAnsweringRun,
+} from '@archon/workflows/schemas/workflow-run';
 import type { UserRole } from '../schemas/user';
 
 /**
  * Who acts on a run. `declared` is the name an operator-side answerer gave for itself
  * (`--as`): a claim recorded with an answer, which nothing checks and authorization
- * never reads.
+ * never reads. `fromRun` is the run and node the operator-side call was made from, which
+ * the surface reads from the identity the engine put in the node's environment, never
+ * from the caller's request.
  */
-export type RunActor = { kind: 'operator'; declared?: string } | ChatActor;
+export type RunActor =
+  | { kind: 'operator'; declared?: string; fromRun?: AttentionAnsweringRun }
+  | ChatActor;
 
 /** Who an answer by `actor` is recorded as coming from, when the actor says. */
 export function answererOf(actor: RunActor): AttentionAnswerer | undefined {

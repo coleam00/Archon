@@ -7,7 +7,7 @@ import { clearRegistry, registerProvider } from '@archon/providers';
 import { descriptor } from '@archon/providers/claude/descriptor';
 
 mock.module('@archon/core', () => ({
-  loadConfig: async () => ({ assistants: { fixture: {} } }),
+  loadConfig: async () => ({ assistant: 'fixture', assistants: { fixture: {} } }),
   pool: { query: async () => [] },
   getDatabaseType: () => 'sqlite',
   getSchemaVersion: async () => null,

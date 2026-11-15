@@ -6,7 +6,21 @@ import {
   forgeEventEnvelopeSchema,
   mapForgeInputs,
   matchForgeEvent,
+  sourceActorSchema,
 } from './index';
+
+describe('source actor account type', () => {
+  const base = { host: 'github.com', id: '1', login: 'octo' };
+  test('is optional and nullable, so records without it still validate', () => {
+    expect(sourceActorSchema.parse(base)).toEqual(base);
+    expect(sourceActorSchema.parse({ ...base, type: null }).type).toBeNull();
+    for (const type of ['user', 'bot', 'organization'] as const)
+      expect(sourceActorSchema.parse({ ...base, type }).type).toBe(type);
+  });
+  test('refuses a value outside the named kinds', () => {
+    expect(sourceActorSchema.safeParse({ ...base, type: 'Bot' }).success).toBe(false);
+  });
+});
 
 describe('authored forge bindings', () => {
   const parsed = forgeEventEnvelopeSchema.parse({

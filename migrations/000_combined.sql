@@ -729,6 +729,25 @@ ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
 -- parse `intent` strictly and would refuse an extra key.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS event_input_names TEXT;
 
+-- The durable thing runs are about: a key within a project, and when it was first named.
+-- No status, stage or config; where an item stands is derived from its runs. project_key
+-- is the engine's project identity, the one remote_agent_state_revisions scopes by.
+CREATE TABLE IF NOT EXISTS remote_agent_items (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  project_key TEXT NOT NULL,
+  key TEXT NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  UNIQUE(project_key, key)
+);
+-- A receipt records the key a start named, before any item exists. Preparation resolves
+-- the project, writes the item and points the start request at it; the run takes the
+-- request's item at admission.
+ALTER TABLE remote_agent_start_receipts ADD COLUMN IF NOT EXISTS item_key TEXT;
+ALTER TABLE remote_agent_resource_start_requests
+  ADD COLUMN IF NOT EXISTS item_id UUID REFERENCES remote_agent_items(id);
+ALTER TABLE remote_agent_workflow_runs
+  ADD COLUMN IF NOT EXISTS item_id UUID REFERENCES remote_agent_items(id);
+
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;
@@ -841,6 +860,8 @@ CREATE INDEX IF NOT EXISTS idx_workflow_runs_user_id
   ON remote_agent_workflow_runs(user_id) WHERE user_id IS NOT NULL;
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_parent_run
   ON remote_agent_workflow_runs(parent_run_id) WHERE parent_run_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS idx_workflow_runs_item
+  ON remote_agent_workflow_runs(item_id) WHERE item_id IS NOT NULL;
 -- Open-work inbox (#2747): adopter lookup by adopted run.
 CREATE INDEX IF NOT EXISTS idx_workflow_runs_adopted_from
   ON remote_agent_workflow_runs(adopted_from_run_id) WHERE adopted_from_run_id IS NOT NULL;

@@ -94,8 +94,12 @@ export async function answerRun(
   await requestJson('/api/workflows/runs/{runId}/answer', 'post', { params: { runId: id }, body });
 }
 
-export async function resumeRun(id: string): Promise<void> {
-  await requestJson('/api/workflows/runs/{runId}/resume', 'post', { params: { runId: id } });
+/** Asks the server to resume a run; resolves to the server's account of what it started. */
+export async function resumeRun(id: string): Promise<string> {
+  const res = await requestJson('/api/workflows/runs/{runId}/resume', 'post', {
+    params: { runId: id },
+  });
+  return res.message;
 }
 
 export async function abandonRun(id: string): Promise<void> {

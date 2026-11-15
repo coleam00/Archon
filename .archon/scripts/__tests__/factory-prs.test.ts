@@ -15,6 +15,8 @@ import { mock } from 'bun:test';
 import * as api from 'archon:script';
 mock.module('archon:script', () => ({ ...api, state: { ...api.state,
   listValues: () => [{ name: 'work/42', revision: 1, lease: null, value: ${JSON.stringify(workItem)} }],
+  // The run keeps a merged pull request's facts; these tests count only the forge calls.
+  put: () => ({ ok: true, revision: 1 }),
 } }));
 `;
 const preload = statePreload(item);

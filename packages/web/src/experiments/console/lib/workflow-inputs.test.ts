@@ -1,5 +1,5 @@
 import { describe, test, expect } from 'bun:test';
-import { missingRequiredInputs, collectSuppliedInputs } from './workflow-inputs';
+import { collectSuppliedInputs } from './workflow-inputs';
 import type { WorkflowInput } from '../primitives/workflow';
 
 function input(over: Partial<WorkflowInput> & { name: string }): WorkflowInput {
@@ -11,33 +11,6 @@ const DECLARED: WorkflowInput[] = [
   input({ name: 'style', default: 'strict' }),
   input({ name: 'notes' }),
 ];
-
-describe('missingRequiredInputs', () => {
-  test('names required inputs with no value, in declaration order', () => {
-    const declared = [
-      input({ name: 'diff', required: true }),
-      input({ name: 'style' }),
-      input({ name: 'plan', required: true }),
-    ];
-    expect(missingRequiredInputs(declared, {})).toEqual(['diff', 'plan']);
-  });
-
-  test('treats a whitespace-only value as unfilled', () => {
-    expect(missingRequiredInputs(DECLARED, { diff: '   ' })).toEqual(['diff']);
-  });
-
-  test('is empty once every required input has a value', () => {
-    expect(missingRequiredInputs(DECLARED, { diff: 'D1' })).toEqual([]);
-  });
-
-  test('never blocks on an optional input, defaulted or not', () => {
-    expect(missingRequiredInputs([input({ name: 'style', default: 'strict' })], {})).toEqual([]);
-  });
-
-  test('is empty for a workflow declaring no inputs', () => {
-    expect(missingRequiredInputs([], {})).toEqual([]);
-  });
-});
 
 describe('collectSuppliedInputs', () => {
   test('sends only the filled inputs', () => {

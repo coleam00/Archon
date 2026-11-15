@@ -16,13 +16,16 @@ import { checkConnectedProviders } from './doctor-connected-providers';
 import { checkWorkspaceWritable, checkBundledDefaults, checkTelemetry } from './doctor-install';
 import { checkArchonSkill } from './doctor-skill';
 import { checkGitHubApp, checkSlack, checkTelegram } from './doctor-platforms';
+import { checkWorkflowProviderSelection } from './doctor-workflow-providers';
 
 type CheckOutcome = Promise<CheckResult | CheckResult[]>;
 
-function runDefaultChecks(env: NodeJS.ProcessEnv): CheckOutcome[] {
+async function runDefaultChecks(env: NodeJS.ProcessEnv): Promise<CheckOutcome[]> {
+  const selection = await checkWorkflowProviderSelection();
   return [
     checkConfigFiles(),
-    checkInstalledProviders(),
+    Promise.resolve(selection.check),
+    checkInstalledProviders(undefined, undefined, selection.allowEmptyProviderInventory),
     ...providerRegistry.list().map(provider => checkProviderDiagnostics(provider.id)),
     checkGitHubApp(env),
     checkAssistantLogin(env),
@@ -68,7 +71,7 @@ export async function doctorCommand(
   console.log('archon doctor — verifying your setup\n');
   doctorLog().info('doctor.run_started');
 
-  const promises = checks ? checks.map(fn => fn()) : runDefaultChecks(process.env);
+  const promises = checks ? checks.map(fn => fn()) : await runDefaultChecks(process.env);
   // Promise.allSettled so one unexpected rejection doesn't skip remaining checks.
   const statuses = (await Promise.allSettled(promises)).flatMap(reportSettled);
   const failures = statuses.filter(status => status === 'fail').length;

@@ -12,25 +12,34 @@ interface FilterChipsProps {
 
 // Order reflects the typical user journey: what's happening now (running),
 // what needs me (paused), what's broken (failed), then the retrospective
-// buckets (completed, all) at the end.
-const ORDER: readonly {
-  filter: Filter;
-  label: string;
-  countKey: keyof RunCounts;
-}[] = [
-  { filter: 'running', label: 'Running', countKey: 'running' },
-  { filter: 'paused', label: 'Paused', countKey: 'paused' },
-  { filter: 'failed', label: 'Failed', countKey: 'failed' },
-  { filter: 'completed', label: 'Completed', countKey: 'completed' },
-  { filter: 'all', label: 'All', countKey: 'all' },
+// buckets (completed, cancelled, all) at the end. Every status has a tab, so the
+// tab counts add up to All.
+const ORDER: readonly { filter: Filter; label: string }[] = [
+  { filter: 'running', label: 'Running' },
+  { filter: 'paused', label: 'Paused' },
+  { filter: 'failed', label: 'Failed' },
+  { filter: 'completed', label: 'Completed' },
+  { filter: 'cancelled', label: 'Cancelled' },
+  { filter: 'all', label: 'All' },
 ];
+
+/** The tabs in display order; the runs page binds its number keys to the same order. */
+export const FILTER_ORDER: readonly Filter[] = ORDER.map(tab => tab.filter);
+
+/**
+ * How many runs a tab holds. A `pending` run is shown as running (see `toRun`), so
+ * the Running tab counts both.
+ */
+export function filterCount(counts: RunCounts, filter: Filter): number {
+  return filter === 'running' ? counts.running + counts.pending : counts[filter];
+}
 
 export function FilterChips({ value, onChange, counts }: FilterChipsProps): ReactElement {
   return (
     <div className="flex items-center gap-1.5">
-      {ORDER.map(({ filter, label, countKey }) => {
+      {ORDER.map(({ filter, label }) => {
         const active = value === filter;
-        const n = counts[countKey];
+        const n = filterCount(counts, filter);
         return (
           <button
             key={filter}

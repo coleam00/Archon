@@ -165,6 +165,10 @@ const mockHandleMessage = mock(async (..._args: unknown[]) => {});
 const mockAddMessage = mock(async (..._args: unknown[]) => ({ id: 'msg-1' }));
 const mockListMessages = mock(async () => []);
 
+// The run route asks the engine before it dispatches; these suites test who may reach it.
+mock.module('@archon/core/operations/workflow-start-admission', () => ({
+  workflowStartRefusal: mock(async () => undefined),
+}));
 mock.module('@archon/core', () => ({
   handleMessage: mockHandleMessage,
   getDatabaseType: () => 'postgresql',

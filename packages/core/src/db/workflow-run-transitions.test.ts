@@ -76,6 +76,7 @@ describe('workflow run transitions', () => {
           null,
           null, // adopted_from_run_id (#2747)
           JSON.stringify({ conversationId: 'conv-456' }),
+          null,
         ]
       );
     });
@@ -110,6 +111,7 @@ describe('workflow run transitions', () => {
           null,
           null, // adopted_from_run_id (#2747)
           JSON.stringify({ conversationId: 'conv-456' }),
+          null,
         ]
       );
     });
@@ -139,6 +141,7 @@ describe('workflow run transitions', () => {
           null,
           null, // adopted_from_run_id (#2747)
           JSON.stringify({ conversationId: 'conv-456' }),
+          null,
         ]
       );
     });

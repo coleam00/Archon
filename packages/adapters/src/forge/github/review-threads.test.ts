@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test';
+import { forgeResponseSchema } from '@archon/forge/operations';
 import { handleGithubOperation } from './operations';
 
 const repo = { host: 'github.com', path: 'archon/test' };
@@ -42,9 +43,14 @@ function fakeGitHub(answer: (call: Call) => unknown): { fetch: typeof fetch; cal
   return { fetch: fetchImpl, calls };
 }
 
-const comment = (id: string, body: string, createdAt = '2026-11-11T10:00:00Z') => ({
+const comment = (
+  id: string,
+  body: string,
+  createdAt = '2026-11-11T10:00:00Z',
+  author: unknown = { __typename: 'User', login: 'reviewer', id: 'U_reviewer', databaseId: 42 }
+) => ({
   id,
-  author: { login: 'reviewer', databaseId: 42 },
+  author,
   createdAt,
   originalCommit: { oid: `${id}-commit` },
   body,
@@ -129,9 +135,117 @@ describe('pr.threads', () => {
       host: 'github.com',
       id: '42',
       login: 'reviewer',
+      type: 'user',
     });
     expect(threads[1]).toMatchObject({ resolved: true, comments: [{ author: null }] });
     expect(github.calls.filter(call => call.query?.includes('reviewThreads'))).toHaveLength(2);
+  });
+
+  test('each comment author carries its GraphQL account type, a missing one as null', async () => {
+    const github = fakeGitHub(() => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                thread('t1', [
+                  comment('c1', 'a', undefined, {
+                    __typename: 'User',
+                    login: 'dev',
+                    id: 'U_dev',
+                    databaseId: 1,
+                  }),
+                  comment('c2', 'b', undefined, {
+                    __typename: 'Bot',
+                    login: 'ci',
+                    id: 'BOT_ci',
+                    databaseId: 2,
+                  }),
+                  comment('c3', 'c', undefined, {
+                    __typename: 'Organization',
+                    login: 'acme',
+                    id: 'O_acme',
+                    databaseId: 3,
+                  }),
+                  comment('c4', 'd', undefined, {
+                    login: 'untyped',
+                    id: 'X_untyped',
+                    databaseId: 4,
+                  }),
+                  comment('c5', 'e', undefined, {
+                    __typename: 'Mannequin',
+                    login: 'm',
+                    id: 'MQ_m',
+                    databaseId: 5,
+                  }),
+                ]),
+              ],
+            },
+          },
+        },
+      },
+    }));
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      { token: 'token', fetch: github.fetch }
+    );
+    if (!response.ok || response.result.op !== 'pr.threads')
+      throw new Error(JSON.stringify(response));
+    const authors = response.result.value.threads[0]?.comments.map(item => item.author);
+    expect(authors?.map(item => item?.type)).toEqual(['user', 'bot', 'organization', null, null]);
+    expect(authors?.[1]).toEqual({ host: 'github.com', id: '2', login: 'ci', type: 'bot' });
+    expect(forgeResponseSchema.safeParse(response).success).toBe(true);
+    expect(github.calls[0]?.query).toContain('author{__typename login');
+  });
+
+  test('an organization or mannequin author keeps the numeric id REST gives the account', async () => {
+    const github = fakeGitHub(() => ({
+      data: {
+        repository: {
+          pullRequest: {
+            reviewThreads: {
+              pageInfo: { hasNextPage: false, endCursor: null },
+              nodes: [
+                thread('t1', [
+                  comment('c1', 'a', undefined, {
+                    __typename: 'Organization',
+                    login: 'acme',
+                    id: 'O_acme',
+                    databaseId: 9001,
+                  }),
+                  comment('c2', 'b', undefined, {
+                    __typename: 'Mannequin',
+                    login: 'imported',
+                    id: 'MDk6TWFubmVxdWlu',
+                    databaseId: 9002,
+                  }),
+                  comment('c3', 'c', undefined, {
+                    __typename: 'EnterpriseUserAccount',
+                    login: 'ent',
+                    id: 'MDIxOkVudGVycHJpc2VVc2VyQWNjb3VudDE=',
+                  }),
+                ]),
+              ],
+            },
+          },
+        },
+      },
+    }));
+    const response = await handleGithubOperation(
+      { operationId: 'threads', op: 'pr.threads', ref },
+      { token: 'token', fetch: github.fetch }
+    );
+    if (!response.ok || response.result.op !== 'pr.threads')
+      throw new Error(JSON.stringify(response));
+    expect(response.result.value.threads[0]?.comments.map(item => item.author)).toEqual([
+      { host: 'github.com', id: '9001', login: 'acme', type: 'organization' },
+      { host: 'github.com', id: '9002', login: 'imported', type: null },
+      // GitHub gives an enterprise user account no numeric id; its node id stands in.
+      { host: 'github.com', id: 'MDIxOkVudGVycHJpc2VVc2VyQWNjb3VudDE=', login: 'ent', type: null },
+    ]);
+    for (const kind of ['Organization', 'Mannequin'])
+      expect(github.calls[0]?.query).toContain(`... on ${kind}{databaseId}`);
   });
 
   test('every thread and comment carries when it was created and on which commit', async () => {
@@ -174,96 +288,6 @@ describe('pr.threads', () => {
         },
       },
     });
-  });
-
-  test('a read that GitHub answers 502 is repeated, and one it refuses is not', async () => {
-    const page = {
-      data: {
-        repository: {
-          pullRequest: {
-            reviewThreads: {
-              pageInfo: { hasNextPage: false, endCursor: null },
-              nodes: [thread('t1', [comment('c1', 'first')])],
-            },
-          },
-        },
-      },
-    };
-    const waits: number[] = [];
-    const sleep = async (ms: number): Promise<void> => {
-      waits.push(ms);
-    };
-    const answers = [json({}, 502), json({}, 502), json(page)];
-    const response = await handleGithubOperation(
-      { operationId: 'threads', op: 'pr.threads', ref },
-      {
-        token: 'token',
-        fetch: async () => answers.shift() ?? json({ message: 'unexpected call' }, 500),
-        sleep,
-      }
-    );
-    expect(response).toMatchObject({ ok: true, result: { value: { threads: [{ id: 't1' }] } } });
-    expect(waits).toEqual([1_000, 2_000]);
-
-    let calls = 0;
-    const refused = await handleGithubOperation(
-      { operationId: 'threads', op: 'pr.threads', ref },
-      {
-        token: 'token',
-        fetch: async () => {
-          calls++;
-          return json({}, 403);
-        },
-        sleep,
-      }
-    );
-    expect(refused).toMatchObject({ ok: false, error: { kind: 'authorization', status: 403 } });
-    expect(calls).toBe(1);
-  });
-
-  test('a read is repeated three times at most, and a dropped connection counts as transient', async () => {
-    const waits: number[] = [];
-    const sleep = async (ms: number): Promise<void> => {
-      waits.push(ms);
-    };
-    let calls = 0;
-    const down = await handleGithubOperation(
-      { operationId: 'threads', op: 'pr.threads', ref },
-      {
-        token: 'token',
-        fetch: async () => {
-          calls++;
-          return json({}, 502);
-        },
-        sleep,
-      }
-    );
-    expect(down).toMatchObject({ ok: false });
-    expect(calls).toBe(4);
-    expect(waits).toEqual([1_000, 2_000, 4_000]);
-
-    const page = {
-      data: {
-        repository: {
-          pullRequest: {
-            reviewThreads: { pageInfo: { hasNextPage: false, endCursor: null }, nodes: [] },
-          },
-        },
-      },
-    };
-    let drops = 2;
-    const recovered = await handleGithubOperation(
-      { operationId: 'threads', op: 'pr.threads', ref },
-      {
-        token: 'token',
-        fetch: async () => {
-          if (drops-- > 0) throw new TypeError('socket hang up');
-          return json(page);
-        },
-        sleep,
-      }
-    );
-    expect(recovered).toMatchObject({ ok: true, result: { value: { threads: [] } } });
   });
 
   test('a GraphQL errors document is a failure, not an empty list', async () => {

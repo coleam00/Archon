@@ -187,8 +187,16 @@ export const forgeRequestSchema = z.discriminatedUnion('op', [
   ...mutationRequestSchemas,
 ]);
 export type ForgeRequest = z.infer<typeof forgeRequestSchema>;
+/**
+ * The failures that say nothing about the request itself: the forge did not answer or
+ * answered that it is failing (`unavailable`), or it is limiting the caller
+ * (`rate_limited`). The host repeats a read that fails with one of them. A plugin sets
+ * them from a status, a documented header or an error code, never from message text.
+ */
+export const temporaryErrorKinds = ['unavailable', 'rate_limited'] as const;
 export const forgeErrorSchema = z.object({
   kind: z.enum([
+    ...temporaryErrorKinds,
     'unsupported_op',
     'conflict',
     'authorization',
@@ -461,6 +469,8 @@ export const forgeOperationAuditSchema = z.object({
   target: z.union([prRefSchema, repoRefSchema]).nullable(),
   plugin: pluginIdentitySchema.nullable(),
   result: auditResponseSchema,
+  // How many times the host repeated a read that failed temporarily before `result`.
+  retries: z.number().int().nonnegative(),
   durationMs: z.number().nonnegative(),
 });
 
