@@ -451,6 +451,13 @@ export function describeSqlStatusReadConformance(
       expect((await start('c'))?.status).toBe('queued');
       await run(CONFORMANCE_CODEBASE_ID, 'b');
       await run(otherProject, 'a');
+      // A `workflow:` child of an item run carries no item and is left to `workflow get`.
+      const child = await store.createWorkflowRun({
+        workflow_name: 'item-child',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        parent_run_id: started.runId,
+      });
       expect((await run(CONFORMANCE_CODEBASE_ID)).item_id).toBeNull();
 
       const project = projectKeyForCodebase(
@@ -460,6 +467,7 @@ export function describeSqlStatusReadConformance(
       const listed = await store.getItemRuns(project, 'a');
       expect(listed?.item).toMatchObject({ projectKey: project, key: 'a' });
       expect(listed?.runs.map(row => row.id)).toEqual([started.runId, second.id]);
+      expect(listed?.runs.map(row => row.id)).not.toContain(child.id);
       expect(await store.getItem(second.item_id ?? '')).toEqual(listed?.item ?? null);
       expect(listed?.runs.every(row => row.item_id === listed.item.id)).toBe(true);
       // An item with no run yet and a key nothing named read apart.
