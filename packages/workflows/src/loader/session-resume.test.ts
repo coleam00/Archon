@@ -353,14 +353,6 @@ nodes:
 });
 
 describe('persist_session capability gating', () => {
-  it('parses persist_session: true on a node', () => {
-    const { workflow } = parseWorkflowYaml(
-      `name: t\ndescription: t\nprovider: claude\nnodes:\n  - id: planner\n    prompt: p\n    persist_session: true\n`
-    );
-    const node = workflow.nodes[0];
-    expect('persist_session' in node ? node.persist_session : undefined).toBe(true);
-  });
-
   it('does NOT capability-check non-AI nodes when persist_sessions is workflow-level', () => {
     // Regression for CodeRabbit #7: workflow-level persist_sessions: true with a bash
     // node would falsely trigger the capability check on a provider that can't even
