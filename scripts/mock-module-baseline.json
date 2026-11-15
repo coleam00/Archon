@@ -2339,11 +2339,8 @@
       "deactivateSession",
       "deleteOldSessions",
       "getActiveSession",
-      "getSessionChain",
-      "getSessionHistory",
       "transitionSession",
-      "updateSession",
-      "updateSessionMetadata"
+      "updateSession"
     ],
     "packages/core/src/db/user-ai-prefs-store.ts": [
       "clearUserAiPrefs",

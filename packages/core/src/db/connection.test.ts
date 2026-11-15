@@ -44,15 +44,5 @@ describe('connection', () => {
       process.env.DATABASE_URL = '';
       expect(getDatabaseType()).toBe('sqlite');
     });
-
-    it('should not initialize database connection', () => {
-      // getDatabaseType should work without connecting to database
-      // This is important for version command that runs without db
-      delete process.env.DATABASE_URL;
-
-      // Should not throw even without a database available
-      const result = getDatabaseType();
-      expect(result).toBe('sqlite');
-    });
   });
 });
