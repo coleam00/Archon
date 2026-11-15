@@ -110,6 +110,8 @@ describe('readArchonCommit', () => {
         ].join('\n'),
         { mode: 0o755 }
       );
+      // gpg.program applies only to the openpgp format; a developer's global gpg.format=ssh would bypass the stand-in.
+      git(root, 'config', 'gpg.format', 'openpgp');
       git(root, 'config', 'gpg.program', fakeGpg);
       git(root, 'commit', '-q', '--allow-empty', '-S', '-m', 'signed');
       git(root, 'config', 'log.showSignature', 'true');
