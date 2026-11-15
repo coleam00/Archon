@@ -45,6 +45,16 @@ const read: ItemRead = {
       decision: 'rejected',
       text: 'needs tests',
     },
+    {
+      kind: 'gate',
+      runId: 'run-done-1',
+      node: 'review',
+      occurrence: 'gate-2',
+      at: '2026-11-01T09:40:00.000Z',
+      via: 'cli',
+      decision: 'approved',
+      text: null,
+    },
   ],
   degraded: [],
 };
@@ -63,4 +73,8 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(answerLine).toContain('2026-11-01T09:20Z');
   expect(answerLine).toContain('rejected');
   expect(answerLine).toContain('api');
+  // Answers print oldest first.
+  const rejected = lines.findIndex(line => line.includes('needs tests'));
+  const approved = lines.findIndex(line => line.includes('gate approved'));
+  expect(approved).toBeGreaterThan(rejected);
 });
