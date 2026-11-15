@@ -1356,14 +1356,17 @@ describe('submodules', () => {
       expectKeptWithoutRemovalAdvice(error);
     });
 
-    test.each(['ownership changes', 'status fails'])(
-      'preserves the checkout when %s during cleanup',
-      async failure => {
+    test.each([
+      { lockChanges: true, statusFails: false },
+      { lockChanges: true, statusFails: true },
+      { lockChanges: false, statusFails: true },
+    ])(
+      'preserves the checkout during cleanup (lock changes: $lockChanges, status fails: $statusFails)',
+      async ({ lockChanges, statusFails }) => {
         gitmodulesPresent();
         execSpy.mockImplementation(async (_cmd: string, args: string[]) => {
           if (args.includes('submodule')) throw submoduleError;
-          if (failure === 'status fails' && args.includes('status'))
-            throw new Error('status unavailable');
+          if (statusFails && args.includes('status')) throw new Error('status unavailable');
           return { stdout: '', stderr: '' };
         });
         let lockReads = 0;
@@ -1373,21 +1376,22 @@ describe('submodules', () => {
           lockReads++;
           return {
             reason:
-              failure === 'ownership changes' && lockReads > 1
+              lockChanges && lockReads > 1
                 ? 'archon: worktree setup in progress: another-attempt'
                 : add[add.indexOf('--reason') + 1],
           };
         });
         const error = await rejection(provider.create(issueRequest));
         expect(error.message).toContain('Submodule initialization failed');
-        // A failed status is a failure on this attempt's own checkout. A lock that became
-        // another attempt's is not: the notice must not send anyone to remove that path.
-        if (failure === 'status fails') {
+        // A failed status is a failure on this attempt's own checkout only while its lock
+        // is still on the path. Once the lock is another attempt's, whatever the content
+        // check said, the notice must not send anyone to remove that path.
+        if (lockChanges) {
+          expectKeptWithoutRemovalAdvice(error);
+        } else {
           expect((error as Error & { cleanupFailure?: string }).cleanupFailure).toMatch(
             /\bremove\b/i
           );
-        } else {
-          expectKeptWithoutRemovalAdvice(error);
         }
         expect(ranGit('remove')).toBe(false);
       }

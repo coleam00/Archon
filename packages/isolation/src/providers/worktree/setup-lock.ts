@@ -299,11 +299,13 @@ async function removeLockedCheckout(
   } catch (error) {
     changes = error instanceof Error ? error.message : String(error);
   }
-  if (changes) return { owner: 'this_attempt', reason: changes };
+  // Read again before deciding either way: the content check takes time, and remains
+  // are this attempt's own only while its lock is still the one on the path.
   const currentLock = await readWorktreeLock(toWorktreePath(worktreePath));
   if (currentLock?.reason !== setupLockReason) {
     return lockedByAnother(currentLock?.reason, 'the setup lock changed during cleanup');
   }
+  if (changes) return { owner: 'this_attempt', reason: changes };
   return ownRemains(async () => {
     await forceRemoveWorktree(repoPath, worktreePath);
     if (await directoryExists(worktreePath)) {
