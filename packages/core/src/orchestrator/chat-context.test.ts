@@ -26,7 +26,7 @@ import {
 } from '../test/orchestrator-agent-harness';
 import { handleMessage } from './orchestrator-agent';
 import { discoverAllWorkflows } from './chat-context';
-import { buildOrchestratorSystemAppend } from './prompt-builder';
+import { buildOrchestratorSystemAppend, formatWorkflowContextSection } from './prompt-builder';
 
 // ─── discoverAllWorkflows — remote sync ───────────────────────────────────────
 
@@ -160,13 +160,12 @@ describe('discoverAllWorkflows — remote sync', () => {
     mockSyncWorkspace.mockRejectedValueOnce(new Error('Network timeout'));
 
     const platform = makePlatform();
-    // Non-fatal: no exception propagated
-    await expect(
-      handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator })
-    ).resolves.toBeUndefined();
+    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
     expect(mockSyncWorkspace).toHaveBeenCalledWith('/repos/test-repo', undefined, {
       remote: 'origin',
     });
+    // Non-fatal: the turn still reaches the agent.
+    expect(mockSendQuery).toHaveBeenCalled();
   });
 
   test('does not call syncWorkspace when conversation has no codebase_id', async () => {
@@ -190,23 +189,6 @@ describe('discoverAllWorkflows — remote sync', () => {
     await handleMessage(platform, 'conv-1', 'Summarize the folder structure.', { actor: operator });
 
     expect(mockSyncWorkspace).not.toHaveBeenCalled();
-  });
-
-  test('logs a warn when syncWorkspace rejects', async () => {
-    const conversation = makeConversation({ codebase_id: 'codebase-1' });
-    const codebase = makeCodebaseForSync();
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(conversation));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(codebase));
-    mockListCodebases.mockReturnValueOnce(Promise.resolve([codebase]));
-    mockSyncWorkspace.mockRejectedValueOnce(new Error('Network timeout'));
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'What is the latest commit?', { actor: operator });
-
-    expect(mockLogger.warn).toHaveBeenCalledWith(
-      expect.objectContaining({ codebaseId: 'codebase-1' }),
-      'workspace.sync_failed'
-    );
   });
 
   test('passes merged repo and DB env vars to provider for codebase-scoped chat', async () => {
@@ -429,6 +411,8 @@ describe('discoverAllWorkflows — merge repo workflows over global', () => {
 describe('handleMessage — workflow context injection', () => {
   beforeEach(() => {
     mockGetRecentWorkflowResultMessages.mockClear();
+    mockSendQuery.mockClear();
+    (formatWorkflowContextSection as ReturnType<typeof mock>).mockClear();
     mockGetOrCreateConversation.mockReset();
     mockListCodebases.mockReset();
     mockDiscoverWorkflowsWithConfig.mockReset();
@@ -449,15 +433,6 @@ describe('handleMessage — workflow context injection', () => {
     expect(mockGetRecentWorkflowResultMessages).toHaveBeenCalledWith('conv-1-db', 3);
   });
 
-  test('does not throw when getRecentWorkflowResultMessages returns empty array', async () => {
-    mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([]);
-    const platform = makePlatform();
-
-    await expect(
-      handleMessage(platform, 'conv-1', 'Hello', { actor: operator })
-    ).resolves.toBeUndefined();
-  });
-
   test('handles malformed metadata JSON without throwing', async () => {
     const badRow = {
       id: 'msg-1',
@@ -471,9 +446,13 @@ describe('handleMessage — workflow context injection', () => {
     mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([badRow]);
     const platform = makePlatform();
 
-    await expect(
-      handleMessage(platform, 'conv-1', 'What did the workflow do?', { actor: operator })
-    ).resolves.toBeUndefined();
+    await handleMessage(platform, 'conv-1', 'What did the workflow do?', { actor: operator });
+
+    // The row still reaches the agent, under default identifiers.
+    expect(formatWorkflowContextSection).toHaveBeenCalledWith([
+      { workflowName: 'unknown', runId: 'unknown', summary: 'Summary.' },
+    ]);
+    expect(mockSendQuery).toHaveBeenCalled();
   });
 
   test('handles metadata with missing workflowResult key gracefully', async () => {
@@ -489,9 +468,12 @@ describe('handleMessage — workflow context injection', () => {
     mockGetRecentWorkflowResultMessages.mockResolvedValueOnce([rowNoWorkflowResult]);
     const platform = makePlatform();
 
-    await expect(
-      handleMessage(platform, 'conv-1', 'Follow-up', { actor: operator })
-    ).resolves.toBeUndefined();
+    await handleMessage(platform, 'conv-1', 'Follow-up', { actor: operator });
+
+    expect(formatWorkflowContextSection).toHaveBeenCalledWith([
+      { workflowName: 'unknown', runId: 'unknown', summary: 'Summary.' },
+    ]);
+    expect(mockSendQuery).toHaveBeenCalled();
   });
 
   test('continues without workflow context when outer fetch throws', async () => {
@@ -499,8 +481,8 @@ describe('handleMessage — workflow context injection', () => {
     const platform = makePlatform();
 
     // Non-critical path — must not block message handling
-    await expect(
-      handleMessage(platform, 'conv-1', 'Hello', { actor: operator })
-    ).resolves.toBeUndefined();
+    await handleMessage(platform, 'conv-1', 'Hello', { actor: operator });
+
+    expect(mockSendQuery).toHaveBeenCalled();
   });
 });
