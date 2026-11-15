@@ -265,19 +265,13 @@ test.each([false, true])(
       [name]: `workflows/shipped/${name}/${filename}`,
     });
     binary = binaryMode;
-    const message = 'Unexpected token at line 3: ARCHON_BUNDLE_SECRET_SENTINEL';
-    const parse = Bun.YAML.parse;
-    const parser = spyOn(Bun.YAML, 'parse').mockImplementation(content => {
-      if (content === yaml) throw new SyntaxError(message);
-      return parse(content);
-    });
     setLogSink(line => lines.push(line));
     try {
       const result = await discoverWorkflows(project, { providers: providerRegistry });
       expect(result.errors).toContainEqual({
         filename,
         errorType: 'parse_error',
-        error: `YAML parse error (near line 3): ${message}`,
+        error: expect.stringContaining(`${filename}:3:9: YAML syntax error:`),
       });
       expect(lines.join('')).not.toContain('ARCHON_BUNDLE_SECRET_SENTINEL');
       expect(lines.join('')).not.toContain('name: private');
@@ -291,7 +285,6 @@ test.each([false, true])(
       expect(event).toBeDefined();
       expect(JSON.stringify(event)).toContain(filename);
     } finally {
-      parser.mockRestore();
       setLogSink(undefined);
       Reflect.deleteProperty(defaults.BUNDLED_WORKFLOWS, name);
       Reflect.deleteProperty(defaults.BUNDLED_WORKFLOW_PATHS, name);

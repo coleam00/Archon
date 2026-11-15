@@ -91,7 +91,8 @@
     "@archon/plugin-manifest": "workspace:*",
     "@archon/script-api": "workspace:*",
     "zod": "^4.4.3",
-    "ajv": "^8.20.0"
+    "ajv": "^8.20.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@archon/providers": "workspace:*"
