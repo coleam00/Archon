@@ -231,8 +231,9 @@ export function registerAdapterTests(shared: ReturnType<typeof setupSqliteTests>
     });
 
     describe('datetime() chronological vs lexical comparison', () => {
-      // Documents the SQLite-specific bug fixed in getActiveWorkflowRunByPath.
-      // `started_at` is TEXT in "YYYY-MM-DD HH:MM:SS" format. Comparing it
+      // Documents why getLiveRunOwningEnv (isolation-environments.ts) wraps a
+      // run's last-active time in datetime() before comparing it with a cutoff.
+      // A timestamp column is TEXT in "YYYY-MM-DD HH:MM:SS" format. Comparing it
       // directly to an ISO param "YYYY-MM-DDTHH:MM:SS.mmmZ" with `<` is
       // LEXICAL: char 11 is space (0x20) in the column vs T (0x54) in the
       // param, so every column value lex-sorts before every ISO param,
