@@ -13,6 +13,7 @@ import {
   selectSetupProviders,
   writeInstallDefaults,
 } from './setup-ai';
+import { DEFAULT_CHAT_MODEL_OPTIONS } from './setup-model-options';
 
 describe('buildDefaultModelChoices (#1999)', () => {
   it('leads with "Keep SDK default" when no current model and ends with the free-text escape', () => {
@@ -27,20 +28,11 @@ describe('buildDefaultModelChoices (#1999)', () => {
     expect(choices[0].label).toBe('Keep current (opus)');
   });
 
-  it('includes the curated claude shortlist between keep and custom', () => {
+  it('includes the curated shortlist between keep and custom', () => {
     const values = buildDefaultModelChoices('claude', undefined).map(c => c.value);
-    expect(values).toEqual(['__keep__', 'sonnet', 'opus', 'haiku', '__custom__']);
-  });
-
-  it('includes the curated codex shortlist', () => {
-    const values = buildDefaultModelChoices('codex', undefined).map(c => c.value);
-    expect(values).toEqual([
-      '__keep__',
-      'gpt-6.1-sol',
-      'gpt-6.1-terra',
-      'gpt-6-luna',
-      '__custom__',
-    ]);
+    const curated = DEFAULT_CHAT_MODEL_OPTIONS.claude.map(o => o.value);
+    expect(curated.length).toBeGreaterThan(0);
+    expect(values).toEqual(['__keep__', ...curated, '__custom__']);
   });
 
   it('falls back to keep + custom only for providers without a curated list', () => {

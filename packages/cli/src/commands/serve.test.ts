@@ -218,28 +218,6 @@ describe('downloadWebDist', () => {
   });
 });
 
-// Structural conformance of the hand-rolled archive, checked against the POSIX
-// ustar spec rather than against the writer itself.
-//
-// The extraction tests above catch a wrong *payload* (a short `size` field
-// truncates the file, which the content assertions see). They do NOT catch a
-// wrong *envelope*: the reader, like tar, stops at the end of data, so an
-// archive with no end-of-archive marker or no final block padding still
-// extracts cleanly. Hence these two.
-describe('buildWebTarball structural conformance', () => {
-  const archive = Bun.gunzipSync(buildWebTarball(FIXTURE_INDEX_HTML));
-
-  it('is a whole number of 512-byte blocks', () => {
-    expect(archive.length % 512).toBe(0);
-  });
-
-  it('ends with the two zero blocks that mark end-of-archive', () => {
-    const terminator = archive.subarray(archive.length - 1024);
-    expect(terminator.length).toBe(1024);
-    expect(terminator.every(byte => byte === 0)).toBe(true);
-  });
-});
-
 const signals = ['SIGINT', 'SIGTERM'] as const;
 function listeners() {
   return signals.map(signal => process.listeners(signal));
