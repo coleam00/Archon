@@ -1477,4 +1477,73 @@ describe('loop_group body inputs: included blocks, command files and loop variab
       expect(iterations(step, 'node_completed')).toEqual([2]);
     }
   });
+
+  it("resolves an include's previous-round output in a command file (#5696)", async () => {
+    await writeFile(
+      join(testDir, '.archon', 'commands', 'prior-review.md'),
+      'Prior include: [$LOOP_PREV.verdict.output]'
+    );
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'agent_message_chunk', text: 'read' };
+      yield { type: 'result', sessionId: 'prior-review-sess' };
+    });
+    const inner = workflowDefinitionSchema.parse({
+      name: 'inner',
+      description: 'Returns a fixed verdict',
+      returns: 'say',
+      nodes: [{ id: 'say', bash: 'echo RETURNED' }],
+    });
+    const outer = workflowDefinitionSchema.parse({
+      name: 'outer',
+      description: "A command file reads an include's previous round",
+      nodes: [
+        {
+          id: 'rounds',
+          loop_group: {
+            max_iterations: 2,
+            until_bash: 'until-check',
+            nodes: [
+              { id: 'reader', command: 'prior-review' },
+              { id: 'verdict', include: 'inner', depends_on: ['reader'] },
+            ],
+          },
+        },
+      ],
+    });
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        [inner.name, inner],
+        [outer.name, outer],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+    const expanded = workflows.get(outer.name);
+    if (!expanded) throw new Error('expected expanded workflow');
+
+    const execSpy = spyOnNodeExec().mockImplementation(async (_cmd, _args, options) => {
+      const script = options?.input ?? '';
+      if (script === 'until-check') throw Object.assign(new Error('exit 1'), { code: 1 });
+      return { stdout: `${script.slice('echo '.length)}\n`, stderr: '' };
+    });
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(),
+          platform: createMockPlatform(),
+          conversationId: 'conv-lg',
+          cwd: testDir,
+          workflow: ready(expanded),
+          workflowRun: makeWorkflowRun('dag-loopgroup-command-include-prev'),
+        })
+      );
+    } finally {
+      execSpy.mockRestore();
+    }
+
+    const prompts = mockSendQueryDag.mock.calls.map(call => call[0] as string);
+    expect(prompts.map(prompt => prompt.match(/Prior include: \[[^\]]*\]/)?.[0])).toEqual([
+      'Prior include: []',
+      'Prior include: [RETURNED]',
+    ]);
+  });
 });

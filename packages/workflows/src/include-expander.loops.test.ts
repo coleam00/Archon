@@ -99,11 +99,7 @@ describe('expandWorkflowIncludes — loop_group body composition (#2623)', () =>
           until_bash: 'test "$review.output.done" = true || test -n "$LOOP_PREV.review.output"',
           max_iterations: 3,
           nodes: [
-            {
-              id: 'seed',
-              bash: 'echo context',
-              when: "$LOOP_PREV.review.output.done != 'true'",
-            },
+            { id: 'seed', bash: 'echo context' },
             {
               id: 'review',
               include: 'review-block',
@@ -136,9 +132,6 @@ describe('expandWorkflowIncludes — loop_group body composition (#2623)', () =>
     expect(groupConfig?.until_bash).toBe(
       'test "$review__decide.output.done" = true || test -n "$LOOP_PREV.review__decide.output"'
     );
-    // `$LOOP_PREV.<include>` reads the previous round of what the include returns (#5696).
-    const seed = groupConfig?.nodes.find(node => node.id === 'seed');
-    expect(seed?.when).toBe("$LOOP_PREV.review__decide.output.done != 'true'");
 
     const decide = groupConfig?.nodes.find(node => node.id === 'review__decide');
     const cleanup = groupConfig?.nodes.find(node => node.id === 'review__cleanup');
