@@ -46,12 +46,16 @@ export async function workflowResumeCommand(
   detach?: boolean
 ): Promise<number> {
   // A run whose owner still answers is the one refusal with a CLI next step to name.
+  // Cancel is not that step: it records the run `cancelled`, which resume refuses.
   const resumeWorkflowOp = (id: string): Promise<WorkflowRun> =>
     host.operations.resumeWorkflow(id, { kind: 'operator' }).catch((error: unknown) => {
       if (!(error instanceof ResumeRefusedError) || error.reason !== 'live_owner') throw error;
-      throw new Error(`${error.message}\nCancel it: archon workflow cancel ${id}`, {
-        cause: error,
-      });
+      throw new Error(
+        `${error.message}\nTo resume it here, wait for that process to exit or stop it ` +
+          `yourself, then run this again. archon workflow cancel ${id} ends the run instead, ` +
+          'and a cancelled run cannot be resumed.',
+        { cause: error }
+      );
     });
 
   // --detach: validate read-only (resumeWorkflowOp checks the run is resumable),

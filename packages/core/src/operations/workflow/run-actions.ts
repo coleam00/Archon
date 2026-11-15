@@ -28,7 +28,8 @@ export interface WorkflowStatusData {
  * `not_resumable`: the run is in a status resume cannot continue.
  * `awaiting_answer`: the run is paused at an attention wait that needs an answer.
  * `live_owner`: the run is `running` and its owner, or its root run's owner, answers on
- *   this host. A second executor would run the same work; cancel it first.
+ *   this host. A second executor would run the same work. It resumes once that process
+ *   is gone; cancelling it instead ends the run.
  * `owner_unreachable`: the run is `running` and its recorded owner is on another host or
  *   ran as another user, so this process cannot ask whether it is still alive.
  */

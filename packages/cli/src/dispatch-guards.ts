@@ -27,19 +27,28 @@ export function isContinueSubcommand(subcommand: string | undefined): boolean {
   return subcommand !== undefined && CONTINUE_SUBCOMMANDS.includes(subcommand);
 }
 
+/** What a continuation keeps from the start of the run, for each `workflow run` flag it refuses. */
+const KEPT_ON_CONTINUE = {
+  model: 'the model bindings',
+  input: 'the inputs',
+  base: 'the base branch',
+} as const;
+
 /**
- * Rejects --model on subcommands that continue an existing workflow run: the
- * run keeps the model bindings it started with.
+ * Rejects `workflow run` flags that a subcommand continuing an existing run would otherwise
+ * ignore: the run keeps what it started with, so a silently dropped value would mislead.
  */
-export function rejectModelOnContinue(
+export function rejectRunFlagsOnContinue(
   subcommand: string | undefined,
-  model: unknown
+  values: Partial<Record<keyof typeof KEPT_ON_CONTINUE, unknown>>
 ): string | undefined {
-  if (model !== undefined && isContinueSubcommand(subcommand)) {
-    return (
-      'Error: --model cannot be used when continuing an existing workflow run. ' +
-      'The run keeps the model bindings it started with.'
-    );
+  if (!isContinueSubcommand(subcommand)) return undefined;
+  for (const [flag, kept] of Object.entries(KEPT_ON_CONTINUE)) {
+    if (values[flag as keyof typeof KEPT_ON_CONTINUE] !== undefined)
+      return (
+        `Error: --${flag} cannot be used when continuing an existing workflow run. ` +
+        `The run keeps ${kept} it started with.`
+      );
   }
   return undefined;
 }

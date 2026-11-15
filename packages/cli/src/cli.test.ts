@@ -32,7 +32,7 @@ import { sealWorkflowRunConfig } from '@archon/core/config';
 import {
   isContinueSubcommand,
   rejectConfigOutsideRun,
-  rejectModelOnContinue,
+  rejectRunFlagsOnContinue,
 } from './dispatch-guards';
 import { loadCliEnv } from './load-cli-env';
 
@@ -475,22 +475,31 @@ describe('workflow model arguments', () => {
     ['workflow', 'respond', 'run-1', 'approve'],
     ['workflow', 'answer', 'run-1', '--occurrence', 'x'],
   ]) {
-    it(`rejects --model on ${args[0]} ${args[1]}`, () => {
+    it(`rejects run-only flags on ${args[0]} ${args[1]}`, () => {
       // Pure pre-dispatch argv guard — no I/O, so asserted in-process instead
       // of through a full interpreter startup. A defined message is what makes
       // main() print to stderr and exit 1.
-      const message = rejectModelOnContinue(args[1], 'large=opus');
       expect(isContinueSubcommand(args[1])).toBe(true);
-      expect(message).toBeDefined();
-      expect(message).toContain('--model cannot be used when continuing an existing workflow run');
-      expect(message).toContain('keeps the model bindings it started with');
+      for (const [values, flag, kept] of [
+        [{ model: 'large=opus' }, '--model', 'the model bindings'],
+        [{ input: ['ticket=1'] }, '--input', 'the inputs'],
+        [{ base: 'main' }, '--base', 'the base branch'],
+      ] as const) {
+        const message = rejectRunFlagsOnContinue(args[1], values);
+        expect(message).toContain(
+          `${flag} cannot be used when continuing an existing workflow run`
+        );
+        expect(message).toContain(`keeps ${kept} it started with`);
+      }
     });
   }
 
   it('does not classify fresh runs or queries as continuations', () => {
     for (const subcommand of ['run', 'list', 'attention', undefined]) {
       expect(isContinueSubcommand(subcommand)).toBe(false);
-      expect(rejectModelOnContinue(subcommand, 'large=foo')).toBeUndefined();
+      expect(
+        rejectRunFlagsOnContinue(subcommand, { model: 'large=foo', input: ['a=1'], base: 'main' })
+      ).toBeUndefined();
     }
   });
 });

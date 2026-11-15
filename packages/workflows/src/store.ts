@@ -241,7 +241,8 @@ export interface IWorkflowStore
   /**
    * Fresh execution must win this pending-to-running CAS before doing any work.
    * `workingPath` is the checkout the run will use; the claim stamps it on a row
-   * created without one.
+   * created without one. The claim records the calling process as the run's execution
+   * owner (`currentExecutionOwner`).
    */
   claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**
@@ -338,7 +339,8 @@ export interface IWorkflowStore
     payload?: unknown
   ): Promise<{ signaled: boolean }>;
   /**
-   * Flip a resumable run to `running` and mint a new execution claim, or throw
+   * Flip a resumable run to `running`, mint a new execution claim and record the calling
+   * process as its execution owner in the same update (`currentExecutionOwner`), or throw
    * `WorkflowNotResumableError`. A failed or paused run resumes with or without a
    * `cursor`. A `running` run resumes only with an `ownerless` cursor whose claim still
    * matches; the caller has checked that no owner answers for it, and an admitted one

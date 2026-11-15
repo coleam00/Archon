@@ -571,7 +571,7 @@ describe('a run its killed process left running', () => {
     expect(after.claim).not.toBe(claim);
   }, 120_000);
 
-  test('workflow resume <run-id> refuses while its owner answers and names cancel', async () => {
+  test('workflow resume <run-id> refuses while its owner answers and names the owner', async () => {
     const fixture = makeFixture();
     const before = await seedFailedRun(fixture, false);
     const claim = markKilledWhileRunning(fixture, before.runId);
@@ -581,7 +581,6 @@ describe('a run its killed process left running', () => {
 
       expect(resumed.status).toBe(1);
       expect(resumed.output).toContain(`host ${hostname()}, pid 999999`);
-      expect(resumed.output).toContain(`archon workflow cancel ${before.runId}`);
       expect(readRunClaim(fixture, before.runId)).toEqual({ status: 'running', claim });
     } finally {
       await owner.close();

@@ -32,6 +32,7 @@ import {
 } from '@archon/core/workflows/sql-host';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import { createLogger } from '@archon/paths';
+import { checkedResumeCursor, type ResumeClaimCursor } from '@archon/workflows/store';
 import {
   workflowResumeTargetForRun,
   resumeWorkflowRunFromServer,
@@ -116,7 +117,8 @@ export function registerChatInbound(
   const continueRun = async (
     runId: string,
     actor: ChatActor,
-    action: ChatRunAction['action']
+    action: ChatRunAction['action'],
+    cursor?: ResumeClaimCursor
   ): Promise<{ resumed: boolean; waitingForCapacity?: true }> => {
     try {
       const run = await workflowDb.getWorkflowRun(runId);
@@ -126,7 +128,8 @@ export function registerChatInbound(
         createSqlWorkflowHost(),
         run,
         actor.kind === 'user' ? actor.userId : undefined,
-        target
+        target,
+        cursor
       );
       return outcome.kind === 'waiting_for_capacity'
         ? { resumed: false, waitingForCapacity: true }
@@ -254,10 +257,16 @@ export function registerChatInbound(
     try {
       const operations = createSqlWorkflowOperations();
       if (action.action === 'resume') {
-        await operations.resumeWorkflow(action.runId, actor);
+        // A `running` run passed the owner check only under the claim it read; the
+        // continuation is pinned to that claim or refused.
+        const checked = await operations.resumeWorkflow(action.runId, actor);
+        const cursor = checkedResumeCursor(checked);
         return {
           status: 'done',
-          result: { kind: 'resumed', ...(await continueRun(action.runId, actor, 'resume')) },
+          result: {
+            kind: 'resumed',
+            ...(await continueRun(action.runId, actor, 'resume', cursor)),
+          },
         };
       }
       if (action.action === 'answer') return await answerRun(operations, action, actor);

@@ -41,8 +41,10 @@ import {
   sourceReleaseMetadata,
   executionClaim,
   EXECUTION_CLAIM_METADATA_KEY,
+  currentExecutionOwner,
   sourceReleasedEvent,
 } from '../store';
+import { EXECUTION_OWNER_METADATA_KEY } from '../schemas/run-metadata';
 import {
   isTerminalRunStatus,
   isWorkflowWaitContext,
@@ -283,6 +285,7 @@ export function createTransactionView(
       const run = runs.get(id);
       if (run?.status !== 'pending') return null;
       run.status = 'running';
+      run.metadata[EXECUTION_OWNER_METADATA_KEY] = currentExecutionOwner();
       run.working_path ??= workingPath ?? null;
       run.last_activity_at = new Date();
       return structuredClone(run);
