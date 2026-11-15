@@ -8,6 +8,7 @@ import type { IWorkflowPlatform, WorkflowDeps } from './deps';
 import { executeWorkflow, type ExecuteWorkflowOptions } from './executor';
 import type { ResolvedRunModelOverrides } from './model-validation';
 import type { JsonValue } from './output-ref';
+import type { IWorkflowStore } from './store';
 import { resolveWorkflowName } from './router';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from './run-ai-configuration';
 import {
@@ -59,7 +60,7 @@ const MAX_DESCENDANT_RUNS = 64;
  * are the caller's to handle (it fails closed).
  */
 export async function gatherDescendantRunIds(
-  deps: WorkflowDeps,
+  deps: { store: Pick<IWorkflowStore, 'findChildRuns'> },
   rootId: string
 ): Promise<string[]> {
   const out: string[] = [];

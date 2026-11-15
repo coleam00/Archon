@@ -185,7 +185,7 @@ function terminalText(line: Extract<AttentionStreamLine, { type: 'terminal' }>):
 }
 
 /** Who answered, as a trailing clause: a declared name is marked as the claim it is. */
-function answererText(answeredBy: AttentionAnswerer | null): string {
+export function answererText(answeredBy: AttentionAnswerer | null): string {
   if (answeredBy === null) return '';
   return 'declared' in answeredBy
     ? ` by ${answeredBy.declared} (self-declared)`

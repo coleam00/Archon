@@ -14,6 +14,7 @@ import { providerEventRecordSchema as engineProviderEventRecordSchema } from '@a
 import { z } from '@hono/zod-openapi';
 import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
+import { itemReadSchema } from '@archon/workflows/item-read';
 import {
   attentionWatchLevelSchema,
   classifiedAttentionStreamLineSchema,
@@ -423,6 +424,19 @@ export const attentionQueueCountsResponseSchema = z
     degraded: z.array(attentionDegradedSchema).optional(),
   })
   .openapi('AttentionQueueCountsResponse');
+
+/**
+ * GET /api/items query. `project` names the project as the attention queue's `project`
+ * does: a codebase id, a codebase name, or a project key. `key` is a query parameter
+ * rather than a path segment because an item key is free text and may hold `/`.
+ */
+export const itemReadQuerySchema = z.object({
+  project: z.string().min(1),
+  key: z.string().min(1),
+});
+
+/** GET /api/items response: the item, its runs, open questions and answers. */
+export const itemReadResponseSchema = itemReadSchema.meta({ id: 'ItemRead' });
 
 /** GET /api/runs/{runId}/attention response: null when the run needs no one now. */
 export const attentionQueueItemResponseSchema = z

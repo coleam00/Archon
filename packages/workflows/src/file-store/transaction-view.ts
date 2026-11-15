@@ -76,7 +76,7 @@ export type TransactionView = Omit<
   | 'upsertWorkflowNodeSession'
   | 'deleteWorkflowNodeSessions'
   | 'releasePausedRunSlot'
-  | 'listItemRuns'
+  | 'getItemRuns'
   | 'getItem'
 > & {
   /**

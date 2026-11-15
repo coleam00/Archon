@@ -139,7 +139,7 @@ export class InMemoryStore implements IWorkflowStore {
   deleteWorkflowNodeSessions: IWorkflowStore['deleteWorkflowNodeSessions'] = () => {
     throw new Error('Unexpected deleteWorkflowNodeSessions');
   };
-  listItemRuns: IWorkflowStore['listItemRuns'] = async () => {
+  getItemRuns: IWorkflowStore['getItemRuns'] = async () => {
     throw new Error('not used');
   };
   getItem: IWorkflowStore['getItem'] = async () => {

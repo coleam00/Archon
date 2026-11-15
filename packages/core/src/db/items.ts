@@ -73,15 +73,29 @@ export async function continuedItem(
   return item.id;
 }
 
-/** Every run of one item in a project, in the order they started. */
-export async function listItemRuns(projectKey: string, itemKey: string): Promise<WorkflowRun[]> {
-  const result = await pool.query<WorkflowRunRow>(
-    `SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
-       JOIN remote_agent_items i ON i.id = r.item_id
-      WHERE i.project_key = $1 AND i.key = $2 ORDER BY r.started_at, r.id`,
+/**
+ * The item `itemKey` names in a project and its runs, in the order they started; null when
+ * the project has no item under that key. A named item may have no run yet.
+ */
+export async function getItemRuns(
+  projectKey: string,
+  itemKey: string
+): Promise<{ item: WorkflowItem; runs: WorkflowRun[] } | null> {
+  const found = await pool.query<{ id: string; project_key: string; key: string }>(
+    'SELECT id, project_key, key FROM remote_agent_items WHERE project_key = $1 AND key = $2',
     [projectKey, itemKey]
   );
-  return result.rows.map(normalizeWorkflowRun);
+  const row = found.rows[0];
+  if (!row) return null;
+  const result = await pool.query<WorkflowRunRow>(
+    `SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
+      WHERE r.item_id = $1 ORDER BY r.started_at, r.id`,
+    [row.id]
+  );
+  return {
+    item: { id: row.id, projectKey: row.project_key, key: row.key },
+    runs: result.rows.map(normalizeWorkflowRun),
+  };
 }
 
 export async function getItem(id: string): Promise<WorkflowItem | null> {

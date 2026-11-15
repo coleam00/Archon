@@ -423,8 +423,26 @@ mock.module('@archon/core/db/workflows', () => ({
 
 export const mockCreateWorkflowEvent = mock(async (_event: unknown) => {});
 
+export const mockListEventsForRuns = mock(
+  async (runIds: readonly string[], _types: readonly string[]) =>
+    new Map<string, MockWorkflowEvent[]>(runIds.map(id => [id, []]))
+);
+export const mockGetItemRuns = mock<typeof import('@archon/core/db/items')['getItemRuns']>(
+  async () => null
+);
+const unusedItemWrite = mock(async () => {
+  throw new Error('Item writes are not used by the route tests');
+});
+mock.module('@archon/core/db/items', () => ({
+  getItemRuns: mockGetItemRuns,
+  getItem: mock(async () => null),
+  ensureItem: unusedItemWrite,
+  continuedItem: unusedItemWrite,
+}));
+
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mockListWorkflowEvents,
+  listEventsForRuns: mockListEventsForRuns,
   createWorkflowEvent: mockCreateWorkflowEvent,
   listProviderEvents: mockListProviderEvents,
   PROVIDER_EVENT_ROW_TYPES,

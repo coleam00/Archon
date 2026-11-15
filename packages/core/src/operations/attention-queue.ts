@@ -15,13 +15,14 @@ import { resolveCodebaseForPath } from '../services/codebase-checkout-resolver';
 import type { IWorkflowHostStore } from '../workflows/host-store';
 
 /**
- * The queue's source on a host. A run's branch is the newest isolation record for its
+ * The queue's source on a host, keeping the store's type so a reader that needs more of
+ * the store (`readItem`) takes the same source. A run's branch is the newest isolation record for its
  * checkout path; a paused run holds that path, so no later checkout can have taken it.
  */
-export function attentionQueueSource(
-  store: AttentionQueueSource['store'],
+export function attentionQueueSource<Store extends AttentionQueueSource['store']>(
+  store: Store,
   isolation: Pick<IWorkflowHostStore['isolation'], 'findLatestByCodebaseAndWorkingPath'>
-): AttentionQueueSource {
+): AttentionQueueSource & { store: Store } {
   return {
     store,
     branchOf: async run =>

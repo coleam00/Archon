@@ -186,8 +186,15 @@ export interface IWorkflowStore
 
   findOpenWorkRuns(options?: { codebaseId?: string; limit?: number }): Promise<WorkflowRun[]>;
   findAdoptingRuns(runId: string): Promise<WorkflowRun[]>;
-  /** Every run of one item in a project, in the order they started. */
-  listItemRuns(projectKey: string, itemKey: string): Promise<WorkflowRun[]>;
+  /**
+   * The item `itemKey` names in a project, with every run whose `item_id` is that item, in
+   * the order they started; null when the project has no item under the key. A `workflow:`
+   * sub-run never carries an item, so the runs are top-level runs and continuations.
+   */
+  getItemRuns(
+    projectKey: string,
+    itemKey: string
+  ): Promise<{ item: import('./schemas/workflow-run').WorkflowItem; runs: WorkflowRun[] } | null>;
   getItem(id: string): Promise<import('./schemas/workflow-run').WorkflowItem | null>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */

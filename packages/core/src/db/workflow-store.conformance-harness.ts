@@ -457,14 +457,16 @@ export function describeSqlStatusReadConformance(
         { name: 'conformance', default_cwd: '/conformance' },
         ''
       );
-      const listed = await store.listItemRuns(project, 'a');
-      expect(listed.map(row => row.id)).toEqual([started.runId, second.id]);
-      expect(await store.getItem(second.item_id ?? '')).toMatchObject({
-        projectKey: project,
-        key: 'a',
-      });
-      expect(new Set(listed.map(row => row.item_id)).size).toBe(1);
-      expect(await store.listItemRuns(project, 'c')).toEqual([]);
+      const listed = await store.getItemRuns(project, 'a');
+      expect(listed?.item).toMatchObject({ projectKey: project, key: 'a' });
+      expect(listed?.runs.map(row => row.id)).toEqual([started.runId, second.id]);
+      expect(await store.getItem(second.item_id ?? '')).toEqual(listed?.item ?? null);
+      expect(listed?.runs.every(row => row.item_id === listed.item.id)).toBe(true);
+      // An item with no run yet and a key nothing named read apart.
+      const waiting = await store.getItemRuns(project, 'c');
+      expect(waiting?.item).toMatchObject({ projectKey: project, key: 'c' });
+      expect(waiting?.runs).toEqual([]);
+      expect(await store.getItemRuns(project, 'never-named')).toBeNull();
       const items = await db.query<{ item: string }>(
         "SELECT key || ' in ' || project_key AS item FROM remote_agent_items"
       );

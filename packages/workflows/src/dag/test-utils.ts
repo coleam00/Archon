@@ -283,7 +283,7 @@ export function createMockStore(): MockWorkflowStore {
     findOpenWorkRuns: mock<IWorkflowStore['findOpenWorkRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
-    listItemRuns: mock<IWorkflowStore['listItemRuns']>(async () => {
+    getItemRuns: mock<IWorkflowStore['getItemRuns']>(async () => {
       throw new Error('Not used by this test');
     }),
     getItem: mock<IWorkflowStore['getItem']>(async () => {

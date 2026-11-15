@@ -5,11 +5,14 @@ import {
   mockGetConversationById,
   mockFindLatestEnvironment,
   mockLabelAttentionWait,
+  mockGetItemRuns,
+  mockListEventsForRuns,
   MOCK_RUNNING_RUN,
   makeDashboardWorkflowRun,
   makeApp,
 } from '../test/api-workflow-runs-harness';
 import { describe, test, expect } from 'bun:test';
+import { itemReadSchema } from '@archon/workflows/item-read';
 import type {
   WorkflowAttentionWaitContext,
   WorkflowRun,
@@ -255,4 +258,71 @@ test('batch list and counts preserve degraded reports even when scope or labels 
   } finally {
     mockListAttentionQueueRows.mockReset();
   }
+});
+
+describe('reading an item over HTTP', () => {
+  const item = { id: 'item-row', projectKey: '_cwd/scratch', key: 'issues/7' };
+  const asking: WorkflowRun = {
+    ...MOCK_RUNNING_RUN,
+    id: 'run-item',
+    status: 'paused',
+    item_id: item.id,
+    metadata: {
+      wait: {
+        owner: 'node',
+        nodeId: 'ask',
+        kind: 'attention',
+        waitingSince: '2026-10-14T00:00:00.000Z',
+        message: 'Accept the scope?',
+        pauseId: 'pause-1',
+      },
+    },
+  };
+
+  test('reads a known item by project and key, with its question and answers', async () => {
+    mockGetItemRuns.mockImplementationOnce(async (projectKey, key) =>
+      projectKey === item.projectKey && key === item.key ? { item, runs: [asking] } : null
+    );
+    mockListAttentionQueueRows.mockImplementationOnce(async () => [
+      makeDashboardWorkflowRun(asking),
+    ]);
+    mockListEventsForRuns.mockImplementationOnce(
+      async runIds =>
+        new Map(
+          runIds.map(id => [
+            id,
+            [
+              {
+                id: 'event-1',
+                workflow_run_id: id,
+                event_type: 'approval_received',
+                step_index: null,
+                step_name: 'review',
+                data: { via: 'api', decision: 'approved', comment: 'ok' },
+                created_at: '2026-10-13T00:00:00.000Z',
+              },
+            ],
+          ])
+        )
+    );
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
+    );
+    expect(response.status).toBe(200);
+    const read = itemReadSchema.parse(await response.json());
+    expect(read.item).toEqual(item);
+    expect(read.runs.map(run => [run.id, run.status])).toEqual([['run-item', 'paused']]);
+    expect(read.questions.map(question => question.run?.id)).toEqual(['run-item']);
+    expect(read.answers).toMatchObject([{ kind: 'gate', runId: 'run-item', decision: 'approved' }]);
+  });
+
+  test('an unknown key is 404 and a missing parameter is 400', async () => {
+    const { app } = makeApp();
+    const unknown = await app.request(
+      `/api/items?project=${encodeURIComponent(item.projectKey)}&key=nope`
+    );
+    expect(unknown.status).toBe(404);
+    expect((await app.request('/api/items?key=nope')).status).toBe(400);
+  });
 });
