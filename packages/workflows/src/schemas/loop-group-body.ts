@@ -1,6 +1,6 @@
 import type { DagNode } from './dag-node';
 import type { IncludeDirective } from './include-node';
-import { isGateNode, isIncludeDirective, isWaitNode } from './node-guards';
+import { isGateNode, isIncludeDirective, isLoopGroupNode, isWaitNode } from './node-guards';
 
 /**
  * A loop_group body's terminal sinks: the entries no other body entry depends on,
@@ -40,4 +40,30 @@ export function loopGroupOutputNodes<T extends DagNode | IncludeDirective>(
       ? body.filter(n => sink.depends_on?.includes(n.id))
       : [sink]
   );
+}
+
+/**
+ * Collect the static ids of every node in a loop_group body, recursing into nested
+ * loop_group bodies. This is the *typo detector* for `$LOOP_PREV.<id>.output.<field>`
+ * refs: an id that matches no node anywhere in the (possibly nested) body is a genuine
+ * typo, distinct from a real body id that merely has no prior-iteration output yet.
+ * The loader refuses a `$LOOP_PREV` ref whose id is outside this set for every enclosing
+ * body, so the load check and the runtime agree on which ids a body may name.
+ *
+ * The transitive set (not just the outer group's direct ids) is deliberate: nested
+ * loop_group bodies reuse the OUTER loop's prior-iteration snapshot, so a ref inside a
+ * nested body may legitimately name an inner-group node id (which resolves to '' at the
+ * outer granularity — see `loopPrevRefToken` in dag/loop-scope.ts). Including descendants keeps
+ * such real-but-empty refs lenient while still catching ids that exist nowhere.
+ */
+export function collectLoopBodyNodeIds(
+  nodes: readonly (DagNode | IncludeDirective)[],
+  into: Set<string> = new Set<string>()
+): Set<string> {
+  for (const n of nodes) {
+    into.add(n.id);
+    if (!isIncludeDirective(n) && isLoopGroupNode(n))
+      collectLoopBodyNodeIds(n.loop_group.nodes, into);
+  }
+  return into;
 }

@@ -150,7 +150,11 @@ export {
   isComposeFanOutNode,
   isIncludeDirective,
 } from './node-guards';
-export { loopGroupOutputNodes, loopGroupSoleTerminalSink } from './loop-group-body';
+export {
+  collectLoopBodyNodeIds,
+  loopGroupOutputNodes,
+  loopGroupSoleTerminalSink,
+} from './loop-group-body';
 export {
   ignoredFieldsForNode,
   isOutputFormatEnforced,

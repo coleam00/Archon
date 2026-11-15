@@ -1378,4 +1378,103 @@ describe('loop_group body inputs: included blocks, command files and loop variab
     const prompts = mockSendQueryDag.mock.calls.map(call => call[0] as string);
     expect(prompts.find(prompt => prompt.includes('Check PR'))).toContain('Check PR [PR-7]');
   });
+
+  it("gates a body node on an include's previous-round output (#5696)", async () => {
+    const returned = '{"outcome":"return"}';
+    const outcomeSchema = {
+      type: 'object',
+      properties: { outcome: { type: 'string' } },
+      required: ['outcome'],
+    };
+    const inner = workflowDefinitionSchema.parse({
+      name: 'inner',
+      description: 'Returns a fixed outcome',
+      returns: 'say',
+      nodes: [{ id: 'say', bash: `echo '${returned}'`, output_format: outcomeSchema }],
+    });
+    const outer = workflowDefinitionSchema.parse({
+      name: 'outer',
+      description: "Reads an include's previous round",
+      nodes: [
+        {
+          id: 'rounds',
+          loop_group: {
+            max_iterations: 2,
+            until_bash: 'until-check $verdict.output.outcome',
+            nodes: [
+              {
+                id: 'fix',
+                bash: 'echo fix',
+                when: "$LOOP_PREV.verdict.output.outcome == 'return'",
+              },
+              {
+                id: 'direct',
+                bash: 'echo direct',
+                depends_on: ['fix'],
+                trigger_rule: 'all_done',
+                output_format: outcomeSchema,
+              },
+              {
+                id: 'fix2',
+                bash: 'echo fix2',
+                depends_on: ['direct'],
+                when: "$LOOP_PREV.direct.output.outcome == 'return'",
+              },
+              { id: 'verdict', include: 'inner', depends_on: ['fix2'], trigger_rule: 'all_done' },
+            ],
+          },
+        },
+      ],
+    });
+    const { workflows, errors } = expandWorkflowIncludes(
+      new Map([
+        [inner.name, inner],
+        [outer.name, outer],
+      ])
+    );
+    expect(errors).toHaveLength(0);
+    const expanded = workflows.get(outer.name);
+    if (!expanded) throw new Error('expected expanded workflow');
+
+    let untilChecks = 0;
+    const execSpy = spyOnNodeExec().mockImplementation(async (_cmd, _args, options) => {
+      const script = options?.input ?? '';
+      if (script.startsWith('until-check')) {
+        untilChecks += 1;
+        if (untilChecks === 1) throw Object.assign(new Error('exit 1'), { code: 1 });
+        return { stdout: '', stderr: '' };
+      }
+      if (script === 'echo direct' || script.startsWith("echo '{")) {
+        return { stdout: `${returned}\n`, stderr: '' };
+      }
+      return { stdout: `${script.slice('echo '.length)}\n`, stderr: '' };
+    });
+
+    const store = createMockStore();
+    try {
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          conversationId: 'conv-lg',
+          cwd: testDir,
+          workflow: ready(expanded),
+          workflowRun: makeWorkflowRun('dag-loopgroup-include-prev'),
+        })
+      );
+    } finally {
+      execSpy.mockRestore();
+    }
+
+    const events = store.createWorkflowEvent.mock.calls.map(([event]) => event);
+    const iterations = (step: string, type: string) =>
+      events
+        .filter(event => event.step_name === `rounds.${step}` && event.event_type === type)
+        .map(event => event.data?.iteration);
+    // Round one reads every `$LOOP_PREV` as empty; round two reads the include's return
+    // exactly as it reads the plain node's.
+    for (const step of ['fix', 'fix2']) {
+      expect(iterations(step, 'node_skipped')).toEqual([1]);
+      expect(iterations(step, 'node_completed')).toEqual([2]);
+    }
+  });
 });

@@ -860,6 +860,11 @@ entire block. A false gate skips the whole block; when true, each node still fol
 its own conditions and trigger rule. If the block contains a nested loop, the include's
 gate still reads the previous iteration of the loop containing that include.
 
+`$LOOP_PREV.<includeId>.output[.field]` reads the previous iteration of the node the
+included workflow returns, just as `$<includeId>.output` reads it in the current
+iteration. A `$LOOP_PREV` reference to an id that is not a node of an enclosing
+`loop_group` body is refused at load instead of reading as empty.
+
 `$LOOP_PREV` works in a body node's `with:` binding **string values** too, with the
 same text semantics as every other body surface: the previous iteration's output is
 substituted into the value each pass (so `with: { prev: $LOOP_PREV.test.output }`

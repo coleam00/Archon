@@ -96,10 +96,14 @@ describe('expandWorkflowIncludes — loop_group body composition (#2623)', () =>
       {
         id: 'group',
         loop_group: {
-          until_bash: 'test "$review.output.done" = true',
+          until_bash: 'test "$review.output.done" = true || test -n "$LOOP_PREV.review.output"',
           max_iterations: 3,
           nodes: [
-            { id: 'seed', bash: 'echo context' },
+            {
+              id: 'seed',
+              bash: 'echo context',
+              when: "$LOOP_PREV.review.output.done != 'true'",
+            },
             {
               id: 'review',
               include: 'review-block',
@@ -118,7 +122,7 @@ describe('expandWorkflowIncludes — loop_group body composition (#2623)', () =>
 
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent));
 
-    expect(errors).toHaveLength(0);
+    expect(errors.map(e => e.error)).toEqual([]);
     const expanded = workflows.get('parent')!;
     const group = nodeById(expanded, 'group');
     const groupConfig = loopGroupOf(group);
@@ -129,7 +133,12 @@ describe('expandWorkflowIncludes — loop_group body composition (#2623)', () =>
       'consume',
     ]);
     expect(groupConfig?.nodes.some(node => 'include' in node)).toBe(false);
-    expect(groupConfig?.until_bash).toBe('test "$review__decide.output.done" = true');
+    expect(groupConfig?.until_bash).toBe(
+      'test "$review__decide.output.done" = true || test -n "$LOOP_PREV.review__decide.output"'
+    );
+    // `$LOOP_PREV.<include>` reads the previous round of what the include returns (#5696).
+    const seed = groupConfig?.nodes.find(node => node.id === 'seed');
+    expect(seed?.when).toBe("$LOOP_PREV.review__decide.output.done != 'true'");
 
     const decide = groupConfig?.nodes.find(node => node.id === 'review__decide');
     const cleanup = groupConfig?.nodes.find(node => node.id === 'review__cleanup');
@@ -139,7 +148,7 @@ describe('expandWorkflowIncludes — loop_group body composition (#2623)', () =>
     expect(bashScript(cleanup) ?? '').toBe('echo $LOOP_PREV.review__decide.output.done');
     expect(consume?.depends_on).toEqual(['review__cleanup']);
     expect(inlinePrompt(consume) ?? '').toBe(
-      'done=$review__decide.output.done previous=$LOOP_PREV.review.output'
+      'done=$review__decide.output.done previous=$LOOP_PREV.review__decide.output'
     );
     expect(inlinePrompt(decide) ?? '').toBe('review $seed.output');
     expect(composedOrigin(decide)).toBe('review-block');
