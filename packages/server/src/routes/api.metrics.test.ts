@@ -58,6 +58,7 @@ const run: WorkflowRun = {
   outcome: null,
   user_message: '',
   metadata: {},
+  active_phase_started_at: null,
   started_at: new Date('2026-10-20T00:00:00.000Z'),
   completed_at: null,
   last_activity_at: null,
@@ -66,6 +67,7 @@ const run: WorkflowRun = {
   parent_run_id: null,
   output_root: null,
   checkout_baseline: null,
+  item_id: null,
   adopted_from_run_id: null,
 };
 

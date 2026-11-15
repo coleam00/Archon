@@ -4,9 +4,7 @@
  * Each binding is a timer (`schedule:`), an event (`event:`) or, with neither, a fire-only
  * binding. The checks that span bindings run here, where all are visible: a sibling
  * reference names a declared binding that is written as a file `trigger fire` reads (a
- * timer or fire-only binding), an event field is read only by an event binding, and
- * bindings sharing a resource agree on its capacity, which admission would otherwise
- * refuse at the first start.
+ * timer or fire-only binding), and an event field is read only by an event binding.
  */
 import type { Fail } from './pack-settings';
 import {
@@ -57,7 +55,6 @@ export function parsePackBindings(
     bindings[id] = parseBinding(id, rawBinding, fail);
   }
   for (const [id, binding] of Object.entries(bindings)) checkInputs(id, binding, bindings, fail);
-  checkSharedCapacities(bindings, fail);
   return bindings;
 }
 
@@ -83,20 +80,6 @@ function checkInputs(
     } else if (packBindingKind(sibling) === 'event') {
       fail(
         `binding '${id}' input '${name}' names event binding '${input.binding}'; only a timer or fire-only binding is a file a run can fire`
-      );
-    }
-  }
-}
-
-function checkSharedCapacities(bindings: Readonly<Record<string, PackBinding>>, fail: Fail): void {
-  const first = new Map<string, { id: string; capacity: number }>();
-  for (const [id, binding] of Object.entries(bindings)) {
-    const resource = `${binding.resource_scope}:${binding.resource}`;
-    const seen = first.get(resource);
-    if (seen === undefined) first.set(resource, { id, capacity: binding.capacity });
-    else if (seen.capacity !== binding.capacity) {
-      fail(
-        `bindings '${seen.id}' and '${id}' share resource '${binding.resource}' but declare capacity ${seen.capacity} and ${binding.capacity}`
       );
     }
   }

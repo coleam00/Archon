@@ -28,6 +28,7 @@ import { getDatabase, getDatabaseType, getDialect, pool } from './connection';
 import {
   addResourceSlotHolder,
   lockResourceSlot,
+  lockResourceSlotForAdmission,
   removeResourceSlotHolder,
   resourceStartOccupancy,
   type TransactionQuery,
@@ -182,7 +183,7 @@ async function claimResourceSlot(
   const resourceKey = prior.resource_key ?? undefined;
   const status = prior.status;
   if (resourceKey === undefined || (status !== 'failed' && status !== 'paused')) return undefined;
-  const { capacity } = await lockResourceSlot(query, resourceKey);
+  const { capacity } = await lockResourceSlotForAdmission(query, resourceKey);
   const metadata = normalizeMetadata(prior.metadata);
   const occupancy = await resourceStartOccupancy(query, resourceKey, capacity);
   const blocker = resourceResumeBlocker(occupancy, { id, status, metadata });
@@ -206,17 +207,8 @@ async function claimResourceSlot(
 }
 
 /**
- * Refresh started_at to NOW so the resumed row competes fairly with
- * currently-active rows in getActiveWorkflowRunByPath's older-wins
- * tiebreaker. Without this, a resumed row carries its original
- * (potentially hours-old) started_at and would sort ahead of any
- * currently-running holder, slipping past the path lock and causing
- * two active workflows on the same working_path.
- *
- * We accept losing the original creation time here — `started_at` for
- * an active row semantically means "when did this active phase start."
- * The original creation time can be recovered from workflow_events
- * history if needed for analytics.
+ * Advance path priority on resume without changing run creation time. Otherwise an
+ * old resumer would sort ahead of a current holder and bypass checkout exclusion.
  *
  * Compare-and-swap guard: flip to 'running' only if the row is STILL
  * resumable (resumableStatusClause — shared with findResumableRun so the two
@@ -259,7 +251,7 @@ async function casResumeRun(
     `UPDATE remote_agent_workflow_runs
      SET status = 'running',
          completed_at = NULL,
-         started_at = ${dialect.now()},
+         active_phase_started_at = ${dialect.now()},
          last_activity_at = ${dialect.now()},
          metadata = ${dialect.jsonMerge('metadata', 3)}
      WHERE id = $1
@@ -356,7 +348,7 @@ export async function recoverCancelledFanOutRun(id: string): Promise<WorkflowRun
         `UPDATE remote_agent_workflow_runs
          SET status = 'running',
              completed_at = NULL,
-             started_at = ${dialect.now()},
+             active_phase_started_at = ${dialect.now()},
              last_activity_at = ${dialect.now()},
              metadata = ${dialect.jsonMerge(metadataWithoutCancelledReason, 2)}
          WHERE id = $1

@@ -1,5 +1,10 @@
 import { expect, mock, test } from 'bun:test';
 import { randomUUID } from 'node:crypto';
+import { mkdtemp, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { removeTempTree } from '@archon/paths/test-utils';
+import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { dashboardRunsResultSchema } from '@archon/workflows/schemas/workflow-run-listing';
 import { WorkflowStatusReadError } from './workflows';
@@ -55,17 +60,32 @@ export async function makeSqlConformanceHarness(
     "INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id) VALUES ($1, 'test', 'conformance')",
     [CONFORMANCE_CONVERSATION_ID]
   );
+  // The SQL stores read install capacities from `$ARCHON_HOME/config.yaml`.
+  const capacities: Record<string, number> = {};
+  let home: { root: string; previous: string | undefined } | undefined;
   return {
     store: createWorkflowStore(),
+    setResourceCapacity: async (resource, capacity): Promise<void> => {
+      home ??= {
+        root: await mkdtemp(join(tmpdir(), 'archon-conformance-home-')),
+        previous: process.env.ARCHON_HOME,
+      };
+      process.env.ARCHON_HOME = home.root;
+      capacities[resource] = capacity;
+      await writeFile(
+        join(home.root, 'config.yaml'),
+        JSON.stringify({ concurrency: { resources: capacities } })
+      );
+    },
     backdate: async (id, dates): Promise<void> => {
-      for (const field of ['started_at', 'last_activity_at'] as const) {
+      for (const field of ['started_at', 'active_phase_started_at', 'last_activity_at'] as const) {
         const date = dates[field];
         if (date === undefined) continue;
         const value =
           date === null
             ? null
             : type === 'sqlite'
-              ? date.toISOString().replace('T', ' ').slice(0, 19)
+              ? date.toISOString().replace('T', ' ').replace('Z', '')
               : date.toISOString();
         await db.query(`UPDATE remote_agent_workflow_runs SET ${field} = $2 WHERE id = $1`, [
           id,
@@ -84,7 +104,14 @@ export async function makeSqlConformanceHarness(
       ]);
     },
     terminalReports: (): string[] => [...reports],
-    close,
+    close: async (): Promise<void> => {
+      if (home) {
+        if (home.previous === undefined) delete process.env.ARCHON_HOME;
+        else process.env.ARCHON_HOME = home.previous;
+        await removeTempTree(home.root);
+      }
+      await close();
+    },
   };
 }
 
@@ -361,6 +388,136 @@ export function describeSqlStatusReadConformance(
         });
         expect(await snapshot()).toEqual(before);
       }
+    } finally {
+      await harness.close();
+    }
+  });
+  test('an item is one row per project and key, and lists exactly its own runs in start order', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const otherProject = randomUUID();
+      await db.query(
+        "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, 'other', '/other')",
+        [otherProject]
+      );
+      const run = (codebase_id: string | undefined, item_key?: string) =>
+        store.createWorkflowRun({ workflow_name: 'item', user_message: '', codebase_id, item_key });
+      const second = await run(CONFORMANCE_CODEBASE_ID, 'a');
+      // A start names its item on the receipt; preparation resolves it onto the request.
+      const { launch } = resourceStartFixtures(
+        CONFORMANCE_CODEBASE_ID,
+        CONFORMANCE_CONVERSATION_ID
+      );
+      const start = async (itemKey: string) => {
+        const identity = { receiptId: randomUUID(), bindingId: 'binding', ownerId: 'owner' };
+        await store.acceptStartReceipt({
+          receipt: {
+            id: identity.receiptId,
+            sourceInstanceId: 'source',
+            deliveryId: null,
+            contentDigest: 'digest',
+            receivedAt: new Date().toISOString(),
+            occurredAt: null,
+            sourceActor: null,
+            itemKey,
+          },
+          outcome: 'matched',
+          bindings: [
+            {
+              bindingId: identity.bindingId,
+              bindingRevision: null,
+              hostId: 'host',
+              runAsUserId: 'operator',
+              resource: 'resource',
+              overlap: 'queue',
+              launch: {
+                cwd: '/c',
+                workflowName: 'item',
+                inputs: {},
+                isolation: { kind: 'in-place' },
+              },
+            },
+          ],
+        });
+        await store.claimStartBindingPreparation(identity);
+        expect((await store.getStartReceipt(identity.receiptId))?.itemKey).toBe(itemKey);
+        return store.completeStartBindingPreparation({ ...identity, launch: launch() });
+      };
+      const started = await start('a');
+      if (started?.status !== 'admitted') throw new Error('Expected the start to be admitted');
+      await harness.backdate(started.runId, { started_at: new Date('2026-01-01T00:00:00Z') });
+      // A start waiting behind it has its item already, with no run yet.
+      expect((await start('c'))?.status).toBe('queued');
+      await run(CONFORMANCE_CODEBASE_ID, 'b');
+      await run(otherProject, 'a');
+      expect((await run(CONFORMANCE_CODEBASE_ID)).item_id).toBeNull();
+
+      const project = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const listed = await store.listItemRuns(project, 'a');
+      expect(listed.map(row => row.id)).toEqual([started.runId, second.id]);
+      expect(await store.getItem(second.item_id ?? '')).toMatchObject({
+        projectKey: project,
+        key: 'a',
+      });
+      expect(new Set(listed.map(row => row.item_id)).size).toBe(1);
+      expect(await store.listItemRuns(project, 'c')).toEqual([]);
+      const items = await db.query<{ item: string }>(
+        "SELECT key || ' in ' || project_key AS item FROM remote_agent_items"
+      );
+      expect(items.rows.map(row => row.item).sort()).toEqual([
+        `a in ${project}`,
+        `a in ${projectKeyForCodebase({ name: 'other', default_cwd: '/other' }, '')}`,
+        `b in ${project}`,
+        `c in ${project}`,
+      ]);
+      await expect(run(undefined, 'a')).rejects.toThrow();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('a continuation belongs to the item of the run it continues unless it names its own', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const otherProject = randomUUID();
+      await db.query(
+        "INSERT INTO remote_agent_codebases (id, name, default_cwd) VALUES ($1, 'other', '/other')",
+        [otherProject]
+      );
+      const run = (
+        input: { item_key?: string; adopted_from_run_id?: string },
+        codebase_id = CONFORMANCE_CODEBASE_ID
+      ) =>
+        store.createWorkflowRun({ workflow_name: 'item', user_message: '', codebase_id, ...input });
+      const first = await run({ item_key: 'a' });
+      const round = await run({ adopted_from_run_id: first.id });
+      expect(round.item_id).toBe(first.item_id);
+      // A continuation of a continuation is still the same item.
+      expect((await run({ adopted_from_run_id: round.id })).item_id).toBe(first.item_id);
+
+      const renamed = await run({ adopted_from_run_id: first.id, item_key: 'b' });
+      expect(await store.getItem(renamed.item_id ?? '')).toMatchObject({ key: 'b' });
+
+      const bare = await run({});
+      expect((await run({ adopted_from_run_id: bare.id })).item_id).toBeNull();
+
+      // The item belongs to one project: another project's continuation must name its own.
+      await expect(run({ adopted_from_run_id: first.id }, otherProject)).rejects.toThrow();
+      const named = await run({ adopted_from_run_id: first.id, item_key: 'a' }, otherProject);
+      expect(named.item_id).not.toBe(first.item_id);
+      // With no project to compare, a continuation of a run on an item is refused; one of
+      // a run with no item starts as it always did.
+      const unregistered = (adopted_from_run_id: string) =>
+        store.createWorkflowRun({ workflow_name: 'item', user_message: '', adopted_from_run_id });
+      await expect(unregistered(first.id)).rejects.toThrow();
+      expect((await unregistered(bare.id)).item_id).toBeNull();
+      const runs = await db.query<{ id: string }>('SELECT id FROM remote_agent_workflow_runs');
+      expect(runs.rows).toHaveLength(8);
     } finally {
       await harness.close();
     }

@@ -79,6 +79,20 @@ export const attentionAnswererSchema = z.union([
 export type AttentionAnswerer = z.infer<typeof attentionAnswererSchema>;
 
 /**
+ * The run and node an answer was given from, as reported by the run's environment and
+ * NOT verified. No flag or request field sets it: the surface reads the identity the
+ * engine put in the node's environment, which a node process can rewrite or clear. It is
+ * attribution, never proof: no approval or permission rule may treat it as one. It is
+ * recorded on the `wait_answered` event only: the stored wait and `attentionAnswererSchema` are strict, so a binary from
+ * before this field could not read a row that carried it there.
+ */
+export const attentionAnsweringRunSchema = z.object({
+  runId: z.string().min(1),
+  nodePath: z.string().min(1),
+});
+export type AttentionAnsweringRun = z.infer<typeof attentionAnsweringRunSchema>;
+
+/**
  * An attention wait paused before answers existed has only `waitingSince` and `message`:
  * no `pauseId`, it reads as the `message` form, and only `resume` continues it. A newer
  * wait carries its occurrence, its form, resolved options and recommendation, and once

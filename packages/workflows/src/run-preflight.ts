@@ -47,6 +47,8 @@ import type {
 } from './schemas/run-config';
 import { createLogger } from '@archon/paths';
 
+export { assistantModelDefaults, resolveWorkflowModelScope } from './node-model-resolution';
+
 const log = createLogger('workflow.run-preflight');
 type UserAiPrefsLayer = Awaited<ReturnType<NonNullable<WorkflowDeps['getUserAiPrefs']>>>;
 

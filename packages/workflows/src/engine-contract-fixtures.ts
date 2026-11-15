@@ -43,6 +43,7 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     outcome: null,
     user_message: 'test message',
     metadata: {},
+    active_phase_started_at: null,
     started_at: new Date(),
     completed_at: null,
     last_activity_at: null,
@@ -51,6 +52,7 @@ export function makeRun(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     parent_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
     adopted_from_run_id: null,
     ...overrides,
   };

@@ -121,6 +121,7 @@ describe('a usage-limit wait', () => {
           resumeAt: '2026-10-15T14:00:00.000Z',
         },
       },
+      active_phase_started_at: null,
       started_at: new Date('2026-10-15T08:00:00.000Z'),
       completed_at: null,
       last_activity_at: null,
@@ -130,6 +131,7 @@ describe('a usage-limit wait', () => {
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      item_id: null,
     };
     const attention = queuedRunAttention(run);
     expect(attention).toEqual({
@@ -139,9 +141,12 @@ describe('a usage-limit wait', () => {
       resumeAt: '2026-10-15T14:00:00.000Z',
     });
     if (attention === undefined) return;
-    expect(toAttentionQueueItem(run, attention, { codebase: null, branch: null })).toMatchObject({
+    expect(
+      toAttentionQueueItem(run, attention, { codebase: null, branch: null, item: null })
+    ).toMatchObject({
       kind: 'usage_limit',
-      node: 'implement',
+      ref: 'limited',
+      run: { id: 'limited', node: 'implement' },
       resetAt: '2026-10-15T14:00:00.000Z',
       pausedAt: '2026-10-15T09:00:00.000Z',
     });

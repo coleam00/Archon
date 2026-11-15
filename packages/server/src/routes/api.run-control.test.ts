@@ -433,11 +433,31 @@ describe('POST /api/workflows/runs/:runId/resume', () => {
     expect(mockHandleMessage).not.toHaveBeenCalled();
   });
 
+  test('refuses to resume a web run that never got a checkout', async () => {
+    mockGetWorkflowRun.mockResolvedValue({
+      ...MOCK_FAILED_RUN,
+      parent_conversation_id: 'parent-conv-uuid',
+      working_path: null,
+    });
+    mockGetConversationById.mockResolvedValueOnce({
+      id: 'parent-conv-uuid',
+      platform_conversation_id: 'web-plat-abc',
+      platform_type: 'web',
+    });
+    const { app } = makeApp();
+    const response = await app.request('/api/workflows/runs/run-uuid-4/resume', {
+      method: 'POST',
+    });
+    expect(response.status).toBe(400);
+    expect(mockHandleMessage).not.toHaveBeenCalled();
+  });
+
   test('returns 200 and dispatches resume when parent is a web conversation', async () => {
     mockGetWorkflowRun.mockResolvedValue({
       ...MOCK_FAILED_RUN,
       parent_conversation_id: 'parent-conv-uuid',
       user_message: 'Run the deploy',
+      working_path: '/tmp/worktrees/run-uuid-4',
     });
     mockGetConversationById.mockResolvedValueOnce({
       id: 'parent-conv-uuid',

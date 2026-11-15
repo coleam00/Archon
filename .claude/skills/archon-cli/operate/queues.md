@@ -43,6 +43,24 @@ Rough durations, so a slow run is not mistaken for a hang: intake about 2 minute
 build round 15 to 40 minutes, a merge sweep about 2 minutes. These are typical, not
 limits.
 
+## Setting up the pack
+
+The pack's own README holds the setup guide: eleven steps, each with a check and a fix,
+written for an agent doing the setup for a user. Read it before anything else and follow
+it in order. It marks every decision that is the user's with **Ask the user**, and says
+which commands write to the tracker, start a run or enable a schedule: ask before those.
+
+- In an Archon source checkout: `.archon/workflows/sdlc/README.md`, section "Set up the
+  pack". This skill lives in that checkout when it is a source install; follow the
+  skill's own path up to the repository root.
+- Otherwise, on GitHub:
+  `https://raw.githubusercontent.com/coleam00/Archon/dev/.archon/workflows/sdlc/README.md`
+  for a source install, or the same path on `main` for a released binary.
+
+Run the setup from a clone of the repository the pack will work on, not from the Archon
+checkout. The README's "Choose the models" section lists every step's model alias with
+the commands to set one; walk the user through it only when they ask to change models.
+
 ## Before the first run
 
 - `archon workflow run archon-forge-check` must pass in the checkout. It proves the
@@ -63,6 +81,9 @@ limits.
 - Policy documents at `.archon/sdlc/policy/<topic>.md` add to the pack's defaults
   rather than replacing them. Where a line in the project's file conflicts with the
   default, the project's line wins.
+- An answered run continues only when something picks it up: a running `archon serve`,
+  or the wake timer (`archon workflow wake schedule install` on macOS). Without either,
+  an answered run waits forever and holds its place in its queue.
 - The pack installs no trigger bindings. Nothing runs on its own until the operator
   adds one. `archon pack bindings sdlc` writes the recommended binding per queue; until
   then, launch by hand.

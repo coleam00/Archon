@@ -40,6 +40,8 @@ A work item keeps its last ten build rounds. A pull request whose rounds all fel
 
 `archon-metrics-prs` reads each pull request through the forge plugin's `pr.view`, whose `timestamps` give the creation, merge and close times. A plugin that does not report them makes the run refuse.
 
+A merged pull request's facts never change, so a run keeps them as a state document under `pr-facts/v1/` and later runs read it in place of the forge. Both metrics workflows share these documents. An open pull request, a closed one (it can reopen) and a merged one no run has kept yet are read from the forge on every run, so a run's cost grows with those, not with every pull request recorded. The first run after a pack carrying this change reads every pull request once, as before, and writes one document per merged pull request. A document that cannot be written is noted on stderr and the run goes on.
+
 ## Pull requests
 
 | Metric | Kind | Unit | One record per pull request, at |
@@ -91,7 +93,7 @@ A review round is one verdict a delivery round's review published on the pull re
 
 Only merged pull requests are measured: an open one can take another round, and a record cannot be withdrawn. The node's `review_rounds_distribution` output gives the number of pull requests per round count.
 
-A round recorded when its run was released before it decided has no verdicts on the work item. For those rounds only, the metric backfills the verdicts from the run's artifacts. Run artifacts do not last: `archon workflow cleanup` and disk cleanup remove them, and the backfill cannot read a removed run.
+A round recorded when its run was released before it decided has no verdicts on the work item. For those rounds only, the metric backfills the verdicts from the run's artifacts. Run artifacts do not last: the backfill cannot read a run whose artifact directory was removed from disk. `archon workflow cleanup` deletes old run records, not artifact directories, so it does not affect the backfill.
 
 A merged pull request is listed in `review_rounds_skipped`, with the reason, and counts in none of these when a round without verdicts has lost its run's artifacts, when its work item dropped the build rounds that may have carried it, or when it merged without a Ready review on record.
 

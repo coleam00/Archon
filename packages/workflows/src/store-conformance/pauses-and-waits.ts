@@ -200,7 +200,7 @@ export function describePausesAndWaitsConformance(getHarness: () => WorkflowStor
       expect(
         splitAttentionRead(
           await listAttentionQueue({ store, branchOf: async () => null })
-        ).values.map(item => item.runId)
+        ).values.map(item => item.run?.id)
       ).toContain(run.id);
       const labeled = await store.labelAttentionWait(run.id, {
         pauseId: 'ask-1',

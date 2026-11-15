@@ -105,6 +105,7 @@ export function toApiWorkflowRun(row: WorkflowRun): ApiWorkflowRun {
     metadata: toApiRunMetadata(row.metadata),
     attention: toApiRunAttention(row),
     started_at: toISOString(row.started_at),
+    active_phase_started_at: toISOString(row.active_phase_started_at),
     completed_at: toISOString(row.completed_at),
     last_activity_at: toISOString(row.last_activity_at),
   };
@@ -120,6 +121,7 @@ export function toApiDashboardWorkflowRun(
     metadata: toApiRunMetadata(row.metadata),
     attention: toApiRunAttention(row),
     started_at: toISOString(row.started_at),
+    active_phase_started_at: toISOString(row.active_phase_started_at),
     completed_at: toISOString(row.completed_at),
     last_activity_at: toISOString(row.last_activity_at),
   };

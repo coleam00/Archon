@@ -169,7 +169,6 @@ function GateResponsePanel({ run }: ApprovalPanelProps): ReactElement {
                 : 'optional comment to send with approval'
             }
             disabled={busy}
-            autoFocus
             className="min-w-0 flex-1 rounded border border-border bg-surface-inset px-3 py-1.5 text-console-13 text-text-primary placeholder:text-text-tertiary focus:border-border-bright focus:outline-none disabled:opacity-50"
           />
           {canApprove && (

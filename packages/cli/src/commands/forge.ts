@@ -19,6 +19,7 @@ import {
   cliForgeResponseSchema,
   type CliForgeResponse,
 } from '@archon/forge';
+import { z } from '@hono/zod-openapi';
 import { writeJsonLine } from '../utils/stdout';
 
 async function readForgeConfig(configPath: string): Promise<unknown> {
@@ -322,9 +323,24 @@ function failureResponse(
 
 function failureMessage(error: unknown, dispatched: boolean): string {
   if (dispatched) return 'Forge dispatch failed; reconcile the operation before retrying it';
-  return error instanceof SyntaxError
-    ? 'Invalid JSON input or configuration'
-    : 'Invalid forge request or configuration; see archon forge --help';
+  if (error instanceof SyntaxError) return 'Invalid JSON input or configuration';
+  const fields = error instanceof z.ZodError ? `: ${invalidFields(error)}` : '';
+  return `Invalid forge request or configuration${fields}; see archon forge --help`;
+}
+
+/** How many refused fields a message names before it only counts the rest. */
+const NAMED_FIELDS = 6;
+
+/**
+ * Names each refused field and what the schema expected there, so the caller can correct
+ * the request. Schema messages describe the expected type, never the supplied value.
+ */
+function invalidFields(error: z.ZodError): string {
+  const named = error.issues
+    .slice(0, NAMED_FIELDS)
+    .map(issue => `${issue.path.join('.') || '(request)'}: ${issue.message}`);
+  const rest = error.issues.length - named.length;
+  return [...named, ...(rest > 0 ? [`and ${rest} more`] : [])].join('; ');
 }
 
 function writeResponse(

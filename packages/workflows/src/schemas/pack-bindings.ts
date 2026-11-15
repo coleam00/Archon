@@ -10,11 +10,7 @@
  */
 import { z } from 'zod';
 import { jsonValueSchema } from '../output-ref';
-import {
-  resourceSlotCapacitySchema,
-  resourceStartBindingIntentSchema,
-  resourceStartOverlapSchema,
-} from './resource-start';
+import { resourceStartBindingIntentSchema, resourceStartOverlapSchema } from './resource-start';
 
 /** A binding id and a resource name both end up in a file name and a resource key. */
 const BINDING_NAME_PATTERN = /^[a-z0-9][a-z0-9-]*$/;
@@ -40,7 +36,7 @@ const bindingShape = {
   resource: packBindingNameSchema,
   /** `host` for work that spans every repository on the host, so one resource guards it. */
   resource_scope: z.enum(['repo', 'host']).default('repo'),
-  capacity: resourceSlotCapacitySchema,
+  capacity: resourceStartBindingIntentSchema.shape.capacity,
   overlap: resourceStartOverlapSchema,
   isolation: resourceStartBindingIntentSchema.shape.launch.shape.isolation.default({
     kind: 'default',

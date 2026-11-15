@@ -71,6 +71,7 @@ export const cliArgOptions: CliArgOptions = {
   'include-closed': { type: 'boolean' },
   'conversation-id': { type: 'string' },
   detach: { type: 'boolean' },
+  'no-wait': { type: 'boolean' },
   all: { type: 'boolean' },
   status: { type: 'string' },
   limit: { type: 'string' },
@@ -112,6 +113,7 @@ export const cliArgOptions: CliArgOptions = {
   'config-from-run': { type: 'string' },
   host: { type: 'string' },
   'delivery-id': { type: 'string' },
+  item: { type: 'string' },
   inputs: { type: 'string' },
   owner: { type: 'string' },
   // `archon pack bindings`: the operator's choices a pack's binding declaration lacks.

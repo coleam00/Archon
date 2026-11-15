@@ -10,7 +10,9 @@ import {
   type ReusableCheckout,
   resourceResumeBlocker,
   resourceStartBlocker,
-  ResourceSlotCapacityConflictError,
+  DIRECT_START_HOST_ID,
+  recordedResourceCapacity,
+  preparedBindingStart,
   SourceReceiptDigestConflictError,
   type IResourceStartStore,
   type ResourceBlocker,
@@ -39,10 +41,13 @@ export function createInMemoryResourceStartStore(
   resume(run: WorkflowRun): Promise<ResourceBlocker | null>;
   /** Give back the slot of an admitted run; whether it held one. */
   release(id: string): Promise<boolean>;
+  /** Stand in for the install config's `concurrency.resources.<resource>`. */
+  setResourceCapacity(resource: string, capacity: number): Promise<void>;
 } {
   const requests = new Map<string, ResourceStartRequestInspection>();
   const receipts = new Map<string, StartReceiptInspection>();
   const capacities = new Map<string, number>();
+  const installed = new Map<string, number>();
   // Holders are implicit: an admitted request whose run is live, unless it gave its slot back.
   const released = new Set<string>();
   const receiptForDelivery = (
@@ -81,7 +86,8 @@ export function createInMemoryResourceStartStore(
     }
     const reusable = await listReusableCheckouts();
     return {
-      capacity: capacities.get(resource) ?? 1,
+      capacity:
+        installed.get(resource) ?? recordedResourceCapacity(capacities.get(resource), undefined),
       reusableCheckouts: reusable,
       holders,
       waiters: capacityWaiters(candidates),
@@ -108,16 +114,14 @@ export function createInMemoryResourceStartStore(
     };
   };
   const admit = async (intent: ResourceStartIntent): Promise<ResourceStartDisposition> => {
-    const capacity = capacities.get(intent.resource);
-    if (capacity !== undefined && capacity !== intent.capacity)
-      throw new ResourceSlotCapacityConflictError(intent.resource, capacity, intent.capacity);
+    capacities.set(
+      intent.resource,
+      recordedResourceCapacity(capacities.get(intent.resource), intent.capacity)
+    );
     const previous = requests.get(intent.launch.run.id);
     if (previous) return decision(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker(
-      { ...(await occupancy(intent.resource)), capacity: intent.capacity },
-      launch
-    );
+    const blocker = resourceStartBlocker(await occupancy(intent.resource), launch);
     const request: ResourceStartRequestInspection = {
       id: launch.run.id,
       resource: intent.resource,
@@ -140,7 +144,6 @@ export function createInMemoryResourceStartStore(
       );
       if (notice) await recordNotice(notice);
     }
-    capacities.set(intent.resource, intent.capacity);
     requests.set(request.id, request);
     return decision(request);
   };
@@ -188,7 +191,37 @@ export function createInMemoryResourceStartStore(
       released.add(id);
       return true;
     },
+    setResourceCapacity: async (resource, capacity) => {
+      installed.set(resource, capacity);
+    },
     admitResourceStart: admit,
+    admitPendingRun: async ({ resource, capacity, launch }) => {
+      const id = launch.run.id;
+      const previous = requests.get(id);
+      if (previous?.status === 'admitted') return null;
+      if (previous)
+        throw new Error(`Run '${id}' already has a ${previous.status} resource request`);
+      const run = await getRun(id);
+      if (run?.status !== 'pending')
+        throw new Error(`Run '${id}' is ${run?.status ?? 'missing'}, not pending`);
+      const blocker = resourceStartBlocker(
+        { ...(await occupancy(resource)), capacity: installed.get(resource) ?? capacity },
+        launch
+      );
+      if (blocker) return blocker;
+      requests.set(id, {
+        id,
+        resource,
+        hostId: DIRECT_START_HOST_ID,
+        overlap: 'queue',
+        status: 'admitted',
+        blocker: null,
+        runStatus: null,
+        blockerRunStatus: null,
+        launch,
+      });
+      return null;
+    },
     drainResourceStarts: async ({
       resource,
       hostId,
@@ -216,8 +249,10 @@ export function createInMemoryResourceStartStore(
           throw new SourceReceiptDigestConflictError();
         return { receiptId: previous.id, replay: true };
       }
+      if (input.receipt.itemKey !== undefined) throw new Error('The test store has no items');
       receipts.set(input.receipt.id, {
         ...structuredClone(input.receipt),
+        itemKey: null,
         outcome: input.outcome,
         reason: input.reason ?? null,
         bindings: [
@@ -318,11 +353,7 @@ export function createInMemoryResourceStartStore(
     ): ReturnType<IResourceStartStore['completeStartBindingPreparation']> => {
       const item = owned(input);
       if (!item?.intent) return null;
-      const result = await admit({
-        ...item.intent,
-        launch: input.launch,
-        receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
-      });
+      const result = await admit(preparedBindingStart(item.intent, input));
       item.status = 'complete';
       item.error = null;
       item.disposition = result;

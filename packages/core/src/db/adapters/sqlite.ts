@@ -528,7 +528,6 @@ export class SqliteAdapter implements IDatabase {
         ON remote_agent_isolation_environments (codebase_id, workflow_type, workflow_id)
         WHERE status = 'active';
 
-      -- Workflow runs table
       -- conversation_id's ON DELETE CASCADE would erase run rows (and with them
       -- the live-run cleanup pin for isolation environments, #2868) on a hard
       -- conversation delete; soft delete is the only supported path. Mirrors
@@ -549,11 +548,22 @@ export class SqliteAdapter implements IDatabase {
         parent_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
         adopted_from_run_id TEXT REFERENCES remote_agent_workflow_runs(id) ON DELETE SET NULL,
         started_at TEXT DEFAULT (datetime('now')),
+        active_phase_started_at TEXT,
         completed_at TEXT,
         last_activity_at TEXT DEFAULT (datetime('now')),
         working_path TEXT,
         output_root TEXT,
-        checkout_baseline TEXT
+        checkout_baseline TEXT,
+        item_id TEXT REFERENCES remote_agent_items(id)
+      );
+
+      -- The durable thing runs are about; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_items (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        project_key TEXT NOT NULL,
+        key TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        UNIQUE(project_key, key)
       );
 
       CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
@@ -585,6 +595,7 @@ export class SqliteAdapter implements IDatabase {
         outcome TEXT NOT NULL CHECK (outcome IN ('matched', 'unmatched', 'unsupported', 'malformed')),
         reason TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        item_key TEXT,
         UNIQUE(source_instance_id, delivery_id)
       );
 
@@ -625,6 +636,7 @@ export class SqliteAdapter implements IDatabase {
         binding_id TEXT,
         created_at TEXT NOT NULL DEFAULT (datetime('now')),
         admitted_at TEXT,
+        item_id TEXT REFERENCES remote_agent_items(id),
         FOREIGN KEY (receipt_id, binding_id) REFERENCES remote_agent_start_receipt_bindings(receipt_id, binding_id) ON DELETE SET NULL
       );
 

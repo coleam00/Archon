@@ -1,4 +1,4 @@
-import { assertWorkflowNoticeLimit } from '@archon/workflows/workflow-notice';
+import { WORKFLOW_NOTICE_LIMITS } from '@archon/workflows/workflow-notice';
 import { createInMemoryStateDocumentStore } from './state-document-store';
 import { createInMemoryResourceStartStore } from './resource-start-store';
 import { resumeRefusal } from '@archon/workflows/resource-start-store';
@@ -135,7 +135,7 @@ export function createInMemoryWorkflowHostStore(): IWorkflowHostStore {
 }
 
 type InMemoryWorkflowStore = IWorkflowStore &
-  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait'>;
+  Pick<WorkflowStoreHarness, 'backdate' | 'seedPersistedWait' | 'setResourceCapacity'>;
 
 /**
  * The file store's transaction view over in-memory maps. Every operation runs on a copy and
@@ -223,7 +223,7 @@ export function createInMemoryWorkflowStore(
         const prior =
           (await view.listEventsForRuns([notice.runId], ['workflow_notice'])).get(notice.runId) ??
           [];
-        assertWorkflowNoticeLimit(notice.runId, prior.length);
+        if (prior.length >= WORKFLOW_NOTICE_LIMITS.perRun) return;
         await view.persistWorkflowEvent({
           workflow_run_id: notice.runId,
           event_type: 'workflow_notice',
@@ -240,6 +240,7 @@ export function createInMemoryWorkflowStore(
   return {
     ...createInMemoryStateDocumentStore(id => runs.get(id)?.status ?? null),
     admitResourceStart: admit(admission.admitResourceStart.bind(admission)),
+    admitPendingRun: admit(admission.admitPendingRun.bind(admission)),
     drainResourceStarts: admit(admission.drainResourceStarts.bind(admission)),
     hasStartReceiptForDelivery: admit(admission.hasStartReceiptForDelivery.bind(admission)),
     acceptStartReceipt: admit(admission.acceptStartReceipt.bind(admission)),
@@ -257,6 +258,7 @@ export function createInMemoryWorkflowStore(
     ),
     failStartBindingPreparation: admit(admission.failStartBindingPreparation.bind(admission)),
     resetStartBindingPreparation: admit(admission.resetStartBindingPreparation.bind(admission)),
+    setResourceCapacity: admit(admission.setResourceCapacity.bind(admission)),
     backdate: (id, dates) =>
       serialize(async () => {
         const run = runs.get(id);
@@ -393,6 +395,8 @@ export function createInMemoryWorkflowStore(
       write(view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => write(view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => write(view => view.findOpenWorkRuns(options)),
+    listItemRuns: unsupported,
+    getItem: unsupported,
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),

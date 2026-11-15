@@ -1,7 +1,7 @@
 import { spawn } from 'node:child_process';
 import * as processTools from '@archon/paths/plugin-process';
 import { multiAttentionWorkflows } from '../test-support/multi-attention-fixture';
-import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
+import { attentionQueueItemSchema, isHeldByRun } from '@archon/workflows/attention-queue';
 import {
   resourceStartDispositionSchema,
   type ResourceStartDisposition,
@@ -856,6 +856,181 @@ test('pause, approve in another process, and resume without any SQL connection',
   expect(existsSync(f.trap)).toBe(false);
   expect(existsSync(join(f.home, 'archon.db'))).toBe(false);
 }, 60000);
+test('a hand start waits while its resource is full and --no-wait refuses it', async () => {
+  const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
+  const workflow = (name: string, bash: string): void =>
+    writeFileSync(
+      join(f.project, `.archon/workflows/${name}.yaml`),
+      `name: ${name}\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
+    );
+  workflow('held', 'touch held-started; while [ ! -f release ]; do sleep 0.1; done');
+  workflow('quick', 'echo ran > quick-ran');
+  const run = (...args: string[]) =>
+    cli(f, ['workflow', 'run', ...args, '--folder', '--no-worktree']);
+  const held = run('held');
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+  const refused = await run('quick', '--no-wait');
+  expect(refused.code, refused.output + refused.error).not.toBe(0);
+  expect(refused.output + refused.error).toContain("Resource 'build' is full");
+  expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
+
+  const waiting = run('quick');
+  await Bun.sleep(3000);
+  expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+  const waited = await waiting;
+  expect(waited, waited.output + waited.error).toMatchObject({ code: 0 });
+  expect(waited.output + waited.error).toContain("Waiting for resource 'build'");
+  expect(readFileSync(join(f.project, 'quick-ran'), 'utf8')).toBe('ran\n');
+}, 60000);
+test('a hand start is checked against its own declared capacity, then the default 1', async () => {
+  const f = fixture('store: files\n');
+  // Runs in one checkout never overlap, so the later starts run in a second folder.
+  const other = join(f.home, '..', 'other');
+  mkdirSync(join(other, '.archon/workflows'), { recursive: true });
+  const workflow = (dir: string, name: string, resource: string, bash: string): void =>
+    writeFileSync(
+      join(dir, `.archon/workflows/${name}.yaml`),
+      `name: ${name}\ndescription: holds build\nresource: ${resource}\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
+    );
+  const pair = '{ name: build, capacity: 2 }';
+  workflow(
+    f.project,
+    'held',
+    pair,
+    'touch held-started; while [ ! -f release ]; do sleep 0.1; done'
+  );
+  workflow(other, 'second', pair, 'echo ran > second-ran');
+  workflow(other, 'plain', 'build', 'echo ran > plain-ran');
+  const run = (cwd: string, name: string) =>
+    cli(f, ['workflow', 'run', name, '--no-wait', '--folder', '--no-worktree'], f.env, '', cwd);
+  const held = run(f.project, 'held');
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+  const second = await run(other, 'second');
+  expect(second, second.output + second.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(other, 'second-ran'), 'utf8')).toBe('ran\n');
+  const plain = await run(other, 'plain');
+  expect(plain.code, plain.output + plain.error).not.toBe(0);
+  expect(plain.output + plain.error).toContain("Resource 'build' is full");
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+}, 60000);
+// Windows has no SIGINT or SIGTERM delivery to a child: kill() ends it at once, so no
+// handler can fail the pending run. There the wait ends like any abrupt kill.
+test.skipIf(process.platform === 'win32')(
+  'interrupting a hand start that waits for its resource leaves no pending run or request',
+  async () => {
+    const f = fixture('store: files\n');
+    const workflow = (name: string, bash: string): void =>
+      writeFileSync(
+        join(f.project, `.archon/workflows/${name}.yaml`),
+        `name: ${name}\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: ${bash}\n`
+      );
+    workflow('held', 'touch held-started; while [ ! -f release ]; do sleep 0.1; done');
+    workflow('quick', 'echo ran > quick-ran');
+    const args = (name: string) => ['workflow', 'run', name, '--folder', '--no-worktree'];
+    const held = cli(f, args('held'));
+    while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+    const waiting = f.scope.start([process.execPath, f.entry, ...args('quick')], f.project, f.env);
+    await Bun.sleep(3000);
+    waiting.child.kill('SIGINT');
+    const interrupted = await waiting.result;
+    expect(interrupted.code).not.toBe(0);
+    expect(interrupted.output + interrupted.error).toContain("Waiting for resource 'build'");
+    writeFileSync(join(f.project, 'release'), '');
+    expect(await held).toMatchObject({ code: 0 });
+
+    const runs: { id: string; workflow_name: string; status: string }[] = JSON.parse(
+      (await cli(f, ['workflow', 'runs', '--json'])).output
+    ).runs;
+    const quick = runs.find(run => run.workflow_name === 'quick');
+    expect(quick?.status).toBe('failed');
+    const request = await cli(f, ['trigger', 'inspect', quick?.id ?? 'missing']);
+    expect(request.code).not.toBe(0);
+    expect(request.output + request.error).toContain('Trigger receipt or request not found');
+    expect(existsSync(join(f.project, 'quick-ran'))).toBe(false);
+  },
+  60000
+);
+test('a broken capacity config ends a waiting hand start instead of leaving it pending', async () => {
+  const config = 'store: files\nconcurrency:\n  resources:\n    build: 1\n';
+  const f = fixture(config);
+  writeFileSync(
+    join(f.project, '.archon/workflows/held.yaml'),
+    'name: held\ndescription: holds build\nresource: build\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n  - id: work\n    bash: touch held-started; while [ ! -f release ]; do sleep 0.1; done\n'
+  );
+  const run = () => cli(f, ['workflow', 'run', 'held', '--folder', '--no-worktree']);
+  const held = run();
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+  const waiting = run();
+  await Bun.sleep(2000);
+  writeFileSync(join(f.home, 'config.yaml'), config.replace('build: 1', 'build: 0'));
+  const refused = await waiting;
+  expect(refused.code, refused.output + refused.error).not.toBe(0);
+  expect(refused.output + refused.error).toContain("Resource 'build' admission failed");
+  writeFileSync(join(f.home, 'config.yaml'), config);
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+  const listed = await cli(f, ['workflow', 'runs', '--json']);
+  expect(
+    JSON.parse(listed.output)
+      .runs.map((r: { status: string }) => r.status)
+      .sort()
+  ).toEqual(['cancelled', 'completed']);
+}, 60000);
+test('a workflow that includes or runs another declaring its resource holds one slot', async () => {
+  const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
+  writeFileSync(
+    join(f.project, '.archon/workflows/block.yaml'),
+    'name: block\ndescription: included\nresource: build\nnodes:\n  - id: inner\n    bash: echo inner > inner-ran\n'
+  );
+  writeFileSync(
+    join(f.project, '.archon/workflows/outer.yaml'),
+    'name: outer\ndescription: includes block\nresource: build\nworktree:\n  enabled: false\nnodes:\n  - id: blk\n    include: block\n  - id: sub\n    depends_on: [blk]\n    workflow: block\n'
+  );
+  // The include and the sub-run both run inside the parent's slot. At capacity 1 a
+  // second slot would refuse under --no-wait.
+  const result = await cli(f, [
+    'workflow',
+    'run',
+    'outer',
+    '--no-wait',
+    '--folder',
+    '--no-worktree',
+  ]);
+  expect(result, result.output + result.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(f.project, 'inner-ran'), 'utf8')).toBe('inner\n');
+}, 60000);
+test('a sub-run whose parent holds no slot on its resource waits for one', async () => {
+  const f = fixture('store: files\nconcurrency:\n  resources:\n    build: 1\n');
+  const write = (name: string, body: string): void =>
+    writeFileSync(
+      join(f.project, `.archon/workflows/${name}.yaml`),
+      `name: ${name}\ndescription: ${name}\nmutates_checkout: false\nworktree:\n  enabled: false\nnodes:\n${body}`
+    );
+  write(
+    'held',
+    '  - id: work\n    bash: touch held-started; while [ ! -f release ]; do sleep 0.1; done\nresource: build\n'
+  );
+  write('block', '  - id: inner\n    bash: echo inner > inner-ran\nresource: build\n');
+  write('orchestrate', '  - id: sub\n    workflow: block\n');
+  const run = (name: string) => cli(f, ['workflow', 'run', name, '--folder', '--no-worktree']);
+  const held = run('held');
+  while (!existsSync(join(f.project, 'held-started'))) await Bun.sleep(50);
+
+  const orchestrated = run('orchestrate');
+  await Bun.sleep(3000);
+  expect(existsSync(join(f.project, 'inner-ran'))).toBe(false);
+  writeFileSync(join(f.project, 'release'), '');
+  expect(await held).toMatchObject({ code: 0 });
+  const result = await orchestrated;
+  expect(result, result.output + result.error).toMatchObject({ code: 0 });
+  expect(readFileSync(join(f.project, 'inner-ran'), 'utf8')).toBe('inner\n');
+}, 60000);
 test('detached JSON resume returns a refusal status to the process', async () => {
   const f = fixture();
   const started = await cli(f, ['workflow', 'run', 'portable', '--folder', '--no-worktree']);
@@ -1463,13 +1638,16 @@ test('independent questions survive separate CLI processes and apply second firs
   const queue = async () => {
     const result = await cli(f, ['workflow', 'attention', '--json']);
     expect(result, result.error).toMatchObject({ code: 0 });
-    return attentionQueueItemSchema.array().parse(JSON.parse(result.output).items);
+    return attentionQueueItemSchema
+      .array()
+      .parse(JSON.parse(result.output).items)
+      .filter(isHeldByRun);
   };
-  const items = (await queue()).sort((a, b) => a.fanOut!.index - b.fanOut!.index);
+  const items = (await queue()).sort((a, b) => a.run.fanOut!.index - b.run.fanOut!.index);
   expect(items).toHaveLength(2);
   const [first, second] = items;
   for (const item of items) {
-    const read = await cli(f, ['workflow', 'attention', item.runId, '--json']);
+    const read = await cli(f, ['workflow', 'attention', item.run.id, '--json']);
     expect(read, read.error).toMatchObject({ code: 0 });
     expect(JSON.parse(read.output).item).toEqual(item);
   }
@@ -1478,9 +1656,9 @@ test('independent questions survive separate CLI processes and apply second firs
     const answered = await cli(f, [
       'workflow',
       'answer',
-      item.runId,
+      item.run.id,
       '--occurrence',
-      item.occurrence,
+      item.run.occurrence,
       '--choose',
       choose,
     ]);
@@ -1489,17 +1667,17 @@ test('independent questions survive separate CLI processes and apply second firs
   await answer(second, 'defer');
   expect(await queue()).toEqual([first]);
   const store = await createFileWorkflowStore({ root: join(f.home, 'store') });
-  const parentId = first.fanOut!.parentRunId;
+  const parentId = first.run.fanOut!.parentRunId;
   expect((await store.getWorkflowRun(parentId))?.status).toBe('paused');
-  expect((await store.getWorkflowRun(second.runId))?.status).toBe('completed');
+  expect((await store.getWorkflowRun(second.run.id))?.status).toBe('completed');
   expect(
-    (await store.listWorkflowEvents(first.runId)).filter(e => e.step_name === 'apply')
+    (await store.listWorkflowEvents(first.run.id)).filter(e => e.step_name === 'apply')
   ).toEqual([]);
   await answer(first, 'accept');
   expect(await queue()).toEqual([]);
   expect((await store.getWorkflowRun(parentId))?.status).toBe('completed');
   expect((await store.findChildRuns(parentId)).map(r => r.id).sort()).toEqual(
-    items.map(i => i.runId).sort()
+    items.map(i => i.run.id).sort()
   );
   expect(
     (await store.listWorkflowEvents(parentId)).find(
@@ -1510,7 +1688,7 @@ test('independent questions survive separate CLI processes and apply second firs
     { key: 'second', decision: 'defer' },
   ]);
   for (const item of items) {
-    const events = await store.listWorkflowEvents(item.runId);
+    const events = await store.listWorkflowEvents(item.run.id);
     expect(events.filter(e => e.event_type === 'wait_answered')).toHaveLength(1);
     expect(
       events.filter(e => e.event_type === 'node_completed' && e.step_name === 'apply')

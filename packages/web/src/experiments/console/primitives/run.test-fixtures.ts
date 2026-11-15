@@ -38,6 +38,7 @@ export const detailFixture: Detail = {
     user_message: '',
     metadata: {},
     started_at: '2026-10-05T10:00:00Z',
+    active_phase_started_at: null,
     completed_at: '2026-10-05T10:01:00Z',
     last_activity_at: null,
     working_path: null,
@@ -46,6 +47,8 @@ export const detailFixture: Detail = {
     adopted_from_run_id: null,
     output_root: null,
     checkout_baseline: null,
+    item_id: null,
+    platform_type: 'cli',
     conversation_platform_id: null,
     owner_observation: null,
     terminal_record: terminalRecord({

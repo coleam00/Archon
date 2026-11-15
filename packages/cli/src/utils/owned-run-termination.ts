@@ -21,6 +21,12 @@ export interface OwnedRunTerminationInput {
   runId: string;
   /** The engine supplies this execution's claim; undefined until admission. */
   getExecutionClaim: () => string | null | undefined;
+  /**
+   * This process created the run row, so before admission the row is its own: a signal
+   * then fails it if it is still pending (a hand start waiting for its resource slot),
+   * instead of leaving a pending run with no owner.
+   */
+  ownsPendingRun?: boolean;
   /** A result settled by this process retains resource cleanup authority after the status write. */
   isExecutionSettled?: () => boolean;
   /** Logger module of the command that owns the run, so its lines name that command. */
@@ -98,7 +104,16 @@ export function registerOwnedRunTermination(input: OwnedRunTerminationInput): ()
       }
       if (input.isExecutionSettled?.()) return;
       const expectedExecutionClaim = input.getExecutionClaim();
-      if (expectedExecutionClaim === undefined) return;
+      if (expectedExecutionClaim === undefined) {
+        // pendingOnly writes nothing if the engine claimed the run meanwhile.
+        if (input.ownsPendingRun)
+          await input.store.failWorkflowRun(runId, `Process terminated (${signal}) before start`, {
+            exitReason: 'process_terminated',
+            signal,
+            pendingOnly: true,
+          });
+        return;
+      }
       cleanupAllowed = false;
       const { failed } = await input.store.failWorkflowRun(
         runId,

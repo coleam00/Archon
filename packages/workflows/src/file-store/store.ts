@@ -1,6 +1,11 @@
 import { createFileAdmissionStore } from './admission';
+import { FileStoreUnsupportedError } from './errors';
 import { createAdmissionTransaction } from './admission-transaction';
-import { type ReusableCheckout, resumeRefusal } from '../resource-start-store';
+import {
+  type ReusableCheckout,
+  type ResourceCapacityOverride,
+  resumeRefusal,
+} from '../resource-start-store';
 import {
   NODE_LIFECYCLE_EVENT_TYPES,
   WorkflowResourceBusyError,
@@ -53,6 +58,8 @@ export interface FileWorkflowStoreOptions {
   /** Called under the commit lock; must not enter store recovery or call this store. */
   listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>;
   isCheckoutReleased?: (run: WorkflowRun, workingPath?: string) => Promise<boolean>;
+  /** Called under the commit lock at every resource admission. */
+  resourceCapacity?: ResourceCapacityOverride;
 }
 export async function createFileWorkflowStore(
   options: FileWorkflowStoreOptions
@@ -117,7 +124,11 @@ export async function createFileWorkflowStore(
       const events = loadEvents ? await eventsFor([...runs.keys()]) : [];
       const prior = byRun(events);
       const priorIds = new Set(events.map(event => event.id));
-      const admission = createAdmissionTransaction(root, options.listReusableCheckouts);
+      const admission = createAdmissionTransaction(
+        root,
+        options.listReusableCheckouts,
+        options.resourceCapacity
+      );
       const result = await call(
         createTransactionView(runs, events, getCodebase, artifacts),
         admission
@@ -341,6 +352,12 @@ export async function createFileWorkflowStore(
       query('all', view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => query('all', view => view.findAdoptingRuns(id)),
     findOpenWorkRuns: options => query('all', view => view.findOpenWorkRuns(options)),
+    listItemRuns: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    getItem: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     listWorkflowRuns: async options => {
       const result = await query('all', view => view.listWorkflowRuns(options));
       result.runs = await Promise.all(
@@ -484,7 +501,7 @@ export async function createFileWorkflowStore(
           changes: { documents: { [path]: [...rows.filter(row => row !== prior), next] } },
         };
       }),
-    ...createFileAdmissionStore(root, options.listReusableCheckouts),
+    ...createFileAdmissionStore(root, options.listReusableCheckouts, options.resourceCapacity),
     ...createFileStateDocumentStore(root),
   };
   return store;

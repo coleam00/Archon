@@ -20,6 +20,7 @@ import {
   SETUP_LOCK_PREFIX,
   directoryExists,
   getLog,
+  setupAttemptOf,
 } from './shared';
 
 export class WorktreeAddError extends Error {
@@ -114,8 +115,10 @@ export async function releaseSetupLock(
  * The setup marker means one of two things, and neither is adoptable: another
  * process is setting this checkout up right now and may yet roll it back, or a
  * setup died before finishing and left a checkout with no submodules, no git
- * identity, and none of the configured files. Ownership here is ambiguous, so
- * the operator gets an explicit action instead of a silent handover.
+ * identity, and none of the configured files. The lock cannot tell the two apart,
+ * so the refusal says whose lock it is, with the same wording as a rollback that
+ * kept the path, and never advises removal: the checkout may be another start's
+ * live one. The bare marker, with no attempt id, is what v0.11.0 and v0.11.1 wrote.
  */
 export async function refuseUnfinishedWorktree(worktreePath: string): Promise<void> {
   const lock = await readWorktreeLock(toWorktreePath(worktreePath));
@@ -125,15 +128,18 @@ export async function refuseUnfinishedWorktree(worktreePath: string): Promise<vo
       `Cannot adopt the worktree at ${worktreePath}: an abandoned run is removing it. Retry once the removal finishes.`
     );
   }
-  if (lock?.reason !== SETUP_LOCK_PREFIX && !lock?.reason.startsWith(`${SETUP_LOCK_PREFIX}: `)) {
+  if (lock?.reason !== SETUP_LOCK_PREFIX && setupAttemptOf(lock?.reason) === null) {
     return;
   }
   getLog().warn({ worktreePath }, 'worktree.adoption_refused_setup_unfinished');
   throw new IsolationFailure(
     'setup_unfinished',
-    `Cannot adopt the worktree at ${worktreePath}: its setup did not finish. ` +
-      'Another run may be creating it right now — retry once that run ends. ' +
-      `Otherwise remove it with \`git worktree remove --force --force ${worktreePath}\`.`
+    `Cannot adopt the existing worktree: its setup did not finish. ${keptCheckoutNotice(
+      worktreePath,
+      lockedByAnother(lock?.reason, 'its setup lock names no setup attempt'),
+      'Retry once that start has ended. If it stopped partway, find what became of it ' +
+        'before changing the workspace.'
+    )}`
   );
 }
 
@@ -174,26 +180,67 @@ async function rollBackIncompleteWorktree(
     'isolation.incomplete_worktree_rollback_started'
   );
 
-  const failure = await removeIncompleteWorktree(repoPath, worktreePath, setupLockReason);
-  if (!failure) {
+  const kept = await removeIncompleteWorktree(repoPath, worktreePath, setupLockReason);
+  if (!kept) {
     getLog().info({ repoPath, worktreePath }, 'isolation.incomplete_worktree_rolled_back');
     return;
   }
 
-  getLog().error(
-    { repoPath, worktreePath, failure },
-    'isolation.incomplete_worktree_rollback_failed'
-  );
-  recordCleanupFailure(
-    setupError,
-    `The incomplete workspace at ${worktreePath} was left behind (${failure}); remove it ` +
-      'after inspecting it and preserving any changes before retrying.'
-  );
+  getLog().error({ repoPath, worktreePath, kept }, 'isolation.incomplete_worktree_rollback_failed');
+  recordCleanupFailure(setupError, keptCheckoutNotice(worktreePath, kept));
+}
+
+/**
+ * Why a path was left in place, by who the path belongs to. Only `this_attempt`
+ * is proven to be this call's own remains; telling an operator to remove anything else
+ * would point them at a checkout another run may be using. A rollback that kept the path
+ * and an adoption that refused it both report through `keptCheckoutNotice`.
+ */
+type KeptCheckout =
+  | { owner: 'this_attempt'; reason: string }
+  /** The path carries another start's setup lock: that start is creating it, or died doing so. */
+  | { owner: 'other_setup'; attemptId: string }
+  | { owner: 'unproven'; reason: string };
+
+function keptCheckoutNotice(
+  worktreePath: string,
+  kept: KeptCheckout,
+  /** What the caller does about another start's lock; a rollback starts again under a new name. */
+  afterOtherSetup = 'Start this run again.'
+): string {
+  switch (kept.owner) {
+    case 'this_attempt':
+      return (
+        `The incomplete workspace at ${worktreePath} was left behind (${kept.reason}); remove it ` +
+        'after inspecting it and preserving any changes before retrying.'
+      );
+    case 'other_setup':
+      return (
+        `The workspace at ${worktreePath} carries the setup lock of another start (setup ` +
+        `attempt ${kept.attemptId}, the id in that worktree's Git lock), which is either still ` +
+        "creating it or stopped partway. It is not this start's, and this start left it " +
+        `untouched. ${afterOtherSetup}`
+      );
+    case 'unproven':
+      return (
+        `The workspace at ${worktreePath} was left in place (${kept.reason}). This start ` +
+        'cannot prove the workspace is its own, so another run may be using it: find the run ' +
+        'that owns it before changing it.'
+      );
+  }
+}
+
+/** Whose a path is when its lock is not this attempt's: another start's setup, or unknown. */
+function lockedByAnother(lockReason: string | null | undefined, otherwise: string): KeptCheckout {
+  const attemptId = setupAttemptOf(lockReason);
+  return attemptId === null
+    ? { owner: 'unproven', reason: otherwise }
+    : { owner: 'other_setup', attemptId };
 }
 
 /**
  * Remove the checkout this attempt's lock still proves it owns. Returns why it
- * was kept, or null once it is gone. Double force is required to remove a
+ * was kept and whose it is, or null once it is gone. Double force is required to remove a
  * locked worktree, and ownership alone does not authorize discarding changes
  * made by hooks or another writer.
  */
@@ -201,14 +248,15 @@ async function removeIncompleteWorktree(
   repoPath: RepoPath,
   worktreePath: string,
   setupLockReason: string
-): Promise<string | null> {
+): Promise<KeptCheckout | null> {
   try {
     if (!(await directoryExists(worktreePath))) {
       return await removeMissingCheckout(repoPath, worktreePath, setupLockReason);
     }
     return await removeLockedCheckout(repoPath, worktreePath, setupLockReason);
   } catch (error) {
-    return error instanceof Error ? error.message : String(error);
+    // Ownership could not be read, so nothing here proves whose checkout remains.
+    return { owner: 'unproven', reason: error instanceof Error ? error.message : String(error) };
   }
 }
 
@@ -216,43 +264,68 @@ async function removeMissingCheckout(
   repoPath: RepoPath,
   worktreePath: string,
   setupLockReason: string
-): Promise<string | null> {
+): Promise<KeptCheckout | null> {
   const registration = await readWorktreeRegistration(repoPath, worktreePath);
   if (registration === null) return null;
   // Git refuses to add over a locked registration, so its lock still proves ownership.
   if (registration.lockReason !== setupLockReason) {
-    return 'the checkout directory is missing and its registration is not owned by this attempt';
+    return lockedByAnother(
+      registration.lockReason,
+      'the checkout directory is missing and its registration is not owned by this attempt'
+    );
   }
-  await forceRemoveWorktree(repoPath, worktreePath);
-  return (await readWorktreeRegistration(repoPath, worktreePath)) === null
-    ? null
-    : 'Git left the missing checkout registered';
+  return ownRemains(async () => {
+    await forceRemoveWorktree(repoPath, worktreePath);
+    return (await readWorktreeRegistration(repoPath, worktreePath)) === null
+      ? null
+      : 'Git left the missing checkout registered';
+  });
+}
+
+/** Run a removal step on a checkout this attempt's lock has proven its own. */
+async function ownRemains(step: () => Promise<string | null>): Promise<KeptCheckout | null> {
+  let reason: string | null;
+  try {
+    reason = await step();
+  } catch (error) {
+    reason = error instanceof Error ? error.message : String(error);
+  }
+  return reason === null ? null : { owner: 'this_attempt', reason };
 }
 
 async function removeLockedCheckout(
   repoPath: RepoPath,
   worktreePath: string,
   setupLockReason: string
-): Promise<string | null> {
+): Promise<KeptCheckout | null> {
   const lock = await readWorktreeLock(toWorktreePath(worktreePath));
   if (lock?.reason !== setupLockReason) {
     return lock === null
-      ? 'the setup lock this call took is gone, so the checkout may already belong to another run'
-      : `the checkout is locked by something else: ${lock.reason}`;
+      ? { owner: 'unproven', reason: 'the setup lock this start took is gone' }
+      : lockedByAnother(lock.reason, `the checkout is locked by something else: ${lock.reason}`);
   }
-  const changes = await findUnsafeContent(worktreePath);
-  if (changes) return changes;
+  let changes: string | null;
+  try {
+    changes = await findUnsafeContent(worktreePath);
+  } catch (error) {
+    changes = error instanceof Error ? error.message : String(error);
+  }
+  // Read again before deciding either way: the content check takes time, and remains
+  // are this attempt's own only while its lock is still the one on the path.
   const currentLock = await readWorktreeLock(toWorktreePath(worktreePath));
   if (currentLock?.reason !== setupLockReason) {
-    return 'the setup lock changed during cleanup, so ownership is no longer proven';
+    return lockedByAnother(currentLock?.reason, 'the setup lock changed during cleanup');
   }
-  await forceRemoveWorktree(repoPath, worktreePath);
-  if (await directoryExists(worktreePath)) {
-    return 'Git removed the worktree registration but the directory remains';
-  }
-  return (await readWorktreeRegistration(repoPath, worktreePath)) === null
-    ? null
-    : 'Git left the checkout registered';
+  if (changes) return { owner: 'this_attempt', reason: changes };
+  return ownRemains(async () => {
+    await forceRemoveWorktree(repoPath, worktreePath);
+    if (await directoryExists(worktreePath)) {
+      return 'Git removed the worktree registration but the directory remains';
+    }
+    return (await readWorktreeRegistration(repoPath, worktreePath)) === null
+      ? null
+      : 'Git left the checkout registered';
+  });
 }
 
 /** Why the checkout may hold work that a forced removal would discard, or null. */

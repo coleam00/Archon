@@ -258,10 +258,6 @@ describe('workflow-level field parity (#2457)', () => {
       yaml: 'container:\n  enabled: true',
       present: w => w.container?.enabled === true,
     },
-    evidence_policy: {
-      yaml: 'evidence_policy:\n  required: true',
-      present: w => w.evidence_policy?.required === true,
-    },
     budget: {
       yaml: 'budget:\n  max_work_units: 3',
       present: w => w.budget?.max_work_units === 3,
@@ -270,6 +266,7 @@ describe('workflow-level field parity (#2457)', () => {
       yaml: 'mutates_checkout: false',
       present: w => w.mutates_checkout === false,
     },
+    resource: { yaml: 'resource: build', present: w => w.resource?.name === 'build' },
     persist_sessions: {
       yaml: 'persist_sessions: true',
       present: w => w.persist_sessions === true,
@@ -594,19 +591,6 @@ describe('workflow-level policy fields', () => {
       { enabled: true },
     ],
     ['no container block', '', 'container', undefined],
-    [
-      'evidence_policy.required: true (#2230)',
-      'evidence_policy:\n  required: true',
-      'evidence_policy',
-      { required: true },
-    ],
-    [
-      'evidence_policy.required: false',
-      'evidence_policy:\n  required: false',
-      'evidence_policy',
-      { required: false },
-    ],
-    ['no evidence_policy', '', 'evidence_policy', undefined],
     ['an explicit tags array', 'tags: [GitLab, Review]', 'tags', ['GitLab', 'Review']],
     ['no tags', '', 'tags', undefined],
     // An explicit empty list suppresses tag inference, so it is kept rather than omitted.
@@ -637,18 +621,25 @@ describe('workflow-level policy fields', () => {
       'mutates_checkout',
       undefined,
     ],
+    ['a resource name', 'resource: build', 'resource', { name: 'build' }],
+    [
+      'a resource with a capacity',
+      'resource: { name: build, capacity: 3 }',
+      'resource',
+      { name: 'build', capacity: 3 },
+    ],
   ])('parses %s', (_, field, key, expected) => {
     expect(parseWorkflowYaml(withField(field)).workflow[key] as unknown).toEqual(expected);
   });
 
-  // Silently dropping a declared terminal-success gate would let runs complete
-  // ungated, so a malformed block fails validation instead of warn-and-ignore.
+  // A malformed block fails validation instead of warn-and-ignore.
   it.each([
-    ['a malformed evidence_policy block', 'evidence_policy:\n  required: "yes"', 'evidence_policy'],
+    // A dropped resource would let every start run without a slot.
+    ['a reserved resource name', 'resource: "provider:claude"', "Invalid 'resource'"],
     [
-      'an empty evidence_policy block (required is mandatory)',
-      'evidence_policy: {}',
-      'required: boolean',
+      'a zero resource capacity',
+      'resource: { name: build, capacity: 0 }',
+      "Invalid 'resource' (capacity)",
     ],
   ])('rejects %s', (_, field, message) => {
     const result = parseWorkflow(withField(field), 'evidence.yaml');

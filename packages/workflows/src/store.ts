@@ -186,6 +186,9 @@ export interface IWorkflowStore
 
   findOpenWorkRuns(options?: { codebaseId?: string; limit?: number }): Promise<WorkflowRun[]>;
   findAdoptingRuns(runId: string): Promise<WorkflowRun[]>;
+  /** Every run of one item in a project, in the order they started. */
+  listItemRuns(projectKey: string, itemKey: string): Promise<WorkflowRun[]>;
+  getItem(id: string): Promise<import('./schemas/workflow-run').WorkflowItem | null>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
@@ -224,6 +227,12 @@ export interface IWorkflowStore
      * resume. Omitted for ordinary fresh runs.
      */
     adopted_from_run_id?: string;
+    /**
+     * The key of the item this run belongs to, in the project of `codebase_id`, which it
+     * needs. The item is created on first use. Absent: a run with `adopted_from_run_id`
+     * belongs to that run's item, and any other run has no item.
+     */
+    item_key?: string;
   }): Promise<WorkflowRun>;
   /**
    * Fresh execution must win this pending-to-running CAS before doing any work.
@@ -248,8 +257,9 @@ export interface IWorkflowStore
    * Pass `self` from the calling dispatch so:
    *   1. Self is never returned (excluded by `id != self.id`).
    *   2. Two near-simultaneous dispatches deterministically agree on which
-   *      is "first" via the `(started_at, id)` tiebreaker — newer aborts.
+   *      is "first" via the `(effective phase time, id)` tiebreaker — newer aborts.
    *
+   * `startedAt` is the effective path priority from `workflowPathPriorityTime`.
    * `id` and `startedAt` must travel together — the tiebreaker requires
    * both. Bundling them as a single optional struct makes the
    * paired-or-nothing invariant structural rather than a doc-only contract.

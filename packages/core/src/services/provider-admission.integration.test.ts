@@ -27,7 +27,7 @@ import {
   tryAdmitProviderAttempt,
 } from '../db/provider-attempts';
 import { currentProcessOwner, ProcessOwnerRecordError } from '@archon/paths/process-owner';
-import { ProviderConcurrencyConfigError } from '../config/provider-concurrency';
+import { ConcurrencyConfigError } from '../config/concurrency-config';
 import { processProviderRegistration } from '../providers/process-registration';
 import { getAgentProvider, ProviderAdmissionAbortedError } from './provider-admission';
 
@@ -326,7 +326,7 @@ describe('provider admission wrapper', () => {
       await writeCaps(config);
       await expect(
         drain(getAgentProvider(PROVIDER, POLL_MS).sendQuery('a', '/tmp'))
-      ).rejects.toBeInstanceOf(ProviderConcurrencyConfigError);
+      ).rejects.toBeInstanceOf(ConcurrencyConfigError);
     }
     expect(calls).toHaveLength(0);
   });

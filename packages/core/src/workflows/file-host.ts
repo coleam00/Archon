@@ -36,6 +36,7 @@ import {
 import { assertAbsoluteDefaultCwd, defaultCwdKey, isSameDefaultCwd } from '../db/codebase-path';
 import type { IWorkflowHostStore, WorkflowHost } from './host-store';
 import { assertFileStoreConfiguration } from '../config/store-selection';
+import { loadResourceCapacities } from '../config/concurrency-config';
 import { completedRunWorktreeDeps, createWorkflowDeps } from './store-adapter';
 import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { createWorkflowOperations } from '../operations/workflow-operations';
@@ -332,6 +333,7 @@ export async function createFileWorkflowHost(root: string): Promise<WorkflowHost
   const store = await createFileWorkflowStore({
     root,
     getCodebase: id => records.codebases.getCodebase(id),
+    resourceCapacity: async resource => (await loadResourceCapacities()).get(resource),
     listReusableCheckouts: async () =>
       (await environments())
         .filter(row => row.status === 'active' && row.workflow_type === 'task')

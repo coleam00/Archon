@@ -263,9 +263,11 @@ export async function loadPausedGateContext(
   const pausedGateContext = pausedGateRun
     ? formatPausedGateSection({
         run: pausedGateRun,
-        // Both resolution routes — the `manage_run` tool and the CLI-pointer
-        // section — are gated on a scoped project; without one the section
-        // must not instruct the agent to use verbs it does not have.
+        // The routes this section speaks for — the `manage_run` tool and the
+        // CLI-pointer section — are gated on a scoped project; without one the
+        // section must not instruct the agent to use verbs it does not have. The
+        // `attention` tool reaches the gate in every native-tools chat, but the
+        // provider is not known yet here, so the section stays on the safe side.
         agentCanResolve: conversation.codebase_id !== null,
         surface: platform,
       }) || undefined

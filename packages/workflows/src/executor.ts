@@ -104,6 +104,8 @@ type ResumePayload =
  * its own; that decision belongs at the call site.
  */
 export type ExecuteWorkflowOptions = ResumePayload & {
+  /** Refuse a fresh run whose workflow's `resource:` is full instead of waiting for a slot. */
+  noWait?: boolean;
   /** Binds host termination handling to the admitted execution, before any node can publish a pause. */
   onExecutionClaimed?: (claim: string | null) => void;
   /** Transfers scratch cleanup to a host that must drain it after reporting the outcome. */
@@ -215,6 +217,8 @@ export type ExecuteWorkflowOptions = ResumePayload & {
    * dispatch; the executor only records provenance.
    */
   adoptedFromRunId?: string;
+  /** The item a fresh run belongs to, written once on the row this call creates. */
+  item?: string;
   /** How `adoptedFromRunId` continues: estate adoption or fresh-lane supersession. */
   continuationMode?: ContinuationMode;
   /** One model-binding phase: raw at invocation boundaries, resolved for child runs. */

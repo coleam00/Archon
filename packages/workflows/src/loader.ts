@@ -26,7 +26,6 @@ import {
   parseBetas,
   parseContainerPolicy,
   parseDeprecation,
-  parseEvidencePolicy,
   parseFallbackModel,
   parseWorkflowModel,
   inputEnvKeyCollision,
@@ -34,6 +33,7 @@ import {
   parseMutatesCheckout,
   parseOptionalField,
   parseOutcomeField,
+  parseWorkflowResource,
   parseRequires,
   parseReturns,
   parseRunBudget,
@@ -82,6 +82,9 @@ function parseWorkflowHeader(
 
   if (Object.hasOwn(raw, 'thinking')) {
     return "'thinking:' has been removed; use 'effort:' instead";
+  }
+  if (Object.hasOwn(raw, 'evidence_policy')) {
+    return "'evidence_policy:' has been removed; use a 'bash:' or 'script:' node that exits non-zero to fail the run instead";
   }
 
   // A load failure reaches the author through the returned `error`, which discovery
@@ -226,13 +229,13 @@ interface WorkflowFields {
   readonly webSearchMode: WorkflowDefinition['webSearchMode'];
   readonly persistSessions: boolean;
   readonly mutatesCheckout: ReturnType<typeof parseMutatesCheckout>;
+  readonly resource: WorkflowDefinition['resource'];
   readonly effort: ReturnType<typeof resolveEffort>;
   readonly fallbackModel: ReturnType<typeof parseFallbackModel>;
   readonly betas: ReturnType<typeof parseBetas>;
   readonly sandbox: WorkflowDefinition['sandbox'];
   readonly worktree: ReturnType<typeof parseWorktreePolicy>;
   readonly container: ReturnType<typeof parseContainerPolicy>;
-  readonly evidencePolicy: WorkflowDefinition['evidence_policy'];
   readonly budget: WorkflowDefinition['budget'];
   readonly tags: ReturnType<typeof parseTags>;
   readonly requires: ReturnType<typeof parseRequires>;
@@ -289,13 +292,13 @@ function parseWorkflowFields(
 
   const worktree = parseWorktreePolicy(raw.worktree, filename);
   const container = parseContainerPolicy(raw.container, filename);
-  const evidencePolicy = parseEvidencePolicy(raw.evidence_policy);
-  if ('error' in evidencePolicy) return evidencePolicy.error;
   const budget = parseRunBudget(raw.budget);
   if ('error' in budget) return budget.error;
   const deprecated = parseDeprecation(raw.deprecated);
   if ('error' in deprecated) return deprecated.error;
   const mutatesCheckout = parseMutatesCheckout(raw.mutates_checkout, filename);
+  const resource = parseWorkflowResource(raw.resource);
+  if ('error' in resource) return resource.error;
   const tags = parseTags(raw.tags, filename);
   const requires = parseRequires(raw.requires, filename);
   const inputs = parseInputs(raw.inputs, filename);
@@ -324,13 +327,13 @@ function parseWorkflowFields(
     webSearchMode,
     persistSessions,
     mutatesCheckout,
+    resource: resource.value,
     effort,
     fallbackModel: parseFallbackModel(raw.fallbackModel, filename),
     betas: parseBetas(raw.betas, filename),
     sandbox,
     worktree,
     container,
-    evidencePolicy: evidencePolicy.value,
     budget: budget.value,
     tags,
     requires,
@@ -366,6 +369,7 @@ function buildWorkflowDefinition(
 function executionSettings(fields: WorkflowFields): Partial<WorkflowDefinition> {
   return {
     ...(fields.mutatesCheckout !== undefined ? { mutates_checkout: fields.mutatesCheckout } : {}),
+    ...(fields.resource !== undefined ? { resource: fields.resource } : {}),
     ...(fields.effort !== undefined ? { effort: fields.effort } : {}),
     ...(fields.fallbackModel !== undefined ? { fallbackModel: fields.fallbackModel } : {}),
     ...(fields.betas !== undefined ? { betas: fields.betas } : {}),
@@ -378,7 +382,6 @@ function runPolicies(fields: WorkflowFields): Partial<WorkflowDefinition> {
   return {
     ...(fields.worktree ? { worktree: fields.worktree } : {}),
     ...(fields.container ? { container: fields.container } : {}),
-    ...(fields.evidencePolicy !== undefined ? { evidence_policy: fields.evidencePolicy } : {}),
     ...(fields.budget !== undefined ? { budget: fields.budget } : {}),
     ...(fields.tags !== undefined ? { tags: fields.tags } : {}),
     ...(fields.requires !== undefined ? { requires: fields.requires } : {}),

@@ -37,6 +37,7 @@ import type { IDatabase } from './adapters/types';
 import { getDatabase, getDialect } from './connection';
 import { lockConversationOwnership } from './conversation-ownership';
 import type { TransactionQuery } from './resource-slots';
+import { continuedItem, ensureItem } from './items';
 import { insertWorkflowEvent } from './workflow-events';
 import { assertPublicConversation, ensureWorkflowOriginAnchor } from './workflow-origin-anchor';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
@@ -52,7 +53,13 @@ export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[
 
 export async function insertWorkflowRun(
   query: TransactionQuery,
-  data: WorkflowRunInsert
+  data: WorkflowRunInsert,
+  /**
+   * Set by a prepared start: its request already holds the item, or null for none, and
+   * the run takes exactly that. Absent, `data.item_key` names the item, and a
+   * continuation that names none stays on the item of the run it continues.
+   */
+  prepared?: { itemId: string | null }
 ): Promise<WorkflowRun> {
   validateWorkflowWaitMetadata(data.metadata);
   const metadataJson = serializeRunMetadata(initialRunMetadata(data.metadata, data.parent_run_id));
@@ -68,10 +75,26 @@ export async function insertWorkflowRun(
       ...(origin.conversationId ? [origin.conversationId] : []),
       ...(origin.parentConversationId ? [origin.parentConversationId] : []),
     ]);
-    const row = await insertRunRow(query, data, metadataJson, physicalConversationId, origin);
+    const itemId = prepared
+      ? prepared.itemId
+      : data.item_key !== undefined
+        ? await ensureItem(query, data.codebase_id, data.item_key)
+        : data.adopted_from_run_id !== undefined
+          ? await continuedItem(query, data.codebase_id, data.adopted_from_run_id)
+          : null;
+    const row = await insertRunRow(
+      query,
+      data,
+      metadataJson,
+      physicalConversationId,
+      origin,
+      itemId
+    );
     return normalizeWorkflowRun(row);
   } catch (error) {
-    throw new Error(`Failed to create workflow run: ${(error as Error).message}`);
+    throw new Error(`Failed to create workflow run: ${(error as Error).message}`, {
+      cause: error,
+    });
   }
 }
 
@@ -113,17 +136,18 @@ async function insertRunRow(
   data: WorkflowRunInsert,
   metadataJson: string,
   physicalConversationId: string,
-  origin: WorkflowRunOrigin
+  origin: WorkflowRunOrigin,
+  itemId: string | null
 ): Promise<WorkflowRunRow> {
   const result = await query<WorkflowRunRow>(
     data.id === undefined
       ? `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, item_id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
        RETURNING *, CAST(origin AS TEXT) AS origin`
       : `INSERT INTO remote_agent_workflow_runs
-       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+       (workflow_name, conversation_id, codebase_id, user_message, metadata, working_path, parent_conversation_id, user_id, parent_run_id, adopted_from_run_id, origin, item_id, id)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
        RETURNING *, CAST(origin AS TEXT) AS origin`,
     [
       data.workflow_name,
@@ -137,6 +161,7 @@ async function insertRunRow(
       data.parent_run_id ?? null,
       data.adopted_from_run_id ?? null,
       JSON.stringify(origin),
+      itemId,
       ...(data.id === undefined ? [] : [data.id]),
     ]
   );

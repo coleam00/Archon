@@ -10,11 +10,15 @@ import {
 import { join } from 'node:path';
 import { z } from 'zod';
 import { createLogger } from '@archon/paths/logger';
-import type { ResourceStartDisposition } from '../schemas/resource-start';
+import {
+  preparedWorkflowLaunchSchema,
+  type ResourceStartDisposition,
+} from '../schemas/resource-start';
 import {
   drainableStarts,
   compareCodeUnits,
   type ReusableCheckout,
+  type ResourceCapacityOverride,
   type IResourceStartStore,
   type ResourceStartRequestInspection,
   type QueuedResourceStartInspection,
@@ -31,11 +35,14 @@ const log = createLogger('file-store.admission');
 
 export function createFileAdmissionStore(
   root: string,
-  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>
+  listReusableCheckouts?: () => Promise<readonly ReusableCheckout[]>,
+  resourceCapacity?: ResourceCapacityOverride
 ): IResourceStartStore {
+  const transaction = () =>
+    createAdmissionTransaction(root, listReusableCheckouts, resourceCapacity);
   const write: AdmissionWrite = call =>
     commit(root, [], async runs => {
-      const tx = createAdmissionTransaction(root, listReusableCheckouts);
+      const tx = transaction();
       const result = await call(tx, runs);
       return {
         result,
@@ -50,7 +57,7 @@ export function createFileAdmissionStore(
     });
   const query: AdmissionQuery = async call => {
     await recoverBeforeRead(root);
-    return call(createAdmissionTransaction(root, listReusableCheckouts));
+    return call(transaction());
   };
   async function queueCandidate<S extends z.ZodType>(
     path: string,
@@ -124,6 +131,8 @@ export function createFileAdmissionStore(
   }
   return {
     admitResourceStart: intent => write((tx, runs) => tx.admit(intent, runs)),
+    admitPendingRun: ({ resource, capacity, launch }) =>
+      write(tx => tx.admitPending(resource, capacity, preparedWorkflowLaunchSchema.parse(launch))),
     drainResourceStarts: options =>
       write(async (tx, runs) => {
         const admitted: ResourceStartDisposition[] = [];

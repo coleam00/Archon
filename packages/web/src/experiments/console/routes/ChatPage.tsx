@@ -6,9 +6,11 @@ import { ProjectViewTabs } from '../components/ProjectViewTabs';
 import { WorkingIndicator } from '../components/WorkingIndicator';
 import { WorkflowDock } from '../components/WorkflowDock';
 import { EmptyState } from '../components/EmptyState';
+import { SELECT_CLASS_COMPACT, SelectShell } from '../components/SettingsFormPrimitives';
 import { StreamContextProvider } from '../lib/stream-context';
 import { useConversationSSE } from '../lib/sse';
 import { followTail } from '../lib/follow-tail';
+import { relativeTime } from '../lib/format';
 import { useEntity, invalidate } from '../store/cache';
 import { K } from '../store/keys';
 import * as skill from '../skills';
@@ -30,12 +32,35 @@ const MAX_WAIT_MS = 300_000;
 // — drives both auto-scroll stickiness and the jump-to-bottom button's visibility.
 const NEAR_BOTTOM_PX = 120;
 
+// The chat a person last had open in a project. Starting a run from the draft card
+// creates a web conversation of its own, so "the most recent web conversation" alone
+// would replace the person's chat with that run's after a reload.
+const chatKey = (projectId: string): string => `archon.console.chat.${projectId}`;
+
+function readStoredChat(projectId: string): string | null {
+  try {
+    return localStorage.getItem(chatKey(projectId));
+  } catch {
+    return null;
+  }
+}
+
+function writeStoredChat(projectId: string, conversationId: string | null): void {
+  try {
+    if (conversationId === null) localStorage.removeItem(chatKey(projectId));
+    else localStorage.setItem(chatKey(projectId), conversationId);
+  } catch {
+    /* storage unavailable: the choice lasts for this page only */
+  }
+}
+
 /**
  * Project-scoped agent chat. A tab peer of the runs view under a project.
  *
- * MVP conversation model: one active conversation per project — the most-recent
- * web conversation, or created lazily on first send. No multi-conversation
- * sidebar yet (spike decision #3, deferred).
+ * Conversation model: one active conversation at a time, the one this browser last
+ * had open in the project, else the most-recent web conversation, else created lazily
+ * on first send. The header's picker switches between the project's web conversations
+ * or starts a new one.
  *
  * Data flow mirrors RunDetailPage: load messages via useEntity(K.messages),
  * keep live via useConversationSSE (invalidate → refetch), render with the
@@ -54,13 +79,21 @@ export function ChatPage(): ReactElement {
     () => (projectId !== undefined ? skill.listConversations(projectId) : Promise.resolve([]))
   );
 
-  // Active conversation: most-recent web conversation, else null until first send.
+  const webConversations = useMemo(
+    () => (conversations ?? []).filter(c => c.platformType === 'web'),
+    [conversations]
+  );
+
+  // Active conversation: null until one is picked, created by the first send, or
+  // while the person has asked for a new chat.
   const [activeConvId, setActiveConvId] = useState<string | null>(null);
+  const [newChat, setNewChat] = useState(false);
   useEffect(() => {
-    if (activeConvId !== null) return;
-    const web = (conversations ?? []).find(c => c.platformType === 'web');
-    if (web !== undefined) setActiveConvId(web.id);
-  }, [conversations, activeConvId]);
+    if (activeConvId !== null || newChat || projectId === undefined) return;
+    const stored = readStoredChat(projectId);
+    const pick = webConversations.find(c => c.id === stored) ?? webConversations[0];
+    if (pick !== undefined) setActiveConvId(pick.id);
+  }, [webConversations, activeConvId, newChat, projectId]);
 
   const { data: messages, error: messagesError } = useEntity<Message[]>(
     activeConvId !== null ? K.messages(activeConvId) : 'noop:no-conv',
@@ -162,6 +195,8 @@ export function ChatPage(): ReactElement {
         if (activeConvId === null) {
           const conv = await skill.createConversation(projectId, text);
           setActiveConvId(conv.conversationId);
+          setNewChat(false);
+          writeStoredChat(projectId, conv.conversationId);
           invalidate(K.conversations(projectId));
           invalidate(K.messages(conv.conversationId));
           // createConversation is JSON-only — files can't ride the first message.
@@ -175,6 +210,7 @@ export function ChatPage(): ReactElement {
           }
         } else {
           await skill.sendMessage(activeConvId, text, files);
+          writeStoredChat(projectId, activeConvId);
           invalidate(K.messages(activeConvId));
         }
       } catch (e: unknown) {
@@ -183,6 +219,16 @@ export function ChatPage(): ReactElement {
       }
       // On success `busy` stays true until the settle detector sees the reply.
     })();
+  };
+
+  const selectConversation = (conversationId: string | null): void => {
+    if (projectId === undefined) return;
+    setActiveConvId(conversationId);
+    setNewChat(conversationId === null);
+    writeStoredChat(projectId, conversationId);
+    setError(null);
+    setNotice(null);
+    setBusy(false);
   };
 
   const scrollRef = useRef<HTMLDivElement | null>(null);
@@ -254,6 +300,11 @@ export function ChatPage(): ReactElement {
             </h1>
             <p className="text-xs text-text-tertiary">{project?.path ?? 'Loading…'}</p>
           </div>
+          <ConversationPicker
+            conversations={webConversations}
+            active={activeConvId}
+            onSelect={selectConversation}
+          />
         </div>
         <ProjectViewTabs projectId={projectId} active="chat" />
       </header>
@@ -327,4 +378,37 @@ function ChatError({
       {error ?? `Failed to load chat: ${loadError?.message ?? 'unknown error'}`}
     </div>
   ) : null;
+}
+
+/** Switches between the project's web conversations, or to a new one. */
+function ConversationPicker({
+  conversations,
+  active,
+  onSelect,
+}: {
+  conversations: ConversationSummary[];
+  active: string | null;
+  onSelect: (conversationId: string | null) => void;
+}): ReactElement | null {
+  if (conversations.length === 0) return null;
+  return (
+    <SelectShell className="w-70 max-w-[40vw] shrink-0">
+      <select
+        aria-label="Conversation"
+        value={active ?? ''}
+        onChange={e => {
+          onSelect(e.target.value === '' ? null : e.target.value);
+        }}
+        className={SELECT_CLASS_COMPACT}
+      >
+        <option value="">New chat</option>
+        {conversations.map(c => (
+          <option key={c.id} value={c.id}>
+            {c.title ?? 'Untitled'}
+            {c.lastActivityAt !== null ? ` · ${relativeTime(c.lastActivityAt)}` : ''}
+          </option>
+        ))}
+      </select>
+    </SelectShell>
+  );
 }

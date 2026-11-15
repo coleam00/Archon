@@ -16,7 +16,7 @@ import {
   resetTelemetryForTests,
 } from './telemetry';
 import { removeTempTree } from './test-utils';
-import { NOTICE_STAMP_FILENAME } from './telemetry-consent';
+import { claimDailyStart, NOTICE_STAMP_FILENAME } from './telemetry-consent';
 import { runRefForTelemetry, TELEMETRY_SCHEMA_VERSION } from './telemetry-events';
 import { shutdownTelemetry } from './telemetry-transport';
 
@@ -313,6 +313,18 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     }
   });
 
+  test('archon_started is sent once per surface per UTC day', async () => {
+    const events = await captureTelemetry(() => {
+      captureArchonStarted({ surface: 'cli' });
+      captureArchonStarted({ surface: 'cli' });
+      captureArchonStarted({ surface: 'server' });
+    });
+    const started = events.filter(event => event.event === 'archon_started');
+    expect(started.map(event => event.properties.surface)).toEqual(['cli', 'server']);
+    expect(claimDailyStart('cli')).toBe(false);
+    expect(claimDailyStart('cli', new Date(Date.now() + 24 * 60 * 60 * 1000))).toBe(true);
+  });
+
   test('captureArchonActive does not throw (disabled)', () => {
     process.env.ARCHON_TELEMETRY_DISABLED = '1';
     expect(() => captureArchonActive({ surface: 'server' })).not.toThrow();
@@ -450,6 +462,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     const events = await captureTelemetry(() => {
       captureArchonStarted({
         surface: 'server',
+        store: 'postgresql',
         dbKind: 'postgresql',
         webAuthEnabled: true,
         githubAuthMode: 'app',
@@ -460,6 +473,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
     });
     const props = eventProperties(events, 'archon_started');
     expect(props.surface).toBe('server');
+    expect(props.store).toBe('postgresql');
     expect(props.db_kind).toBe('postgresql');
     expect(props.web_auth_enabled).toBe(true);
     expect(props.github_auth_mode).toBe('app');
@@ -496,7 +510,7 @@ describe('new capture functions are fire-and-forget no-throw', () => {
       cache_read_tokens: 700,
       cache_write_tokens: 0,
       cache_partial: true,
-      schema_version: 13,
+      schema_version: TELEMETRY_SCHEMA_VERSION,
     });
     expect(props.model).toBe('sonnet');
     expect(props.duration_ms).toBe(5120);

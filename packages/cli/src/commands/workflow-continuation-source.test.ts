@@ -119,6 +119,7 @@ for (const source of [
       parent_conversation_id: source.endsWith('-origin') ? 'origin' : null,
       codebase_id: null,
       user_message: '',
+      active_phase_started_at: null,
       started_at: new Date(),
       completed_at: null,
       last_activity_at: null,
@@ -128,6 +129,7 @@ for (const source of [
       adopted_from_run_id: null,
       output_root: null,
       checkout_baseline: null,
+      item_id: null,
       metadata: {
         workflow_source: {
           version: 1,

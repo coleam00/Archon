@@ -7,6 +7,9 @@ import { parseGitHubHost, resolveGitHubHost, type GitHubHost } from '@archon/git
 
 export type Fetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
 
+/** The wait between repeated reads; tests replace it so they do not sleep. */
+export type Sleep = (ms: number) => Promise<unknown>;
+
 export class GitHubError extends Error {
   constructor(
     readonly detail: ForgeError,

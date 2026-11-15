@@ -4,6 +4,7 @@ import {
   mutableRunMetadata,
 } from '../schemas/run-metadata';
 import { prepareWorkflowRunFailure } from '../workflow-run-failure';
+import { FileStoreUnsupportedError } from './errors';
 import { resumeRun } from './run-resume';
 import { createLogger } from '@archon/paths';
 import {
@@ -75,6 +76,8 @@ export type TransactionView = Omit<
   | 'upsertWorkflowNodeSession'
   | 'deleteWorkflowNodeSessions'
   | 'releasePausedRunSlot'
+  | 'listItemRuns'
+  | 'getItem'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
@@ -187,6 +190,7 @@ export function createTransactionView(
     input
   ): ReturnType<IWorkflowStore['createWorkflowRun']> => {
     validateWorkflowWaitMetadata(input.metadata);
+    if (input.item_key !== undefined) throw new FileStoreUnsupportedError('items');
     const origin =
       input.origin && Object.values(input.origin).some(value => value !== undefined)
         ? structuredClone(input.origin)
@@ -204,6 +208,7 @@ export function createTransactionView(
       status: 'pending',
       outcome: null,
       started_at: new Date(),
+      active_phase_started_at: null,
       completed_at: null,
       last_activity_at: null,
       working_path: input.working_path ?? null,
@@ -211,6 +216,7 @@ export function createTransactionView(
       checkout_baseline: null,
       parent_run_id: input.parent_run_id ?? null,
       adopted_from_run_id: input.adopted_from_run_id ?? null,
+      item_id: null,
     };
     if (runs.has(run.id)) throw new Error('Duplicate run');
     runs.set(run.id, run);
@@ -228,7 +234,7 @@ export function createTransactionView(
       if (!run || !answered) return { answered: false };
       const stored = workflowWaitContextSchema.parse(answered);
       run.metadata.wait = stored;
-      record(waitAnsweredEvent(id, answered));
+      record(waitAnsweredEvent(id, answered, write.fromRun));
       return { answered: true };
     },
     labelAttentionWait: async (id, write) => {
@@ -426,7 +432,11 @@ export function createTransactionView(
         .filter(
           run =>
             isTerminalRunStatus(run.status) &&
-            run.started_at.getTime() < Date.now() - days * 86_400_000
+            Math.max(
+              run.started_at.getTime(),
+              run.active_phase_started_at?.getTime() ?? -Infinity
+            ) <
+              Date.now() - days * 86_400_000
         )
         .map(run => run.id);
       const deleted = new Set(ids);
@@ -513,9 +523,9 @@ export function createTransactionView(
         throw new Error('Not an engine-cancelled fan-out child');
       run.status = 'running';
       run.completed_at = null;
-      run.started_at = new Date();
+      run.active_phase_started_at = new Date();
       run.metadata[EXECUTION_CLAIM_METADATA_KEY] = crypto.randomUUID();
-      run.last_activity_at = new Date();
+      run.last_activity_at = run.active_phase_started_at;
       delete run.metadata[CANCELLED_REASON_METADATA_KEY];
       Reflect.deleteProperty(run.metadata, TOOL_CALL_ATTENTION_METADATA_KEY);
       for (let index = events.length - 1; index >= 0; index--) {

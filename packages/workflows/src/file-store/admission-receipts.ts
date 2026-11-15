@@ -17,12 +17,14 @@ import {
   SourceReceiptDigestConflictError,
   compareCodeUnits,
   compareStartReceipts,
+  preparedBindingStart,
   validateStartReceiptLimit,
   type DamagedStartReceipt,
   type IResourceStartStore,
   type StartBindingInspection,
 } from '../resource-start-store';
 import { readJson } from './commit';
+import { FileStoreUnsupportedError } from './errors';
 import { disposition, documentPaths, type AdmissionTransaction } from './admission-transaction';
 
 export type AdmissionWrite = <T>(
@@ -72,6 +74,7 @@ export function createReceiptOperations(
     acceptStartReceipt: input =>
       write(async tx => {
         sourceReceiptAcceptanceSchema.parse(input);
+        if (input.receipt.itemKey !== undefined) throw new FileStoreUnsupportedError('items');
         const deliveryPath =
           input.receipt.deliveryId === null
             ? null
@@ -133,6 +136,7 @@ export function createReceiptOperations(
         return row
           ? {
               ...receiptFieldsSchema.parse(row),
+              itemKey: null,
               outcome: row.outcome,
               reason: row.reason,
               bindings: await Promise.all(
@@ -210,14 +214,7 @@ export function createReceiptOperations(
       write(async (tx, runs) => {
         const item = await tx.owned(input);
         if (!item?.intent) return null;
-        const result = await tx.admit(
-          {
-            ...item.intent,
-            launch: input.launch,
-            receipt: { receiptId: input.receiptId, bindingId: input.bindingId },
-          },
-          runs
-        );
+        const result = await tx.admit(preparedBindingStart(item.intent, input), runs);
         item.status = 'complete';
         item.error = null;
         return result;

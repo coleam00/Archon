@@ -928,7 +928,10 @@ describe('WorktreeProvider against real git', () => {
       const error = await provider.create(request).catch((error: unknown) => error);
       if (!(error instanceof Error)) throw new Error('Expected hook failure');
       expect(error.message).toContain('unowned-hook-failure');
-      expect(classifyIsolationError(error)).toContain('not owned by this attempt');
+      const notice = (error as Error & { cleanupFailure?: string }).cleanupFailure ?? '';
+      expect(notice).toContain(worktreePath);
+      expect(notice).not.toMatch(/\bremove\b/i);
+      if (reason === 'another-attempt') expect(notice).toContain('another-attempt');
       expect(await registeredWorktrees()).toContain(resolve(worktreePath));
       expect(await lockReasonOf(worktreePath)).toBe(
         reason === 'unlocked' ? null : 'archon: worktree setup in progress: another-attempt'
@@ -1084,9 +1087,14 @@ describe('WorktreeProvider against real git', () => {
     expect(existsSync(otherPath)).toBe(true);
   });
 
-  test.each(['unlocked', 'another-attempt'])(
-    'a fork add that loses its setup lock (%s) preserves the original error',
-    async reason => {
+  const otherAttempt = '0b1ee8da-1111-4222-8333-444455556666';
+  test.each([
+    { lock: null },
+    { lock: 'operator lock' },
+    { lock: `archon: worktree setup in progress: ${otherAttempt}` },
+  ])(
+    'a fork add whose setup lock becomes $lock keeps the checkout and never advises removing it',
+    async ({ lock }) => {
       const remotePath = join(root, 'remote.git');
       await git(root, 'init', '--bare', '-q', remotePath);
       await git(repoPath, 'remote', 'add', 'origin', remotePath);
@@ -1102,8 +1110,7 @@ describe('WorktreeProvider against real git', () => {
         isForkPR: true,
       };
       const path = provider.getWorktreePath(attempt, provider.generateBranchName(attempt));
-      const changeLock =
-        reason === 'unlocked' ? 'rm "$gd/locked"' : 'printf "operator lock" > "$gd/locked"';
+      const changeLock = lock === null ? 'rm "$gd/locked"' : `printf "${lock}" > "$gd/locked"`;
       await writeFile(
         join(repoPath, '.git', 'hooks', 'post-checkout'),
         `#!/bin/sh\ngd=$(git rev-parse --absolute-git-dir)\n${changeLock}\necho lock-lost-hook-failure >&2\nexit 42\n`,
@@ -1112,10 +1119,16 @@ describe('WorktreeProvider against real git', () => {
       const error = await provider.create(attempt).catch((error: unknown) => error);
       if (!(error instanceof Error)) throw new Error('Expected hook failure');
       expect(error.message).toContain('lock-lost-hook-failure');
-      expect(classifyIsolationError(error)).toContain('was left behind');
+      // The path is no longer provably this attempt's, so the notice names it without
+      // telling anyone to remove what another run may be using.
+      const notice = (error as Error & { cleanupFailure?: string }).cleanupFailure ?? '';
+      expect(classifyIsolationError(error)).toContain(notice);
+      expect(notice).toContain(path);
+      expect(notice).not.toMatch(/\bremove\b/i);
+      if (lock?.includes(otherAttempt)) expect(notice).toContain(otherAttempt);
       expect(await registeredWorktrees()).toContain(resolve(path));
       expect(existsSync(path)).toBe(true);
-      expect(await lockReasonOf(path)).toBe(reason === 'unlocked' ? null : 'operator lock');
+      expect(await lockReasonOf(path)).toBe(lock);
     }
   );
 

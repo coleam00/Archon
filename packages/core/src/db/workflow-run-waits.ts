@@ -352,7 +352,7 @@ export async function answerAttentionWait(
         );
       if (!answered) return { answered: false };
       await writeWaitContext(query, id, answered);
-      await insertWorkflowEvent(query, waitAnsweredEvent(id, answered));
+      await insertWorkflowEvent(query, waitAnsweredEvent(id, answered, write.fromRun));
       return { answered: true };
     });
   } catch (error) {

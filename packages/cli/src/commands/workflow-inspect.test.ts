@@ -870,6 +870,26 @@ describe('workflowGetCommand', () => {
     stdoutSpy.mockRestore();
   });
 
+  it('reports creation age and JSON creation time after an actual store resume', async () => {
+    const { createInMemoryWorkflowStore, createInMemoryWorkflowHostStore } = await import(
+      '../test-support/workflow-store'
+    );
+    const store = createInMemoryWorkflowStore(createInMemoryWorkflowHostStore());
+    const run = await store.createWorkflowRun({ workflow_name: 'age', user_message: '' });
+    const creation = new Date(Date.now() - 4 * 3600_000);
+    await store.backdate(run.id, { started_at: creation });
+    await store.failWorkflowRun(run.id, 'failed');
+    await store.resumeWorkflowRun(run.id);
+    const host = createTestWorkflowHost();
+    host.deps.store = store;
+    expect(await workflowGetCommand(host, run.id, false)).toBe(0);
+    expect(consoleSpy.mock.calls.map((call: unknown[]) => String(call[0])).join('\n')).toMatch(
+      /Age:\s+4h/
+    );
+    expect(await workflowGetCommand(host, run.id, true)).toBe(0);
+    expect(JSON.parse(firstJsonPayload(stdoutSpy)).started_at).toBe(creation.toISOString());
+  });
+
   it.each([
     [false, false, false],
     [true, false, false],

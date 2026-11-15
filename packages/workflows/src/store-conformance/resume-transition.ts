@@ -1,5 +1,6 @@
 import { expect, test } from 'bun:test';
 import { executionClaim, WorkflowNotResumableError } from '../store';
+import { workflowPathPriorityTime } from '../workflow-path-lock';
 import type { WorkflowStoreHarness } from '../store-conformance';
 
 const approval = { nodeId: 'review', message: 'Choose', type: 'approval' as const };
@@ -12,6 +13,104 @@ const schedule = {
 };
 
 export function describeResumeTransitionConformance(getHarness: () => WorkflowStoreHarness): void {
+  test('a resumed old run yields to the current checkout holder and keeps creation listing order', async () => {
+    const { store, backdate } = getHarness();
+    const path = '/timestamp-priority';
+    const old = await store.createWorkflowRun({
+      workflow_name: 'old',
+      user_message: '',
+      working_path: path,
+    });
+    await store.claimPendingWorkflowRun(old.id);
+    await store.failWorkflowRun(old.id, 'failed');
+    const creation = new Date(Date.now() - 4 * 3600_000);
+    await backdate(old.id, { started_at: creation });
+    const holder = await store.createWorkflowRun({
+      workflow_name: 'holder',
+      user_message: '',
+      working_path: path,
+    });
+    await store.claimPendingWorkflowRun(holder.id);
+    await backdate(holder.id, { started_at: new Date(creation.getTime() + 3600_000) });
+    for (let attempt = 0; attempt < 2; attempt++) {
+      const resumed = await store.resumeWorkflowRun(old.id);
+      expect(resumed.started_at).toEqual(creation);
+      const current = await store.getWorkflowRun(holder.id);
+      if (!current) throw new Error('Missing holder');
+      expect(
+        (
+          await store.getActiveWorkflowRunByPath(path, {
+            id: old.id,
+            startedAt: workflowPathPriorityTime(resumed),
+          })
+        )?.id
+      ).toBe(holder.id);
+      expect(
+        await store.getActiveWorkflowRunByPath(path, {
+          id: holder.id,
+          startedAt: workflowPathPriorityTime(current),
+        })
+      ).toBeNull();
+      expect((await store.getActiveWorkflowRunByPath(path))?.id).toBe(holder.id);
+      expect(
+        (await store.listWorkflowRuns()).runs
+          .filter(run => [old.id, holder.id].includes(run.id))
+          .map(run => run.id)
+      ).toEqual([holder.id, old.id]);
+      expect(resumed.active_phase_started_at?.getTime()).toBeGreaterThan(
+        creation.getTime() + 3600_000
+      );
+      await store.failWorkflowRun(old.id, 'again');
+    }
+  });
+
+  test('path priority agrees on phase ties, milliseconds, null phases and newer legacy-writer creation times', async () => {
+    const { store, backdate } = getHarness();
+    const path = '/priority-compatibility';
+    const runs = await Promise.all(
+      [0, 1].map(() =>
+        store.createWorkflowRun({ workflow_name: 'priority', user_message: '', working_path: path })
+      )
+    );
+    runs.sort((a, b) => (a.id < b.id ? -1 : 1));
+    const [a, b] = runs;
+    if (!a || !b) throw new Error('Missing fixture');
+    for (const run of runs) await store.claimPendingWorkflowRun(run.id);
+    const creation = new Date('2020-01-01');
+    const phase = new Date('2021-01-01T00:00:00.123Z');
+    for (const run of runs)
+      await backdate(run.id, { started_at: creation, active_phase_started_at: phase });
+    const check = async (first: string, second: string) => {
+      const earlier = await store.getWorkflowRun(first);
+      const later = await store.getWorkflowRun(second);
+      if (!earlier || !later) throw new Error('Missing priority fixture');
+      expect((await store.getActiveWorkflowRunByPath(path))?.id).toBe(first);
+      expect(
+        await store.getActiveWorkflowRunByPath(path, {
+          id: first,
+          startedAt: workflowPathPriorityTime(earlier),
+        })
+      ).toBeNull();
+      expect(
+        (
+          await store.getActiveWorkflowRunByPath(path, {
+            id: second,
+            startedAt: workflowPathPriorityTime(later),
+          })
+        )?.id
+      ).toBe(first);
+    };
+    await backdate(a.id, { started_at: new Date('2019-01-01') });
+    await check(a.id, b.id);
+    await backdate(a.id, { active_phase_started_at: new Date(phase.getTime() + 1) });
+    await check(b.id, a.id);
+    await backdate(a.id, { active_phase_started_at: null });
+    await check(a.id, b.id);
+    // An old writer resets started_at without knowing about the phase column.
+    await backdate(a.id, { started_at: new Date('2022-01-01'), active_phase_started_at: phase });
+    await check(b.id, a.id);
+  });
+
   test.each([
     { status: 'failed', error: 'original error' },
     { status: 'failed', error: '' },
@@ -93,9 +192,13 @@ export function describeResumeTransitionConformance(getHarness: () => WorkflowSt
       await store.updateWorkflowRun(run.id, {
         metadata: { ...cleared, scheduled_resume: scheduled, keep: { nested: true } },
       });
-      await harness.backdate(run.id, { last_activity_at: new Date('2000-01-01') });
+      const creation = new Date('2000-01-01');
+      await harness.backdate(run.id, { started_at: creation, last_activity_at: creation });
       const before = await store.listWorkflowEvents(run.id);
       const resumed = await store.resumeWorkflowRun(run.id);
+      expect(resumed.started_at).toEqual(creation);
+      expect(resumed.active_phase_started_at?.getTime()).toBeGreaterThan(creation.getTime());
+      expect(resumed.last_activity_at).toEqual(resumed.active_phase_started_at);
       for (const key of Object.keys(cleared)) expect(resumed.metadata).not.toHaveProperty(key);
       expect(resumed.metadata.keep).toEqual({ nested: true });
       expect(executionClaim(resumed.metadata)).not.toBeNull();
