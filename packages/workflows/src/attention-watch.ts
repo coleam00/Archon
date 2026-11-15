@@ -14,6 +14,7 @@ import { createLogger } from '@archon/paths';
 import {
   attentionQueueItemForRun,
   attentionQueueItemSchema,
+  isHeldByRun,
   isInAttentionScope,
   listAttentionQueue,
   matchesAttentionLabels,
@@ -23,6 +24,7 @@ import {
   type AttentionQueueItem,
   type AttentionQueueSource,
   type ProjectRef,
+  type RunAttentionQueueItem,
 } from './attention-queue';
 import type {
   AttentionWatch,
@@ -131,6 +133,16 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
       occurrence: z.string().nullable(),
       /** The item closed without an answer: resumed, ended, deleted or replaced. */
       reason: z.literal('withdrawn'),
+    }),
+    z.object({
+      type: z.literal('resolved'),
+      ...itemLineBase,
+      occurrence: z.string().nullable(),
+      /**
+       * An item no run holds is no longer in the list. That is all the stream observed:
+       * it does not know whether the item was answered or withdrawn.
+       */
+      reason: z.literal('no_longer_listed'),
     }),
   ]),
   z.object({
@@ -284,8 +296,8 @@ export async function watchAttentionQueue(
   /** The items this stream holds open, by ref. */
   const open = new Map<string, AttentionQueueItem>();
   /** The open item `runId` holds; a run holds at most one. */
-  const heldBy = (runId: string): AttentionQueueItem | undefined => {
-    for (const item of open.values()) if (item.run?.id === runId) return item;
+  const heldBy = (runId: string): RunAttentionQueueItem | undefined => {
+    for (const item of open.values()) if (isHeldByRun(item) && item.run.id === runId) return item;
     return undefined;
   };
   let follower: WorkflowEventFeedFollower | undefined;
@@ -545,26 +557,21 @@ export async function watchAttentionQueue(
   };
 
   const resolve = async (
-    prev: AttentionQueueItem,
+    prev: RunAttentionQueueItem,
     cursor: WorkflowEventCursor,
     run: WorkflowRun | null
   ): Promise<void> => {
+    const runId = prev.run.id;
     const occurrence = occurrenceOf(prev);
-    // Only a run's pause records an answer, so an item no run holds closes as withdrawn.
-    const pause =
-      prev.run === undefined || occurrence === null
-        ? undefined
-        : { runId: prev.run.id, occurrence };
     const fromRow = run === null ? undefined : rowResolution(run, occurrence);
-    const origin =
-      pause === undefined ? undefined : answers.get(answerKey(pause.runId, pause.occurrence));
+    const origin = occurrence === null ? undefined : answers.get(answerKey(runId, occurrence));
     const answered: Answered | undefined =
       fromRow ??
       (origin !== undefined ? { reason: 'answered', ...origin, answeredAt: null } : undefined);
     const resolution: Resolution =
-      answered === undefined || pause === undefined
+      answered === undefined || occurrence === null
         ? { reason: 'withdrawn' }
-        : { ...answered, answeredFromRun: await answeringRun(pause.runId, pause.occurrence) };
+        : { ...answered, answeredFromRun: await answeringRun(runId, occurrence) };
     await emit({
       type: 'resolved',
       cursor,
@@ -599,7 +606,8 @@ export async function watchAttentionQueue(
 
   /**
    * Items no run holds commit no event to the feed, so they are read again each time the
-   * tail reaches the head and compared with the open set.
+   * tail reaches the head and compared with the open set. One that is gone closes as
+   * `no_longer_listed`: the stream saw it leave the list, and nothing it reads says why.
    */
   const reconcileItemsWithoutRun = async (): Promise<void> => {
     if (source.itemsWithoutRun === undefined) return;
@@ -608,7 +616,17 @@ export async function watchAttentionQueue(
       (await source.itemsWithoutRun()).filter(inQuery).map(item => [item.ref, item])
     );
     for (const prev of [...open.values()])
-      if (prev.run === undefined && !now.has(prev.ref)) await resolve(prev, cursor, null);
+      if (!isHeldByRun(prev) && !now.has(prev.ref)) {
+        await emit({
+          type: 'resolved',
+          cursor,
+          project: prev.project,
+          ...closedItemFields(prev),
+          occurrence: null,
+          reason: 'no_longer_listed',
+        });
+        open.delete(prev.ref);
+      }
     for (const item of now.values())
       if (!isDeepStrictEqual(open.get(item.ref), item)) await emitOpen(item, cursor, false);
   };

@@ -1710,7 +1710,14 @@ test('an item no run holds is listed, read by its ref, streamed and resolved, wi
   const none = { project, workflow: null, parentRunId: null };
   expect(stream.lines.filter(about('ask:1'))).toEqual([
     { type: 'attention', cursor, snapshot: true, ...none, item: ask },
-    { type: 'resolved', cursor, ...none, ref: 'ask:1', occurrence: null, reason: 'withdrawn' },
+    {
+      type: 'resolved',
+      cursor,
+      ...none,
+      ref: 'ask:1',
+      occurrence: null,
+      reason: 'no_longer_listed',
+    },
   ]);
   expect(stream.lines.filter(about('ask:2'))).toEqual([
     { type: 'attention', cursor, snapshot: false, ...none, item: later },

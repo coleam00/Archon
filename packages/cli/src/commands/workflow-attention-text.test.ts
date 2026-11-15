@@ -162,7 +162,7 @@ test('an item no run holds is named by its ref and offers no run command', () =>
       workflow: null,
       parentRunId: null,
       occurrence: null,
-      reason: 'withdrawn',
+      reason: 'no_longer_listed',
     })
-  ).toBe('Item ask:1 no longer needs attention.');
+  ).toBe('Item ask:1 is no longer listed.');
 });

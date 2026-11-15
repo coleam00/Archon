@@ -200,6 +200,18 @@ export function noticeText(notice: Pick<WorkflowNotice, 'at' | 'labels' | 'text'
   return [at, notice.text, ...(labels.length > 0 ? [labels.join(' ')] : [])].join('  ');
 }
 
+/** How an item closed, as the rest of the sentence that names it. */
+function closedText(line: Extract<AttentionStreamLine, { type: 'resolved' }>): string {
+  switch (line.reason) {
+    case 'answered':
+      return `was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}${answererText(line.answeredBy)}${line.answeredFromRun === null ? '' : ` from run ${line.answeredFromRun.runId} (node ${line.answeredFromRun.nodePath})`}.`;
+    case 'withdrawn':
+      return 'no longer needs attention.';
+    case 'no_longer_listed':
+      return 'is no longer listed.';
+  }
+}
+
 /** The text for one stream line; none for a bookmark. */
 export function attentionStreamText(
   line: Exclude<AttentionStreamLine, { type: 'error' }>,
@@ -212,11 +224,7 @@ export function attentionStreamText(
         ...attentionItemLines(line.item, 'brief'),
       ];
     case 'resolved':
-      return [
-        (line.reason === 'answered'
-          ? `${closedItemName(line)} was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}${answererText(line.answeredBy)}${line.answeredFromRun === null ? '' : ` from run ${line.answeredFromRun.runId} (node ${line.answeredFromRun.nodePath})`}.`
-          : `${closedItemName(line)} no longer needs attention.`) + runContextText(line),
-      ];
+      return [`${closedItemName(line)} ${closedText(line)}${runContextText(line)}`];
     case 'unmatched':
       return [`${closedItemName(line)} no longer matches the label filter.${runContextText(line)}`];
     case 'terminal':
