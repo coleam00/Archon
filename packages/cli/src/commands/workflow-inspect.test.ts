@@ -1587,6 +1587,25 @@ describe('workflowGetCommand', () => {
     expect(consoleSpy).toHaveBeenCalledWith('  Authored outcome: failed');
   });
 
+  it('prints an empty-string named outcome', async () => {
+    const workflowDb = await import('@archon/core/db/workflows');
+    (workflowDb.getWorkflowRun as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'run-empty-outcome',
+      checkout_baseline: null,
+      workflow_name: 'review',
+      status: 'completed',
+      outcome: null,
+      completed_outcome: '',
+      working_path: '/tmp/wt',
+      started_at: new Date(),
+      metadata: {},
+    });
+
+    await workflowGetCommand(createTestWorkflowHost(), 'run-empty-outcome');
+
+    expect(consoleSpy).toHaveBeenCalledWith('  Authored outcome: ');
+  });
+
   it('emits the raw run as a single clean JSON object', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const metadata = {

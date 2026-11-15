@@ -718,5 +718,5 @@ function authoredOutcome(
   run: Pick<WorkflowRun, 'status' | 'outcome' | 'completed_outcome'>
 ): string {
   const outcome = displayedRunOutcome(run);
-  return outcome ? ` · authored outcome: ${outcome}` : '';
+  return outcome !== null ? ` · authored outcome: ${outcome}` : '';
 }

@@ -510,6 +510,27 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('Active nodes: parallel-a, parallel-b');
       });
 
+      test('shows no outcome for an active workflow, even one an older binary wrote early', async () => {
+        mockListDashboardRuns.mockResolvedValueOnce({
+          runs: [
+            makeDashboardRun({
+              id: 'run-paused',
+              workflow_name: 'review',
+              status: 'paused',
+              outcome: 'succeeded',
+            }),
+          ],
+          total: 1,
+          counts: { ...EMPTY_DASHBOARD_COUNTS, all: 1, paused: 1 },
+        });
+
+        const result = await handleCommand(baseConversation, '/workflow status', operator);
+
+        expect(result.message).toContain('review');
+        expect(result.message).toContain('(paused)');
+        expect(result.message).not.toContain('Authored outcome');
+      });
+
       test('should direct an attention wait from before answers to resume', async () => {
         mockListDashboardRuns.mockResolvedValueOnce({
           runs: [

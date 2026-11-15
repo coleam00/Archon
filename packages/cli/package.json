@@ -255,6 +255,9 @@
       "src/commands/workflow-attention-watch.integration.spec.ts"
     ],
     [
+      "src/commands/workflow-completed-outcome.integration.spec.ts"
+    ],
+    [
       "src/commands/workflow-interrupt.integration.spec.ts"
     ],
     [

@@ -311,8 +311,8 @@ async function handleList(ctx: ManageRunContext): Promise<string> {
   const lines = runs.map(r => {
     const activeNodes =
       r.active_nodes.length > 0 ? ` · active node(s): ${r.active_nodes.join(', ')}` : '';
-    const outcome = displayedRunOutcome(r) ?? '';
-    return `- ${r.id.slice(0, 8)} · ${r.workflow_name} · ${r.status}${outcome && ` · authored outcome: ${outcome}`}${activeNodes}`;
+    const outcome = displayedRunOutcome(r);
+    return `- ${r.id.slice(0, 8)} · ${r.workflow_name} · ${r.status}${outcome !== null ? ` · authored outcome: ${outcome}` : ''}${activeNodes}`;
   });
   return `${runs.length.toString()} run(s) (most recent first):\n${lines.join('\n')}`;
 }
