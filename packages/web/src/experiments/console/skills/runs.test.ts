@@ -22,6 +22,7 @@ describe('run responses', () => {
       run: {
         ...detailFixture.run,
         outcome: 'succeeded',
+        completed_outcome: 'succeeded',
         terminal_record: terminalRecord(
           {
             availability: 'available',

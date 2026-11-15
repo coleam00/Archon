@@ -20,6 +20,12 @@ describe('RunOutcomeBadge', () => {
     expect(html).toContain('Outcome: failed');
   });
 
+  test('labels a named outcome', () => {
+    const html = renderToStaticMarkup(<RunOutcomeBadge outcome="built" />);
+    expect(html).toContain('Authored outcome: built');
+    expect(html).toContain('Outcome: built');
+  });
+
   test('renders nothing for an undeclared outcome', () => {
     expect(renderToStaticMarkup(<RunOutcomeBadge outcome={null} />)).toBe('');
   });

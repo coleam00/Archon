@@ -3,7 +3,8 @@ import type { RunStatus } from '../lib/run-status';
 import type { components } from '@/lib/api.generated';
 
 export type RunOrigin = 'web' | 'cli' | 'slack' | 'telegram' | 'discord' | 'github' | 'unknown';
-export type RunOutcome = components['schemas']['WorkflowRunOutcome'];
+/** How a run completed: `succeeded` or `failed` for the boolean form, or a named outcome. */
+export type RunOutcome = components['schemas']['WorkflowRun']['completed_outcome'];
 type WorkflowRunMetadata = components['schemas']['WorkflowRunMetadata'];
 type WorkflowApproval = NonNullable<WorkflowRunMetadata['approval']>;
 type WorkflowWait = NonNullable<WorkflowRunMetadata['wait']>;
@@ -135,6 +136,7 @@ type RawWorkflowRun = Pick<
       WorkflowRun,
       | 'conversation_id'
       | 'outcome'
+      | 'completed_outcome'
       | 'completed_at'
       | 'active_phase_started_at'
       | 'working_path'
@@ -239,6 +241,16 @@ function readRunProvenance(raw: RawWorkflowRun) {
   };
 }
 
+/**
+ * The rule `displayedRunOutcome` in @archon/workflows owns: a run completed by a binary
+ * from before `completed_outcome` has only `outcome`, and a run that did not complete
+ * shows none, though an older binary may have written `outcome` while it ran.
+ */
+function readOutcome(raw: RawWorkflowRun): RunOutcome {
+  if (raw.completed_outcome) return raw.completed_outcome;
+  return raw.status === 'completed' ? (raw.outcome ?? null) : null;
+}
+
 export function toRun(raw: RawWorkflowRun): Run {
   const activeNodes = Array.isArray(raw.active_nodes)
     ? raw.active_nodes.filter(nodeId => typeof nodeId === 'string' && nodeId.length > 0)
@@ -258,7 +270,7 @@ export function toRun(raw: RawWorkflowRun): Run {
     status: normalizeStatus(raw.status),
     ownerObservation: raw.owner_observation,
     attention: raw.attention ?? null,
-    outcome: raw.outcome ?? null,
+    outcome: readOutcome(raw),
     terminalRecord: raw.terminal_record ?? null,
     startedAt: raw.started_at,
     activePhaseStartedAt: raw.active_phase_started_at ?? null,
