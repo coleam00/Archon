@@ -73,6 +73,7 @@
       "src/commands/setup-github-authentication.test.ts",
       "src/commands/setup-env.test.ts",
       "src/commands/setup-provider-auth.test.ts",
+      "src/commands/setup-pi-credential.test.ts",
       "src/commands/skill.test.ts",
       "src/commands/doctor.test.ts",
       "src/commands/doctor-assistant-login.test.ts",
