@@ -7,7 +7,7 @@
  * one grammar instead of hand-written copies that drift. The web app
  * cannot import it — `@archon/web` must never depend on `@archon/workflows`
  * (a server package), and `api.generated.d.ts` is type-only so it cannot carry
- * a runtime value. AGENTS.md records the same exception for `TRIGGER_RULES`.
+ * a runtime value.
  *
  * So this is a deliberate copy, kept honest two ways: it is the ONLY copy in
  * `packages/web` (both builders and the id-rename check import it), and
