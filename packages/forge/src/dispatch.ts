@@ -9,7 +9,9 @@ import {
   mutationAttempt,
   PR_VIEW_ANY_STATE,
   RESOLVE_SUBJECT,
+  temporaryErrorKinds,
   type ForgeError,
+  type ForgeMutationRequest,
   type ForgeRequest,
   type ForgeResponse,
   type PluginMetadata,
@@ -150,10 +152,13 @@ interface DispatchOptions {
   timeoutMs?: number;
   maxOutputBytes?: number;
   signal?: AbortSignal;
+  /** How the host waits between repeats of a read; tests replace it so they do not sleep. */
+  sleep?: (ms: number) => Promise<unknown>;
 }
 
 interface Dispatched {
   response: ForgeResponse;
+  retries?: number;
   plugin: ForgeDispatchResult['plugin'];
   credentialSource?: string;
 }
@@ -172,9 +177,9 @@ export async function dispatchForge(
 ): Promise<ForgeDispatchResult> {
   const started = performance.now();
   const request = forgeRequestSchema.parse(input);
-  const { response, plugin, credentialSource } = await dispatch(request, options);
+  const { response, plugin, credentialSource, retries = 0 } = await dispatch(request, options);
   return {
-    ...finish(request, plugin, response, started),
+    ...finish(request, plugin, named(request, response, retries), retries, started),
     ...(credentialSource ? { credentialSource } : {}),
   };
 }
@@ -208,10 +213,57 @@ async function dispatch(request: ForgeRequest, options: DispatchOptions): Promis
     return { response: errorResponse(request, credentialFailure(credential)), plugin: identity };
   }
   const selected = credential.kind === 'selected' ? credential : undefined;
+  const run = (operation: ForgeRequest): Promise<ForgeResponse> =>
+    runOperation(operation, plugin, selected?.token, hosts, options);
+  // A mutation runs once: a temporary failure can arrive after the forge applied it.
+  const outcome = isMutationRequest(request)
+    ? { response: await run(request) }
+    : await retryRead(request, run, options.sleep ?? Bun.sleep);
   return {
-    response: await runOperation(request, plugin, selected?.token, hosts, options),
+    ...outcome,
     plugin: identity,
     credentialSource: selected?.source,
+  };
+}
+
+/** The waits before each repeat of a read; their count is the number of repeats. */
+const READ_RETRY_DELAYS_MS = [1_000, 2_000, 4_000];
+
+/**
+ * Run a read, repeating it from its start while it fails with a temporary kind. A read
+ * changes nothing, so a repeat is safe. The request type excludes every mutation, so a
+ * write cannot be passed here.
+ */
+async function retryRead(
+  read: Exclude<ForgeRequest, ForgeMutationRequest>,
+  run: (read: Exclude<ForgeRequest, ForgeMutationRequest>) => Promise<ForgeResponse>,
+  sleep: (ms: number) => Promise<unknown>
+): Promise<{ response: ForgeResponse; retries: number }> {
+  for (let retries = 0; ; retries++) {
+    const response = await run(read);
+    const delay = READ_RETRY_DELAYS_MS[retries];
+    const temporary =
+      !response.ok && temporaryErrorKinds.some(kind => kind === response.error.kind);
+    if (!temporary || delay === undefined) return { response, retries };
+    await sleep(delay);
+  }
+}
+
+/** A failure names its operation and subject, so its reader knows what it was about. */
+function named(request: ForgeRequest, response: ForgeResponse, retries: number): ForgeResponse {
+  if (response.ok) return response;
+  const target = requestTarget(request);
+  const repo = target && ('repo' in target ? target.repo : target);
+  const subject = repo
+    ? ` on ${repo.host}/${repo.path}${target && 'number' in target ? `#${String(target.number)}` : ''}`
+    : '';
+  const repeated = retries > 0 ? `, retried ${String(retries)} times` : '';
+  return {
+    ...response,
+    error: {
+      ...response.error,
+      message: `${response.error.message} (${request.op}${subject}${repeated})`,
+    },
   };
 }
 
@@ -458,6 +510,7 @@ function finish(
   request: ForgeRequest,
   plugin: ForgeDispatchResult['plugin'],
   response: ForgeResponse,
+  retries: number,
   started: number
 ): ForgeDispatchResult {
   const audit = forgeOperationAuditSchema.parse({
@@ -466,6 +519,7 @@ function finish(
     target: requestTarget(request, response),
     plugin,
     result: forgeAuditResponse(response),
+    retries,
     durationMs: Math.max(0, performance.now() - started),
   });
   return { response, plugin, audit };

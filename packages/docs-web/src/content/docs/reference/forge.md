@@ -89,6 +89,16 @@ With `"web": true`, `resolve` reads the forge's web URL of an issue or a pull re
 
 Exit 0 means the operation succeeded. Exit 1 means it failed. Exit 2 means the operation returned a response but its run audit could not be persisted. Stdout retains that response, which may be a success or a failed write with its mutation outcome; read it before retrying or reconciling, because exit 2 alone does not say whether a write happened.
 
+### Temporary failures and read retries
+
+Two error kinds say a failure is about the forge at that moment, not about the request. `unavailable` means the forge did not answer or answered that it is failing. `rate_limited` means the forge is limiting the caller. A plugin sets them from a status, a documented header or an error code, never from message text. The GitHub plugin reports `unavailable` for a 5xx answer or a request that got no answer, and `rate_limited` for a 429, for a 403 carrying `retry-after` or `x-ratelimit-remaining: 0`, and for a GraphQL `RATE_LIMITED` error. A 403 with neither header stays `authorization`: only its message says "rate limit", and message text is not read.
+
+The host repeats a read that fails with either kind, from its start, up to three times, waiting 1, 2 and 4 seconds. The audit event records the count as `retries`. A read that still fails keeps its kind. The host never repeats a write: a temporary failure can arrive after the forge applied it, so a failed write runs once and reports its `mutation.outcome`.
+
+Every failure message ends with the operation and what it was about, such as `(pr.view on github.com/owner/repository#42, retried 3 times)`.
+
+A host released before these kinds reads them as `invalid_response`, and reports a write that failed with one as `outcome_unknown`. Update the host before, or together with, an installed GitHub plugin that sets them. A plugin that sets neither kind keeps working, and its reads are not retried.
+
 ### Check forge access before a run spends
 
 ```sh
@@ -275,7 +285,7 @@ On Windows, discovered executables must have an `.exe` extension. `.cmd` and `.b
 
 The CLI sets `ARCHON_CLI_COMMAND` at startup to a JSON argv array for the install's CLI: the compiled CLI executable, or the Bun runtime and CLI source entry in a source checkout. A source server also publishes the source CLI command. A compiled server launched by `archon serve` requires and preserves the launching CLI's value instead of publishing its own executable. Runs launched from the CLI, the Web UI or a chat or forge adapter therefore see the same CLI command. Bundled scripts append command arguments without shell parsing. An SDK host must supply its own argv array. A container execution does not receive the variable, because a host binary path is not assumed to exist in a container.
 
-When `WORKFLOW_ID` is present, the CLI persists an `integration_operation` event through its database host. The forge payload retains operation correlation, qualified target, plugin identity/version, result and duration. Audit records keep identity and content digests only: the title and body a view operation returned, and each review, thread and conversation comment body, are replaced by a digest and a byte count, so authored content never lands in the run's durable event log. The engine does not interpret the forge payload. The CLI reports persistence failure separately from the operation's observed outcome.
+When `WORKFLOW_ID` is present, the CLI persists an `integration_operation` event through its database host. The forge payload retains operation correlation, qualified target, plugin identity/version, result, the number of read retries and duration. Audit records keep identity and content digests only: the title and body a view operation returned, and each review, thread and conversation comment body, are replaced by a digest and a byte count, so authored content never lands in the run's durable event log. The engine does not interpret the forge payload. The CLI reports persistence failure separately from the operation's observed outcome.
 
 ## Work-item writes
 

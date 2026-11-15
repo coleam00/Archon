@@ -25,12 +25,6 @@ export class GitHubError extends Error {
   }
 }
 
-/**
- * A failure that says nothing about the request itself: GitHub answered 5xx, or
- * nothing answered at all. Repeating a read that hit one may succeed.
- */
-export class TransientGitHubError extends GitHubError {}
-
 export function repositoryPath(path: string): { owner: string; repo: string } | null {
   const parts = path.replace(/^\/+|\/+$/g, '').split('/');
   if (parts.length !== 2) return null;
@@ -96,11 +90,9 @@ export async function githubSend(
       },
     });
   } catch (cause) {
-    throw new TransientGitHubError(
-      { kind: 'forge_error', message: 'GitHub API request failed' },
-      false,
-      { cause }
-    );
+    throw new GitHubError({ kind: 'unavailable', message: 'GitHub API request failed' }, false, {
+      cause,
+    });
   }
 }
 
@@ -185,11 +177,13 @@ export async function githubGraphql(
     const types = new Set(parsed.errors.map(error => error.type));
     throw new GitHubError(
       {
-        kind: types.has('NOT_FOUND')
-          ? 'not_found'
-          : types.has('FORBIDDEN') || types.has('INSUFFICIENT_SCOPES')
-            ? 'authorization'
-            : 'forge_error',
+        kind: types.has('RATE_LIMITED')
+          ? 'rate_limited'
+          : types.has('NOT_FOUND')
+            ? 'not_found'
+            : types.has('FORBIDDEN') || types.has('INSUFFICIENT_SCOPES')
+              ? 'authorization'
+              : 'forge_error',
         message: `GitHub GraphQL refused the request: ${parsed.errors[0]?.message ?? 'unknown error'}`,
       },
       true
@@ -284,17 +278,32 @@ export function githubErrorDetail(cause: unknown): ForgeError {
   };
 }
 
+/**
+ * GitHub answers a rate limit with 429, or with 403 carrying `retry-after` or an
+ * exhausted `x-ratelimit-remaining`. A 403 with neither header is an authorization
+ * failure as far as its status and headers say.
+ */
+function rateLimited({ status, headers }: Response): boolean {
+  return (
+    status === 429 ||
+    (status === 403 && (headers.has('retry-after') || headers.get('x-ratelimit-remaining') === '0'))
+  );
+}
+
+function responseKind(response: Response): ForgeError['kind'] {
+  const { status } = response;
+  if (rateLimited(response)) return 'rate_limited';
+  if (status >= 500) return 'unavailable';
+  if (status === 404) return 'not_found';
+  if (status === 401 || status === 403) return 'authorization';
+  if (status === 409 || status === 422) return 'conflict';
+  return 'forge_error';
+}
+
 export function githubResponseError(response: Response): GitHubError {
-  return new (response.status >= 500 ? TransientGitHubError : GitHubError)(
+  return new GitHubError(
     {
-      kind:
-        response.status === 404
-          ? 'not_found'
-          : response.status === 401 || response.status === 403
-            ? 'authorization'
-            : response.status === 409 || response.status === 422
-              ? 'conflict'
-              : 'forge_error',
+      kind: responseKind(response),
       message: `GitHub API request failed with HTTP ${String(response.status)}`,
       status: response.status,
     },
