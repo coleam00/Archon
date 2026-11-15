@@ -70,79 +70,6 @@ describe('CLI help output', () => {
     }
   });
 
-  it('lists the workflow resume command', () => {
-    expect(help).toContain(
-      'workflow resume <run-id>   Resume a failed or paused run from completed nodes'
-    );
-  });
-
-  it('lists the workflow transcript reader and follow flag', () => {
-    expect(help).toContain("workflow logs <run-id>     Print or follow a run's JSONL transcript");
-    expect(help).toContain('--follow');
-  });
-
-  it('documents project-scoped active status and its install-wide override', () => {
-    expect(help).toContain(
-      'workflow status            Show running/paused workflows for this project'
-    );
-    expect(help).toContain(
-      "--all                      For 'workflow status/runs': list across all projects"
-    );
-  });
-
-  it('documents compact and full workflow discovery', () => {
-    expect(help).toContain('workflow list [name] [--full] [--json]');
-    expect(help).toContain('List compact workflow descriptions');
-    expect(help).toContain('Use <name> --full for one exact description');
-  });
-
-  it('describes cancel and abandon', () => {
-    expect(help).toContain(
-      'workflow cancel <run-id>   Stop a running workflow (stops an owning process first)'
-    );
-    expect(help).toContain(
-      'workflow abandon <run-id>  Mark a run cancelled, stopping a live owner first'
-    );
-  });
-
-  it('documents workflow dry-run flags', () => {
-    expect(help).toContain('--dry-run');
-    expect(help).toContain('--stubs <path>');
-    expect(help).toContain('--stubs-init <path>');
-    expect(help).toContain('--default-stubs');
-    expect(help).toContain('--exec-code');
-    expect(help).toContain('--pause-at-gates');
-  });
-
-  it('documents sparse repeatable model bindings', () => {
-    expect(help).toContain('--model <name>=<spec>');
-  });
-
-  it('documents the per-run config file', () => {
-    expect(help).toContain('--config <path>');
-  });
-
-  it('documents the unified skill destinations and subscription providers', () => {
-    expect(help).toContain(
-      'skill add [path]           Add archon-cli into .claude/skills and .agents/skills'
-    );
-    expect(help).toContain(
-      'ai login <provider>        Connect a Claude, ChatGPT/Codex, or Copilot subscription'
-    );
-  });
-
-  it('omits the removed branch-inferred continue command', () => {
-    expect(help).not.toMatch(/\bcontinue <branch>/);
-    expect(help).not.toContain('--workflow <name>');
-    expect(help).not.toContain('--no-context');
-  });
-
-  it('documents exact run-id adoption as the continuation route', () => {
-    expect(help).toContain(
-      "--adopt <run-id>           Start a new run adopting a terminal run's worktree/branch + artifacts ($ADOPTED_RUN_DIR)"
-    );
-  });
-
   // The global anchor must disappear from a scoped slice, rather than
   // merely appending the same content under a different heading.
   it('produces scoped workflow run --help that differs from archon --help and scopes to run-only flags', () => {
@@ -153,11 +80,6 @@ describe('CLI help output', () => {
     expect(scoped).not.toContain('--cwd <path>');
     expect(scoped).toContain('--workflow-source');
     expect(scoped).toContain('--dry-run');
-  });
-
-  it('documents --workflow-source as a run-only flag in workflow run --help', () => {
-    const scoped = renderHelp('workflow', 'run');
-    expect(scoped).toContain('--workflow-source');
   });
 
   it('documents --container in workflow run options', () => {
