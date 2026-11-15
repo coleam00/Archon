@@ -516,6 +516,10 @@ describe('codebases', () => {
       );
 
       expect((await findCodebaseByDefaultCwd('/workspace/test-repo'))?.id).toBe('newer');
+      // The mock cannot sort, so the newest-first order is held by the query itself.
+      expect(mockQuery).toHaveBeenCalledWith(
+        'SELECT * FROM remote_agent_codebases ORDER BY created_at DESC'
+      );
     });
 
     test('should return null when codebase not found', async () => {
