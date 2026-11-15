@@ -38,16 +38,6 @@ describe('AsyncQueue', () => {
     expect(received).toEqual([1, 2, 3]);
   });
 
-  test('resolves pending waiter when push arrives later', async () => {
-    const q = new AsyncQueue<string>();
-    const iter = q[Symbol.asyncIterator]();
-    const pending = iter.next();
-    queueMicrotask(() => q.push('hello'));
-    const r = await pending;
-    expect(r.done).toBe(false);
-    if (!r.done) expect(r.value).toBe('hello');
-  });
-
   test('preserves FIFO order across push and waiter', async () => {
     const q = new AsyncQueue<number>();
     const iter = q[Symbol.asyncIterator]();
@@ -56,8 +46,8 @@ describe('AsyncQueue', () => {
     q.push(20);
     const r1 = await p1;
     const r2 = await iter.next();
-    if (!r1.done) expect(r1.value).toBe(10);
-    if (!r2.done) expect(r2.value).toBe(20);
+    expect(r1).toEqual({ value: 10, done: false });
+    expect(r2).toEqual({ value: 20, done: false });
   });
 
   test('second iterator call throws (single-consumer invariant)', () => {

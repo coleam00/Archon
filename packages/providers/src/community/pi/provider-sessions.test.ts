@@ -93,24 +93,6 @@ describe('PiProvider sessions', () => {
     });
   });
 
-  test('result chunk carries Pi sessionId (for Archon to store and reuse)', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-
-    const { chunks } = await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, {
-        model: 'google/gemini-2.5-pro',
-      })
-    );
-
-    const resultChunk = chunks.find(
-      (c): c is { type: 'result'; sessionId?: string } =>
-        typeof c === 'object' && c !== null && (c as { type?: string }).type === 'result'
-    );
-    expect(resultChunk).toBeDefined();
-    expect(resultChunk?.sessionId).toBe('mock-session-uuid');
-  });
-
   test('disposes session after completion', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());

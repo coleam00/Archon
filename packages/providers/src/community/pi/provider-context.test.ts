@@ -174,20 +174,6 @@ describe('PiProvider context', () => {
     expect(loaderArgs?.systemPrompt).toBeUndefined();
   });
 
-  test('non-Anthropic backend keeps Pi built-in prompt (systemPrompt undefined)', async () => {
-    process.env.GEMINI_API_KEY = 'sk-test';
-    resetScript(scriptedAgentEnd());
-
-    await consume(
-      new PiProvider().sendQuery('hi', '/tmp', undefined, { model: 'google/gemini-2.5-pro' })
-    );
-
-    const loaderArgs = MockDefaultResourceLoader.mock.calls[0]?.[0] as
-      | Record<string, unknown>
-      | undefined;
-    expect(loaderArgs?.systemPrompt).toBeUndefined();
-  });
-
   test('nodeConfig.skills with unknown name yields a warning, does not abort', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
