@@ -32,6 +32,7 @@ import {
 import { readComposedBindings } from '../compiled-command';
 import { transitiveDepsLookup } from '../depends-on';
 import { indexDependencies } from '../graph-plan';
+import type { IncludeCommandContent } from '../compiled-command';
 import { checkNodeReferences, priorRefIds, type DagScope } from './dag-references';
 
 /** What a nested `validateDagStructure` call inherits from the scopes around it. */
@@ -40,6 +41,7 @@ export interface DagContext {
   readonly includeAliases?: ReadonlyMap<string, string>;
   readonly eligibleResumeSources?: ReadonlyMap<string, DagNode | IncludeDirective>;
   readonly loopBodyIds?: ReadonlySet<string>;
+  readonly commandContents?: ReadonlyMap<string, IncludeCommandContent>;
 }
 
 type NodeCheck = (node: DagNode | IncludeDirective, scope: DagScope) => string | null;
@@ -70,6 +72,10 @@ interface BindingRead {
  * `loopBodyIds` is every id a `$LOOP_PREV.<id>` ref in this list may name (see
  * `priorRefIds`). Undefined outside any body, or while an id set is not yet known.
  *
+ * `commandContents` maps a command name to the body discovery read for it. A command
+ * node's body is checked for output references like an inline prompt, in the node's own
+ * scope. Without the map (a single-file parse), command bodies are not checked.
+ *
  * The checks run in a fixed order and the first error wins, so a graph with two problems
  * always reports the same one.
  */
@@ -77,7 +83,8 @@ export function validateDagStructure(
   nodes: readonly (DagNode | IncludeDirective)[],
   context: DagContext = {}
 ): string | null {
-  const { enclosingNodes, includeAliases, eligibleResumeSources, loopBodyIds } = context;
+  const { enclosingNodes, includeAliases, eligibleResumeSources, loopBodyIds, commandContents } =
+    context;
   const nodesById = indexNodeIds(nodes, enclosingNodes);
   if (typeof nodesById === 'string') return nodesById;
   const dependsOnError = checkDependsOn(nodes, nodesById);
@@ -91,6 +98,7 @@ export function validateDagStructure(
     includeAliases,
     eligibleResumeSources,
     loopBodyIds,
+    commandContents,
     transitiveDepsOf: transitiveDepsLookup(nodes),
   };
   return (
@@ -467,6 +475,7 @@ function checkLoopGroupBody(node: DagNode | IncludeDirective, scope: DagScope): 
     includeAliases: scope.includeAliases,
     eligibleResumeSources: eligible,
     loopBodyIds: priorRefIds(node.loop_group.nodes, scope),
+    commandContents: scope.commandContents,
   });
   if (bodyError) {
     return `loop_group '${node.id}' body: ${bodyError}`;

@@ -1,6 +1,7 @@
 // @archon-test-isolated
 import {
   discoverFiles,
+  discoverWorkflows,
   expectRejected,
   inlinePrompt,
   parseError,
@@ -8,6 +9,9 @@ import {
   useTempWorkflowRoot,
 } from './test-utils';
 import { describe, it, expect } from 'bun:test';
+import { mkdir, writeFile } from 'fs/promises';
+import { join } from 'path';
+import { validateDagStructure } from './dag-structure';
 
 describe('DAG output ref validation', () => {
   for (const keyword of ['allOf', 'anyOf', 'oneOf']) {
@@ -763,6 +767,142 @@ ${verdictInBody ? `${verdict('        ')}          depends_on: [fix]\n          
       const error = result.errors.find(e => e.filename.includes('outer'))?.error;
       expect(error).toContain(
         "Node 'fix' field 'when' references '$LOOP_PREV.verdict.output', which is not a node in an enclosing loop_group body"
+      );
+    });
+  });
+});
+
+describe('output refs in command files (#5706)', () => {
+  const body = (nodes: string) => `name: cmd
+description: Reads a command file.
+nodes:
+${nodes}`;
+  const check = (yaml: string, contents: Record<string, string | null>) =>
+    validateDagStructure(parseWorkflowYaml(yaml).workflow.nodes, {
+      commandContents: new Map(Object.entries(contents)),
+    });
+  const loopBody = (bodyNodes: string) =>
+    body(`  - id: rounds
+    loop_group:
+      until_bash: "true"
+      max_iterations: 2
+      nodes:
+${bodyNodes}`);
+
+  it('refuses an unknown node in a command body, naming the file', () => {
+    expect(
+      check(body('  - id: b\n    command: hello\n'), {
+        hello: 'Say hi. Prior: $nosuch.output.field',
+      })
+    ).toContain("Node 'b' field 'command hello.md' references unknown node '$nosuch.output'");
+  });
+
+  it('refuses a field the producer does not declare', () => {
+    const yaml = body(`  - id: a
+    bash: echo a
+    output_format: { type: object, properties: { status: { type: string } } }
+  - id: b
+    command: hello
+    depends_on: [a]
+`);
+    expect(check(yaml, { hello: 'Status: $a.output.status' })).toBeNull();
+    expect(check(yaml, { hello: 'Status: $a.output.typo' })).toContain('$a.output.typo');
+  });
+
+  it('checks a loop command body', () => {
+    const yaml = body(`  - id: l
+    loop: { command: hello, until: DONE, max_iterations: 2 }
+`);
+    expect(check(yaml, { hello: 'Use $nosuch.output' })).toContain(
+      "Node 'l' field 'loop.command hello.md' references unknown node '$nosuch.output'"
+    );
+  });
+
+  it("judges a shared command file's $LOOP_PREV ref in each node's own scope", () => {
+    const shared = { hello: '$LOOP_PREV.work.output' };
+    const withWork = loopBody(`        - id: work
+          bash: echo work
+        - id: ask
+          command: hello
+          depends_on: [work]
+`);
+    expect(check(withWork, shared)).toBeNull();
+    const withoutWork = loopBody(`        - id: ask
+          command: hello
+`);
+    expect(check(withoutWork, shared)).toContain(
+      "Node 'ask' field 'command hello.md' references '$LOOP_PREV.work.output', which is not a node in an enclosing loop_group body"
+    );
+    // Two consumers of one file in one workflow: only the body without 'work' is refused.
+    const twoLoops = body(`  - id: first
+    loop_group:
+      until_bash: "true"
+      max_iterations: 2
+      nodes:
+        - id: work
+          bash: echo work
+        - id: ask
+          command: hello
+          depends_on: [work]
+  - id: second
+    depends_on: [first]
+    loop_group:
+      until_bash: "true"
+      max_iterations: 2
+      nodes:
+        - id: again
+          command: hello
+`);
+    expect(check(twoLoops, shared)).toBe(
+      "loop_group 'second' body: Node 'again' field 'command hello.md' references '$LOOP_PREV.work.output', which is not a node in an enclosing loop_group body"
+    );
+    // At top level a $LOOP_PREV ref is left to the pass where an include lands it.
+    expect(check(body('  - id: ask\n    command: hello\n'), shared)).toBeNull();
+  });
+
+  it('leaves a missing command to the command validator', () => {
+    expect(check(body('  - id: b\n    command: hello\n'), { hello: null })).toBeNull();
+  });
+
+  describe('at discovery', () => {
+    const root = useTempWorkflowRoot();
+
+    it('refuses a bad ref in a command file like the same text inline', async () => {
+      const commands = join(root(), '.archon', 'commands');
+      await mkdir(commands, { recursive: true });
+      await writeFile(join(commands, 'hello.md'), 'Say hi. Prior: $nosuch.output.field');
+      const workflow = (name: string, node: string) =>
+        `name: ${name}\ndescription: Repro.\nnodes:\n  - id: a\n    bash: echo a\n  - id: b\n    depends_on: [a]\n${node}`;
+      const result = await discoverFiles(root(), {
+        'inlineref.yaml': workflow(
+          'inlineref',
+          '    prompt: "Say hi. Prior: $nosuch.output.field"\n'
+        ),
+        'cmdref.yaml': workflow('cmdref', '    command: hello\n'),
+        'missing.yaml': workflow('missing', '    command: nosuch-command\n'),
+      });
+      const error = (file: string) => result.errors.find(e => e.filename === file)?.error;
+      expect(error('inlineref.yaml')).toContain("references unknown node '$nosuch.output'");
+      expect(error('cmdref.yaml')).toContain(
+        "Node 'b' field 'command hello.md' references unknown node '$nosuch.output'"
+      );
+      expect(error('missing.yaml')).toBeUndefined();
+      expect(result.workflows.map(w => w.workflow.name)).toEqual(['missing']);
+    });
+
+    it('names a packaged command by its file in the pack', async () => {
+      const flow = join(root(), '.archon', 'workflows', 'demo', 'check');
+      await mkdir(join(flow, 'commands'), { recursive: true });
+      await writeFile(join(flow, 'commands', 'hello.md'), 'Prior: $nosuch.output');
+      await writeFile(
+        join(flow, 'check.yaml'),
+        'name: check\ndescription: Packaged.\nnodes:\n  - id: b\n    command: hello\n'
+      );
+      const result = await discoverWorkflows(root(), { loadDefaults: false });
+      expect(result.errors.map(e => e.error)).toContainEqual(
+        expect.stringContaining(
+          "Node 'b' field 'command demo/check/commands/hello.md' references unknown node '$nosuch.output'"
+        )
       );
     });
   });
