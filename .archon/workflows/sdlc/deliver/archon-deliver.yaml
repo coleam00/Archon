@@ -322,6 +322,9 @@ nodes:
             simplify: { from: "$simplify.output.findings", if_skipped: null }
             ci_state: { from: "$ci.output.state", if_skipped: null }
             ci_summary: { from: "$ci.output.summary", if_skipped: null }
+            # Under `ci: none` a round is delivered only with a validation that passed at the head.
+            ci: "$INPUTS.ci"
+            ci_validation: { from: "$ci.output.validation", if_skipped: null }
             threads_open: { from: "$threads.output.open", if_skipped: null }
             threads_summary: { from: "$threads.output.summary", if_skipped: null }
             settle_ask: { from: "$settle-threads.output.ask", if_skipped: null }

@@ -67,6 +67,8 @@ curl http://localhost:3090/api/health
 
 `/api/health` also returns `storeId`, the opaque id of the Archon home the server serves. It is random and carries no path. To check that a server serves the home you mean, compare it with that home's `store-id` file; a running server for a home is recorded in `<ARCHON_HOME>/server.json`. See [Archon directories](/reference/archon-directories/).
 
+`commit` names the code the server is running: `sha` is the short commit hash and `committedAt` its commit date (ISO 8601). A server started from a source checkout reads it from the checkout once at startup, so it changes only on restart, not on a later `git pull`. A compiled binary reports the hash it was built from, with `committedAt` set to `null`. The key is omitted when there is no commit to name, for example in a source tree without its own `.git`. Settings → System shows the same value.
+
 ---
 
 ## Conversations

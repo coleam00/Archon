@@ -20,7 +20,10 @@ import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
 import type { WorkflowResumeCursor } from '@archon/workflows/store';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
-import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import {
+  ContinuedItemProjectError,
+  type WorkflowRun,
+} from '@archon/workflows/schemas/workflow-run';
 import { generateConversationId } from '../utils/conversation-id';
 import { CLI_WORKFLOW_SURFACE } from '../utils/workflow-surface';
 import { writeJsonLine } from '../utils/stdout';
@@ -280,6 +283,22 @@ export async function spelledForCli<T>(op: () => Promise<T>): Promise<T> {
   }
 }
 
+/**
+ * How this surface names an item. The engine refuses a continuation that cannot stay on
+ * the continued run's item without naming a flag, because chat and the API reach the same
+ * refusal; the CLI adds its flag where it reports one.
+ */
+export const NAME_ITEM_HINT = 'Pass --item <key> to name the item of this run.';
+
+/** A failed run creation, with the hint added when it was that refusal; otherwise as thrown. */
+export function withItemHint(error: unknown): unknown {
+  for (let current = error; current instanceof Error; current = current.cause) {
+    if (current instanceof ContinuedItemProjectError)
+      return new Error(`${(error as Error).message} ${NAME_ITEM_HINT}`, { cause: error });
+  }
+  return error;
+}
+
 export function printJsonWriteError(runId: string, action: string, error: unknown): Promise<void> {
   return writeJsonLine({ ok: false, runId, action, error: cliRefusalText(error) });
 }
@@ -408,4 +427,13 @@ export async function resolveDiscoveryCwdForCodebase(
         'Fix the codebase lookup problem, then retry.'
     );
   }
+}
+
+/**
+ * The worktree identity of a start that names no branch. The run id is what makes it
+ * unique: any number of starts of one workflow at the same instant each get their own
+ * branch and worktree, which a clock value cannot promise at any resolution.
+ */
+export function generatedWorktreeIdentifier(workflowName: string, runId: string): string {
+  return `${workflowName}-${runId}`;
 }

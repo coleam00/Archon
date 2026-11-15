@@ -87,16 +87,20 @@ describe('the attention queue over HTTP', () => {
       const list = await app.request('/api/runs/attention?label=ci%3Dother');
       expect(list.status).toBe(200);
       const body = runsNeedingAttentionResponseSchema.parse(await list.json());
-      expect(body.items.map(item => item.runId)).toEqual(['run-other']);
+      expect(body.items.map(item => item.run?.id)).toEqual(['run-other']);
       expect(body.runs.map(run => run.id)).toEqual(['run-other']);
       expect(body.items[0]).toMatchObject({
         kind: 'attention',
-        occurrence: 'pause-run-other',
+        ref: 'run-other:pause-run-other',
         form: 'approval',
         labels: { ci: 'other' },
         revision: 1,
-        fanOut: null,
-        context: { workingPath: '/tmp/worktrees/feature', branch: 'fix/ci' },
+        run: {
+          id: 'run-other',
+          occurrence: 'pause-run-other',
+          fanOut: null,
+          context: { workingPath: '/tmp/worktrees/feature', branch: 'fix/ci' },
+        },
       });
 
       const counts = await app.request('/api/runs/attention?countBy=label%3Aci');
@@ -147,7 +151,7 @@ describe('the attention queue over HTTP', () => {
       const list = await app.request('/api/runs/attention');
       expect(list.status).toBe(200);
       const { items } = runsNeedingAttentionResponseSchema.parse(await list.json());
-      expect(items.map(item => ({ runId: item.runId, fanOut: item.fanOut }))).toEqual(
+      expect(items.map(item => ({ runId: item.run?.id, fanOut: item.run?.fanOut }))).toEqual(
         children.map((run, index) => ({
           runId: run.id,
           fanOut: { parentRunId: 'questions-parent', nodeId: 'answers', index },
@@ -155,7 +159,7 @@ describe('the attention queue over HTTP', () => {
       );
       for (const item of items) {
         expect(item.kind).toBe('attention');
-        const read = await app.request(`/api/runs/${item.runId}/attention`);
+        const read = await app.request(`/api/runs/${item.run?.id}/attention`);
         expect(read.status).toBe(200);
         expect(await read.json()).toEqual({ item });
       }
@@ -172,7 +176,7 @@ describe('the attention queue over HTTP', () => {
       const read = await app.request(`/api/runs/${other.id}/attention`);
       expect(read.status).toBe(200);
       expect(await read.json()).toMatchObject({
-        item: { runId: other.id, labels: { ci: 'other' } },
+        item: { run: { id: other.id }, labels: { ci: 'other' } },
       });
       expect((await app.request('/api/runs/missing/attention')).status).toBe(404);
 
@@ -235,7 +239,7 @@ test('batch list and counts preserve degraded reports even when scope or labels 
       const body = runsNeedingAttentionResponseSchema.parse(await list.json());
       expect(body.degraded).toEqual(warnings);
       expect(body.runs.map(run => run.id)).toEqual(project ? [] : [run.id]);
-      expect(body.items.map(item => item.runId)).toEqual(project ? [] : [run.id]);
+      expect(body.items.map(item => item.run?.id)).toEqual(project ? [] : [run.id]);
       for (const countBy of ['', '&countBy=project']) {
         const response = await app.request(
           `/api/runs/attention?label=missing%3Dyes${project}${countBy}`

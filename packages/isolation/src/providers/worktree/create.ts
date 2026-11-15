@@ -42,10 +42,10 @@ import { worktreeBaseFor, worktreePathFor } from './location';
 import { releaseSetupLock, rollBackOnFailure } from './setup-lock';
 import {
   CREATION_MARKER,
-  SETUP_LOCK_PREFIX,
   directoryExists,
   getForkReviewBranch,
   getLog,
+  setupLockReasonFor,
 } from './shared';
 
 type BranchCheckout =
@@ -182,7 +182,7 @@ async function createWorktree(
     );
   }
   const creationId = randomUUID();
-  const setupLockReason = `${SETUP_LOCK_PREFIX}: ${creationId}`;
+  const setupLockReason = setupLockReasonFor(creationId);
 
   // In both layouts the base already carries repo context — creating it
   // recursively is enough.

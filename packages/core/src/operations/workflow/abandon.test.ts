@@ -1000,13 +1000,16 @@ describe('abandon owned worktrees', () => {
     reclaim.mockImplementation(async (run, store) => {
       expect(store).toBe(isolationStore);
       order.push(`release ${run.id}`);
-      return { released: { path: `/wt/${run.id}`, branch: `b-${run.id}` }, warnings: [] };
+      return {
+        released: { path: `/wt/${run.id}`, branch: `b-${run.id}`, branchDeleted: false },
+        warnings: [],
+      };
     });
     const result = await operations.abandonWorkflow('run-1', operator);
     expect(order).toEqual(['cancel run-1', 'cancel child', 'release child', 'release run-1']);
     expect(result.releasedWorktrees).toEqual([
-      { path: '/wt/child', branch: 'b-child' },
-      { path: '/wt/run-1', branch: 'b-run-1' },
+      { path: '/wt/child', branch: 'b-child', branchDeleted: false },
+      { path: '/wt/run-1', branch: 'b-run-1', branchDeleted: false },
     ]);
   });
 
@@ -1061,7 +1064,7 @@ describe('abandon owned worktrees', () => {
         return { pid: 4242, stop: async () => ({ warnings: [] }), release: () => undefined };
       });
       reclaim.mockImplementation(async row => ({
-        released: { path: `/wt/${row.id}`, branch: `b-${row.id}` },
+        released: { path: `/wt/${row.id}`, branch: `b-${row.id}`, branchDeleted: false },
         warnings: [],
       }));
 
@@ -1121,7 +1124,10 @@ describe('abandon owned worktrees', () => {
             throw new Error('creation proof does not match its isolation record');
           if (mode === 'same proof') return { warnings: ['worktree removal refused'] };
         }
-        return { released: { path: '/wt/shared', branch: 'kept' }, warnings: [] };
+        return {
+          released: { path: '/wt/shared', branch: 'kept', branchDeleted: false },
+          warnings: [],
+        };
       });
 
       const result = await operations.abandonWorkflow(root.id, operator);
@@ -1135,6 +1141,7 @@ describe('abandon owned worktrees', () => {
         Array.from({ length: mode === 'successful distinct release' ? 2 : 1 }, () => ({
           path: '/wt/shared',
           branch: 'kept',
+          branchDeleted: false,
         }))
       );
       if (mode.startsWith('successful')) expect(result.cleanupWarnings).toBeUndefined();
@@ -1168,7 +1175,7 @@ describe('abandon owned worktrees', () => {
         reclaimRunWorktree: reclaim,
       });
       reclaim.mockResolvedValue({
-        released: { path: '/wt/root', branch: 'kept' },
+        released: { path: '/wt/root', branch: 'kept', branchDeleted: false },
         warnings: [],
       });
       if (operation === 'reset') await fileStore.failWorkflowRun(root.id, 'interrupted');
@@ -1181,7 +1188,9 @@ describe('abandon owned worktrees', () => {
       expect((await fileStore.getWorkflowRun(root.id))?.status).toBe('cancelled');
       expect(reclaim.mock.calls.map(call => call[0].id)).toEqual([root.id]);
       expect(result.cleanupWarnings).toBeUndefined();
-      expect(result.releasedWorktrees).toEqual([{ path: '/wt/root', branch: 'kept' }]);
+      expect(result.releasedWorktrees).toEqual([
+        { path: '/wt/root', branch: 'kept', branchDeleted: false },
+      ]);
     }
   );
 
@@ -1555,7 +1564,7 @@ describe('abandon owned worktrees', () => {
       const currentRoot = owned('current-root');
       if (shared) currentRoot.metadata.owned_worktree = staleChild.metadata.owned_worktree;
       reclaim.mockImplementation(async run => ({
-        released: { path: `/wt/${run.id}`, branch: `b-${run.id}` },
+        released: { path: `/wt/${run.id}`, branch: `b-${run.id}`, branchDeleted: false },
         warnings: [],
       }));
       expect(staleChild.metadata.execution_owner).toEqual(currentRoot.metadata.execution_owner);
@@ -1576,7 +1585,9 @@ describe('abandon owned worktrees', () => {
       expect(mockRequestDetachedRunStop.mock.calls).toEqual(rows.map(row => [row.id]));
       expect(reclaim.mock.calls.map(call => call[0].id)).toEqual(shared ? [] : [currentRoot.id]);
       expect(result.releasedWorktrees).toEqual(
-        shared ? undefined : [{ path: '/wt/current-root', branch: 'b-current-root' }]
+        shared
+          ? undefined
+          : [{ path: '/wt/current-root', branch: 'b-current-root', branchDeleted: false }]
       );
       expect(result.cleanupWarnings?.join(' ')).toContain('Cancellation is recorded');
       expect(result.cleanupWarnings?.join(' ')).toContain('previous-root');
@@ -1798,7 +1809,7 @@ describe('abandon owned worktrees', () => {
   test('reset releases an owned worktree through its supplied store and reports a failure', async () => {
     const sentinel: IIsolationStore = { ...isolationStore };
     const resetReclaim = mock<WorkflowOperationsDeps['reclaimRunWorktree']>(async () => ({
-      released: { path: '/wt/run-a', branch: 'b-a' },
+      released: { path: '/wt/run-a', branch: 'b-a', branchDeleted: false },
       warnings: [],
     }));
     resetReclaim.mockRejectedValueOnce(new Error('removal failed for run-b'));
@@ -1823,7 +1834,9 @@ describe('abandon owned worktrees', () => {
     expect(result.cleanupWarnings).toEqual([
       expect.stringContaining('removal failed for run-b The run remains cancelled.'),
     ]);
-    expect(result.releasedWorktrees).toEqual([{ path: '/wt/run-a', branch: 'b-a' }]);
+    expect(result.releasedWorktrees).toEqual([
+      { path: '/wt/run-a', branch: 'b-a', branchDeleted: false },
+    ]);
   });
 
   test.each(['root', 'retry', 'descendant', 'shared-owner descendant', 'reset'] as const)(
@@ -2085,7 +2098,7 @@ describe('abandon owned worktrees', () => {
     };
     const local = owned('local');
     mockCancelResumableRunsForConversation.mockResolvedValueOnce([foreign, local]);
-    const released = { path: '/wt/local', branch: 'b-local' };
+    const released = { path: '/wt/local', branch: 'b-local', branchDeleted: false };
     reclaim.mockResolvedValueOnce({ released, warnings: [] });
 
     const result = await operations.abandonResumableRunsForConversation('conv-1', operator);

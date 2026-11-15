@@ -199,8 +199,9 @@ for the consumer inspection commands.
 
 ### Commit messages
 
-Follow the repository's Conventional Commit style. Write a concise,
-human-readable subject that explains the meaningful outcome. Commit subjects
+Write a concise, human-readable subject that explains the meaningful outcome:
+a sentence about what is now true. A Conventional Commit prefix
+(`fix(cli):`, `docs:`) is optional. Commit subjects
 may become changelog entries or pull request titles, so they must make sense
 without the diff.
 
@@ -211,9 +212,9 @@ evidence of valid structure, not as the writing-quality standard.
 Never add AI attribution, generated-by text, robot emoji, or
 `Co-Authored-By: $Agent`.
 
-**Bad:** `refactor(prp-pr): update skill instructions`
+**Bad:** `refactor(cli): update trigger handling`
 
-**Good:** `refactor(prp-pr): PR creation now uses one focused workflow`
+**Good:** `A refused run start gets the same answer from the Web UI as from the CLI`
 
 ### Pull requests
 
@@ -244,12 +245,12 @@ formulaic transitions, and vague claims.
 #### Title
 
 Write a concise, human-readable title that describes the meaningful outcome.
-Follow the repository's Conventional Commit style, but do not copy vague or
-implementation-focused titles from its history.
+A Conventional Commit prefix is optional. Do not copy vague or
+implementation-focused titles from the history.
 
 **Bad:** `feat(core): add child run traversal and parent event aggregation`
 
-**Good:** `feat(core): workflows can now include a child workflow in the parent run`
+**Good:** `Workflows can now include a child workflow in the parent run`
 
 #### Description
 

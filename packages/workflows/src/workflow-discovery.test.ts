@@ -1140,7 +1140,7 @@ nodes:
       expect(result.errors).toHaveLength(1);
       expect(result.errors[0].filename).toBe('broken.yaml');
       expect(result.errors[0].errorType).toBe('parse_error');
-      expect(result.errors[0].error).toContain('YAML parse error');
+      expect(result.errors[0].error).toStartWith('broken.yaml:2:11: YAML syntax error:');
     });
 
     it('should accumulate errors from subdirectories', async () => {

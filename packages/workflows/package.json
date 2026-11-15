@@ -20,7 +20,7 @@
     "./resource-start-store": "./src/resource-start-store.ts",
     "./store": "./src/store.ts",
     "./attention-queue": "./src/attention-queue.ts",
-    "./attention-item-ref": "./src/attention-item-ref.ts",
+    "./attention-counts": "./src/attention-counts.ts",
     "./attention-watch": "./src/attention-watch.ts",
     "./attention-needs": "./src/attention-needs.ts",
     "./workflow-notice": "./src/workflow-notice.ts",
@@ -91,7 +91,8 @@
     "@archon/plugin-manifest": "workspace:*",
     "@archon/script-api": "workspace:*",
     "zod": "^4.4.3",
-    "ajv": "^8.20.0"
+    "ajv": "^8.20.0",
+    "yaml": "^2.9.0"
   },
   "devDependencies": {
     "@archon/providers": "workspace:*"

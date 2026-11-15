@@ -39,7 +39,11 @@ export class AbandonOwnerNotStoppedError extends Error {
 export function describeReleasedWorktrees(released: readonly ReleasedWorktree[] = []): string[] {
   return released.map(
     worktree =>
-      `Removed worktree ${worktree.path} with any uncommitted changes; branch ${worktree.branch} is kept.`
+      `Removed worktree ${worktree.path} with any uncommitted changes; ${
+        worktree.branchDeleted
+          ? `branch ${worktree.branch} had no commits and was deleted`
+          : `branch ${worktree.branch} is kept`
+      }.`
   );
 }
 

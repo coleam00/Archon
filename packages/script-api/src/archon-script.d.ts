@@ -1470,7 +1470,7 @@ declare module 'archon:script' {
     readonly operationId: string;
     readonly ok: false;
     readonly error: {
-      readonly kind: 'unsupported_op' | 'conflict' | 'authorization' | 'no_plugin_for_host' | 'no_credential' | 'not_found' | 'forge_error' | 'invalid_request' | 'invalid_response' | 'duplicate_host' | 'process_failed' | 'timeout';
+      readonly kind: 'unavailable' | 'rate_limited' | 'unsupported_op' | 'conflict' | 'authorization' | 'no_plugin_for_host' | 'no_credential' | 'not_found' | 'forge_error' | 'invalid_request' | 'invalid_response' | 'duplicate_host' | 'process_failed' | 'timeout';
       readonly message: string;
       readonly status?: number;
       readonly exitCode?: number | null;
