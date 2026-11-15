@@ -53,6 +53,7 @@ const CONTAINER = { isolation: 'container', isolation_env_id: 'env-a' } as const
 test.each([
   ['host', 'completed', 'no record'],
   ['host', 'cancelled', 'empty record'],
+  ['host', 'completed', 'subdirectory only'],
   ['container', 'completed', 'no record'],
   ['container', 'cancelled', 'empty record'],
 ] as const)(
@@ -68,10 +69,15 @@ test.each([
         ...(isolationKind === 'container' ? CONTAINER : {}),
       },
     };
-    if (record === 'empty record')
-      mkdirSync(join(getRunArtifactsDirForRoot(root, run.id), VERIFICATION_IMAGE_RECORD_DIR), {
-        recursive: true,
-      });
+    if (record !== 'no record')
+      mkdirSync(
+        join(
+          getRunArtifactsDirForRoot(root, run.id),
+          VERIFICATION_IMAGE_RECORD_DIR,
+          record === 'subdirectory only' ? 'backend' : ''
+        ),
+        { recursive: true }
+      );
     const docker = spyOn(isolation, 'dockerCli').mockRejectedValue(
       new Error('Cannot connect to the Docker daemon')
     );

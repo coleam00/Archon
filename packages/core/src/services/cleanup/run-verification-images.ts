@@ -23,7 +23,7 @@ import { FAN_OUT_CANCEL_REASONS, type IWorkflowStore } from '@archon/workflows/s
 
 /**
  * The `$ARTIFACTS_DIR` child a node records its verification builds in, one
- * `docker build --iidfile` file per build. A run with no entry there built no image, so
+ * `docker build --iidfile` file per build. A run with no file there built no image, so
  * cleanup never asks Docker about it.
  */
 export const VERIFICATION_IMAGE_RECORD_DIR = 'verification-images';
@@ -97,7 +97,7 @@ async function recordsVerificationImages(
   if (!root) return false;
   const dir = join(getRunArtifactsDirForRoot(root, run.id), VERIFICATION_IMAGE_RECORD_DIR);
   try {
-    return (await readdir(dir)).length > 0;
+    return (await readdir(dir, { withFileTypes: true })).some(entry => entry.isFile());
   } catch (err) {
     if (err instanceof Error && 'code' in err && err.code === 'ENOENT') return false;
     throw err;
