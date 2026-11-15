@@ -30,6 +30,12 @@ import {
   similarNodeIds,
 } from '../output-ref';
 import { visitNodeTemplateSlots, type TemplateSurface } from '../template-walker';
+import {
+  COMPILED_LOOP_COMMAND,
+  resolveIncludeOutputAliases,
+  type IncludeCommandContent,
+  type LoopWithCompiledCommand,
+} from '../compiled-command';
 import { z } from 'zod';
 
 // OUTPUT_REF_SOURCE (output-ref.ts) is the one shape of a `$nodeId.output` reference, shared
@@ -225,6 +231,7 @@ export interface DagScope {
   readonly includeAliases: ReadonlyMap<string, string> | undefined;
   readonly eligibleResumeSources: ReadonlyMap<string, DagNode | IncludeDirective> | undefined;
   readonly loopBodyIds: ReadonlySet<string> | undefined;
+  readonly commandContents: ReadonlyMap<string, IncludeCommandContent> | undefined;
   transitiveDepsOf(nodeId: string): Set<string>;
 }
 
@@ -261,9 +268,14 @@ export function checkNodeReferences(
 
 /**
  * template-walker.ts owns every engine template/reference field. Runtime substitution
- * is syntax-agnostic, so this scan checks each text slot verbatim.
+ * is syntax-agnostic, so this scan checks each text slot verbatim. A command node's body
+ * is one more prompt source (#5706): moving a prompt into a command file must not drop
+ * its reference check.
  */
-function templateReferenceSources(node: DagNode | IncludeDirective): TemplateReferenceSource[] {
+function templateReferenceSources(
+  node: DagNode | IncludeDirective,
+  scope: DagScope
+): TemplateReferenceSource[] {
   const sources: TemplateReferenceSource[] = [];
   if (!isIncludeDirective(node)) {
     visitNodeTemplateSlots(
@@ -281,12 +293,46 @@ function templateReferenceSources(node: DagNode | IncludeDirective): TemplateRef
       },
       { recursive: false }
     );
+    const commandBody = commandBodySource(node, scope);
+    if (commandBody !== undefined) sources.push(commandBody);
   }
   return sources;
 }
 
+/**
+ * The body of the command file `node` reads when it runs, with the same include-alias
+ * rename the runtime applies. Undefined when the node reads no command file, an include
+ * already compiled its loop command into `loop.compiled_prompt`, or discovery found no
+ * readable, non-empty body: a missing, unreadable or empty command is reported by the
+ * command validator and the runtime, not as a reference error.
+ */
+function commandBodySource(node: DagNode, scope: DagScope): TemplateReferenceSource | undefined {
+  let field: string;
+  let name: string;
+  if (isAgentNode(node) && node.source.kind === 'command') {
+    field = 'command';
+    name = node.source.name;
+  } else if (
+    isLoopNode(node) &&
+    typeof node.loop.command === 'string' &&
+    (node.loop as typeof node.loop & LoopWithCompiledCommand)[COMPILED_LOOP_COMMAND] === undefined
+  ) {
+    field = 'loop.command';
+    name = node.loop.command;
+  } else {
+    return undefined;
+  }
+  const body = scope.commandContents?.get(name);
+  if (typeof body !== 'string' || body.trim().length === 0) return undefined;
+  return {
+    field: `${field} ${name}.md`,
+    text: resolveIncludeOutputAliases(node, body),
+    surface: 'prompt',
+  };
+}
+
 function checkTemplateReferences(node: DagNode | IncludeDirective, scope: DagScope): string | null {
-  for (const source of templateReferenceSources(node)) {
+  for (const source of templateReferenceSources(node, scope)) {
     const error = checkTemplateReferenceSource(node.id, source, scope);
     if (error !== null) return error;
   }

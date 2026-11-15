@@ -120,10 +120,13 @@ describe('expandWorkflowIncludes — included command compilation', () => {
     ]);
     const { workflows, errors } = expandWorkflowIncludes(mapOf(block, parent), commandContents);
     expect(workflows.has('parent')).toBe(false);
+    // The block is refused as its own workflow first (#5706), so the parent reports
+    // the block's command-file error under its include node.
+    expect(workflows.has('cmdblk')).toBe(false);
     const message = errors.find(error => error.filename === 'parent')?.error;
-    expect(message).toContain("included workflow 'cmdblk'");
-    expect(message).toContain("node 'runner'");
-    expect(message).toContain("command 'my-cmd'");
+    expect(message).toContain("Node 'inc'");
+    expect(message).toContain("Node 'runner'");
+    expect(message).toContain('command my-cmd.md');
     expect(message).toContain("'$caller.output'");
     expect(message).toContain('inputs:');
     expect(message).toContain('with:');

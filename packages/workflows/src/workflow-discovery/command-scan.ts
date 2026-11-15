@@ -2,7 +2,6 @@ import { readFile } from 'fs/promises';
 import { join } from 'path';
 import * as archonPaths from '@archon/paths';
 import type { DagNode, IncludeDirective, WorkflowDefinition } from '../schemas';
-import { isComposeFanOutNode, isIncludeDirective, isLoopGroupNode } from '../schemas';
 import { BUNDLED_COMMANDS, isBinaryBuild } from '../defaults/bundled-defaults';
 import { bundlesPackagedResources } from '../defaults/bundle-inventory';
 import { isValidCommandName } from '../command-validation';
@@ -123,37 +122,17 @@ async function readCommandFromDir(
 
 /**
  * Pre-resolve command-file contents for every file-backed command node (including
- * `loop.command`) that lives in a workflow reachable as an `include:` target
- * (transitively). The include expander uses these to validate deferred prompt bodies.
- * Touches disk only when includes exist; returns an empty map otherwise.
+ * `loop.command` and loop_group bodies) of every workflow in the catalog. The include
+ * expander compiles an included block's command bodies from this map, and the flattened
+ * graph check reads each remaining command node's body for its output references (#5706).
  */
-export async function resolveIncludeBlockCommandContents(
+export async function resolveCatalogCommandContents(
   roots: WorkflowSourceRoots,
   byName: ReadonlyMap<string, WorkflowDefinition>,
   config: CommandScanConfig
 ): Promise<Map<string, IncludeCommandContent>> {
-  const targetNames = new Set<string>();
-  const visitNodes = (nodes: readonly (DagNode | IncludeDirective)[]): void => {
-    for (const node of nodes) {
-      if (!isIncludeDirective(node) && isLoopGroupNode(node)) visitNodes(node.loop_group.nodes);
-      const targetName =
-        isIncludeDirective(node) || isComposeFanOutNode(node) ? node.include : undefined;
-      if (targetName === undefined || targetNames.has(targetName)) continue;
-      targetNames.add(targetName);
-      const target = byName.get(targetName);
-      if (target) visit(target);
-    }
-  };
-  const visit = (workflow: WorkflowDefinition): void => {
-    visitNodes(workflow.nodes);
-  };
-  for (const workflow of byName.values()) visit(workflow);
-
   const contents = new Map<string, IncludeCommandContent>();
-  if (targetNames.size === 0) return contents; // no includes → nothing to scan
-  for (const name of targetNames) {
-    const workflow = byName.get(name);
-    if (!workflow) continue;
+  for (const workflow of byName.values()) {
     for (const commandName of collectFileBackedCommandNames(workflow.nodes)) {
       if (!contents.has(commandName)) {
         contents.set(commandName, await resolveCommandContentForScan(roots, commandName, config));
