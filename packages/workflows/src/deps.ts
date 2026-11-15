@@ -270,13 +270,13 @@ export type ReleaseVerificationImages = (runId: string, containerEnvId: string) 
 
 export interface WorkflowDeps {
   /**
-   * Releases a terminal container run's verification images; retains live writers and throws
-   * when cleanup fails. Requires a supplied effect or an explicitly bound resource owner.
+   * Releases a terminal run's recorded verification images; retains live writers and returns
+   * non-fatal warnings. Container cleanup requires a supplied effect or a bound resource owner.
    */
   releaseRunResources?: (
     runId: string,
     releaseVerificationImages?: ReleaseVerificationImages
-  ) => Promise<void>;
+  ) => Promise<void | string[]>;
   providers: ProviderRegistry;
   store: IWorkflowStore;
   /**

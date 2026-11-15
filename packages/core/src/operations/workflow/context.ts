@@ -106,8 +106,7 @@ export function createOperationContext(deps: WorkflowOperationsDeps): OperationC
 
 export async function releaseRunResources(ctx: OperationContext, runId: string): Promise<string[]> {
   try {
-    await ctx.releaseRunResources?.(runId);
-    return [];
+    return (await ctx.releaseRunResources?.(runId)) ?? [];
   } catch (err) {
     getLog().warn({ err, runId }, 'operations.resource_release_failed');
     return [`Run ${runId} retained verification images: ${String(err)}`];

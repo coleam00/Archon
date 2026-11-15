@@ -3,16 +3,20 @@ import { RunActionForbiddenError } from '../run-authorization';
 import { describe, test, expect, mock, beforeEach, spyOn } from 'bun:test';
 import { workflowEventRowSchema } from '@archon/workflows/schemas/workflow-event';
 import { randomUUID } from 'node:crypto';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync, writeFileSync } from 'node:fs';
 import { hostname } from 'node:os';
 import { join } from 'node:path';
 import { getArchonWorkspacesPath } from '@archon/paths/archon-paths';
+import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowOperationsDeps } from '../workflow-operations';
 import { releaseRunVerificationImages, type IIsolationStore } from '@archon/isolation';
-import { createRunResourceRelease } from '../../services/cleanup/run-verification-images';
+import {
+  createRunResourceRelease,
+  VERIFICATION_IMAGE_RECORD_DIR,
+} from '../../services/cleanup/run-verification-images';
 import { DetachedRunOwnerUnavailableError } from '../../services/run-owner-stop';
 import {
   operator,
@@ -75,14 +79,27 @@ describe('abandonWorkflow', () => {
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
 
-  test('returns image inventory warnings for the abandoned container run and its cancelled child', async () => {
-    const metadata = {
-      execution_owner: { host: hostname(), pid: process.pid },
-      isolation: 'container',
-      isolation_env_id: 'env-inventory',
-    };
-    const root = makePausedRun({ metadata });
-    const child = makePausedRun({ id: 'child-inventory', parent_run_id: root.id, metadata });
+  test('returns host inventory recovery warnings for the abandoned run and its cancelled child', async () => {
+    const output_root = scratchRoot();
+    const root = makePausedRun({
+      output_root,
+      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+    });
+    const child = makePausedRun({
+      id: 'child-inventory',
+      parent_run_id: root.id,
+      output_root,
+      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+    });
+    // Both runs recorded a verification build, so cleanup asks Docker about them.
+    for (const run of [root, child]) {
+      const record = join(
+        getRunArtifactsDirForRoot(output_root, run.id),
+        VERIFICATION_IMAGE_RECORD_DIR
+      );
+      mkdirSync(record, { recursive: true });
+      writeFileSync(join(record, 'check'), 'sha256:built');
+    }
     const runs = new Map([root, child].map(run => [run.id, run]));
     const operationStore: WorkflowOperationsDeps['store'] = {
       ...store,
@@ -95,8 +112,7 @@ describe('abandonWorkflow', () => {
         return { cancelled: true };
       },
     };
-    const inventory = mock(async (args: string[]) => {
-      if (args[0] === 'container') return { stdout: '', stderr: '' };
+    const inventory = mock(async () => {
       throw new Error('inventory unavailable');
     });
     const operations = createWorkflowOperations({
@@ -118,10 +134,15 @@ describe('abandonWorkflow', () => {
       expect(result.cancelled).toBe(true);
       for (const run of [root, child]) {
         const warning = result.cleanupWarnings?.find(text => text.includes(`Run ${run.id} `));
-        expect(warning).toContain(`Run ${run.id} retained verification images`);
-        expect(warning).toContain('inventory unavailable');
+        expect(warning).toContain('inventory failed; cleanup is inconclusive');
+        expect(warning).toContain(`label=archon.run_id=${run.id}`);
+        expect(warning).toContain('cannot resume or write');
+        expect(warning).toContain('docker image inspect <full-id>');
+        expect(warning).toContain('docker container ls --all --filter ancestor=<full-id>');
+        expect(warning).toContain('docker image rm --no-prune <full-id>');
+        expect(warning).toContain('exclusive control');
       }
-      expect(inventory.mock.calls.filter(([args]) => args[0] === 'image')).toHaveLength(2);
+      expect(inventory).toHaveBeenCalledTimes(2);
     } finally {
       stderr.mockRestore();
     }
