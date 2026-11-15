@@ -11,19 +11,23 @@ import type { WorktreeDisposition } from '@archon/workflows/schemas/terminal-rec
 import {
   getIsolationProvider,
   isGeneratedTaskBranch,
+  readWorktreeBranchCreated,
   readWorktreeCreationId,
   WorktreeLeftoverError,
   type IIsolationStore,
 } from '@archon/isolation';
 import type { IsolationEnvironmentRow } from '@archon/isolation';
 import {
+  execFileAsync,
   hasUncommittedChangesStrict,
   isWorktreeRegistered,
+  listWorktrees,
+  toBranchName,
   toRepoPath,
   toWorktreePath,
   worktreeExists,
 } from '@archon/git';
-import type { RepoPath, WorktreePath } from '@archon/git';
+import type { BranchName, RepoPath, WorktreePath } from '@archon/git';
 import { retainsWorkspace, unknownPlatformReason } from '../../platforms/registry';
 import * as isolationEnvDb from '../../db/isolation-environments';
 import * as codebaseDb from '../../db/codebases';
@@ -33,6 +37,8 @@ import { getLog } from './log';
 export interface ReleasedWorktree {
   path: string;
   branch: string;
+  /** True when the branch never moved off the commit it was cut from and went with the worktree. */
+  branchDeleted: boolean;
 }
 
 export interface RunWorktreeRelease {
@@ -127,8 +133,9 @@ export async function assessCompletedRunWorktree(
 }
 
 /**
- * Remove a completed run's worktree, keeping its branch so the run stays adoptable.
- * Remote tips are read before the claim; local checks rerun under the lock against them.
+ * Remove a completed run's worktree. Its branch goes too when it holds no commit of its
+ * own (see `unusedBranch`); a branch with work is kept. Remote tips are read before
+ * the claim; local checks rerun under the lock against them.
  */
 export async function releaseCompletedRunWorktree(
   run: WorkflowRun,
@@ -179,8 +186,86 @@ async function reclaimOwnedWorktree(
       },
     });
     if (!result.worktreeRemoved || !result.directoryClean) refuse('filesystem removal incomplete');
-    return { released: { path, branch: env.branch_name }, warnings: result.warnings };
+    const warnings = [...result.warnings];
+    const unused = unusedBranch(run, env);
+    let branchDeleted = false;
+    if (unused) {
+      // The worktree is already removed and recorded destroyed: a failed delete is a
+      // warning, never a failed release.
+      try {
+        branchDeleted = (await deleteBranchAt(repo, unused.branch, unused.cutFrom)) === 'deleted';
+      } catch (err) {
+        getLog().warn({ err, workflowRunId: run.id }, 'run_branch_delete_failed');
+        warnings.push(`Kept branch ${unused.branch} for run ${run.id}: ${(err as Error).message}`);
+      }
+    }
+    return { released: { path, branch: env.branch_name, branchDeleted }, warnings };
   });
+}
+
+/**
+ * The run's branch when deleting it at its start point is safe to try: the engine
+ * generated it for the run, this creation made it, and the run recorded the commit it
+ * was cut from. Without a recorded start point the branch is kept, because a kept
+ * branch costs one `git branch -d` and a deleted one may cost work.
+ */
+function unusedBranch(
+  run: WorkflowRun,
+  env: IsolationEnvironmentRow
+): { branch: BranchName; cutFrom: string } | null {
+  const cutFrom =
+    run.checkout_baseline?.kind === 'git' ? run.checkout_baseline.cutFromCommit : undefined;
+  if (cutFrom === undefined) return null;
+  if (!isGeneratedTaskBranch(env) || !readWorktreeBranchCreated(env.metadata)) return null;
+  return { branch: toBranchName(env.branch_name), cutFrom };
+}
+
+/**
+ * Delete a local branch only while its tip is exactly `expected`: a compare-and-delete,
+ * never a force delete. `update-ref -d <ref> <old>` makes Git itself refuse when the ref
+ * moved, so a commit landing between the read and the delete is never lost. Unlike
+ * `git branch -d`, `update-ref` would delete a checked-out branch, so that is refused first.
+ */
+async function deleteBranchAt(
+  repo: RepoPath,
+  branch: BranchName,
+  expected: string
+): Promise<'deleted' | 'moved' | 'checked_out'> {
+  if ((await listWorktrees(repo)).some(wt => wt.branch === branch)) return 'checked_out';
+  const ref = `refs/heads/${branch}`;
+  const before = await readBranchTip(repo, ref);
+  if (before === null) return 'deleted';
+  if (before !== expected) return 'moved';
+  try {
+    await execFileAsync('git', ['-C', repo, 'update-ref', '-d', ref, expected], {
+      timeout: 10000,
+    });
+    return 'deleted';
+  } catch (err) {
+    const after = await readBranchTip(repo, ref);
+    if (after === null) return 'deleted';
+    if (after !== expected) return 'moved';
+    throw new Error(`could not delete branch ${branch}: ${(err as Error).message}`, {
+      cause: err,
+    });
+  }
+}
+
+/** The commit a local branch ref points at, or null when the ref does not exist. */
+async function readBranchTip(repo: RepoPath, ref: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', repo, 'rev-parse', '--verify', '--quiet', `${ref}^{commit}`],
+      { timeout: 10000 }
+    );
+    return stdout.trim();
+  } catch (err) {
+    // `rev-parse --verify --quiet` exits 1, silently, exactly when the ref is absent.
+    const code = (err as { code?: number | string }).code;
+    if (code === 1 || code === '1') return null;
+    throw err;
+  }
 }
 
 function refuse(reason: string): never {
@@ -230,7 +315,8 @@ async function settleAbsentCheckout(
 
 /**
  * Remove the worktree an abandoned run created, discarding uncommitted work.
- * The branch is kept, so committed work stays recoverable.
+ * A branch with commits of its own is kept, so committed work stays recoverable; a
+ * generated branch still at its start point goes with the worktree.
  */
 export async function reclaimRunWorktree(
   run: WorkflowRun,

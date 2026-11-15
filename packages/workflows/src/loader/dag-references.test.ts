@@ -656,3 +656,114 @@ nodes:
     });
   });
 });
+
+describe('$LOOP_PREV node refs (#5696)', () => {
+  const loop = (body: string, untilBash = 'true') => `name: loop-prev-refs
+description: Prior-round refs
+nodes:
+  - id: rounds
+    loop_group:
+      until_bash: ${JSON.stringify(untilBash)}
+      max_iterations: 2
+      nodes:
+        - id: check
+          bash: echo '{"outcome":"return"}'
+          output_format:
+            type: object
+            properties: { outcome: { type: string } }
+            required: [outcome]
+${body}`;
+
+  it('refuses an id that is no node of an enclosing body, in when: and in text', () => {
+    for (const field of ['when', 'bash']) {
+      const value =
+        field === 'when'
+          ? `"$LOOP_PREV.chek.output.outcome == 'return'"`
+          : '"echo $LOOP_PREV.chek.output.outcome"';
+      expectRejected(
+        loop(`        - id: fix\n          bash: echo fix\n          ${field}: ${value}\n`),
+        ['$LOOP_PREV.chek.output']
+      );
+    }
+  });
+
+  it('refuses an unknown id in until_bash and accepts the group body there', () => {
+    expectRejected(loop('', 'test "$LOOP_PREV.nope.output" = x'), [
+      "field 'loop_group.until_bash' references '$LOOP_PREV.nope.output'",
+    ]);
+    parseWorkflowYaml(loop('', 'test "$LOOP_PREV.check.output.outcome" = return'));
+  });
+
+  it('accepts refs across nested bodies in both directions', () => {
+    parseWorkflowYaml(
+      loop(`        - id: outer-reader
+          bash: echo $LOOP_PREV.inner-work.output
+        - id: inner
+          depends_on: [outer-reader]
+          loop_group:
+            until_bash: "true"
+            max_iterations: 1
+            nodes:
+              - id: inner-work
+                bash: echo $LOOP_PREV.check.output.outcome
+                when: "$LOOP_PREV.check.output.outcome == 'return'"
+`)
+    );
+  });
+
+  describe('to an include', () => {
+    const root = useTempWorkflowRoot();
+    const inner = `name: inner
+description: Returns a fixed outcome.
+returns: say
+nodes:
+  - id: say
+    bash: echo '{"outcome":"return"}'
+    output_format:
+      type: object
+      properties: { outcome: { type: string } }
+      required: [outcome]
+`;
+    const outer = (fixWhen: string, verdictInBody = true) => {
+      const verdict = (indent: string) => `${indent}- id: verdict\n${indent}  include: inner\n`;
+      return `name: outer
+description: Reads an include's previous round.
+nodes:
+${verdictInBody ? '' : verdict('  ')}  - id: rounds
+${verdictInBody ? '' : '    depends_on: [verdict]\n'}    loop_group:
+      until_bash: "true"
+      max_iterations: 2
+      nodes:
+        - id: fix
+          bash: echo fix
+          when: "${fixWhen}"
+${verdictInBody ? `${verdict('        ')}          depends_on: [fix]\n          trigger_rule: all_done\n` : ''}`;
+    };
+    const load = (yaml: string) =>
+      discoverFiles(root(), { 'inner.yaml': inner, 'outer.yaml': yaml });
+
+    it('loads a field the included workflow returns', async () => {
+      const result = await load(outer("$LOOP_PREV.verdict.output.outcome == 'return'"));
+      expect(result.errors).toEqual([]);
+      const fix = result.workflows
+        .find(w => w.workflow.name === 'outer')
+        ?.workflow.nodes.flatMap(n => ('loop_group' in n ? n.loop_group.nodes : []))
+        .find(n => n.id === 'fix');
+      expect(fix?.when).toBe("$LOOP_PREV.verdict__say.output.outcome == 'return'");
+    });
+
+    it('refuses a field the included workflow does not return', async () => {
+      const result = await load(outer("$LOOP_PREV.verdict.output.outcom == 'return'"));
+      const error = result.errors.find(e => e.filename.includes('outer'))?.error;
+      expect(error).toContain('outcom');
+    });
+
+    it('refuses an include outside the loop body', async () => {
+      const result = await load(outer("$LOOP_PREV.verdict.output.outcome == 'return'", false));
+      const error = result.errors.find(e => e.filename.includes('outer'))?.error;
+      expect(error).toContain(
+        "Node 'fix' field 'when' references '$LOOP_PREV.verdict.output', which is not a node in an enclosing loop_group body"
+      );
+    });
+  });
+});

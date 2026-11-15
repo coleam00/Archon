@@ -1,7 +1,7 @@
 // @archon-test-isolated
 /**
  * Real Git and a real SQLite database: abandonment removes the worktree a run
- * created, with force, and keeps its branch. Runs in its own `bun test`
+ * created, with force, and keeps its branch unless it never left its start point. Runs in its own `bun test`
  * invocation (declared by @archon-test-isolated) because it mock.module's the DB connection.
  */
 import { setPlatformPolicies } from '../../platforms/registry';
@@ -120,6 +120,21 @@ let env: IsolationEnvironmentRow;
 let run: WorkflowRun;
 let store: IIsolationStore;
 let provider: WorktreeProvider;
+/** The commit the fixture's branch was cut from. */
+let cutFrom: string;
+/** Record on the run the start point the isolation step records for a branch it cut. */
+const recordStartPoint = (): void => {
+  run.checkout_baseline = {
+    kind: 'git',
+    sampledAt: new Date().toISOString(),
+    commit: cutFrom,
+    tree: null,
+    worktree: { status: 'clean' },
+    cutFromCommit: cutFrom,
+  };
+};
+const branchExists = async (name: string): Promise<boolean> =>
+  (await git(repo, 'branch', '--list', name)) !== '';
 const request = () => ({
   canonicalRepoPath: toRepoPath(repo),
   codebaseId,
@@ -226,6 +241,8 @@ beforeEach(async () => {
   );
   const created = await provider.create(request());
   if (created.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+  if (created.metadata.cutFromCommit === undefined) throw new Error('Expected a cut branch');
+  cutFrom = created.metadata.cutFromCommit;
   env = await isolationDb.create({
     codebase_id: codebaseId,
     workflow_type: 'task',
@@ -439,11 +456,71 @@ describe('owned worktree release', () => {
 
     const result = await reclaimRunWorktree(run, store);
 
-    expect(result).toEqual({ released: { path: wt, branch: env.branch_name }, warnings: [] });
+    expect(result).toEqual({
+      released: { path: wt, branch: env.branch_name, branchDeleted: false },
+      warnings: [],
+    });
     expect(existsSync(wt)).toBe(false);
     expect(await status()).toBe('destroyed');
     expect(await git(repo, 'rev-parse', '--verify', env.branch_name)).toBe(head);
     await expect(reclaimRunWorktree(run, store)).resolves.toEqual({ warnings: [] });
+  });
+
+  test('a generated branch still at its start point goes with the worktree', async () => {
+    recordStartPoint();
+    const result = await reclaimRunWorktree(run, store);
+    expect(result.released?.branchDeleted).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(existsSync(env.working_path)).toBe(false);
+    expect(await branchExists(env.branch_name)).toBe(false);
+  });
+
+  test('a generated branch with an unpushed commit is kept', async () => {
+    recordStartPoint();
+    await writeFile(join(env.working_path, 'work'), 'work');
+    await git(env.working_path, 'add', 'work');
+    await git(env.working_path, 'commit', '-qm', 'work');
+    const result = await reclaimRunWorktree(run, store);
+    expect(result.released?.branchDeleted).toBe(false);
+    expect(await branchExists(env.branch_name)).toBe(true);
+  });
+
+  test('a generated branch checked out in another checkout is kept', async () => {
+    recordStartPoint();
+    await git(repo, 'checkout', '-q', '--ignore-other-worktrees', env.branch_name);
+    const result = await reclaimRunWorktree(run, store);
+    expect(result.released?.branchDeleted).toBe(false);
+    expect(existsSync(env.working_path)).toBe(false);
+    expect(await branchExists(env.branch_name)).toBe(true);
+  });
+
+  test('a branch the launch named is kept even at its start point', async () => {
+    const named = await provider.create({
+      ...request(),
+      identifier: 'build/8-y',
+      taskBranch: { kind: 'new', branch: toBranchName('build/8-y') },
+    });
+    if (named.metadata.provenance !== 'created') throw new Error('Expected fresh creation');
+    const namedEnv = await isolationDb.create({
+      codebase_id: codebaseId,
+      workflow_type: 'task',
+      workflow_id: 'build/8-y',
+      working_path: named.workingPath,
+      branch_name: named.branchName,
+      metadata: { ...worktreeRegistrationMetadata(named.metadata) },
+    });
+    recordStartPoint();
+    const result = await reclaimRunWorktree(
+      {
+        ...run,
+        working_path: named.workingPath,
+        metadata: { owned_worktree: { envId: namedEnv.id, creationId: named.metadata.creationId } },
+      },
+      store
+    );
+    expect(result.released?.branchDeleted).toBe(false);
+    expect(existsSync(named.workingPath)).toBe(false);
+    expect(await branchExists('build/8-y')).toBe(true);
   });
 
   test('removes a worktree with an initialized submodule', async () => {
@@ -472,9 +549,11 @@ describe('owned worktree release', () => {
   });
 
   test('a claimable run on the checkout refuses release and leaves it usable', async () => {
-    const other = await seedRunAt(env.working_path, 'failed');
+    recordStartPoint();
+    const other = await seedRunAt(env.working_path, 'paused');
     await expect(reclaimRunWorktree(run, store)).rejects.toThrow(`claimable run ${other}`);
     expect(existsSync(env.working_path)).toBe(true);
+    expect(await branchExists(env.branch_name)).toBe(true);
     expect(await status()).toBe('active');
     expect(await readWorktreeLock(gitModule.toWorktreePath(env.working_path))).toBeNull();
   });
@@ -622,9 +701,14 @@ describe('completed run worktree release', () => {
     await writeFile(join(repo, '.archon', 'config.yaml'), 'worktree:\n  remote: upstream\n');
   });
 
-  test.each(['sql', 'file'] as const)(
-    '%s: a clean checkout whose commits are all on a remote is removed, keeping its branch',
-    async persistence => {
+  test.each(
+    (['sql', 'file'] as const).flatMap(persistence =>
+      ([true, false] as const).map(recorded => ({ persistence, recorded }))
+    )
+  )(
+    '$persistence: a clean checkout with no commits of its own is removed; start point recorded: $recorded',
+    async ({ persistence, recorded }) => {
+      if (recorded) recordStartPoint();
       const target =
         persistence === 'sql'
           ? store
@@ -655,7 +739,8 @@ describe('completed run worktree release', () => {
 
       expect(existsSync(env.working_path)).toBe(false);
       expect((await target.getById(env.id))?.status).toBe('destroyed');
-      expect(await git(repo, 'branch', '--list', env.branch_name)).toContain(env.branch_name);
+      // Without a recorded start point the branch is kept: nothing proves it holds no work.
+      expect(await branchExists(env.branch_name)).toBe(!recorded);
     }
   );
 
@@ -703,6 +788,7 @@ describe('completed run worktree release', () => {
   };
 
   test('a pushed run-named checkout is removed, keeping its local and remote branch', async () => {
+    recordStartPoint();
     await commitInWorktree();
     await pushByUrl();
     expect(await git(repo, 'branch', '--remotes')).not.toContain(env.branch_name);

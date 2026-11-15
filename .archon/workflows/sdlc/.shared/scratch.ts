@@ -47,7 +47,17 @@ export function pruneScratch(scratch: string): string[] {
     removed.push(path);
   }
   // The directory as named, never its resolved target: a symlink there loses only the link.
-  rmSync(scratch, { recursive: true, force: true });
+  // Windows can refuse (EBUSY) while a process a reviewer started still holds a file. The
+  // worktrees are already unregistered above, and the engine deletes this directory when the
+  // run ends, so a refusal here is reported and does not fail the round. No retry options:
+  // Bun ignores `maxRetries` and `retryDelay`.
+  try {
+    rmSync(scratch, { recursive: true, force: true });
+  } catch (error) {
+    console.error(
+      `scratch: left ${scratch} for the engine to remove (${error instanceof Error ? error.message : String(error)})`
+    );
+  }
   return removed;
 }
 

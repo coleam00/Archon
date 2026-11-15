@@ -256,7 +256,9 @@ test.each([false, true])(
   async binaryMode => {
     const name = 'private-bundle';
     const filename = `${name}.yaml`;
-    const yaml = 'name: private\ndescription: ARCHON_BUNDLE_SECRET_SENTINEL\nnodes: [';
+    // The sentinel sits on the offending line, so the diagnostic quotes it: the test then
+    // proves the author sees the line while the logs do not.
+    const yaml = 'name: private\ndescription: ARCHON_BUNDLE_SECRET_SENTINEL: stray\nnodes: []';
     const path = join(app, 'workflows', 'shipped', name, filename);
     const lines: string[] = [];
     await write(path, yaml);
@@ -265,20 +267,16 @@ test.each([false, true])(
       [name]: `workflows/shipped/${name}/${filename}`,
     });
     binary = binaryMode;
-    const message = 'Unexpected token at line 3: ARCHON_BUNDLE_SECRET_SENTINEL';
-    const parse = Bun.YAML.parse;
-    const parser = spyOn(Bun.YAML, 'parse').mockImplementation(content => {
-      if (content === yaml) throw new SyntaxError(message);
-      return parse(content);
-    });
     setLogSink(line => lines.push(line));
     try {
       const result = await discoverWorkflows(project, { providers: providerRegistry });
       expect(result.errors).toContainEqual({
         filename,
         errorType: 'parse_error',
-        error: `YAML parse error (near line 3): ${message}`,
+        error: expect.stringContaining(`${filename}:2:14: YAML syntax error:`),
       });
+      const diagnostic = result.errors.find(entry => entry.filename === filename)?.error;
+      expect(diagnostic).toContain('ARCHON_BUNDLE_SECRET_SENTINEL');
       expect(lines.join('')).not.toContain('ARCHON_BUNDLE_SECRET_SENTINEL');
       expect(lines.join('')).not.toContain('name: private');
       const event = lines
@@ -291,7 +289,6 @@ test.each([false, true])(
       expect(event).toBeDefined();
       expect(JSON.stringify(event)).toContain(filename);
     } finally {
-      parser.mockRestore();
       setLogSink(undefined);
       Reflect.deleteProperty(defaults.BUNDLED_WORKFLOWS, name);
       Reflect.deleteProperty(defaults.BUNDLED_WORKFLOW_PATHS, name);

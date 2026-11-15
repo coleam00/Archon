@@ -1,11 +1,5 @@
 /** The references one loop_group iteration resolves in its body's text: `$LOOP_PREV.*` and `$LOOP_USER_INPUT`. */
-import {
-  type DagNode,
-  type IncludeDirective,
-  type NodeOutput,
-  isIncludeDirective,
-  isLoopGroupNode,
-} from '../schemas';
+import { type DagNode, type NodeOutput, collectLoopBodyNodeIds } from '../schemas';
 import {
   type TemplateToken,
   OutputRefError,
@@ -20,30 +14,6 @@ import {
 import { getLog } from './log';
 import type { TextSurface } from './references';
 import { shellQuote, shellQuoteOrFile } from './shell-quote';
-
-/**
- * Collect the static ids of every node in a loop_group body, recursing into nested
- * loop_group bodies. This is the *typo detector* for `$LOOP_PREV.<id>.output.<field>`
- * refs: an id that matches no node anywhere in the (possibly nested) body is a genuine
- * typo, distinct from a real body id that merely has no prior-iteration output yet.
- *
- * The transitive set (not just the outer group's direct ids) is deliberate: nested
- * loop_group bodies reuse the OUTER loop's prior-iteration snapshot, so a ref inside a
- * nested body may legitimately name an inner-group node id (which resolves to '' at the
- * outer granularity — see {@link loopPrevRefToken}). Including descendants keeps
- * such real-but-empty refs lenient while still catching ids that exist nowhere.
- */
-export function collectLoopBodyNodeIds(
-  nodes: readonly (DagNode | IncludeDirective)[],
-  into: Set<string> = new Set<string>()
-): Set<string> {
-  for (const n of nodes) {
-    into.add(n.id);
-    if (!isIncludeDirective(n) && isLoopGroupNode(n))
-      collectLoopBodyNodeIds(n.loop_group.nodes, into);
-  }
-  return into;
-}
 
 /**
  * The `$LOOP_PREV.<nodeId>.output[.field]` reference, resolved against one loop_group
