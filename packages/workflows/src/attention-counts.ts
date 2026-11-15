@@ -4,8 +4,8 @@
  */
 import { z } from 'zod';
 import {
-  compareAttentionStrings,
-  inAttentionQuery,
+  compareStrings,
+  inQuery,
   projectRefSchema,
   runProject,
   type AttentionQueueCountBy,
@@ -89,7 +89,7 @@ export function countAttentionQueue(
   items: readonly AttentionCounted[],
   query: AttentionQueueQuery & { countBy: AttentionQueueCountBy }
 ): AttentionQueueCounts {
-  const selected = items.filter(item => inAttentionQuery(item, query));
+  const selected = items.filter(item => inQuery(item, query));
   const { countBy } = query;
   switch (countBy.by) {
     case 'project':
@@ -161,7 +161,7 @@ function tally<Group>(
     if (recommendation.followed) totals.followed += 1;
   }
   return [...groups.values()].sort(
-    (a, b) => b.count - a.count || compareAttentionStrings(sortKey(a.group), sortKey(b.group))
+    (a, b) => b.count - a.count || compareStrings(sortKey(a.group), sortKey(b.group))
   );
 }
 

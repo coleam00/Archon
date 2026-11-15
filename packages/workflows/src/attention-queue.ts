@@ -631,7 +631,7 @@ export function matchesAttentionLabels(
 }
 
 /** True when an item's project is in the query's scope and it carries the query's labels. */
-export function inAttentionQuery(
+export function inQuery(
   item: Pick<AttentionQueueItem, 'project' | 'labels'>,
   query: AttentionQueueQuery
 ): boolean {
@@ -640,7 +640,7 @@ export function inAttentionQuery(
   );
 }
 
-export function compareAttentionStrings(a: string, b: string): number {
+export function compareStrings(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;
 }
 
@@ -651,7 +651,7 @@ function compareAge(a: AttentionQueueItem, b: AttentionQueueItem): number {
     if (b.pausedAt === null) return -1;
     return Date.parse(a.pausedAt) - Date.parse(b.pausedAt);
   }
-  return compareAttentionStrings(a.ref, b.ref);
+  return compareStrings(a.ref, b.ref);
 }
 
 /** The items `query` selects, in `order`. Items without the sort label come last. */
@@ -659,7 +659,7 @@ export function selectAttentionQueue(
   items: readonly AttentionQueueItem[],
   query: AttentionQueueQuery & { order: AttentionQueueOrder }
 ): AttentionQueueItem[] {
-  const selected = items.filter(item => inAttentionQuery(item, query));
+  const selected = items.filter(item => inQuery(item, query));
   const { order } = query;
   if (order.by === 'age') return selected.sort(compareAge);
   const labelOf = (item: AttentionQueueItem): string | undefined =>
@@ -669,7 +669,7 @@ export function selectAttentionQueue(
     if (x !== y) {
       if (x === undefined) return 1;
       if (y === undefined) return -1;
-      return compareAttentionStrings(x, y);
+      return compareStrings(x, y);
     }
     return compareAge(a, b);
   });
