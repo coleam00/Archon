@@ -53,6 +53,18 @@ nodes:
 });
 
 describe('parseWorkflow', () => {
+  it('reports a YAML syntax error with its file, line, column and source line', () => {
+    const yaml =
+      'name: repro\ndescription: a stray: colon here\nnodes:\n  - id: a\n    bash: echo hi\n';
+    const { error } = parseWorkflowWithProviders(yaml, 'repro.yaml', providerRegistry);
+    expect(error?.errorType).toBe('parse_error');
+    expect(error?.error).toStartWith('repro.yaml:2:14: YAML syntax error: ');
+    expect(error?.error.split('\n').slice(1)).toEqual([
+      '  description: a stray: colon here',
+      `  ${' '.repeat(13)}^`,
+    ]);
+  });
+
   it.each(['true', 'false', '"yes"'])(
     'loads workflow-level interactive: %s with a deprecation warning and drops it',
     value => {
@@ -1474,7 +1486,7 @@ nodes:
     );
     expect(error).toContain("'fan_out.join'");
     expect(error).toContain('first_success');
-    expect(error).not.toContain('YAML parse error');
+    expect(error).not.toContain('YAML syntax error');
   });
 
   it('rejects max_parallel: all on composed fan-out', () => {

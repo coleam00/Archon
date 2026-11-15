@@ -311,6 +311,7 @@
         "@archon/provider-contract": "workspace:*",
         "@archon/script-api": "workspace:*",
         "ajv": "^8.20.0",
+        "yaml": "^2.9.0",
         "zod": "^4.4.3",
       },
       "devDependencies": {

@@ -1,6 +1,7 @@
 /**
  * Workflow loader - parses and validates a workflow YAML file
  */
+import { LineCounter, parseDocument } from 'yaml';
 import type { ProviderRegistry } from '@archon/provider-contract';
 import type { WorkflowDefinition, WorkflowLoadError, DagNode, IncludeDirective } from './schemas';
 import type { WorkflowPack } from './schemas/pack-settings';
@@ -153,7 +154,7 @@ export function parseWorkflow(
     const raw = parseYaml(content) as Record<string, unknown>;
     return parseWorkflowDocument(raw, filename, providers, configuredEnvNames, pack);
   } catch (error) {
-    return yamlParseFailure(filename, error as Error);
+    return yamlParseFailure(filename, content, error as Error);
   }
 }
 
@@ -417,27 +418,40 @@ function workflowContractError(
   return validateWorkflowOutcomeDeclaration(workflow) ?? validateRunBudgetShape(workflow);
 }
 
-function yamlParseFailure(filename: string, err: Error): ParseResult {
-  // Extract line number from YAML parse errors if available
-  const linePattern = /line (\d+)/i;
-  const lineMatch = linePattern.exec(err.message);
-  const lineInfo = lineMatch ? ` (near line ${lineMatch[1]})` : '';
+/**
+ * The author-facing error for a workflow Bun's YAML parser rejected. Bun's YAML errors carry no
+ * source position (their `line`/`column` are the JavaScript call site), so the `yaml` package
+ * re-parses the text on this failure path only, and its structured error offset gives the
+ * line and column.
+ */
+function yamlParseFailure(filename: string, content: string, err: Error): ParseResult {
+  const location = locateYamlError(content);
   // Debug for the same reason as the validation failures above: the returned
   // parse_error is what the author sees, and discovery re-parses on every command.
-  getLog().debug(
-    {
-      filename,
-      lineInfo: lineInfo || undefined,
-    },
-    'workflow_parse_failed'
-  );
+  // The reason and source line stay out of the log: both can quote the file's text.
+  getLog().debug({ filename, line: location?.line, col: location?.col }, 'workflow_parse_failed');
+  // The two parsers can disagree. Bun decides whether a file loads, so when `yaml` accepts
+  // what Bun rejected, report Bun's error without inventing a position.
+  const error = location
+    ? `${filename}:${location.line}:${location.col}: YAML syntax error: ${location.reason}\n  ${location.sourceLine}\n  ${' '.repeat(location.col - 1)}^`
+    : `${filename}: YAML syntax error: ${err.message}`;
+  return { workflow: null, error: { filename, error, errorType: 'parse_error' } };
+}
+
+function locateYamlError(
+  content: string
+): { line: number; col: number; reason: string; sourceLine: string } | undefined {
+  // Normalized as parseYaml does, so positions match the text Bun saw.
+  const normalized = content.replaceAll('\r\n', '\n');
+  const lineCounter = new LineCounter();
+  const first = parseDocument(normalized, { prettyErrors: false, lineCounter }).errors[0];
+  if (first === undefined) return undefined;
+  const { line, col } = lineCounter.linePos(first.pos[0]);
   return {
-    workflow: null,
-    error: {
-      filename,
-      error: `YAML parse error${lineInfo}: ${err.message}`,
-      errorType: 'parse_error',
-    },
+    line,
+    col,
+    reason: first.message,
+    sourceLine: normalized.split('\n')[line - 1] ?? '',
   };
 }
 
