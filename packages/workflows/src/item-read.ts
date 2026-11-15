@@ -11,7 +11,6 @@ import {
   listAttentionQueue,
   type AttentionQueueSource,
 } from './attention-queue';
-import { gatherDescendantRunIds } from './child-runs';
 import { attentionDegradedSchema, splitAttentionRead } from './schemas/attention-degraded';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import { workflowRunOutcomeSchema, workflowRunStatusSchema } from './schemas/run-status';
@@ -133,6 +132,27 @@ function itemAnswer(row: WorkflowEventRow): ItemAnswer {
   };
 }
 
+/**
+ * Every run in the trees under `roots`, roots included. Complete rather than bounded like
+ * `gatherDescendantRunIds`: a fan-out has no limit on its children, and a cut-off walk
+ * would report an item with an open question as having none. `seen` keeps a corrupted
+ * `parent_run_id` cycle from looping.
+ */
+async function runTree(
+  store: Pick<IWorkflowStore, 'findChildRuns'>,
+  roots: readonly WorkflowRun[]
+): Promise<Set<string>> {
+  const seen = new Set(roots.map(run => run.id));
+  const queue = [...seen];
+  for (let id = queue.shift(); id !== undefined; id = queue.shift())
+    for (const child of await store.findChildRuns(id))
+      if (!seen.has(child.id)) {
+        seen.add(child.id);
+        queue.push(child.id);
+      }
+  return seen;
+}
+
 /** Read the item `key` names in project `projectKey`; null when there is no such item. */
 export async function readItem(
   source: ItemReadSource,
@@ -141,11 +161,7 @@ export async function readItem(
 ): Promise<ItemRead | null> {
   const found = await source.store.getItemRuns(projectKey, key);
   if (found === null) return null;
-  const tree = new Set<string>();
-  for (const run of found.runs) {
-    tree.add(run.id);
-    for (const id of await gatherDescendantRunIds(source, run.id)) tree.add(id);
-  }
+  const tree = await runTree(source.store, found.runs);
   // The one queue reader, so a question here reads as `workflow attention` lists it.
   const { values, degraded } = splitAttentionRead(await listAttentionQueue(source));
   const questions = values

@@ -66,8 +66,9 @@ function event(
   };
 }
 
-// Two top-level runs on the item; the second was started first. The later one has a
-// `workflow:` child paused on a question, and an unrelated run asks one too.
+// Two top-level runs on the item; the second was started first. The later one has two
+// `workflow:` children paused on questions, the older of which the queue returns last, and
+// an unrelated run asks one too.
 const first = run('first', {
   status: 'completed',
   outcome: 'succeeded',
@@ -79,8 +80,12 @@ const child = asking('child', '2026-11-01T11:10:00.000Z', {
   parent_run_id: 'second',
   item_id: null,
 });
+const sibling = asking('sibling', '2026-11-01T11:02:00.000Z', {
+  parent_run_id: 'second',
+  item_id: null,
+});
 const unrelated = asking('unrelated', '2026-11-01T08:00:00.000Z', { item_id: null });
-const runs = new Map([first, second, child, unrelated].map(row => [row.id, row]));
+const runs = new Map([first, second, child, sibling, unrelated].map(row => [row.id, row]));
 
 const events: WorkflowEventRow[] = [
   event('child', 'wait_answered', '2026-11-01T11:05:00.000Z', {
@@ -115,7 +120,7 @@ const source: ItemReadSource = {
     findChildRuns: async id => [...runs.values()].filter(row => row.parent_run_id === id),
     listEventsForRuns: async ids =>
       new Map(ids.map(id => [id, events.filter(row => row.workflow_run_id === id)])),
-    listAttentionQueueRows: async () => [unrelated, child],
+    listAttentionQueueRows: async () => [unrelated, child, sibling],
     getWorkflowRun: async id => runs.get(id) ?? null,
     getWorkflowRunForAttention: async id => runs.get(id) ?? null,
     getCodebase: async () => null,
@@ -145,8 +150,10 @@ describe('reading an item', () => {
         completedAt: null,
       },
     ]);
-    // The child's question is the item's, under the child's run id; the unrelated one is not.
+    // The children's questions are the item's, under their own run ids, oldest first; the
+    // unrelated one is not.
     expect(read?.questions.map(question => [question.kind, question.run?.id])).toEqual([
+      ['attention', 'sibling'],
       ['attention', 'child'],
     ]);
     expect(read?.answers).toEqual([
@@ -208,5 +215,34 @@ describe('reading an item', () => {
       answers: [],
       degraded: [],
     });
+  });
+
+  test('reaches a question below a fan-out of any width', async () => {
+    const root = run('root');
+    const fanOut = Array.from({ length: 64 }, (_, n) =>
+      run(`fan-${String(n)}`, { parent_run_id: 'root', item_id: null })
+    );
+    const deep = asking('deep', '2026-11-01T12:00:00.000Z', {
+      parent_run_id: 'fan-63',
+      item_id: null,
+    });
+    const tree = new Map([root, ...fanOut, deep].map(row => [row.id, row]));
+    const answered = event('deep', 'wait_answered', '2026-11-01T11:50:00.000Z', { via: 'cli' });
+    const wide: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [root] }),
+        findChildRuns: async id => [...tree.values()].filter(row => row.parent_run_id === id),
+        listEventsForRuns: async ids =>
+          new Map(ids.map(id => [id, id === 'deep' ? [answered] : []])),
+        listAttentionQueueRows: async () => [deep],
+        getWorkflowRun: async id => tree.get(id) ?? null,
+        getWorkflowRunForAttention: async id => tree.get(id) ?? null,
+      },
+    };
+    const read = await readItem(wide, item.projectKey, item.key);
+    expect(read?.questions.map(question => question.run?.id)).toEqual(['deep']);
+    expect(read?.answers.map(answer => answer.runId)).toEqual(['deep']);
   });
 });
