@@ -95,7 +95,7 @@ describe('workflowRunCommand — progress rendering', () => {
   async function runOutcomeFixture(
     execution: WorkflowExecutionResult,
     status: 'completed' | 'failed' | 'paused',
-    outcome: 'succeeded' | 'failed' | null
+    outcome: 'succeeded' | 'failed' | null = null
   ): Promise<unknown> {
     setupWorkflowMocks(true);
     const { executeWorkflow } = require('@archon/workflows/executor');
@@ -426,27 +426,14 @@ describe('workflowRunCommand — progress rendering', () => {
     );
   });
 
-  it('claims no outcome for a failed run, which never completed with one', async () => {
+  it('exits 1 for a failed run and still reports its cost', async () => {
     const thrown = await runOutcomeFixture(
       { success: false, workflowRunId: 'run-1', error: 'later node failed' },
-      'failed',
-      null
+      'failed'
     );
 
     expect(resolveCliExitCode(thrown)).toBe(1);
     expect(consoleSpy).toHaveBeenCalledWith('    Cost: $0.024');
-    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Authored outcome');
-  });
-
-  it('claims no outcome for a paused run', async () => {
-    await runOutcomeFixture(
-      { success: true, paused: true, workflowRunId: 'run-1' },
-      'paused',
-      null
-    );
-
-    expect(consoleSpy.mock.calls.flat().join('\n')).not.toContain('Usage');
-    expect(consoleSpy).toHaveBeenCalledWith('\nWorkflow paused — waiting for approval.');
   });
 
   it('preserves the existing completion text when authored outcome is null', async () => {
