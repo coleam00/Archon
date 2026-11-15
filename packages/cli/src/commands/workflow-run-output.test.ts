@@ -144,39 +144,10 @@ describe('workflowRunCommand — progress rendering', () => {
     stderrSpy.mockRestore();
   });
 
-  it('keeps a successful foreground host workflow successful without Docker', async () => {
-    setupWorkflowMocks();
-    const { executeWorkflow } = require('@archon/workflows/executor');
-    (executeWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
-      success: true,
-      workflowRunId: 'test-run-id',
-    });
-    const { hostname } = await import('node:os');
-    const { mockWorkflowRun } = await import('../../../core/src/test/mocks/workflow-run');
-    const { createRunResourceRelease } = await import(
-      '../../../core/src/services/cleanup/run-verification-images'
-    );
-    const host = createTestWorkflowHost();
-    const row = {
-      ...mockWorkflowRun,
-      id: 'test-run-id',
-      status: 'completed' as const,
-      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-    };
-    const previousPath = process.env.PATH;
-    process.env.PATH = '';
-    try {
-      host.deps.releaseRunResources = createRunResourceRelease({ getWorkflowRun: async () => row });
-      await expect(
-        workflowRunCommand(host, '/test/path', 'plan', 'hello', {})
-      ).resolves.toBeUndefined();
-    } finally {
-      process.env.PATH = previousPath;
-    }
-  });
-
+  // A host run records no Docker use, so a failing daemon must stay silent; a container
+  // run records it, so the same failure stays loud and fails the command.
   it.each(['host-inventory', 'container-inventory', 'isolation-container'])(
-    'preserves foreground exit policy for %s failure',
+    'reports a %s failure only for a run that recorded container isolation',
     async stage => {
       setupWorkflowMocks();
       const { executeWorkflow } = require('@archon/workflows/executor');
@@ -233,14 +204,11 @@ describe('workflowRunCommand — progress rendering', () => {
           expect(error).toBeUndefined();
         }
         const text = warning.mock.calls.flat().join(' ');
-        expect(text).toContain('test-run-id');
         if (container) {
-          expect(text).toContain('retained verification images');
-          expect(text).not.toContain('cleanup is inconclusive');
+          expect(text).toContain('WARNING: Run test-run-id retained verification images');
         } else {
-          expect(text).toContain('cleanup is inconclusive');
-          expect(text).toContain(`label=${isolation.VERIFICATION_IMAGE_RUN_LABEL}=test-run-id`);
-          expect(text).toContain('docker image rm --no-prune <full-id>');
+          expect(text).not.toContain('verification image');
+          expect(text).not.toContain('inconclusive');
         }
         expect(calls.map(args => args.slice(0, 2))).toEqual(
           stage === 'isolation-container'
@@ -250,7 +218,7 @@ describe('workflowRunCommand — progress rendering', () => {
                   ['container', 'ls'],
                   ['image', 'ls'],
                 ]
-              : [['image', 'ls']]
+              : []
         );
       } finally {
         warning.mockRestore();

@@ -112,7 +112,7 @@ Runs with an already recorded output root keep using it when resumed.
 
 ### Disposable Docker verification images
 
-Use the current run's identity to opt disposable images into terminal cleanup:
+Label disposable images with the current run's identity to mark which run owns them:
 
 ```bash
 docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check" .
@@ -120,16 +120,16 @@ docker build --label "archon.run_id=$WORKFLOW_ID" -t "verify-$WORKFLOW_ID:check"
 
 `docker buildx build --load` takes the same `--label`. Give each run unique tags, one tag per image, and use the same Docker context as the Archon host. A child run uses its own `$WORKFLOW_ID`. Remove verification containers when the check finishes, including stopped containers.
 
-**When images are removed.** Archon attempts cleanup when a completed run, or a cancelled run that cannot resume, stops writing. Nothing watches for containers removed later. These keep their images:
+Archon removes labelled images only for a run with container isolation, because that is the only Docker use a run records. A host run removes its own images, for example with `docker image rm --no-prune "verify-$WORKFLOW_ID:check"` in the same node or in a trailing node. Archon never asks Docker about a host run's images, so a host run with Docker stopped prints nothing about them.
+
+**When images are removed.** For a container run, Archon attempts cleanup when a completed run, or a cancelled run that cannot resume, stops writing. Nothing watches for containers removed later. These keep their images:
 
 - Failed runs, including ones interrupted by SIGINT or SIGTERM, because they can resume under the same run ID. Abandon the run, or recover by hand as below, to release them.
 - Fan-out children cancelled in a way that can resume. Abandoning does not release their images; recover by hand.
 - Images a container uses, and images whose owning run is live or cannot be established.
 - Unlabelled images and other runs' images. Shared build cache also stays: Docker cannot filter it by this label.
 
-Docker errors are reported, and the run's terminal status is unchanged.
-
-**When cleanup cannot list images.** If the first listing of a host run's verification images fails, Archon keeps the run's own exit code and reports a warning that names the run, with manual recovery guidance, whatever caused the failure. Cleanup is then inconclusive and images may remain: restore access to the intended Docker context and recover by hand. A failure after the listing (inspection, container-use checks or removal) fails an otherwise successful foreground command, as does a container run's cleanup failure. A host run skips image cleanup only when Docker is absent at both host setup and cleanup. Container runs always require Docker.
+Docker errors are reported, and the run's terminal status is unchanged. A cleanup failure fails an otherwise successful foreground command.
 
 **Recover by hand.** Cleanup deletes immutable image IDs without force or parent pruning, and Docker refuses an ID with several repository references, so an image with several tags needs manual cleanup under exclusive control of its tags. After removing late test containers and confirming the run cannot resume or write:
 

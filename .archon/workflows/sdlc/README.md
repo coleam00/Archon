@@ -21,7 +21,7 @@ How the queues behave once they run is on the docs site:
 - [Forge](https://archon.diy/reference/forge/#use-the-forge-path-in-the-sdlc-pack): the plugin, its
   credential and the operations each stage needs.
 - [Disposable Docker verification images](https://archon.diy/reference/variables/#disposable-docker-verification-images):
-  the image label a run's Docker builds carry, and when the engine removes them.
+  the image label a run's Docker builds carry, and which runs the engine removes them for.
 
 ## Set up the pack
 

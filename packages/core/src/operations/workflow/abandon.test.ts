@@ -75,15 +75,14 @@ describe('abandonWorkflow', () => {
     expect(mockCancelWorkflowRun).toHaveBeenCalledWith('run-1', { cancel_reason: 'operator' });
   });
 
-  test('returns host inventory recovery warnings for the abandoned run and its cancelled child', async () => {
-    const root = makePausedRun({
-      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-    });
-    const child = makePausedRun({
-      id: 'child-inventory',
-      parent_run_id: root.id,
-      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-    });
+  test('returns image inventory warnings for the abandoned container run and its cancelled child', async () => {
+    const metadata = {
+      execution_owner: { host: hostname(), pid: process.pid },
+      isolation: 'container',
+      isolation_env_id: 'env-inventory',
+    };
+    const root = makePausedRun({ metadata });
+    const child = makePausedRun({ id: 'child-inventory', parent_run_id: root.id, metadata });
     const runs = new Map([root, child].map(run => [run.id, run]));
     const operationStore: WorkflowOperationsDeps['store'] = {
       ...store,
@@ -96,7 +95,8 @@ describe('abandonWorkflow', () => {
         return { cancelled: true };
       },
     };
-    const inventory = mock(async () => {
+    const inventory = mock(async (args: string[]) => {
+      if (args[0] === 'container') return { stdout: '', stderr: '' };
       throw new Error('inventory unavailable');
     });
     const operations = createWorkflowOperations({
@@ -118,15 +118,10 @@ describe('abandonWorkflow', () => {
       expect(result.cancelled).toBe(true);
       for (const run of [root, child]) {
         const warning = result.cleanupWarnings?.find(text => text.includes(`Run ${run.id} `));
-        expect(warning).toContain('inventory failed; cleanup is inconclusive');
-        expect(warning).toContain(`label=archon.run_id=${run.id}`);
-        expect(warning).toContain('cannot resume or write');
-        expect(warning).toContain('docker image inspect <full-id>');
-        expect(warning).toContain('docker container ls --all --filter ancestor=<full-id>');
-        expect(warning).toContain('docker image rm --no-prune <full-id>');
-        expect(warning).toContain('exclusive control');
+        expect(warning).toContain(`Run ${run.id} retained verification images`);
+        expect(warning).toContain('inventory unavailable');
       }
-      expect(inventory).toHaveBeenCalledTimes(2);
+      expect(inventory.mock.calls.filter(([args]) => args[0] === 'image')).toHaveLength(2);
     } finally {
       stderr.mockRestore();
     }

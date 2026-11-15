@@ -1,7 +1,7 @@
 import { expect, mock, spyOn, test } from 'bun:test';
 import * as isolation from '@archon/isolation';
 import { hostname, tmpdir } from 'node:os';
-import { mkdtemp, unlink, writeFile } from 'node:fs/promises';
+import { mkdtemp, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { trackTempRoots } from '@archon/paths/test-utils';
 import { createFileWorkflowStore } from '@archon/workflows/file-store';
@@ -16,20 +16,21 @@ import { mockWorkflowRun } from '../../test/mocks/workflow-run';
 import { createRunResourceRelease } from './run-verification-images';
 
 const trackTempRoot = trackTempRoots();
+const containerMetadata = {
+  execution_owner: { host: hostname(), pid: process.pid },
+  isolation: 'container',
+  isolation_env_id: 'env-a',
+};
 
 test.each(workflowRunStatusSchema.options)(
   'fresh %s status controls Docker cleanup',
   async status => {
-    const run = {
-      ...mockWorkflowRun,
-      status,
-      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-    };
+    const run = { ...mockWorkflowRun, status, metadata: containerMetadata };
     const release = mock(async (_id: string, _env?: string) => {});
     await createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id);
     expect(release.mock.calls).toEqual(
       isTerminalRunStatus(status) && !RESUMABLE_WORKFLOW_STATUSES.includes(status)
-        ? [[run.id, undefined]]
+        ? [[run.id, 'env-a']]
         : []
     );
   }
@@ -39,9 +40,13 @@ test.each([
   {},
   { execution_owner: { host: 'remote', pid: process.pid } },
   { execution_owner: { host: hostname(), pid: process.ppid } },
-])('ambiguous or live owner keeps images', async metadata => {
+])('ambiguous or live owner keeps images', async owner => {
   const release = mock(async (_id: string, _env?: string) => {});
-  const run = { ...mockWorkflowRun, status: 'completed' as const, metadata };
+  const run = {
+    ...mockWorkflowRun,
+    status: 'completed' as const,
+    metadata: { ...owner, isolation: 'container', isolation_env_id: 'env-a' },
+  };
   await createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id);
   expect(release).not.toHaveBeenCalled();
 });
@@ -108,15 +113,11 @@ test('missing rows skip cleanup while lookup and Docker errors reach the caller'
       release
     )('missing')
   ).rejects.toThrow('store unavailable');
-  const run = {
-    ...mockWorkflowRun,
-    status: 'completed' as const,
-    metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-  };
+  const run = { ...mockWorkflowRun, status: 'completed' as const, metadata: containerMetadata };
   await expect(
     createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id)
   ).rejects.toThrow('Docker unavailable');
-  expect(release).toHaveBeenCalledWith(run.id, undefined);
+  expect(release).toHaveBeenCalledWith(run.id, 'env-a');
 });
 
 test('a failed run cannot authorize asynchronous deletion before a concurrent resume', async () => {
@@ -125,9 +126,7 @@ test('a failed run cannot authorize asynchronous deletion before a concurrent re
   });
   const run = await store.createWorkflowRun({ workflow_name: 'verification', user_message: '' });
   await store.claimPendingWorkflowRun(run.id);
-  await store.updateWorkflowRun(run.id, {
-    metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-  });
+  await store.updateWorkflowRun(run.id, { metadata: containerMetadata });
   await store.failWorkflowRun(run.id, 'verification failed');
   let deletedDuringExecution = false;
   const release = mock(async () => {
@@ -152,9 +151,7 @@ test.each([...FAN_OUT_CANCEL_REASONS])(
     });
     const run = await store.createWorkflowRun({ workflow_name: 'verification', user_message: '' });
     await store.claimPendingWorkflowRun(run.id);
-    await store.updateWorkflowRun(run.id, {
-      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-    });
+    await store.updateWorkflowRun(run.id, { metadata: containerMetadata });
     await store.cancelFanOutRun(run.id, reason);
     let deletedDuringExecution = false;
     const release = mock(async () => {
@@ -174,153 +171,56 @@ test.each([...FAN_OUT_CANCEL_REASONS])(
     const run = {
       ...mockWorkflowRun,
       status: 'completed' as const,
-      metadata: {
-        execution_owner: { host: hostname(), pid: process.pid },
-        cancelled_reason: reason,
-      },
+      metadata: { ...containerMetadata, cancelled_reason: reason },
     };
     const release = mock(async (_id: string, _env?: string) => {});
     await createRunResourceRelease({ getWorkflowRun: async () => run }, release)(run.id);
-    expect(release.mock.calls).toEqual([[run.id, undefined]]);
+    expect(release.mock.calls).toEqual([[run.id, 'env-a']]);
   }
 );
 
 test.each(['completed', 'cancelled'] as const)(
-  'Docker-free host skips optional cleanup for %s runs',
+  'a %s host run never asks Docker about images',
   async status => {
-    const run = {
-      ...mockWorkflowRun,
-      status,
-      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-    };
-    const warning = spyOn(console, 'error').mockImplementation(() => {});
+    // A docker binary on PATH with its daemon down is the setup that used to warn.
+    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-docker-outage-')));
+    await writeFile(join(root, process.platform === 'win32' ? 'docker.cmd' : 'docker'), '', {
+      mode: 0o755,
+    });
     const previousPath = process.env.PATH;
-    process.env.PATH = '';
+    process.env.PATH = root;
+    const docker = spyOn(isolation, 'dockerCli').mockRejectedValue(
+      new Error('Cannot connect to the Docker daemon')
+    );
+    const warning = spyOn(console, 'error').mockImplementation(() => {});
+    const boundRelease = mock(async (_id: string, _env: string) => {});
+    const ownerRelease = mock(async (_id: string, _env: string) => {});
     try {
-      const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
-      await expect(cleanup(run.id)).resolves.toBeUndefined();
+      const run = {
+        ...mockWorkflowRun,
+        status,
+        metadata: { execution_owner: { host: hostname(), pid: process.pid } },
+      };
+      await expect(
+        createRunResourceRelease({ getWorkflowRun: async () => run })(run.id)
+      ).resolves.toBeUndefined();
+      await expect(
+        createRunResourceRelease({ getWorkflowRun: async () => run }, boundRelease)(
+          run.id,
+          ownerRelease
+        )
+      ).resolves.toBeUndefined();
+      expect(docker).not.toHaveBeenCalled();
+      expect(boundRelease).not.toHaveBeenCalled();
+      expect(ownerRelease).not.toHaveBeenCalled();
       expect(warning).not.toHaveBeenCalled();
     } finally {
       warning.mockRestore();
+      docker.mockRestore();
       process.env.PATH = previousPath;
     }
   }
 );
-
-test.each([false, true])(
-  'Docker disappearing after setup warns only for hosts (container=%s)',
-  async container => {
-    const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-docker-capability-')));
-    const executable = join(root, process.platform === 'win32' ? 'docker.cmd' : 'docker');
-    await writeFile(
-      executable,
-      process.platform === 'win32' ? '@exit /b 0\r\n' : '#!/bin/sh\nexit 0\n',
-      { mode: 0o755 }
-    );
-    const run = {
-      ...mockWorkflowRun,
-      status: 'completed' as const,
-      metadata: {
-        execution_owner: { host: hostname(), pid: process.pid },
-        ...(container ? { isolation: 'container', isolation_env_id: 'env-a' } : {}),
-      },
-    };
-    const warning = spyOn(console, 'error').mockImplementation(() => {});
-    const previousPath = process.env.PATH;
-    process.env.PATH = root;
-    try {
-      const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
-      await unlink(executable);
-      if (container) {
-        await expect(
-          cleanup(run.id, (id, env) => isolation.releaseRunVerificationImages(id, env))
-        ).rejects.toThrow('Verification image cleanup failed');
-      } else {
-        await expect(cleanup(run.id)).resolves.toEqual([expect.stringContaining(run.id)]);
-        expect(warning.mock.calls.flat().join(' ')).toContain(run.id);
-      }
-    } finally {
-      warning.mockRestore();
-      process.env.PATH = previousPath;
-    }
-  }
-);
-
-test.each([
-  ['completed', 'daemon unavailable'],
-  ['cancelled', 'daemon unavailable'],
-  ['completed', 'arbitrary inventory failure'],
-] as const)('inventory failure warns for a %s host run: %s', async (status, message) => {
-  const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-docker-outage-')));
-  await writeFile(join(root, process.platform === 'win32' ? 'docker.cmd' : 'docker'), '', {
-    mode: 0o755,
-  });
-  const previousPath = process.env.PATH;
-  process.env.PATH = root;
-  const docker = spyOn(isolation, 'dockerCli').mockRejectedValue(new Error(message));
-  const warning = spyOn(console, 'error').mockImplementation(() => {});
-  try {
-    const run = {
-      ...mockWorkflowRun,
-      status,
-      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-    };
-    const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
-    const warnings = await cleanup(run.id);
-    expect(warnings).toEqual([expect.any(String)]);
-    const text = warning.mock.calls.flat().join(' ');
-    expect(warnings).toEqual([text]);
-    expect(text).toContain(run.id);
-    expect(text).toContain('inconclusive');
-    expect(text).toContain(
-      `docker image ls --all --no-trunc --filter "label=${isolation.VERIFICATION_IMAGE_RUN_LABEL}=${run.id}"`
-    );
-    expect(text).toContain('cannot resume or write');
-    expect(text).toContain('docker image inspect <full-id>');
-    expect(text).toContain('docker container ls --all --filter ancestor=<full-id>');
-    expect(text).toContain('docker image rm --no-prune <full-id>');
-    expect(text).toContain('exclusive control');
-    expect(docker).toHaveBeenCalledTimes(1);
-  } finally {
-    warning.mockRestore();
-    docker.mockRestore();
-    process.env.PATH = previousPath;
-  }
-});
-
-test('host cleanup discovers Docker installed during execution', async () => {
-  const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-docker-start-')));
-  await writeFile(join(root, process.platform === 'win32' ? 'docker.cmd' : 'docker'), '', {
-    mode: 0o755,
-  });
-  const previousPath = process.env.PATH;
-  process.env.PATH = '';
-  const docker = spyOn(isolation, 'dockerCli').mockResolvedValue({ stdout: '', stderr: '' });
-  try {
-    const run = {
-      ...mockWorkflowRun,
-      status: 'completed' as const,
-      metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-    };
-    const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run });
-    process.env.PATH = root;
-    await cleanup(run.id);
-    expect(docker.mock.calls.map(([args]) => args)).toEqual([
-      [
-        'image',
-        'ls',
-        '--all',
-        '--quiet',
-        '--no-trunc',
-        '--filter',
-        `label=archon.run_id=${run.id}`,
-      ],
-    ]);
-  } finally {
-    docker.mockRestore();
-    process.env.PATH = previousPath;
-  }
-});
 
 test.each(workflowRunStatusSchema.options)(
   'container %s cleanup without an owner never calls host Docker',
@@ -349,27 +249,20 @@ test.each(workflowRunStatusSchema.options)(
   }
 );
 
-test.each(['inspect', 'container-use', 'removal', 'container-inventory', 'isolation-container'])(
+test.each(['inspect', 'container-use', 'removal', 'inventory', 'isolation-container'])(
   '%s failure remains fatal at the run cleanup boundary',
   async stage => {
-    const container = stage === 'container-inventory' || stage === 'isolation-container';
-    const run = {
-      ...mockWorkflowRun,
-      status: 'completed' as const,
-      metadata: {
-        execution_owner: { host: hostname(), pid: process.pid },
-        ...(container ? { isolation: 'container', isolation_env_id: 'env-a' } : {}),
-      },
-    };
+    const run = { ...mockWorkflowRun, status: 'completed' as const, metadata: containerMetadata };
     const failure = new Error('same Docker failure');
     const warning = spyOn(console, 'error').mockImplementation(() => {});
     const runner: isolation.DockerRunner = async args => {
       if (
         (stage === 'inspect' && args[1] === 'inspect') ||
-        (stage === 'container-use' && args[0] === 'container') ||
+        (stage === 'container-use' && args.some(arg => arg.startsWith('ancestor='))) ||
         (stage === 'removal' && args[1] === 'rm') ||
-        (stage === 'container-inventory' && args[0] === 'image' && args[1] === 'ls') ||
-        (stage === 'isolation-container' && args[0] === 'container')
+        (stage === 'inventory' && args[0] === 'image' && args[1] === 'ls') ||
+        (stage === 'isolation-container' &&
+          args.includes(`label=${isolation.CONTAINER_LABELS.envId}=env-a`))
       )
         throw failure;
       return {
@@ -397,7 +290,7 @@ test.each(['inspect', 'container-use', 'removal', 'container-inventory', 'isolat
   }
 );
 
-test.each([false, true])('container owner overrides host cleanup (failure=%s)', async fails => {
+test.each([false, true])('a per-call owner overrides the bound owner (failure=%s)', async fails => {
   const run = {
     ...mockWorkflowRun,
     status: 'completed' as const,
@@ -407,35 +300,19 @@ test.each([false, true])('container owner overrides host cleanup (failure=%s)', 
       isolation_env_id: 'env-owned',
     },
   };
-  const hostRelease = mock(async () => {
+  const boundRelease = mock(async () => {
     throw new Error('wrong daemon');
   });
   const failure = new isolation.VerificationImageInventoryError(run.id, new Error('owner offline'));
   const ownerRelease = mock(async (_id: string, _env: string) => {
     if (fails) throw failure;
   });
-  const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run }, hostRelease);
+  const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run }, boundRelease);
   const result = cleanup(run.id, ownerRelease);
   if (fails) await expect(result).rejects.toBe(failure);
   else await result;
   expect(ownerRelease.mock.calls).toEqual([[run.id, 'env-owned']]);
-  expect(hostRelease).not.toHaveBeenCalled();
-});
-
-test('container callback cannot change host cleanup ownership', async () => {
-  const run = {
-    ...mockWorkflowRun,
-    status: 'completed' as const,
-    metadata: { execution_owner: { host: hostname(), pid: process.pid } },
-  };
-  const hostRelease = mock(async (_id: string, _env?: string) => {});
-  const ownerRelease = mock(async (_id: string, _env: string) => {});
-  await createRunResourceRelease({ getWorkflowRun: async () => run }, hostRelease)(
-    run.id,
-    ownerRelease
-  );
-  expect(hostRelease.mock.calls).toEqual([[run.id, undefined]]);
-  expect(ownerRelease).not.toHaveBeenCalled();
+  expect(boundRelease).not.toHaveBeenCalled();
 });
 
 test.each(workflowRunStatusSchema.options)(
@@ -450,11 +327,11 @@ test.each(workflowRunStatusSchema.options)(
         isolation_env_id: 'env-owned',
       },
     };
-    const hostRelease = mock(async () => {
+    const boundRelease = mock(async () => {
       throw new Error('wrong daemon');
     });
     const ownerRelease = mock(async (_id: string, _env: string) => {});
-    const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run }, hostRelease);
+    const cleanup = createRunResourceRelease({ getWorkflowRun: async () => run }, boundRelease);
     const leave = enterRunExecution(run.id);
     try {
       await cleanup(run.id, ownerRelease);
@@ -468,6 +345,6 @@ test.each(workflowRunStatusSchema.options)(
         ? [[run.id, 'env-owned']]
         : []
     );
-    expect(hostRelease).not.toHaveBeenCalled();
+    expect(boundRelease).not.toHaveBeenCalled();
   }
 );
