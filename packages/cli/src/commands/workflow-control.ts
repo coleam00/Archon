@@ -50,12 +50,8 @@ export async function workflowResumeCommand(
   const resumeWorkflowOp = (id: string): Promise<WorkflowRun> =>
     host.operations.resumeWorkflow(id, { kind: 'operator' }).catch((error: unknown) => {
       if (!(error instanceof ResumeRefusedError) || error.reason !== 'live_owner') throw error;
-      throw new Error(
-        `${error.message}\nTo resume it here, wait for that process to exit or stop it ` +
-          `yourself, then run this again. archon workflow cancel ${id} ends the run instead, ` +
-          'and a cancelled run cannot be resumed.',
-        { cause: error }
-      );
+      const hint = 'Resume it once that process is gone; cancel would end the run for good.';
+      throw new Error(`${error.message}\n${hint}`, { cause: error });
     });
 
   // --detach: validate read-only (resumeWorkflowOp checks the run is resumable),
