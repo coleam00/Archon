@@ -148,6 +148,21 @@ describe('workflowRunCommand — --input declared inputs (#2554)', () => {
     expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
   });
 
+  it('rejects an undeclared --input name on a dry run at the gate', async () => {
+    const dryRun = await import('@archon/workflows/dry-run');
+    await stubInputWorkflow();
+    (dryRun.dryRunWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/repo/root', 'review-block', 'go', {
+        dryRun: true,
+        inputs: ['diff=D1', 'stlye=terse'],
+      })
+    ).rejects.toThrow(/does not declare input 'stlye'/);
+
+    expect(dryRun.dryRunWorkflow).not.toHaveBeenCalled();
+  });
+
   it('does not re-gate a --resume of a required-input workflow', async () => {
     // The gate is deliberately skipped on resume: the run row already carries inputs
     // validated at creation, and a resume supplies nothing. A refactor that hoists

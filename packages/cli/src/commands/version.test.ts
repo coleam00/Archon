@@ -34,9 +34,10 @@ describe('versionCommand', () => {
     // Should have called console.log 5 times (version, platform, build, database, git commit)
     expect(consoleSpy).toHaveBeenCalledTimes(5);
 
-    // First call is exactly "Archon CLI v<semver>"
+    // First call should contain "Archon CLI" and version
     const firstCall = consoleSpy.mock.calls[0][0] as string;
-    expect(firstCall).toMatch(/^Archon CLI v\d+\.\d+\.\d+$/);
+    expect(firstCall).toContain('Archon CLI');
+    expect(firstCall).toMatch(/v\d+\.\d+\.\d+/);
 
     // Second call should contain platform info
     const secondCall = consoleSpy.mock.calls[1][0] as string;

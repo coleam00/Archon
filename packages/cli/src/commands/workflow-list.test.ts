@@ -326,6 +326,29 @@ describe('workflowListCommand', () => {
     await expect(query).rejects.toThrow('Did you mean:\n  - archon-review\n  - custom-review');
   });
 
+  it('should include errors in JSON output', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [],
+      errors: [{ filename: 'bad.yaml', error: 'Invalid YAML', errorType: 'parse_error' }],
+    });
+
+    await workflowListCommand('/test/path', { json: true });
+
+    const output = firstJsonPayload(stdoutSpy);
+    const parsed = JSON.parse(output) as {
+      workflows: unknown[];
+      errors: Array<{ filename: string; error: string; errorType: string }>;
+    };
+    expect(parsed.workflows).toHaveLength(0);
+    expect(parsed.errors).toHaveLength(1);
+    expect(parsed.errors[0]).toEqual({
+      filename: 'bad.yaml',
+      error: 'Invalid YAML',
+      errorType: 'parse_error',
+    });
+  });
+
   it('calls discoverWorkflowsWithConfig with (cwd, loadConfig) — home scope is internal', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({

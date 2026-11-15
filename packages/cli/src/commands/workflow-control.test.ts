@@ -313,7 +313,7 @@ describe('workflowResumeCommand', () => {
     );
   });
 
-  it('resumes in the codebase recorded on the run, not one looked up from its working path', async () => {
+  it('forwards the codebase recorded on the run to the resumed run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
     const runOwned = await import('./workflow-run-owned');
@@ -601,7 +601,7 @@ describe('workflowApproveCommand', () => {
     }
   });
 
-  it('auto-resumes in the codebase recorded on the run', async () => {
+  it('auto-resume forwards the codebase recorded on the run', async () => {
     const workflowDb = await import('@archon/core/db/workflows');
     const codebaseDb = await import('@archon/core/db/codebases');
     const core = await import('@archon/core');
