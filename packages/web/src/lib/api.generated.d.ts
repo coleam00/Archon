@@ -7452,6 +7452,23 @@ export interface components {
               /** @enum {string} */
               reason: 'withdrawn';
             }
+          | {
+              /** @enum {string} */
+              type: 'resolved';
+              cursor: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              ref: string;
+              runId?: string;
+              workflow: string | null;
+              parentRunId: string | null;
+              occurrence: string | null;
+              /** @enum {string} */
+              reason: 'no_longer_listed';
+            }
         )
       | {
           /** @enum {string} */
