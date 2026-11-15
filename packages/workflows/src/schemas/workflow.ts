@@ -268,8 +268,26 @@ export type WorkflowBase = z.infer<typeof workflowBaseSchema>;
  * Workflow definition parsed from YAML.
  * All workflows use DAG-based execution with `nodes`.
  */
+/** What the engine reads from a workflow's result, each part named in `returns: { node, ... }`. */
+export const workflowResultContractSchema = z.strictObject({
+  /**
+   * A required property of the returns node's `output_format`: a boolean, or a string
+   * with an `enum`. Its value is the outcome the run completed with, written once, in
+   * the write that completes the run.
+   */
+  outcome: z.string().min(1).optional(),
+});
+
+export type WorkflowResultContract = z.infer<typeof workflowResultContractSchema>;
+
 const workflowDefinitionObjectSchema = workflowBaseSchema.extend({
   nodes: z.array(dagNodeSchema),
+  /**
+   * What the engine reads from the `returns:` node's output, from the object form of
+   * `returns:`. Not authorable on its own key: the loader is its only writer, and
+   * `KNOWN_WORKFLOW_KEYS` leaves it out so an authored `result:` warns as unknown.
+   */
+  result: workflowResultContractSchema.optional(),
 });
 export const workflowDefinitionSchema = z.preprocess(
   rejectRetiredThinking,
@@ -285,22 +303,7 @@ export const workflowDefinitionSchema = z.preprocess(
 export type WorkflowDefinition = z.infer<typeof workflowDefinitionSchema> & {
   prompt?: never;
   pack?: WorkflowPack;
-  /**
-   * What the engine reads from the `returns:` node's output, from the object form of
-   * `returns:`. Not authorable on its own key: the loader is its only writer.
-   */
-  result?: WorkflowResultContract;
 };
-
-/** What the engine reads from a workflow's result, each part named in `returns: { node, ... }`. */
-export interface WorkflowResultContract {
-  /**
-   * A required property of the returns node's `output_format`: a boolean, or a string
-   * with an `enum`. Its value is the outcome the run completed with, written once, in
-   * the write that completes the run.
-   */
-  readonly outcome?: string;
-}
 
 /** Static execution plan attached after include expansion and graph validation. */
 export interface GraphPlan {
@@ -331,7 +334,7 @@ export type ResolvedWorkflow = Omit<WorkflowDefinition, 'nodes'> &
  * Used by parseWorkflow to warn on unknown keys (#2213).
  */
 export const KNOWN_WORKFLOW_KEYS: ReadonlySet<string> = new Set(
-  Object.keys(workflowDefinitionObjectSchema.shape)
+  Object.keys(workflowDefinitionObjectSchema.shape).filter(key => key !== 'result')
 );
 
 /**

@@ -2,7 +2,7 @@
 import { clearRegistry, providerRegistry } from '@archon/providers';
 import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { describe, it, expect } from 'bun:test';
-import { isAgentNode, isExecNode, type DagNode } from '../schemas';
+import { isAgentNode, isExecNode, workflowDefinitionSchema, type DagNode } from '../schemas';
 import { parseWorkflow as parseWorkflowWithProviders, type ParseResult } from '../loader';
 
 // Bootstrap provider registry (needed by isRegisteredProvider checks at load time)
@@ -76,6 +76,27 @@ nodes:
 
     expect(error).toBeNull();
     expect(workflow?.result).toEqual({ outcome: 'stage' });
+  });
+
+  it('keeps the declaration through the published workflow schema', () => {
+    const parsed = workflowDefinitionSchema.parse({
+      name: 'authored-outcome',
+      description: 'independently reports the authored verdict',
+      nodes: [{ id: 'result', bash: 'true' }],
+      returns: 'result',
+      result: { outcome: 'green' },
+    });
+
+    expect(parsed.result).toEqual({ outcome: 'green' });
+  });
+
+  it('does not take the declaration from an authored result: key', () => {
+    const { workflow, warnings } = parseOutcomeWorkflow(
+      'returns: result\nresult: { outcome: green }'
+    );
+
+    expect(workflow?.result).toBeUndefined();
+    expect(warnings?.join('\n')).toContain("'result'");
   });
 
   it.each([

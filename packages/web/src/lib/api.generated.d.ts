@@ -5446,6 +5446,9 @@ export interface components {
         message: string;
       };
       nodes: components['schemas']['DagNode'][];
+      result?: {
+        outcome?: string;
+      };
     };
     DagNode: {
       id: string;
