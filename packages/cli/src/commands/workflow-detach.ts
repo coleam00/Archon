@@ -32,10 +32,12 @@ import { DETACHED_LAUNCH_TOKEN_ENV, DETACHED_RUN_OWNER_ENV } from '../utils/deta
 import { RUN_JOB_ESCAPE_BUN_CONFIG_ARG } from '../utils/run-job-escape';
 import {
   destinationCorrelationId,
+  generatedWorktreeIdentifier,
   getLog,
   printJsonWriteError,
   resolveRunTranscriptPath,
   spelledForCli,
+  withItemHint,
   type RunDestination,
   type WorkflowRunOptions,
 } from './workflow-shared';
@@ -472,7 +474,7 @@ interface DetachedRunClaim {
 export async function launchDetachedRun(launch: DetachedLaunch): Promise<void> {
   const { host, cwd, runConfig, destination: childDestination } = launch;
   const claim = await claimDetachedRun(launch);
-  const { extraArgs, generatedIdentifier } = buildDetachedChildArgs(launch, claim.launchedRunId);
+  const { extraArgs, generatedIdentifier } = buildDetachedChildArgs(launch, claim);
   const transcriptPath = await resolveDetachedTranscriptPath(launch, claim.detachedRunId);
   const runConfigPayload = runConfig
     ? JSON.stringify(sealWorkflowRunConfig(runConfig.layer, runConfig.source))
@@ -576,7 +578,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
   } catch (error) {
     throw new Error(
-      `Failed to create the workflow run: ${(error as Error).message}\nNothing was started.`
+      `Failed to create the workflow run: ${(withItemHint(error) as Error).message}\nNothing was started.`
     );
   }
 }
@@ -584,7 +586,7 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
 /** The arguments the child gets on top of this process's argv. */
 function buildDetachedChildArgs(
   launch: DetachedLaunch,
-  launchedRunId: string | undefined
+  { detachedRunId, launchedRunId }: DetachedRunClaim
 ): { extraArgs: string[]; generatedIdentifier: string | undefined } {
   const {
     workflowName,
@@ -607,7 +609,7 @@ function buildDetachedChildArgs(
     options.branchName === undefined &&
     options.adoptRunId === undefined
   ) {
-    generatedIdentifier = `${workflowName}-${String(Date.now())}`;
+    generatedIdentifier = generatedWorktreeIdentifier(workflowName, detachedRunId);
     extraArgs.push('--internal-detached-worktree-identifier', generatedIdentifier);
   }
   // A continued chat run retains its transport thread across the fork.
