@@ -390,6 +390,9 @@ describe('trigger CLI durable execution', () => {
     const unknown = await invoke(['workflow', 'runs', '--item', 'item-9', '--json'], false);
     expect(unknown.exitCode).toBe(1);
     expect(JSON.parse(unknown.stdout)).toEqual({ ok: false, error: 'not_found', item: 'item-9' });
+    const textUnknown = await invoke(['workflow', 'runs', '--item', 'item-9'], false);
+    expect(textUnknown.exitCode).toBe(1);
+    expect(textUnknown.stderr).toContain("No item 'item-9'");
     const writable = new Database(database);
     try {
       writable.run(

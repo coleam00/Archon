@@ -74,6 +74,7 @@ test('an item read prints its runs, open questions and answers', () => {
   const lines = itemReadLines(read);
   const runLine = lines.find(line => line.includes('run-done'));
   expect(runLine).toContain('deliver');
+  expect(runLine).toContain('completed');
   expect(runLine).toContain('succeeded');
   expect(runLine).toContain('2026-11-01T09:00Z');
   expect(runLine).toContain('2026-11-01T09:30Z');
