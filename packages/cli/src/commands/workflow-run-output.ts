@@ -12,7 +12,7 @@ import type { CLIAdapter } from '../adapters/cli-adapter';
 import { WorkflowRunFailedError } from '../utils/workflow-exit-code';
 import { formatRunUsage } from './workflow-usage';
 import { formatSkipCause } from './workflow-node-summaries';
-import { getLog, type RunDestination } from './workflow-shared';
+import { getLog, NAME_ITEM_HINT, type RunDestination } from './workflow-shared';
 import { pendingDurableWait, type PendingWaitContinuation } from './workflow-wait-continuation';
 
 /**
@@ -184,9 +184,14 @@ export async function presentRunResult(
     if (result.workflowRunId !== undefined)
       printRunFacts(workflow, run, '\nWorkflow finished.', 'failed');
     printRunUsage(run);
-    throw new WorkflowRunFailedError(result.error, detachedProcessOwner);
+    throw new WorkflowRunFailedError(failureReason(result), detachedProcessOwner);
   }
   return undefined;
+}
+
+/** Why the run failed, with this surface's way to name an item when that was refused. */
+function failureReason(result: Extract<WorkflowExecutionResult, { success: false }>): string {
+  return 'continuedItemRefused' in result ? `${result.error} ${NAME_ITEM_HINT}` : result.error;
 }
 
 function presentHandoff(

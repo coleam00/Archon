@@ -9,6 +9,7 @@ import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
   drainResourceStartHost,
+  registeredStartProjectKey,
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
@@ -194,17 +195,38 @@ async function requestingSourceActor(
   return { source: RUN_SOURCE_ACTOR, id: caller.runId, display: caller.nodePath };
 }
 
-/** A fire from inside a run stays on that run's item; the root run of a sub-run holds it. */
+/**
+ * A fire from inside a run stays on that run's item; the root run of a sub-run holds it.
+ * The item crosses the fire as its key and is resolved again in the new start's project,
+ * so it is the caller's item only when that project is the item's. A start in another
+ * project is refused here, where the fire still knows the item was not named: joining the
+ * same key there would be a different item, and starting with none would drop the run
+ * from the item's history.
+ */
 async function inheritedItemKey(
   host: WorkflowHost,
-  sourceActor: SourceReceiptInput['sourceActor']
+  sourceActor: SourceReceiptInput['sourceActor'],
+  start: { cwd: string; recorded: boolean }
 ): Promise<string | undefined> {
   const caller = requestingRun(sourceActor);
-  if (!caller) return undefined;
+  // A recorded delivery replays with the item of its first acceptance, so only a new
+  // start is judged.
+  if (!caller || start.recorded) return undefined;
   const root =
     (await host.deps.store.getRunAncestry(caller.runId)).at(-1) ??
     (await host.deps.store.getWorkflowRun(caller.runId));
-  return root?.item_id ? (await host.deps.store.getItem(root.item_id))?.key : undefined;
+  const item = root?.item_id ? await host.deps.store.getItem(root.item_id) : null;
+  if (!item) return undefined;
+  const project = await registeredStartProjectKey(host, start.cwd);
+  if (project === null)
+    throw new Error(
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there.`
+    );
+  if (project !== item.projectKey)
+    throw new Error(
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start runs in project '${project}'. An item belongs to one project, so the start cannot inherit it: pass --item <key> to name its item there.`
+    );
+  return item.key;
 }
 
 async function triggerFire(
@@ -232,7 +254,6 @@ async function triggerFire(
   if (options.item !== undefined) assertItemKey(options.item);
   const config = await loadFireConfig(options.config);
   const sourceActor = await requestingSourceActor(host, env);
-  const itemKey = options.item ?? (await inheritedItemKey(host, sourceActor));
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
   // must not turn a recorded delivery into a failure; the store answers replay or
   // conflict for it. This lookup is the only run-as gate before persistence. It holds
@@ -242,6 +263,9 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
+  const itemKey =
+    options.item ??
+    (await inheritedItemKey(host, sourceActor, { cwd: config.binding.launch.cwd, recorded }));
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
