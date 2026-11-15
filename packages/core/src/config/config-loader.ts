@@ -39,6 +39,7 @@ import {
   validateModelBindingConfig,
   validateWorkflowContinuationConfig,
 } from './config-validation';
+import { patchYamlText } from './config-yaml-patch';
 import {
   applyEnvOverrides,
   getDefaults,
@@ -425,10 +426,11 @@ export function logConfig(config: MergedConfig): void {
  * mapping throws, because merging into `{}` would replace the operator's whole
  * file with just the patch.
  */
-async function readGlobalConfigForUpdate(configPath: string): Promise<GlobalConfig> {
-  const content = await readConfigFileIfPresent(configPath);
-  if (content === undefined) return {};
-  return parseConfigMapping(content, configPath, 'Global config') as GlobalConfig;
+async function readGlobalConfigForUpdate(
+  configPath: string
+): Promise<{ text: string; current: GlobalConfig }> {
+  const text = (await readConfigFileIfPresent(configPath)) ?? '';
+  return { text, current: parseConfigMapping(text, configPath, 'Global config') as GlobalConfig };
 }
 
 /**
@@ -460,14 +462,15 @@ type GlobalConfigUpdates = Partial<Omit<GlobalConfig, 'tiers' | 'aliases'>> & {
 
 /**
  * Update global config (~/.archon/config.yaml) with partial updates.
- * Reads current config, deep-merges updates, and writes back to YAML.
+ * Reads current config, deep-merges updates, and writes back only the changed keys
+ * into the existing YAML text, so comments and block layout are kept.
  * Invalidates the cached config so next loadConfig() picks up changes.
  */
 export async function updateGlobalConfig(updates: GlobalConfigUpdates): Promise<void> {
   const configPath = getArchonConfigPath();
 
   try {
-    const current = await readGlobalConfigForUpdate(configPath);
+    const { text, current } = await readGlobalConfigForUpdate(configPath);
     const merged = applyGlobalConfigUpdates(current, updates);
 
     // Refuse to persist what the loaders would then refuse to read: a bad value
@@ -476,8 +479,7 @@ export async function updateGlobalConfig(updates: GlobalConfigUpdates): Promise<
     validateGlobalConfigBlocks(merged, configPath);
     validateAssistantDefaults(merged, configPath);
 
-    // Serialize to YAML and write
-    const yaml = Bun.YAML.stringify(merged);
+    const yaml = patchYamlText(text, current, merged);
     await mkdir(dirname(configPath), { recursive: true });
     await writeConfigFile(configPath, yaml);
 
