@@ -20,7 +20,7 @@ mock.module('./connection', () => ({
   getDatabaseType: () => 'postgresql' as const,
 }));
 
-import { WorkflowNotResumableError } from '@archon/workflows/store';
+import { currentExecutionOwner, WorkflowNotResumableError } from '@archon/workflows/store';
 import { findResumableRunByParentConversation, resumeWorkflowRun } from './workflow-run-resume';
 
 describe('workflow run resume', () => {
@@ -110,6 +110,7 @@ describe('workflow run resume', () => {
         capacity_wait: null,
         source_release: null,
         execution_claim: expect.any(String),
+        execution_owner: currentExecutionOwner(),
       });
       // Third call: SELECT
       const [selectQuery, selectParams] = mockQuery.mock.calls[2] as [string, unknown[]];
