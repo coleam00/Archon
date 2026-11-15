@@ -1,6 +1,7 @@
 import { splitAttentionRead } from '../schemas/attention-degraded';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { WorkflowNotResumableError, type IWorkflowStore } from '../store';
+import { countAttentionQueue, countAttentionWaitStarts } from '../attention-counts';
 import {
   attentionLabels,
   attentionRevision,
@@ -13,8 +14,6 @@ import {
 import { join } from 'node:path';
 import { getArchonWorkspacesPath, projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
-  countAttentionQueue,
-  countAttentionWaitStarts,
   listAttentionQueue,
   readAttentionQueueItem,
   selectAttentionQueue,

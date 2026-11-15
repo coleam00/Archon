@@ -32,23 +32,25 @@ import type {
   WorkflowRunDelivery,
 } from './engine-port';
 import { followWorkflowEventFeed, type WorkflowEventFeedFollower } from './run-subscription';
+import {
+  answerKey,
+  indexAnswers,
+  rowResolution,
+  terminalFacts,
+  type Answered,
+  type AnswerOrigin,
+  type Resolution,
+} from './attention-watch-events';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import {
   attentionAnswererSchema,
   attentionAnsweringRunSchema,
-  attentionOccurrence,
-  gateOccurrence,
-  isApprovalContext,
-  isGateResolved,
-  isWorkflowWaitContext,
   terminalRunStatusForEventType,
   terminalWorkflowRunStatusSchema,
   workflowRunOutcomeSchema,
   workflowRunStatusSchema,
-  type AttentionAnswerer,
   type AttentionAnsweringRun,
-  type RunTerminalStatus,
   type WorkflowRun,
   type WorkflowRunStatus,
 } from './schemas/workflow-run';
@@ -58,15 +60,9 @@ import {
   workflowEventCursor,
   type IWorkflowStore,
   type WorkflowEventCursor,
-  type WorkflowEventPage,
 } from './store';
 import { nodeFailureKindSchema, type NodeFailureKind } from './schemas/node-execution';
-import {
-  firstFailedNodeEvent,
-  getTerminalRecord,
-  recordedFailureKind,
-  failedOutcomeReason,
-} from './terminal-record';
+import { firstFailedNodeEvent, recordedFailureKind } from './terminal-record';
 import { workflowNoticeDataSchema } from './workflow-notice';
 
 function getLog(): ReturnType<typeof createLogger> {
@@ -204,67 +200,6 @@ function occurrenceOf(item: AttentionQueueItem): string | null {
   return item.kind === 'unreadable' || item.kind === 'usage_limit' ? null : item.occurrence;
 }
 
-type Resolution =
-  | {
-      reason: 'answered';
-      answeredVia: string | null;
-      answeredBy: AttentionAnswerer | null;
-      answeredFromRun: AttentionAnsweringRun | null;
-      answeredAt: string | null;
-    }
-  | { reason: 'withdrawn' };
-
-type Answered = Omit<Extract<Resolution, { reason: 'answered' }>, 'answeredFromRun'>;
-
-/** How `occurrence` closed, from the row when it still records the answer. */
-function rowResolution(run: WorkflowRun, occurrence: string | null): Answered | undefined {
-  if (occurrence === null) return undefined;
-  const { approval, wait } = run.metadata;
-  if (isApprovalContext(approval) && gateOccurrence(approval) === occurrence)
-    return isGateResolved(approval)
-      ? {
-          reason: 'answered',
-          answeredVia: approval.answeredVia ?? null,
-          answeredBy: null,
-          answeredAt: approval.answeredAt ?? null,
-        }
-      : undefined;
-  if (
-    isWorkflowWaitContext(wait) &&
-    wait.kind === 'attention' &&
-    attentionOccurrence(wait) === occurrence &&
-    wait.answer !== undefined
-  )
-    return {
-      reason: 'answered',
-      answeredVia: wait.answeredVia ?? null,
-      answeredBy: wait.answeredBy ?? null,
-      answeredAt: wait.answeredAt ?? null,
-    };
-  return undefined;
-}
-
-const answerKey = (runId: string, occurrence: string): string => `${runId}\u0000${occurrence}`;
-
-type AnswerOrigin = Pick<Answered, 'answeredVia' | 'answeredBy'>;
-
-/** The surface and answerer of each answer event in a page, by run and occurrence. */
-function indexAnswers(page: WorkflowEventPage): Map<string, AnswerOrigin> {
-  const answers = new Map<string, AnswerOrigin>();
-  for (const { event } of page.events) {
-    if (event.event_type !== 'approval_received' && event.event_type !== 'wait_answered') continue;
-    const { occurrence, via, by } = event.data;
-    if (typeof occurrence !== 'string') continue;
-    const surface = recordSurfaceSchema.safeParse(via);
-    const answerer = attentionAnswererSchema.safeParse(by);
-    answers.set(answerKey(event.workflow_run_id, occurrence), {
-      answeredVia: surface.success ? surface.data : null,
-      answeredBy: answerer.success ? answerer.data : null,
-    });
-  }
-  return answers;
-}
-
 /** What the queue reports for one run now: its row, its own item, its project. */
 interface RunView {
   run: WorkflowRun;
@@ -298,32 +233,6 @@ function itemContext(
   item: AttentionQueueItem
 ): Pick<AttentionQueueItem, 'workflow' | 'parentRunId'> {
   return { workflow: item.workflow, parentRunId: item.parentRunId };
-}
-
-/** What the terminal record riding on `event` says, or nulls when it cannot be read. */
-function terminalFacts(
-  event: WorkflowEventRow,
-  status: RunTerminalStatus
-): { outcome: 'succeeded' | 'failed' | null; firstFailedNode: string | null; reason: string[] } {
-  try {
-    const record = getTerminalRecord(status, [event]);
-    return {
-      outcome: record?.outcome ?? null,
-      firstFailedNode: record?.first_failed_node ?? null,
-      reason:
-        status === 'failed' && event.data.exit_reason === 'launch_failed'
-          ? ['launch failed before the first node']
-          : failedOutcomeReason(record),
-    };
-  } catch (error) {
-    // A malformed record must not stall the stream on one row; the line still reports
-    // the status, and `workflow get` remains the full read.
-    getLog().warn(
-      { err: error as Error, runId: event.workflow_run_id, eventId: event.id },
-      'workflow.attention_watch_terminal_record_unreadable'
-    );
-    return { outcome: null, firstFailedNode: null, reason: [] };
-  }
 }
 
 /**
