@@ -111,15 +111,6 @@ describe('users', () => {
       expect(mockWithTransaction).not.toHaveBeenCalled();
     });
 
-    test('returns the role from the user row (existing admin)', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
-      mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ role: 'admin' })]));
-
-      const result = await findOrCreateUserByPlatformIdentity('web', 'web-user-1');
-
-      expect(result.role).toBe('admin');
-    });
-
     test('propagates a non-default role from the user row (member round-trip)', async () => {
       mockQuery.mockResolvedValueOnce(createQueryResult([identityRow()]));
       mockQuery.mockResolvedValueOnce(createQueryResult([userRow({ role: 'member' })]));

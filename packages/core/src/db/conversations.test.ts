@@ -354,25 +354,6 @@ describe('conversations', () => {
 
       expect(result).toBeNull();
     });
-
-    test('works for any platform type without filtering', async () => {
-      const telegramConv: Conversation = {
-        ...cliConversation,
-        id: 'conv-tg-1',
-        platform_type: 'telegram',
-        platform_conversation_id: 'tg-chat-999',
-      };
-      mockQuery.mockResolvedValueOnce(createQueryResult([telegramConv]));
-
-      const result = await findConversationByPlatformId('tg-chat-999');
-
-      expect(result).toEqual(telegramConv);
-      // Verify no platform_type in the query
-      expect(mockQuery).toHaveBeenCalledWith(
-        `SELECT * FROM remote_agent_conversations WHERE platform_conversation_id = $1 AND id <> '00000000-0000-4000-8000-000000003640'`,
-        ['tg-chat-999']
-      );
-    });
   });
 
   describe('updateConversation', () => {

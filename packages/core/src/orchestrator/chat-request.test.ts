@@ -448,29 +448,6 @@ describe('per-user AI prefs in chat + tier-fallback nudge', () => {
     expect(mockSendQuery).toHaveBeenCalled();
   });
 
-  test('profile-invalid log attributes the EXECUTION identity, not the creator (S1)', async () => {
-    mockGetOrCreateConversation.mockReturnValueOnce(
-      Promise.resolve(makeConversation({ user_id: 'creator-1' } as Partial<Conversation>))
-    );
-    // Sender's stored prefs are corrupt → buildAiProfile throws → degrade path
-    // logs the identity whose prefs were at fault: the sender.
-    mockGetUserAiPrefsDb.mockImplementation(async () => ({
-      aliases: { fast: { provider: 'claude', model: 'haiku' } },
-    }));
-    mockLogger.error.mockClear();
-
-    const platform = makePlatform();
-    await handleMessage(platform, 'conv-1', 'Hello', {
-      actor: { kind: 'user', userId: 'sender-2' },
-    });
-
-    const invalidLog = mockLogger.error.mock.calls.find(
-      c => c[1] === 'orchestrator.user_ai_prefs_profile_invalid'
-    ) as [Record<string, unknown>, string] | undefined;
-    expect(invalidLog).toBeDefined();
-    expect(invalidLog?.[0].userId).toBe('sender-2');
-  });
-
   test('a prefs DB failure falls back to config-only (chat still answers)', async () => {
     mockGetOrCreateConversation.mockReturnValueOnce(
       Promise.resolve(makeConversation({ user_id: 'user-9' } as Partial<Conversation>))

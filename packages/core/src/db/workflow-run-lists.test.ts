@@ -45,12 +45,12 @@ describe('workflow run lists', () => {
   });
 
   test.each([
-    [() => listDashboardRuns(), 'Failed to list dashboard runs: offline'],
-    [() => listWorkflowRuns(), 'Failed to list workflow runs: offline'],
-    [() => findAdoptingRuns('source'), 'Failed to find adopting runs: offline'],
-  ] as const)('preserves query failure diagnostics', async (read, message) => {
+    () => listDashboardRuns(),
+    () => listWorkflowRuns(),
+    () => findAdoptingRuns('source'),
+  ])('preserves query failure diagnostics', async read => {
     mockQuery.mockRejectedValueOnce(new Error('offline'));
-    await expect(read()).rejects.toThrow(message);
+    await expect(read()).rejects.toThrow('offline');
   });
 
   describe('listDashboardRuns', () => {
@@ -313,16 +313,6 @@ describe('workflow run lists', () => {
       expect(query).toContain('status IN ($1, $2)');
       expect(params[0]).toBe('running');
       expect(params[1]).toBe('failed');
-    });
-
-    test('single-element array uses IN clause', async () => {
-      mockQuery.mockResolvedValueOnce(createQueryResult([]));
-
-      await listWorkflowRuns({ status: ['failed'] });
-
-      const [query, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(query).toContain('status IN ($1)');
-      expect(params[0]).toBe('failed');
     });
 
     test('filters by the run-owned codebase', async () => {

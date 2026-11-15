@@ -376,35 +376,10 @@ export function registerResumeInputTests(fixture: ReturnType<typeof setupRouting
     expect(mockExecuteWorkflow).toHaveBeenCalled();
   });
 
-  test('web workflow with resumable run resumes foreground (not background)', async () => {
-    // Pins the priority order: resume detection comes before the background-dispatch
-    // gate. If a resumable run exists, web workflows must resume foreground rather
-    // than dispatching a fresh background run, or they would lose the paused run's
-    // worktree state.
-    mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
-    mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
-    mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
-        makeResumableRun({
-          id: 'web-noninteractive-resume-1',
-          working_path: '/repos/test-repo/worktrees/web-feature',
-          status: 'paused',
-        })
-      )
-    );
-
-    const platform = makePlatform(); // getPlatformType returns 'web'
-    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
-
-    expect(mockHydrateResumableRun).toHaveBeenCalled();
-    expect(mockExecuteWorkflow).toHaveBeenCalled();
-    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
-    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
-    expect(callArgs[3]).toBe('/repos/test-repo/worktrees/web-feature');
-  });
-
   test('a background-default adapter workflow with resumable run resumes foreground (not background)', async () => {
+    // Pins the priority order: resume detection comes before the background-dispatch
+    // gate. A resumable run must resume foreground rather than dispatching a fresh
+    // background run, or it would lose the paused run's worktree state.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
