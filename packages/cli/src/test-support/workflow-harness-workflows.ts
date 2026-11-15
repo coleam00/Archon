@@ -133,7 +133,7 @@ mock.module('@archon/workflows/run-paths', () => ({
       artifactsRoot: join(mockArtifactsRoot, 'artifacts'),
       stateDir: join(mockArtifactsRoot, 'state'),
       outputRoot: mockArtifactsRoot,
-      identityResolution: 'resolved' as const,
+      identityFaulted: false,
     })
   ),
 }));
