@@ -1668,8 +1668,9 @@ list with `withdrawn` set; what a ruling means is for the reading node to judge.
 
 `items()` reads the items of the run's project that had a run started in a window, each as
 `item()` reads one, with all of its runs. It is [`archon workflow items`](/reference/cli/#workflow-items),
-and returns `{ window, items, next }`. A page holds at most 100 items, so it stays under the
-node output cap; pass `next` back as `after` to read the following page:
+and returns `{ window, items, next }`. A page holds at most 100 items, but each item is read
+whole, so a page has no byte bound: emit what the node computes from the pages, not the pages
+themselves. Pass `next` back as `after` to read the following page:
 
 ```yaml
 nodes:
