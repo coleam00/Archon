@@ -47,7 +47,8 @@ export interface ItemRunWait {
  * The first run that needs attention, ends, loses its owner or disappears stops the
  * others. Every result is returned, in the order the runs were first watched, so runs that
  * settle together are all reported. At the deadline, each watched run reports `deadline`.
- * A `reread` failure stops every watch and is thrown, unless a run had already reported.
+ * A `reread` failure stops every watch and is thrown, unless a run had already reported;
+ * a `reread` still pending when the wait stops or reaches the deadline is dropped.
  */
 export async function waitForItemAttention(
   store: RunAttentionReadStore,
@@ -74,7 +75,9 @@ export async function waitForItemAttention(
   for (const run of initial) watchUnlessHistory(run);
   try {
     while (await nextPoll(stop.signal, pollIntervalMs, deadlineAt)) {
-      for (const run of await reread()) watchUnlessHistory(run);
+      const runs = await unlessStopped(reread(), stop.signal, deadlineAt);
+      if (runs === undefined) break;
+      for (const run of runs) watchUnlessHistory(run);
     }
   } catch (error) {
     const alreadyReported = stop.signal.aborted;
@@ -128,6 +131,24 @@ function reported(watched: readonly Watched[]): ItemRunWait[] {
   return results;
 }
 
+/**
+ * The read's value, or undefined once stopped or past the deadline, so a slow read does
+ * not hold back results that have already settled. A read abandoned this way is dropped:
+ * `Promise.race` keeps a handler on it, so its late rejection is not left unhandled.
+ */
+async function unlessStopped<T>(
+  read: Promise<T>,
+  signal: AbortSignal,
+  deadlineAt: number | undefined
+): Promise<T | undefined> {
+  const given = giveWay(signal, deadlineAt === undefined ? undefined : deadlineAt - Date.now());
+  try {
+    return await Promise.race([read, given.done.then(() => undefined)]);
+  } finally {
+    given.cancel();
+  }
+}
+
 /** Sleep one poll interval; false once stopped or past the deadline. */
 async function nextPoll(
   signal: AbortSignal,
@@ -138,14 +159,23 @@ async function nextPoll(
   const delay =
     deadlineAt === undefined ? pollIntervalMs : Math.min(pollIntervalMs, deadlineAt - Date.now());
   if (delay <= 0) return false;
-  await new Promise<void>(resolve => {
-    const timer = setTimeout(done, delay);
-    function done(): void {
-      clearTimeout(timer);
-      signal.removeEventListener('abort', done);
-      resolve();
-    }
-    signal.addEventListener('abort', done, { once: true });
-  });
+  await giveWay(signal, delay).done;
   return !signal.aborted && (deadlineAt === undefined || Date.now() < deadlineAt);
+}
+
+/** Settles `done` after `delayMs` (never, when undefined) or on abort, whichever comes first. */
+function giveWay(
+  signal: AbortSignal,
+  delayMs: number | undefined
+): { done: Promise<void>; cancel: () => void } {
+  const { promise: done, resolve } = Promise.withResolvers<void>();
+  const timer = delayMs === undefined ? undefined : setTimeout(finish, Math.max(0, delayMs));
+  function finish(): void {
+    clearTimeout(timer);
+    signal.removeEventListener('abort', finish);
+    resolve();
+  }
+  if (signal.aborted) finish();
+  else signal.addEventListener('abort', finish, { once: true });
+  return { done, cancel: finish };
 }

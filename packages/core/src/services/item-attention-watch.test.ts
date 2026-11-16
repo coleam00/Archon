@@ -170,4 +170,36 @@ describe('waitForItemAttention', () => {
       )
     ).rejects.toThrow('item unreadable');
   });
+
+  test('a run that reports during a slow re-read returns without waiting for the read', async () => {
+    const live = putRun('live');
+    let reads = 0;
+    const waiting = waitForItemAttention(
+      store,
+      [live],
+      () => (++reads === 1 ? new Promise<never>(() => {}) : reread()),
+      { pollIntervalMs: 5, deadlineMs: 3000 }
+    );
+    await Bun.sleep(20);
+    live.status = 'failed';
+
+    const results = await waiting;
+    expect(results.map(r => [r.runId, r.result.kind])).toEqual([['live', 'attention']]);
+  });
+
+  test('a re-read pending at the deadline gives way, and its late failure is dropped', async () => {
+    const live = putRun('live');
+    const startedAt = Date.now();
+    const results = await waitForItemAttention(
+      store,
+      [live],
+      () => Bun.sleep(150).then(() => Promise.reject(new Error('late failure'))),
+      { pollIntervalMs: 5, deadlineMs: 40 }
+    );
+
+    expect(Date.now() - startedAt).toBeLessThan(120);
+    expect(results.map(r => [r.runId, r.result.kind])).toEqual([['live', 'deadline']]);
+    // Outlive the read, so an unhandled late rejection would fail this test.
+    await Bun.sleep(150);
+  });
 });
