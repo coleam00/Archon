@@ -59,8 +59,9 @@ export type CompletedAsksReading =
 
 /**
  * The asks a run completes with. Only a top-level run opens asks: a `workflow:` child has
- * no item of its own, so its asks stay data in the result it hands its parent. A skipped
- * returns node or an absent property leaves no asks. A value that is not a list of asks
+ * no item of its own, so its asks stay data in the result it hands its parent. A returns
+ * node that was skipped opens nothing and replaces nothing, so asks an earlier run left stay
+ * open. A completed one with the property absent leaves none. A value that is not a list of asks
  * is invalid: the run fails naming the field instead of completing.
  */
 export function readCompletedAsks(
@@ -73,7 +74,9 @@ export function readCompletedAsks(
   if (field === undefined || returns === undefined || run.parent_run_id !== null)
     return { kind: 'none' };
   const output = nodeOutputs.get(returns);
-  if (output?.state !== 'completed') return { kind: 'asks', asks: [] };
+  // A returns node that did not complete said nothing about asks: the open set stays as
+  // it is. Only a completed node that leaves none replaces it with nothing.
+  if (output?.state !== 'completed') return { kind: 'none' };
   const subject = `Workflow '${workflow.name}' returns.asks '${field}' on node '${returns}'`;
   let value: unknown;
   try {

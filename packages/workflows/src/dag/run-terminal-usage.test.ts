@@ -17,6 +17,7 @@ import {
 } from 'bun:test';
 import { mkdir, writeFile } from 'fs/promises';
 import { ITEM_ASKS_DESCRIPTION, itemAsksJsonSchema } from '../schemas/item-ask';
+import { readCompletedAsks } from '../completed-asks';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -40,7 +41,7 @@ import {
   readTranscript,
 } from './test-utils';
 import { executeDagWorkflow } from '../dag-executor';
-import type { DagNode, AgentNode, WorkflowRun } from '../schemas';
+import type { DagNode, AgentNode, NodeOutput, WorkflowRun } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 import type { RunEndedFacts, WorkflowDeps } from '../deps';
 import type { SourceReceiptAcceptance } from '../schemas/resource-start';
@@ -1962,6 +1963,12 @@ describe('executeDagWorkflow -- the asks a run leaves are written when it comple
       .map(([event]) => event)
       .find(event => event.event_type === 'node_failed' && event.step_name === 'decide');
     expect(String(failed?.data?.error)).toContain('/asks');
+  });
+
+  it('leaves an earlier open set alone when the returns node was skipped', () => {
+    const workflow = { name: 'asks-wf', returns: 'decide', result: { asks: 'asks' } };
+    const skipped = new Map([['decide', { state: 'skipped', output: '' } as NodeOutput]]);
+    expect(readCompletedAsks(workflow, { parent_run_id: null }, skipped)).toEqual({ kind: 'none' });
   });
 
   it('opens no asks from a workflow: child, whose asks stay data in its result', async () => {
