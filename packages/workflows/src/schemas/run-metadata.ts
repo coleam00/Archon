@@ -158,6 +158,14 @@ export function readSubrunMetadata(metadata: Record<string, unknown> | undefined
   };
 }
 
+/**
+ * The result a top-level run that declares `returns.asks` completed with: its `returns:`
+ * node output, parsed. Written only by the completing write, and only when the value is
+ * defined, so an asks-settled binding can read the run's result once its asks settle,
+ * long after the process that held its node outputs has exited.
+ */
+export const ASKS_RESULT_METADATA_KEY = 'asks_result';
+
 export const CANCELLED_REASON_METADATA_KEY = 'cancelled_reason';
 
 export const ISOLATION_ENV_ID_METADATA_KEY = 'isolation_env_id';

@@ -7669,6 +7669,11 @@ export interface components {
             }
           | {
               /** @enum {string} */
+              kind: 'asks_settled';
+              runId: string;
+            }
+          | {
+              /** @enum {string} */
               kind: 'run_fired';
               runId: string;
               node: string | null;

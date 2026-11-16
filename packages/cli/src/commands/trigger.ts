@@ -11,7 +11,12 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { readRunEndedBindings, runEndedTriggerCheck } from '@archon/core/workflows/run-ended';
+import {
+  readOnBindings,
+  runEndedTriggerCheck,
+  type OnBinding,
+} from '@archon/core/workflows/run-ended';
+import { asksSettledTriggerCheck } from '@archon/core/workflows/asks-settled';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
@@ -543,48 +548,57 @@ async function installTimer(
   });
 }
 
-/** The directory run-ended bindings are read from; `trigger check` lists the same files. */
+/** The directory run-ended and asks-settled bindings are read from; `trigger check` lists the same files. */
 export function triggersDirectory(): string {
   return join(getArchonHome(), 'triggers');
 }
 
 /**
- * List every run-ended binding that is active (each `on.runEnded` file in the triggers
- * directory) and check it against the workflows of the project it launches in: the
- * ended workflow declares the outcome and every input the binding reads from it, and
- * the started workflow exists and declares every input the binding maps. A run on an
- * item whose end could fire such a binding is refused before it starts, by the same check.
- * It also reports what a run is not refused for: a `launch.cwd` that does not exist, a
- * binding that starts the workflow that ended, and two files that start the same stage.
+ * List every binding with `on` that is active (each `on.runEnded` and `on.asksSettled`
+ * file in the triggers directory) and check it against the workflows of the project it
+ * launches in. For a run-ended binding, the ended workflow declares the outcome and every
+ * input the binding reads from it; for an asks-settled binding, the asking workflow
+ * declares `returns.asks` and every input the binding reads. The started workflow exists
+ * and declares every input the binding maps. A run on an item whose end or asks could fire
+ * such a binding is refused before it starts, by the same check. It also reports what a
+ * run is not refused for: a `launch.cwd` that does not exist, a run-ended binding that
+ * starts the workflow that ended, and two files that start the same stage.
  */
 async function checkTriggers(host: WorkflowHost): Promise<void> {
-  const checked = [];
-  const bindings = await readRunEndedBindings(triggersDirectory());
-  // The file store has no items, so a run-ended binding can never start anything there.
+  const bindings = await readOnBindings(triggersDirectory());
+  // The file store has no items, so a binding with `on` can never start anything there.
   if (host.deps.credentialStore === 'files' && bindings.length > 0)
     throw new FileStoreUnsupportedError(
-      `Run-ended triggers (${bindings.map(entry => entry.file).join(', ')})`
+      `Run-ended and asks-settled triggers (${bindings.map(entry => entry.file).join(', ')})`
     );
-  const problems = await runEndedTriggerCheck(bindings, {
+  const deps = {
     ...host.deps,
-    projectKeyOf: cwd => registeredProjectKeyForPath(cwd, host.records.codebases),
+    projectKeyOf: (cwd: string) => registeredProjectKeyForPath(cwd, host.records.codebases),
+  };
+  const runEnded = bindings.filter(entry => 'runEnded' in entry);
+  const asksSettled = bindings.filter(entry => 'asksSettled' in entry);
+  const runEndedProblems = await runEndedTriggerCheck(runEnded, deps);
+  const asksSettledProblems = await asksSettledTriggerCheck(asksSettled, deps);
+  const listed = (entry: OnBinding, problems: string[] | undefined) => ({
+    file: entry.file,
+    sourceInstanceId: entry.sourceInstanceId,
+    bindingId: entry.binding.bindingId,
+    hostId: entry.binding.hostId,
+    ...('runEnded' in entry ? { runEnded: entry.runEnded } : { asksSettled: entry.asksSettled }),
+    workflowName: entry.binding.launch.workflowName,
+    cwd: entry.binding.launch.cwd,
+    problems: problems ?? [],
   });
-  for (const [index, entry] of bindings.entries()) {
-    checked.push({
-      file: entry.file,
-      sourceInstanceId: entry.sourceInstanceId,
-      bindingId: entry.binding.bindingId,
-      hostId: entry.binding.hostId,
-      runEnded: entry.runEnded,
-      workflowName: entry.binding.launch.workflowName,
-      cwd: entry.binding.launch.cwd,
-      problems: problems[index],
-    });
-  }
-  await writeJsonLine({ directory: triggersDirectory(), runEnded: checked });
-  const broken = checked.filter(entry => entry.problems.length > 0).length;
+  const checked = {
+    runEnded: runEnded.map((entry, index) => listed(entry, runEndedProblems[index])),
+    asksSettled: asksSettled.map((entry, index) => listed(entry, asksSettledProblems[index])),
+  };
+  await writeJsonLine({ directory: triggersDirectory(), ...checked });
+  const broken = [...checked.runEnded, ...checked.asksSettled].filter(
+    entry => entry.problems.length > 0
+  ).length;
   if (broken > 0)
-    throw new Error(`${String(broken)} run-ended binding(s) have problems; see "problems" above.`);
+    throw new Error(`${String(broken)} trigger binding(s) have problems; see "problems" above.`);
 }
 
 export interface TriggerDependencies {

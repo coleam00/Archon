@@ -37,6 +37,29 @@ describe('the drain after a run ends', () => {
     expect(ended).toEqual(['a', 'b', 'c']);
   });
 
+  test('a close of an ask is followed only when its settlement caused starts', async () => {
+    const caused = [{ receipt: { id: 'receipt-1' } }];
+    const closes = [
+      { kind: 'closed', ask: { runId: 'asking-run' }, settled: false, startReceipts: [] },
+      { kind: 'closed', ask: { runId: 'asking-run' }, settled: true, startReceipts: caused },
+      { kind: 'unchanged', ask: { runId: 'asking-run' } },
+    ];
+    const store = {
+      ...terminalStore(true),
+      answerItemAsk: async () => closes.shift(),
+      withdrawItemAsk: async () => closes.shift(),
+    } as unknown as TerminalWriters;
+    const followed: [string, unknown][] = [];
+    const wrapped = drainAfterRunEnds(store, async (runId, receipts) => {
+      followed.push([runId, receipts]);
+    });
+    const input = { askId: 'a', via: 'cli', by: null, fromRun: null } as const;
+    await wrapped.answerItemAsk({ ...input, answer: { text: '' } });
+    await wrapped.withdrawItemAsk(input);
+    await wrapped.answerItemAsk({ ...input, answer: { text: '' } });
+    expect(followed).toEqual([['asking-run', caused]]);
+  });
+
   test('a run ended inside a drain schedules one more pass instead of a nested one', async () => {
     let passes = 0;
     let depth = 0;

@@ -51,6 +51,8 @@ function answerText(answer: Exclude<ItemAnswer, { kind: 'ruling' }>): string {
 function causeText(cause: ItemRun['cause']): string {
   if (cause === null) return '';
   if (cause.kind === 'run_ended') return ` · after run ${cause.runId.slice(0, 8)} ended`;
+  if (cause.kind === 'asks_settled')
+    return ` · after the asks of run ${cause.runId.slice(0, 8)} settled`;
   if (cause.kind === 'run_fired')
     return ` · fired by run ${cause.runId.slice(0, 8)}${cause.node === null ? '' : ` (${cause.node})`}`;
   return ` · trigger ${cause.sourceInstanceId}`;

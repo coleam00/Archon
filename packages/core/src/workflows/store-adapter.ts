@@ -39,7 +39,13 @@ import { getAgentProvider } from '../services/provider-admission';
 import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree';
 import { loadConfig as loadMergedConfig } from '../config/config-loader';
 import { createLogger, getArchonHome } from '@archon/paths';
-import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
+import {
+  createRunEndedPreflight,
+  createRunEndedStarts,
+  launchProjectKey,
+  type RunEndedStartsDependencies,
+} from './run-ended';
+import { createAsksSettledPreflight, createAsksSettledStarts } from './asks-settled';
 import { registeredProjectKeyForPath } from '../services/codebase-checkout-resolver';
 import type { IGitHubAppAuthProvider } from '../github-auth/types';
 import { createGitHubAppAuthProvider } from '../github-auth/auth';
@@ -117,7 +123,21 @@ function collectOAuthCredentialValues(
   }
 }
 
+/** Where trigger files with `on` are read from and how a binding is placed in a project. */
+function onBindingDeps(getItem: IWorkflowStore['getItem']): RunEndedStartsDependencies {
+  return {
+    triggersDirectory: () => join(getArchonHome(), 'triggers'),
+    getItem,
+    projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
+  };
+}
+
 export function createWorkflowStore(): IWorkflowStore {
+  // The close that settles a set writes the starts its asks-settled bindings cause.
+  const asksSettledStarts = createAsksSettledStarts({
+    ...onBindingDeps(itemsDb.getItem),
+    getItemAsk: itemAsksDb.getItemAsk,
+  });
   return {
     ...createSqlStateDocumentStore(getDatabase),
     setToolCallAttention: workflowDb.setToolCallAttention,
@@ -153,8 +173,10 @@ export function createWorkflowStore(): IWorkflowStore {
     listOpenItemAsks: itemAsksDb.listOpenItemAsks,
     listItemAsks: itemAsksDb.listItemAsks,
     getItemAsk: itemAsksDb.getItemAsk,
-    answerItemAsk: itemAsksDb.answerItemAsk,
-    withdrawItemAsk: itemAsksDb.withdrawItemAsk,
+    answerItemAsk: async input =>
+      itemAsksDb.answerItemAsk(input, await asksSettledStarts(input.askId)),
+    withdrawItemAsk: async input =>
+      itemAsksDb.withdrawItemAsk(input, await asksSettledStarts(input.askId)),
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),
@@ -328,20 +350,22 @@ export function createWorkflowDeps(
   loadConfig: typeof loadMergedConfig;
 } {
   const provider = registeredGitHubAppAuthProvider;
-  const runEnded = {
-    triggersDirectory: () => join(getArchonHome(), 'triggers'),
-    getItem: (id: string) => store.getItem(id),
-    projectKeyOf: launchProjectKey(cwd => registeredProjectKeyForPath(cwd, codebaseDb)),
+  const onBindings = {
+    ...onBindingDeps(id => store.getItem(id)),
+    loadConfig: loadMergedConfig,
+    providers: providerRegistry,
   };
+  const runEndedPreflight = createRunEndedPreflight(onBindings);
+  const asksSettledPreflight = createAsksSettledPreflight(onBindings);
   return {
     store,
     credentialStore,
-    runEndedStarts: createRunEndedStarts(runEnded),
-    checkRunEndedBindings: createRunEndedPreflight({
-      ...runEnded,
-      loadConfig: loadMergedConfig,
-      providers: providerRegistry,
-    }),
+    runEndedStarts: createRunEndedStarts(onBindings),
+    // A run is refused before it starts for a broken binding its end or its asks could fire.
+    checkRunEndedBindings: async run => {
+      await runEndedPreflight(run);
+      await asksSettledPreflight(run);
+    },
     releaseRunResources: createRunResourceRelease(store),
     providers: providerRegistry,
     getAgentProvider,

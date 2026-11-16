@@ -13,6 +13,7 @@ import {
 import { attentionQueueSource } from '@archon/core/operations/attention-queue';
 import type { AttentionAnswerRequest } from '@archon/core/operations/workflow-operations';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
+import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import { cliActor } from '../utils/calling-node';
 import { writeJsonLine } from '../utils/stdout';
 
@@ -33,14 +34,48 @@ type Outcome =
   | { ok: true; text: string; json: object }
   | { ok: false; error: string; code: string };
 
+/**
+ * What a settling close says about the starts it caused: how many bound stages start, and
+ * each binding that matched but could not start, with its receipt and how to start it by
+ * hand, as a run's end reports it.
+ */
+function settledStarts(receipts: readonly SourceReceiptAcceptance[]): {
+  text: string;
+  json: object;
+} {
+  const started = receipts.filter(accepted => accepted.outcome === 'matched').length;
+  const notStarted = receipts.filter(accepted => accepted.outcome !== 'matched');
+  const lines = [
+    ...(started > 0 ? [` It starts ${String(started)} bound stage(s) on the item.`] : []),
+    ...notStarted.map(
+      ({ receipt, reason }) =>
+        `\n\u26a0\ufe0f The next stage was not started: ${reason ?? 'its binding was rejected'}. Receipt ${receipt.id} records it (archon trigger inspect ${receipt.id}). After fixing the trigger, start the stage with archon trigger fire --config <trigger file> --item ${receipt.itemKey ?? '<key>'}.`
+    ),
+  ];
+  return {
+    text: lines.join(''),
+    json:
+      notStarted.length > 0
+        ? {
+            notStarted: notStarted.map(({ receipt, reason }) => ({
+              receiptId: receipt.id,
+              reason: reason ?? null,
+            })),
+          }
+        : {},
+  };
+}
+
 function answered(ref: string, result: AttentionItemAnswerResult): Outcome {
   switch (result.kind) {
-    case 'ask_answered':
+    case 'ask_answered': {
+      const starts = settledStarts(result.startReceipts);
       return {
         ok: true,
-        text: `Answered ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}`,
-        json: { ok: true, ref, action: 'answer', settled: result.settled },
+        text: `Answered ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}${starts.text}`,
+        json: { ok: true, ref, action: 'answer', settled: result.settled, ...starts.json },
       };
+    }
     case 'answered':
       return {
         ok: true,
@@ -88,12 +123,14 @@ function answered(ref: string, result: AttentionItemAnswerResult): Outcome {
 
 function withdrawn(ref: string, result: AttentionItemWithdrawResult): Outcome {
   switch (result.kind) {
-    case 'withdrawn':
+    case 'withdrawn': {
+      const starts = settledStarts(result.startReceipts);
       return {
         ok: true,
-        text: `Withdrew ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}`,
-        json: { ok: true, ref, action: 'withdraw', settled: result.settled },
+        text: `Withdrew ${ref}.${result.settled ? ' That was the last open ask of its set; the set is settled.' : ''}${starts.text}`,
+        json: { ok: true, ref, action: 'withdraw', settled: result.settled, ...starts.json },
       };
+    }
     case 'unchanged':
       return {
         ok: true,
