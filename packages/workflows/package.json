@@ -26,7 +26,7 @@
     "./attention-needs": "./src/attention-needs.ts",
     "./item-read": "./src/item-read.ts",
     "./item-window": "./src/item-window.ts",
-
+    "./item-metrics": "./src/item-metrics.ts",
     "./workflow-notice": "./src/workflow-notice.ts",
     "./end-turn-request": "./src/end-turn-request.ts",
     "./run-attention-resolution": "./src/run-attention-resolution.ts",

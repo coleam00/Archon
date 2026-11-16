@@ -265,6 +265,7 @@ Archon provides the `archon:script` module to every `runtime: bun` script: named
 | `trigger.fire(binding, inputs, options)` | Fires a trigger binding (`archon trigger fire`) and returns the admission its request got |
 | `notice(text, labels)` | Tells whoever watches attention with `--notices` what the run did (`archon workflow notice`). The run does not pause |
 | `item()` | The [item](/reference/cli/#items) the run belongs to (`archon workflow runs --item-of`): its runs, open questions, and answers with rulings, oldest first; `null` when the run is on no item. See [Reading the item a run belongs to](/reference/workflow-language/#reading-the-item-a-run-belongs-to) |
+| `items(query?)` | The items of the run's project with a run started in a window (`archon workflow items`), each read as `item()` reads one, a page at a time: `{ window, items, next }`; pass `next` as `after` for the following page. See [Reading a project's items over a window](/reference/workflow-language/#reading-a-projects-items-over-a-window) |
 
 Write `input('<name>')` with a string literal. Archon checks at load that every input a script reads is provided, and it reads `input('pr-number')` in the node's own script the way it reads `process.env.INPUTS_PR_NUMBER`. A computed name, or a read inside an imported module, is not checked.
 

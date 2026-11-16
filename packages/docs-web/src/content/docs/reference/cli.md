@@ -652,7 +652,7 @@ than returning a partial report.
 
 `--item <key>` reads one [item](#items) in the current project and ignores the other filters. It prints three sections, each oldest first: the item's runs (id, workflow, status, authored outcome, start and end), the questions open in those runs or their sub-runs, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface) together with the item's [rulings](#workflow-rule) (text, time, surface, who when they said, and when it was withdrawn). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no position for the item. It needs a registered project.
 
-`--json` prints `{ item, runs, questions, answers, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), or a ruling (`reason: "ruling_unreadable"`, `rulingId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its rulings; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
+`--json` prints `{ item, runs, questions, answers, merged, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt, cause, awaitingExecution, spend }`, where `spend` is `{ usd, inputTokens, outputTokens }` as recorded on the run, each null when the run recorded none; `merged` is the merge [recorded on the item](#workflow-merged), `{ change, commit, at, recordedAt, via, fromRun }`, or null; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), a ruling (`reason: "ruling_unreadable"`, `rulingId`), or the merge (`reason: "merge_unreadable"`, `itemId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its rulings; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
 
 `--item-of <run-id>` reads the item a run belongs to, the item of its top-level run when it is a `workflow:` sub-run, in whichever project the run is. It prints the same read as `--item`. A run on no item, or one the store does not know, exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "run": "<run-id>" }`. It is the host command behind the `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) export.
 
@@ -1312,6 +1312,66 @@ already withdrawn (`error: "already_withdrawn"`), and under `--chat-project-id` 
 another project's item (`error: "outside_project"`), which stays as it was. Rulings need the database store.
 `POST /api/items/rulings` and `POST /api/items/rulings/{rulingId}/withdraw` do the same over
 HTTP; see the [API reference](/reference/api/).
+
+### `workflow items`
+
+Read the items of the current project that had a run in a window, a page at a time. Each
+item is read whole, as [`runs --item`](#workflow-runs) reads it: all of its runs in start
+order, not only those in the window, its open questions, its answers and rulings, its
+merge and its `degraded` parts.
+
+```bash
+archon workflow items                       # the last 30 days
+archon workflow items --since 7d --json
+archon workflow items --after <cursor> --json
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--since <40m\|7d\|24h\|2w\|ISO>` | Start of the window, as [`metrics`](#metrics-name) takes it; default 30 days before `--until` |
+| `--until <ISO>` | End of the window, exclusive; default now |
+| `--limit <n>` | Items a page, 1 to 100; default 20 |
+| `--after <cursor>` | Read the page after the one that returned this cursor. It carries the project and the window, so it cannot be passed with `--since` or `--until` |
+| `--json` | Print the page, or `{ ok: false, error }` |
+
+An item is in the window when one of its own runs (not a `workflow:` sub-run) started in
+`[since, until)`. Items are ordered by their id. The order carries no meaning; it is what a
+cursor resumes from, so following each page's cursor returns every remaining item once,
+over the window the first page fixed. The project is found as `runs --item` finds it.
+
+`--json` prints `{ window: { since, until }, items, next }`, where each entry of `items` is
+the document `runs --item --json` prints and `next` is the cursor of the following page, or
+null on the last. It exits 1 for a directory with no registered project, a malformed window
+or limit, and a cursor that is not one this read returned or is for another project. Items
+need the database store. It is the host command behind the `archon:script`
+[`items()`](/reference/workflow-language/#reading-a-projects-items-over-a-window) export, and
+`GET /api/items/window` returns the same page over HTTP.
+
+### `workflow merged`
+
+Record that an item's change merged, as the forge reported it. The caller decides which
+change belongs to which item, typically the step that merged the pull request or read it
+back from the forge; the engine stores the fact and never reads the forge for it.
+
+```bash
+archon workflow merged --item issue-42 --change https://github.com/acme/web/pull/12 \
+  --at 2026-11-02T10:00:00Z --commit <sha> --json
+```
+
+| Flag | Effect |
+| --- | --- |
+| `--item <key>` | The item whose change merged, in the project the working directory belongs to |
+| `--change <ref>` | The merged change as the forge names it, such as its pull request URL; 1 to 2048 characters, never parsed |
+| `--at <ISO>` | When the forge says it merged, with an offset |
+| `--commit <sha>` | The merge commit, a full lowercase hash, when the forge reported one |
+| `--json` | Print `{ merge, recorded }`, or `{ ok: false, error }` |
+
+The fact is recorded once. A second report keeps the first and prints it with
+`recorded: false`, so a caller can see a different `change`. Called from inside a workflow
+node, it records the node's run and node as `fromRun`. It exits 1 for a key no run or ruling
+has named in the project (`error: "not_found"`: a merge never creates an item), a malformed
+flag, or a directory with no registered project. Every later item read carries the fact as
+`merged`. It needs the database store.
 
 ### `workflow attention label`
 
@@ -2469,6 +2529,16 @@ none ran the `--by-model` node, with the AI node ids they did run (at most 50) o
 with no records reports none, and records whose runs were all deleted are `unattributed`), `4` the report refused a
 record.
 
+With `--project` and none of `--subject`, `--compare` or `--by-model`, the report also
+evaluates the [item metrics](/guides/metrics/#item-metrics-a-pack-declares) the project's
+packs declare, over every item with a run in the same window; a positional `[name]` keeps
+only that metric. Text output adds a block of their figures per pack. `--json` adds
+`item_metrics`: `{ project, window, items, degraded_items, packs, errors }`, where each pack
+lists its metrics' figures and `errors` names a declaration that could not be read, also
+reported on stderr. `item_metrics` is null without `--project`, with one of those three
+flags, and on the file store, which says so on stderr. A bad declaration does not change the
+exit code.
+
 ### `chat <message>`
 
 Send one message to the orchestrator, print its response and exit. Each invocation creates a new conversation. Multi-turn conversations and project selection through `/setproject <name>` are available in the Web UI and chat adapters. Projectless chat can answer questions; use `archon workflow run <name> --project <owner/repo>` to launch work for a registered repository from the CLI.
@@ -2503,9 +2573,13 @@ A continuation started with `--adopt <run-id>` or `--supersedes <run-id>` and no
 
 A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP.
 
+`archon workflow items` reads every item of the project that had a run in a window, a page at a time ([`workflow items`](#workflow-items)).
+
+The merge of an item's change is the one fact about it that comes from outside the engine. The caller that saw the forge report it records it once with [`workflow merged`](#workflow-merged), and every read of the item carries it as `merged`.
+
 A ruling is a decision recorded on the item without a question having been asked ([`workflow rule`](#workflow-rule)). It is a fact about the item, like an answer, and needs no run: recording one on a key nothing has named writes the item. Withdrawing a ruling keeps the record and marks it withdrawn. A workflow reads its item's answers and rulings through `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to); the engine passes them to no node on its own.
 
-Items need the database store and a registered project. With `store: files`, or in a directory with no project, naming an item fails.
+Items need the database store and a registered project. With `store: files`, or in a directory with no project, naming, reading or listing an item fails; it is never read as empty.
 
 ### `pack bindings`
 

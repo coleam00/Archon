@@ -173,6 +173,11 @@ Commands:
   workflow rule --item <key> -- <text>
                              Record a ruling on an item of this project: a decision made without a question.
                              Every later read of the item shows it with the answers; prints the ruling's id
+  workflow items             This project's items with a run started in a window (default the last 30 days),
+                             each with all its runs, questions, answers and merge, ordered by item id
+  workflow merged --item <key> --change <ref> --at <ISO>
+                             Record that an item's change merged, as the forge reported it. Recorded once:
+                             a second report keeps the first
   workflow notice <text>     Inside a workflow node: say what the run did, for whoever watches attention
                              with --notices. Never pauses the run and cannot be answered
   workflow event emit        Emit a workflow event into a run
@@ -276,9 +281,9 @@ Options:
                              resource is full
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
-  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on
+  --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow merged': the item whose change merged
   --open                     For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded
-  --limit <n>                For 'workflow runs': max rows (default 20)
+  --limit <n>                For 'workflow runs': max rows (default 20); for 'workflow items': items a page (default 20, at most 100)
   --timeout <seconds>        For 'workflow wait': give up after N seconds (default: wait indefinitely)
   --follow                   For 'workflow logs': stream appended rows until the run ends
   --format <jsonl|text>      For 'workflow logs': jsonl (default) prints the exact transcript;
