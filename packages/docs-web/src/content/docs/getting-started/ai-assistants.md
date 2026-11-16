@@ -224,10 +224,10 @@ assistants:
       plan: { interactive: true, extensionFlags: { plan: true } }
     env:                                # set in process.env for extensions; shell env wins
       PLANNOTATOR_REMOTE: "1"
-    maxConcurrent: 2                    # cap on concurrent Pi prompts in this process
+    maxConcurrent: 2                    # install-wide cap on concurrent Pi attempts; read from ~/.archon/config.yaml
 ```
 
-`env` and `maxConcurrent` apply to the whole process, so a per-run `--config` layer refuses them. Use codebase env vars, not `assistants.pi.env`, for secrets that vary per project.
+`env` applies to the whole process, and `maxConcurrent` is an install-wide cap enforced by [provider admission](/reference/configuration/#provider-concurrency-caps); a per-run `--config` layer refuses both. Use codebase env vars, not `assistants.pi.env`, for secrets that vary per project.
 
 Model references can nest slashes, as in `openrouter/qwen/qwen3-coder`. Archon reads Pi's model catalog from `~/.pi/agent/models-store.json`, or `$PI_CODING_AGENT_DIR/models-store.json` when that variable is set. If a model is newer than your catalog, run `pi update --models` and retry. Archon never refreshes the catalog itself and never substitutes another model when a lookup fails.
 
