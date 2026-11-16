@@ -162,7 +162,10 @@ export async function selectRunWorkflow(request: OwnedRunRequest): Promise<RunSe
       workflowName,
       workflowEntries.map(ws => ws.workflow)
     );
-  if (!workflow) throw workflowNotFoundError(workflowName, workflowEntries, errors);
+  if (!workflow) {
+    const error = workflowNotFoundError(workflowName, workflowEntries, errors);
+    throw isContinuation ? error : withSourceContext(error, options.discoveryCwd);
+  }
   const workflowEntry = workflowEntries.find(ws => ws.workflow === workflow);
   // An explicit --workflow-source that lacks the named workflow would otherwise run another
   // scope's copy while recording the source as its origin (#5826). Commands, scripts and
@@ -362,7 +365,10 @@ async function discoverRunWorkflows(
   if (workflowEntries.length === 0 && errors.length === 0) {
     // No manual cleanup here or anywhere else in this run: the owner reclaims
     // anything unadopted on the way out, which is the point of having one.
-    throw new Error('No workflows found in .archon/workflows/');
+    throw withSourceContext(
+      new Error('No workflows found in .archon/workflows/'),
+      options.discoveryCwd
+    );
   }
   return { workflowEntries, errors };
 }
@@ -387,17 +393,36 @@ function workflowNotInSourceError(
   resolvedScope: WorkflowSource | undefined
 ): Error {
   const root = resolve(sourceRoot);
-  const searched = join(root, '.archon', 'workflows');
   const lines = [
-    `Workflow '${workflowName}' is not in --workflow-source ${root}: Archon looked in ${searched}` +
-      (resolvedScope ? ` and found it only in the ${resolvedScope} scope.` : '.') +
-      ' Nothing was started.',
+    `Workflow '${workflowName}' is not in --workflow-source ${root}: Archon looked in ` +
+      `${join(root, '.archon', 'workflows')} and found it only in the ${resolvedScope ?? 'another'} scope. ` +
+      'Nothing was started.',
+    ...checkoutRootHint(root),
   ];
-  const checkout = checkoutRootAbove(root);
-  if (checkout !== undefined) {
-    lines.push(`--workflow-source takes the checkout root; did you mean ${checkout}?`);
-  }
   return new Error(lines.join('\n'));
+}
+
+/**
+ * Every refusal under an explicit --workflow-source names the directory searched, so a wrong
+ * path is visible whether or not the name exists in another scope.
+ */
+function withSourceContext(error: Error, sourceRoot: string | undefined): Error {
+  if (sourceRoot === undefined) return error;
+  const root = resolve(sourceRoot);
+  const lines = [
+    error.message,
+    '',
+    `--workflow-source ${root}: Archon looked in ${join(root, '.archon', 'workflows')}.`,
+    ...checkoutRootHint(root),
+  ];
+  return new Error(lines.join('\n'));
+}
+
+function checkoutRootHint(root: string): string[] {
+  const checkout = checkoutRootAbove(root);
+  return checkout === undefined
+    ? []
+    : [`--workflow-source takes the checkout root; did you mean ${checkout}?`];
 }
 
 /** The checkout whose `.archon/workflows` contains `path`, when the path sits inside one. */

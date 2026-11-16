@@ -106,9 +106,9 @@ describe('workflow run --dry-run --workflow-source', () => {
     );
   }
 
-  async function refusal(fx: Fixture, source: string): Promise<string> {
+  async function refusal(fx: Fixture, source: string, workflow = 'probe'): Promise<string> {
     const result = await captureWorkflowCommand(fx.home, async host => {
-      await workflowRunCommand(host, fx.target, 'probe', '', {
+      await workflowRunCommand(host, fx.target, workflow, '', {
         discoveryCwd: source,
         dryRun: true,
         defaultStubs: true,
@@ -128,6 +128,18 @@ describe('workflow run --dry-run --workflow-source', () => {
     expect(error).toContain(`--workflow-source ${fx.source}`);
     expect(error).toContain(join(fx.source, '.archon', 'workflows'));
     expect(error).toContain('global scope');
+  });
+
+  test('names the source when the workflow is in no scope', async () => {
+    const fx = fixture();
+    const packFolder = join(fx.source, '.archon', 'workflows', 'demo-pack');
+    mkdirSync(packFolder, { recursive: true });
+
+    const error = await refusal(fx, packFolder, 'absent-everywhere');
+
+    expect(error).toContain("Workflow 'absent-everywhere' not found");
+    expect(error).toContain(join(packFolder, '.archon', 'workflows'));
+    expect(error).toContain(`did you mean ${fx.source}?`);
   });
 
   test('points a pack folder passed as the source at its checkout root', async () => {
