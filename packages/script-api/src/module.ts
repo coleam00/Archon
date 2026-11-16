@@ -347,6 +347,11 @@ export function notice(text: string, labels: Readonly<Record<string, string>> = 
 export interface TriggerFireOptions {
   /** One delivery id starts at most one run; build it from values a retry repeats. */
   readonly deliveryId?: string;
+  /**
+   * The item the started run is on (`--item`), or `null` for no item (`--no-item`).
+   * Left out, a fire from a run on an item inherits it.
+   */
+  readonly item?: string | null;
 }
 
 /** A fire's receipt and the admission its binding's request got; null when it got none. */
@@ -371,8 +376,14 @@ export const trigger = {
       Object.entries(inputs).sort(([left], [right]) => (left < right ? -1 : 1))
     );
     const delivery = options.deliveryId === undefined ? [] : ['--delivery-id', options.deliveryId];
+    const item =
+      options.item === undefined
+        ? []
+        : options.item === null
+          ? ['--no-item']
+          : ['--item', options.item];
     const answer = withJsonFile(sorted, path =>
-      archon('trigger fire', ['--config', binding, ...delivery, '--inputs', path])
+      archon('trigger fire', ['--config', binding, ...delivery, ...item, '--inputs', path])
     );
     const receipt = answer.value;
     if (answer.code !== 0 || !isRecord(receipt) || typeof receipt.id !== 'string')
