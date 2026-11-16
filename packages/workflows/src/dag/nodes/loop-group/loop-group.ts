@@ -5,13 +5,19 @@ import { finishNodeExecution } from '../../../node-execution';
 import { serializeNodeOutput, type NodeExecutionResult } from '../../../node-record-serialization';
 import { type NodeExecutionRecord } from '../../../schemas/node-execution';
 import { NodeEventWriteError, recordNodeState } from '../../../node-event-write';
-import type { LoopGroupNode } from '../../../schemas';
+import type { DagNode, LoopGroupNode } from '../../../schemas';
+import { nodeInvocationKey } from '../../../node-record-reader';
 import { resolvedBodyNodes } from '../../../graph-plan';
 import { type ModelAliasPreset, type TierName } from '../../../model-validation';
 import { getLog } from '../../log';
 import { RunSourceUnreadableError } from '../../node-source';
 import { beginExecution, type RunLayersContext } from '../../run-context';
-import type { LoopGroupBodyResult, LoopGroupRun, LoopGroupProgress } from './loop-group-state';
+import type {
+  InterruptedIteration,
+  LoopGroupBodyResult,
+  LoopGroupRun,
+  LoopGroupProgress,
+} from './loop-group-state';
 import {
   completeEscalatedResume,
   finalizeGroupOnBareApprove,
@@ -21,6 +27,7 @@ import {
   resumeTerminalWait,
 } from './resume';
 import { completeLoopGroup, runLoopGroupIteration } from './iteration';
+import { findInterruptedIteration, restorePreviousIteration } from './previous-iteration';
 
 /**
  * Execute a loop-group node — runs a multi-node sub-DAG body repeatedly until a
@@ -197,7 +204,14 @@ async function executeLoopGroupBody(
     workflowModel,
     workflowTier,
     workflowPreset,
-    resume: readLoopGroupResume(ctx, node, bodyNodes, stepName, progress),
+    resume: readLoopGroupResume(
+      ctx,
+      node,
+      bodyNodes,
+      stepName,
+      progress,
+      await readInterruptedIteration(ctx, node, bodyNodes, stepName)
+    ),
   };
   const { resume } = run;
 
@@ -207,7 +221,11 @@ async function executeLoopGroupBody(
     const waiting = await resumeTerminalWait(run);
     if (waiting !== undefined) return waiting;
   }
-  const loopPrevOutputs = resume.isLoopResume ? restoreLoopPrevOutputs(run) : undefined;
+  const loopPrevOutputs = resume.isLoopResume
+    ? restoreLoopPrevOutputs(run)
+    : resume.continuesInterruptedIteration
+      ? await restorePreviousIteration(run)
+      : undefined;
   const resumedCompletion = await completeEscalatedResume(run, loopPrevOutputs);
   if (resumedCompletion !== undefined) return resumedCompletion;
 
@@ -242,5 +260,33 @@ async function executeLoopGroupBody(
     ...progress.usage,
     loopIterations: iterations,
     maxIterations: iterationLimit,
+  };
+}
+
+/**
+ * The round this group invocation stopped in when the run resumes after it failed or was
+ * killed inside the group. Undefined on a fresh run (no unfinished invocations), and when
+ * the group never got as far as a body row.
+ */
+async function readInterruptedIteration(
+  ctx: RunLayersContext,
+  node: LoopGroupNode,
+  bodyNodes: readonly DagNode[],
+  stepName: string
+): Promise<InterruptedIteration | undefined> {
+  const unfinished = ctx.unfinishedInvocations?.get(nodeInvocationKey(stepName, ctx.loopGroupPath));
+  if (unfinished?.node.kind !== 'loop_group') return undefined;
+  const { lifecycle } = unfinished;
+  if (lifecycle.status !== 'failed' && lifecycle.status !== 'started') return undefined;
+  const iteration = await findInterruptedIteration({
+    ctx,
+    node,
+    bodyNodes,
+    bodyStepNamePrefix: `${stepName}.`,
+  });
+  if (iteration === undefined) return undefined;
+  return {
+    iteration,
+    exhausted: lifecycle.status === 'failed' && lifecycle.failureKind === 'max_iterations',
   };
 }

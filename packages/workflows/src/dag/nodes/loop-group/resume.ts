@@ -42,6 +42,7 @@ import {
   loopGroupIterationOutput,
   type LoopGroupBodyResult,
   type LoopGroupProgress,
+  type InterruptedIteration,
   type LoopGroupResume,
   type LoopGroupRun,
   type LoopGroupState,
@@ -71,7 +72,8 @@ export function readLoopGroupResume(
   node: LoopGroupNode,
   bodyNodes: readonly DagNode[],
   stepName: string,
-  progress: LoopGroupProgress
+  progress: LoopGroupProgress,
+  interrupted: InterruptedIteration | undefined
 ): LoopGroupResume {
   const { loopGateMeta, ownerInvocationKey, enclosingPauseFrame } = readPausedInvocation(
     ctx,
@@ -92,11 +94,10 @@ export function readLoopGroupResume(
   });
   // Leaf rows already own prior spend; only its completeness proof carries into this segment.
   progress.usage.costPartial = hasIncompleteGroupCost(ctx, loopGateMeta, ownerInvocationKey);
-  const startIteration = isLoopResume
-    ? resumeIteration + 1
-    : shape.restoredAncestry !== undefined
-      ? (enclosingPauseFrame?.iteration ?? 1)
-      : 1;
+  const { startIteration, restoredIteration, continuesInterruptedIteration } = startOf(
+    { ...shape, isLoopResume, resumeIteration, enclosingPauseFrame, interrupted },
+    progress
+  );
   const loopGateRunMeta = (ctx.workflowRun.metadata ?? {}) as LoopGateRunMetadata;
   const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
   // max_iterations bounds autonomous work. An explicit answer authorizes one fresh iteration
@@ -115,12 +116,57 @@ export function readLoopGroupResume(
     isLoopResume,
     bodySessionCursors,
     bodySessionCursorAncestry: withOwnCursors(ctx, shape.ownerInvocationKey, bodySessionCursors),
-    resumeIteration,
+    continuesInterruptedIteration,
+    resumeIteration: restoredIteration,
     startIteration,
     feedbackGiven,
     iterationLimit: answered ? Math.max(maxIterations, startIteration) : maxIterations,
     loopUserInput: isLegacyInteractiveLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '',
   };
+}
+
+/**
+ * The iteration a group starts at, and the one whose successor `$LOOP_PREV` restores. Every
+ * pause shape keeps its own start; only a failure or kill outside a pause re-enters the
+ * round it stopped in.
+ */
+function startOf(
+  shape: Pick<ResumeShape, 'restoredAncestry'> & {
+    isLoopResume: boolean;
+    resumeIteration: number;
+    enclosingPauseFrame: { iteration: number } | undefined;
+    interrupted: InterruptedIteration | undefined;
+  },
+  progress: LoopGroupProgress
+): { startIteration: number; restoredIteration: number; continuesInterruptedIteration: boolean } {
+  const { isLoopResume, resumeIteration, enclosingPauseFrame, interrupted } = shape;
+  if (isLoopResume) {
+    return {
+      startIteration: resumeIteration + 1,
+      restoredIteration: resumeIteration,
+      continuesInterruptedIteration: false,
+    };
+  }
+  if (shape.restoredAncestry !== undefined || enclosingPauseFrame !== undefined) {
+    return {
+      startIteration:
+        shape.restoredAncestry !== undefined ? (enclosingPauseFrame?.iteration ?? 1) : 1,
+      restoredIteration: resumeIteration,
+      continuesInterruptedIteration: false,
+    };
+  }
+  if (interrupted === undefined) {
+    return {
+      startIteration: 1,
+      restoredIteration: resumeIteration,
+      continuesInterruptedIteration: false,
+    };
+  }
+  progress.lastStartedIteration = interrupted.iteration;
+  // A group that ran out of rounds has none left: it starts past its last and fails again.
+  const startIteration = interrupted.exhausted ? interrupted.iteration + 1 : interrupted.iteration;
+  // $LOOP_PREV restores the iteration before the one that starts.
+  return { startIteration, restoredIteration: startIteration, continuesInterruptedIteration: true };
 }
 
 function hasIncompleteGroupCost(

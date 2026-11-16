@@ -35,8 +35,15 @@ export interface LoopGroupProgress {
   lastStartedIteration: number;
 }
 
+/** The round a failed or interrupted group invocation stopped in, read from its body rows. */
+export interface InterruptedIteration {
+  iteration: number;
+  /** The group failed because it ran out of rounds, so it has none left. */
+  exhausted: boolean;
+}
+
 /**
- * Where a loop group starts. Three resume shapes are recognized:
+ * Where a loop group starts. Four resume shapes are recognized:
  *  - the ORIGINAL interactive_loop gate (group.interactive + gate_message).
  *  - a body terminal gate paused under THIS group, with bodyGateId naming
  *    the leaf gate. `$LOOP_USER_INPUT` does not apply to this shape — the human's
@@ -44,6 +51,10 @@ export interface LoopGroupProgress {
  *    like any other body node's output — so `loopUserInput` stays scoped to the
  *    legacy shape.
  *  - a body terminal wait this group owns.
+ *  - a group that failed or was interrupted outside any pause
+ *    (`continuesInterruptedIteration`): it re-enters the round it stopped in and re-runs
+ *    that round's body in full. Earlier rounds stay done, `$LOOP_PREV` reads the round
+ *    before, and the rounds already used count against max_iterations.
  */
 export interface LoopGroupResume {
   loopGateMeta: ApprovalContext | undefined;
@@ -52,10 +63,14 @@ export interface LoopGroupResume {
   isEscalatedGateResume: boolean;
   isEscalatedWaitResume: boolean;
   isLoopResume: boolean;
+  continuesInterruptedIteration: boolean;
   /** Named owner sessions of body nodes that resume a session context; undefined when none do. */
   bodySessionCursors: Map<string, SessionCursor> | undefined;
   bodySessionCursorAncestry: Map<string, Map<string, SessionCursor>>;
-  /** The iteration the run paused in. */
+  /**
+   * The iteration the run paused in; for `continuesInterruptedIteration`, the iteration
+   * that starts, so `$LOOP_PREV` restores the one before it.
+   */
   resumeIteration: number;
   startIteration: number;
   feedbackGiven: boolean;
