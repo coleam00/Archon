@@ -285,12 +285,12 @@ Terminal ≠ good. The three JSON modes expose different data:
 
 | Command | Read |
 |---|---|
-| `get <id> --json` | top-level normalized `outcome` (`succeeded`/`failed`) and `leave_behind.artifactFiles` |
+| `get <id> --json` | top-level `completed_outcome` (set only once the run completed), the boolean form's `outcome` (`succeeded`/`failed`), and `leave_behind.artifactFiles` |
 | `get <id> --verbose --json` | ordered `nodes` summaries and parse warnings |
 | `get <id> --verbose --events --json` | raw `events` rows |
 
-`outcome_field` selects a boolean from the return node, but the run stores only
-the normalized top-level outcome. It does not expose the authored field name
+`returns.outcome` selects a boolean or a string enum from the return node, but the
+run stores only the resulting top-level outcome. It does not expose the authored field name
 (`green`, `ready`, or `rooted`) as another top-level property. Locate the report
 through `leave_behind.artifactFiles`, then read the artifact before reporting to
 the user.

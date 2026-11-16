@@ -24,8 +24,12 @@ import { workflowSourceConfigFrom } from '@archon/workflows/run-source';
 import { latestWorkflowNotices } from '@archon/workflows/workflow-notice';
 import { formatFixtureReport, runFixtures } from '@archon/workflows/fixture-runner';
 import type { WorkflowLoadError, WorkflowWithSource } from '@archon/workflows/schemas/workflow';
-import { workflowRunStatusSchema, runAttention } from '@archon/workflows/schemas/workflow-run';
-import type { WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
+import {
+  displayedRunOutcome,
+  workflowRunStatusSchema,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowRun, WorkflowRunStatus } from '@archon/workflows/schemas/workflow-run';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import {
   loadWorkflows,
@@ -757,6 +761,9 @@ async function listRecentRuns(
   return 0;
 }
 
-function authoredOutcome(run: { outcome?: string | null }): string {
-  return run.outcome ? ` · authored outcome: ${run.outcome}` : '';
+function authoredOutcome(
+  run: Pick<WorkflowRun, 'status' | 'outcome' | 'completed_outcome'>
+): string {
+  const outcome = displayedRunOutcome(run);
+  return outcome !== null ? ` · authored outcome: ${outcome}` : '';
 }

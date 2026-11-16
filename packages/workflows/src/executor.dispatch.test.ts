@@ -65,14 +65,17 @@ describe('refusals before any side effect', () => {
   it('rejects a structurally valid but semantically invalid outcome declaration', async () => {
     const store = makeStore();
     const deps = makeDeps(store);
-    const workflow = parsedWorkflow({
-      name: 'invalid-authored-outcome',
-      description: 'missing selected return node',
-      outcome_field: 'green',
-      nodes: [{ id: 'node1', prompt: 'Do something' }],
+    // `result` is the loader's normalization of `returns:`; built by hand to bypass the loader.
+    const workflow = resolveWorkflow({
+      ...workflowDefinitionSchema.parse({
+        name: 'invalid-authored-outcome',
+        description: 'missing selected return node',
+        nodes: [{ id: 'node1', prompt: 'Do something' }],
+      }),
+      result: { outcome: 'green' },
     });
     await expect(startWorkflow({ deps, workflow, cwd: '/tmp/ops' })).rejects.toThrow(
-      'without returns:'
+      'without a returns node'
     );
     expect(store.createWorkflowRun).not.toHaveBeenCalled();
     expect(deps.loadConfig).not.toHaveBeenCalled();

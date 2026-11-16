@@ -6,6 +6,7 @@ import {
   attentionChoiceSummary,
   attentionLabels,
   attentionRevision,
+  displayedRunOutcome,
   isApprovalContext,
   isContainerRun,
   legacyOccurrenceStep,
@@ -310,8 +311,8 @@ async function handleList(ctx: ManageRunContext): Promise<string> {
   const lines = runs.map(r => {
     const activeNodes =
       r.active_nodes.length > 0 ? ` · active node(s): ${r.active_nodes.join(', ')}` : '';
-    const outcome = r.outcome ? ` · authored outcome: ${r.outcome}` : '';
-    return `- ${r.id.slice(0, 8)} · ${r.workflow_name} · ${r.status}${outcome}${activeNodes}`;
+    const outcome = displayedRunOutcome(r);
+    return `- ${r.id.slice(0, 8)} · ${r.workflow_name} · ${r.status}${outcome !== null ? ` · authored outcome: ${outcome}` : ''}${activeNodes}`;
   });
   return `${runs.length.toString()} run(s) (most recent first):\n${lines.join('\n')}`;
 }
@@ -337,7 +338,8 @@ function formatRunDetail(run: WorkflowRun): string {
 
 function formatRunSummary(run: WorkflowRun): string[] {
   const parts = [`Run ${run.id.slice(0, 8)} · ${run.workflow_name}`, `status: ${run.status}`];
-  if (run.outcome !== null) parts.push(`authored outcome: ${run.outcome}`);
+  const outcome = displayedRunOutcome(run);
+  if (outcome !== null) parts.push(`authored outcome: ${outcome}`);
   parts.push(`started: ${formatTimestamp(run.started_at)}`);
   if (run.completed_at !== null) parts.push(`finished: ${formatTimestamp(run.completed_at)}`);
   const error = run.metadata.error;

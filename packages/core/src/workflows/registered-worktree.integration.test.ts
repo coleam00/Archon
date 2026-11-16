@@ -162,6 +162,7 @@ test.each(['checkout', 'local branch', 'remote branch'])(
       codebase_id: codebaseId,
       status: 'running',
       outcome: null,
+      completed_outcome: null,
       user_message: '',
       metadata: {},
       active_phase_started_at: null,

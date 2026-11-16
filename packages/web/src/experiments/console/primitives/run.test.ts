@@ -89,38 +89,34 @@ describe('toRun — provenance', () => {
     expect(detail.activeNodes).toEqual([]);
   });
 
-  test('keeps authored outcome independent from execution status', () => {
-    const completedWithSucceededOutcome = toRun(
-      raw({
-        id: 'r0',
-        workflow_name: 'review',
-        status: 'completed',
-        outcome: 'succeeded',
-      })
+  test('shows the outcome a run completed with, in either form', () => {
+    const named = toRun(
+      raw({ id: 'r0', workflow_name: 'build', status: 'completed', completed_outcome: 'built' })
     );
-    const completedWithFailedOutcome = toRun(
+    const boolean = toRun(
       raw({
         id: 'r1',
         workflow_name: 'review',
         status: 'completed',
         outcome: 'failed',
-      })
-    );
-    const pausedWithSucceededOutcome = toRun(
-      raw({
-        id: 'r2',
-        workflow_name: 'review',
-        status: 'paused',
-        outcome: 'succeeded',
+        completed_outcome: 'failed',
       })
     );
 
-    expect(completedWithSucceededOutcome.status).toBe('completed');
-    expect(completedWithSucceededOutcome.outcome).toBe('succeeded');
-    expect(completedWithFailedOutcome.status).toBe('completed');
-    expect(completedWithFailedOutcome.outcome).toBe('failed');
-    expect(pausedWithSucceededOutcome.status).toBe('paused');
-    expect(pausedWithSucceededOutcome.outcome).toBe('succeeded');
+    expect(named.outcome).toBe('built');
+    expect(boolean.outcome).toBe('failed');
+  });
+
+  test("shows an older binary's outcome only on a completed run", () => {
+    const completed = toRun(
+      raw({ id: 'r0', workflow_name: 'review', status: 'completed', outcome: 'succeeded' })
+    );
+    const paused = toRun(
+      raw({ id: 'r1', workflow_name: 'review', status: 'paused', outcome: 'succeeded' })
+    );
+
+    expect(completed.outcome).toBe('succeeded');
+    expect(paused.outcome).toBeNull();
   });
 
   test('normalizes an absent authored outcome to null', () => {

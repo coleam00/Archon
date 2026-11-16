@@ -82,7 +82,7 @@ export function stuckItems(runId: string, stage: HistoryEntry['stage']): Stuck[]
 /**
  * The outcome of a run whose pickup claimed nothing: `idle` itself, healthy, when nothing
  * is stuck; otherwise each stuck item by name and reason, not healthy, which the
- * workflow's `outcome_field` records as a failed outcome.
+ * workflow's `returns.outcome` records as a failed outcome.
  */
 export function idleOutcome(idle: string, stuck: readonly Stuck[]): { summary: string; healthy: boolean } {
   if (stuck.length === 0) return { summary: idle, healthy: true };

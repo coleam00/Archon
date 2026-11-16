@@ -50,6 +50,7 @@ function pausedRun(
     conversation_id: 'conv-1',
     parent_conversation_id: null,
     outcome: null,
+    completed_outcome: null,
     user_message: 'Run the workflow',
     last_activity_at: new Date('2026-06-01T00:00:00.000Z'),
     working_path: null,

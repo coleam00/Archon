@@ -11,6 +11,7 @@ import type {
   UnknownOwnerLiveness,
 } from '@archon/core/services/run-attention-watch';
 import {
+  displayedRunOutcome,
   isApprovalContext,
   isScheduledWorkflowResume,
   isWorkflowWaitContext,
@@ -54,7 +55,8 @@ export async function printStatusRun(
   if (attention?.kind === 'stalled_tool_calls') console.log(formatToolAttention(attention));
   if (attention?.kind === 'usage_limit')
     console.log(usageLimitWaitLine(attention.nodeId, attention.resumeAt));
-  if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
+  const outcome = displayedRunOutcome(run);
+  if (outcome !== null) console.log(`  Authored outcome: ${outcome}`);
   console.log(`  Age:    ${age}`);
   if (notice !== undefined) {
     // The run's own latest account of what it is doing or did.
@@ -459,7 +461,8 @@ export function printRunDetail(
   console.log(`  Start:  ${describeCheckoutBaseline(run.checkout_baseline)}`);
   console.log(`  Transcript: ${transcriptPath ?? '(unavailable)'}`);
   console.log(`  Status: ${run.status}`);
-  if (run.outcome) console.log(`  Authored outcome: ${run.outcome}`);
+  const outcome = displayedRunOutcome(run);
+  if (outcome !== null) console.log(`  Authored outcome: ${outcome}`);
   printReason(terminalRecord);
   console.log(`  Age:    ${formatAge(run.started_at)}`);
   for (const line of formatRunUsage(run.metadata)) console.log(line);

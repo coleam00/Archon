@@ -510,7 +510,7 @@ describe('CommandHandler', () => {
         expect(result.message).toContain('Active nodes: parallel-a, parallel-b');
       });
 
-      test('should show authored outcome independently for an active workflow', async () => {
+      test('shows no outcome for an active workflow, even one an older binary wrote early', async () => {
         mockListDashboardRuns.mockResolvedValueOnce({
           runs: [
             makeDashboardRun({
@@ -528,7 +528,7 @@ describe('CommandHandler', () => {
 
         expect(result.message).toContain('review');
         expect(result.message).toContain('(paused)');
-        expect(result.message).toContain('Authored outcome: succeeded');
+        expect(result.message).not.toContain('Authored outcome');
       });
 
       test('should direct an attention wait from before answers to resume', async () => {

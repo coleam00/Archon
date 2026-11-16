@@ -227,6 +227,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Stores workflow state, step progress, and parent conversation linkage
   - Nullable `user_id` records which user triggered the run
   - Nullable `item_id` references the [item](/reference/cli/#items) the run belongs to. Written once at creation; null for a run started with no item
+  - Nullable `completed_outcome` is the outcome the run completed with, from its workflow's [`returns.outcome`](/reference/workflow-language/#workflow-signature-inputs-returns-and-inputs): an enum value as it is, a boolean as `succeeded` or `failed`. Written only by the write that completes the run, so it is null on any run that has not completed. Nullable `outcome` holds the boolean form only (its constraint admits `succeeded` and `failed`) and is written by that same write; binaries before `completed_outcome` wrote it while the run was still running
   - Nullable `parent_run_id` (#2121 Phase 2) — self-referential FK (`ON DELETE SET NULL`) linking a `workflow:` sub-run to the run that spawned it; null for top-level runs. Makes the run tree walkable (`findChildRuns`/`getRunAncestry`) for the abandon cascade and cost roll-up.
   - `conversation_id` cascades on conversation delete: a hard `DELETE` of a conversation would erase its run rows and silently drop the live-run cleanup pin for their isolation environments (#2868). Soft delete is the only supported path — a future hard-delete must resolve live runs first.
 

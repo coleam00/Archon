@@ -72,17 +72,17 @@ nodes:
     expect(error?.error).toContain("Invalid 'returns'");
   });
 
-  it('rejects a non-string returns value instead of falling back to a positional sink', () => {
+  it('rejects an invalid returns value instead of falling back to a positional sink', () => {
     const { workflow, error } = parseWorkflow(
       `
-name: object-returns
-description: invalid object selector
-returns: { node: build }
+name: list-returns
+description: invalid list selector
+returns: [build]
 nodes:
   - id: build
     prompt: "hi"
 `,
-      'object-returns.yaml'
+      'list-returns.yaml'
     );
     expect(workflow).toBeNull();
     expect(error?.errorType).toBe('validation_error');
@@ -282,10 +282,6 @@ describe('workflow-level field parity (#2457)', () => {
     },
     // `returns` must name a real top-level node id — the fixture's single node is `only`.
     returns: { yaml: 'returns: only', present: w => w.returns === 'only' },
-    outcome_field: {
-      yaml: 'returns: only\noutcome_field: green',
-      present: w => w.outcome_field === 'green',
-    },
     deprecated: {
       yaml: 'deprecated:\n  message: Switch instead.',
       present: w => w.deprecated?.message === 'Switch instead.',

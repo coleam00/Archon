@@ -213,6 +213,7 @@ export function createTransactionView(
       codebase_id: input.codebase_id ?? null,
       status: 'pending',
       outcome: null,
+      completed_outcome: null,
       started_at: new Date(),
       active_phase_started_at: null,
       completed_at: null,
@@ -326,12 +327,16 @@ export function createTransactionView(
     completeWorkflowRun: async (
       id,
       completion,
-      metadata
+      metadata,
+      result
     ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
       validateWorkflowWaitMetadata(metadata);
       const run = structuredClone(row(id));
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';
+      const outcome = result?.outcome;
+      run.outcome = outcome?.kind === 'boolean' ? outcome.value : null;
+      run.completed_outcome = outcome?.value ?? null;
       Object.assign(run.metadata, mutableRunMetadata(metadata));
       terminal(run, {
         workflow_run_id: id,

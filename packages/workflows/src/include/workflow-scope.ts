@@ -196,10 +196,10 @@ const NON_DROPPED_WORKFLOW_KEYS: ReadonlySet<string> = new Set([
   // primarySink and `inputs` validates the caller's `with:`. Warning "dropped" would be
   // misleading.
   'returns',
-  // Run-owned like `returns`: an included file's authored outcome is not
-  // propagated to its composer, while the top-level workflow keeps its own
+  // Run-owned like `returns`, which declares it: an included file's result contract is
+  // not propagated to its composer, while the top-level workflow keeps its own
   // declaration through flattening.
-  'outcome_field',
+  'result',
   'inputs',
   // #1764: unioned into the composing workflow's own requirement set, not dropped.
   'requires',

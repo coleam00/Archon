@@ -15,7 +15,6 @@ import {
   validateWorkflowWaitMetadata,
   type ToolCallAttention,
   type WorkflowRun,
-  type WorkflowRunOutcome,
   type WorkflowRunStatus,
 } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDialect, pool } from './connection';
@@ -99,7 +98,6 @@ export async function updateWorkflowRun(
   id: string,
   updates: Partial<Pick<WorkflowRun, 'metadata' | 'output_root'>> & {
     status?: Exclude<WorkflowRunStatus, 'completed' | 'failed' | 'cancelled'>;
-    outcome?: WorkflowRunOutcome;
     working_path?: string;
   }
 ): Promise<void> {
@@ -122,10 +120,6 @@ export async function updateWorkflowRun(
     const paramIndex = values.length + 1;
     values.push(JSON.stringify(mutableRunMetadata(updates.metadata)));
     setClauses.push(`metadata = ${dialect.jsonMerge('metadata', paramIndex)}`);
-  }
-  if (updates.outcome !== undefined) {
-    values.push(updates.outcome);
-    setClauses.push(`outcome = $${values.length}`);
   }
   if (updates.output_root !== undefined) {
     values.push(updates.output_root);

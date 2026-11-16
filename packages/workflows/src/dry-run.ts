@@ -6,6 +6,7 @@ import { randomUUID } from 'node:crypto';
 import { rm } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readComposedBindings } from './compiled-command';
+import { declaredOutcome, outcomeFromValue } from './completed-outcome';
 import { parseWholeExecutionCheckoutRef } from './output-ref';
 import { resolveWorkflowModelScope, assistantModelDefaults } from './node-model-resolution';
 import type { ResolvedAiProfile } from './model-validation';
@@ -19,7 +20,7 @@ import {
   type DagNode,
   type NodeOutput,
   type ResolvedWorkflow,
-  type WorkflowRunOutcome,
+  type RunCompletedOutcome,
 } from './schemas';
 import type { DryRunContext } from './dry-run/context';
 import {
@@ -79,15 +80,20 @@ function collectCheckoutProducers(
   return into;
 }
 
-function resolveDryRunAuthoredOutcome(
+/**
+ * The outcome the simulated run completes with, read as the completion write reads it.
+ * Null unless the simulation completed and the returns node's value is a stubbed or
+ * executed one that satisfies its schema: a placeholder output is not an outcome.
+ */
+function resolveDryRunOutcome(
   workflow: ResolvedWorkflow,
   outputs: ReadonlyMap<string, NodeOutput>,
   consumedStubs: ReadonlySet<string>,
   execCode: boolean
-): WorkflowRunOutcome | null {
-  const field = workflow.outcome_field;
+): RunCompletedOutcome | null {
+  const declared = declaredOutcome(workflow);
   const returns = workflow.returns;
-  if (field === undefined || returns === undefined) return null;
+  if (declared === undefined || returns === undefined) return null;
 
   const selectedNode = workflow.nodes.find(node => node.id === returns);
   if (
@@ -106,10 +112,10 @@ function resolveDryRunAuthoredOutcome(
   ) {
     return null;
   }
-  if (!isRecord(structured) || !Object.hasOwn(structured, field)) return null;
+  if (!isRecord(structured) || !Object.hasOwn(structured, declared.field)) return null;
 
-  const verdict = structured[field];
-  return typeof verdict === 'boolean' ? (verdict ? 'succeeded' : 'failed') : null;
+  const outcome = outcomeFromValue(declared.form, structured[declared.field]);
+  return 'invalid' in outcome ? null : outcome;
 }
 
 interface DryRunOptions {
@@ -230,15 +236,16 @@ export async function dryRunWorkflow(options: DryRunOptions): Promise<DryRunResu
         : anyFailed
           ? 'failed'
           : 'completed';
+  const completedOutcome =
+    outcome === 'completed'
+      ? resolveDryRunOutcome(options.workflow, outputs, ctx.consumedStubs, ctx.execCode)
+      : null;
   return dryRunResultSchema.parse({
     workflow: options.workflow.name,
     outcome,
-    authoredOutcome: resolveDryRunAuthoredOutcome(
-      options.workflow,
-      outputs,
-      ctx.consumedStubs,
-      ctx.execCode
-    ),
+    declaresOutcome: declaredOutcome(options.workflow) !== undefined,
+    authoredOutcome: completedOutcome?.kind === 'boolean' ? completedOutcome.value : null,
+    completedOutcome: completedOutcome?.value ?? null,
     trace: ctx.trace,
     missingStubs: [...ctx.missingStubs].sort(),
     toleratedMissingStubs: [...ctx.toleratedMissingStubs].sort(),
@@ -258,7 +265,7 @@ export function formatDryRunTrace(result: DryRunResult): string {
   lines.push(
     '',
     `Simulation outcome: ${result.outcome}`,
-    `Authored outcome: ${result.authoredOutcome ?? 'undeclared'}`
+    `Authored outcome: ${result.declaresOutcome ? (result.completedOutcome ?? 'none') : 'undeclared'}`
   );
   if (result.missingStubs.length > 0)
     lines.push(`Missing stubs: ${result.missingStubs.join(', ')}`);

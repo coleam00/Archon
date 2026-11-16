@@ -65,10 +65,9 @@ inputs:
       `archon trigger fire`, at most once per sweep, so records about the merged code
       are decided once that code is on the default branch. Empty starts no drain.
 
-returns: record
 # False when the default branch's CI is red, or when a run that claimed nothing found
 # stored items no pickup can act on: the run completes with a failed outcome.
-outcome_field: healthy
+returns: { node: record, outcome: healthy }
 
 # Read-only: runs in the launch checkout beside any other run, and creates no worktree.
 worktree:

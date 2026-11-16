@@ -55,7 +55,7 @@ describe('dry-run outcomes and trace', () => {
       const workflow = makeTestWorkflow({
         name: 'authored-outcome',
         returns: 'verdict',
-        outcome_field: 'green',
+        result: { outcome: 'green' },
         nodes: [
           {
             id: 'verdict',
@@ -78,6 +78,34 @@ describe('dry-run outcomes and trace', () => {
     }
   );
 
+  test('derives a completed enum outcome, which the boolean column does not hold', async () => {
+    const workflow = makeTestWorkflow({
+      name: 'enum-outcome',
+      returns: 'decide',
+      result: { outcome: 'stage' },
+      nodes: [
+        {
+          id: 'decide',
+          prompt: 'decide',
+          output_format: {
+            type: 'object',
+            properties: { stage: { type: 'string', enum: ['built', 'stop'] } },
+            required: ['stage'],
+          },
+        },
+      ],
+    });
+
+    const result = await dryRunWorkflow({ workflow, stubs: { decide: { stage: 'stop' } } });
+
+    expect(result).toMatchObject({
+      outcome: 'completed',
+      completedOutcome: 'stop',
+      authoredOutcome: null,
+    });
+    expect(formatDryRunTrace(result)).toContain('Authored outcome: stop');
+  });
+
   test.each([false, true])(
     'refuses an invalid structured result and authors no outcome (execCode: %s)',
     async execCode => {
@@ -85,7 +113,7 @@ describe('dry-run outcomes and trace', () => {
         workflow: makeTestWorkflow({
           name: 'invalid-authored-outcome',
           returns: 'verdict',
-          outcome_field: 'green',
+          result: { outcome: 'green' },
           nodes: [
             {
               id: 'verdict',
@@ -117,7 +145,7 @@ describe('dry-run outcomes and trace', () => {
     const workflow = makeTestWorkflow({
       name: 'authored-outcome-not-reached',
       returns: 'verdict',
-      outcome_field: 'green',
+      result: { outcome: 'green' },
       nodes: [
         { id: 'hold', wait: { duration_ms: 60_000 } },
         {
@@ -148,7 +176,7 @@ describe('dry-run outcomes and trace', () => {
         workflow: makeTestWorkflow({
           name: 'executed-authored-outcome',
           returns: 'verdict',
-          outcome_field: 'succeeded',
+          result: { outcome: 'succeeded' },
           nodes: [
             {
               id: 'verdict',
@@ -190,7 +218,7 @@ describe('dry-run outcomes and trace', () => {
         workflow: makeTestWorkflow({
           name: 'placeholder-authored-outcome',
           returns: 'verdict',
-          outcome_field: 'green',
+          result: { outcome: 'green' },
           nodes: [
             {
               id: 'verdict',

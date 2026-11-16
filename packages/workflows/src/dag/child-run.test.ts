@@ -12,6 +12,7 @@ function settledRun(metadata: Record<string, unknown>): WorkflowRun {
     codebase_id: null,
     status: 'completed',
     outcome: null,
+    completed_outcome: null,
     user_message: 'child input',
     metadata,
     active_phase_started_at: null,

@@ -554,7 +554,8 @@ export class SqliteAdapter implements IDatabase {
         working_path TEXT,
         output_root TEXT,
         checkout_baseline TEXT,
-        item_id TEXT REFERENCES remote_agent_items(id)
+        item_id TEXT REFERENCES remote_agent_items(id),
+        completed_outcome TEXT
       );
 
       -- The durable thing runs are about; see migrations/000_combined.sql.

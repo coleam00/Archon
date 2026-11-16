@@ -71,8 +71,7 @@ inputs:
 # `delivered: false` in the callers. A delivery that broke still completes the
 # report, not ready with reason `failed` (`pr_create_unresolved` when a PR create
 # ended unresolved), and the run still fails, naming the node that failed.
-returns: report
-outcome_field: ready
+returns: { node: report, outcome: ready }
 
 nodes:
   # Refuses the run before any agent spends when the forge plugin cannot

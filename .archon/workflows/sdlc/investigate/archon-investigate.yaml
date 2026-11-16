@@ -23,8 +23,7 @@ inputs:
 # with an authored outcome of false — lifecycle status and work outcome are separate
 # facts. The boolean is derived from the verdict by the verdict node, never declared
 # a second time by the agent.
-returns: verdict
-outcome_field: rooted
+returns: { node: verdict, outcome: rooted }
 
 nodes:
 

@@ -1,5 +1,9 @@
 import { findProjectRunsByReference } from '../../workflows/run-id';
-import { isContainerRun, runAttention } from '@archon/workflows/schemas/workflow-run';
+import {
+  displayedRunOutcome,
+  isContainerRun,
+  runAttention,
+} from '@archon/workflows/schemas/workflow-run';
 import {
   attentionAnswerLines,
   spellWorkflowCommand,
@@ -154,7 +158,8 @@ export async function getWorkflowRun(input: WorkflowCommand): Promise<CommandRes
     if (!run || (conversation.codebase_id && run.codebase_id !== conversation.codebase_id))
       return { success: false, message: `Workflow run not found: ${arg}` };
     let msg = `**\`${run.workflow_name}\`** (${run.status})\n  ID: ${run.id}\n`;
-    if (run.outcome !== null) msg += `  Authored outcome: ${run.outcome}\n`;
+    const outcome = displayedRunOutcome(run);
+    if (outcome !== null) msg += `  Authored outcome: ${outcome}\n`;
     msg += `  Started: ${new Date(run.started_at).toISOString()}\n`;
     if (run.completed_at !== null)
       msg += `  Finished: ${new Date(run.completed_at).toISOString()}\n`;
@@ -184,7 +189,6 @@ export async function listActiveWorkflowRuns(input: WorkflowCommand): Promise<Co
     let msg = `**Active Workflows (${String(activeRuns.length)})**\n\n`;
     for (const run of activeRuns) {
       msg += `**\`${run.workflow_name}\`** (${run.status})\n`;
-      if (run.outcome !== null) msg += `  Authored outcome: ${run.outcome}\n`;
       msg += `  ID: ${run.id}\n`;
       msg += `  Path: ${run.working_path ?? '(unknown)'}\n`;
       if (run.active_nodes.length > 0) {

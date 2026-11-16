@@ -847,8 +847,7 @@ nodes:
       `
 name: child-outcome
 description: child authors a failed work verdict
-returns: result
-outcome_field: green
+returns: { node: result, outcome: green }
 nodes:
   - id: result
     prompt: report the child verdict
@@ -899,8 +898,12 @@ nodes:
     expect(result.success).toBe(true);
     const child = [...store.runs.values()].find(run => run.workflow_name === 'child-outcome');
     const parent = [...store.runs.values()].find(run => run.workflow_name === 'parent-outcome');
-    expect(child).toMatchObject({ status: 'completed', outcome: 'failed' });
-    expect(parent).toMatchObject({ status: 'completed', outcome: null });
+    expect(child).toMatchObject({
+      status: 'completed',
+      outcome: 'failed',
+      completed_outcome: 'failed',
+    });
+    expect(parent).toMatchObject({ status: 'completed', outcome: null, completed_outcome: null });
     expect(
       store.events.some(
         event =>

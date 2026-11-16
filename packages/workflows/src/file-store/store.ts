@@ -282,10 +282,10 @@ export async function createFileWorkflowStore(
         view => view.resolveAndCancelApprovalGate(id, events, cancellation, expected),
         await observedRun(id)
       ),
-    completeWorkflowRun: async (id, completion, metadata) =>
+    completeWorkflowRun: async (id, completion, metadata, result) =>
       write(
         [id],
-        view => view.completeWorkflowRun(id, completion, metadata),
+        view => view.completeWorkflowRun(id, completion, metadata, result),
         await observedRun(id)
       ),
     failWorkflowRun: async (id, error, options) =>

@@ -60,29 +60,29 @@ describe('output reference errors name the reference as written', () => {
     ).toThrow("'$LOOP_PREV.ghost.output.x'");
   });
 
-  it('outcome_field', async () => {
+  it('returns.outcome', async () => {
     const testDir = join(
       tmpdir(),
       `dag-outcome-ref-${Date.now()}-${Math.random().toString(36).slice(2)}`
     );
     await mkdir(testDir, { recursive: true });
+    const store = createMockStore();
     try {
-      await expect(
-        executeDagWorkflow(
-          dagOptions({
-            deps: createMockDeps(createMockStore()),
-            platform: createMockPlatform(),
-            cwd: testDir,
-            workflow: {
-              name: 'outcome-ref',
-              returns: 'r',
-              outcome_field: 'green',
-              nodes: [{ id: 'r', kind: 'exec', runtime: 'sh', script: "printf '%s' '{}'" }],
-            },
-            workflowRun: makeWorkflowRun('outcome-ref'),
-          })
-        )
-      ).rejects.toThrow("'$r.output.green'");
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(store),
+          platform: createMockPlatform(),
+          cwd: testDir,
+          workflow: {
+            name: 'outcome-ref',
+            returns: 'r',
+            result: { outcome: 'green' },
+            nodes: [{ id: 'r', kind: 'exec', runtime: 'sh', script: "printf '%s' '{}'" }],
+          },
+          workflowRun: makeWorkflowRun('outcome-ref'),
+        })
+      );
+      expect(store.failWorkflowRun.mock.calls[0]?.[1]).toContain("'$r.output.green'");
     } finally {
       await removeTempTree(testDir);
     }

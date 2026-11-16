@@ -26,6 +26,7 @@ function harness(thresholdMs = 100, reportedBackgroundWork = false) {
     codebase_id: null,
     status: 'running',
     outcome: null,
+    completed_outcome: null,
     user_message: '',
     metadata: {},
     active_phase_started_at: null,

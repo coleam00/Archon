@@ -24,11 +24,13 @@ type TestWorkflowOverrides = {
 } & Partial<Omit<WorkflowDefinition, 'name' | 'nodes'>>;
 
 export function makeTestWorkflow(overrides: TestWorkflowOverrides): WorkflowDefinition {
-  return workflowDefinitionSchema.parse({
+  const workflow = workflowDefinitionSchema.parse({
     description: `${overrides.name} test workflow`,
     nodes: [DEFAULT_NODE],
     ...overrides,
   });
+  // `result` is the loader's normalization of `returns:`, not a schema key, so the parse drops it.
+  return overrides.result === undefined ? workflow : { ...workflow, result: overrides.result };
 }
 
 export function makeTestWorkflowList(names: string[]): WorkflowDefinition[] {
