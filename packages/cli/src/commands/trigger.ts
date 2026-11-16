@@ -12,13 +12,12 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { readRunEndedBindings, runEndedBindingProblems } from '@archon/core/workflows/run-ended';
+import { readRunEndedBindings, runEndedBindingCheck } from '@archon/core/workflows/run-ended';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
   collectCredentialValues,
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
-import { declaredOutcome } from '@archon/workflows/completed-outcome';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
 import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 import {
@@ -30,8 +29,6 @@ import {
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
 import { assertItemKey, readWorkflowSourceState } from '@archon/workflows/schemas/workflow-run';
-import { resolveWorkflowName } from '@archon/workflows/router';
-import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { CLIAdapter } from '../adapters/cli-adapter';
 import { writeJsonLine } from '../utils/stdout';
@@ -505,8 +502,8 @@ export function triggersDirectory(): string {
  * List every run-ended binding that is active (each `on.runEnded` file in the triggers
  * directory) and check it against the workflows of the project it launches in: the
  * ended workflow declares the outcome and every input the binding reads from it, and
- * the started workflow exists and declares every input the binding maps. A completion
- * refuses a binding with the first two problems; the last two would fail preparation.
+ * the started workflow exists and declares every input the binding maps. A run on an
+ * item whose end could fire such a binding is refused before it starts, by the same check.
  */
 async function checkTriggers(host: WorkflowHost): Promise<void> {
   const checked = [];
@@ -519,57 +516,13 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
       runEnded: entry.runEnded,
       workflowName: entry.binding.launch.workflowName,
       cwd: entry.binding.launch.cwd,
-      problems: await runEndedProblems(host, entry),
+      problems: await runEndedBindingCheck(entry, host.deps),
     });
   }
   await writeJsonLine({ directory: triggersDirectory(), runEnded: checked });
   const broken = checked.filter(entry => entry.problems.length > 0).length;
   if (broken > 0)
     throw new Error(`${String(broken)} run-ended binding(s) have problems; see "problems" above.`);
-}
-
-/** The input names a workflow declares: its own `inputs:` and its pack's settings. */
-function declaredInputNames(workflow: {
-  inputs?: Record<string, unknown>;
-  pack?: { settings?: Record<string, unknown> };
-}): string[] {
-  return [...Object.keys(workflow.inputs ?? {}), ...Object.keys(workflow.pack?.settings ?? {})];
-}
-
-async function runEndedProblems(
-  host: WorkflowHost,
-  { binding, runEnded }: Awaited<ReturnType<typeof readRunEndedBindings>>[number]
-): Promise<string[]> {
-  const discovered = await discoverWorkflowsWithConfig(
-    binding.launch.discoveryCwd ?? binding.launch.cwd,
-    host.deps.loadConfig,
-    host.deps.providers
-  );
-  const workflows = discovered.workflows.map(found => found.workflow);
-  const problems: string[] = [];
-  // A completion matches the ended run's own name exactly, so this does too.
-  const ended = workflows.find(workflow => workflow.name === runEnded.workflowName);
-  const outcome = ended ? declaredOutcome(ended) : undefined;
-  if (!ended) problems.push(`workflow '${runEnded.workflowName}' is not in this project`);
-  else if (!outcome)
-    problems.push(`workflow '${runEnded.workflowName}' declares no returns.outcome`);
-  else
-    problems.push(
-      ...runEndedBindingProblems(runEnded, {
-        outcomeForm: outcome.form,
-        declaredInputs: declaredInputNames(ended),
-      })
-    );
-  const target = resolveWorkflowName(binding.launch.workflowName, workflows);
-  if (!target) {
-    problems.push(`workflow '${binding.launch.workflowName}' is not in this project`);
-    return problems;
-  }
-  const declared = declaredInputNames(target);
-  for (const name of Object.keys(runEnded.inputs ?? {}))
-    if (!declared.includes(name))
-      problems.push(`workflow '${target.name}' does not declare input '${name}'`);
-  return problems;
 }
 
 export interface TriggerDependencies {

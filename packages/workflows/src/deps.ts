@@ -305,6 +305,11 @@ export interface WorkflowDeps {
    */
   runEndedStarts?: (ended: RunEndedFacts) => Promise<readonly SourceReceiptAcceptance[]>;
   /**
+   * Optional: refuse a run before it starts when a run-ended binding its end could fire
+   * is broken (a missing stage, an undeclared outcome or input). Throws the reason.
+   */
+  checkRunEndedBindings?: (run: WorkflowRun) => Promise<void>;
+  /**
    * Optional: release the worktree a completed run created. `assess` runs before the
    * completion write and its result goes into the terminal record; it returns null when
    * the run has no proof it created its checkout, and reports a failed check as a

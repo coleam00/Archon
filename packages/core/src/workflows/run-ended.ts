@@ -23,7 +23,12 @@ import {
   type SourceReceiptAcceptance,
   type TriggerConfig,
 } from '@archon/workflows/schemas/resource-start';
-import type { WorkflowItem } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowItem, WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import type { WorkflowDeps } from '@archon/workflows/deps';
+import { declaredOutcome } from '@archon/workflows/completed-outcome';
+import { resolveWorkflowName } from '@archon/workflows/router';
+import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
+import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
 
 /** A trigger file whose binding the end of a run starts. */
 export interface RunEndedBinding {
@@ -225,4 +230,78 @@ function receiptFor(
     ...(Object.keys(mapped.inputs).length > 0 ? { eventInputs: mapped.inputs } : {}),
   };
   return sourceReceiptAcceptanceSchema.parse({ receipt, outcome: 'matched', bindings: [binding] });
+}
+
+/** The input names a workflow declares: its own `inputs:` and its pack's settings. */
+function declaredInputNames(workflow: Pick<ResolvedWorkflow, 'inputs' | 'pack'>): string[] {
+  return [...Object.keys(workflow.inputs ?? {}), ...Object.keys(workflow.pack?.settings ?? {})];
+}
+
+/**
+ * Every problem with a run-ended binding, read against the workflows of the project it
+ * launches in: the ended workflow exists and declares the outcome and every input the
+ * binding reads, and the started workflow exists and declares every input it maps. The
+ * check a run gets before it starts, and the one `trigger check` prints.
+ */
+export async function runEndedBindingCheck(
+  { binding, runEnded }: RunEndedBinding,
+  deps: Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+): Promise<string[]> {
+  const discovered = await discoverWorkflowsWithConfig(
+    binding.launch.discoveryCwd ?? binding.launch.cwd,
+    deps.loadConfig,
+    deps.providers
+  );
+  const workflows = discovered.workflows.map(found => found.workflow);
+  const problems: string[] = [];
+  // A completion matches the ended run's own name exactly, so this does too.
+  const ended = workflows.find(workflow => workflow.name === runEnded.workflowName);
+  const outcome = ended ? declaredOutcome(ended) : undefined;
+  if (!ended) problems.push(`workflow '${runEnded.workflowName}' is not in this project`);
+  else if (!outcome)
+    problems.push(`workflow '${runEnded.workflowName}' declares no returns.outcome`);
+  else
+    problems.push(
+      ...runEndedBindingProblems(runEnded, {
+        outcomeForm: outcome.form,
+        declaredInputs: declaredInputNames(ended),
+      })
+    );
+  const target = resolveWorkflowName(binding.launch.workflowName, workflows);
+  if (!target) {
+    problems.push(`workflow '${binding.launch.workflowName}' is not in this project`);
+    return problems;
+  }
+  const declared = declaredInputNames(target);
+  for (const name of Object.keys(runEnded.inputs ?? {}))
+    if (!declared.includes(name))
+      problems.push(`workflow '${target.name}' does not declare input '${name}'`);
+  return problems;
+}
+
+/**
+ * The check a run on an item gets before it starts: every run-ended binding its end
+ * could fire, in its project, is checked in full, so a binding that names a missing
+ * stage or an undeclared input is refused before the run does any work.
+ */
+export function createRunEndedPreflight(
+  dependencies: Omit<RunEndedStartsDependencies, 'now'> &
+    Pick<WorkflowDeps, 'loadConfig' | 'providers'>
+): (run: WorkflowRun) => Promise<void> {
+  return async run => {
+    if (!run.item_id || run.parent_run_id) return;
+    const candidates = (await readRunEndedBindings(dependencies.triggersDirectory())).filter(
+      candidate => candidate.runEnded.workflowName === run.workflow_name
+    );
+    if (candidates.length === 0) return;
+    const item = await dependencies.getItem(run.item_id);
+    if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
+    for (const candidate of candidates) {
+      if ((await dependencies.projectKeyOf(candidate.binding.launch.cwd)) !== item.projectKey)
+        continue;
+      const problems = await runEndedBindingCheck(candidate, dependencies);
+      if (problems.length > 0)
+        throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
+    }
+  };
 }

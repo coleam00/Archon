@@ -1078,8 +1078,13 @@ describe('durable resource starts', () => {
     expect(receipt?.bindings[0]?.intent?.eventInputs).toEqual({ plan: 'the plan' });
     expect((await getWorkflowRun(ended))?.completed_outcome).toBe('planned');
 
-    // A second completion loses the change from running and writes nothing.
-    const second = caused();
+    // A second completion loses the change from running and writes nothing. Its receipt
+    // has its own delivery identity, so only the lost compare-and-set can keep it out.
+    const loser = caused();
+    const second = {
+      ...loser,
+      receipt: { ...loser.receipt, sourceInstanceId: 'loser', deliveryId: 'loser-delivery' },
+    };
     await expect(
       completeWorkflowRun(ended, { duration_ms: 1 }, undefined, {
         outcome,

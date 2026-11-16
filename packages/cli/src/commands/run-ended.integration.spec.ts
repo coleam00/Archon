@@ -4,7 +4,14 @@
  */
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
-import { existsSync, mkdirSync, mkdtempSync, realpathSync, writeFileSync } from 'node:fs';
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  realpathSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
@@ -24,6 +31,8 @@ interface Fixture {
   projectRoot: string;
   archonHome: string;
   cli: (args: string[], env?: Record<string, string>) => Promise<string>;
+  /** Run the CLI and return its exit code and output, whether or not it succeeded. */
+  attempt: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
   rows: <T>(sql: string) => T[];
   fireConfig: (name: string, workflowName: string, resource: string, capacity?: number) => string;
   /** Write a run-ended binding where the ending process reads it. */
@@ -31,7 +40,8 @@ interface Fixture {
   userId: string;
 }
 
-// Stage A returns a named outcome and the plan it was given; no node fires anything.
+// Stage A returns a named outcome and a plan derived from its input, so B's `plan` (read
+// from the result) differs from A's `plan` input; no node fires anything.
 // Both stages take a second, so on SQLite, whose start times have one-second resolution,
 // each run starts in a later second than the one before it and the order reads true.
 const STAGE_A = `name: stage-a
@@ -45,7 +55,7 @@ nodes:
   - id: decide
     bash: |
       sleep 1
-      printf '{"outcome": "planned", "plan": "%s"}' "$INPUTS_PLAN"
+      printf '{"outcome": "planned", "plan": "planned: %s"}' "$INPUTS_PLAN"
     output_format:
       type: object
       properties:
@@ -85,7 +95,10 @@ async function makeFixture(label: string): Promise<Fixture> {
   writeFileSync(join(workflows, 'pool-work.yaml'), POOL);
   expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
 
-  const cli = async (args: string[], env: Record<string, string> = {}): Promise<string> => {
+  const attempt = async (
+    args: string[],
+    env: Record<string, string> = {}
+  ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
     const child = Bun.spawn([process.execPath, CLI_PATH, ...args], {
       cwd: projectRoot,
       env: {
@@ -109,6 +122,10 @@ async function makeFixture(label: string): Promise<Fixture> {
       new Response(child.stdout).text(),
       new Response(child.stderr).text(),
     ]);
+    return { exitCode, stdout, stderr };
+  };
+  const cli = async (args: string[], env: Record<string, string> = {}): Promise<string> => {
+    const { exitCode, stdout, stderr } = await attempt(args, env);
     if (exitCode !== 0)
       throw new Error(`archon ${args.join(' ')} failed (${String(exitCode)}): ${stderr || stdout}`);
     return stdout;
@@ -148,6 +165,7 @@ async function makeFixture(label: string): Promise<Fixture> {
     projectRoot,
     archonHome,
     cli,
+    attempt,
     rows,
     userId,
     fireConfig: (name, workflowName, resource, capacity) => {
@@ -248,8 +266,11 @@ describe('a run-ended binding', () => {
     ]);
     const inputsOf = (run: RunRow | undefined) =>
       (JSON.parse(run?.metadata ?? '{}') as { inputs?: Record<string, string> }).inputs;
-    expect(inputsOf(runs[1])).toEqual({ plan: 'first plan', issue: 'Fix the login page' });
-    expect(inputsOf(runs[3])).toEqual({ plan: 'second plan', issue: 'Fix the login page' });
+    expect(inputsOf(runs[1])).toEqual({ plan: 'planned: first plan', issue: 'Fix the login page' });
+    expect(inputsOf(runs[3])).toEqual({
+      plan: 'planned: second plan',
+      issue: 'Fix the login page',
+    });
 
     const read = itemReadSchema.parse(
       JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
@@ -319,6 +340,44 @@ describe('a run-ended binding', () => {
     await fixture.cli(['trigger', 'drain', '--host', HOST]);
     await Bun.sleep(500);
     expect(fixture.rows<RunRow>(RUNS_SQL)).toHaveLength(4);
+  }, 90_000);
+
+  test('a binding that names a missing stage is refused before the stage feeding it runs', async () => {
+    const fixture = await makeFixture('missing');
+    fixture.bind('build-after-plan', RUN_ENDED);
+    const file = join(fixture.archonHome, 'triggers', 'build-after-plan.json');
+    const config = JSON.parse(readFileSync(file, 'utf8')) as {
+      binding: { launch: { workflowName: string } };
+    };
+    config.binding.launch.workflowName = 'missing-stage';
+    writeFileSync(file, JSON.stringify(config));
+
+    const checked = await fixture.attempt(['trigger', 'check']);
+    expect(checked.exitCode).not.toBe(0);
+    expect(checked.stdout).toContain("workflow 'missing-stage' is not in this project");
+
+    const started = await fixture.attempt([
+      'workflow',
+      'run',
+      'stage-a',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p',
+      '--input',
+      'issue=i',
+    ]);
+    expect(started.exitCode).not.toBe(0);
+    expect(started.stdout + started.stderr).toContain(
+      "workflow 'missing-stage' is not in this project"
+    );
+    const runs = fixture.rows<{ status: string; events: number }>(
+      `SELECT r.status, (SELECT COUNT(*) FROM remote_agent_workflow_events e
+         WHERE e.workflow_run_id = r.id AND e.event_type = 'node_started') AS events
+         FROM remote_agent_workflow_runs r`
+    );
+    expect(runs).toEqual([{ status: 'cancelled', events: 0 }]);
   }, 90_000);
 });
 
