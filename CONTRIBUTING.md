@@ -16,10 +16,12 @@ Thank you for your interest in contributing to Archon!
 
 Packages using the shared test runner discover tests under `src` automatically
 (`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents). Core uses this default.
-A package's legacy `testGroups` pin only the files they name into fixed processes;
+A package's legacy `testGroups` pin the files their selectors name into fixed processes;
 discovery groups every other test, so a new test needs no manifest edit. A test that uses `mock.module()`, directly
 or through a helper, must start with the exact line `// @archon-test-isolated`;
-discovery fails on a direct call without it.
+discovery fails on a direct call without it. The line isolates only a discovered test: a file a
+directory selector such as `src/` covers stays in that selector's group until the selector is
+narrowed to leave it out.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
 retain Bun's substring-filter meaning and run only matching files, preserving the same
