@@ -885,6 +885,36 @@ test('a hand start waits while its resource is full and --no-wait refuses it', a
   expect(waited.output + waited.error).toContain("Waiting for resource 'build'");
   expect(readFileSync(join(f.project, 'quick-ran'), 'utf8')).toBe('ran\n');
 }, 60000);
+test('trigger check refuses a run-ended binding on the file store', async () => {
+  const f = fixture('store: files\n');
+  mkdirSync(join(f.home, 'triggers'));
+  writeFileSync(
+    join(f.home, 'triggers', 'build-after-plan.json'),
+    JSON.stringify({
+      version: 1,
+      sourceInstanceId: 'build-after-plan',
+      binding: {
+        bindingId: 'build',
+        bindingRevision: null,
+        hostId: 'host',
+        runAsUserId: 'operator',
+        resource: 'build',
+        overlap: 'queue',
+        launch: {
+          cwd: f.project,
+          workflowName: 'build',
+          inputs: {},
+          isolation: { kind: 'default' },
+        },
+      },
+      on: { runEnded: { workflowName: 'plan', outcome: 'planned' } },
+    })
+  );
+
+  const checked = await cli(f, ['trigger', 'check']);
+  expect(checked.code, checked.output + checked.error).not.toBe(0);
+  expect(checked.output + checked.error).toContain('store: files does not support it');
+}, 60000);
 test('a hand start is checked against its own declared capacity, then the default 1', async () => {
   const f = fixture('store: files\n');
   // Runs in one checkout never overlap, so the later starts run in a second folder.

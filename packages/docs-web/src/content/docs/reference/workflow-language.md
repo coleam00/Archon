@@ -1044,7 +1044,7 @@ When a `nodes:` (DAG) workflow fails, the prior run stays in the database as a c
 **How to resume:**
 
 - **CLI**: `archon workflow resume <run-id>` continues that run: a failed or paused one, or one its killed process left `running`. Find the id with `archon workflow runs`. See the [CLI reference](/reference/cli/#workflow-resume) for what it checks before resuming a `running` run.
-- **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run.
+- **Chat**: Approving or rejecting a _paused_ workflow continues it from where it left off (the platform already knows the run id). For a prior **failed** run, `/workflow run <name>` does **not** silently resume: it shows a prompt offering three choices: resume it, abandon it and run fresh, or start fresh anyway. Pass `--force` to skip the prompt: `/workflow run <name> --force <args>` always starts a fresh run. Each failed or paused run of that workflow in the conversation is a candidate to continue, except a run waiting for attention or a run with no working path, which never counts. When two or more candidates remain, `/workflow run <name>` continues none of them: it lists them with the `/workflow resume <id>` command for each, and `--force` to start fresh.
 - **Web UI**: Open the failed run in the console and use **Resume** in the run detail action bar.
 
 **What happens on resume:**
@@ -2298,9 +2298,10 @@ the workflow's [pack settings](#pack-settings): it overrides the project's value
 run, and is checked against the setting's type.
 
 One consequence worth knowing on **chat, the run route, and the console**: the surfaces that reuse a
-conversation. Invoking a workflow there when a resumable run of it already exists in that
+conversation. Invoking a workflow there when exactly one resumable run of it exists in that
 conversation normally *continues that run* rather than starting a new one, without any resume vocabulary
-(see [DAG Resume on Failure](#dag-resume-on-failure)). New `inputs` values passed on such a call are
+(see [DAG Resume on Failure](#dag-resume-on-failure)). With more than one, it continues none and lists
+them so you can name one by id. New `inputs` values passed on such a call are
 **not applied**: the continued run keeps what it started with, and Archon says so, naming the
 values it ignored. To run fresh with different values, abandon the existing run first
 (`/workflow abandon <id>`) and invoke again. The CLI has no such implicit continuation: a plain
@@ -2867,8 +2868,9 @@ sends one notice. The node and the run still complete. The all-refused failure a
 applies, and its `node_failed` event carries the `not_started` slots.
 
 Read the record with `archon workflow get <run-id>` (see the [CLI reference](/reference/cli/#workflow-get)),
-from `run.nodes[].fan_out_outcome` on `GET /api/workflows/runs/{runId}`, or on the node's line
-in the console. It is not a `$node.*` reference: a downstream node that decides what the
+from `run.nodes[].fan_out_outcome` on `GET /api/workflows/runs/{runId}`, as `fan_out_outcome`
+on the node's `node_complete` or `node_error` line in the run's JSONL transcript (only when the
+outcome was settled, so not for an empty item list or a failure before every slot settled), or on the node's line in the console. It is not a `$node.*` reference: a downstream node that decides what the
 results are worth reads the `archon_failed` markers in `$<id>.output`, as below.
 
 ##### Why `all_done` is the default

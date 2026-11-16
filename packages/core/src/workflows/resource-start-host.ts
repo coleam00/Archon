@@ -1,4 +1,7 @@
-import type { QueuedResourceStartInspection } from '@archon/workflows/resource-start-store';
+import type {
+  PendingStartBindingInspection,
+  QueuedResourceStartInspection,
+} from '@archon/workflows/resource-start-store';
 import { createRunWorktreeSetupExecutor } from './worktree-setup';
 import type { WorktreeSetupExecutor } from '@archon/isolation';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
@@ -26,7 +29,7 @@ import type { OwnedWorktree } from '@archon/workflows/schemas/workflow-run';
 import { resolve } from 'node:path';
 import { toBranchName, toRepoPath } from '@archon/git';
 import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
-import { createLogger, canonicalizeProjectPath, projectKeyForCodebase } from '@archon/paths';
+import { createLogger, canonicalizeProjectPath } from '@archon/paths';
 import type { WorkflowEngineSubmitInput } from '@archon/workflows/engine-port';
 import type { IWorkflowPlatform } from '@archon/workflows/deps';
 import {
@@ -99,19 +102,6 @@ async function findOrRegisterCodebase(host: WorkflowHost, cwd: string): Promise<
     throw new Error(`Cannot prepare a resource start from '${cwd}': register the project first.`);
   }
   return registered;
-}
-
-/**
- * The project a start from `cwd` runs in, or null when none is registered there yet.
- * Preparation resolves `cwd` the same way and registers an unknown checkout as a new
- * project, so null is never a project that already exists.
- */
-export async function registeredStartProjectKey(
-  host: WorkflowHost,
-  cwd: string
-): Promise<string | null> {
-  const { codebase } = await resolveCodebaseForPath(cwd, host.records.codebases);
-  return codebase ? projectKeyForCodebase(codebase, codebase.default_cwd) : null;
 }
 
 async function selectBindingWorkflow(
@@ -403,42 +393,90 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 }
 
 /**
- * One host pass: prepare this host's pending receipt bindings, then admit its queued
- * requests while their slots have capacity. Every admitted request is handed to the
- * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run concurrently with other hosts and processes: preparation and
- * admission are claimed atomically by the store.
+ * Prepare a page of this host's pending bindings, or all of `receiptIds` page by page (a
+ * page is read again until it brings nothing untried), and start each one admitted now.
+ * Failures are collected, not thrown; a failed binding is not retried here.
+ */
+async function preparePendingBindings(
+  host: ResourceStartHost,
+  failures: ResourceStartDrainFailure[],
+  receiptIds?: readonly string[]
+): Promise<void> {
+  const PAGE = 100;
+  const tried = new Set<string>();
+  const key = (binding: PendingStartBindingInspection) =>
+    'document' in binding ? binding.document : `${binding.receiptId}\n${binding.bindingId}`;
+  for (let offset = 0; offset < (receiptIds?.length ?? 1); ) {
+    const page = receiptIds?.slice(offset, offset + PAGE);
+    const query = { hostId: host.hostId, receiptIds: page, limit: PAGE };
+    const listed = await host.deps.store.listPendingStartBindings(query);
+    const fresh = listed.filter(binding => !tried.has(key(binding)));
+    for (const binding of fresh) {
+      tried.add(key(binding));
+      await preparePendingBinding(host, failures, binding);
+    }
+    if (!page || listed.length < PAGE || fresh.length === 0) offset += PAGE;
+  }
+}
+
+async function preparePendingBinding(
+  host: ResourceStartHost,
+  failures: ResourceStartDrainFailure[],
+  binding: PendingStartBindingInspection
+): Promise<void> {
+  if ('document' in binding) return void failures.push({ error: binding.error });
+  if (!binding.intent) return;
+  const { receiptId, bindingId } = binding;
+  const identity = { receiptId, bindingId, ownerId: randomUUID() };
+  if (!(await host.deps.store.claimStartBindingPreparation(identity))) return;
+  let disposition: ResourceStartDisposition;
+  try {
+    disposition = await prepareClaimedBinding(host, binding.intent, identity);
+  } catch (error) {
+    return void failures.push({ receiptId, error });
+  }
+  if (disposition.status === 'admitted')
+    await startAdmittedRequest(host, failures, disposition.requestId, receiptId);
+}
+
+async function startAdmittedRequest(
+  host: ResourceStartHost,
+  failures: ResourceStartDrainFailure[],
+  requestId: string,
+  receiptId: string | undefined
+): Promise<void> {
+  try {
+    await host.startAdmitted(requestId);
+  } catch (error) {
+    failures.push({ receiptId, error });
+  }
+}
+
+/**
+ * Prepare every binding of `receiptIds` on this host and start those admitted now, leaving
+ * the host's other work to its own drain: what an ending process does for the starts it caused.
+ */
+export async function startReceiptBindings(
+  host: ResourceStartHost,
+  receiptIds: ReadonlySet<string>
+): Promise<void> {
+  const failures: ResourceStartDrainFailure[] = [];
+  await preparePendingBindings(host, failures, [...receiptIds]);
+  if (failures.length > 0) throw new ResourceStartDrainError(failures);
+}
+
+/**
+ * One host pass: prepare a page of this host's pending receipt bindings, then admit its
+ * queued requests while their slots have capacity, handing each admitted one to the host.
+ * A damaged receipt is reported after the pass. Safe to run concurrently with other hosts
+ * and processes: the store claims preparation and admission atomically.
  */
 export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
   const failures: ResourceStartDrainFailure[] = [];
-  const start = async (requestId: string, receiptId?: string): Promise<void> => {
-    try {
-      await host.startAdmitted(requestId);
-    } catch (error) {
-      failures.push({ receiptId, error });
-    }
-  };
+  const start = (requestId: string, receiptId?: string): Promise<void> =>
+    startAdmittedRequest(host, failures, requestId, receiptId);
 
-  for (const binding of await host.deps.store.listPendingStartBindings({ hostId: host.hostId })) {
-    if ('document' in binding) {
-      failures.push({ error: binding.error });
-      continue;
-    }
-    if (!binding.intent) continue;
-    const identity = {
-      receiptId: binding.receiptId,
-      bindingId: binding.bindingId,
-      ownerId: randomUUID(),
-    };
-    if (!(await host.deps.store.claimStartBindingPreparation(identity))) continue;
-    let disposition: ResourceStartDisposition;
-    try {
-      disposition = await prepareClaimedBinding(host, binding.intent, identity);
-    } catch (error) {
-      failures.push({ receiptId: binding.receiptId, error });
-      continue;
-    }
-    if (disposition.status === 'admitted') await start(disposition.requestId, binding.receiptId);
-  }
+  await preparePendingBindings(host, failures);
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
   const drain = async (resource: string): Promise<void> => {

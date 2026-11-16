@@ -25,13 +25,16 @@ import { addResourceSlotHolder, liveResourceSlotHolders, lockResourceSlot } from
 import {
   resourceStartIntentSchema,
   type PreparedWorkflowLaunch,
+  type SourceReceiptAcceptance,
 } from '@archon/workflows/schemas/resource-start';
 import {
   claimPendingWorkflowRun,
+  completeWorkflowRun,
   getWorkflowRun,
   resumeWorkflowRun,
   WorkflowResourceBusyError,
 } from './workflows';
+import { getItemRuns } from './items';
 
 let root = '';
 const CODEBASE_ID = '33333333-3333-4333-8333-333333333333';
@@ -1018,6 +1021,103 @@ describe('durable resource starts', () => {
     expect((await claimPendingWorkflowRun(third))?.status).toBe('running');
   });
 
+  test('a completion writes the starts it causes in its own commit, and only once', async () => {
+    const ended = '0d0d0d0d-0d0d-4d0d-8d0d-0d0d0d0d0d0d';
+    expect(
+      await admitResourceStart({
+        resource: 'stage-a',
+        capacity: 1,
+        hostId: 'host',
+        overlap: 'queue',
+        launch: launch(ended),
+      })
+    ).toMatchObject({ status: 'admitted' });
+    expect((await claimPendingWorkflowRun(ended))?.status).toBe('running');
+    const caused = (): SourceReceiptAcceptance => ({
+      receipt: {
+        id: crypto.randomUUID(),
+        sourceInstanceId: 'stage-b-after-a',
+        deliveryId: ended,
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: { source: 'archon-run-ended', id: ended, display: 'planned' },
+        itemKey: 'item-1',
+      },
+      outcome: 'matched',
+      bindings: [
+        {
+          bindingId: 'stage-b',
+          bindingRevision: 'r1',
+          hostId: 'host',
+          runAsUserId: '22222222-2222-4222-8222-222222222222',
+          resource: 'stage-b',
+          overlap: 'queue',
+          launch: {
+            cwd: '/tmp/test',
+            workflowName: 'b',
+            inputs: {},
+            isolation: { kind: 'in-place' },
+          },
+          eventInputs: { plan: 'the plan' },
+        },
+      ],
+    });
+    const first = caused();
+    const outcome = { kind: 'enum', value: 'planned' } as const;
+    await completeWorkflowRun(ended, { duration_ms: 1 }, undefined, {
+      outcome,
+      startReceipts: [first],
+    });
+    const receipt = await getStartReceipt(first.receipt.id);
+    expect(receipt).toMatchObject({
+      deliveryId: ended,
+      itemKey: 'item-1',
+      sourceActor: { source: 'archon-run-ended', id: ended, display: 'planned' },
+      bindings: [{ bindingId: 'stage-b', status: 'pending', hostId: 'host' }],
+    });
+    expect(receipt?.bindings[0]?.intent?.eventInputs).toEqual({ plan: 'the plan' });
+    expect((await getWorkflowRun(ended))?.completed_outcome).toBe('planned');
+
+    // A second completion loses the change from running and writes nothing. Its receipt
+    // has its own delivery identity, so only the lost compare-and-set can keep it out.
+    const loser = caused();
+    const second = {
+      ...loser,
+      receipt: { ...loser.receipt, sourceInstanceId: 'loser', deliveryId: 'loser-delivery' },
+    };
+    await expect(
+      completeWorkflowRun(ended, { duration_ms: 1 }, undefined, {
+        outcome,
+        startReceipts: [second],
+      })
+    ).rejects.toThrow('not in running state');
+    expect(await getStartReceipt(second.receipt.id)).toBeNull();
+    expect((await listStartReceipts()).map(row => row.id)).toEqual([first.receipt.id]);
+  });
+
+  test('an item lists runs that started in the same second in the order they were written', async () => {
+    const db = getDatabase();
+    await db.query(
+      "INSERT INTO remote_agent_items (project_key, key) VALUES ('acme/web', 'issue-1')"
+    );
+    const item = await db.query<{ id: string }>(
+      "SELECT id FROM remote_agent_items WHERE key = 'issue-1'"
+    );
+    // Written first, but its id sorts last; both start in one SQLite second.
+    const ids = ['ffffffff-ffff-4fff-8fff-ffffffffffff', '00000000-0000-4000-8000-000000000000'];
+    for (const id of ids)
+      await db.query(
+        `INSERT INTO remote_agent_workflow_runs
+           (id, conversation_id, workflow_name, user_message, status, started_at, item_id)
+         VALUES ($1, '11111111-1111-4111-8111-111111111111', 'test', '', 'completed',
+                 '2026-11-16 09:00:00', $2)`,
+        [id, item.rows[0]?.id]
+      );
+    const found = await getItemRuns('acme/web', 'issue-1');
+    expect(found?.runs.map(run => ('id' in run ? run.id : run.runId))).toEqual(ids);
+  });
+
   test('the install config beats a declared capacity, which beats the default of 1', async () => {
     const decide = async (resource: string, count: number, capacity?: number) => {
       const statuses: string[] = [];
@@ -1669,6 +1769,65 @@ for (const damagedLaunch of ['{', '{}', 'mismatched-id']) {
     expect(await host.deps.store.getWorkflowRun(queued[0]!)).toBeNull();
   });
 }
+
+test('a run end prepares every start it caused, past one page of receipts and one page of bindings', async () => {
+  const { createSqlWorkflowHost } = await import('../workflows/sql-host');
+  const { startReceiptBindings, ResourceStartDrainError } = await import(
+    '../workflows/resource-start-host'
+  );
+  const host = createSqlWorkflowHost();
+  // 101 receipts, so their ids span two pages; the first has 101 bindings, so the first
+  // page of ids holds more pending bindings than one read returns.
+  const receiptIds = Array.from({ length: 101 }, () => crypto.randomUUID());
+  const binding = (index: number) => ({
+    bindingId: `binding-${String(index)}`,
+    bindingRevision: null,
+    hostId: 'host',
+    // No such user: preparation ends at its first step, which keeps 201 of them cheap
+    // and still takes each binding out of pending.
+    runAsUserId: '99999999-9999-4999-8999-999999999999',
+    resource: 'pool',
+    overlap: 'skip' as const,
+    launch: {
+      cwd: '/tmp/test',
+      workflowName: 'test',
+      inputs: {},
+      isolation: { kind: 'in-place' as const },
+    },
+  });
+  for (const [index, receiptId] of receiptIds.entries())
+    await host.deps.store.acceptStartReceipt({
+      receipt: {
+        id: receiptId,
+        sourceInstanceId: `caused-${String(index)}`,
+        deliveryId: null,
+        contentDigest: 'digest',
+        receivedAt: new Date().toISOString(),
+        occurredAt: null,
+        sourceActor: null,
+      },
+      outcome: 'matched',
+      bindings: [
+        binding(0),
+        ...Array.from({ length: index === 0 ? 100 : 0 }, (_, more) => binding(more + 1)),
+      ],
+    });
+
+  const error = await startReceiptBindings(
+    { ...host, hostId: 'host', startAdmitted: async () => {} },
+    new Set(receiptIds)
+  ).catch((caught: unknown) => caught);
+
+  if (!(error instanceof ResourceStartDrainError)) throw new Error('expected drain failure');
+  expect(error.failures).toHaveLength(201);
+  expect(
+    (
+      await getDatabase().query(
+        'SELECT preparation_status AS status, COUNT(*) AS count FROM remote_agent_start_receipt_bindings GROUP BY preparation_status'
+      )
+    ).rows
+  ).toEqual([{ status: 'rejected', count: 201 }]);
+});
 
 for (const phase of ['admission', 'drain'] as const) {
   for (const guarded of [false, true]) {

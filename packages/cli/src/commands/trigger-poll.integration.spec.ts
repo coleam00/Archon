@@ -17,7 +17,8 @@ import {
   createInMemoryWorkflowHostStore,
 } from '../test-support/workflow-store';
 import { registerFolder } from '@archon/core/handlers/clone';
-import { triggerCommand, type triggerFireConfigSchema } from './trigger';
+import { triggerCommand } from './trigger';
+import type { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import type { z } from '@hono/zod-openapi';
 
 // Poll-style `trigger fire` behavior, run in-process: an external poller re-runs `fire`, and
@@ -25,7 +26,7 @@ import type { z } from '@hono/zod-openapi';
 
 const tempRoots = trackTempRoots();
 
-type FireConfig = z.infer<typeof triggerFireConfigSchema>;
+type FireConfig = z.infer<typeof triggerConfigSchema>;
 
 function hostForTest(): WorkflowHost {
   const records = createInMemoryWorkflowHostStore();

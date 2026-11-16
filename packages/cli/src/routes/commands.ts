@@ -181,8 +181,15 @@ export async function runTrigger({
   const { triggerCommand, spawnAdmitted } = await loadRoute(() => import('../commands/trigger'), {
     database: await usesDatabaseStore(),
   });
-  const { createCliWorkflowHost } = await import('../utils/workflow-host');
-  const host = await createCliWorkflowHost(true);
+  const { createCliWorkflowHost, cliOwnTriggerHost } = await import('../utils/workflow-host');
+  // A `trigger execute` process serves the host it runs for, so the run it ends admits
+  // that host's next start.
+  const host = await createCliWorkflowHost(
+    true,
+    cliOwnTriggerHost(
+      subcommand === 'execute' && typeof values.host === 'string' ? values.host : undefined
+    )
+  );
   await triggerCommand(
     host,
     subcommand,
@@ -333,6 +340,15 @@ export async function runIsolation({
   values,
   json,
 }: CliRouteContext): Promise<number> {
+  if (subcommand === 'cleanup' && positionals[2] === 'schedule') {
+    // The timer commands never open the store, but install refuses a file-store install:
+    // the merged cleanup is SQL-only, so every pass it schedules would fail.
+    const { isolationCleanupScheduleCommand } = await loadRoute(
+      () => import('../commands/isolation-schedule'),
+      { providers: false, database: positionals[3] === 'install' }
+    );
+    return await isolationCleanupScheduleCommand(positionals.slice(3), values);
+  }
   const { isolationListCommand, isolationCleanupCommand, isolationCleanupMergedCommand } =
     await loadRoute(() => import('../commands/isolation'), { database: true });
   switch (subcommand) {

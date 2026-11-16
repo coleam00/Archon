@@ -338,7 +338,7 @@ Who removes each checkout:
 - A run that creates a worktree on its own run-named branch, such as a build round, removes it when the run completes, if the checkout is clean and every commit is on a remote; its pushed branch counts. A branch with commits of its own stays; one still at the commit it was cut from is deleted with the worktree. Otherwise the run reports what removing it would lose, and the checkout stays listed by `archon isolation list`.
 - A worktree launched with `--branch` waits for the merged sweep.
 
-A server already runs a merged sweep on its cleanup schedule, so the `worktree-cleanup` binding is for installs that run only the CLI. Its resource is named for the host, not the repository, because one pass covers every project registered there: generated for two repositories, the two schedules share one slot and `overlap: skip` drops the second pass.
+A server already runs a merged sweep on its cleanup schedule. An install that runs only the CLI can schedule the same sweep without a workflow, with [`archon isolation cleanup schedule install`](/reference/cli/#isolation-cleanup-schedule); the `worktree-cleanup` binding remains for now. Its resource is named for the host, not the repository, because one pass covers every project registered there: generated for two repositories, the two schedules share one slot and `overlap: skip` drops the second pass.
 
 ## Notices
 

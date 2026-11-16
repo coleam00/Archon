@@ -394,6 +394,21 @@ export function describeStartReceiptConformance(getHarness: () => WorkflowStoreH
       expect(await store.hasStartReceiptForDelivery('source', 'other-delivery')).toBe(false);
       expect(await store.hasStartReceiptForDelivery('other-source', 'delivery')).toBe(false);
     });
+    test('receiptIds selects only the pending bindings of those receipts, and none when empty', async () => {
+      const store = harness.store;
+      const older = acceptance();
+      const named = { ...acceptance(), receipt: { ...acceptance().receipt, deliveryId: 'named' } };
+      await store.acceptStartReceipt(older);
+      await store.acceptStartReceipt(named);
+      expect(
+        await store.listPendingStartBindings({
+          hostId: 'host',
+          limit: 1,
+          receiptIds: [named.receipt.id],
+        })
+      ).toMatchObject([{ receiptId: named.receipt.id }]);
+      expect(await store.listPendingStartBindings({ hostId: 'host', receiptIds: [] })).toEqual([]);
+    });
     test('preparation failure and reset require the exact current owner', async () => {
       const store = harness.store,
         input = acceptance();

@@ -290,8 +290,8 @@ export async function createFileWorkflowStore(
       ),
     failWorkflowRun: async (id, error, options) =>
       write([id], view => view.failWorkflowRun(id, error, options), await observedRun(id)),
-    cancelWorkflowRun: async (id, event) =>
-      write([id], view => view.cancelWorkflowRun(id, event), await observedRun(id)),
+    cancelWorkflowRun: async (id, event, options) =>
+      write([id], view => view.cancelWorkflowRun(id, event, options), await observedRun(id)),
     cancelFanOutRun: async (id, reason) =>
       write([id], view => view.cancelFanOutRun(id, reason), await observedRun(id)),
     cancelResumableRunsForConversation: async (id, assertMayCancel) =>

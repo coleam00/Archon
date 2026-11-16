@@ -11,7 +11,7 @@ import {
   mockCreateWorkflowRun,
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockFindWorkflowRunsByIdPrefix,
   mockGetCodebase,
   mockGetOrCreateConversation,
@@ -74,7 +74,7 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     mockHandleCommand.mockResolvedValueOnce(
       fixture.makeWorkflowResult(explicit ? { resumeRun: run } : {})
     );
-    if (!explicit) mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
+    if (!explicit) mockListResumableRunsByParentConversation.mockResolvedValueOnce([run]);
     mockPrepareWorkflowSource.mockClear();
     const platform = makeForegroundPlatform();
     await handleMessage(platform, 'conv-1', '/workflow run test-workflow', {
@@ -229,8 +229,8 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun())
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun()])
     );
 
     const platform = makeForegroundPlatform();
@@ -261,10 +261,10 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    // findResumableRunByParentConversation also surfaces stale 'running' orphans,
+    // listResumableRunsByParentConversation also surfaces stale 'running' orphans,
     // not just 'failed' runs — the prompt must not mislabel them as "failed".
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(makeResumableRun({ status: 'running' }))
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([makeResumableRun({ status: 'running' })])
     );
 
     const platform = makeForegroundPlatform();
@@ -300,13 +300,13 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'resumable-run-preview',
           user_message: priorMessage,
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -325,12 +325,12 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     mockHandleCommand.mockReturnValueOnce(
       Promise.resolve(fixture.makeWorkflowResult({ args: 'fix \\ path "quoted" `tick`' }))
     );
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           id: 'resumable-run-escape',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -357,7 +357,7 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
       actor: operator,
     });
 
-    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockListResumableRunsByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).toHaveBeenCalled();
     const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
@@ -393,7 +393,7 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
         expect.objectContaining({ id: 'env-1' }),
       ],
     ]);
-    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockListResumableRunsByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ id: 'old-run' }),
@@ -425,7 +425,7 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
       actor: operator,
     });
 
-    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockListResumableRunsByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
     expect(mockExecuteWorkflow).not.toHaveBeenCalled();
     expect(platform.sendMessage).toHaveBeenCalledWith(
@@ -460,7 +460,7 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
         const run = makeResumableRun({ status: 'paused', user_id: starter });
         mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
         mockGetCodebase.mockResolvedValueOnce(makeCodebase());
-        mockFindResumableRunByParentConversation.mockResolvedValueOnce(run);
+        mockListResumableRunsByParentConversation.mockResolvedValueOnce([run]);
         mockValidateAndResolveIsolation.mockClear();
         const providers = await import('@archon/providers');
         const caps = providers.getProviderCapabilities as ReturnType<typeof mock>;
@@ -521,21 +521,21 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
 
   test('foreground_resume_detected: preserves origin when a paused run exists', async () => {
     // Regression for the foreground-resume branch: when
-    // findResumableRunByParentConversation returns a paused run, the
+    // listResumableRunsByParentConversation returns a paused run, the
     // orchestrator must hydrate it (single DB roundtrip — no second
-    // findResumableRun) and hand the resumed run + priorCompletedNodes to
+    // lookup) and hand the resumed run + priorCompletedNodes to
     // executeWorkflow via opts.
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(
       Promise.resolve(makeCodebase({ default_branch: 'develop' }))
     );
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           status: 'paused',
-        })
-      )
+        }),
+      ])
     );
 
     const platform = makeForegroundPlatform();
@@ -566,8 +566,8 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
     mockGetOrCreateConversation.mockReturnValueOnce(Promise.resolve(makeDispatchConversation()));
     mockGetCodebase.mockReturnValueOnce(Promise.resolve(makeCodebase()));
     mockHandleCommand.mockReturnValueOnce(Promise.resolve(fixture.makeWorkflowResult()));
-    mockFindResumableRunByParentConversation.mockReturnValueOnce(
-      Promise.resolve(
+    mockListResumableRunsByParentConversation.mockReturnValueOnce(
+      Promise.resolve([
         makeResumableRun({
           status: 'paused',
           metadata: {
@@ -579,16 +579,86 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
               message: 'Re-run the failing check, then resume.',
             },
           },
-        })
-      )
+        }),
+      ])
     );
 
     await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
       actor: operator,
     });
 
-    expect(mockFindResumableRunByParentConversation).toHaveBeenCalled();
+    expect(mockListResumableRunsByParentConversation).toHaveBeenCalled();
     expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+  });
+
+  test.each([
+    { label: 'two paused runs', second: 'paused' as const },
+    { label: 'a paused and a failed run', second: 'failed' as const },
+  ])('a plain workflow run with $label continues neither and lists both', async ({ second }) => {
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
+    mockListResumableRunsByParentConversation.mockResolvedValueOnce([
+      makeResumableRun({ id: 'run-a', status: 'paused' }),
+      makeResumableRun({ id: 'run-b', status: second }),
+    ]);
+
+    const platform = makeForegroundPlatform();
+    await handleMessage(platform, 'conv-1', '/workflow run test-workflow', { actor: operator });
+
+    expect(mockStartRunLiveOwner).not.toHaveBeenCalled();
+    expect(mockHydrateResumableRun).not.toHaveBeenCalled();
+    expect(mockValidateAndResolveIsolation).not.toHaveBeenCalled();
+    expect(mockExecuteWorkflow).not.toHaveBeenCalled();
+    expect(mockDispatchBackgroundWorkflow).not.toHaveBeenCalled();
+    const replies = (platform.sendMessage as ReturnType<typeof mock>).mock.calls.map(
+      call => call[1] as string
+    );
+    const listing = replies.find(reply => reply.includes('Found 2 open runs of **test-workflow**'));
+    expect(listing).toContain('/workflow resume run-a');
+    expect(listing).toContain('/workflow resume run-b');
+    expect(listing).toContain('/workflow run test-workflow --force "test message"');
+    expect(replies.some(reply => reply.includes('Found a prior'))).toBe(false);
+  });
+
+  test.each([
+    {
+      label: 'an attention pause',
+      excluded: makeResumableRun({
+        id: 'attention-run',
+        status: 'paused',
+        metadata: {
+          wait: {
+            owner: 'node',
+            nodeId: 'rerun-ci',
+            kind: 'attention',
+            waitingSince: '2026-09-01T10:00:00.000Z',
+            message: 'Re-run the failing check, then resume.',
+          },
+        },
+      }),
+    },
+    {
+      label: 'a run with no working path',
+      excluded: makeResumableRun({ id: 'pathless-run', status: 'failed', working_path: null }),
+    },
+  ])('$label does not make a single continuable run ambiguous', async ({ excluded }) => {
+    mockGetOrCreateConversation.mockResolvedValueOnce(makeDispatchConversation());
+    mockGetCodebase.mockResolvedValueOnce(makeCodebase());
+    mockHandleCommand.mockResolvedValueOnce(fixture.makeWorkflowResult());
+    mockListResumableRunsByParentConversation.mockResolvedValueOnce([
+      excluded,
+      makeResumableRun({ id: 'gate-run', status: 'paused' }),
+    ]);
+
+    await handleMessage(makeForegroundPlatform(), 'conv-1', '/workflow run test-workflow', {
+      actor: operator,
+    });
+
+    expect(mockStartRunLiveOwner).toHaveBeenCalledWith('gate-run');
+    const callArgs = mockExecuteWorkflow.mock.calls[0] as unknown[];
+    const opts = callArgs[callArgs.length - 1] as { preCreatedRun?: { id: string } };
+    expect(opts.preCreatedRun?.id).toBe('gate-run');
   });
 
   test('an explicit workflow resume consumes an attention pause', async () => {
@@ -614,7 +684,7 @@ export function registerResumeSelectionTests(fixture: ReturnType<typeof setupRou
       actor: operator,
     });
 
-    expect(mockFindResumableRunByParentConversation).not.toHaveBeenCalled();
+    expect(mockListResumableRunsByParentConversation).not.toHaveBeenCalled();
     expect(mockHydrateResumableRun).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ id: requestedRun.id }),

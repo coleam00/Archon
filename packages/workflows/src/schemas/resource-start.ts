@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
 import { itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
@@ -130,6 +131,35 @@ export function readResourceStartReceiptId(
  * still acts as its binding's run-as user.
  */
 export const RUN_SOURCE_ACTOR = 'archon-run';
+
+/**
+ * `sourceActor.source` of a receipt the end of a run caused (a run-ended binding): `id`
+ * is the ended run and `display` the outcome it completed with, when that is not empty.
+ */
+export const RUN_ENDED_SOURCE_ACTOR = 'archon-run-ended';
+
+/**
+ * What caused a start, read from its receipt's source actor: a run that ended, a node
+ * that fired, or another source (a schedule, a webhook, an operator's fire).
+ */
+export const startCauseSchema = z.discriminatedUnion('kind', [
+  z.object({ kind: z.literal('run_ended'), runId: z.string() }),
+  z.object({ kind: z.literal('run_fired'), runId: z.string(), node: z.string().nullable() }),
+  z.object({ kind: z.literal('receipt'), receiptId: z.string(), sourceInstanceId: z.string() }),
+]);
+export type StartCause = z.infer<typeof startCauseSchema>;
+
+export function startCause(receipt: {
+  id: string;
+  sourceInstanceId: string;
+  sourceActor: SourceReceiptInput['sourceActor'];
+}): StartCause {
+  const actor = receipt.sourceActor;
+  if (actor?.source === RUN_ENDED_SOURCE_ACTOR) return { kind: 'run_ended', runId: actor.id };
+  if (actor?.source === RUN_SOURCE_ACTOR)
+    return { kind: 'run_fired', runId: actor.id, node: actor.display ?? null };
+  return { kind: 'receipt', receiptId: receipt.id, sourceInstanceId: receipt.sourceInstanceId };
+}
 
 /** The run and node that requested a start, or null when the source was not a run. */
 export function requestingRun(
@@ -263,7 +293,7 @@ export const resourceStartBindingIntentSchema = z
      * a workflow that declares them, so untrusted event content never fills the
      * passthrough of a workflow without `inputs:`. Operator configs omit this field. The
      * SQL store never writes it into the `intent` column, which older binaries parse
-     * strictly; see `storableIntent` in core's resource-starts.
+     * strictly; see `storableIntent` in core's start-receipt-writes.
      */
     eventInputs: z.record(z.string(), jsonValueSchema).optional(),
   })
@@ -336,3 +366,51 @@ export const sourceReceiptAcceptanceSchema = z
     }
   });
 export type SourceReceiptAcceptance = z.infer<typeof sourceReceiptAcceptanceSchema>;
+
+/**
+ * Where a run-ended binding reads one input of the stage it starts: a JSON Pointer into
+ * the ended run's result (its `returns:` node output), or one of the ended run's own
+ * inputs by name. Data only: no expression, and nothing here names a workflow.
+ */
+export const runEndedInputSourceSchema = z.union([
+  z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
+  z.object({ input: z.string().min(1) }).strict(),
+]);
+export type RunEndedInputSource = z.infer<typeof runEndedInputSourceSchema>;
+
+/**
+ * `on.runEnded` of a trigger file: the binding starts when a run of `workflowName`
+ * completes with `outcome` on an item, in the project the binding launches in.
+ */
+export const runEndedTriggerSchema = z
+  .object({
+    workflowName: z.string().min(1),
+    outcome: z.string(),
+    inputs: z.record(z.string().min(1), runEndedInputSourceSchema).optional(),
+  })
+  .strict();
+export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
+
+/**
+ * A trigger file: the binding, and what starts it. With `schedule` a clock fires it; with
+ * `on.runEnded` the end of a run does; with neither it is fire-only, and nothing but
+ * `trigger fire` starts it. A `schedule` or `on` that is present must be complete, so a
+ * half-written one is never fire-only.
+ */
+export const triggerConfigSchema = z
+  .object({
+    version: z.literal(1),
+    sourceInstanceId: z.string().min(1),
+    binding: resourceStartBindingIntentSchema.omit({ eventInputs: true }),
+    schedule: z
+      .object({ intervalSeconds: z.number().int().positive(), runAtLoad: z.boolean() })
+      .strict()
+      .optional(),
+    on: z.object({ runEnded: runEndedTriggerSchema }).strict().optional(),
+  })
+  .strict()
+  .refine(config => config.schedule === undefined || config.on === undefined, {
+    message: 'A trigger has either a schedule or on.runEnded, not both',
+    path: ['on'],
+  });
+export type TriggerConfig = z.infer<typeof triggerConfigSchema>;

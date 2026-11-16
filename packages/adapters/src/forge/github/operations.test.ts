@@ -94,6 +94,7 @@ describe('GitHub outbound producer', () => {
         'repo.file',
         'pr.thread.reply',
         'pr.thread.resolve',
+        'pr.review.submit',
       ],
       mutationConditions: { 'pr.merge': ['head'] },
       token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],

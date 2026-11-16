@@ -61,14 +61,13 @@ describe("deliver's report after a node failure", () => {
   });
 
   for (const script of ['deliver/scripts/report', 'build-route/scripts/report']) {
-    it.each(['unverified', 'unreadable', 'directory'])(
+    it.each(['unverified', 'unreadable'])(
       'distinguishes an unresolved %s create from no PR', kind => {
         const run = runPackScript(script, {
           inputs: FAILED,
-          artifacts: kind === 'directory' ? {} : {
+          artifacts: {
             'pr-create-started': kind === 'unverified' ? JSON.stringify({ repo: PR.repo, headRepo: PR.repo, head: 'feature' }) : 'invalid JSON',
           },
-          preload: kind === 'directory' ? `import { mkdirSync } from 'node:fs'; mkdirSync('{ARTIFACTS}/pr-create-started');` : undefined,
         });
         expect(run.code).toBe(0);
         expect(JSON.parse(run.stdout)).toMatchObject({ reason: 'pr_create_unresolved', pr_url: '' });

@@ -7,7 +7,7 @@ import {
   type WorkflowItem,
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
-import { pool } from './connection';
+import { getDatabaseType, pool } from './connection';
 import type { TransactionQuery } from './resource-slots';
 import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { getLog } from './workflow-run-shared';
@@ -102,9 +102,12 @@ export async function getItemRuns(
   );
   const row = found.rows[0];
   if (!row) return null;
+  // SQLite records started_at to the second, so runs that start in one second tie; its
+  // rowid is insertion order and breaks the tie truly. PostgreSQL records microseconds.
+  const tieBreak = getDatabaseType() === 'sqlite' ? 'r.rowid' : 'r.id';
   const result = await pool.query<WorkflowRunRow>(
     `SELECT r.*, CAST(r.origin AS TEXT) AS origin FROM remote_agent_workflow_runs r
-      WHERE r.item_id = $1 ORDER BY r.started_at, r.id`,
+      WHERE r.item_id = $1 ORDER BY r.started_at, ${tieBreak}`,
     [row.id]
   );
   const runs = result.rows.map((run): AttentionRead<WorkflowRun> => {

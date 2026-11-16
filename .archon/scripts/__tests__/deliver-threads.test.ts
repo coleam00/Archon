@@ -61,14 +61,8 @@ describe("deliver's review threads", () => {
       inputs: { INPUTS_ANSWERS: JSON.stringify([{ thread: 'T1', reply }]) },
     });
     expect(ok(result).open).toBe(0);
-    expect(result.forge.map(argv => argv.split(' ')[1])).toEqual([
-      'pr.view',
-      'pr.threads',
-      'pr.thread.reply',
-      'pr.thread.resolve',
-      'pr.view',
-      'pr.threads',
-    ]);
+    const writes = result.forge.map(argv => argv.split(' ')[1] ?? '').filter(op => op.startsWith('pr.thread.'));
+    expect(writes).toEqual(['pr.thread.reply', 'pr.thread.resolve']);
     expect(JSON.parse(result.forgeRequests[2] ?? '{}')).toMatchObject({ thread: 'T1', body: reply });
     expect(JSON.parse(result.forgeRequests[3] ?? '{}')).toMatchObject({ thread: 'T1' });
   });

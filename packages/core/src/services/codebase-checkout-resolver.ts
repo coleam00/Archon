@@ -1,6 +1,6 @@
 import type { Codebase } from '../types';
 import { resolve, relative, isAbsolute, sep } from 'node:path';
-import { canonicalizeProjectPath } from '@archon/paths';
+import { canonicalizeProjectPath, projectKeyForCodebase } from '@archon/paths';
 import {
   findRepoRoot,
   CanonicalRepoPathUnavailableError,
@@ -136,4 +136,17 @@ export async function resolveCodebaseForPath(
     codebase: repoRoot ? await findCodebaseForCheckoutPath(repoRoot, deps) : parent,
     repoRoot,
   };
+}
+
+/**
+ * The key of the project registered at `cwd`, or null when none is registered there yet.
+ * Resource-start preparation resolves `cwd` the same way and registers an unknown checkout
+ * as a new project, so null is never a project that already exists.
+ */
+export async function registeredProjectKeyForPath(
+  cwd: string,
+  deps: Parameters<typeof resolveCodebaseForPath>[1]
+): Promise<string | null> {
+  const { codebase } = await resolveCodebaseForPath(cwd, deps);
+  return codebase ? projectKeyForCodebase(codebase, codebase.default_cwd) : null;
 }

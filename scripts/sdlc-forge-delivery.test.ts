@@ -125,7 +125,7 @@ describe('delivery goes through plugin operations', () => {
   it('creates a draft and upserts one review comment', () => {
     // A real checkout whose recorded remote is a local bare repository: publish-pr pushes
     // it before it creates.
-    const CHECKOUT = gitCheckout({}, trackTempRoot);
+    const CHECKOUT = gitCheckout(trackTempRoot);
     const HEAD_SHA = spawnSync('git', ['rev-parse', 'HEAD'], {
       cwd: CHECKOUT,
       encoding: 'utf8',

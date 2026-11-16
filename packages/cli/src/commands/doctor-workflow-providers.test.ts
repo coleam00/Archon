@@ -10,7 +10,7 @@ import { registerBuiltinProviders } from '@archon/providers/in-process';
 import { descriptor } from '@archon/providers/claude/descriptor';
 import type { CheckResult } from './doctor-check';
 import { checkInstalledProviders } from './doctor-providers';
-import { checkWorkflowProviderSelection } from './doctor-workflow-providers';
+import { checkWorkflows } from './doctor-workflow-providers';
 
 const hostCheck = async (): Promise<CheckResult> => ({
   label: 'Host check',
@@ -85,10 +85,10 @@ async function workflow(body: string, prefix = '', global = false) {
 }
 
 async function focusedDoctor() {
-  const selection = await checkWorkflowProviderSelection();
+  const checks = await checkWorkflows();
   output.mockClear();
   const exit = await doctorCommand();
-  return { ...selection, exit };
+  return { ...checks, exit, printed: output.mock.calls.flat().join('\n') };
 }
 
 test('missing default fails with the remedy; explicit provider scopes remain supported', async () => {
@@ -100,9 +100,9 @@ test('missing default fails with the remedy; explicit provider scopes remain sup
   ]) {
     await workflow(body);
     const result = await focusedDoctor();
-    expect(result.check.status).toBe('fail');
+    expect(result.providers.status).toBe('fail');
     expect(result.exit).toBe(1);
-    expect(result.check.message).toContain('probe');
+    expect(result.providers.message).toContain('probe');
     expect(output.mock.calls.flat().join('\n')).toContain('archon ai default <provider>');
     expect(output.mock.calls.flat().join('\n')).toContain('archon setup');
     expect(output.mock.calls.flat().join('\n')).toContain('✗ Workflow providers: probe');
@@ -123,7 +123,7 @@ test('missing default fails with the remedy; explicit provider scopes remain sup
     await writeFile(join(project, '.archon/config.yaml'), configText + extraConfig);
     await workflow(body, prefix);
     const result = await focusedDoctor();
-    expect(result.check.status).toBe('pass');
+    expect(result.providers.status).toBe('pass');
     expect(result.allowEmptyProviderInventory).toBe(false);
     expect(result.exit).toBe(0);
   }
@@ -138,7 +138,7 @@ test('script and bash workflows, or no workflows, pass with no providers; broken
     if (body) await workflow(body);
     else await rm(join(project, '.archon/workflows/probe.yaml'));
     const result = await focusedDoctor();
-    expect(result.check.status).toBe('pass');
+    expect(result.providers.status).toBe('pass');
     expect(result.exit).toBe(0);
     expect(result.allowEmptyProviderInventory).toBe(true);
     expect(output.mock.calls.flat().join('\n')).toContain(
@@ -163,14 +163,21 @@ test('script and bash workflows, or no workflows, pass with no providers; broken
     );
     expect(unavailable.status).toBe('fail');
   }
-  await workflow('  - id: bad\n');
-  const invalid = await checkWorkflowProviderSelection();
-  expect(invalid.check.status).toBe('fail');
-  expect(invalid.allowEmptyProviderInventory).toBe(false);
 });
 
-test('resolved defaults keep the existing config and login outcome and skip discovery', async () => {
+test('a workflow file that does not load fails Workflow files with or without a default provider', async () => {
+  const expectBrokenFile = (result: Awaited<ReturnType<typeof focusedDoctor>>) => {
+    expect(result.files.status).toBe('fail');
+    expect(result.exit).toBe(1);
+    expect(result.allowEmptyProviderInventory).toBe(false);
+    expect(result.printed).toContain('✗ Workflow files: probe.yaml');
+  };
   clearRegistry();
+  await workflow('  - id: invalid\n');
+  const withoutDefault = await focusedDoctor();
+  expectBrokenFile(withoutDefault);
+  expect(withoutDefault.providers.status).toBe('skip');
+
   registerProvider({
     id: 'fixture',
     displayName: 'Fixture',
@@ -187,14 +194,18 @@ test('resolved defaults keep the existing config and login outcome and skip disc
       },
     }),
   });
-  await workflow('  - id: invalid\n');
   for (const extra of ['defaultAssistant: fixture\n', '']) {
     await writeFile(join(project, '.archon/config.yaml'), configText + extra);
     expect((await loadConfig(project)).assistant).toBe('fixture');
-    const result = await focusedDoctor();
-    expect(result.check.status).toBe('skip');
-    expect(result.allowEmptyProviderInventory).toBe(false);
-    expect(result.exit).toBe(0);
-    expect(output.mock.calls.flat().join('\n')).toContain('fixture: not checked');
+    await workflow('  - id: shell\n    bash: "true"\n');
+    const loads = await focusedDoctor();
+    expect(loads.files.status).toBe('pass');
+    expect(loads.providers.status).toBe('skip');
+    expect(loads.exit).toBe(0);
+    expect(loads.printed).toContain('fixture: not checked');
+    await workflow('  - id: invalid\n');
+    const withDefault = await focusedDoctor();
+    expectBrokenFile(withDefault);
+    expect(withDefault.providers.status).toBe('skip');
   }
 });
