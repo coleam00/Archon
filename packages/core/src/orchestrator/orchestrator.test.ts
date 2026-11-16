@@ -299,7 +299,7 @@ const mockDiscoverWorkflows = mock<typeof WorkflowDiscovery.discoverWorkflowsWit
 const mockExecuteWorkflow = mock<typeof WorkflowExecutor.executeWorkflow>(() =>
   Promise.resolve({ success: true, workflowRunId: 'run-1' })
 );
-const mockFindWorkflow = mock<typeof WorkflowRouter.findWorkflow>((name, workflows) =>
+const mockResolveWorkflowName = mock<typeof WorkflowRouter.resolveWorkflowName>((name, workflows) =>
   workflows.find(w => w.name === name)
 );
 
@@ -532,11 +532,7 @@ mock.module('@archon/workflows/run-source', () => ({
 }));
 mock.module('@archon/workflows/router', () => ({
   suggestWorkflowNames: mock<typeof WorkflowRouter.suggestWorkflowNames>(() => []),
-  findWorkflow: mockFindWorkflow,
-  // Statically imported by the background dispatch path (see dispatch/background.ts).
-  resolveWorkflowName: mock((name: string, workflows: { name: string }[]) =>
-    workflows.find(w => w.name === name)
-  ),
+  resolveWorkflowName: mockResolveWorkflowName,
 }));
 mock.module('@archon/workflows/utils/tool-formatter', () => ({
   formatToolCall: mock((toolName: string, _toolInput: unknown) => `🔧 ${toolName.toUpperCase()}`),
@@ -674,7 +670,7 @@ function clearAllMocks(): void {
   mockGetProviderCapabilities.mockClear();
   mockDiscoverWorkflows.mockClear();
   mockExecuteWorkflow.mockClear();
-  mockFindWorkflow.mockClear();
+  mockResolveWorkflowName.mockClear();
   mockResolveWorkflowSourceRoot.mockClear();
   mockResolveWorkflowSourceRoot.mockImplementation(() => Promise.resolve(undefined));
   mockValidateAndResolveIsolation.mockClear();

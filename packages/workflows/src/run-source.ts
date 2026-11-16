@@ -201,7 +201,7 @@ export async function withCapturedSource<T>(
  * The graph a run must continue with, read from the source IT recorded.
  *
  * Every continuation surface goes through here — `/workflow resume`, `approve`, `reject`,
- * the console Resume button, and `workflow run --resume`. That is the point. Before this
+ * and the console Resume button. That is the point. Before this
  * existed each surface discovered the graph itself and had to remember to pass the
  * capture's roots, and the ones nobody rewrote kept discovering live: the executor then
  * supplied commands and scripts from the frozen capture while the DAG came from whatever

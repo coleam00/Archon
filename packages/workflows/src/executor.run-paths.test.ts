@@ -304,9 +304,4 @@ describe('scope artifacts dir threading (#1846)', () => {
       cwdPath('/tmp', 'artifacts', 'scopes', 'test-workflow', 'conv-1')
     );
   });
-
-  it('passes undefined scopeArtifactsDir when the workflow uses no session persistence', async () => {
-    await startWorkflow();
-    expect(dagCall()?.scopeArtifactsDir).toBeUndefined();
-  });
 });

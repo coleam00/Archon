@@ -4,6 +4,7 @@ import {
   attentionForm,
   readWorkflowWaitContext,
   pausedAttentionWait,
+  readExecutionOwner,
 } from '@archon/workflows/schemas/workflow-run';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { DashboardWorkflowRun } from '@archon/workflows/schemas/workflow-run-listing';
@@ -13,15 +14,37 @@ import {
   type SignalWorkflowWaitRequest,
 } from '../../schemas/workflow-run';
 import type { RunActor } from '../run-authorization';
+import { hostname } from 'node:os';
 import { getLog, type OperationContext } from './context';
+import { rootRunIdOf } from './teardown';
 
 export interface WorkflowStatusData {
   runs: DashboardWorkflowRun[];
 }
 
+/**
+ * Why resume left a run unchanged.
+ *
+ * `not_resumable`: the run is in a status resume cannot continue.
+ * `awaiting_answer`: the run is paused at an attention wait that needs an answer.
+ * `live_owner`: the run is `running` and its owner, or its root run's owner, answers on
+ *   this host. A second executor would run the same work. It resumes once that process
+ *   is gone; cancelling it instead ends the run.
+ * `owner_unreachable`: the run is `running` and its recorded owner is on another host or
+ *   ran as another user, so this process cannot ask whether it is still alive.
+ */
+export type ResumeRefusal =
+  | 'not_resumable'
+  | 'awaiting_answer'
+  | 'live_owner'
+  | 'owner_unreachable';
+
 /** Resume refused; the run is unchanged. The message states why. */
 export class ResumeRefusedError extends Error {
-  constructor(message: string) {
+  constructor(
+    readonly reason: ResumeRefusal,
+    message: string
+  ) {
     super(message);
     this.name = 'ResumeRefusedError';
   }
@@ -75,6 +98,10 @@ export async function getWorkflowStatus(
 /**
  * Validate that a run can be resumed and return it.
  * Does NOT execute the workflow — callers decide whether to run.
+ *
+ * A failed or paused run resumes. A `running` run resumes only when no owner answers for
+ * it ({@link assertNoLiveOwner}): its process was killed and left it `running`. The store's
+ * resume then pins the execution claim read here, so of two resumers only one wins.
  */
 export async function resumeWorkflow(
   ctx: OperationContext,
@@ -83,9 +110,15 @@ export async function resumeWorkflow(
 ): Promise<WorkflowRun> {
   const run = await ctx.getRunOrThrow(runId, 'operations.workflow_resume_lookup_failed');
   await ctx.assertMayAct(run, actor, 'resume');
+  if (run.status === 'running') {
+    await assertNoLiveOwner(ctx, run);
+    return run;
+  }
   if (!RESUMABLE_WORKFLOW_STATUSES.includes(run.status)) {
     throw new ResumeRefusedError(
-      `Cannot resume run with status '${run.status}'. Only failed or paused runs can be resumed.`
+      'not_resumable',
+      `Cannot resume run with status '${run.status}'. Only failed, paused, or running runs ` +
+        'whose owner is gone can be resumed.'
     );
   }
   // A bare resume continues a message-form wait with empty text, which keeps waits from
@@ -93,11 +126,57 @@ export async function resumeWorkflow(
   const wait = pausedAttentionWait(run);
   if (wait !== undefined && wait.answer === undefined && attentionForm(wait) !== 'message') {
     throw new ResumeRefusedError(
+      'awaiting_answer',
       `Run ${run.id} is waiting for an answer to its '${attentionForm(wait)}' attention wait. ` +
         'Answer it with answer instead of resuming it.'
     );
   }
   return run;
+}
+
+/**
+ * Refuse to resume a `running` run unless this process can tell its owner is gone, the
+ * same way cancel tells a live owner from a gone one. A sub-run executes inside its root
+ * run's process and publishes no endpoint of its own, so its root's owner is asked too.
+ * A recorded owner on another host or user cannot be asked from here, so it is refused
+ * rather than assumed dead. A run with no recorded owner (from before owner recording)
+ * and nothing answering resumes.
+ */
+async function assertNoLiveOwner(ctx: OperationContext, run: WorkflowRun): Promise<void> {
+  const recorded = readExecutionOwner(run.metadata);
+  const ownerName = recorded
+    ? `host ${recorded.host}, pid ${String(recorded.pid)}`
+    : 'no recorded owner';
+  const notChanged = `Resuming it would start a second executor, so run ${run.id} was not changed.`;
+  if (ctx.isRunOwnedByThisProcess(run.id) || (await ctx.isRunOwnerAnswering(run.id))) {
+    throw new ResumeRefusedError(
+      'live_owner',
+      `Run ${run.id} is still running: its owner (${ownerName}) answers on this host. ${notChanged}`
+    );
+  }
+  const rootRunId = run.parent_run_id ? await rootRunIdOf(ctx, run.id) : undefined;
+  if (rootRunId && (await ctx.isRunOwnerAnswering(rootRunId))) {
+    throw new ResumeRefusedError(
+      'live_owner',
+      `Run ${run.id} is a sub-run of ${rootRunId}, whose owner still answers on this host. ${notChanged}`
+    );
+  }
+  const thisHost = hostname();
+  const thisUid = process.getuid?.();
+  const otherUser =
+    recorded?.uid !== undefined && thisUid !== undefined && recorded.uid !== thisUid;
+  if (recorded && (recorded.host !== thisHost || otherUser)) {
+    const where =
+      recorded.host !== thisHost
+        ? `on another host (${recorded.host}, pid ${String(recorded.pid)}); this is ${thisHost}`
+        : `as another user (uid ${String(recorded.uid)}, pid ${String(recorded.pid)}); this is uid ${String(thisUid)}`;
+    throw new ResumeRefusedError(
+      'owner_unreachable',
+      `Run ${run.id} is marked running and its recorded owner ran ${where}. ` +
+        `Its owner cannot be asked from here, so run ${run.id} was not changed. ` +
+        'Resume it from that host and user, or abandon it if its process is gone.'
+    );
+  }
 }
 
 /**

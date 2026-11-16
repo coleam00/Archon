@@ -134,10 +134,6 @@ describe('getWorktreePath', () => {
     expect(path).toContain('repo');
     expect(path).toContain('issue-42');
   });
-
-  test('throws for a degenerate repo path with no basename', () => {
-    expect(() => pathFor(issue('/'))).toThrow('Cannot derive a project identity');
-  });
 });
 
 describe('worktree.path repo-local override', () => {

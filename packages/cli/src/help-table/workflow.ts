@@ -146,7 +146,7 @@ export const workflowHelp: HelpGroup = {
       command: 'workflow',
       subcommand: 'resume',
       spec: 'workflow resume <run-id>',
-      description: 'Resume a failed or paused run from completed nodes',
+      description: 'Resume a failed, paused or killed run from completed nodes',
     },
     {
       command: 'workflow',

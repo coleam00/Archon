@@ -28,7 +28,11 @@ import type {
 import type { IStateDocumentStore } from './state-document-store';
 import type { ItemRulingAct } from './schemas/item-ruling';
 import type { AttentionAnswerWrite, AttentionLabelWrite } from './store/attention-writes';
-import type { PauseCursor, WorkflowResumeCursor } from './store/continuation-cursors';
+import type {
+  PauseCursor,
+  ResumeClaimCursor,
+  WorkflowResumeCursor,
+} from './store/continuation-cursors';
 import type { IWorkflowEventFeed } from './store/event-feed';
 import type {
   GatePauseEventInput,
@@ -272,7 +276,8 @@ export interface IWorkflowStore
   /**
    * Fresh execution must win this pending-to-running CAS before doing any work.
    * `workingPath` is the checkout the run will use; the claim stamps it on a row
-   * created without one.
+   * created without one. The claim records the calling process as the run's execution
+   * owner (`currentExecutionOwner`).
    */
   claimPendingWorkflowRun(id: string, workingPath?: string): Promise<WorkflowRun | null>;
   /**
@@ -312,7 +317,6 @@ export interface IWorkflowStore
     workingPath: string,
     self?: { id: string; startedAt: Date; excludeRunIds?: string[] }
   ): Promise<WorkflowRun | null>;
-  findResumableRun(workflowName: string, workingPath: string): Promise<WorkflowRun | null>;
   /**
    * Return at most `limit` due continuations, defaulting to 25: time waits past their
    * deadline, signaled event waits, due quota resumes, and answered gates and attention
@@ -370,13 +374,20 @@ export interface IWorkflowStore
     payload?: unknown
   ): Promise<{ signaled: boolean }>;
   /**
-   * A resume of a run admitted through a resource start takes a slot or throws
+   * Flip a resumable run to `running`, mint a new execution claim and record the calling
+   * process as its execution owner in the same update (`currentExecutionOwner`), or throw
+   * `WorkflowNotResumableError`. A failed or paused run resumes with or without a
+   * `cursor`. A `running` run resumes only with an `ownerless` cursor whose claim still
+   * matches; the caller has checked that no owner answers for it, and an admitted one
+   * keeps the resource slot it already holds.
+   *
+   * A resume of a failed or paused run admitted through a resource start takes a slot or throws
    * `WorkflowResourceBusyError` (`resourceResumeBlocker`). A paused run refused while ready
    * to continue (answered, due or signaled, or claimed with a `cursor`) records its first
    * refusal (`CAPACITY_WAIT_METADATA_KEY`) before the error is thrown, so it keeps its place
    * while the host retries (`resumeRefusal`).
    */
-  resumeWorkflowRun(id: string, cursor?: WorkflowResumeCursor): Promise<WorkflowRun>;
+  resumeWorkflowRun(id: string, cursor?: ResumeClaimCursor): Promise<WorkflowRun>;
   /**
    * Give back the resource slot of a run admitted through a resource start, while it is
    * still paused at exactly `cursor`, and clear any capacity wait it carries. Called once

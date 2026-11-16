@@ -1,9 +1,14 @@
 import { formatAbandonResult } from './workflow-abandon-output';
 import type { WorkflowHost } from '@archon/core/workflows/host-store';
-import { WorkflowNotResumableError, WorkflowResourceBusyError } from '@archon/workflows/store';
+import {
+  checkedResumeCursor,
+  WorkflowNotResumableError,
+  WorkflowResourceBusyError,
+} from '@archon/workflows/store';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import {
   CancelRefusedError,
+  ResumeRefusedError,
   type CancelWorkflowResult,
   describeAbandonOwner,
   describeReleasedWorktrees,
@@ -27,11 +32,9 @@ import { assertResumeWorkingPathExists } from './workflow-isolation';
 import { workflowRunCommand } from './workflow-run-owned';
 
 /**
- * Resume a failed workflow run by ID.
- *
- * Re-executes the workflow with --resume semantics: `workflowRunCommand` locates
- * the prior failed run via findResumableRun and hands it to the executor, which
- * skips already-completed nodes (the executor no longer auto-detects on its own).
+ * Resume a workflow run by ID: a failed or paused one, or a running one whose owner is
+ * gone (`resumeWorkflow` decides). `workflowRunCommand` continues exactly this run and
+ * skips its already-completed nodes.
  *
  * `runId` may be the short id printed by `workflow runs` (see resolveRunIdArg).
  */
@@ -42,7 +45,14 @@ export async function workflowResumeCommand(
   cwd?: string,
   detach?: boolean
 ): Promise<number> {
-  const { resumeWorkflow: resumeWorkflowOp } = host.operations;
+  // A run whose owner still answers is the one refusal with a CLI next step to name.
+  // Cancel is not that step: it records the run `cancelled`, which resume refuses.
+  const resumeWorkflowOp = (id: string): Promise<WorkflowRun> =>
+    host.operations.resumeWorkflow(id, { kind: 'operator' }).catch((error: unknown) => {
+      if (!(error instanceof ResumeRefusedError) || error.reason !== 'live_owner') throw error;
+      const hint = 'Resume it once that process is gone; cancel would end the run for good.';
+      throw new Error(`${error.message}\n${hint}`, { cause: error });
+    });
 
   // --detach: validate read-only (resumeWorkflowOp checks the run is resumable),
   // then let a detached child re-invoke the blocking resume and own all mutation
@@ -51,7 +61,7 @@ export async function workflowResumeCommand(
   if (detach) {
     const resolvedId = await resolveRunIdArg(host, runId, cwd);
     return runDetachedControlCommand(resolvedId, 'resume', json, cwd, async () => {
-      const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
+      const run = await resumeWorkflowOp(resolvedId);
       // The inline path below refuses a run with no recorded working path, or one
       // whose checkout is gone. Check both here too, on the run the precheck already
       // holds: otherwise the parent acks success and the child throws where nobody
@@ -71,14 +81,11 @@ export async function workflowResumeCommand(
   // and report its state, but do NOT re-execute the workflow inline (execution
   // streams workflow output to stdout, which would corrupt the JSON contract).
   // To actually execute a resumable run, use the blocking `resume` (no --json,
-  // run as a background task) or `resume <run-id> --detach`. Prefer that exact-id
-  // form over `run <name> --resume --detach`, which selects the newest resumable
-  // run of that workflow in the CURRENT checkout — a different question, and the
-  // wrong one when the caller already holds a run id (#2645).
+  // run as a background task) or `resume <run-id> --detach`.
   if (json) {
     try {
       const resolvedId = await resolveRunIdArg(host, runId, cwd);
-      const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
+      const run = await resumeWorkflowOp(resolvedId);
       await writeJsonLine({
         ok: true,
         runId: resolvedId,
@@ -96,7 +103,7 @@ export async function workflowResumeCommand(
   }
 
   const resolvedId = await resolveRunIdArg(host, runId, cwd);
-  const run = await resumeWorkflowOp(resolvedId, { kind: 'operator' });
+  const run = await resumeWorkflowOp(resolvedId);
   if (!run.working_path) {
     throw new Error(
       `Workflow run '${resolvedId}' has no working path recorded.\n` +
@@ -114,13 +121,12 @@ export async function workflowResumeCommand(
     ? await resolveDiscoveryCwdForCodebase(host, resolvedId, run.codebase_id, 'resume')
     : undefined;
 
-  // Re-execute via workflowRunCommand with --resume: it locates the prior failed
-  // run via findResumableRun and skips already-completed nodes (the executor
-  // itself no longer auto-detects resumable runs).
+  // Re-execute this run via workflowRunCommand; it skips already-completed nodes.
   try {
     await workflowRunCommand(host, run.working_path, run.workflow_name, run.user_message ?? '', {
       // Continue from the source this run froze, not a fresh capture of the target.
       continuationRun: run,
+      continuationCursor: checkedResumeCursor(run),
       resume: true,
       codebaseId: run.codebase_id ?? undefined,
       discoveryCwd,

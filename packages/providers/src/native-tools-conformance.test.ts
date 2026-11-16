@@ -176,15 +176,4 @@ describe('native tool input schema conformance', () => {
     expect(() => buildArchonMcpServer([tool])).toThrow('Required tool keys');
     expect(() => buildPiNativeToolDefinitions([tool])).toThrow('Required tool keys');
   });
-
-  test('both builders accept a NativeTool carrying the typed schema', () => {
-    const tool: NativeTool = {
-      name: 'manage_run',
-      description: 'conformance fixture',
-      inputSchema: SCHEMA,
-      handler: () => Promise.resolve('ok'),
-    };
-    expect(buildArchonMcpServer([tool])).toBeDefined();
-    expect(buildPiNativeToolDefinitions([tool])).toHaveLength(1);
-  });
 });

@@ -11,7 +11,7 @@ import * as db from '../../db/conversations';
 import { createIsolationStore } from '../../db/isolation-environments';
 import { toError } from '../../utils/error';
 import { configureWorktreeIsolation } from '../../workflows/worktree-setup';
-import { getWorktreeStatusBreakdown, STALE_THRESHOLD_DAYS } from '../../services/cleanup-service';
+import { getWorktreeStatusBreakdown } from '../../services/cleanup-service';
 import { cleanupToMakeRoom } from '../../services/cleanup/merged-sweep';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -57,7 +57,6 @@ function getResolver(): IsolationResolver {
         },
         getBreakdown: getWorktreeStatusBreakdown,
       },
-      staleThresholdDays: STALE_THRESHOLD_DAYS,
     });
   }
   return resolver;

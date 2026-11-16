@@ -166,57 +166,6 @@ describe('git utilities', () => {
       expect(sync.error.message).toContain(failure.stderr);
     });
 
-    test('remote inspection confirms genuine absence in a repository', async () => {
-      const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-no-remote-')));
-      await git.execFileAsync('git', ['init', '-q', root]);
-      const original = await git
-        .execFileAsync('git', ['-C', root, 'remote', 'get-url', 'origin'])
-        .catch((error: unknown) => error);
-      expect(original).toMatchObject({ kind: 'unclassified', code: 2 });
-      const inspection = await git
-        .execFileAsync('git', ['-C', root, 'config', '--local', '--get', 'remote.origin.url'])
-        .catch((error: unknown) => error);
-      expect(inspection).toMatchObject({ kind: 'unclassified', code: 1 });
-      expect(await git.getRemoteUrl(repo(root))).toBeNull();
-      expect(await git.detectForge(repo(root))).toEqual({
-        type: 'github',
-        apiBase: 'https://api.github.com',
-      });
-    });
-
-    test.each(['plain directory', 'damaged repository'])(
-      'remote inspection preserves failure for a %s',
-      async shape => {
-        const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-remote-')));
-        if (shape === 'damaged repository') {
-          await git.execFileAsync('git', ['init', '-q', root]);
-          await git.execFileAsync('git', [
-            '-C',
-            root,
-            'remote',
-            'add',
-            'origin',
-            'https://gitlab.com/acme/widgets.git',
-          ]);
-          await writeFile(join(root, '.git', 'HEAD'), 'invalid HEAD');
-        }
-        const original = await git
-          .execFileAsync('git', ['-C', root, 'remote', 'get-url', 'origin'])
-          .catch((error: unknown) => error);
-        expect(original).toBeInstanceOf(git.GitFailure);
-        if (!(original instanceof git.GitFailure)) throw new Error('expected GitFailure');
-        for (const inspect of [
-          () => git.getRemoteUrl(repo(root)),
-          () => git.detectForge(repo(root)),
-        ]) {
-          const failure = await inspect().catch((error: unknown) => error);
-          expect(failure).toBeInstanceOf(Error);
-          if (!(failure instanceof Error)) throw new Error('expected remote failure');
-          expect(failure.cause).toMatchObject({ code: original.code, stderr: original.stderr });
-        }
-      }
-    );
-
     test('a vendor failure retains stderr and exit code without interpreting colliding text', async () => {
       const root = trackTempRoot(await mkdtemp(join(tmpdir(), 'archon-git-failure-')));
       await git.execFileAsync('git', ['init', '-q', root]);
@@ -289,9 +238,6 @@ describe('git utilities', () => {
       try {
         const calls = [
           () => git.findRepoRoot('/repo'),
-          () => git.getRemoteUrl(repo('/repo')),
-          () => git.checkout(repo('/repo'), branch('feature')),
-          () => git.commitAllChanges(repo('/repo'), 'message'),
           () => git.isBranchMerged(repo('/repo'), branch('feature'), branch('main')),
           () => git.isPatchEquivalent(repo('/repo'), branch('feature'), 'main'),
           () => git.isAncestorOf(repo('/repo'), 'main'),

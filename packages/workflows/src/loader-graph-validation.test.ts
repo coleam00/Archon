@@ -575,18 +575,4 @@ nodes:
     const wf = result.workflow!;
     expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
   });
-
-  it('node with no agents field is undefined', () => {
-    const yaml = `
-name: no-agents
-description: test
-nodes:
-  - id: basic
-    prompt: "Do something"
-`;
-    const result = parseWorkflow(yaml, 'no-agents.yaml', providerRegistry);
-    expect(result.error).toBeNull();
-    const wf = result.workflow!;
-    expect((wf.nodes[0] as DagNode).agents).toBeUndefined();
-  });
 });

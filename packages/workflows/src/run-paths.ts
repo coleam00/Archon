@@ -62,24 +62,19 @@ export interface ResolvedProjectPaths {
   /** The project root persisted to `workflow_runs.output_root`. */
   outputRoot: string;
   /**
-   * How the run's project identity was determined (#2304). Three states; collapsing
-   * any two is a correctness bug:
-   *  - `'resolved'`     — `getCodebase` returned a row whose identity resolves to a
-   *                      repo / folder / `_local` key.
-   *  - `'unregistered'` — `getCodebase` returned a row, but no owner/repo nor a
-   *                      `_local` identity could be derived from it; the run still
-   *                      gets external storage, keyed on cwd (`codebase_project_identity_unresolved`
-   *                      WARN). This is a legitimate outcome of a registered codebase,
-   *                      NOT a fault.
-   *  - `'faulted'`      — `getCodebase` threw on BOTH retry attempts; the run fell
-   *                      through to the cwd fallback (`project_paths_resolve_failed_using_fallback`
-   *                      ERROR). The persistence block must NOT write `output_root`
-   *                      for these runs — see `executeWorkflow`.
+   * True when `getCodebase` threw on BOTH retry attempts and the run fell through to
+   * the cwd fallback (`project_paths_resolve_failed_using_fallback` ERROR, #2304). The
+   * persistence block must NOT write `output_root` for these runs; it stamps
+   * `metadata.identity_unresolved` instead — see `persistRunOutputRoot`.
    *
-   * Undefined on the persisted-`output_root` short-circuit branch (a resume reading
-   * an existing root re-derives nothing and there is nothing to flag).
+   * A codebase row that yields no owner/repo or `_local` identity is NOT faulted: the
+   * run still gets external storage keyed on cwd (`codebase_project_identity_unresolved`
+   * WARN), and that root may be persisted. Treating it as faulted is a correctness bug.
+   *
+   * False on the persisted-`output_root` short-circuit branch (a resume reading an
+   * existing root re-derives nothing and there is nothing to flag).
    */
-  identityResolution?: 'resolved' | 'unregistered' | 'faulted';
+  identityFaulted: boolean;
 }
 
 /**
@@ -121,7 +116,8 @@ export async function resolveProjectPaths(
     if (archonPaths.isInsideArchonHome(opts.persistedOutputRoot)) {
       return composeRunPaths(
         archonPaths.getStoragePathsForRoot(opts.persistedOutputRoot),
-        workflowRunId
+        workflowRunId,
+        false
       );
     }
     getLog().error(
@@ -132,14 +128,11 @@ export async function resolveProjectPaths(
 
   const identity = codebaseId
     ? await lookupProjectIdentity(deps.store, cwd, codebaseId)
-    : { key: undefined, identityResolution: 'unregistered' as const };
+    : { key: undefined, identityFaulted: false };
   const key = identity.key ?? archonPaths.resolveProjectStorageKey(null, cwd);
   const storage = archonPaths.getProjectStoragePaths(key);
   if (key.kind === 'cwd') await maybeWarnLegacyCwdStoragePath(key.cwd, storage.root);
-  return {
-    ...composeRunPaths(storage, workflowRunId),
-    identityResolution: identity.identityResolution,
-  };
+  return composeRunPaths(storage, workflowRunId, identity.identityFaulted);
 }
 
 async function lookupProjectIdentity(
@@ -148,7 +141,7 @@ async function lookupProjectIdentity(
   codebaseId: string
 ) {
   let key: archonPaths.ProjectStorageKey | undefined;
-  let identityResolution: ResolvedProjectPaths['identityResolution'];
+  let identityFaulted = false;
   // A registry outage must not kill a run, but its fallback must not become the
   // persisted output_root. The faulted identity tells persistRunOutputRoot to leave
   // that pointer unset and flag metadata.identity_unresolved instead (#2304).
@@ -159,7 +152,6 @@ async function lookupProjectIdentity(
       const codebase = await store.getCodebase(codebaseId);
       if (codebase) {
         key = archonPaths.resolveProjectStorageKey(codebase, cwd);
-        identityResolution = key.kind === 'cwd' ? 'unregistered' : 'resolved';
         if (key.kind === 'cwd') {
           // An existing row without a project identity is unregistered, not faulted;
           // unlike a failed lookup, its cwd fallback may be persisted.
@@ -178,20 +170,21 @@ async function lookupProjectIdentity(
         );
         continue;
       }
-      identityResolution = 'faulted';
+      identityFaulted = true;
       getLog().error(
         { err: error as Error, codebaseId, cwd },
         'project_paths_resolve_failed_using_fallback'
       );
     }
   }
-  return { key, identityResolution: identityResolution ?? 'unregistered' };
+  return { key, identityFaulted };
 }
 
 /** Project-level roots → the run-scoped view the executor threads downstream. */
 function composeRunPaths(
   storage: archonPaths.ProjectStoragePaths,
-  workflowRunId: string
+  workflowRunId: string,
+  identityFaulted: boolean
 ): ResolvedProjectPaths {
   return {
     artifactsDir: archonPaths.getRunArtifactsDirForRoot(storage.root, workflowRunId),
@@ -200,6 +193,7 @@ function composeRunPaths(
     artifactsRoot: storage.artifactsRoot,
     stateDir: storage.stateRoot,
     outputRoot: storage.root,
+    identityFaulted,
   };
 }
 
@@ -255,12 +249,12 @@ export async function prepareRunPaths(
     artifactsRoot,
     stateDir,
     outputRoot,
-    identityResolution,
+    identityFaulted,
   } = await resolveProjectPaths(deps, cwd, workflowRun.id, codebaseId, {
     persistedOutputRoot: workflowRun.output_root,
   });
 
-  await persistRunOutputRoot(deps, workflowRun, outputRoot, identityResolution);
+  await persistRunOutputRoot(deps, workflowRun, outputRoot, identityFaulted);
 
   // Stable cross-invocation artifact scope (#1846): only for persist_session
   // workflows, keyed like the session store. Undefined otherwise — zero new dirs.
@@ -351,10 +345,10 @@ async function persistRunOutputRoot(
   deps: WorkflowDeps,
   workflowRun: WorkflowRun,
   outputRoot: string,
-  identityResolution: ResolvedProjectPaths['identityResolution']
+  identityFaulted: boolean
 ): Promise<void> {
   if (workflowRun.output_root) return;
-  if (identityResolution === 'faulted') {
+  if (identityFaulted) {
     workflowRun.metadata = {
       ...workflowRun.metadata,
       [RUN_METADATA_KEYS.identityUnresolved]: true,

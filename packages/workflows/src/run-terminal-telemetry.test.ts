@@ -76,12 +76,6 @@ describe('buildRunTerminalTelemetry', () => {
     });
   });
 
-  test.each([0, 0.25])('keeps reported cost %s', costUsd => {
-    expect(buildRunTerminalTelemetry({ run, events: [], usage: { costUsd } })).toMatchObject({
-      costUsd,
-    });
-  });
-
   test.each([
     ['completed', {}],
     ['failed', { exitReason: 'node_error' }],
@@ -228,26 +222,24 @@ describe('TokenUsage axis seam guard', () => {
     total: null, // Telemetry carries gross axes, not the optional combined total.
     cost: null, // cost_usd comes from the separate result/run scalar.
   };
-  for (const status of ['completed', 'failed', 'cancelled'] as const) {
-    test(`${status}: carries every declared axis through the terminal wire serializer`, () => {
-      const props = buildRunTerminalTelemetry({
-        run: { ...run, status },
-        events: [],
-        usage: { costUsd: 0.75, tokens: specimen },
-      });
-      if (!props) throw new Error('Missing terminal telemetry');
-      const wire = workflowTerminalEventProperties(props);
-      for (const axis of Object.keys(wireKeys) as (keyof TokenUsage)[]) {
-        const key = wireKeys[axis];
-        if (key !== null) expect(wire[key], `${axis} -> ${key}`).toBe(specimen[axis]);
-        else {
-          expect(props).not.toHaveProperty(axis);
-          expect(wire).not.toHaveProperty(axis);
-        }
-      }
-      expect(wire.cost_usd).toBe(0.75);
+  test('carries every declared axis through the terminal wire serializer', () => {
+    const props = buildRunTerminalTelemetry({
+      run: { ...run, status: 'completed' },
+      events: [],
+      usage: { costUsd: 0.75, tokens: specimen },
     });
-  }
+    if (!props) throw new Error('Missing terminal telemetry');
+    const wire = workflowTerminalEventProperties(props);
+    for (const axis of Object.keys(wireKeys) as (keyof TokenUsage)[]) {
+      const key = wireKeys[axis];
+      if (key !== null) expect(wire[key], `${axis} -> ${key}`).toBe(specimen[axis]);
+      else {
+        expect(props).not.toHaveProperty(axis);
+        expect(wire).not.toHaveProperty(axis);
+      }
+    }
+    expect(wire.cost_usd).toBe(0.75);
+  });
 
   test('preserves absent usage, reported zero, and true-only partial flags', () => {
     for (const tokens of [

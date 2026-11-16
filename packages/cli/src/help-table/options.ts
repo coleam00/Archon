@@ -64,8 +64,7 @@ export const orderedFlags: FlagHelp[] = [
   },
   {
     spec: '--input <name>=<value>',
-    description:
-      'Supply a declared workflow input; repeat per input (mutually exclusive with --resume)',
+    description: 'Supply a declared workflow input; repeat per input',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {
@@ -81,14 +80,6 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--config-from-run <run-id>',
     description: 'Start a fresh run with the run config another run was started with',
-    owners: [{ command: 'workflow', subcommand: 'run' }],
-  },
-  {
-    spec: '--resume',
-    description:
-      'Resume the newest eligible failed, paused, or stale running run of this workflow\n' +
-      'Running is stale when activity is missing or older than one day; verify its owner is gone first.\n' +
-      'Mutually exclusive with --branch',
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {

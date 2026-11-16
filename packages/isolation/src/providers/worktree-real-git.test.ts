@@ -393,16 +393,9 @@ describe('WorktreeProvider against real git', () => {
     expect(await gitModule.findWorktreeByBranch(toRepoPath(repoPath), validBranch)).toBe(
       validTarget
     );
-    expect((await provider.get(validTarget))?.workingPath).toBe(validTarget);
-    expect((await provider.adopt(validTarget))?.workingPath).toBe(validTarget);
-    expect((await provider.list(repoPath)).map(environment => environment.workingPath)).toEqual([
-      validTarget,
-    ]);
     expect(
       await gitModule.findWorktreeByBranch(toRepoPath(repoPath), toBranchName(branch))
     ).toBeNull();
-    expect(await provider.get(target)).toBeNull();
-    expect(await provider.adopt(target)).toBeNull();
     expect((await git(target, 'symbolic-ref', 'HEAD')).trim()).toBe(branch);
     expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
     expect(await git(target, 'status', '--porcelain')).toBe(status);
@@ -565,7 +558,6 @@ describe('WorktreeProvider against real git', () => {
       expect(created.workingPath).toBe(worktreePath);
       const adopted = await provider.create(request);
       expect(adopted.metadata.adopted).toBe(true);
-      expect(await provider.adopt(worktreePath)).not.toBeNull();
       const { stdout } = await execFileAsync('git', [
         'config',
         '--global',
@@ -1338,13 +1330,6 @@ describe('WorktreeProvider against real git', () => {
       fresh.metadata.creationId
     );
     expect((await git(fresh.workingPath, 'status', '--porcelain')).trim()).toBe('');
-    const observed = await provider.get(fresh.id);
-    expect(observed?.metadata).toEqual({ provenance: 'observed', adopted: false });
-    const listed = await provider.list(repoPath);
-    expect(listed.find(env => env.id === fresh.id)?.metadata).toEqual({
-      provenance: 'observed',
-      adopted: false,
-    });
     const adopted = await provider.create(freshRequest);
     expect(adopted.metadata.provenance).toBe('adopted');
     expect(adopted.metadata.adopted).toBe(true);

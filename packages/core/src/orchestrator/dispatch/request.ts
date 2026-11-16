@@ -118,15 +118,14 @@ export async function detectContinuation(
   // would forfeit the pre-cost refusal. This lookup is a single indexed DB read — no
   // worktree, no clone, no AI — so it is safe to do before gating. Its inputs
   // (`conversation.id`, `codebase.id`) are parameters and nothing in the dispatch mutates them.
-  const { resumableRun, explicitResumeRequested, willContinueExistingRun } = await readContinuation(
-    scope,
-    request,
-    workflow
-  );
+  const read = await readContinuation(scope, request, workflow);
+  const { explicitResumeRequested, willContinueExistingRun } = read;
+  let resumableRun = read.resumableRun;
 
   if (willContinueExistingRun && resumableRun) {
     try {
-      await createSqlWorkflowOperations().resumeWorkflow(resumableRun.id, actor);
+      // Continue the row this check read: a running run's resume is pinned to its claim.
+      resumableRun = await createSqlWorkflowOperations().resumeWorkflow(resumableRun.id, actor);
     } catch (error) {
       if (!(error instanceof RunActionForbiddenError)) throw error;
       await platform.sendMessage(conversationId, error.message);

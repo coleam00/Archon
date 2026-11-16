@@ -28,7 +28,7 @@ import {
   WorkflowRunPauseConflictError,
   type IWorkflowStore,
   type WorkflowEventInput,
-  type WorkflowResumeCursor,
+  type ResumeClaimCursor,
   waitCompletionEvents,
   FAN_OUT_CANCEL_REASONS,
   resumeCursorMatches,
@@ -41,8 +41,10 @@ import {
   sourceReleaseMetadata,
   executionClaim,
   EXECUTION_CLAIM_METADATA_KEY,
+  currentExecutionOwner,
   sourceReleasedEvent,
 } from '../store';
+import { EXECUTION_OWNER_METADATA_KEY } from '../schemas/run-metadata';
 import {
   isTerminalRunStatus,
   isWorkflowWaitContext,
@@ -86,7 +88,7 @@ export type TransactionView = Omit<
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw
    * otherwise. Lets a store decide slot admission before the resume changes anything.
    */
-  resumableRun(id: string, cursor?: WorkflowResumeCursor): WorkflowRun;
+  resumableRun(id: string, cursor?: ResumeClaimCursor): WorkflowRun;
   recordCapacityWait(id: string): void;
   clearCapacityWait(id: string): void;
 };
@@ -124,9 +126,10 @@ export function createTransactionView(
       event_order: ++eventOrder,
     });
   };
-  const resumableRun = (id: string, cursor?: WorkflowResumeCursor): WorkflowRun => {
+  const resumableRun = (id: string, cursor?: ResumeClaimCursor): WorkflowRun => {
     const run = row(id);
-    if (!isResumable(run) || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
+    const statusAllows = isResumable(run) || cursor?.kind === 'ownerless';
+    if (!statusAllows || (cursor !== undefined && !resumeCursorMatches(run, cursor)))
       throw new WorkflowNotResumableError(id, run.status);
     return run;
   };
@@ -285,6 +288,7 @@ export function createTransactionView(
       const run = runs.get(id);
       if (run?.status !== 'pending') return null;
       run.status = 'running';
+      run.metadata[EXECUTION_OWNER_METADATA_KEY] = currentExecutionOwner();
       run.working_path ??= workingPath ?? null;
       run.last_activity_at = new Date();
       return structuredClone(run);

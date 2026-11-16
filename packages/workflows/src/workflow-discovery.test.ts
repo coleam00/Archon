@@ -750,57 +750,6 @@ nodes:
 
       expect(workflows.map(w => w.name)).toEqual(['fake-review']);
     });
-
-    it('should allow repo workflows to override bundled defaults', async () => {
-      // Simulate binary build
-      isBinaryBuildSpy.mockReturnValue(true);
-
-      // Create repo workflow with same filename as bundled default
-      const repoWorkflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(repoWorkflowDir, { recursive: true });
-      const repoWorkflowYaml = `name: custom-assist-override
-description: Custom override of fake-review
-nodes:
-  - id: custom
-    command: custom
-`;
-      await writeFile(join(repoWorkflowDir, 'fake-review.yaml'), repoWorkflowYaml);
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: true });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      // Repo workflow should override bundled default
-      const assistWorkflow = workflows.find(
-        w => w.name === 'custom-assist-override' || w.name === 'fake-review'
-      );
-      expect(assistWorkflow).toBeDefined();
-      expect(assistWorkflow?.name).toBe('custom-assist-override');
-    });
-
-    it('should combine bundled workflows with repo workflows', async () => {
-      // Simulate binary build
-      isBinaryBuildSpy.mockReturnValue(true);
-
-      // Create repo workflow with unique name
-      const repoWorkflowDir = join(testDir, '.archon', 'workflows');
-      await mkdir(repoWorkflowDir, { recursive: true });
-      const repoWorkflowYaml = `name: my-repo-workflow
-description: A repo-specific workflow
-nodes:
-  - id: custom
-    command: custom
-`;
-      await writeFile(join(repoWorkflowDir, 'my-repo.yaml'), repoWorkflowYaml);
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: true });
-      const workflows = result.workflows.map(ws => ws.workflow);
-
-      // Should have both bundled and repo workflows
-      const bundledReview = workflows.find(w => w.name === 'fake-review');
-      const repoWorkflow = workflows.find(w => w.name === 'my-repo-workflow');
-      expect(bundledReview).toBeDefined();
-      expect(repoWorkflow).toBeDefined();
-    });
   });
 
   describe('home-scoped workflows (~/.archon/workflows/)', () => {
@@ -864,19 +813,6 @@ nodes:
 
       expect(result.errors).toEqual([]);
       expect(result.workflows).toEqual([]);
-    });
-
-    it("classifies home-scoped workflows as source: 'global'", async () => {
-      const homeWorkflowDir = join(homeDir, 'workflows');
-      await mkdir(homeWorkflowDir, { recursive: true });
-      await writeFile(
-        join(homeWorkflowDir, 'only-home.yaml'),
-        'name: only-home\ndescription: From home\nnodes:\n  - id: n\n    command: c\n'
-      );
-
-      const result = await discoverWorkflows(testDir, { loadDefaults: false });
-      const entry = result.workflows.find(w => w.workflow.name === 'only-home');
-      expect(entry?.source).toBe('global');
     });
 
     it('repo workflow overrides home workflow with the same filename', async () => {

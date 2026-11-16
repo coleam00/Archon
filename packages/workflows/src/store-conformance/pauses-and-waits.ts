@@ -1,6 +1,7 @@
 import { splitAttentionRead } from '../schemas/attention-degraded';
 import { beforeEach, describe, expect, test } from 'bun:test';
 import {
+  currentExecutionOwner,
   executionClaim,
   WorkflowNotResumableError,
   continuablePauseCursor,
@@ -118,6 +119,7 @@ export function describePausesAndWaitsConformance(getHarness: () => WorkflowStor
           expect(result.reason).toBeInstanceOf(WorkflowRunPauseConflictError);
       expect((await store.getWorkflowRun(run.id))?.metadata).toEqual({
         execution_claim: executionClaim(resumed.metadata),
+        execution_owner: currentExecutionOwner(),
         keep: true,
         extra: true,
         approval,

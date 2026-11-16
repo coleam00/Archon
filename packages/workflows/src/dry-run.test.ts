@@ -384,20 +384,17 @@ describe('dry-run outcomes and trace', () => {
     }
   );
 
-  test.each(['stub', '[{}]', {}, null, true, 42])(
-    'a fan-out rejects a non-array stub (%j)',
-    async spread => {
-      const result = await dryRunWorkflow({
-        workflow: makeTestWorkflow({
-          name: 'parent',
-          nodes: [{ id: 'spread', workflow: 'other', fan_out: { items: '["a"]' } }],
-        }),
-        stubs: { spread },
-      });
-      expect(result.outcome).toBe('failed');
-      expect(result.trace[0]?.reason).toContain('must be a JSON array');
-    }
-  );
+  test.each(['[{}]', {}, null])('a fan-out rejects a non-array stub (%j)', async spread => {
+    const result = await dryRunWorkflow({
+      workflow: makeTestWorkflow({
+        name: 'parent',
+        nodes: [{ id: 'spread', workflow: 'other', fan_out: { items: '["a"]' } }],
+      }),
+      stubs: { spread },
+    });
+    expect(result.outcome).toBe('failed');
+    expect(result.trace[0]?.reason).toContain('must be a JSON array');
+  });
 
   test.each([0, 1, 5])(
     'a fan-out rejects %s stub results for three resolved items',

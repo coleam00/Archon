@@ -347,7 +347,6 @@ export async function createFileWorkflowStore(
     getRunAncestry: id => query('all', view => view.getRunAncestry(id)),
     getActiveWorkflowRunByPath: (path, self) =>
       query('all', view => view.getActiveWorkflowRunByPath(path, self)),
-    findResumableRun: (name, path) => query('all', view => view.findResumableRun(name, path)),
     findWorkflowRunsByIdPrefix: (prefix, codebase) =>
       query('all', view => view.findWorkflowRunsByIdPrefix(prefix, codebase)),
     findAdoptingRuns: id => query('all', view => view.findAdoptingRuns(id)),
