@@ -5,6 +5,12 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { readItem } from '@archon/workflows/item-read';
+import { listAttentionQueue, readAttentionQueueItem } from '@archon/workflows/attention-queue';
+import { executeWorkflow } from '@archon/workflows/executor';
+import type { IWorkflowPlatform, WorkflowDeps } from '@archon/workflows/deps';
+import { makeTestResolvedWorkflow } from '@archon/workflows/test-utils';
+import { providerRegistry } from '@archon/providers';
+import { registerBuiltinProviders } from '@archon/providers/in-process';
 import type { PreparedWorkflowLaunch } from '@archon/workflows/schemas/resource-start';
 import { closeDatabase, getDatabase, resetDatabase } from './connection';
 import { createWorkflowStore } from '../workflows/store-adapter';
@@ -146,6 +152,20 @@ async function bindingStart(input: {
 
 const end = (id: string): Promise<void> => completeWorkflowRun(id, { duration_ms: 1 });
 
+const source = () =>
+  attentionQueueSource(store, { findLatestByCodebaseAndWorkingPath: async () => null });
+
+/** The item reads of a later start of `build` on issue-1 and the attention list. */
+async function readsOfHeldItem() {
+  const holder = (await getWorkflowRun((await store.listWaitedItemHolders())[0]?.id ?? ''))!;
+  const item = await store.getItem(String(holder.item_id));
+  return {
+    read: await readItem(source(), String(item?.projectKey), 'issue-1'),
+    queue: await listAttentionQueue(source()),
+    single: await readAttentionQueueItem(source(), holder.id),
+  };
+}
+
 describe('one run of a workflow per item', () => {
   test('a binding start on a held item queues or is skipped by its overlap, and drains after the holder ends', async () => {
     const holder = await pending('build', 'issue-1');
@@ -181,7 +201,8 @@ describe('one run of a workflow per item', () => {
         (await bindingStart({ ...other, resource: 'builds', overlap: 'queue' })).disposition
       ).toMatchObject({ status: 'admitted' });
 
-    // The item read names the run each start is held behind.
+    // The item read names the run each start is held behind, and, through the host's
+    // source, that its owner is gone: this process claimed it and serves no endpoint.
     const item = await store.getItem(String((await getWorkflowRun(holder))?.item_id));
     const read = await readItem(
       attentionQueueSource(store, { findLatestByCodebaseAndWorkingPath: async () => null }),
@@ -194,14 +215,14 @@ describe('one run of a workflow per item', () => {
         workflow: 'build',
         resource: 'builds',
         status: 'queued',
-        heldBehind: { runId: holder, workflow: 'build', status: 'running', owner: null },
+        heldBehind: { runId: holder, workflow: 'build', status: 'running', owner: 'unreachable' },
       },
       {
         requestId: skipped.runId,
         workflow: 'build',
         resource: 'builds',
         status: 'skipped',
-        heldBehind: { runId: holder, workflow: 'build', status: 'running', owner: null },
+        heldBehind: { runId: holder, workflow: 'build', status: 'running', owner: 'unreachable' },
       },
     ]);
 
@@ -306,5 +327,116 @@ describe('one run of a workflow per item', () => {
     );
     expect(outputs.sort()).toEqual(['WorkflowItemHeldError', 'running']);
     resetDatabase();
+  });
+
+  test('a holder whose owner is gone is in the attention list, naming its item, while a start waits behind it', async () => {
+    const holder = await pending('build', 'issue-1');
+    await claimPendingWorkflowRun(holder);
+    // Holding with nothing waiting behind it, it is not listed.
+    expect(await store.listWaitedItemHolders()).toEqual([]);
+    expect(await listAttentionQueue(source())).toEqual([]);
+    await pending('build', 'issue-1');
+    const { queue, single } = await readsOfHeldItem();
+    expect(queue).toEqual([
+      expect.objectContaining({
+        kind: 'owner_lost',
+        observedStatus: 'running',
+        item: expect.objectContaining({ key: 'issue-1' }),
+        run: expect.objectContaining({ id: holder, workflow: 'build' }),
+      }),
+    ]);
+    expect(single).toMatchObject({ kind: 'owner_lost', ref: holder });
+  });
+
+  test('a paused parent whose sub-run lost its owner reads as a lost owner, not as waiting', async () => {
+    const parent = await pending('build', 'issue-1');
+    await claimPendingWorkflowRun(parent);
+    const child = await createWorkflowRun({
+      id: crypto.randomUUID(),
+      workflow_name: 'sub',
+      codebase_id: CODEBASE_ID,
+      user_message: '',
+      origin: { conversationId: CONVERSATION_ID },
+      parent_run_id: parent,
+    });
+    await claimPendingWorkflowRun(child.id);
+    await getDatabase().query(
+      `UPDATE remote_agent_workflow_runs SET status = 'paused', metadata = $2 WHERE id = $1`,
+      [
+        parent,
+        JSON.stringify({
+          approval: { type: 'child_workflow', nodeId: 'sub', message: '', childRunId: child.id },
+        }),
+      ]
+    );
+    await pending('build', 'issue-1');
+    const { read, queue } = await readsOfHeldItem();
+    expect(read?.runs.at(-1)?.heldBehind).toEqual({
+      runId: parent,
+      workflow: 'build',
+      status: 'paused',
+      owner: 'unreachable',
+    });
+    expect(queue).toEqual([
+      expect.objectContaining({ kind: 'owner_lost', observedStatus: 'paused' }),
+    ]);
+  });
+
+  test('a hand start of a workflow with no resource waits for its item, or is refused under --no-wait', async () => {
+    registerBuiltinProviders();
+    const holder = await pending('build', 'issue-1');
+    await claimPendingWorkflowRun(holder);
+    const messages: string[] = [];
+    const platform: IWorkflowPlatform = {
+      sendMessage: async (_conversation, message) => {
+        messages.push(message);
+      },
+      getPlatformType: () => 'test',
+      getStreamingMode: () => 'batch',
+    };
+    const deps: WorkflowDeps = {
+      store,
+      providers: providerRegistry,
+      getAgentProvider: () => {
+        throw new Error('Unexpected agent work');
+      },
+      loadConfig: async () => ({
+        assistant: 'claude',
+        assistants: { claude: {}, codex: {} },
+        commands: {},
+        defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
+      }),
+    };
+    const start = (noWait: boolean) =>
+      executeWorkflow(
+        deps,
+        platform,
+        CONVERSATION_ID,
+        root,
+        makeTestResolvedWorkflow({
+          name: 'build',
+          mutates_checkout: false,
+          nodes: [{ id: 'work', bash: 'true' }],
+        }),
+        '',
+        undefined,
+        { codebaseId: CODEBASE_ID, item: 'issue-1', noWait }
+      );
+    const refused = await start(true);
+    if (refused.success) throw new Error('the start was not refused');
+    expect(refused.error).toContain(`Item 'issue-1' is held by run ${holder}`);
+    expect((await getWorkflowRun(String(refused.workflowRunId)))?.status).toBe('cancelled');
+
+    const waited = start(false);
+    for (
+      let tries = 0;
+      !messages.some(text => text.includes("Waiting for item 'issue-1'"));
+      tries++
+    ) {
+      if (tries > 100) throw new Error('the start did not wait for its item');
+      await Bun.sleep(50);
+    }
+    await end(holder);
+    expect(await waited).toMatchObject({ success: true });
   });
 });

@@ -577,6 +577,12 @@ export interface IResourceStartStore {
    * skipped ones that were refused. Oldest first. A store without items returns none.
    */
   listItemStartRequests(itemId: string): Promise<ResourceStartRequestInspection[]>;
+  /**
+   * The runs that hold their item (`holdsItem`) while a later start of their workflow on
+   * it waits: a queued start request, or a pending hand start that holds nothing. A store
+   * without items returns none.
+   */
+  listWaitedItemHolders(): Promise<WorkflowRun[]>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
   claimStartBindingPreparation(input: {

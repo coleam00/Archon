@@ -123,6 +123,11 @@ function itemBody(item: RunAttentionQueueItem, detail: AttentionItemDetail): str
         `needs a look: ${item.detail}`,
         `show more: ${command(`get ${run.id}`)}, then resume or abandon it`,
       ];
+    case 'owner_lost':
+      return [
+        `${item.observedStatus} but its owner is gone, holding item ${item.item?.key ?? '(unread)'}: later starts of ${run.workflow} on it wait behind it`,
+        `continue it: ${command(`resume ${run.id}`)}, or end it: ${command(`abandon ${run.id}`)}`,
+      ];
   }
 }
 
@@ -133,7 +138,11 @@ export function attentionItemLines(
 ): string[] {
   const run = isHeldByRun(item) ? item.run : undefined;
   const paused =
-    item.pausedAt === null ? 'pause time not recorded' : `paused ${formatAge(item.pausedAt)} ago`;
+    item.kind === 'owner_lost'
+      ? 'owner gone'
+      : item.pausedAt === null
+        ? 'pause time not recorded'
+        : `paused ${formatAge(item.pausedAt)} ago`;
   const project = item.project?.name ?? '(no project)';
   const lines = [
     run === undefined

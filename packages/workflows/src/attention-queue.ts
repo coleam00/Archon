@@ -42,6 +42,8 @@ import {
   type WorkflowItem,
   type WorkflowRun,
 } from './schemas/workflow-run';
+import { workflowRunStatusSchema } from './schemas/run-status';
+import type { RunOwnerObservation } from './schemas/workflow-run-listing';
 import { resolveRunAttention } from './run-attention-resolution';
 import { stateProjectKeySchema } from './state-document-store';
 import type { AttentionQueueCounts } from './attention-counts';
@@ -117,7 +119,9 @@ const itemBase = {
  * `usage_limit` is a run waiting for a provider usage limit, or a rate limit that outlasted
  * its retries, that tries again by itself at `resetAt` (the provider's reported reset, or a
  * computed backoff for a rate limit) and needs no answer; `unreadable` is a paused run
- * nothing can describe, which someone has to look at and resume or abandon.
+ * nothing can describe, which someone has to look at and resume or abandon; `owner_lost`
+ * is a run whose owner is gone while it holds its item and later starts of its workflow on
+ * the item wait behind it (`holdsItem`), which only `resume` or `abandon` moves.
  *
  * `run` is the paused run that holds the item. A gate, a usage-limit wait and an
  * unreadable pause are always a run. A question may have none: then nothing is paused on
@@ -153,6 +157,13 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     run: z.object(heldRunFields),
     reason: runAttentionUnreadableReasonSchema,
     detail: z.string(),
+  }),
+  z.object({
+    kind: z.literal('owner_lost'),
+    ...itemBase,
+    run: z.object(heldRunFields),
+    /** The run's stored status, unchanged: the engine never ends it by itself. */
+    observedStatus: workflowRunStatusSchema,
   }),
 ]);
 export type AttentionQueueItem = z.infer<typeof attentionQueueItemSchema>;
@@ -240,22 +251,9 @@ export function fanOutPosition(
     : null;
 }
 
-/** Derive the queue item `run` holds, from its run-attention `attention`. */
-export function toAttentionQueueItem(
-  run: WorkflowRun,
-  attention: QueuedRunAttention,
-  sources: AttentionQueueItemSources
-): RunAttentionQueueItem {
+function heldRun(run: WorkflowRun, sources: AttentionQueueItemSources) {
   const root = resolveRunStorageRoot(run, sources.codebase);
-  const wait = attention.kind === 'attention' ? pausedAttentionWait(run) : undefined;
-  const base = {
-    project: projectRefForRun(run, sources.codebase),
-    ...(sources.item === null ? {} : { item: sources.item }),
-    revision: wait === undefined ? 1 : attentionRevision(wait),
-    labels: wait === undefined ? {} : attentionLabels(wait),
-    pausedAt: (wait ?? pausedUsageLimitWait(run))?.waitingSince ?? null,
-  };
-  const held = {
+  return {
     id: run.id,
     workflow: run.workflow_name,
     parentRunId: run.parent_run_id,
@@ -267,6 +265,23 @@ export function toAttentionQueueItem(
       branch: sources.branch,
     },
   };
+}
+
+/** Derive the queue item `run` holds, from its run-attention `attention`. */
+export function toAttentionQueueItem(
+  run: WorkflowRun,
+  attention: QueuedRunAttention,
+  sources: AttentionQueueItemSources
+): RunAttentionQueueItem {
+  const wait = attention.kind === 'attention' ? pausedAttentionWait(run) : undefined;
+  const base = {
+    project: projectRefForRun(run, sources.codebase),
+    ...(sources.item === null ? {} : { item: sources.item }),
+    revision: wait === undefined ? 1 : attentionRevision(wait),
+    labels: wait === undefined ? {} : attentionLabels(wait),
+    pausedAt: (wait ?? pausedUsageLimitWait(run))?.waitingSince ?? null,
+  };
+  const held = heldRun(run, sources);
   switch (attention.kind) {
     case 'attention':
       return {
@@ -327,6 +342,15 @@ export interface AttentionQueueSource {
    * where a source of such items joins the one reader.
    */
   itemsWithoutRun?(): Promise<readonly AttentionQueueItemWithoutRun[]>;
+  /**
+   * Runs that hold their item while a later start of their workflow on it waits, and what
+   * this process observes about a run's execution owner. Without it the queue lists no
+   * `owner_lost` items and an item read observes no owners.
+   */
+  ownerLost?: {
+    holders(): Promise<WorkflowRun[]>;
+    observe(run: WorkflowRun): Promise<RunOwnerObservation | null>;
+  };
 }
 
 export type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
@@ -397,6 +421,47 @@ export async function attentionQueueItemForRun(
   return attention === undefined ? null : itemFor(source, run, attention, codebases);
 }
 
+/**
+ * The `owner_lost` item of `run`, a holder of its item that starts wait behind (see
+ * `AttentionQueueSource.ownerLost`), when its owner is gone; null otherwise. Observing
+ * never changes the run.
+ */
+async function ownerLostItem(
+  source: AttentionQueueSource,
+  run: WorkflowRun,
+  codebases: CodebaseCache
+): Promise<RunAttentionQueueItem | null> {
+  if (source.ownerLost === undefined || run.item_id === null) return null;
+  if ((await source.ownerLost.observe(run)) !== 'unreachable') return null;
+  const sources: AttentionQueueItemSources = {
+    codebase: await codebaseFor(source, run, codebases),
+    branch: await source.branchOf(run),
+    item: await source.store.getItem(run.item_id),
+  };
+  return {
+    kind: 'owner_lost',
+    ref: runItemRef(run.id),
+    project: projectRefForRun(run, sources.codebase),
+    ...(sources.item === null ? {} : { item: sources.item }),
+    revision: 1,
+    labels: {},
+    pausedAt: null,
+    run: heldRun(run, sources),
+    observedStatus: run.status,
+  };
+}
+
+async function ownerLostItems(source: AttentionQueueSource): Promise<RunAttentionQueueItem[]> {
+  if (source.ownerLost === undefined) return [];
+  const codebases: CodebaseCache = new Map();
+  const items: RunAttentionQueueItem[] = [];
+  for (const run of await source.ownerLost.holders()) {
+    const item = await ownerLostItem(source, run, codebases);
+    if (item !== null) items.push(item);
+  }
+  return items;
+}
+
 /** The items the store's queue rows hold, in the rows' order. */
 async function runAttentionQueueItems(
   source: AttentionQueueSource,
@@ -444,7 +509,8 @@ async function runAttentionQueueItems(
 /**
  * Every open item in the install: the one entry every surface lists through. The items
  * paused runs hold come first, in the store's order (most recently started run first),
- * then the items no run holds. A host that also needs the queue rows passes the ones it
+ * then the holders of an item whose owner is gone (`owner_lost`), then the items no run
+ * holds. A host that also needs the queue rows passes the ones it
  * read as `runs`, so both come from one read.
  */
 export async function listAttentionQueue(
@@ -456,6 +522,7 @@ export async function listAttentionQueue(
       source,
       runs ?? (await source.store.listAttentionQueueRows())
     )),
+    ...(await ownerLostItems(source)),
     ...((await source.itemsWithoutRun?.()) ?? []),
   ];
 }
@@ -472,7 +539,14 @@ export async function readAttentionQueueItem(
   const run = await source.store.getWorkflowRun(runId);
   if (run === null) return undefined;
   const resolution = await resolveRunAttention(source.store, run);
-  if (resolution.kind !== 'attention') return null;
+  if (resolution.kind !== 'attention') {
+    // A run that needs an owner may be an item holder whose owner is gone.
+    if (resolution.kind !== 'owner_required' || source.ownerLost === undefined) return null;
+    const holders = await source.ownerLost.holders();
+    return holders.some(holder => holder.id === run.id)
+      ? ownerLostItem(source, run, new Map())
+      : null;
+  }
   const holder =
     resolution.attention.runId === run.id
       ? run

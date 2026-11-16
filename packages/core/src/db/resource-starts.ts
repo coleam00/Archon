@@ -39,6 +39,7 @@ import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run'
 import { getDatabase, getDialect } from './connection';
 import {
   addResourceSlotHolder,
+  liveItemRuns,
   lockAdmission,
   lockResourceSlot,
   lockResourceSlotForAdmission,
@@ -47,7 +48,9 @@ import {
   type TransactionQuery as Query,
 } from './resource-slots';
 import { loadResourceCapacities } from '../config/concurrency-config';
-import { insertWorkflowRun } from './workflows';
+import { getWorkflowRunsByIds, insertWorkflowRun } from './workflows';
+import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold';
+import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
 import { WorkflowStatusReadError } from './workflow-run-reads';
 import { insertStartReceipt } from './start-receipt-writes';
@@ -498,6 +501,35 @@ export async function listItemStartRequests(
     [itemId]
   );
   return result.rows.map(inspectRequest);
+}
+
+export async function listWaitedItemHolders(): Promise<WorkflowRun[]> {
+  const db = getDatabase();
+  const runs = await liveItemRuns(db.query.bind(db));
+  const queued = await db.query<{ id: string; item_id: string; launch: unknown }>(
+    `SELECT id, item_id, launch FROM remote_agent_resource_start_requests
+      WHERE status = 'queued' AND item_id IS NOT NULL`
+  );
+  const held = itemHolders(runs);
+  const waiting = [
+    ...runs
+      .filter(run => !holdsItem(run))
+      .map(run => ({ runId: run.id, workflow: run.workflow_name, itemId: run.item_id })),
+    ...queued.rows.flatMap(row => {
+      const launch = preparedWorkflowLaunchSchema.safeParse(parseStoredJson(row.launch));
+      // A damaged request is reported by the trigger reads; it names no workflow here.
+      if (!launch.success) return [];
+      const workflow = launch.data.run.workflow_name;
+      return [{ runId: String(row.id), workflow, itemId: String(row.item_id) }];
+    }),
+  ];
+  const ids = new Set(
+    waiting.flatMap(start => {
+      const holder = itemHolder(held, start);
+      return holder === undefined ? [] : [holder];
+    })
+  );
+  return ids.size === 0 ? [] : getWorkflowRunsByIds([...ids]);
 }
 
 export async function listQueuedResourceStartsForHost(

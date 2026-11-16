@@ -363,13 +363,9 @@ describe('reading an item', () => {
       } satisfies PreparedWorkflowLaunch,
       ...fields,
     });
-    const observed: string[] = [];
     const held: ItemReadSource = {
       ...source,
-      observeOwner: async row => {
-        observed.push(row.id);
-        return 'unreachable';
-      },
+      ownerLost: { holders: async () => [second], observe: async () => 'unreachable' },
       store: {
         ...source.store,
         getItemRuns: async () => ({
@@ -406,7 +402,7 @@ describe('reading an item', () => {
       ['queued-review', 'queued', null],
       ['skipped-deliver', 'skipped', behindSecond],
     ]);
-    // The holder's owner is observed once per read, however many starts wait behind it.
-    expect(observed).toEqual(['second']);
+    // The lost owner is reported on the starts held behind it, not as an open question.
+    expect(read?.questions).toEqual([]);
   });
 });

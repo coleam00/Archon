@@ -227,9 +227,15 @@ function notAnswered(
     case 'moved':
       return `attention: item '${ref}' is over; its run now asks something else, as item '${result.item.ref}'. Call action=list and answer what it asks now.`;
     case 'takes_no_answer':
-      return result.item.kind === 'usage_limit'
-        ? `attention: item '${ref}' waits for a usage limit and continues by itself at ${result.item.resetAt}. It takes no answer.`
-        : `attention: item '${ref}' cannot be read (${result.item.reason}: ${result.item.detail}). Someone has to look at its run; it takes no answer.`;
+      switch (result.item.kind) {
+        case 'usage_limit':
+          return `attention: item '${ref}' waits for a usage limit and continues by itself at ${result.item.resetAt}. It takes no answer.`;
+        case 'unreadable':
+          return `attention: item '${ref}' cannot be read (${result.item.reason}: ${result.item.detail}). Someone has to look at its run; it takes no answer.`;
+        case 'owner_lost':
+          return `attention: run ${result.item.run.id} lost its owner while it holds its item, so later starts wait behind it. It takes no answer: resume or abandon the run.`;
+      }
+      return result.item satisfies never;
     case 'refused':
       return result.reason === 'gate_has_no_recommendation'
         ? 'attention: a gate has no recommendation. Pass choose with one decision.'

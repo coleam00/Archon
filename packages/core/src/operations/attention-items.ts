@@ -41,7 +41,7 @@ export type AttentionItemAnswerResult =
   | { kind: 'moved'; item: AttentionQueueItem }
   | {
       kind: 'takes_no_answer';
-      item: Extract<AttentionQueueItem, { kind: 'usage_limit' | 'unreadable' }>;
+      item: Extract<AttentionQueueItem, { kind: 'usage_limit' | 'unreadable' | 'owner_lost' }>;
     }
   /** A gate takes one of its decisions and has no recommendation to accept. */
   | { kind: 'refused'; reason: 'gate_has_no_recommendation' | 'gate_takes_one_decision' }
@@ -103,7 +103,7 @@ export async function answerAttentionItem(
   const holder = await answerableRun(deps, item, actor);
   if (holder === null || !isHeldByRun(item)) return { kind: 'unknown' };
   if (read.kind === 'moved') return read;
-  if (item.kind === 'usage_limit' || item.kind === 'unreadable')
+  if (item.kind === 'usage_limit' || item.kind === 'unreadable' || item.kind === 'owner_lost')
     return { kind: 'takes_no_answer', item };
   const { id, occurrence } = item.run;
   const origin = { via, expectedGate: expectedGateForOccurrence(holder, occurrence) };

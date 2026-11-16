@@ -6,7 +6,10 @@
 import { type OpenAPIHono, createRoute, z } from '@hono/zod-openapi';
 import * as codebaseDb from '@archon/core/db/codebases';
 import * as userDb from '@archon/core/db/users';
-import { itemReadSource, resolveAttentionProject } from '@archon/core/operations/attention-queue';
+import {
+  attentionQueueSource,
+  resolveAttentionProject,
+} from '@archon/core/operations/attention-queue';
 import {
   assertMayRule,
   ItemRulingForbiddenError,
@@ -129,7 +132,7 @@ async function projectKeyOf(spec: string): Promise<{ key: string } | { refusal: 
 
 export function registerItemRoutes(app: OpenAPIHono): void {
   const registerOpenApiRoute = openApiRouteRegistrar(app);
-  const source = itemReadSource(createWorkflowStore(), createWorkflowHostStore().isolation);
+  const source = attentionQueueSource(createWorkflowStore(), createWorkflowHostStore().isolation);
 
   registerOpenApiRoute(getItemRoute, async c => {
     const query = getValidatedQuery(c, itemReadQuerySchema);

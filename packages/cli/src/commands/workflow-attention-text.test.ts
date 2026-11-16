@@ -110,9 +110,23 @@ test('an unreadable item, a failed run and a lost owner say which run and what s
   });
   expect(red).toContain('summary: main is red: lint fails on dev.');
   expect(red).toContain(more);
-  const lost = text({ type: 'owner_lost', ...run, observedStatus: 'running' });
+  const lost = text({ type: 'owner_lost', ...run, observedStatus: 'running', item: 'issue-7' });
   expect(lost).toContain(more);
+  expect(lost).toContain('item issue-7');
+  expect(lost).toContain('archon workflow resume run-1');
   expect(lost).toContain('archon workflow abandon run-1');
+  // The list's item for the same holder names its item and both actions too.
+  const listed = opened({
+    ...base,
+    kind: 'owner_lost',
+    ref: 'run-1',
+    item: { id: 'item-row', projectKey: 'acme/web', key: 'issue-7' },
+    run: held,
+    observedStatus: 'paused',
+  });
+  expect(listed).toContain('item issue-7');
+  expect(listed).toContain('archon workflow resume run-1');
+  expect(listed).toContain('archon workflow abandon run-1');
   // A run that ended well needs nobody, so it points nowhere.
   expect(
     text({ type: 'terminal', ...run, status: 'completed', outcome: null, cause: null })

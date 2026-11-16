@@ -1394,8 +1394,19 @@ describe('watchAttentionQueue', () => {
     const orphan = await running(store);
     const healthy = await running(store, 'beta');
     const watched: string[] = [];
+    // The orphan holds an item; the file store keeps none, so the reads give it one.
+    const item = { id: 'item-row', projectKey: '_cwd/alpha', key: 'issue-7' };
+    const onItem = <Run extends { id: string }>(run: Run) =>
+      run.id === orphan ? { ...run, item_id: item.id } : run;
+    const withItem: IWorkflowStore = Object.assign(Object.create(store), {
+      listWorkflowRuns: async (options: Parameters<IWorkflowStore['listWorkflowRuns']>[0]) => {
+        const page = await store.listWorkflowRuns(options);
+        return { ...page, runs: page.runs.map(onItem) };
+      },
+      getItem: async (id: string) => (id === item.id ? item : null),
+    });
     const stream = await watch(
-      store,
+      withItem,
       {},
       {
         ...host,
@@ -1409,6 +1420,7 @@ describe('watchAttentionQueue', () => {
     expect(await stream.next(ofRun(orphan, 'owner_lost'))).toMatchObject({
       observedStatus: 'running',
       project: { key: '_cwd/alpha' },
+      item: 'issue-7',
     });
     await Bun.sleep(30);
     await stream.close();

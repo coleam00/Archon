@@ -35,17 +35,15 @@ import { readResourceStartReceiptId, startCause, startCauseSchema } from './sche
 import type { IWorkflowStore } from './store';
 import { awaitingExecution, type ResourceStartRequestInspection } from './resource-start-store';
 import { holdsItem, itemHolder, itemHolders } from './item-hold';
-import {
-  runOwnerObservationSchema,
-  type RunOwnerObservation,
-} from './schemas/workflow-run-listing';
+import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 
 /**
  * The run of the same workflow that holds the item, which a start waits behind or was
  * refused for. `owner` is what the reading process observes about that run's execution
- * owner while it is running (`unreachable`: its owner is gone, and only an operator's
- * `archon workflow resume` or `archon workflow abandon` moves it); null when the run is not
- * running or the reader observes no owners. The engine never ends that run by itself.
+ * owner while its state needs one (`observeRunOwner`: running, or paused on a sub-run that
+ * runs in its process). `unreachable`: its owner is gone, and only an operator's
+ * `archon workflow resume` or `archon workflow abandon` moves it. Null when the run needs
+ * no owner now or the reader observes no owners. The engine never ends that run by itself.
  */
 export const itemHeldBehindSchema = z.object({
   runId: z.string(),
@@ -164,8 +162,6 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getResourceStartRequest'
       | 'listItemStartRequests'
     >;
-  /** What this process observes about a running run's owner. Without it `owner` is null. */
-  observeOwner?: (run: WorkflowRun) => Promise<RunOwnerObservation | null>;
 }
 
 async function itemRun(
@@ -219,8 +215,7 @@ async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly 
         runId,
         workflow: run.workflow_name,
         status: run.status,
-        owner:
-          run.status === 'running' && source.observeOwner ? await source.observeOwner(run) : null,
+        owner: source.ownerLost === undefined ? null : await source.ownerLost.observe(run),
       }))();
       behind.set(runId, read);
     }
@@ -293,8 +288,11 @@ export async function readItem(
     ...own.degraded.map(report => report.runId),
     ...found.descendantIds,
   ]);
-  // The one queue reader, so a question here reads as `workflow attention` lists it.
-  const { values, degraded } = splitAttentionRead(await listAttentionQueue(source));
+  // The one queue reader, so a question here reads as `workflow attention` lists it. A
+  // holder whose owner is gone is reported on the start held behind it, not as a question.
+  const { values, degraded } = splitAttentionRead(
+    await listAttentionQueue({ ...source, ownerLost: undefined })
+  );
   const questions = values
     .filter(item => isHeldByRun(item) && tree.has(item.run.id))
     .sort(compareAge);
