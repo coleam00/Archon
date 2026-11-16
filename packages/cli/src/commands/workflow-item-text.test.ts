@@ -13,6 +13,7 @@ const read: ItemRead = {
       startedAt: '2026-11-01T09:00:00.000Z',
       completedAt: '2026-11-01T09:30:00.000Z',
       cause: null,
+      awaitingExecution: null,
     },
   ],
   questions: [

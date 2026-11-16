@@ -1,15 +1,15 @@
 /**
- * The moment a run ends, the process that ended it drains its own trigger host, so a
- * start that end caused, or one queued behind the slot it released, is admitted with no
- * other command.
+ * The moment a run ends, the process that ended it starts the starts that end caused, on
+ * the host each binding names, and drains its own trigger host when it serves one, so a
+ * start queued behind the slot it released is admitted with no other command.
  *
- * Only the process's own host: a binding names the host it executes on, and starting
- * another host's work here would run it where its binding did not ask. Another host's
+ * It never drains a host it does not serve beyond its own run's starts: another host's
  * queue is that host's to drain. Nothing here is needed for correctness: the starts are
- * durable, and a crash before the drain leaves them for the host's next drain.
+ * durable, and a crash before this leaves them for their host's next drain.
  */
 import { createLogger } from '@archon/paths';
 import type { IWorkflowStore } from '@archon/workflows/store';
+import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 
 const log = createLogger('run-end-drain');
 
@@ -24,26 +24,31 @@ export type TerminalWriters = Pick<
 >;
 
 /**
- * `store` with every terminal writer followed, when it won, by `afterRunEnded`. The end
- * is already durable when it is called, so a failure there is logged with the run and
- * never thrown: the caller's run did end.
+ * `store` with every terminal writer followed, when it won, by `afterRunEnded`, given the
+ * starts a completion wrote (none for any other end). The end is already durable when it
+ * is called, so a failure there is logged with the run and never thrown: the caller's run
+ * did end.
  */
 export function drainAfterRunEnds<S extends TerminalWriters>(
   store: S,
-  afterRunEnded: (runId: string) => Promise<void>
+  afterRunEnded: (runId: string, caused: readonly SourceReceiptAcceptance[]) => Promise<void>
 ): S {
-  const after = async (runId: string): Promise<void> => {
+  const after = async (
+    runId: string,
+    caused: readonly SourceReceiptAcceptance[] = []
+  ): Promise<void> => {
     try {
-      await afterRunEnded(runId);
+      await afterRunEnded(runId, caused);
     } catch (error) {
       log.error({ err: error as Error, workflowRunId: runId }, 'run_end_drain.failed');
     }
   };
   return {
     ...store,
-    completeWorkflowRun: async (id, ...rest) => {
-      await store.completeWorkflowRun(id, ...rest);
-      await after(id);
+    completeWorkflowRun: async (id, completion, metadata, result) => {
+      // A completion that lost throws, so only a won one writes and starts its receipts.
+      await store.completeWorkflowRun(id, completion, metadata, result);
+      await after(id, result?.startReceipts);
     },
     failWorkflowRun: async (id, ...rest) => {
       const result = await store.failWorkflowRun(id, ...rest);

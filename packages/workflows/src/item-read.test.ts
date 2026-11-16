@@ -132,6 +132,7 @@ const source: ItemReadSource = {
     getWorkflowRunForAttention: async id => runs.get(id) ?? null,
     getCodebase: async () => null,
     getItem: async () => null,
+    getResourceStartRequest: async () => null,
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
         ? {
@@ -164,6 +165,7 @@ describe('reading an item', () => {
         startedAt: '2026-11-01T09:00:00.000Z',
         completedAt: '2026-11-01T09:30:00.000Z',
         cause: null,
+        awaitingExecution: null,
       },
       {
         id: 'second',
@@ -173,6 +175,7 @@ describe('reading an item', () => {
         startedAt: '2026-11-01T11:00:00.000Z',
         completedAt: null,
         cause: { kind: 'run_ended', runId: 'first' },
+        awaitingExecution: null,
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the

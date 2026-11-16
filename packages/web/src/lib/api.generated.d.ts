@@ -7309,6 +7309,10 @@ export interface components {
               sourceInstanceId: string;
             }
           | unknown;
+        awaitingExecution: {
+          requestId: string;
+          hostId: string;
+        } | null;
       }[];
       questions: (
         | {

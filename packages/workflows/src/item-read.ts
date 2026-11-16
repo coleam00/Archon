@@ -25,6 +25,7 @@ import {
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
+import { awaitingExecution } from './resource-start-store';
 
 export const itemRunSchema = z.object({
   id: z.string(),
@@ -41,6 +42,12 @@ export const itemRunSchema = z.object({
    * by hand, which has no receipt.
    */
   cause: startCauseSchema.nullable(),
+  /**
+   * Set while the run's start is admitted but no executor has claimed it. If the process
+   * that admitted it died, it stays set until an operator runs it once:
+   * `archon trigger execute <requestId> --host <hostId>`.
+   */
+  awaitingExecution: z.object({ requestId: z.string(), hostId: z.string() }).nullable(),
 });
 export type ItemRun = z.infer<typeof itemRunSchema>;
 
@@ -97,13 +104,19 @@ export type ItemRead = z.infer<typeof itemReadSchema>;
 
 export interface ItemReadSource extends AttentionQueueSource {
   store: AttentionQueueSource['store'] &
-    Pick<IWorkflowStore, 'getItemRuns' | 'listEventsForRuns' | 'getStartReceipt'>;
+    Pick<
+      IWorkflowStore,
+      'getItemRuns' | 'listEventsForRuns' | 'getStartReceipt' | 'getResourceStartRequest'
+    >;
 }
 
 async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRun> {
   // The receipt stays the one owner of why a start happened; this only reads it.
   const receiptId = readResourceStartReceiptId(run.metadata);
   const receipt = receiptId ? await source.store.getStartReceipt(receiptId) : null;
+  // Only a start from a receipt is executed by another process; only a pending run waits.
+  const request =
+    receipt && run.status === 'pending' ? await source.store.getResourceStartRequest(run.id) : null;
   return {
     id: run.id,
     workflow: run.workflow_name,
@@ -112,6 +125,7 @@ async function itemRun(source: ItemReadSource, run: WorkflowRun): Promise<ItemRu
     startedAt: run.started_at.toISOString(),
     completedAt: run.completed_at?.toISOString() ?? null,
     cause: receipt ? startCause(receipt) : null,
+    awaitingExecution: awaitingExecution(request),
   };
 }
 

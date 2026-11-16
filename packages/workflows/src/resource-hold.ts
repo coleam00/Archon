@@ -91,7 +91,7 @@ export async function holdWorkflowResource(
     }
     if (!blocker) return undefined;
     const held = `${blocker.kind === 'run' ? 'held by run' : 'behind queued start'} ${blocker.id}`;
-    if (noWait) return refuse(noWaitRefusal(resource, blocker, held));
+    if (noWait) return refuse(`Resource '${resource}' is full (${held}); the start does not wait.`);
     if (!announced) {
       announced = true;
       getLog().info({ workflowRunId: workflowRun.id, resource, blocker }, 'workflow.resource_wait');
@@ -103,16 +103,6 @@ export async function holdWorkflowResource(
     }
     await Bun.sleep(RESOURCE_WAIT_POLL_MS);
   }
-}
-
-/**
- * Why a `--no-wait` start is refused. A queued start ahead blocks a new one whether or
- * not a slot is free, so only a blocking run means the resource is full.
- */
-function noWaitRefusal(resource: string, blocker: ResourceBlocker, held: string): string {
-  return blocker.kind === 'run'
-    ? `Resource '${resource}' is full (${held}); the start does not wait.`
-    : `Resource '${resource}' has a start queued ahead of this one (${held}); the start does not wait.`;
 }
 
 /**

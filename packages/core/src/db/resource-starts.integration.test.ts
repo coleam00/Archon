@@ -34,6 +34,7 @@ import {
   resumeWorkflowRun,
   WorkflowResourceBusyError,
 } from './workflows';
+import { getItemRuns } from './items';
 
 let root = '';
 const CODEBASE_ID = '33333333-3333-4333-8333-333333333333';
@@ -1093,6 +1094,90 @@ describe('durable resource starts', () => {
     ).rejects.toThrow('not in running state');
     expect(await getStartReceipt(second.receipt.id)).toBeNull();
     expect((await listStartReceipts()).map(row => row.id)).toEqual([first.receipt.id]);
+  });
+
+  test('a start a completion wrote before its process died is prepared once by the next drains', async () => {
+    const { claimStartBindingPreparation, listPendingStartBindings } = createWorkflowStore();
+    const ended = '0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e';
+    await admitResourceStart({
+      resource: 'stage-a',
+      capacity: 1,
+      hostId: 'host',
+      overlap: 'queue',
+      launch: launch(ended),
+    });
+    await claimPendingWorkflowRun(ended);
+    const receiptId = crypto.randomUUID();
+    // The completion commits its start; nothing after it runs, as when the process dies.
+    await completeWorkflowRun(ended, { duration_ms: 1 }, undefined, {
+      outcome: { kind: 'enum', value: 'planned' },
+      startReceipts: [
+        {
+          receipt: {
+            id: receiptId,
+            sourceInstanceId: 'stage-b-after-a',
+            deliveryId: ended,
+            contentDigest: 'digest',
+            receivedAt: new Date().toISOString(),
+            occurredAt: null,
+            sourceActor: { source: 'archon-run-ended', id: ended, display: 'planned' },
+          },
+          outcome: 'matched',
+          bindings: [
+            {
+              bindingId: 'stage-b',
+              bindingRevision: 'r1',
+              hostId: 'host',
+              runAsUserId: '22222222-2222-4222-8222-222222222222',
+              resource: 'stage-b',
+              overlap: 'queue',
+              launch: {
+                cwd: '/tmp/test',
+                workflowName: 'b',
+                inputs: {},
+                isolation: { kind: 'in-place' },
+              },
+            },
+          ],
+        },
+      ],
+    });
+    // The restarted host's next drain finds it; a second drain at the same time cannot
+    // claim it again, and once prepared it is no longer pending.
+    expect(await listPendingStartBindings({ hostId: 'host' })).toMatchObject([
+      { receiptId, bindingId: 'stage-b', status: 'pending' },
+    ]);
+    const identity = (ownerId: string) => ({ receiptId, bindingId: 'stage-b', ownerId });
+    expect(await claimStartBindingPreparation(identity('first'))).toBe(true);
+    expect(await claimStartBindingPreparation(identity('second'))).toBe(false);
+    const prepared = launch(crypto.randomUUID());
+    expect(
+      await completeStartBindingPreparation({ ...identity('first'), launch: prepared })
+    ).toMatchObject({ status: 'admitted' });
+    expect(await listPendingStartBindings({ hostId: 'host' })).toEqual([]);
+    expect(await claimStartBindingPreparation(identity('third'))).toBe(false);
+  });
+
+  test('an item lists runs that started in the same second in the order they were written', async () => {
+    const db = getDatabase();
+    await db.query(
+      "INSERT INTO remote_agent_items (project_key, key) VALUES ('acme/web', 'issue-1')"
+    );
+    const item = await db.query<{ id: string }>(
+      "SELECT id FROM remote_agent_items WHERE key = 'issue-1'"
+    );
+    // Written first, but its id sorts last; both start in one SQLite second.
+    const ids = ['ffffffff-ffff-4fff-8fff-ffffffffffff', '00000000-0000-4000-8000-000000000000'];
+    for (const id of ids)
+      await db.query(
+        `INSERT INTO remote_agent_workflow_runs
+           (id, conversation_id, workflow_name, user_message, status, started_at, item_id)
+         VALUES ($1, '11111111-1111-4111-8111-111111111111', 'test', '', 'completed',
+                 '2026-11-16 09:00:00', $2)`,
+        [id, item.rows[0]?.id]
+      );
+    const found = await getItemRuns('acme/web', 'issue-1');
+    expect(found?.runs.map(run => ('id' in run ? run.id : run.runId))).toEqual(ids);
   });
 
   test('the install config beats a declared capacity, which beats the default of 1', async () => {

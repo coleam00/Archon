@@ -139,7 +139,28 @@ export async function finishRun(
       ? { outcome: outcome.outcome, ...(startReceipts.length > 0 ? { startReceipts } : {}) }
       : undefined
   );
+  await reportUnstartedStages(ctx, startReceipts);
   return terminal.output;
+}
+
+/**
+ * A binding that matched this end but could not start its stage (its result pointer did
+ * not resolve) is recorded on its receipt; say so where the run ends, so the completion
+ * does not read as a hand-off that happened.
+ */
+async function reportUnstartedStages(
+  ctx: RunTerminalContext,
+  receipts: readonly SourceReceiptAcceptance[]
+): Promise<void> {
+  for (const accepted of receipts) {
+    if (accepted.outcome === 'matched') continue;
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      `\u26a0\ufe0f The next stage was not started: ${accepted.reason ?? 'its binding was rejected'}. Receipt ${accepted.receipt.id} records it (archon trigger inspect ${accepted.receipt.id}). After fixing the trigger, start the stage with archon trigger fire.`,
+      { workflowId: ctx.workflowRun.id }
+    );
+  }
 }
 
 /**

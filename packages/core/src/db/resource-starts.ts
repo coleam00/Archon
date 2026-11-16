@@ -127,7 +127,8 @@ async function admitResourceStartWithQuery(
   const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
   const blocker = resourceStartBlocker(
     await resourceStartOccupancy(query, intent.resource, capacity),
-    launch
+    launch,
+    intent.hostId
   );
   const status = blocker && intent.overlap === 'skip' ? 'skipped' : 'queued';
   await query(
@@ -235,7 +236,8 @@ export async function admitPendingRun(input: {
     if (status !== 'pending') throw new Error(`Run '${id}' is ${status ?? 'missing'}, not pending`);
     const blocker = resourceStartBlocker(
       await resourceStartOccupancy(query, input.resource, capacity),
-      launch
+      launch,
+      DIRECT_START_HOST_ID
     );
     if (blocker) return blocker;
     await query(

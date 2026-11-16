@@ -123,9 +123,16 @@ describe('run-ended starts', () => {
     expect(receipt?.bindings[0]?.bindingRevision).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  test('the stage started is the one the binding names, whatever the ended run returned', async () => {
+    const starts = await triggersWith({ 'build.json': trigger() });
+    const [receipt] = await starts(
+      facts({ result: { outcome: 'planned', plan: 'p', next: 'deploy', workflow: 'deploy' } })
+    );
+    expect(receipt?.bindings.map(binding => binding.launch.workflowName)).toEqual(['build']);
+  });
+
   test.each([
     ['a run with no item', facts({ run: endedRun({ item_id: null }) })],
-    ['a child run', facts({ run: endedRun({ parent_run_id: 'parent' }) })],
     ['another workflow', facts({ run: endedRun({ workflow_name: 'review' }) })],
     ['another outcome', facts({ outcome: { kind: 'enum', value: 'blocked' } })],
   ])('%s starts nothing', async (_label, ended) => {
@@ -164,19 +171,17 @@ describe('run-ended starts', () => {
         },
       }),
     });
-    expect(await starts(facts())).toMatchObject([
-      {
-        outcome: 'unmatched',
-        bindings: [],
-        evaluatedBindings: [
-          {
-            bindingId: 'build',
-            status: 'rejected',
-            reason: "Input 'plan': result pointer '/missing' did not resolve",
-          },
-        ],
-      },
-    ]);
+    const [receipt, ...rest] = await starts(facts());
+    expect(rest).toEqual([]);
+    expect(receipt).toMatchObject({
+      outcome: 'unmatched',
+      bindings: [],
+      evaluatedBindings: [{ bindingId: 'build', status: 'rejected' }],
+    });
+    // The receipt itself carries why, so `trigger list` shows it: the file and the pointer.
+    expect(receipt?.reason).toContain('build.json');
+    expect(receipt?.reason).toContain('/missing');
+    expect(receipt?.evaluatedBindings?.[0]?.reason).toContain('/missing');
   });
 
   test.each([
@@ -185,38 +190,35 @@ describe('run-ended starts', () => {
       {
         runEnded: { workflowName: 'plan', outcome: 'planned', inputs: { x: { input: 'secret' } } },
       },
-      "reads 'secret', which 'plan' does not declare",
+      'secret',
     ],
     [
       'names an outcome the ended workflow cannot complete with',
       { runEnded: { workflowName: 'plan', outcome: 'plannned' } },
-      "outcome 'plannned' is not one 'plan' completes with",
+      'plannned',
     ],
-  ])('a binding that %s is refused naming its file', async (_label, on, message) => {
+  ])('a binding that %s is refused naming its file', async (_label, on, offending) => {
     const starts = await triggersWith({ 'build.json': trigger({ on }) });
     const refused = starts(facts());
-    await expect(refused).rejects.toThrow(message);
+    await expect(refused).rejects.toThrow(offending);
     await expect(refused).rejects.toThrow('build.json');
   });
 
   test.each([
-    [
-      'a file that is not JSON',
-      { 'broken.json': '{ not json' },
-      'broken.json is not readable JSON',
-    ],
+    ['a file that is not JSON', { 'broken.json': '{ not json' }, ['broken.json']],
     [
       'an invalid on.runEnded',
       { 'build.json': trigger({ on: { runEnded: { workflowName: 'plan' } } }) },
-      'build.json is invalid',
+      ['build.json', 'on.runEnded.outcome'],
     ],
     [
       'two files with one source',
       { 'a.json': trigger(), 'b.json': trigger() },
-      "share sourceInstanceId 'build-after-plan'",
+      ['a.json', 'b.json', 'build-after-plan'],
     ],
-  ])('%s fails the read loudly', async (_label, files, message) => {
+  ])('%s fails the read loudly', async (_label, files, named) => {
     const starts = await triggersWith(files);
-    await expect(starts(facts())).rejects.toThrow(message);
+    const refused = starts(facts());
+    for (const name of named) await expect(refused).rejects.toThrow(name);
   });
 });

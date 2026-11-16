@@ -10,6 +10,7 @@ import {
   mkdtempSync,
   readFileSync,
   realpathSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -33,8 +34,16 @@ interface Fixture {
   cli: (args: string[], env?: Record<string, string>) => Promise<string>;
   /** Run the CLI and return its exit code and output, whether or not it succeeded. */
   attempt: (args: string[]) => Promise<{ exitCode: number; stdout: string; stderr: string }>;
+  /** Start the CLI without waiting for it; the caller awaits `exited`. */
+  start: (args: string[]) => { exited: Promise<number> };
   rows: <T>(sql: string) => T[];
-  fireConfig: (name: string, workflowName: string, resource: string, capacity?: number) => string;
+  fireConfig: (
+    name: string,
+    workflowName: string,
+    resource: string,
+    capacity?: number,
+    hostId?: string
+  ) => string;
   /** Write a run-ended binding where the ending process reads it. */
   bind: (name: string, file: Record<string, unknown>) => void;
   userId: string;
@@ -42,8 +51,6 @@ interface Fixture {
 
 // Stage A returns a named outcome and a plan derived from its input, so B's `plan` (read
 // from the result) differs from A's `plan` input; no node fires anything.
-// Both stages take a second, so on SQLite, whose start times have one-second resolution,
-// each run starts in a later second than the one before it and the order reads true.
 const STAGE_A = `name: stage-a
 description: Plan an item.
 mutates_checkout: false
@@ -54,7 +61,6 @@ returns: { node: decide, outcome: outcome }
 nodes:
   - id: decide
     bash: |
-      sleep 1
       printf '{"outcome": "planned", "plan": "planned: %s"}' "$INPUTS_PLAN"
     output_format:
       type: object
@@ -72,7 +78,26 @@ inputs:
   issue: { required: true }
 nodes:
   - id: build
-    bash: sleep 1; echo "building $INPUTS_PLAN"
+    bash: echo "building $INPUTS_PLAN"
+`;
+
+// Holds a slot of resource 'pool' until the test writes \`release\`.
+const HELD = `name: held
+description: Hold the pool slot until released.
+resource: pool
+mutates_checkout: false
+nodes:
+  - id: hold
+    bash: touch held-started; while [ ! -f release ]; do sleep 0.1; done
+`;
+
+const QUICK = `name: quick
+description: Take a pool slot briefly.
+resource: pool
+mutates_checkout: false
+nodes:
+  - id: work
+    bash: echo ran >> quick-ran
 `;
 
 const POOL = `name: pool-work
@@ -93,13 +118,12 @@ async function makeFixture(label: string): Promise<Fixture> {
   writeFileSync(join(workflows, 'stage-a.yaml'), STAGE_A);
   writeFileSync(join(workflows, 'stage-b.yaml'), STAGE_B);
   writeFileSync(join(workflows, 'pool-work.yaml'), POOL);
+  writeFileSync(join(workflows, 'held.yaml'), HELD);
+  writeFileSync(join(workflows, 'quick.yaml'), QUICK);
   expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
 
-  const attempt = async (
-    args: string[],
-    env: Record<string, string> = {}
-  ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
-    const child = Bun.spawn([process.execPath, CLI_PATH, ...args], {
+  const spawnCli = (args: string[], env: Record<string, string> = {}) =>
+    Bun.spawn([process.execPath, CLI_PATH, ...args], {
       cwd: projectRoot,
       env: {
         ...process.env,
@@ -117,6 +141,11 @@ async function makeFixture(label: string): Promise<Fixture> {
       stdout: 'pipe',
       stderr: 'pipe',
     });
+  const attempt = async (
+    args: string[],
+    env: Record<string, string> = {}
+  ): Promise<{ exitCode: number; stdout: string; stderr: string }> => {
+    const child = spawnCli(args, env);
     const [exitCode, stdout, stderr] = await Promise.all([
       child.exited,
       new Response(child.stdout).text(),
@@ -149,11 +178,12 @@ async function makeFixture(label: string): Promise<Fixture> {
     bindingId: string,
     workflowName: string,
     resource: string,
-    capacity?: number
+    capacity?: number,
+    hostId = HOST
   ) => ({
     bindingId,
     bindingRevision: null,
-    hostId: HOST,
+    hostId,
     runAsUserId: userId,
     resource,
     ...(capacity === undefined ? {} : { capacity }),
@@ -166,16 +196,20 @@ async function makeFixture(label: string): Promise<Fixture> {
     archonHome,
     cli,
     attempt,
+    start: args => {
+      const child = spawnCli(args);
+      return { exited: child.exited };
+    },
     rows,
     userId,
-    fireConfig: (name, workflowName, resource, capacity) => {
+    fireConfig: (name, workflowName, resource, capacity, hostId) => {
       const path = join(root, `${name}.json`);
       writeFileSync(
         path,
         JSON.stringify({
           version: 1,
           sourceInstanceId: name,
-          binding: binding(name, workflowName, resource, capacity),
+          binding: binding(name, workflowName, resource, capacity, hostId),
         })
       );
       return path;
@@ -212,8 +246,9 @@ interface RunRow {
   metadata: string;
 }
 
+// The order `workflow runs --item` reads: start time, then the order the rows were written.
 const RUNS_SQL =
-  'SELECT id, workflow_name, status, metadata FROM remote_agent_workflow_runs ORDER BY started_at, id';
+  'SELECT id, workflow_name, status, metadata FROM remote_agent_workflow_runs ORDER BY started_at, rowid';
 
 function completedRuns(fixture: Fixture, count: number): RunRow[] | undefined {
   const runs = fixture.rows<RunRow>(RUNS_SQL);
@@ -288,58 +323,106 @@ describe('a run-ended binding', () => {
     );
   }, 90_000);
 
-  test('a start the end caused survives a process that never drained, and starts exactly once', async () => {
-    const fixture = await makeFixture('crash');
+  test('a hand run with no trigger host starts the stage its end caused, with no other command', async () => {
+    const fixture = await makeFixture('hand');
     fixture.bind('build-after-plan', RUN_ENDED);
-    // Register the project with a first fired A; its end starts a B in the usual way.
-    const fireA = fixture.fireConfig('plan', 'stage-a', 'stage-a');
-    const inputs = join(fixture.root, 'inputs.json');
-    writeFileSync(inputs, JSON.stringify({ plan: 'p1', issue: 'i1' }));
-    await fixture.cli([
-      'trigger',
-      'fire',
-      '--config',
-      fireA,
-      '--item',
-      'issue-1',
-      '--inputs',
-      inputs,
-    ]);
-    await waitFor(() => completedRuns(fixture, 2), 'the first A and B');
-
-    // A hand start serves no trigger host: it ends A and writes the start, then exits
-    // without a drain, the state a process killed after the commit leaves behind.
     await fixture.cli([
       'workflow',
       'run',
       'stage-a',
       '--no-worktree',
       '--item',
-      'issue-2',
+      'issue-1',
       '--input',
-      'plan=p2',
+      'plan=p1',
       '--input',
-      'issue=i2',
+      'issue=i1',
     ]);
-    const pending = () =>
-      fixture.rows<{ preparation_status: string }>(
-        `SELECT b.preparation_status FROM remote_agent_start_receipt_bindings b
-           JOIN remote_agent_start_receipts r ON r.id = b.receipt_id
-           WHERE r.item_key = 'issue-2'`
-      );
-    expect(pending()).toEqual([{ preparation_status: 'pending' }]);
-    expect(
-      fixture.rows<RunRow>(RUNS_SQL).filter(run => run.workflow_name === 'stage-b')
-    ).toHaveLength(1);
+    const runs = await waitFor(() => completedRuns(fixture, 2), 'A and the B its end started');
+    expect(runs.map(run => run.workflow_name)).toEqual(['stage-a', 'stage-b']);
+  }, 90_000);
 
-    // The host's next drains start it, once.
+  test('a start admitted by a process that died before spawning it is shown, and runs once by hand', async () => {
+    const fixture = await makeFixture('stranded');
+    fixture.bind('build-after-plan', RUN_ENDED);
+    // The ending process admits B, then cannot spawn B's executor because its log
+    // directory is a file: the state a process killed between admission and spawn leaves.
+    const logs = join(fixture.archonHome, 'logs');
+    writeFileSync(logs, '');
+    await fixture.cli([
+      'workflow',
+      'run',
+      'stage-a',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    const stageB = () =>
+      fixture.rows<RunRow>(RUNS_SQL).filter(run => run.workflow_name === 'stage-b');
+    const [stranded] = stageB();
+    expect(stageB().map(run => run.status)).toEqual(['pending']);
+    if (!stranded) throw new Error('stage B was not admitted');
+
+    // A drain does not guess that the admitting process is gone.
     await fixture.cli(['trigger', 'drain', '--host', HOST]);
-    await fixture.cli(['trigger', 'drain', '--host', HOST]);
-    const runs = await waitFor(() => completedRuns(fixture, 4), 'the recovered B');
-    expect(runs.filter(run => run.workflow_name === 'stage-b')).toHaveLength(2);
-    await fixture.cli(['trigger', 'drain', '--host', HOST]);
-    await Bun.sleep(500);
-    expect(fixture.rows<RunRow>(RUNS_SQL)).toHaveLength(4);
+    expect(stageB().map(run => run.status)).toEqual(['pending']);
+
+    // Where an operator looks, the start is shown with the command that runs it.
+    const waiting = { requestId: stranded.id, hostId: HOST };
+    const read = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'issue-1', '--json']))
+    );
+    expect(read.runs.map(run => run.awaitingExecution)).toEqual([null, waiting]);
+    expect(await fixture.cli(['workflow', 'runs', '--item', 'issue-1'])).toContain(
+      `archon trigger execute ${stranded.id} --host ${HOST}`
+    );
+    const listed = JSON.parse(await fixture.cli(['trigger', 'list'])) as {
+      awaitingExecution: unknown[];
+    }[];
+    expect(listed.flatMap(receipt => receipt.awaitingExecution)).toEqual([waiting]);
+
+    rmSync(logs);
+    await fixture.cli(['trigger', 'execute', stranded.id, '--host', HOST]);
+    expect(
+      (await fixture.attempt(['trigger', 'execute', stranded.id, '--host', HOST])).exitCode
+    ).not.toBe(0);
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(run => [run.workflow_name, run.status])).toEqual([
+      ['stage-a', 'completed'],
+      ['stage-b', 'completed'],
+    ]);
+  }, 90_000);
+
+  test('a result pointer that does not resolve is reported where the run ends and in trigger list', async () => {
+    const fixture = await makeFixture('pointer');
+    fixture.bind('build-after-plan', {
+      runEnded: { ...RUN_ENDED.runEnded, inputs: { plan: { result: '/missing' } } },
+    });
+    const ended = await fixture.cli([
+      'workflow',
+      'run',
+      'stage-a',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'plan=p1',
+      '--input',
+      'issue=i1',
+    ]);
+    expect(ended).toContain('/missing');
+    expect(ended).toContain('not started');
+    const [receipt, ...rest] = JSON.parse(await fixture.cli(['trigger', 'list'])) as {
+      outcome: string;
+      reason: string | null;
+    }[];
+    expect(rest).toEqual([]);
+    expect(receipt?.outcome).toBe('unmatched');
+    expect(receipt?.reason).toContain('/missing');
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(run => run.workflow_name)).toEqual(['stage-a']);
   }, 90_000);
 
   test('a binding that names a missing stage is refused before the stage feeding it runs', async () => {
@@ -392,5 +475,41 @@ describe('a run end on a trigger host', () => {
       'all six starts to run to their end'
     );
     expect(runs).toHaveLength(6);
+  }, 90_000);
+
+  test('a hand start takes a free slot even when another host has a start queued on it', async () => {
+    const fixture = await makeFixture('free-slot');
+    const held = fixture.start(['workflow', 'run', 'held', '--no-worktree']);
+    await waitFor(
+      () => (existsSync(join(fixture.projectRoot, 'held-started')) ? true : undefined),
+      'the held run to take the slot'
+    );
+    // Another host's start queues behind the held run; nothing drains that host.
+    await fixture.cli([
+      'trigger',
+      'fire',
+      '--config',
+      fixture.fireConfig('other', 'quick', 'pool', 1, 'other-host'),
+    ]);
+    const queued = () =>
+      fixture.rows<{ status: string }>(
+        "SELECT status FROM remote_agent_resource_start_requests WHERE host_id = 'other-host'"
+      );
+    expect(queued()).toEqual([{ status: 'queued' }]);
+    writeFileSync(join(fixture.projectRoot, 'release'), '');
+    expect(await held.exited).toBe(0);
+
+    // The slot is free and nothing runs: the hand start is admitted, not refused as full
+    // or left behind the other host's start, which keeps its place.
+    const started = await fixture.attempt([
+      'workflow',
+      'run',
+      'quick',
+      '--no-worktree',
+      '--no-wait',
+    ]);
+    expect(started.exitCode, started.stdout + started.stderr).toBe(0);
+    expect(readFileSync(join(fixture.projectRoot, 'quick-ran'), 'utf8')).toBe('ran\n');
+    expect(queued()).toEqual([{ status: 'queued' }]);
   }, 90_000);
 });

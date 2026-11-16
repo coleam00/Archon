@@ -45,6 +45,11 @@ export function itemReadLines(read: ItemRead): string[] {
     lines.push(
       `  ${run.id.slice(0, 8)}  ${run.status.padEnd(9)}  ${run.workflow}${outcome}  ${minute(run.startedAt)}${ended}${causeText(run.cause)}`
     );
+    const waiting = run.awaitingExecution;
+    if (waiting)
+      lines.push(
+        `            admitted, not started. If no process is running it: archon trigger execute ${waiting.requestId} --host ${waiting.hostId}`
+      );
   }
   lines.push('', 'Open questions:');
   if (read.questions.length === 0) lines.push('  none');

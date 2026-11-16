@@ -402,26 +402,20 @@ function receiptIdOfLaunch(launch: PreparedWorkflowLaunch | undefined): string |
 }
 
 /**
- * One host pass: prepare this host's pending receipt bindings, then admit its queued
- * requests while their slots have capacity. Every admitted request is handed to the
- * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run concurrently with other hosts and processes: preparation and
- * admission are claimed atomically by the store.
+ * Prepare this host's pending receipt bindings, or only those of `receiptIds`, and hand
+ * each one admitted now to the host. Failures are collected, not thrown.
  */
-export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
-  const failures: ResourceStartDrainFailure[] = [];
-  const start = async (requestId: string, receiptId?: string): Promise<void> => {
-    try {
-      await host.startAdmitted(requestId);
-    } catch (error) {
-      failures.push({ receiptId, error });
-    }
-  };
-
+async function preparePendingBindings(
+  host: ResourceStartHost,
+  failures: ResourceStartDrainFailure[],
+  receiptIds?: ReadonlySet<string>
+): Promise<void> {
   for (const binding of await host.deps.store.listPendingStartBindings({ hostId: host.hostId })) {
     if ('document' in binding) {
-      failures.push({ error: binding.error });
+      if (!receiptIds) failures.push({ error: binding.error });
       continue;
     }
+    if (receiptIds && !receiptIds.has(binding.receiptId)) continue;
     if (!binding.intent) continue;
     const identity = {
       receiptId: binding.receiptId,
@@ -436,8 +430,51 @@ export async function drainResourceStartHost(host: ResourceStartHost): Promise<v
       failures.push({ receiptId: binding.receiptId, error });
       continue;
     }
-    if (disposition.status === 'admitted') await start(disposition.requestId, binding.receiptId);
+    if (disposition.status === 'admitted')
+      await startAdmittedRequest(host, failures, disposition.requestId, binding.receiptId);
   }
+}
+
+async function startAdmittedRequest(
+  host: ResourceStartHost,
+  failures: ResourceStartDrainFailure[],
+  requestId: string,
+  receiptId: string | undefined
+): Promise<void> {
+  try {
+    await host.startAdmitted(requestId);
+  } catch (error) {
+    failures.push({ receiptId, error });
+  }
+}
+
+/**
+ * Prepare only the bindings of `receiptIds` on this host, and start the ones admitted now.
+ * The rest of the host's pending and queued work is left for the host's own drain: this
+ * is what a process that serves no host does for the starts its own run's end caused.
+ */
+export async function startReceiptBindings(
+  host: ResourceStartHost,
+  receiptIds: ReadonlySet<string>
+): Promise<void> {
+  const failures: ResourceStartDrainFailure[] = [];
+  await preparePendingBindings(host, failures, receiptIds);
+  if (failures.length > 0) throw new ResourceStartDrainError(failures);
+}
+
+/**
+ * One host pass: prepare this host's pending receipt bindings, then admit its queued
+ * requests while their slots have capacity. Every admitted request is handed to the
+ * host. A damaged receipt is reported after the pass instead of stopping it. Safe to run
+ * concurrently with other hosts and processes: preparation and admission are claimed
+ * atomically by the store.
+ */
+export async function drainResourceStartHost(host: ResourceStartHost): Promise<void> {
+  const failures: ResourceStartDrainFailure[] = [];
+  const start = (requestId: string, receiptId?: string): Promise<void> =>
+    startAdmittedRequest(host, failures, requestId, receiptId);
+
+  await preparePendingBindings(host, failures);
 
   const queued = await host.deps.store.listQueuedResourceStartsForHost(host.hostId);
   const drain = async (resource: string): Promise<void> => {

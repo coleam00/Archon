@@ -19,7 +19,11 @@ import {
   redactCredentialValues,
 } from '@archon/paths/credential-redaction';
 import { jsonValueSchema } from '@archon/workflows/output-ref';
-import { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
+import {
+  awaitingExecution,
+  SourceReceiptDigestConflictError,
+  type AwaitingExecution,
+} from '@archon/workflows/resource-start-store';
 import {
   resourceStartBindingIntentSchema,
   RUN_SOURCE_ACTOR,
@@ -120,12 +124,38 @@ async function triggerWhoami(host: WorkflowHost): Promise<void> {
   await writeJsonLine({ runAsUserId: user.id, cliIdentity: cliId });
 }
 
+/**
+ * Each receipt, with `awaitingExecution`: its starts that are admitted but whose run no
+ * executor has claimed. One stays there when the process that admitted it died before it
+ * spawned the executor; `archon trigger execute <requestId> --host <hostId>` runs it once.
+ */
 async function triggerList(host: WorkflowHost, options: TriggerOptions): Promise<void> {
+  const receipts = await host.deps.store.listStartReceipts(
+    options.limit === undefined ? undefined : Number(options.limit)
+  );
   await writeJsonLine(
-    await host.deps.store.listStartReceipts(
-      options.limit === undefined ? undefined : Number(options.limit)
+    await Promise.all(
+      receipts.map(async receipt => ({
+        ...receipt,
+        awaitingExecution: await receiptAwaitingExecution(host, receipt.id),
+      }))
     )
   );
+}
+
+async function receiptAwaitingExecution(
+  host: WorkflowHost,
+  receiptId: string
+): Promise<AwaitingExecution[]> {
+  const bindings = (await host.deps.store.getStartReceipt(receiptId))?.bindings ?? [];
+  const awaiting: AwaitingExecution[] = [];
+  for (const binding of bindings) {
+    if (binding.requestStatus !== 'admitted' || !binding.disposition) continue;
+    const request = await host.deps.store.getResourceStartRequest(binding.disposition.requestId);
+    const waiting = awaitingExecution(request);
+    if (waiting) awaiting.push(waiting);
+  }
+  return awaiting;
 }
 
 /**

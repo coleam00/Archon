@@ -150,8 +150,8 @@ export interface RunEndedStartsDependencies {
 }
 
 /**
- * The receipts the completion of `ended` causes. Only a run on an item with no parent
- * causes starts: a child's end is its parent's business. A binding matches when it names
+ * The receipts the completion of `ended` causes. Only a run on an item causes starts (a
+ * `workflow:` child is created with no item). A binding matches when it names
  * the run's workflow and outcome and launches in the item's project. Each match gets its
  * own receipt, keyed by the binding's source and the ended run, so a replayed completion
  * could never start it twice even if it reached the store.
@@ -161,7 +161,7 @@ export function createRunEndedStarts(
 ): (ended: RunEndedFacts) => Promise<SourceReceiptAcceptance[]> {
   return async ended => {
     const { run } = ended;
-    if (!run.item_id || run.parent_run_id) return [];
+    if (!run.item_id) return [];
     const candidates = (await readRunEndedBindings(dependencies.triggersDirectory())).filter(
       candidate => candidate.runEnded.workflowName === run.workflow_name
     );
@@ -215,6 +215,8 @@ function receiptFor(
     return sourceReceiptAcceptanceSchema.parse({
       receipt,
       outcome: 'unmatched',
+      // On the receipt as well as its binding, so `trigger list` shows why nothing started.
+      reason: `${candidate.file}: ${mapped.missing}; '${candidate.binding.launch.workflowName}' was not started`,
       bindings: [],
       evaluatedBindings: [
         {
@@ -290,7 +292,7 @@ export function createRunEndedPreflight(
     Pick<WorkflowDeps, 'loadConfig' | 'providers'>
 ): (run: WorkflowRun) => Promise<void> {
   return async run => {
-    if (!run.item_id || run.parent_run_id) return;
+    if (!run.item_id) return;
     const candidates = (await readRunEndedBindings(dependencies.triggersDirectory())).filter(
       candidate => candidate.runEnded.workflowName === run.workflow_name
     );
