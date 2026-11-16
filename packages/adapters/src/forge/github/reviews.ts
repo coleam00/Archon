@@ -75,14 +75,16 @@ async function readReviews(fetchImpl: Fetch, token: string, ref: PrRef): Promise
   );
 }
 
+/** The pull request's root diff comments; thread replies are left out. */
 async function readDiffComments(
   fetchImpl: Fetch,
   token: string,
   ref: PrRef
 ): Promise<DiffComment[]> {
-  return githubPages(fetchImpl, token, `${pullUrl(ref)}/comments`, value =>
+  const comments = await githubPages(fetchImpl, token, `${pullUrl(ref)}/comments`, value =>
     z.array(diffCommentSchema).parse(value)
   );
+  return comments.filter(comment => comment.in_reply_to_id == null);
 }
 
 export async function handleGithubPrReviews(
@@ -124,17 +126,15 @@ export async function handleGithubPrReviews(
         ref: request.ref,
         items: [
           ...submitted.map(item => project(item, 'review', keys.get(String(item.id)))),
-          ...comments
-            .filter(item => item.in_reply_to_id == null)
-            .map(item =>
-              project(
-                item,
-                'review_comment',
-                item.pull_request_review_id == null
-                  ? undefined
-                  : keys.get(String(item.pull_request_review_id))
-              )
-            ),
+          ...comments.map(item =>
+            project(
+              item,
+              'review_comment',
+              item.pull_request_review_id == null
+                ? undefined
+                : keys.get(String(item.pull_request_review_id))
+            )
+          ),
         ],
       },
     },
@@ -169,18 +169,24 @@ function composeBody(request: SubmitRequest, placed: readonly Placed[]): string 
   return sections.join('\n\n');
 }
 
-/** Where each request comment is, read back from the review's own diff comments. */
+/**
+ * Where each request comment is, read back from the review's own diff comments.
+ * Each diff comment answers at most one request comment, so a finding named twice
+ * needs two.
+ */
 function observedPlacement(request: SubmitRequest, comments: readonly DiffComment[]): Placed[] {
-  return request.comments.map(wanted =>
-    comments.some(
+  const unmatched = [...comments];
+  return request.comments.map(wanted => {
+    const index = unmatched.findIndex(
       comment =>
         comment.path === wanted.path &&
         comment.original_line === wanted.line &&
         comment.body === wanted.body
-    )
-      ? 'inline'
-      : 'summary'
-  );
+    );
+    if (index === -1) return 'summary';
+    unmatched.splice(index, 1);
+    return 'inline';
+  });
 }
 
 /** Whether a review holds exactly this request: its body and one inline comment per inline finding. */

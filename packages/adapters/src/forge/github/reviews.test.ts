@@ -256,6 +256,19 @@ describe('pr.review.submit', () => {
     expect(github.posts).toHaveLength(1);
   });
 
+  test('a repeat naming one posted finding twice is refused, not matched to it twice', async () => {
+    const github = reviewGitHub();
+    const a = { path: 'src/a.ts', line: 10, body: 'Finding A.' };
+    await run(
+      { ...submit, comments: [a, { path: 'src/a.ts', line: 11, body: 'Finding B.' }] },
+      github
+    );
+    expect(
+      await run({ ...submit, operationId: 'review-2', comments: [a, a] }, github)
+    ).toMatchObject({ ok: false, error: { kind: 'conflict' }, mutation: { outcome: 'refused' } });
+    expect(github.posts).toHaveLength(1);
+  });
+
   test('a review whose inline comments did not land is a verification failure naming it', async () => {
     const github = reviewGitHub({ dropComments: true });
     expect(await run(submit, github)).toMatchObject({
