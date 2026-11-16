@@ -64,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A merge-queue sweep whose gate command could not run now fails the run, naming what the gate printed, instead of recording a `wait` and completing.
 - The SDLC pack's queue questions use the wait's own `other` option. On build and pull-request items it does what the pack's own `other` choice did, and the answer must now carry text; a `merge: base` item now shows it too, and an `other` answer there holds like `hold`.
 
+### Fixed
+
+- `archon workflow run --detach` is refused with the reason (exit 1, `{ "ok": false, "error" }` under `--json`) when the run's child would refuse it before its first node: a registered `--branch` worktree on another branch or without `--from` in its history, or an `--item` run with a broken run-ended binding. It used to acknowledge a started run that the child then refused, with the reason only in the child's log. (#5783)
+
 ## [0.14.0] - 2026-11-07
 
 The SDLC pack reaches GitHub only through the forge plugin, packs can declare settings, and `archon metrics` measures the factory.
