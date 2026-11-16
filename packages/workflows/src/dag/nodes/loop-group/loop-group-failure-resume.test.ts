@@ -21,6 +21,14 @@ type FileStore = Awaited<ReturnType<typeof createFileWorkflowStore>>;
 // `count` numbers every body run in a counter file; `check` fails once, when the counter
 // reads 2, if `failOnce` is set. Resume must continue in the round it stopped in.
 function roundsGroup(group: Record<string, unknown>, failOnce: boolean): unknown {
+  return withCheck(group, {
+    bash: failOnce
+      ? 'n=$(cat counter); if [ "$n" = 2 ] && [ ! -f failed ]; then touch failed; exit 1; fi; echo "checked-$n"'
+      : 'echo "checked-$(cat counter)"',
+  });
+}
+
+function withCheck(group: Record<string, unknown>, check: Record<string, unknown>): unknown {
   return {
     id: 'rounds',
     loop_group: {
@@ -35,9 +43,7 @@ function roundsGroup(group: Record<string, unknown>, failOnce: boolean): unknown
         {
           id: 'check',
           depends_on: ['count'],
-          bash: failOnce
-            ? 'n=$(cat counter); if [ "$n" = 2 ] && [ ! -f failed ]; then touch failed; exit 1; fi; echo "checked-$n"'
-            : 'echo "checked-$(cat counter)"',
+          ...check,
         },
       ],
     },
@@ -47,6 +53,8 @@ function roundsGroup(group: Record<string, unknown>, failOnce: boolean): unknown
 interface Scenario {
   group: Record<string, unknown>;
   failOnce: boolean;
+  /** Replaces the group and adds nodes after it. */
+  nodes?: unknown[];
   /** Wraps the first run's store, to stop it at a chosen record. */
   interrupt?: (store: FileStore) => void;
   /** Edits the first run's records before the resume reads them. */
@@ -61,7 +69,9 @@ async function stopThenResume(root: string, scenario: Scenario) {
   if (!run) throw new Error('Claim failed');
   const workflow = {
     name: 'rounds',
-    nodes: [dagNodeSchema.parse(roundsGroup(scenario.group, scenario.failOnce))],
+    nodes: (scenario.nodes ?? [roundsGroup(scenario.group, scenario.failOnce)]).map(node =>
+      dagNodeSchema.parse(node)
+    ),
   };
   scenario.interrupt?.(store);
   await executeDagWorkflow(
@@ -97,6 +107,9 @@ async function stopThenResume(root: string, scenario: Scenario) {
       .filter(e => e.step_name === 'rounds.count' && e.event_type === 'node_completed')
       .map(e => readNodeRecordEvent(e)?.data.node_output?.trim()),
     lastGroupRecord: groupRecords.at(-1),
+    readerOutput: events
+      .filter(e => e.step_name === 'reader' && e.event_type === 'node_completed')
+      .map(e => readNodeRecordEvent(e)?.data.node_output?.trim()),
     messages: deliveredMessages(platform),
   };
 }
@@ -114,11 +127,7 @@ async function inTempRoot<T>(fn: (root: string) => Promise<T>): Promise<T> {
 const completesInRoundThree = { until_bash: 'test "$(cat counter)" = 4' };
 
 /** Drops the group's node_failed record, leaving it started, as a killed process would. */
-async function dropGroupFailure(
-  _store: FileStore,
-  storeRoot: string,
-  runId: string
-): Promise<void> {
+async function dropGroupFailure(_: FileStore, storeRoot: string, runId: string): Promise<void> {
   const log = join(storeRoot, 'runs', runId, 'log.jsonl');
   const lines = (await readFile(log, 'utf8')).trim().split('\n');
   let dropped = 0;
@@ -227,6 +236,34 @@ test('a group stopped after its last round finished completes on resume without 
     expect(result.iterations).toEqual([1, 2]);
     expect(result.messages).toContain("Loop-group node 'rounds' completed after 2 iterations");
     expect(result.lastGroupRecord?.data.node_output).toBe('checked-2');
+  }));
+
+test('a group stopped after it ran out of rounds keeps its last structured output on resume', () =>
+  inTempRoot(async root => {
+    const result = await stopThenResume(root, {
+      group: {},
+      failOnce: false,
+      nodes: [
+        withCheck(
+          { max_iterations: 2, on_exhausted: 'complete' },
+          {
+            bash: 'echo "{\\"outcome\\":\\"checked-$(cat counter)\\"}"',
+            output_format: { type: 'object', properties: { outcome: { type: 'string' } } },
+          }
+        ),
+        { id: 'reader', depends_on: ['rounds'], bash: 'echo "result=$rounds.output.outcome"' },
+      ],
+      // The group exhausted and completed; that completion never reaches the store.
+      ...stopAtRecord(
+        event => event.step_name === 'rounds' && event.event_type === 'node_completed'
+      ),
+    });
+    expect(result.counterAfterFirstRun).toBe('2');
+    expect(result.status).toBe('completed');
+    expect(result.counter).toBe('2');
+    expect(result.iterations).toEqual([1, 2]);
+    expect(result.lastGroupRecord?.data.structured_output).toEqual({ outcome: 'checked-2' });
+    expect(result.readerOutput).toEqual(["result='checked-2'"]);
   }));
 
 test('a group that ran out of rounds fails again on resume without a new round', () =>

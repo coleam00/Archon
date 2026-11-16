@@ -651,16 +651,25 @@ export function initialLoopGroupState(
 ): LoopGroupState {
   const { resume, bodyNodes } = run;
   const group = run.node.loop_group;
+  const prevResult =
+    loopPrevOutputs === undefined
+      ? undefined
+      : loopGroupIterationOutput(bodyNodes, loopPrevOutputs);
   return {
     loopPrevOutputs,
     lastOutput:
       loopPrevOutputs === undefined
         ? ''
-        : stripCompletionTags(
-            loopGroupIterationOutput(bodyNodes, loopPrevOutputs)?.output ?? '',
-            group.until
-          ),
-    lastStructuredOutput: undefined,
+        : stripCompletionTags(prevResult?.output ?? '', group.until),
+    // A failure or kill restores the round's payload with its text, so a group that then
+    // completes on exhaustion keeps the finished round's structured output. Pause shapes
+    // keep their existing state.
+    lastStructuredOutput:
+      resume.interruptedRound !== undefined &&
+      prevResult !== undefined &&
+      'structuredOutput' in prevResult
+        ? prevResult.structuredOutput
+        : undefined,
     lastSequentialSession: resumedSequentialSession(resume),
   };
 }
