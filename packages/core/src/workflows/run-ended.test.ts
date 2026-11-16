@@ -6,6 +6,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import type { RunEndedFacts } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { providerRegistry } from '@archon/providers';
+import type { EndedCheckout } from './ended-checkout';
 import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
 
 const track = trackTempRoots();
@@ -81,7 +82,14 @@ function trigger(fields: { cwd?: string; on?: unknown; sourceInstanceId?: string
   };
 }
 
-async function triggersWith(files: Record<string, unknown>) {
+// A binding without `checkout` never reads the ended run's checkout.
+const noCheckout = (): Promise<EndedCheckout> =>
+  Promise.reject(new Error('no binding here reads the checkout'));
+
+async function triggersWith(
+  files: Record<string, unknown>,
+  endedCheckout: (run: WorkflowRun) => Promise<EndedCheckout> = noCheckout
+) {
   const directory = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-')));
   for (const [name, value] of Object.entries(files))
     await writeFile(
@@ -92,6 +100,7 @@ async function triggersWith(files: Record<string, unknown>) {
     triggersDirectory: () => directory,
     getItem: async id => (id === ITEM.id ? ITEM : null),
     projectKeyOf: async cwd => (cwd === PROJECT_CWD ? ITEM.projectKey : 'acme/other'),
+    endedCheckout,
     now: () => new Date('2026-11-16T10:00:00.000Z'),
   });
 }
@@ -148,6 +157,7 @@ describe('run-ended starts', () => {
       triggersDirectory: () => directory,
       getItem: async () => ITEM,
       projectKeyOf: async () => ITEM.projectKey,
+      endedCheckout: noCheckout,
     };
     const noItem = endedRun({ item_id: null });
     expect(await createRunEndedStarts(dependencies)(facts({ run: noItem }))).toEqual([]);
@@ -174,6 +184,7 @@ describe('run-ended starts', () => {
       triggersDirectory: () => join(tmpdir(), `archon-no-triggers-${crypto.randomUUID()}`),
       getItem: async () => ITEM,
       projectKeyOf: async () => ITEM.projectKey,
+      endedCheckout: noCheckout,
     });
     expect(await starts(facts())).toEqual([]);
   });
@@ -248,6 +259,7 @@ describe('run-ended starts', () => {
       triggersDirectory: () => directory,
       getItem: async () => ITEM,
       projectKeyOf: () => Promise.reject(new Error('Failed to find repo root for /srv/widgets')),
+      endedCheckout: noCheckout,
     };
     for (const read of [
       () => createRunEndedStarts(dependencies)(facts()),
@@ -262,6 +274,66 @@ describe('run-ended starts', () => {
       await expect(refused).rejects.toThrow('build.json');
       await expect(refused).rejects.toThrow('Failed to find repo root');
     }
+  });
+
+  test('a binding that takes the ended checkout starts on its branch and records the commit', async () => {
+    const handoff = { runId: endedRun().id, branch: 'archon/task-plan-1', commit: 'c'.repeat(40) };
+    const reads: string[] = [];
+    const checkoutTrigger = (sourceInstanceId: string) =>
+      trigger({
+        sourceInstanceId,
+        on: { runEnded: { workflowName: 'plan', outcome: 'planned', checkout: 'ended-run' } },
+      });
+    const starts = await triggersWith(
+      { 'build.json': checkoutTrigger('build'), 'check.json': checkoutTrigger('check') },
+      async run => {
+        reads.push(run.id);
+        return { handoff };
+      }
+    );
+    const receipts = await starts(facts());
+    // Read once per completion, however many bindings take it.
+    expect(reads).toEqual([endedRun().id]);
+    for (const receipt of receipts)
+      expect(receipt).toMatchObject({
+        outcome: 'matched',
+        bindings: [
+          {
+            checkoutFrom: handoff,
+            launch: { isolation: { kind: 'worktree', branch: 'archon/task-plan-1' } },
+          },
+        ],
+      });
+  });
+
+  test('a binding whose ended run left no checkout is rejected on its receipt, naming why', async () => {
+    const starts = await triggersWith(
+      {
+        'build.json': trigger({
+          on: { runEnded: { workflowName: 'plan', outcome: 'planned', checkout: 'ended-run' } },
+        }),
+      },
+      async run => ({
+        refused: `run '${run.id}' ran in place at '/srv/widgets', so it left no branch`,
+      })
+    );
+    const [receipt] = await starts(facts());
+    expect(receipt).toMatchObject({
+      outcome: 'unmatched',
+      bindings: [],
+      evaluatedBindings: [{ bindingId: 'build', status: 'rejected' }],
+    });
+    expect(receipt?.reason).toContain('build.json');
+    expect(receipt?.reason).toContain('ran in place');
+  });
+
+  test('a fixed isolation beside checkout: ended-run is refused when the file is read', async () => {
+    const file = trigger({
+      on: { runEnded: { workflowName: 'plan', outcome: 'planned', checkout: 'ended-run' } },
+    });
+    file.binding.launch.isolation = { kind: 'in-place' };
+    const starts = await triggersWith({ 'build.json': file });
+    await expect(starts(facts())).rejects.toThrow('binding.launch.isolation');
   });
 
   // A stale file for another project must not fail item runs of its workflow here.

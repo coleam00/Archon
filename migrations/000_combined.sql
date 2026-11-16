@@ -605,6 +605,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_start_receipt_bindings (
   host_id TEXT,
   intent TEXT,
   event_input_names TEXT,
+  checkout_from TEXT,
   preparation_status VARCHAR(20) NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
   preparation_owner TEXT,
   preparation_error TEXT,
@@ -728,6 +729,9 @@ ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS origin JSONB;
 -- Names of a binding's event-derived inputs, kept beside the intent: older binaries
 -- parse `intent` strictly and would refuse an extra key.
 ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS event_input_names TEXT;
+-- A run-ended start's checkout hand-off (branch, commit, source run), kept beside the
+-- intent for the same reason.
+ALTER TABLE remote_agent_start_receipt_bindings ADD COLUMN IF NOT EXISTS checkout_from TEXT;
 
 -- The durable thing runs are about: a key within a project, and when it was first named.
 -- No status, stage or config; where an item stands is derived from its runs. project_key

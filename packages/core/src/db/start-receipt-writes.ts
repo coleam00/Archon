@@ -52,8 +52,8 @@ export async function insertStartReceipt(
   for (const binding of input.bindings) {
     await query(
       `INSERT INTO remote_agent_start_receipt_bindings
-       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,preparation_status)
-       VALUES ($1,$2,$3,$4,$5,$6,'pending')`,
+       (receipt_id,binding_id,binding_revision,host_id,intent,event_input_names,checkout_from,preparation_status)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'pending')`,
       [
         input.receipt.id,
         binding.bindingId,
@@ -81,18 +81,26 @@ export async function insertStartReceipt(
 }
 
 /**
- * Older binaries parse the `intent` column strictly, so it keeps their shape: event
+ * Older binaries parse the `intent` column strictly, so it keeps their shape. Event
  * inputs are merged into `launch.inputs` (an older binary passes them through, as it
- * always did) and their names go to `event_input_names`. `readStoredIntent` reverses it.
+ * always did) and their names go to `event_input_names`. A checkout hand-off goes to
+ * `checkout_from`; `launch.isolation` already names its branch, so an older binary starts
+ * the stage on that branch without the commit pin or a read-only copy. `readStoredIntent`
+ * reverses it.
  */
-function storableIntent(binding: ResourceStartBindingIntent): [string, string | null] {
-  const { eventInputs, ...intent } = binding;
-  if (!eventInputs || Object.keys(eventInputs).length === 0) return [JSON.stringify(intent), null];
+function storableIntent(
+  binding: ResourceStartBindingIntent
+): [string, string | null, string | null] {
+  const { eventInputs, checkoutFrom, ...intent } = binding;
+  const handoff = checkoutFrom ? JSON.stringify(checkoutFrom) : null;
+  if (!eventInputs || Object.keys(eventInputs).length === 0)
+    return [JSON.stringify(intent), null, handoff];
   return [
     JSON.stringify({
       ...intent,
       launch: { ...intent.launch, inputs: { ...intent.launch.inputs, ...eventInputs } },
     }),
     JSON.stringify(Object.keys(eventInputs)),
+    handoff,
   ];
 }
