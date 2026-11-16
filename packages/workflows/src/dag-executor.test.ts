@@ -9004,8 +9004,9 @@ describe('executeDagWorkflow -- resume with priorCompletedNodes', () => {
         })
       );
 
-      // Enforced provider -> zero reasks, fails on the first attempt.
-      expect(mockSendQueryDag.mock.calls.length).toBe(1);
+      // Enforced provider -> one same-session reask, then fail. Not max_iterations.
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      expect(mockSendQueryDag.mock.calls[1]?.[2]).toBe('s1');
       const failed = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls.filter(
         (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
       );
@@ -13966,9 +13967,10 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
     expect(errMsg).toContain('failed schema validation');
   });
 
-  it('enforced provider does NOT reask on a validation miss (exactly one sendQuery)', async () => {
-    // Claude is 'enforced' → maxReasks = 0. A validation miss must fail on the
-    // FIRST pass — a regressed gate would silently make 4 API calls per miss.
+  it('enforced provider reasks once on the same session, then fails', async () => {
+    // Claude/Codex are 'enforced' → one continuation, not the best-effort 3.
+    // A still-invalid second reply fails. The reask resumes the session that
+    // just replied so the model reprints JSON instead of redoing the task.
     mockSendQueryDag.mockImplementation(async function* () {
       yield { type: 'result', sessionId: 's', structuredOutput: { other: 'x' } };
     });
@@ -13984,7 +13986,7 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
         platform,
         cwd: testDir,
         workflow: {
-          name: 'enforced-no-reask',
+          name: 'enforced-one-reask',
           nodes: [
             {
               id: 'classify',
@@ -14004,12 +14006,69 @@ describe('executeDagWorkflow -- terminal node output selection', () => {
       })
     );
 
-    expect(mockSendQueryDag.mock.calls.length).toBe(1);
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    expect(mockSendQueryDag.mock.calls[1]?.[2]).toBe('s');
+    expect(String(mockSendQueryDag.mock.calls[1]?.[0])).toContain('ONLY a JSON object');
     const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
     const failed = eventCalls.find(
       (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
     );
     expect(failed).toBeDefined();
+  });
+
+  it('enforced provider: prose with no structured output recovers on the resumed session', async () => {
+    mockSendQueryDag.mockImplementationOnce(async function* () {
+      yield { type: 'assistant', content: 'All four files are in place.\n{"verdict":"review"}' };
+      yield { type: 'result', sessionId: 'sess-prose' };
+    });
+    mockSendQueryDag.mockImplementation(async function* () {
+      yield { type: 'result', sessionId: 'sess-prose', structuredOutput: { verdict: 'review' } };
+    });
+
+    const store = createMockStore();
+    const mockDeps = createMockDeps(store);
+    const platform = createMockPlatform();
+    const workflowRun = makeWorkflowRun();
+
+    await executeDagWorkflow(
+      dagOptions({
+        deps: mockDeps,
+        platform,
+        cwd: testDir,
+        workflow: {
+          name: 'enforced-reask-recovers',
+          nodes: [
+            {
+              id: 'classify',
+              kind: 'agent',
+              source: { kind: 'inline', prompt: 'decide' },
+              provider: 'claude',
+              output_format: {
+                type: 'object',
+                properties: { verdict: { type: 'string' } },
+                required: ['verdict'],
+              },
+              retry: { max_attempts: 0 },
+            },
+          ],
+        },
+        workflowRun,
+      })
+    );
+
+    expect(mockSendQueryDag.mock.calls.length).toBe(2);
+    expect(mockSendQueryDag.mock.calls[1]?.[2]).toBe('sess-prose');
+    const eventCalls = (store.createWorkflowEvent as ReturnType<typeof mock>).mock.calls;
+    const completed = eventCalls.filter(
+      (call: unknown[]) =>
+        (call[0] as Record<string, unknown>).event_type === 'node_completed' &&
+        (call[0] as Record<string, unknown>).step_name === 'classify'
+    );
+    const failed = eventCalls.filter(
+      (call: unknown[]) => (call[0] as Record<string, unknown>).event_type === 'node_failed'
+    );
+    expect(completed.length).toBe(1);
+    expect(failed.length).toBe(0);
   });
 
   it('best-effort provider: MISSING structured output triggers reask and recovers', async () => {

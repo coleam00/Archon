@@ -925,12 +925,22 @@ const DEFAULT_NODE_MAX_RETRIES = 2;
 const DEFAULT_NODE_RETRY_DELAY_MS = 3000;
 
 /**
- * Max validate-and-reask attempts for a `best-effort` provider whose structured
- * output fails schema validation (separate from transient-error retries above).
- * Enforced providers don't reask — a validation failure there is a genuine edge
- * (refusal / max_tokens truncation) and fails fast.
+ * Max validate-and-reask attempts when structured output is missing or fails the
+ * schema (separate from transient-error retries above).
+ * Best-effort providers (Pi/Copilot) have no grammar constraint, so they get
+ * several fresh-session retries. Enforced providers (Codex/Claude) are supposed
+ * to grammar-constrain decoding, but a turn can still come back as prose wrapped
+ * around JSON. They get one reask that continues the same session, so the model
+ * reprints the JSON instead of redoing the whole task.
  */
 const STRUCTURED_OUTPUT_MAX_REASKS = 3;
+const ENFORCED_STRUCTURED_OUTPUT_MAX_REASKS = 1;
+
+function structuredOutputReaskLimit(capability: 'enforced' | 'best-effort' | false): number {
+  if (capability === 'best-effort') return STRUCTURED_OUTPUT_MAX_REASKS;
+  if (capability === 'enforced') return ENFORCED_STRUCTURED_OUTPUT_MAX_REASKS;
+  return 0;
+}
 
 /**
  * Tracks live background Agent tasks within one provider stream pass (#2083).
@@ -2286,14 +2296,14 @@ async function executeNodeInternal(
   // node never masquerades as a clean success (#2083).
   let backgroundTasksIncomplete: string[] = [];
 
-  // Best-effort providers (Pi/Copilot) get a bounded validate-and-reask loop: on a
-  // structured-output validation miss, re-run the stream with the schema errors
-  // appended. Enforced providers and non-output_format nodes get 0 reasks.
-  const maxReasks =
-    getProviderCapabilities(provider).structuredOutput === 'best-effort' &&
-    nodeOptions?.outputFormat
-      ? STRUCTURED_OUTPUT_MAX_REASKS
-      : 0;
+  // output_format nodes reask when the payload is missing or schema-invalid.
+  // Best-effort: up to 3 fresh sessions. Enforced: one continuation of the
+  // session that just replied, asking for JSON only. Nodes without output_format
+  // do not reask.
+  const structuredCapability = getProviderCapabilities(provider).structuredOutput;
+  const maxReasks = nodeOptions?.outputFormat
+    ? structuredOutputReaskLimit(structuredCapability)
+    : 0;
   let accumulatedCostUsd: number | undefined;
   let accumulatedTokens: TokenUsage | undefined;
 
@@ -2903,14 +2913,17 @@ async function executeNodeInternal(
     }
   };
 
-  // Build a reask prompt: the original prompt + a correction block listing the
-  // schema errors. The provider still augments with the JSON schema itself
-  // (best-effort providers add their own JSON-only instruction), so this only
-  // appends the per-attempt feedback.
-  const buildReaskPrompt = (errors: string[]): string =>
-    `${finalPrompt}\n\n--- CORRECTION ---\n` +
-    `Your previous response did not satisfy the required JSON schema: ${errors.join('; ')}. ` +
-    'Respond again with ONLY a JSON object matching the schema — no prose, no code fences.';
+  // Build a reask prompt. The provider still sends the JSON schema itself.
+  // A fresh session needs the original task plus the correction. A continued
+  // session already has the task in the transcript; repeating it makes the model
+  // redo the work instead of reprinting the JSON.
+  const buildReaskPrompt = (errors: string[]): string => {
+    const correction =
+      `Your previous response did not satisfy the required JSON schema: ${errors.join('; ')}. ` +
+      'Respond again with ONLY a JSON object matching the schema — no prose, no code fences.';
+    if (structuredCapability === 'enforced' && newSessionId !== undefined) return correction;
+    return `${finalPrompt}\n\n--- CORRECTION ---\n${correction}`;
+  };
 
   // Observability: log every reask; notify the user once (first reask) so a
   // best-effort provider being auto-corrected isn't invisible.
@@ -2933,10 +2946,9 @@ async function executeNodeInternal(
     | (NodeExecutionResult & { state: 'completed' })
     | { state: 'failed'; output: string; error: string; failureKind: NodeFailureKind }
   > => {
-    // Validate-and-reask loop. Enforced / non-output_format nodes run exactly once
-    // (maxReasks = 0). A best-effort node whose structured output is missing or
-    // schema-invalid is re-run with the errors appended, up to maxReasks times;
-    // exhaustion (or a non-best-effort failure) throws → failed node.
+    // Validate-and-reask loop. A node whose structured output is missing or
+    // schema-invalid is re-run with the errors appended, up to maxReasks times.
+    // Exhaustion throws → failed node. Nodes without output_format run once.
     let reaskAttempt = 0;
     let reaskPrompt = finalPrompt;
     // Set up the next reask attempt (increment, augment the prompt, notify).
@@ -2946,11 +2958,17 @@ async function executeNodeInternal(
       await emitReask(reaskAttempt);
     };
     while (true) {
-      // Legacy reasks use a fresh throwaway session so an invalid turn is not carried
-      // forward. Named resume is stricter: every accepted pass must independently fork
+      // Best-effort reasks use a fresh throwaway session so an invalid turn is not
+      // carried forward. Enforced reasks continue the session that just replied:
+      // the work is already done, and the correction only asks for a JSON reprint.
+      // Named resume is stricter: every accepted pass must independently fork
       // the declared source rather than inheriting stale attestation from an earlier pass.
       const reaskResumeSessionId =
-        namedResumeSourceNodeId !== undefined || reaskAttempt === 0 ? resumeSessionId : undefined;
+        namedResumeSourceNodeId !== undefined || reaskAttempt === 0
+          ? resumeSessionId
+          : structuredCapability === 'enforced'
+            ? newSessionId
+            : undefined;
       try {
         await runStreamPass(reaskPrompt, reaskResumeSessionId);
       } finally {
@@ -5943,11 +5961,12 @@ async function executeLoopNode(
     //
     // ── Structured-output attempts (#2563) ──────────────────────────────────
     // When the node declares `output_format`, an iteration is one or more STREAM
-    // ATTEMPTS: the payload is validated against the schema, and on a best-effort
-    // provider (Pi/Copilot) a miss is re-asked with the schema errors appended, up
-    // to STRUCTURED_OUTPUT_MAX_REASKS. This mirrors executeNodeInternal's contract
-    // exactly, deliberately — a loop should not be the one node type where a
-    // structured miss behaves differently. Exhaustion FAILS the node; it is never
+    // ATTEMPTS: the payload is validated against the schema, and a miss is
+    // re-asked with the schema errors appended, up to the same limit as
+    // executeNodeInternal (best-effort: several fresh sessions; enforced: one
+    // continuation of this iteration's session). A loop should not be the one
+    // node type where a structured miss behaves differently. Exhaustion FAILS
+    // the node; it is never
     // treated as "not complete yet", which would be the silent degradation the
     // engine refuses everywhere else.
     //
@@ -6053,11 +6072,8 @@ async function executeLoopNode(
       let reaskAttempt = 0;
       let reaskErrors: string[] = [];
       const wantsStructured = resolvedOptions?.outputFormat !== undefined;
-      const maxReasks =
-        wantsStructured &&
-        getProviderCapabilities(workflowProvider).structuredOutput === 'best-effort'
-          ? STRUCTURED_OUTPUT_MAX_REASKS
-          : 0;
+      const structuredCapability = getProviderCapabilities(workflowProvider).structuredOutput;
+      const maxReasks = wantsStructured ? structuredOutputReaskLimit(structuredCapability) : 0;
 
       attempts: while (true) {
         // Per-attempt reset. A reask re-runs the stream, so anything the stream
@@ -6104,24 +6120,37 @@ async function executeLoopNode(
             { stateDir, inputs: resolveRunInputs(workflowRun), typedArtifactsFile }
           );
           const basePrompt = substituteNodeOutputRefs(substitutedPrompt, nodeOutputs);
-          // A reask re-runs this iteration's prompt with the schema errors appended, so
-          // the model is told WHAT was wrong rather than silently asked again.
+          // A reask tells the model WHAT was wrong. Enforced providers continue this
+          // iteration's session, so the correction stands alone — repeating the
+          // original prompt would make the model redo the iteration.
+          const correction =
+            `Your previous response did not match the required output schema:\n${reaskErrors.map(e => `- ${e}`).join('\n')}\n\n` +
+            'Respond again with output that satisfies the schema exactly. No prose, no code fences.';
           const finalPrompt =
             reaskAttempt === 0
               ? basePrompt
-              : `${basePrompt}\n\n---\n\nYour previous response did not match the required output schema:\n${reaskErrors.map(e => `- ${e}`).join('\n')}\n\nRespond again with output that satisfies the schema exactly.`;
+              : structuredCapability === 'enforced' && currentSessionId !== undefined
+                ? correction
+                : `${basePrompt}\n\n---\n\n${correction}`;
 
           const iterationOptions: SendQueryOptions | undefined = {
             ...resolvedOptions,
             abortSignal: iterationAbortController.signal,
           };
 
-          // Reask attempts start a FRESH session (mirrors runStreamPass in
-          // executeNodeInternal) so an invalid turn is not carried forward as context.
+          // Best-effort reasks start a fresh session (mirrors executeNodeInternal)
+          // so an invalid turn is not carried forward as context. Enforced reasks
+          // continue this iteration's session and only ask for a JSON reprint.
+          const reaskResumeSessionId =
+            reaskAttempt === 0
+              ? resumeSessionId
+              : structuredCapability === 'enforced'
+                ? currentSessionId
+                : undefined;
           const generator = aiClient.sendQuery(
             finalPrompt,
             cwd,
-            reaskAttempt === 0 ? resumeSessionId : undefined,
+            reaskResumeSessionId,
             iterationOptions
           );
           const runningTools = new Map<string, RunningTool>();
