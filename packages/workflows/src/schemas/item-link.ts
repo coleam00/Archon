@@ -10,7 +10,9 @@ import { workflowItemSchema } from './workflow-run';
 /**
  * The kinds a link can be, each read from `from` to `to`: `from` waits for `to`
  * (`depends_on`), is a piece of `to` (`part_of`), or goes away in favour of `to`
- * (`duplicate_of`). The database's CHECK repeats this list.
+ * (`duplicate_of`). This is the only place the kinds are checked: the database stores any
+ * kind, so a later kind is a code change, and a reader meets a kind it does not know as an
+ * unreadable link.
  */
 export const itemLinkKindSchema = z.enum(['depends_on', 'part_of', 'duplicate_of']);
 export type ItemLinkKind = z.infer<typeof itemLinkKindSchema>;

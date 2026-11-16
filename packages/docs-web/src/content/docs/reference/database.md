@@ -321,7 +321,7 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
 
 - **`remote_agent_item_links`** - Links between items: accepted, directed relations
-  - One row per link, read from `from_item_id` to `to_item_id`, with `kind` one of `depends_on`, `part_of` or `duplicate_of`. The engine gives the kinds no meaning
+  - One row per link, read from `from_item_id` to `to_item_id`, with `kind` one of `depends_on`, `part_of` or `duplicate_of`. The engine gives the kinds no meaning. The kind is checked in code, not by a database constraint, so a later kind needs no schema change; a binary that reads a kind it does not know reports that link as unreadable and reads the rest of the item
   - `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at` record who recorded the link, as for rulings. They and the link itself are never updated
   - Ending a link writes the `ended_*` columns once (`ended_at`, `ended_via`, who, and the calling run); the row is kept, never deleted. `ended_at` and `ended_via` are set together
   - While `ended_at` is null, `(from_item_id, to_item_id, kind)` is unique (a partial unique index), so an active link is stored once. A link joins two different items. The schema allows the two items to be in different projects; the CLI records links within one

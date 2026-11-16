@@ -790,7 +790,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_links (
   seq BIGSERIAL NOT NULL UNIQUE,
   from_item_id UUID NOT NULL REFERENCES remote_agent_items(id),
   to_item_id UUID NOT NULL REFERENCES remote_agent_items(id),
-  kind TEXT NOT NULL CHECK (kind IN ('depends_on', 'part_of', 'duplicate_of')),
+  kind TEXT NOT NULL,
   by_declared TEXT,
   by_user_id TEXT,
   via TEXT NOT NULL,

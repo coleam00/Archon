@@ -592,7 +592,7 @@ export class SqliteAdapter implements IDatabase {
         id TEXT NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
         from_item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
         to_item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
-        kind TEXT NOT NULL CHECK (kind IN ('depends_on', 'part_of', 'duplicate_of')),
+        kind TEXT NOT NULL,
         by_declared TEXT,
         by_user_id TEXT,
         via TEXT NOT NULL,

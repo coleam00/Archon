@@ -130,7 +130,7 @@ export function describeItemLinkConformance(
       expect(listed[0]).toEqual(ended);
       expect(listed.at(-1)).toEqual(renewed.link);
 
-      // The database refuses what the store refuses, as a backstop.
+      // The database refuses a self-link, as a backstop to the store.
       const pieceId = piece?.item.id ?? '';
       await expect(
         db.query(
@@ -138,12 +138,19 @@ export function describeItemLinkConformance(
           [pieceId]
         )
       ).rejects.toThrow();
-      await expect(
-        db.query(
-          "INSERT INTO remote_agent_item_links (from_item_id, to_item_id, kind, via) VALUES ($1, $2, 'same_as', 'cli')",
-          [pieceId, whole?.item.id ?? '']
-        )
-      ).rejects.toThrow();
+      // The kind is checked in code, not by the database, so a newer binary can add one.
+      // This binary reads a kind it does not know as unreadable; the rest of the item reads.
+      const newer = await db.query<{ id: string }>(
+        "INSERT INTO remote_agent_item_links (from_item_id, to_item_id, kind, via) VALUES ($1, $2, 'same_as', 'cli') RETURNING id",
+        [pieceId, whole?.item.id ?? '']
+      );
+      const newerLinks = await store.listItemLinks(pieceId);
+      expect(newerLinks).toContainEqual({
+        type: 'degraded',
+        reason: 'link_unreadable',
+        linkId: newer.rows[0]?.id,
+      });
+      expect(newerLinks).toContainEqual(renewed.link);
       // The renewed link is active, so the database refuses a second active row for it:
       // the partial unique index, not the store's code, keeps an active link stored once.
       await expect(
