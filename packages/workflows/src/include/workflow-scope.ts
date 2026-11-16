@@ -140,7 +140,9 @@ function workflowFieldTravelsTo(
   if (nodeKey === 'model') return workflowModelTravelsTo(scope, node);
   // `persist_session` only means something on a node that takes an AI turn and can
   // resume one, and never inside a loop_group body (see pushWorkflowScopeOntoNodes).
-  if (nodeKey === 'persist_session') return !insideLoopGroup && isPersistableNode(node);
+  // A `context: same` node carries its own cross-run continuity and refuses both.
+  if (nodeKey === 'persist_session')
+    return !insideLoopGroup && isPersistableNode(node) && node.context !== 'same';
   return true;
 }
 

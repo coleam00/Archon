@@ -62,7 +62,7 @@ for the background-start admission and observation cutoff rules.
 | --- | --- | --- | --- | --- | --- |
 | Background work observation | reported | reported | unobserved | none | unobserved |
 | Session resume | ✅ | ✅ | ✅ | ✅ | ✅ |
-| Immutable session fork (`context.resume`, cross-run `persist_session`) | ✅ | ✅ | ❌ | ✅ | ❌ |
+| Immutable session fork (`context.resume`, cross-run `persist_session` and `context: same`) | ✅ | ✅ | ❌ | ✅ | ❌ |
 | MCP servers (`mcp:`) | ✅ | ✅ | ❌ | ❌ | ✅ |
 | Hooks (`hooks:`) | ✅ | ❌ | ❌ | ❌ | ❌ |
 | Skills (`skills:`) | ✅ | ❌ | ❌ | ✅ | ✅ |

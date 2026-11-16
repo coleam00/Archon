@@ -1788,10 +1788,10 @@ archon workflow cleanup 30     # Custom threshold
 
 ### `workflow reset-sessions`
 
-Delete a workflow's persisted per-node AI sessions: the cross-run memory kept by nodes that opt in with `persist_session` (or workflow-level `persist_sessions: true`). Use it when a workflow should forget its earlier conversation.
+Delete a workflow's persisted per-node AI sessions: the cross-run memory kept by nodes that opt in with `persist_session` (or workflow-level `persist_sessions: true`) or `context: same`. Use it when a workflow should forget its earlier conversation. A `context: same` node's sessions are scoped `item:<item_id>`, and its `--node` id is the node's path (`<group>.<node>` inside a `loop_group`).
 
 ```bash
-archon workflow reset-sessions <workflow-name> --scope <key>      # one scope, usually a conversation UUID
+archon workflow reset-sessions <workflow-name> --scope <key>      # one scope: a conversation UUID, or item:<item_id>
 archon workflow reset-sessions <workflow-name> --yes              # every scope
 archon workflow reset-sessions <workflow-name> --node <id> --yes  # one node, every scope
 archon workflow reset-sessions <workflow-name> --scope <key> --json

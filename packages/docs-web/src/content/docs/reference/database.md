@@ -274,8 +274,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Stores the provider and session ID for same-run session lineage; excluded from run and event APIs
 
 - **`remote_agent_workflow_node_sessions`** - Per-node provider session IDs persisted across workflow re-runs
-  - Opt-in via `persist_session`; keyed by `(workflow_name, node_id, scope_key, provider)`
-  - `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`). A run with neither has no scope, so it reads and writes no rows here
+  - Opt-in via `persist_session` or `context: same`; keyed by `(workflow_name, node_id, scope_key, provider)`
+  - For `persist_session`, `scope_key` is the UUID of the conversation that launched the run (`parent_conversation_id`, else `conversation_id`). A run with neither has no scope, so it reads and writes no rows here
+  - For `context: same`, `scope_key` is `item:<item_id>` and `node_id` is the node's qualified path (`<group>.<node>` inside a `loop_group`). A run without an item reads and writes no such rows
+  - `model` is the model the session ran on, or NULL when the node resolved none; rows written before the column existed read as NULL. A `context: same` node does not continue a session recorded under another provider or model
   - A run reads its scope's rows once at start, and each node writes its finished session back, so concurrent runs end with the session that finished last
   - No FK on `scope_key`, so a conversation delete does not cascade here. Soft delete plus a never-reused UUID makes the leftovers harmless; a future hard-delete must delete by `scope_key` itself — the mirror of the cascade caveat on `remote_agent_workflow_runs` above.
 
