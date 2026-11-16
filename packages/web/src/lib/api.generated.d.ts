@@ -5686,7 +5686,7 @@ export interface components {
       model?: string | string[];
       provider?: string;
       context?:
-        | ('fresh' | 'shared')
+        | ('fresh' | 'shared' | 'same')
         | {
             resume: string;
           };
@@ -6282,6 +6282,7 @@ export interface components {
           [key: string]: {
             sessionId: string;
             provider: string;
+            model?: string;
           };
         };
         bodySessionCursorAncestry?: {
@@ -6289,6 +6290,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
         };
@@ -6869,6 +6871,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -6876,6 +6879,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -6899,6 +6903,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -6906,6 +6911,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -6933,6 +6939,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -6940,6 +6947,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };

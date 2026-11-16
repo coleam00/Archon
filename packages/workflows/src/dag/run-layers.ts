@@ -634,10 +634,18 @@ function addNodeUsage(ctx: RunLayersContext, { nodeId, output }: LayerNodeResult
 }
 
 /** A completed node's session, when its provider attested it. */
-function completedSession({ output, sessionProvider }: LayerNodeResult): SessionCursor | undefined {
+function completedSession({
+  output,
+  sessionProvider,
+  sessionModel,
+}: LayerNodeResult): SessionCursor | undefined {
   if (output.state !== 'completed' || output.sessionId === undefined) return undefined;
   if (sessionProvider === undefined) return undefined;
-  return { sessionId: output.sessionId, provider: sessionProvider };
+  return {
+    sessionId: output.sessionId,
+    provider: sessionProvider,
+    ...(sessionModel !== undefined ? { model: sessionModel } : {}),
+  };
 }
 
 function recordSessionCursors(

@@ -5,8 +5,10 @@
 import { join as joinPath } from 'path';
 import { requireProvider, sessionPreview } from '@archon/provider-contract';
 import type { AgentNode } from '../../../schemas';
+import type { WorkflowNodeSession } from '../../../schemas';
 import {
   isNodeContextResume,
+  isNodeContextSame,
   nodeUsesPersistedScope,
   persistedSessionHandling,
 } from '../../../schemas';
@@ -60,36 +62,21 @@ export async function dispatchAgentNode(
     warnedProviderConflicts: ctx.warnedProviderConflicts,
   });
 
-  const session = selectSession(ctx, node, provider, isParallelLayer);
-  let resumeSessionId = session.resumeSessionId;
-
   // Strictly opt-in: on only when the node sets persist_session (or inherits the
-  // workflow-level persist_sessions default) and doesn't opt out via context:'fresh'.
+  // workflow-level persist_sessions default) and its context is neither 'fresh' nor
+  // 'same' (which keeps its own cross-run session, under the item).
   // A parallel-layer node CAN still use persist_session — it just doesn't share
   // with siblings. Same predicate gates the scope-artifact mirror below.
   const usesPersistedScope = nodeUsesPersistedScope(node, ctx.workflowPersistSessions);
-
-  if (usesPersistedScope) {
-    const handling = persistedSessionHandling(
-      requireProvider(ctx.deps.providers, provider).capabilities
-    );
-    if (handling === 'unsupported') {
-      throw new Error(
-        `Node '${node.id}' has persist_session: true but resolved provider '${provider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`
-      );
-    }
-    const persistScope = ctx.persistScope;
-    if (persistScope && !session.named) {
-      resumeSessionId =
-        (await persistedSessionToContinue(
-          ctx,
-          node,
-          provider,
-          persistScope,
-          handling === 'fork'
-        )) ?? resumeSessionId;
-    }
-  }
+  const session = await chooseSession(
+    ctx,
+    node,
+    provider,
+    resolvedNodeModel,
+    isParallelLayer,
+    usesPersistedScope
+  );
+  const resumeSessionId = session.resumeSessionId;
 
   // Execute with retry for transient failures. AI nodes get the
   // default 2 transient retries; the shared loop applies the same
@@ -191,48 +178,289 @@ export async function dispatchAgentNode(
   // one. A completion without a session ID leaves the row alone: deleting it could
   // erase a newer session a sibling run just wrote. A provider that cannot fork
   // still writes its row: the next run never continues it, but reads it to record
-  // which session it did not continue.
-  // context:'fresh' nodes are excluded (the author opted out of any cross-run memory).
-  const persistScope = ctx.persistScope;
-  if (
-    usesPersistedScope &&
-    persistScope &&
-    output.state === 'completed' &&
-    output.sessionId !== undefined
-  ) {
-    try {
-      await ctx.deps.store.upsertWorkflowNodeSession({
-        workflow_name: ctx.workflowName,
-        node_id: node.id,
-        scope_key: persistScope.key,
-        provider,
-        provider_session_id: output.sessionId,
-        last_run_id: ctx.workflowRun.id,
-      });
-    } catch (err) {
-      // Non-fatal: persistence failure does not undo a successful node execution.
-      // But the user opted into persistence — the next run will not continue this
-      // session, so warn them as well as the logs.
-      getLog().warn(
-        {
-          err: err as Error,
-          nodeId: node.id,
-          workflow: ctx.workflowName,
-          scopeKey: persistScope.key,
-          provider,
-        },
-        'persist_session_upsert_failed'
-      );
-      await safeSendMessage(
-        ctx.platform,
-        ctx.conversationId,
-        `⚠️ Could not persist the session for node \`${node.id}\` (${provider}). The next run will not continue from it.`,
-        { workflowId: ctx.workflowRun.id, nodeName: node.id }
-      );
-    }
+  // which session it did not continue. A `context: same` node writes under the item
+  // every round, so a later run, or a resume that restarts mid-loop without saved
+  // cursors, continues the newest round.
+  const writeScope = usesPersistedScope
+    ? ctx.persistScope
+    : isNodeContextSame(node.context)
+      ? ctx.itemScope
+      : undefined;
+  if (writeScope && output.state === 'completed' && output.sessionId !== undefined) {
+    await recordScopedSession(ctx, node, writeScope, {
+      // persist_session rows have always keyed on the bare id; `same` rows on the path.
+      nodeId: usesPersistedScope ? node.id : ctx.stepNamePrefix + node.id,
+      provider,
+      model: resolvedNodeModel,
+      sessionId: output.sessionId,
+    });
   }
 
-  return { nodeId: node.id, output, sessionProvider: provider };
+  return {
+    nodeId: node.id,
+    output,
+    sessionProvider: provider,
+    ...(resolvedNodeModel !== undefined ? { sessionModel: resolvedNodeModel } : {}),
+  };
+}
+
+/**
+ * The session the node starts from: its own (`context: same`), else the in-run choice,
+ * replaced by the session a `persist_session` node left in its thread scope when there
+ * is one to continue.
+ */
+async function chooseSession(
+  ctx: RunLayersContext,
+  node: AgentNode,
+  provider: string,
+  model: string | undefined,
+  isParallelLayer: boolean,
+  usesPersistedScope: boolean
+): Promise<SessionSelection> {
+  if (isNodeContextSame(node.context)) return selectOwnSession(ctx, node, provider, model);
+  const session = selectSession(ctx, node, provider, isParallelLayer);
+  if (!usesPersistedScope) return session;
+  const handling = persistedSessionHandling(
+    requireProvider(ctx.deps.providers, provider).capabilities
+  );
+  if (handling === 'unsupported') {
+    throw new Error(
+      `Node '${node.id}' has persist_session: true but resolved provider '${provider}' does not support sessionResume. Remove persist_session, or use a provider with sessionResume capability.`
+    );
+  }
+  const persistScope = ctx.persistScope;
+  if (!persistScope || session.named) return session;
+  const persisted = await persistedSessionToContinue(
+    ctx,
+    node,
+    provider,
+    persistScope,
+    handling === 'fork'
+  );
+  return persisted === undefined ? session : { ...session, resumeSessionId: persisted };
+}
+
+const FRESH_SESSION: SessionSelection = {
+  resumeSessionId: undefined,
+  resumeIntent: 'ordinary',
+  named: false,
+};
+
+/** Why a recorded session is not continued by a node now resolving to another pair. */
+function sessionPairChange(
+  recorded: { provider: string; model?: string | null },
+  provider: string,
+  model: string | undefined
+): 'provider_changed' | 'model_changed' | undefined {
+  if (recorded.provider !== provider) return 'provider_changed';
+  // No recorded model means the node resolved none then; it matches only an unresolved one now.
+  if ((recorded.model ?? undefined) !== model) return 'model_changed';
+  return undefined;
+}
+
+/**
+ * `context: same`: the session this node itself last had. Its own cursor from an earlier
+ * round of this loop invocation continues in place; otherwise the newest session it left
+ * on the run's item, in whichever run, is forked, so two runs never append to one
+ * session. A session from another provider or model is never continued, and the run says
+ * so. With neither, the node starts fresh. Never the shared sequential cursor, and never
+ * reset by a parallel layer, `fresh_context`, or the start of a composed block.
+ */
+async function selectOwnSession(
+  ctx: RunLayersContext,
+  node: AgentNode,
+  provider: string,
+  model: string | undefined
+): Promise<SessionSelection> {
+  const handling = persistedSessionHandling(
+    requireProvider(ctx.deps.providers, provider).capabilities
+  );
+  if (handling === 'unsupported') {
+    throw new Error(
+      `Node '${node.id}' has context: same but resolved provider '${provider}' does not support sessionResume. Use another context, or a provider with sessionResume capability.`
+    );
+  }
+
+  const cursor = ctx.bodySessionCursors?.get(node.id);
+  if (cursor !== undefined) {
+    const change = sessionPairChange(cursor, provider, model);
+    if (change === undefined) {
+      return {
+        resumeSessionId: cursor.sessionId,
+        resumeIntent: 'owner-continuation',
+        named: false,
+      };
+    }
+    // The earlier round's session is this run's own work; an older item session would skip
+    // it, so a changed pair starts fresh rather than falling back to the item.
+    await reportOwnSessionNotContinued(ctx, node, {
+      reason: change,
+      provider,
+      model,
+      recorded: cursor,
+      sessionId: cursor.sessionId,
+      scopeKey: undefined,
+    });
+    return FRESH_SESSION;
+  }
+
+  const itemScope = ctx.itemScope;
+  if (itemScope === undefined) return FRESH_SESSION;
+  let recorded: WorkflowNodeSession | undefined;
+  try {
+    recorded = newestSession(await itemScope.sessionsAtStart, ctx.stepNamePrefix + node.id);
+  } catch (err) {
+    await reportLookupFailed(ctx, node, provider, itemScope, err as Error);
+    return FRESH_SESSION;
+  }
+  if (recorded === undefined) return FRESH_SESSION;
+
+  const change = sessionPairChange(recorded, provider, model);
+  if (change !== undefined || handling === 'fresh') {
+    await reportOwnSessionNotContinued(ctx, node, {
+      reason: change ?? 'no_fork',
+      provider,
+      model,
+      recorded,
+      sessionId: recorded.provider_session_id,
+      scopeKey: itemScope.key,
+    });
+    return FRESH_SESSION;
+  }
+  recordSessionEvent(ctx, node, 'node_session_resumed', {
+    provider,
+    scope_key: itemScope.key,
+    provider_session_id_preview: sessionPreview(recorded.provider_session_id),
+  });
+  // 'ordinary' requests a fork: the earlier run's session stays as it was.
+  return { resumeSessionId: recorded.provider_session_id, resumeIntent: 'ordinary', named: false };
+}
+
+/** The most recently written session for one node path, over every provider. */
+function newestSession(
+  rows: readonly WorkflowNodeSession[],
+  nodePath: string
+): WorkflowNodeSession | undefined {
+  let newest: WorkflowNodeSession | undefined;
+  for (const row of rows) {
+    if (row.node_id !== nodePath) continue;
+    if (newest === undefined || row.updated_at > newest.updated_at) newest = row;
+  }
+  return newest;
+}
+
+function recordSessionEvent(
+  ctx: RunLayersContext,
+  node: AgentNode,
+  eventType: 'node_session_resumed' | 'node_session_not_continued',
+  data: Record<string, unknown>
+): void {
+  // This event is not a node record, so it carries only the session preview.
+  ctx.deps.store
+    .createWorkflowEvent({
+      workflow_run_id: ctx.workflowRun.id,
+      event_type: eventType,
+      step_name: ctx.stepNamePrefix + node.id,
+      data,
+    })
+    .catch((err: Error) => {
+      getLog().warn({ err, nodeId: node.id }, 'persist_session_event_persist_failed');
+    });
+}
+
+async function reportOwnSessionNotContinued(
+  ctx: RunLayersContext,
+  node: AgentNode,
+  report: {
+    reason: 'provider_changed' | 'model_changed' | 'no_fork';
+    provider: string;
+    model: string | undefined;
+    recorded: { provider: string; model?: string | null };
+    sessionId: string;
+    scopeKey: string | undefined;
+  }
+): Promise<void> {
+  const recordedModel = report.recorded.model ?? null;
+  recordSessionEvent(ctx, node, 'node_session_not_continued', {
+    reason: report.reason,
+    provider: report.provider,
+    model: report.model ?? null,
+    recorded_provider: report.recorded.provider,
+    recorded_model: recordedModel,
+    ...(report.scopeKey !== undefined ? { scope_key: report.scopeKey } : {}),
+    provider_session_id_preview: sessionPreview(report.sessionId),
+  });
+  const pair = (p: string, m: string | null | undefined): string =>
+    `\`${p}\`${m ? ` / \`${m}\`` : ''}`;
+  const message =
+    report.reason === 'no_fork'
+      ? `⚠️ Node \`${node.id}\`: provider \`${report.provider}\` cannot fork a session, so this run started fresh instead of continuing the session the node last had on this item (concurrent runs never share one provider conversation).`
+      : `⚠️ Node \`${node.id}\`: started fresh instead of continuing its last session, which ran on ${pair(report.recorded.provider, recordedModel)}; the node now resolves to ${pair(report.provider, report.model)}.`;
+  await safeSendMessage(ctx.platform, ctx.conversationId, message, {
+    workflowId: ctx.workflowRun.id,
+    nodeName: node.id,
+  });
+}
+
+async function reportLookupFailed(
+  ctx: RunLayersContext,
+  node: AgentNode,
+  provider: string,
+  scope: PersistScope,
+  err: Error
+): Promise<void> {
+  // Non-fatal: the node still runs (fresh, no resume), but the user opted into
+  // continuity, and a DB error here silently breaks it, so warn them as well as the
+  // logs. (A "no row" result is not an error and never reaches this.)
+  getLog().warn(
+    { err, nodeId: node.id, workflow: scope.workflowName, scopeKey: scope.key, provider },
+    'persist_session_lookup_failed'
+  );
+  await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`${spellWorkflowCommand(ctx.platform, `reset-sessions ${scope.workflowName}`)}\`.`,
+    { workflowId: ctx.workflowRun.id, nodeName: node.id }
+  );
+}
+
+async function recordScopedSession(
+  ctx: RunLayersContext,
+  node: AgentNode,
+  scope: PersistScope,
+  session: { nodeId: string; provider: string; model: string | undefined; sessionId: string }
+): Promise<void> {
+  try {
+    await ctx.deps.store.upsertWorkflowNodeSession({
+      workflow_name: scope.workflowName,
+      node_id: session.nodeId,
+      scope_key: scope.key,
+      provider: session.provider,
+      model: session.model ?? null,
+      provider_session_id: session.sessionId,
+      last_run_id: ctx.workflowRun.id,
+    });
+  } catch (err) {
+    // Non-fatal: persistence failure does not undo a successful node execution. But the
+    // author opted into continuity, and the next run will not continue this session, so
+    // warn them as well as the logs.
+    getLog().warn(
+      {
+        err: err as Error,
+        nodeId: node.id,
+        workflow: scope.workflowName,
+        scopeKey: scope.key,
+        provider: session.provider,
+      },
+      'persist_session_upsert_failed'
+    );
+    await safeSendMessage(
+      ctx.platform,
+      ctx.conversationId,
+      `⚠️ Could not persist the session for node \`${node.id}\` (${session.provider}). The next run will not continue from it.`,
+      { workflowId: ctx.workflowRun.id, nodeName: node.id }
+    );
+  }
 }
 
 /**
@@ -329,58 +557,29 @@ async function persistedSessionToContinue(
   persistScope: PersistScope,
   canFork: boolean
 ): Promise<string | undefined> {
+  let persisted: WorkflowNodeSession | undefined;
   try {
-    const persisted = (await persistScope.sessionsAtStart).find(
+    persisted = (await persistScope.sessionsAtStart).find(
       row => row.node_id === node.id && row.provider === provider
     );
-    if (!persisted) return undefined;
-    // This event is not a node record, so it carries only the preview.
-    const sessionIdPreview = sessionPreview(persisted.provider_session_id);
-    ctx.deps.store
-      .createWorkflowEvent({
-        workflow_run_id: ctx.workflowRun.id,
-        event_type: canFork ? 'node_session_resumed' : 'node_session_not_continued',
-        step_name: ctx.stepNamePrefix + node.id,
-        data: {
-          provider,
-          scope_key: persistScope.key,
-          provider_session_id_preview: sessionIdPreview,
-        },
-      })
-      .catch((err: Error) => {
-        getLog().warn({ err, nodeId: node.id }, 'persist_session_event_persist_failed');
-      });
-    if (canFork) return persisted.provider_session_id;
-    await safeSendMessage(
-      ctx.platform,
-      ctx.conversationId,
-      `⚠️ Node \`${node.id}\`: provider \`${provider}\` cannot fork a session, so this run started fresh instead of continuing the persisted session (concurrent runs never share one provider conversation). To carry context across runs, use a provider with sessionFork or pass state through artifacts.`,
-      { workflowId: ctx.workflowRun.id, nodeName: node.id }
-    );
-    return undefined;
   } catch (err) {
-    // Non-fatal: the node still runs (fresh, no resume), but the user opted
-    // into persistence — a DB error here silently breaks continuity, so warn
-    // them as well as the logs. (A "no row" result is not an error: it finds
-    // nothing above and this catch never fires for it.)
-    getLog().warn(
-      {
-        err: err as Error,
-        nodeId: node.id,
-        workflow: ctx.workflowName,
-        scopeKey: persistScope.key,
-        provider,
-      },
-      'persist_session_lookup_failed'
-    );
-    await safeSendMessage(
-      ctx.platform,
-      ctx.conversationId,
-      `⚠️ Could not load the persisted session for node \`${node.id}\` — it will run without prior context. Session continuity may be broken; if this recurs, check server logs or run \`${spellWorkflowCommand(ctx.platform, `reset-sessions ${ctx.workflowName}`)}\`.`,
-      { workflowId: ctx.workflowRun.id, nodeName: node.id }
-    );
+    await reportLookupFailed(ctx, node, provider, persistScope, err as Error);
     return undefined;
   }
+  if (!persisted) return undefined;
+  recordSessionEvent(ctx, node, canFork ? 'node_session_resumed' : 'node_session_not_continued', {
+    provider,
+    scope_key: persistScope.key,
+    provider_session_id_preview: sessionPreview(persisted.provider_session_id),
+  });
+  if (canFork) return persisted.provider_session_id;
+  await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    `⚠️ Node \`${node.id}\`: provider \`${provider}\` cannot fork a session, so this run started fresh instead of continuing the persisted session (concurrent runs never share one provider conversation). To carry context across runs, use a provider with sessionFork or pass state through artifacts.`,
+    { workflowId: ctx.workflowRun.id, nodeName: node.id }
+  );
+  return undefined;
 }
 
 /**

@@ -3,9 +3,10 @@
  *
  * One row per (workflow_name, node_id, scope_key, provider) tuple — the
  * composite primary key. Stored when a node opts in via `persist_session: true`
- * (or workflow-level `persist_sessions: true`) and the resolved provider
- * supports session resume. It records the provider's session ID so the executor
- * can pass it back as `resumeSessionId` on a later run with the same scope.
+ * (or workflow-level `persist_sessions: true`), scoped to the launching thread, or
+ * declares `context: same`, scoped to the run's item (`item:<item_id>`), and the
+ * resolved provider supports session resume. It records the provider's session ID so
+ * the executor can pass it back as `resumeSessionId` on a later run with the same scope.
  */
 import { z } from 'zod';
 import type { WorkflowRun } from './workflow-run';
@@ -15,6 +16,9 @@ export const workflowNodeSessionSchema = z.object({
   node_id: z.string(),
   scope_key: z.string(),
   provider: z.string(),
+  // The model the session ran on, or null when the node resolved none. Rows written
+  // before the column existed have none and read as null.
+  model: z.string().nullable().default(null),
   provider_session_id: z.string(),
   // Nullable because the FK to workflow_runs is ON DELETE SET NULL — deleting the
   // originating run clears this without dropping the resumable session itself.

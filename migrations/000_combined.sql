@@ -236,7 +236,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_sessions (
 );
 
 COMMENT ON TABLE remote_agent_workflow_node_sessions IS
-  'Per-node provider session IDs persisted across workflow re-runs. Keyed by (workflow, node, scope, provider). Scope is typically conversation UUID. No cascade on conversation delete (soft delete + never-reused UUID = harmless orphans); a future hard-delete path must delete by scope_key.';
+  'Per-node provider session IDs persisted across workflow re-runs. Keyed by (workflow, node, scope, provider). Scope is the launching conversation UUID for persist_session, or item:<item_id> for context: same. No cascade on conversation delete (soft delete + never-reused UUID = harmless orphans); a future hard-delete path must delete by scope_key.';
 
 -- ============================================================================
 -- Table 7: Messages
@@ -784,6 +784,11 @@ ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEX
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_run_id TEXT;
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_node_path TEXT;
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_taken_at TIMESTAMP WITH TIME ZONE;
+
+-- The model a persisted node session ran on (#5711), or NULL when the node resolved
+-- none. A `context: same` node does not continue a session from another model. Rows
+-- written before the column existed read as NULL.
+ALTER TABLE remote_agent_workflow_node_sessions ADD COLUMN IF NOT EXISTS model TEXT;
 
 -- ============================================================================
 -- Indexes and column comments
