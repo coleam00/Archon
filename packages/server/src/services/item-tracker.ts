@@ -473,8 +473,11 @@ async function itemFacts(tracked: Tracked, itemKey: string): Promise<ItemFacts |
   );
   const posted = new Set<string>();
   for (const row of ledger) {
-    // A run that resumed after its result was posted owes its result again.
-    if (row.key === TRACKER_RESUMED_KEY) posted.delete(postedKey({ ...row, key: RESULT_KEY }));
+    // A run that resumed or was shown live after its result was posted owes its result
+    // again. Both keys count: a resume committed while the result was being written
+    // lands before that result's row, and only the next `started` row follows it.
+    if (row.key === TRACKER_RESUMED_KEY || row.key === TRACKER_STARTED_KEY)
+      posted.delete(postedKey({ ...row, key: RESULT_KEY }));
     posted.add(postedKey(row));
   }
   const comments: OwedComment[] = [

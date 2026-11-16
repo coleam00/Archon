@@ -450,10 +450,14 @@ async function pauseAtWait(runId: string): Promise<void> {
 }
 
 /**
- * The end of `endedRunId` matched a run-ended binding whose next stage is still being
- * prepared; `admitNextStage` completes that preparation, as admission does with its run.
+ * The end of `endedRunId` matched a run-ended binding whose next stage has no run yet: its
+ * preparation is pending, or it is prepared and its start waits in the resource queue.
+ * `admitNextStage` ends both, as admission does with the run it creates.
  */
-async function recordRunEndedStart(endedRunId: string): Promise<void> {
+async function recordRunEndedStart(
+  endedRunId: string,
+  waits: 'preparation' | 'resource' = 'preparation'
+): Promise<void> {
   const receiptId = crypto.randomUUID();
   await getDatabase().query(
     `INSERT INTO remote_agent_start_receipts
@@ -468,15 +472,31 @@ async function recordRunEndedStart(endedRunId: string): Promise<void> {
   );
   await getDatabase().query(
     `INSERT INTO remote_agent_start_receipt_bindings (receipt_id, binding_id, preparation_status)
-     VALUES ($1, 'next-stage', 'pending')`,
-    [receiptId]
+     VALUES ($1, 'next-stage', $2)`,
+    [receiptId, waits === 'preparation' ? 'pending' : 'complete']
+  );
+  if (waits === 'preparation') return;
+  await getDatabase().query(
+    "INSERT INTO remote_agent_resource_slots (resource_key) VALUES ('builder') ON CONFLICT DO NOTHING"
+  );
+  await getDatabase().query(
+    `INSERT INTO remote_agent_resource_start_requests
+     (id, resource_key, host_id, overlap_policy, status, launch, receipt_id, binding_id)
+     VALUES ($1, 'builder', 'host', 'queue', 'queued', '{}', $2, 'next-stage')`,
+    [crypto.randomUUID(), receiptId]
   );
 }
 
 async function admitNextStage(endedRunId: string, itemKey: string, workflow: string) {
+  const receipts = 'SELECT id FROM remote_agent_start_receipts WHERE delivery_id = $1';
   await getDatabase().query(
     `UPDATE remote_agent_start_receipt_bindings SET preparation_status = 'complete'
-      WHERE receipt_id IN (SELECT id FROM remote_agent_start_receipts WHERE delivery_id = $1)`,
+      WHERE receipt_id IN (${receipts})`,
+    [endedRunId]
+  );
+  await getDatabase().query(
+    `UPDATE remote_agent_resource_start_requests SET status = 'admitted'
+      WHERE receipt_id IN (${receipts})`,
     [endedRunId]
   );
   return startRun(itemKey, workflow);
@@ -568,6 +588,23 @@ test('the result is posted once, when a run ends without starting a next stage',
   expect(comments[0]).not.toContain('private');
 });
 
+test('no result is posted while a stage a run end started waits for a resource slot', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const plan = await startRun('issue-7', 'plan');
+  await recordRunEndedStart(plan, 'resource');
+  await endRun(plan, 'completed', 'ready');
+  await tracker.scan();
+  expect(newComments(fake)).toEqual([]);
+
+  const implement = await admitNextStage(plan, 'issue-7', 'implement');
+  await endRun(implement, 'completed', 'delivered');
+  await tracker.scan();
+  const comments = newComments(fake);
+  expect(comments.length).toBe(1);
+  expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');
+});
+
 test('a run-ended chain that ends between two scans still gets its result', async () => {
   const fake = fakeForge();
   const tracker = await activeTracker(fake.forge);
@@ -612,6 +649,35 @@ test('a run that resumes after its result was posted replaces that result when i
   await tracker.scan();
   expect(newComments(fake)[0]).toContain('the `implement` stage failed');
   await resumeRun(run);
+  await tracker.scan();
+  await endRun(run, 'completed', 'delivered');
+  await tracker.scan();
+  const comments = newComments(fake);
+  expect(comments.length).toBe(1);
+  expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');
+});
+
+test('a run that resumes while its failed result is being written shows its new end', async () => {
+  const fake = fakeForge();
+  let run = '';
+  let resumed = false;
+  // The resume commits after the forge applied the result and before its row is recorded.
+  const forge: ItemTrackerForge = {
+    ...fake.forge,
+    upsertComment: async request => {
+      const response = await fake.forge.upsertComment(request);
+      if (!resumed && request.marker.includes('archon-item-result')) {
+        resumed = true;
+        await resumeRun(run);
+      }
+      return response;
+    },
+  };
+  const tracker = await activeTracker(forge);
+  run = await startRun('issue-7', 'implement');
+  await endRun(run, 'failed');
+  await tracker.scan();
+  expect(resumed).toBe(true);
   await tracker.scan();
   await endRun(run, 'completed', 'delivered');
   await tracker.scan();
