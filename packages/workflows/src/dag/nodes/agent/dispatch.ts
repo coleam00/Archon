@@ -306,14 +306,29 @@ async function selectOwnSession(
 
   const itemScope = ctx.itemScope;
   if (itemScope === undefined) return FRESH_SESSION;
-  let recorded: WorkflowNodeSession | undefined;
+  let newest: WorkflowNodeSession[];
   try {
-    recorded = newestSession(await itemScope.sessionsAtStart, ctx.stepNamePrefix + node.id);
+    newest = newestSessions(await itemScope.sessionsAtStart, ctx.stepNamePrefix + node.id);
   } catch (err) {
     await reportLookupFailed(ctx, node, provider, itemScope, err as Error);
     return FRESH_SESSION;
   }
+  const [recorded, ...tied] = newest;
   if (recorded === undefined) return FRESH_SESSION;
+  // Rows are one per provider, and a store may record seconds only, so two providers'
+  // sessions can tie as newest. Neither is provably the last one; continuing either could
+  // restore stale context, so the node starts fresh and says why.
+  if (tied.length > 0) {
+    await reportOwnSessionNotContinued(ctx, node, {
+      reason: 'ambiguous',
+      provider,
+      model,
+      recorded,
+      sessionId: recorded.provider_session_id,
+      scopeKey: itemScope.key,
+    });
+    return FRESH_SESSION;
+  }
 
   const change = sessionPairChange(recorded, provider, model);
   if (change !== undefined || handling === 'fresh') {
@@ -336,15 +351,17 @@ async function selectOwnSession(
   return { resumeSessionId: recorded.provider_session_id, resumeIntent: 'ordinary', named: false };
 }
 
-/** The most recently written session for one node path, over every provider. */
-function newestSession(
+/** Every session for one node path that ties as the most recently written, over every provider. */
+function newestSessions(
   rows: readonly WorkflowNodeSession[],
   nodePath: string
-): WorkflowNodeSession | undefined {
-  let newest: WorkflowNodeSession | undefined;
+): WorkflowNodeSession[] {
+  let newest: WorkflowNodeSession[] = [];
   for (const row of rows) {
     if (row.node_id !== nodePath) continue;
-    if (newest === undefined || row.updated_at > newest.updated_at) newest = row;
+    const latest = newest[0]?.updated_at;
+    if (latest === undefined || row.updated_at > latest) newest = [row];
+    else if (row.updated_at === latest) newest.push(row);
   }
   return newest;
 }
@@ -372,7 +389,7 @@ async function reportOwnSessionNotContinued(
   ctx: RunLayersContext,
   node: AgentNode,
   report: {
-    reason: 'provider_changed' | 'model_changed' | 'no_fork';
+    reason: 'provider_changed' | 'model_changed' | 'no_fork' | 'ambiguous';
     provider: string;
     model: string | undefined;
     recorded: { provider: string; model?: string | null };
@@ -395,7 +412,9 @@ async function reportOwnSessionNotContinued(
   const message =
     report.reason === 'no_fork'
       ? `⚠️ Node \`${node.id}\`: provider \`${report.provider}\` cannot fork a session, so this run started fresh instead of continuing the session the node last had on this item (concurrent runs never share one provider conversation).`
-      : `⚠️ Node \`${node.id}\`: started fresh instead of continuing its last session, which ran on ${pair(report.recorded.provider, recordedModel)}; the node now resolves to ${pair(report.provider, report.model)}.`;
+      : report.reason === 'ambiguous'
+        ? `⚠️ Node \`${node.id}\`: started fresh, because sessions it left on this item under more than one provider were recorded at the same time and the last one cannot be told apart.`
+        : `⚠️ Node \`${node.id}\`: started fresh instead of continuing its last session, which ran on ${pair(report.recorded.provider, recordedModel)}; the node now resolves to ${pair(report.provider, report.model)}.`;
   await safeSendMessage(ctx.platform, ctx.conversationId, message, {
     workflowId: ctx.workflowRun.id,
     nodeName: node.id,

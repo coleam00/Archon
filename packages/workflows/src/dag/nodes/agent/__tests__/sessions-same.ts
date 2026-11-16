@@ -82,6 +82,10 @@ export function registerSameContextTests(): void {
       await removeTempTree(testDir);
     });
 
+    const build = (): DagNode[] => [
+      { id: 'build', kind: 'agent', source: { kind: 'inline', prompt: 'build' }, context: 'same' },
+    ];
+
     const callsTo = (prompt: string): Omit<Call, 'prompt'>[] =>
       calls.filter(c => c.prompt === prompt).map(({ resume, fork }) => ({ resume, fork }));
 
@@ -380,6 +384,52 @@ export function registerSameContextTests(): void {
         })
       );
       expect(callsTo('build')).toEqual([{ resume: 'build1', fork: false }]);
+    });
+
+    it('sessions from two providers tied as newest are not continued', async () => {
+      // Stores may record seconds only; the matching provider's row is not provably the last.
+      const row = (provider: string, id: string) => ({
+        workflow_name: 'same-test',
+        node_id: 'build',
+        scope_key: 'item:K',
+        provider,
+        model: null,
+        provider_session_id: id,
+        last_run_id: 'run-0',
+        created_at: '2026-11-16T12:19:02.000Z',
+        updated_at: '2026-11-16T12:19:02.000Z',
+      });
+      const store = createMockStore();
+      store.listWorkflowNodeSessions.mockResolvedValue([
+        row('claude', 'claude-session'),
+        row('codex', 'codex-session'),
+      ]);
+      const { platform } = await run(build(), { store, itemId: 'K' });
+      expect(callsTo('build')).toEqual([{ resume: undefined, fork: undefined }]);
+      expect(
+        persistedEvents(store).find(e => e.event_type === 'node_session_not_continued')?.data
+      ).toMatchObject({ reason: 'ambiguous', scope_key: 'item:K' });
+      expect(deliveredMessages(platform).some(m => m.includes('started fresh'))).toBe(true);
+    });
+
+    it('a workflow-level persist_sessions does not move it off the item scope', async () => {
+      const store = await sessionStore();
+      for (const runId of ['run-1', 'run-2']) {
+        const platform = createMockPlatform();
+        await executeDagWorkflow(
+          dagOptions({
+            deps: createMockDeps(store),
+            platform,
+            cwd: testDir,
+            workflow: { name: 'same-test', persist_sessions: true, nodes: build() },
+            workflowRun: makeWorkflowRun(runId, { item_id: 'K' }),
+          })
+        );
+      }
+      expect(callsTo('build')).toEqual([
+        { resume: undefined, fork: undefined },
+        { resume: 'build1', fork: true },
+      ]);
     });
 
     it('a failed lookup runs fresh and says so', async () => {
