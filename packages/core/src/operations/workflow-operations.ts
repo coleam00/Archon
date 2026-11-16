@@ -83,6 +83,7 @@ export {
 } from './workflow/abandon';
 export {
   CancelRefusedError,
+  isCancellableRun,
   type CancelRefusal,
   type CancelWorkflowResult,
 } from './workflow/cancel';

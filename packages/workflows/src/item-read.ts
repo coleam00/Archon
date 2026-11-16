@@ -17,6 +17,7 @@ import {
   attentionDegradedSchema,
   splitAttentionRead,
   type AttentionDegraded,
+  type IdentifiedAttentionDegraded,
 } from './schemas/attention-degraded';
 import { itemActFields } from './schemas/item-act';
 import {
@@ -40,6 +41,7 @@ import {
   attentionAnswerSchema,
   displayedRunOutcome,
   workflowItemSchema,
+  type WorkflowItem,
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -246,6 +248,27 @@ function readLink(itemId: string, link: ItemLink): ItemReadLink {
   return { ...rest, direction: outgoing ? 'outgoing' : 'incoming', other: outgoing ? to : from };
 }
 
+/**
+ * The item `key` names in project `projectKey` and its own runs, in start order: the one
+ * read of an item's runs, for the item read and for every verb that acts on an item.
+ * `degraded` names each own run whose row could not be read. Null when there is no such item.
+ */
+export async function readItemRuns(
+  store: Pick<IWorkflowStore, 'getItemRuns'>,
+  projectKey: string,
+  key: string
+): Promise<{
+  item: WorkflowItem;
+  runs: WorkflowRun[];
+  degraded: IdentifiedAttentionDegraded[];
+  descendantIds: string[];
+} | null> {
+  const found = await store.getItemRuns(projectKey, key);
+  if (found === null) return null;
+  const { values, degraded } = splitAttentionRead(found.runs);
+  return { item: found.item, runs: values, degraded, descendantIds: found.descendantIds };
+}
+
 function distinctByRun(reports: readonly AttentionDegraded[]): AttentionDegraded[] {
   return reports.filter(
     (report, index) => reports.findIndex(other => other.runId === report.runId) === index
@@ -308,9 +331,9 @@ export async function readItem(
   projectKey: string,
   key: string
 ): Promise<ItemRead | null> {
-  const found = await source.store.getItemRuns(projectKey, key);
+  const found = await readItemRuns(source.store, projectKey, key);
   if (found === null) return null;
-  const own = splitAttentionRead(found.runs);
+  const own = { values: found.runs, degraded: found.degraded };
   const tree = new Set([
     ...own.values.map(run => run.id),
     ...own.degraded.map(report => report.runId),
