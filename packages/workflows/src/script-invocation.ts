@@ -29,14 +29,17 @@ export function scriptInvocation(
   }
   // Keep the checkout's uv project out of the script. --project moves project, config and
   // .python-version discovery from the checkout to an empty engine-owned directory, so the
-  // checkout's .venv, uv.lock, dependencies, uv.toml, [tool.uv] and Python pin do not apply.
-  // --no-project stops uv walking up from that directory into an ancestor's project. The
+  // checkout's uv.lock, dependencies, uv.toml, [tool.uv] and Python pin do not apply.
+  // --no-project stops uv walking up from that directory into an ancestor's project.
+  // --isolated runs in a fresh environment: without it uv still finds the checkout's .venv
+  // from the working directory and makes its packages importable, even with --with. The
   // user's own uv config and the script's working directory stay as they are.
   return {
     command: runtime,
     args: [
       'run',
       '--no-project',
+      '--isolated',
       '--project',
       uvProjectDir(artifactsDir),
       ...deps.flatMap(dep => ['--with', dep]),

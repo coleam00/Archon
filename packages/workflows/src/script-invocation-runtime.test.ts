@@ -159,6 +159,54 @@ test.skipIf(!Bun.which('uv'))(
   60_000
 );
 
+test.skipIf(!Bun.which('uv'))(
+  'inline uv cannot import a package installed only in the checkout .venv',
+  async () => {
+    const checkout = await mkdtemp(join(tmpdir(), 'archon-uv-checkout-'));
+    const artifactsDir = await mkdtemp(join(tmpdir(), 'archon-uv-artifacts-'));
+    try {
+      await execFileAsync('uv', ['venv', '--quiet', '.venv'], { cwd: checkout, timeout: 60_000 });
+      // Plain uv run from the checkout picks up its .venv; put a module in that venv only.
+      const { stdout } = await execFileAsync(
+        'uv',
+        [
+          'run',
+          '--no-project',
+          'python',
+          '-c',
+          'import sysconfig; print(sysconfig.get_paths()["purelib"])',
+        ],
+        { cwd: checkout, timeout: 60_000 }
+      );
+      await writeFile(join(stdout.trim(), 'archon_venv_only.py'), '');
+      const invocation = scriptInvocation(
+        'uv',
+        {
+          kind: 'inline',
+          code: [
+            'try:',
+            '    import archon_venv_only',
+            '    print("leaked")',
+            'except ImportError:',
+            '    print("ok")',
+          ].join('\n'),
+        },
+        [],
+        artifactsDir
+      );
+      const result = await execFileAsync(invocation.command, invocation.args, {
+        cwd: checkout,
+        timeout: 60_000,
+      });
+      expect(result.stdout.trim()).toBe('ok');
+    } finally {
+      await removeTempTree(checkout);
+      await removeTempTree(artifactsDir);
+    }
+  },
+  60_000
+);
+
 // Builds a one-module wheel and a PEP 503 index for it, so the install needs no network.
 const buildIndex = `
 import base64, hashlib, os, sys, zipfile

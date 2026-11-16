@@ -77,8 +77,8 @@ The file `.archon/scripts/fetch-github-pages.ts` is loaded and executed with
 3. **Dispatch.**
    - `runtime: bun` + inline → `bun --no-env-file --preload=<file> -` (code on stdin)
    - `runtime: bun` + named  → `bun --no-env-file run --preload=<file> <path>`
-   - `runtime: uv` + inline  → `uv run --no-project --project <run dir> [--with dep ...] python -c '<code>'`
-   - `runtime: uv` + named   → `uv run --no-project --project <run dir> [--with dep ...] <path>`
+   - `runtime: uv` + inline  → `uv run --no-project --isolated --project <run dir> [--with dep ...] python -c '<code>'`
+   - `runtime: uv` + named   → `uv run --no-project --isolated --project <run dir> [--with dep ...] <path>`
 
    The preload file provides the `archon:script` module. `<run dir>` is an empty
    directory Archon keeps in the run's artifact directory; see
@@ -349,7 +349,8 @@ a per-run ephemeral environment:
 - **The target repository's uv project does not apply** — a uv node runs outside
   any `pyproject.toml` in the checkout. It writes no `.venv` or `uv.lock` into the
   checkout, and ignores the repository's project dependencies, its `[tool.uv]` or
-  `uv.toml` settings, and its `.python-version`. Your own uv config (for example
+  `uv.toml` settings, its `.python-version`, and packages installed in an existing
+  `.venv`. Your own uv config (for example
   `~/.config/uv/uv.toml`) still applies. The script still runs with the checkout
   as its working directory.
 
