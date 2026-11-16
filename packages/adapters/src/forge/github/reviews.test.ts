@@ -42,11 +42,13 @@ function reviewGitHub(options: { head?: string; dropComments?: boolean } = {}) {
   const posts: Record<string, unknown>[] = [];
   const head = options.head ?? 'commit-a';
   const files = [
-    // New-side lines 9 to 12 are shown: 9 context, 10 and 11 added, 12 context.
+    // New-side lines 9 to 12 are shown (9 context, 10 and 11 added, 12 context),
+    // then 41 to 43 in a second hunk.
     {
       filename: 'src/a.ts',
       status: 'modified',
-      patch: '@@ -9,3 +9,4 @@\n ctx\n-old\n+new\n+more\n ctx',
+      patch:
+        '@@ -9,3 +9,4 @@\n ctx\n-old\n+new\n+more\n ctx\n@@ -40,2 +41,3 @@\n ctx\n+added\n ctx',
     },
     { filename: 'logo.png', status: 'added' },
   ];
@@ -181,6 +183,30 @@ describe('pr.review.submit', () => {
     ]);
   });
 
+  test('a finding goes inline exactly on the lines a hunk shows', async () => {
+    const github = reviewGitHub();
+    const lines = [8, 9, 12, 13, 41, 42, 43, 44];
+    const response = await run(
+      {
+        ...submit,
+        comments: lines.map(line => ({ path: 'src/a.ts', line, body: `At ${String(line)}.` })),
+      },
+      github
+    );
+    if (!response.ok || response.result.op !== 'pr.review.submit')
+      throw new Error(JSON.stringify(response));
+    expect(response.result.value.comments.map(comment => comment.placed)).toEqual([
+      'summary',
+      'inline',
+      'inline',
+      'summary',
+      'inline',
+      'inline',
+      'inline',
+      'summary',
+    ]);
+  });
+
   test('a head other than the reviewed commit is refused before anything is written', async () => {
     const github = reviewGitHub({ head: 'commit-b' });
     expect(await run(submit, github)).toMatchObject({
@@ -212,6 +238,22 @@ describe('pr.review.submit', () => {
     });
     expect(github.posts).toHaveLength(1);
     expect(github.reviews).toHaveLength(1);
+  });
+
+  test('a repeat with the same key and commit but other findings is refused, not reported as placed', async () => {
+    const github = reviewGitHub();
+    await run(submit, github);
+    const changed = {
+      ...submit,
+      operationId: 'review-2',
+      comments: [...submit.comments, { path: 'src/a.ts', line: 300, body: 'A new finding.' }],
+    };
+    expect(await run(changed, github)).toMatchObject({
+      ok: false,
+      error: { kind: 'conflict', message: expect.stringContaining('Review 100') },
+      mutation: { outcome: 'refused' },
+    });
+    expect(github.posts).toHaveLength(1);
   });
 
   test('a review whose inline comments did not land is a verification failure naming it', async () => {

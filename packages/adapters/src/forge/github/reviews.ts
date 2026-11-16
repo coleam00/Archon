@@ -92,9 +92,7 @@ export async function handleGithubPrReviews(
 ): Promise<ForgeResponse> {
   const [reviews, comments] = await Promise.all([
     readReviews(fetchImpl, token, request.ref),
-    githubPages(fetchImpl, token, `${pullUrl(request.ref)}/comments`, value =>
-      z.array(itemSchema).parse(value)
-    ),
+    readDiffComments(fetchImpl, token, request.ref),
   ]);
   const submitted = reviews.filter(item => item.state !== 'PENDING');
   const keys = new Map<string, string>();
@@ -185,6 +183,19 @@ function observedPlacement(request: SubmitRequest, comments: readonly DiffCommen
   );
 }
 
+/** Whether a review holds exactly this request: its body and one inline comment per inline finding. */
+function showsRequest(
+  request: SubmitRequest,
+  review: Item,
+  comments: readonly DiffComment[],
+  placed: readonly Placed[]
+): boolean {
+  return (
+    (review.body ?? '') === composeBody(request, placed) &&
+    comments.length === placed.filter(where => where === 'inline').length
+  );
+}
+
 function submitResult(request: SubmitRequest, review: Item, placed: readonly Placed[]): object {
   return {
     review: {
@@ -245,9 +256,17 @@ export async function submitReview(
   const previous = posted[0];
   if (previous) {
     const comments = await reviewComments(fetchImpl, token, request.ref, previous);
+    const placed = observedPlacement(request, comments);
+    // Only a review that shows exactly this request answers it; otherwise its
+    // findings would be reported as placed in a review that does not hold them.
+    if (!showsRequest(request, previous, comments, placed))
+      return refused(request, {
+        kind: 'conflict',
+        message: `Review ${String(previous.id)} already carries key ${request.key} at ${request.commit} with other content; submit under another key`,
+      });
     return applied(request, {
       changed: false,
-      ...submitResult(request, previous, observedPlacement(request, comments)),
+      ...submitResult(request, previous, placed),
     });
   }
 
@@ -310,14 +329,11 @@ export async function submitReview(
   } catch {
     return unverified(request, 'Review could not be read back', leaveBehind);
   }
-  const observed = observedPlacement(request, comments);
-  const inline = placed.filter(where => where === 'inline').length;
   if (
     String(review.id) !== String(written.data.id) ||
     review.commit_id !== request.commit ||
-    (review.body ?? '') !== body ||
-    comments.length !== inline ||
-    observed.some((where, index) => where !== placed[index])
+    observedPlacement(request, comments).some((where, index) => where !== placed[index]) ||
+    !showsRequest(request, review, comments, placed)
   )
     return unverified(request, 'Review read-back did not match', leaveBehind);
   return applied(request, { changed: true, ...submitResult(request, review, placed) });
