@@ -1,5 +1,11 @@
 /**
- * Release a terminal run's scratch and tagged artifact caches.
+ * Release scratch: a node invocation's own when it ends, and a terminal run's whole
+ * scratch and tagged artifact caches when the run ends.
+ *
+ * `releaseNodeScratch` removes one invocation's `$NODE_SCRATCH_DIR` once that invocation
+ * has completed, failed or been skipped; the layer walker calls it, so the invocation's
+ * own processes have ended. Run-end release below stays the backstop for an invocation
+ * that never got there (interrupted, or its process died).
  *
  * Scratch is removed only once the run is terminal and nothing of it can still write
  * into it. `releaseRunScratch` proves the second half itself: the run's recorded
@@ -113,6 +119,37 @@ export async function releaseRunScratch(run: ScratchRun): Promise<void> {
     await deregisterScratchWorktrees(run.working_path, getRunScratchDir(artifactsDir), logContext);
   }
   await removeScratchAndCaches(artifactsDir, logContext, caches);
+}
+
+/**
+ * Remove one node invocation's scratch directory, deregistering the git worktrees under
+ * it from `repoPath` first. A container run's worktrees are registered in the container's
+ * git, so only their files are deleted, as at container teardown. Never throws: a failed
+ * release is logged and the node's result stands; run-end release retries the removal.
+ */
+export async function releaseNodeScratch({
+  scratchDir,
+  repoPath,
+  container,
+  logContext,
+}: {
+  scratchDir: string;
+  repoPath: string;
+  container: boolean;
+  logContext: Record<string, unknown>;
+}): Promise<void> {
+  try {
+    const stat = await lstat(scratchDir);
+    // An empty directory, the common case, costs no git subprocess. A link a node put in
+    // place of the directory is removed without following it.
+    if (stat.isDirectory() && !container && (await readdir(scratchDir)).length > 0) {
+      await deregisterScratchWorktrees(repoPath, scratchDir, logContext);
+    }
+    await rm(scratchDir, { recursive: true, force: true });
+  } catch (error) {
+    if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
+    getLog().warn({ ...logContext, err: error, path: scratchDir }, 'node_scratch.remove_failed');
+  }
 }
 
 /**

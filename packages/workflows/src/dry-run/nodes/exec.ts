@@ -19,6 +19,7 @@ import {
 import { collectCredentialValues } from '@archon/paths/credential-redaction';
 import { assertWorkflowSourceIntegrity } from '../../workflow-source';
 import { buildExecNodeEnvironment } from '../../exec-environment';
+import { currentNodeScratchDir } from '../../workflow-variables';
 import type { NodeExecutionMetadata } from '../../schemas/node-execution';
 import type { ExecNode } from '../../schemas';
 import type { DryRunContext } from '../context';
@@ -38,6 +39,8 @@ export async function executeCodeNode(
     // a pure-stub dry run creates no directory.
     await mkdir(ctx.artifactsDir, { recursive: true });
     await mkdir(ctx.stateDir, { recursive: true });
+    const nodeScratchDir = currentNodeScratchDir();
+    if (nodeScratchDir !== undefined) await mkdir(nodeScratchDir, { recursive: true });
     const env = {
       ...process.env,
       ...ctx.envVars,

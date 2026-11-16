@@ -93,6 +93,7 @@ describe('user-controlled runtime variable delivery', () => {
         LOG_DIR: '/logs',
         ADOPTED_RUN_DIR: '',
         PACK_DIR: '',
+        NODE_SCRATCH_DIR: '',
         WORKFLOW_ID: 'run-1',
         BASE_BRANCH: 'dev',
         USER_MESSAGE: value('message'),
