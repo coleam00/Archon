@@ -111,6 +111,7 @@ type TriggerOptions = {
   deliveryId?: string;
   inputs?: string;
   item?: string;
+  noItem?: boolean;
 };
 
 type TriggerDispatch = (requestId: string, hostId: string) => Promise<void>;
@@ -200,13 +201,30 @@ async function inheritedItemKey(
   const project = await registeredProjectKeyForPath(start.cwd, host.records.codebases);
   if (project === null)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there, or --no-item to start it on no item.`
     );
   if (project !== item.projectKey)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start runs in project '${project}'. An item belongs to one project, so the start cannot inherit it: pass --item <key> to name its item there.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start runs in project '${project}'. An item belongs to one project, so the start cannot inherit it: pass --item <key> to name its item there, or --no-item to start it on no item.`
     );
   return item.key;
+}
+
+function assertItemOptions(options: TriggerOptions): void {
+  if (options.item === undefined) return;
+  if (options.noItem) throw new Error('--item and --no-item are mutually exclusive.');
+  assertItemKey(options.item);
+}
+
+/** The item the fired start is on: `--item`, none with `--no-item`, else the caller's. */
+async function firedItemKey(
+  host: WorkflowHost,
+  options: TriggerOptions,
+  sourceActor: SourceReceiptInput['sourceActor'],
+  start: { cwd: string; recorded: boolean }
+): Promise<string | undefined> {
+  if (options.noItem) return undefined;
+  return options.item ?? (await inheritedItemKey(host, sourceActor, start));
 }
 
 async function triggerFire(
@@ -231,7 +249,7 @@ async function triggerFire(
       );
     }
   }
-  if (options.item !== undefined) assertItemKey(options.item);
+  assertItemOptions(options);
   const config = await loadFireConfig(options.config);
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
@@ -243,9 +261,10 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
-  const itemKey =
-    options.item ??
-    (await inheritedItemKey(host, sourceActor, { cwd: config.binding.launch.cwd, recorded }));
+  const itemKey = await firedItemKey(host, options, sourceActor, {
+    cwd: config.binding.launch.cwd,
+    recorded,
+  });
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),

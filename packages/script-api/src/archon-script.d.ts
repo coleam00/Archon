@@ -2435,6 +2435,11 @@ declare module 'archon:script' {
   export interface TriggerFireOptions {
       /** One delivery id starts at most one run; build it from values a retry repeats. */
       readonly deliveryId?: string;
+      /**
+       * The item the started run is on (`--item`), or `null` for no item (`--no-item`).
+       * Left out, a fire from a run on an item inherits it.
+       */
+      readonly item?: string | null;
   }
   /** A fire's receipt and the admission its binding's request got; null when it got none. */
   export interface TriggerFired {
