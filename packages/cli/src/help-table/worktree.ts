@@ -32,6 +32,18 @@ export const worktreeHelp: HelpGroup = {
       ],
     },
     {
+      command: 'isolation',
+      subcommand: 'cleanup',
+      spec: 'isolation cleanup schedule install|remove|status',
+      description: 'Manage the macOS timer that runs the merged cleanup',
+      scopedFlags: [
+        {
+          spec: '--interval <seconds>',
+          description: 'Timer interval (positive integer, default: 21600)',
+        },
+      ],
+    },
+    {
       command: 'complete',
       spec: 'complete <branch> [...]',
       description: 'Remove worktree and local branch; retain remote branch',

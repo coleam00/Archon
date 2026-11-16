@@ -11,6 +11,7 @@ import {
   createDetachedChildFixture,
   finishStartupWindow,
   createTestWorkflowHost,
+  mockRefuseUnappliedStartPoint,
 } from '../test-support/workflow-command-harness';
 import { InvalidCodebaseDefaultCwdError } from '@archon/core/utils/codebase-path';
 import { describe, it, expect, beforeEach, afterEach, spyOn, mock, jest } from 'bun:test';
@@ -1491,6 +1492,54 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
     }
   });
 
+  it('refuses a --from the reused worktree does not contain before recording adoption', async () => {
+    const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
+    const { executeWorkflow } = await import('@archon/workflows/executor');
+    const conversationDb = await import('@archon/core/db/conversations');
+    const codebaseDb = await import('@archon/core/db/codebases');
+    const isolationDb = await import('@archon/core/db/isolation-environments');
+
+    (discoverWorkflowsWithConfig as ReturnType<typeof mock>).mockResolvedValueOnce({
+      workflows: [makeTestWorkflowWithSource({ name: 'assist', description: 'Help' })],
+      errors: [],
+    });
+    (conversationDb.getOrCreateConversation as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'conv-123',
+    });
+    (codebaseDb.findCodebaseByDefaultCwd as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'cb-123',
+      default_cwd: '/test/path',
+    });
+    (git.getCurrentBranchStrict as ReturnType<typeof mock>).mockResolvedValueOnce('my-feature');
+    (isolationDb.findActiveByWorkflow as ReturnType<typeof mock>).mockResolvedValueOnce({
+      id: 'env-1',
+      working_path: '/worktrees/feat',
+      provider: 'worktree',
+      branch_name: 'my-feature',
+      workflow_type: 'task',
+      workflow_id: 'my-feature',
+    });
+    const refusal = new Error('--from dev is not in its history');
+    mockRefuseUnappliedStartPoint.mockRejectedValueOnce(refusal);
+    (isolationDb.updateMetadata as ReturnType<typeof mock>).mockClear();
+    (executeWorkflow as ReturnType<typeof mock>).mockClear();
+
+    await expect(
+      workflowRunCommand(createTestWorkflowHost(), '/test/path', 'assist', 'hello', {
+        branchName: 'my-feature',
+        fromBranch: ' dev ',
+      })
+    ).rejects.toBe(refusal);
+    expect(mockRefuseUnappliedStartPoint).toHaveBeenLastCalledWith(
+      '/test/path',
+      '/worktrees/feat',
+      'my-feature',
+      'dev'
+    );
+    expect(isolationDb.updateMetadata).not.toHaveBeenCalled();
+    expect(executeWorkflow).not.toHaveBeenCalled();
+  });
+
   it('warns that --base did not change the cut-from when reusing a worktree', async () => {
     const { discoverWorkflowsWithConfig } = await import('@archon/workflows/workflow-discovery');
     const { executeWorkflow } = await import('@archon/workflows/executor');
@@ -1534,8 +1583,8 @@ describe('workflowRunCommand — isolation and worktree flags', () => {
         branchName: 'my-feature',
         baseBranch: 'epic/foo',
       });
-      // Unlike --from (which is fully ignored on reuse), --base is PARTIALLY
-      // applied: the cut-from is already fixed, but $BASE_BRANCH still moves.
+      // --base is PARTIALLY applied on reuse: the cut-from is already fixed, but
+      // $BASE_BRANCH still moves.
       // The wording has to say so, or it trades one silent surprise for another.
       expect(consoleWarnSpy).toHaveBeenCalledWith(
         expect.stringContaining('--base epic/foo did not change the cut-from')

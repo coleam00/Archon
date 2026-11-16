@@ -23,6 +23,7 @@ packages/cli/
 │   │   ├── workflow-query.ts # workflow list/test/status/get/runs/logs/wait
 │   │   ├── workflow-run-*.ts # workflow run: select, admit, launch, execute
 │   │   ├── isolation.ts    # isolation list/cleanup (list/merged-cleanup delegate to @archon/core/operations)
+│   │   ├── isolation-schedule.ts # isolation cleanup schedule: the macOS merged-cleanup timer
 │   │   ├── setup.ts        # setup command implementation
 │   │   ├── chat.ts         # chat command implementation
 │   │   ├── validate.ts     # validate command implementation
@@ -393,7 +394,7 @@ When `--branch` is provided:
 2. **Health check:** `provider.healthCheck(path)` on existing
 3. **Branch verification:** Read the current local branch. Refuse a different branch or detached
    HEAD, naming the requested branch, actual branch, and path without changing the checkout.
-4. **Reuse:** If found, healthy, and on the requested branch (warns if `--from` was specified but not applied)
+4. **Reuse:** If found, healthy, and on the requested branch (refused when `--from` is given and is not in the worktree's history)
 5. **Create:** If not found or unhealthy -- passes a `taskBranch: { kind: 'new', fromBranch }`
    selection to the provider when `--from` is specified. Adoption instead passes
    `taskBranch: { kind: 'existing', branch }`, which checks out that exact local branch

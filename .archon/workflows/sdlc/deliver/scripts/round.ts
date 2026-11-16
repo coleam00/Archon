@@ -10,8 +10,8 @@
  * round: another round reruns the implementer and the review to reach the same CI step.
  *
  * Bound inputs (canonical text; a skipped producer arrives as "null"):
- * - INPUTS_PREVIOUS / INPUTS_PRIOR_REPORT / INPUTS_PREVIOUS_PR_URL: the previous round's
- *   `round`, `prior_report` and `pr_url` ('' on the first round).
+ * - INPUTS_PRIOR_REPORT / INPUTS_PREVIOUS_PR_URL: the previous round's `prior_report`
+ *   and `pr_url` ('' on the first round).
  * - INPUTS_GREEN / INPUTS_RED_CAUSE: the implementer's verdict on the checks it ran.
  * - INPUTS_PR_URL: this round's pull request.
  * - INPUTS_REVIEW_READY / INPUTS_REVIEW_ACTION: the review verdict.
@@ -47,8 +47,6 @@ type Ended =
   | 'ci_pr_caused'
   | 'ci_other';
 
-const previous = Number.parseInt(input('previous'), 10);
-const round = (Number.isNaN(previous) ? 0 : previous) + 1;
 const green = input('green');
 const redCause = input('red_cause');
 const reviewReady = input('review_ready');
@@ -110,7 +108,6 @@ function decide(): { reason: Ended; again: boolean; summary: string | undefined 
 const { reason, again, summary } = decide();
 
 emit({
-  round,
   done: !again,
   ready: reason === 'delivered',
   reason,

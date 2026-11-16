@@ -520,6 +520,7 @@ async function installTimer(
     archonHome: getArchonHome(),
     path: process.env.PATH ?? '',
     schedule: config.schedule,
+    removeCommand: `archon trigger schedule remove --config ${configPath}`,
   });
 }
 

@@ -5615,11 +5615,15 @@ export interface components {
           allowLocalBinding?: boolean;
           httpProxyPort?: number;
           socksProxyPort?: number;
+        } & {
+          [key: string]: unknown;
         };
         filesystem?: {
           allowWrite?: string[];
           denyWrite?: string[];
           denyRead?: string[];
+        } & {
+          [key: string]: unknown;
         };
         ignoreViolations?: {
           [key: string]: string[];
@@ -5630,6 +5634,8 @@ export interface components {
         ripgrep?: {
           command: string;
           args?: string[];
+        } & {
+          [key: string]: unknown;
         };
       } & {
         [key: string]: unknown;
@@ -5890,11 +5896,15 @@ export interface components {
           allowLocalBinding?: boolean;
           httpProxyPort?: number;
           socksProxyPort?: number;
+        } & {
+          [key: string]: unknown;
         };
         filesystem?: {
           allowWrite?: string[];
           denyWrite?: string[];
           denyRead?: string[];
+        } & {
+          [key: string]: unknown;
         };
         ignoreViolations?: {
           [key: string]: string[];
@@ -5905,6 +5915,8 @@ export interface components {
         ripgrep?: {
           command: string;
           args?: string[];
+        } & {
+          [key: string]: unknown;
         };
       } & {
         [key: string]: unknown;

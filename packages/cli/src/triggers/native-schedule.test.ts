@@ -6,6 +6,7 @@ import { join, resolve } from 'node:path';
 import { promisify } from 'node:util';
 import { removeTempTree } from '@archon/paths/test-utils';
 import {
+  inspectMacosNativeSchedule,
   installMacosNativeSchedule,
   removeMacosNativeSchedule,
   renderMacosLaunchAgent,
@@ -27,6 +28,7 @@ function config(overrides: Partial<NativeScheduleConfig> = {}): NativeScheduleCo
     archonHome: '/Users/example/.archon',
     path: '/Users/example/.bun/bin:/opt/homebrew/bin:/usr/bin:/bin',
     schedule: { intervalSeconds: 37, runAtLoad: false },
+    removeCommand: 'archon trigger schedule remove --config /tmp/a&b.json',
     ...overrides,
   };
 }
@@ -248,5 +250,40 @@ describe('workflow wake native schedule', () => {
       ['/bin/launchctl', 'print', 'gui/501/com.archon.trigger.source-refresh'],
     ]);
     expect(await readFile(path, 'utf8')).toBe(plist);
+  });
+});
+
+describe('isolation cleanup native schedule', () => {
+  it('runs the merged cleanup from the Archon home, and status reports what is installed', async () => {
+    const { isolationCleanupScheduleConfig } = await import('../commands/isolation-schedule');
+    const generated = isolationCleanupScheduleConfig();
+    expect(isolationCleanupScheduleConfig(60).id).toBe(generated.id);
+    expect(generated.programArguments.slice(-3)).toEqual(['isolation', 'cleanup', '--merged']);
+    expect(generated.workingDirectory).toBe(generated.archonHome);
+    expect(generated.schedule).toEqual({ intervalSeconds: 21600, runAtLoad: true });
+
+    const directory = await scratchDirectory();
+    let printFails = false;
+    const runtime = {
+      platform: 'darwin' as const,
+      uid: 501,
+      launchAgentsDirectory: directory,
+      runCommand: async (_executable: string, args: readonly string[]) => {
+        if (args[0] === 'print' && printFails) throw new Error('service not registered');
+      },
+    };
+    expect(await inspectMacosNativeSchedule(generated.id, runtime)).toBeUndefined();
+    const installed = await installMacosNativeSchedule(generated, runtime);
+    expect(await inspectMacosNativeSchedule(generated.id, runtime)).toEqual({
+      path: installed,
+      registered: true,
+    });
+    printFails = true;
+    expect(await inspectMacosNativeSchedule(generated.id, runtime)).toEqual({
+      path: installed,
+      registered: false,
+    });
+    expect(await removeMacosNativeSchedule(generated.id, runtime)).toBe(true);
+    expect(await inspectMacosNativeSchedule(generated.id, runtime)).toBeUndefined();
   });
 });

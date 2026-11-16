@@ -340,6 +340,15 @@ export async function runIsolation({
   values,
   json,
 }: CliRouteContext): Promise<number> {
+  if (subcommand === 'cleanup' && positionals[2] === 'schedule') {
+    // The timer commands never open the store, but install refuses a file-store install:
+    // the merged cleanup is SQL-only, so every pass it schedules would fail.
+    const { isolationCleanupScheduleCommand } = await loadRoute(
+      () => import('../commands/isolation-schedule'),
+      { providers: false, database: positionals[3] === 'install' }
+    );
+    return await isolationCleanupScheduleCommand(positionals.slice(3), values);
+  }
   const { isolationListCommand, isolationCleanupCommand, isolationCleanupMergedCommand } =
     await loadRoute(() => import('../commands/isolation'), { database: true });
   switch (subcommand) {

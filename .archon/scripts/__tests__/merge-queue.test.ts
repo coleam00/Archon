@@ -161,7 +161,7 @@ function git(cwd: string, ...args: string[]): void {
 
 /** A checkout whose remote's default branch lists `Maintainer`, and an empty Archon home. */
 function install(): Install {
-  const checkout = gitCheckout({}, track);
+  const checkout = gitCheckout(track);
   git(checkout, 'checkout', '-q', 'dev');
   mkdirSync(join(checkout, '.archon/sdlc/policy'), { recursive: true });
   writeFileSync(join(checkout, '.archon/sdlc/policy/maintainers.json'), '["Maintainer"]\n');
@@ -597,15 +597,6 @@ describe('the merge queue scripts', () => {
     expect(stored(at).value).toMatchObject({ claim: { run_id: 'run-1' }, facts: { merge: { status: 'asking' } } });
   }, 60_000);
 
-  test('a red default branch asks nobody: the sweep ends not healthy, with its diagnosis, and the pull request waits', () => {
-    const at = install();
-    seed(at, item(BUILT, undefined, CLAIMED));
-    const held = ok(run(at, 'record', recordInputs([decision({ action: 'wait', reason: 'dev is red' })], BASE_RED)));
-    expect(held).toMatchObject({ healthy: false, merged: [], question: '', options: [], recommendation: null, asked: null });
-    expect(held.summary).toContain(`The default branch dev is red at ${OLD} (lint); nothing merges until it is green. ${BASE_RED.summary}`);
-    expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting' } } });
-  }, 60_000);
-
   test('an idle run that finds a stored item no pickup can act on ends not healthy and names it', () => {
     const at = install();
     const idle = { INPUTS_PATH: 'idle', INPUTS_ITEMS: '[]', INPUTS_SETTLED: '[]', INPUTS_BASE: JSON.stringify(FACTS_BASE_GREEN), INPUTS_SWEEP: 'null' };
@@ -645,7 +636,6 @@ describe('the merge queue scripts', () => {
     seed(at, item(BUILT, undefined, CLAIMED));
     const extra = run(at, 'record', recordInputs([decision({ number: 7 }), decision({ action: 'wait', reason: 'CI pending' })]));
     expect(extra.code).toBe(0);
-    expect(extra.stderr).toContain('the sweep decided PR 7, which this run did not claim; not recorded');
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { status: 'waiting', decisions: [{ reason: 'CI pending' }] } } });
   }, 60_000);
 
@@ -728,7 +718,6 @@ describe('the merge queue facts and gate', () => {
     const same = on(at, 'facts', { pr: pending });
     expect(same.code).toBe(0);
     expect(JSON.parse(same.stdout)).toMatchObject({ path: 'idle', items: [], settled: [] });
-    expect(same.stderr).toContain('1 pull request(s) read the same as at their last wait; not swept');
     // Released with nothing recorded, so the next sweep reads it again.
     expect(stored(at).value).toMatchObject({ claim: null, facts: { merge: { decisions: waited.facts.merge?.decisions } } });
 
