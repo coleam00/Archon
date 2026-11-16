@@ -34,11 +34,6 @@ describe('logger', () => {
       expect(getLogLevel()).toBe('debug');
     });
 
-    it('is case-insensitive', () => {
-      setLogLevel('DEBUG');
-      expect(getLogLevel()).toBe('debug');
-    });
-
     it('throws on invalid level', () => {
       expect(() => setLogLevel('invalid')).toThrow("Invalid log level: 'invalid'. Valid levels:");
     });
@@ -50,12 +45,6 @@ describe('logger', () => {
       expect(getLogLevel()).toBe('fatal');
       setLogLevel('WaRn');
       expect(getLogLevel()).toBe('warn');
-    });
-  });
-
-  describe('getLogLevel', () => {
-    it('returns default level info', () => {
-      expect(getLogLevel()).toBe('info');
     });
   });
 

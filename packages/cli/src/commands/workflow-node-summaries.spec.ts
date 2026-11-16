@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * `buildNodeSummaries` projects a run's event log into the per-node view that
  * `archon workflow get/status --verbose` renders, and the `nodes` array their

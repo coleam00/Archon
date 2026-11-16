@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * A run's end starts the stage a run-ended binding names and admits the work its slot
  * held back, with no other command: real SQLite, every run in its own CLI process.

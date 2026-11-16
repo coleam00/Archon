@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { getLog } from './workflow-shared';
 import * as chatScope from '../workflow-scope';
 import { afterEach, expect, spyOn, test } from 'bun:test';
@@ -1179,7 +1180,7 @@ test.each([true, false].flatMap(all => [undefined, 'project'].map(countBy => ({ 
       ).toBe(0);
       const text = lines.join('\n');
       expect(text.match(/Attention coverage incomplete/g)).toHaveLength(2);
-      expect(text).not.toContain('No runs need attention');
+      expect(text).not.toContain('Nothing needs attention');
       expect(text.includes('bad-a')).toBe(all);
       expect(text.includes('bad-b')).toBe(all);
     } finally {

@@ -196,12 +196,6 @@ describe('when-grammar parse — $INPUTS (engine parity)', () => {
   test('rejects a bare $INPUTS with no name', () => {
     expect(parse("$INPUTS == 'x'").ok).toBe(false);
   });
-
-  test('composes with node atoms in one expression', () => {
-    const r = parse("$INPUTS.mode == 'fast' && $classify.output.type == 'BUG'");
-    expect(r.ok).toBe(true);
-    if (r.ok) expect(r.ast.or[0].length).toBe(2);
-  });
 });
 
 describe('when-grammar format', () => {

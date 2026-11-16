@@ -585,6 +585,55 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id ON remote_agent_item_rulings(item_id);
 
+      -- Links between items, one row per link, ended not deleted; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_links (
+        -- Recording order; timestamps tie and the id is random.
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
+        from_item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        to_item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        kind TEXT NOT NULL,
+        by_declared TEXT,
+        by_user_id TEXT,
+        via TEXT NOT NULL,
+        from_run_id TEXT,
+        from_node_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        ended_at TEXT,
+        ended_by_declared TEXT,
+        ended_by_user_id TEXT,
+        ended_via TEXT,
+        ended_from_run_id TEXT,
+        ended_from_node_path TEXT,
+        CHECK (from_item_id <> to_item_id),
+        CHECK ((ended_at IS NULL) = (ended_via IS NULL))
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_item_links_active
+        ON remote_agent_item_links(from_item_id, to_item_id, kind) WHERE ended_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_item_links_from_item_id ON remote_agent_item_links(from_item_id);
+      CREATE INDEX IF NOT EXISTS idx_item_links_to_item_id ON remote_agent_item_links(to_item_id);
+      -- Asks a completed run left on its item; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
+        id TEXT PRIMARY KEY DEFAULT (lower(hex(randomblob(16)))),
+        item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        run_id TEXT NOT NULL,
+        workflow_name TEXT NOT NULL,
+        position INTEGER NOT NULL,
+        ask TEXT NOT NULL,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        closed_as TEXT,
+        answer TEXT,
+        closed_at TEXT,
+        closed_via TEXT,
+        closed_by_declared TEXT,
+        closed_by_user_id TEXT,
+        closed_from_run_id TEXT,
+        closed_from_node_path TEXT,
+        replaced_by_run_id TEXT
+      );
+      CREATE INDEX IF NOT EXISTS idx_item_asks_open ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_item_asks_run_id ON remote_agent_item_asks(run_id);
+
       CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
         project_key TEXT NOT NULL,
         name TEXT NOT NULL,

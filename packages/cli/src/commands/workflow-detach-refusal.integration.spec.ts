@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * A detached launch the child would refuse is refused in the result the caller reads,
  * before the fork: real git, real SQLite, the CLI in its own process.

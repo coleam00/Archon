@@ -79,7 +79,50 @@ const read: ItemRead = {
       withdrawn: { at: '2026-11-01T10:05:00.000Z', via: 'api', by: null, fromRun: null },
     },
   ],
-  degraded: [{ type: 'degraded', reason: 'ruling_unreadable', rulingId: 'ruling-lost' }],
+  links: [
+    {
+      id: 'link-ended',
+      kind: 'part_of',
+      direction: 'outgoing',
+      other: { id: 'order-row', projectKey: 'acme/web', key: 'order-1' },
+      at: '2026-11-01T08:00:00.000Z',
+      via: 'cli',
+      by: null,
+      fromRun: null,
+      ended: {
+        at: '2026-11-01T08:30:00.000Z',
+        via: 'cli',
+        by: { declared: 'alice' },
+        fromRun: null,
+      },
+    },
+    {
+      id: 'link-out',
+      kind: 'depends_on',
+      direction: 'outgoing',
+      other: { id: 'other-row', projectKey: 'acme/api', key: 'issue-3' },
+      at: '2026-11-01T08:10:00.000Z',
+      via: 'cli',
+      by: null,
+      fromRun: null,
+      ended: null,
+    },
+    {
+      id: 'link-in',
+      kind: 'duplicate_of',
+      direction: 'incoming',
+      other: { id: 'dupe-row', projectKey: 'acme/web', key: 'issue-9' },
+      at: '2026-11-01T08:20:00.000Z',
+      via: 'cli',
+      by: null,
+      fromRun: null,
+      ended: null,
+    },
+  ],
+  degraded: [
+    { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'ruling-lost' },
+    { type: 'degraded', reason: 'link_unreadable', linkId: 'link-lost' },
+  ],
 };
 
 test('an item read prints its runs, open questions and answers', () => {
@@ -111,4 +154,26 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(lines[ruling]).toContain('by operator-agent (self-declared)');
   expect(lines[ruling]).toContain('(withdrawn 2026-11-01T10:05Z)');
   expect(text).toContain('1 ruling(s) on this item could not be read: ruling-lost');
+});
+
+test('an item read prints each link with the other item, kind and direction', () => {
+  const lines = itemReadLines(read);
+  const section = lines.slice(lines.indexOf('Links:') + 1, lines.indexOf('Open questions:'));
+  const line = (id: string) => section.find(row => row.includes(id)) ?? '';
+  expect(line('link-out')).toContain('depends_on');
+  expect(line('link-out')).toContain('acme/api/issue-3');
+  expect(line('link-in')).toContain('duplicate_of');
+  expect(line('link-in')).toContain('issue-9');
+  // A link reads from its `from` to its `to`: the other item follows the kind on an
+  // outgoing link and precedes it on an incoming one.
+  const out = line('link-out');
+  expect(out.indexOf('acme/api/issue-3')).toBeGreaterThan(out.indexOf('depends_on'));
+  const inc = line('link-in');
+  expect(inc.indexOf('issue-9')).toBeLessThan(inc.indexOf('duplicate_of'));
+  expect(line('link-ended')).toContain('part_of');
+  expect(line('link-ended')).toContain('order-1');
+  expect(line('link-ended')).toContain('alice');
+  expect(line('link-ended')).toContain('2026-11-01T08:30Z');
+  expect(line('link-out')).not.toContain('ended');
+  expect(section.some(row => row.includes('link-lost'))).toBe(true);
 });

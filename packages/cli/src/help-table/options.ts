@@ -181,13 +181,14 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--as <name>',
     description:
-      "For 'workflow approve/reject/respond/answer/rule': the name the answerer declares for itself,\nrecorded with an attention wait's answer or a ruling as a claim (never checked; refused at a gate)",
+      "For 'workflow approve/reject/respond/answer/rule/link': the name the answerer declares for itself,\nrecorded with an attention wait's answer, a ruling or a link as a claim (never checked; refused at a gate)",
     owners: [
       { command: 'workflow', subcommand: 'approve' },
       { command: 'workflow', subcommand: 'reject' },
       { command: 'workflow', subcommand: 'respond' },
       { command: 'workflow', subcommand: 'answer' },
       { command: 'workflow', subcommand: 'rule' },
+      { command: 'workflow', subcommand: 'link' },
     ],
   },
   {
@@ -224,11 +225,12 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--item <key>',
     description:
-      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on",
+      "The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on; for 'workflow link': the item the link is from",
     owners: [
       { command: 'workflow', subcommand: 'run' },
       { command: 'workflow', subcommand: 'runs' },
       { command: 'workflow', subcommand: 'rule' },
+      { command: 'workflow', subcommand: 'link' },
       { command: 'trigger', subcommand: 'fire' },
     ],
   },

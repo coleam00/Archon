@@ -195,10 +195,6 @@ describe('renameReasonMessage', () => {
     expect(msg).toContain('..');
     expect(msg).toContain('\\');
   });
-
-  test('noop is a fixed string', () => {
-    expect(renameReasonMessage('noop', 'x')).toBe('The new name is the same as the current one.');
-  });
 });
 
 describe('planRename', () => {

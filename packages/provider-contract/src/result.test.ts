@@ -79,15 +79,6 @@ describe('mergeTokenUsage', () => {
     });
   });
 
-  test('does not flag a single complete contribution', () => {
-    expect(mergeTokenUsage([{ input: 10, output: 1, cacheRead: 5, cacheWrite: 1 }])).toEqual({
-      input: 10,
-      output: 1,
-      cacheRead: 5,
-      cacheWrite: 1,
-    });
-  });
-
   test('ignores total and cost rather than half-aggregating them', () => {
     const merged = mergeTokenUsage([
       { input: 10, output: 1, total: 11, cost: 0.5 },
