@@ -91,9 +91,17 @@ bindings:
     schedule: { interval_seconds: 1800 }
     inputs:
       build_queue_binding: { binding: build-queue }
+      # The most items one pass fires: the build queue's capacity below. An install that
+      # lowers that capacity lowers this in the written file's launch.inputs too, or a
+      # backlog waits in fire order and an urgent item starts behind it.
+      limit: '10'
+      # 'true' in the written file's launch.inputs makes the pick also start the build
+      # queue's revisit of blocked items, at most once per six hours.
+      revisit_blocked: 'false'
   # Fire-only: no clock starts it. The pick fires it once per waiting issue, and a round
   # that continues fires it for its next round, each with the issue's number and on the
-  # issue's item. `queue`, so a start that finds every slot busy keeps its place and
+  # issue's item. A start with no number builds nothing; the pick fires one to revisit
+  # blocked items when its revisit_blocked is on. `queue`, so a start that finds every slot busy keeps its place and
   # runs when a slot frees.
   build-queue:
     workflow: archon-build-queue

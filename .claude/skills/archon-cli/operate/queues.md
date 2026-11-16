@@ -116,8 +116,9 @@ Optional inputs, with their defaults in each workflow's YAML:
   for a label), `label` and `label_actor` for a label event, and `build_pick_binding`
   (the binding file a routed item's build pick is fired through).
 - `archon-build-pick`: `build_queue_binding` (required: the binding file it fires once
-  per waiting issue) and `orders_only` (`true` starts only members of an open work
-  order).
+  per waiting issue), `limit` (default `10`: the most issues one pass fires),
+  `orders_only` (`true` starts only members of an open work order) and
+  `revisit_blocked` (`true` also starts the build queue's revisit of blocked items).
 - `archon-build-queue`: `number` (the issue to build; empty claims the item the
   message names, and with no message nothing), `revisit_blocked` (`true`: a run with no
   `number` sends blocked items that no longer look blocked back to intake), `round_limit` (default

@@ -138,7 +138,7 @@ export interface BlockedItem {
   readonly blocked_by: readonly string[];
 }
 
-// A scheduled queue would otherwise judge the same blocked items on every run.
+// A scheduled revisit would otherwise judge the same blocked items on every run.
 const REVISIT_EVERY_MS = 6 * 60 * 60 * 1000;
 const REVISITED = 'revisited';
 
@@ -291,35 +291,44 @@ function buildInputs(item: QualifiedPr): Record<string, string> {
 }
 
 /**
- * Start the item's next build-queue round now, through the operator's build-queue
- * binding (`build_queue_binding`), on the issue's item. One run starts at most one next
- * round per item.
+ * The delivery key of a build-queue start for an item that waits at `revision` of its
+ * work item. Every start of one item state shares it, so the engine starts that state
+ * once: a pick that finds the item still waiting where a finishing round left it fires
+ * the delivery that round fired. Any write to the work item moves the revision.
  */
-export function nextRound(item: QualifiedPr, runId: string): string {
-  const { host, path } = item.repo;
-  return followUp(
-    input('build_queue_binding'),
-    `build-round:${host}/${path}#${String(item.number)}:${runId}`,
-    buildInputs(item),
-    'its next round',
-    { later: 'the next build pick starts it', item: itemKey(item.number) }
-  );
+function startKey(item: QualifiedPr, revision: number): string {
+  return `build-start:${item.repo.host}/${item.repo.path}#${String(item.number)}@${String(revision)}`;
 }
 
 /**
- * Start a waiting item's build-queue run through `binding`, on the issue's item. The
- * key holds the revision the item was read waiting at, so a pick that finds it still
- * waiting there fires the same delivery, which starts nothing twice; a round that ended
- * or a re-triage moves the revision, and the item starts again.
+ * Start the item's next build-queue round now, through the operator's build-queue
+ * binding (`build_queue_binding`), on the issue's item. `revision` is the one the
+ * caller's write left the item waiting at.
+ */
+export function nextRound(item: QualifiedPr, revision: number): string {
+  return followUp(input('build_queue_binding'), startKey(item, revision), buildInputs(item), 'its next round', {
+    later: 'the next build pick starts it',
+    item: itemKey(item.number),
+  });
+}
+
+/**
+ * Start a waiting item's build-queue run through `binding`, on the issue's item.
+ * `revision` is the one the item was read waiting at.
  */
 export function startWaiting(binding: string, item: QualifiedPr, revision: number): Fired {
-  const { host, path } = item.repo;
-  return fire(
-    binding,
-    `build-start:${host}/${path}#${String(item.number)}@${String(revision)}`,
-    buildInputs(item),
-    itemKey(item.number)
-  );
+  return fire(binding, startKey(item, revision), buildInputs(item), itemKey(item.number));
+}
+
+/**
+ * Start one build-queue run that names no issue and revisits the blocked items. It
+ * works no single issue, so the fire names no item; only a run on no item makes it. The
+ * key is the revisit window `at` falls in: an item is listed once per window, so a
+ * second run in the same window would list nothing, and the engine starts one.
+ */
+export function startRevisit(binding: string, at: string): Fired {
+  const window = Math.floor(Date.parse(at) / REVISIT_EVERY_MS);
+  return fire(binding, `build-revisit:${String(window)}`, { revisit_blocked: 'true' });
 }
 
 /**

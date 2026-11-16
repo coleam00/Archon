@@ -277,13 +277,14 @@ function callLog(): string {
 
 /**
  * The next round fires the build-queue binding for the item it continues, keyed by the
- * item and this run alone, so a retry repeats the key and starts nothing twice. The fire
- * names the issue's item, so the round is on it whichever run fired it.
+ * item and the revision the run's write left it waiting at: the key a pick fires for an
+ * item it finds waiting there, so the engine starts that state once. The fire names the
+ * issue's item, so the round is on it whichever run fired it.
  */
-function expectNextRound(calls: string): void {
+function expectNextRound(calls: string, revision: number): void {
   const fire = readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]).find(argv => argv[0] === 'trigger');
   expect(fire?.slice(0, 6)).toEqual([
-    'trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-round:ghe.example.com/example/repo#7:run-1',
+    'trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', `build-start:ghe.example.com/example/repo#7@${String(revision)}`,
   ]);
   const inputs = fire?.[fire.indexOf('--inputs') + 1] ?? '';
   expect(JSON.parse(readFileSync(inputs, 'utf8'))).toEqual({ number: '7', repo_host: 'ghe.example.com', repo_path: 'example/repo' });
@@ -589,7 +590,7 @@ describe('the build queue scripts', () => {
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');
     const applied = run(at, 'apply', { ...applyInputs(CONTINUE), ...SELECTED, ARCHON_CALL_LOG: calls });
     expect(ok(applied)).toMatchObject({ decision: 'continue', question: '', options: [], asked: null });
-    expectNextRound(calls);
+    expectNextRound(calls, stored(at).revision);
     expect(ok(applied).summary).toContain('its next round started at once (run fired-run)');
     expect(notices(calls)).toEqual([{ text: 'Issue 7: another round; R1 is correctable', labels: ['stage=build', 'kind=continued', 'item=7'] }]);
     const doc = stored(at).value;
@@ -696,7 +697,7 @@ describe('the build queue scripts', () => {
     seed(at, triaged(CLAIMED));
     ok(run(at, 'apply', applyInputs(ASK)));
     // The wait refused the ask, the run failed and was abandoned: the next pick frees its claim and starts nothing.
-    const later = { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"cancelled"}', ...SELECTED };
+    const later = { WORKFLOW_ID: 'run-2', INTAKE_RUN_STATUSES: '{"run-1":"cancelled"}', INPUTS_LIMIT: '10', ...SELECTED };
     const idle = ok(run(at, 'pick', later));
     expect(idle).toMatchObject({ started: [], healthy: false });
     expect(stored(at).value).toMatchObject({ claim: null, facts: { build: { status: 'asking' } } });
@@ -785,7 +786,7 @@ describe('the build queue scripts', () => {
     });
     const output = ok(ruled);
     // The answer continues the item at once through the build-queue binding.
-    expectNextRound(calls);
+    expectNextRound(calls, stored(at).revision);
     expect(output.summary).toContain('its next round started at once (run fired-run)');
     const heading = output.section as string;
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the build queue's question on a stopped run, \d{4}-\d{2}-\d{2}\)$/);

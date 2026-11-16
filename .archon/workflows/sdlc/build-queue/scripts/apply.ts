@@ -41,7 +41,7 @@ import { setPrDraft, viewPr } from '../../.shared/pr.ts';
 import { pushHead } from '../../.shared/push.ts';
 import { runReviews } from '../../.shared/review-rounds.ts';
 import { announce, type DecisionEntry } from '../../.shared/queue.ts';
-import { updateClaimed } from '../../.shared/workitem.ts';
+import { writeClaimed } from '../../.shared/workitem.ts';
 
 type RouteOutput = NodeOutput<'archon-build-queue', 'route'>;
 type AnswerOutput = NodeOutput<'archon-build-queue', 'answer'>;
@@ -159,9 +159,9 @@ function summaryOf(item: QualifiedPr | null, decision: Decision): string {
 }
 
 /** The summary once the writes are done; a continue starts the next round now instead of waiting for the next build pick. */
-function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, runId: string): string {
+function afterWrite(summary: string, wrote: string | null, decision: Decision, item: QualifiedPr, revision: number): string {
   const written = wrote === null ? summary : `${summary} (${wrote})`;
-  return decision.kind === 'continue' ? `${written}; ${nextRound(item, runId)}` : written;
+  return decision.kind === 'continue' ? `${written}; ${nextRound(item, revision)}` : written;
 }
 
 /** The summary of a path with no item, so nothing is written or asked; null on an item's path. */
@@ -290,7 +290,7 @@ function main(): void {
     reason: wrote === null ? decision.reason : `${decision.reason} (${wrote})`,
     links,
   };
-  updateClaimed(item, runId, doc =>
+  const { revision } = writeClaimed(item, runId, doc =>
     withBuild(doc, {
       at,
       run_id: runId,
@@ -302,7 +302,7 @@ function main(): void {
     })
   );
   announceDecision(decision, result.item, result.pr);
-  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, runId) });
+  emit({ ...result, summary: afterWrite(result.summary, wrote, decision, item, revision) });
 }
 
 try {

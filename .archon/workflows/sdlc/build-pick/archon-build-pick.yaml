@@ -1,15 +1,21 @@
 name: archon-build-pick
 description: |
-  The build queue's pick: starts one archon-build-queue run for every work item that
-  waits for the build queue. One script lists the waiting items, ranks them in the
-  pack's pickup order (most urgent, then most important, then smallest, then oldest)
-  and fires the operator's build-queue binding once per issue, with the issue's number
-  and on the issue's engine item (`issue-<number>`). It claims and builds nothing: each
-  run it starts claims its own issue. The binding's capacity decides how many run at
-  once, and the rest queue in the order they were fired. An issue that still waits
-  where an earlier pass found it is fired with the same delivery, which starts nothing
-  twice. A pass that finds nothing waiting names the stored items no pickup can act
-  on, once each, and ends as a failed outcome.
+  The build queue's pick: starts archon-build-queue runs for the work items that wait
+  for the build queue, one run per issue. One script lists the waiting items, ranks
+  them in the pack's pickup order (most urgent, then most important, then smallest,
+  then oldest) and fires the operator's build-queue binding for the first `limit` of
+  them, each with the issue's number and on the issue's engine item
+  (`issue-<number>`). It claims and builds nothing: each run it starts claims its own
+  issue. The binding's capacity decides how many run at once, and the rest queue in the
+  order they were fired. An issue that still waits where an earlier pass found it
+  keeps its rank and is fired with the same delivery, which starts nothing twice, so
+  every pass ranks afresh and the queue stays about `limit` deep.
+
+  A pass ends as a failed outcome, naming the issues, when a fire started nothing,
+  when an earlier start's run ended before it claimed its issue (nothing starts that
+  issue again: start it by hand or re-triage it), or when nothing waits and stored
+  items no pickup can act on were found. With revisit_blocked on it also starts the
+  build queue's revisit of blocked items.
 
   Use when: a schedule binding the operator installed starts it, intake fires it for
   an item it routed (see https://archon.diy/guides/sdlc-operations/#build-queue), or
@@ -23,6 +29,13 @@ inputs:
       The absolute path of the operator's binding config for this repository's build
       queue. The pick fires it once per waiting issue with `archon trigger fire`, so
       each run is admitted under that binding's resource, capacity and overlap policy.
+  limit:
+    default: "10"
+    description: >-
+      The most waiting items one pass fires, taken from the top of the rank order. It
+      bounds how many starts sit in the binding's queue in fire order, so an item that
+      becomes urgent is fired on the next pass. The default is the build capacity the
+      pack recommends; an install that lowers that capacity lowers this with it.
   orders_only:
     default: "false"
     description: >-
@@ -31,9 +44,16 @@ inputs:
       https://archon.diy/guides/sdlc-operations/#work-orders), and nothing when no
       order is open. It first marks done each open order whose members have all
       merged. Anything else starts every waiting item.
+  revisit_blocked:
+    default: ""
+    description: >-
+      "true" also fires one build-queue start that names no issue and has
+      revisit_blocked on: that run builds nothing, and has one agent judge which
+      blocked items no longer look blocked. At most one such start per six hours, the
+      time before a blocked item is revisited again. Anything else revisits nothing.
 
-# False when a fire started nothing, or when nothing waits and stored items no pickup
-# can act on were found.
+# False when a fire started nothing, when an earlier start ended before it claimed its
+# issue, or when nothing waits and stored items no pickup can act on were found.
 returns: { node: pick, outcome: healthy }
 
 # Reads and writes only the state store: runs in the launch checkout beside any other
@@ -51,6 +71,9 @@ nodes:
       properties:
         # The issues whose build-queue run started or queued, in rank order.
         started: { type: array, items: { type: integer, minimum: 1 } }
+        # The issues whose earlier start ended before it claimed them: a person starts
+        # or re-triages each.
+        stranded: { type: array, items: { type: integer, minimum: 1 } }
         summary: { type: string }
         healthy: { type: boolean }
-      required: [started, summary, healthy]
+      required: [started, stranded, summary, healthy]

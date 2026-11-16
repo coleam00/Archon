@@ -27,13 +27,13 @@ import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredMergeDecision, type MergeAsked, type MergeDecisionEntry, type MergeEffect, type MergeStatus, otherEffect, withMerge } from '../../.shared/merge.ts';
 import { answeredChoice, rulingHeading } from '../../.shared/queue.ts';
-import { updateClaimed } from '../../.shared/workitem.ts';
+import { writeClaimed } from '../../.shared/workitem.ts';
 
 const STATUS = { merge: 'waiting', return: 'returned', park: 'parked' } as const satisfies Record<MergeEffect, MergeStatus>;
 
 /** Act on the answer now; when that does not start, the released item waits for the next queue run. */
-function continueNow(effect: string, item: QualifiedPr, runId: string): string {
-  if (effect === 'return') return `; ${nextRound(item, runId)}`;
+function continueNow(effect: string, item: QualifiedPr, runId: string, revision: number): string {
+  if (effect === 'return') return `; ${nextRound(item, revision)}`;
   if (effect !== 'merge') return '';
   const { host, path } = item.repo;
   // A sweep merges whatever waits; the binding names the repository, so it takes no inputs.
@@ -72,7 +72,7 @@ function main(): void {
     head: asked.head,
     reran: false,
   };
-  updateClaimed(asked.item, runId, doc => {
+  const { revision } = writeClaimed(asked.item, runId, doc => {
     const recorded = withMerge(doc, {
       at,
       run_id: runId,
@@ -89,7 +89,7 @@ function main(): void {
   emit({
     decision: effect,
     section: heading,
-    summary: `PR ${String(asked.pr.number)}: the maintainer chose ${choice.id} (${effect})${continueNow(effect, asked.item, runId)}.`,
+    summary: `PR ${String(asked.pr.number)}: the maintainer chose ${choice.id} (${effect})${continueNow(effect, asked.item, runId, revision)}.`,
   });
 }
 

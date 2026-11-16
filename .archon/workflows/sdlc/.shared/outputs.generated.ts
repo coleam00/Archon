@@ -17,6 +17,7 @@ export interface WorkflowOutputs {
   'archon-build-pick': {
     pick: {
       readonly started: ReadonlyArray<number>;
+      readonly stranded: ReadonlyArray<number>;
       readonly summary: string;
       readonly healthy: boolean;
     };

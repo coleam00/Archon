@@ -768,16 +768,21 @@ export function claimNamed(number: number, at: string, runId: string, pickup: Pi
   throw new Error(`${issue} does not wait for the ${pickup.stage} queue: stage ${now.doc.stage}${status}`);
 }
 
+/** `writeClaimed` for a caller that needs only the document. */
+export function updateClaimed(subject: QualifiedPr, runId: string, change: (doc: WorkItem) => WorkItem): WorkItem {
+  return writeClaimed(subject, runId, change).doc;
+}
+
 /**
- * Replace the document of the item this run holds, re-reading on a conflict. Refuses
- * when the claim is no longer this run's. A change that clears the claim gives back the
- * run's lease in the same write.
+ * Replace the document of the item this run holds, re-reading on a conflict, and return
+ * it with the revision the write made. Refuses when the claim is no longer this run's. A
+ * change that clears the claim gives back the run's lease in the same write.
  */
-export function updateClaimed(
+export function writeClaimed(
   subject: QualifiedPr,
   runId: string,
   change: (doc: WorkItem) => WorkItem
-): WorkItem {
+): { readonly doc: WorkItem; readonly revision: number } {
   const name = workItemName(subject.number);
   // Enqueues append to the document at any time, so a conflict is ordinary here.
   for (let attempt = 0; attempt < 3; attempt++) {
@@ -786,7 +791,8 @@ export function updateClaimed(
     if (doc.claim?.run_id !== runId) throw new Error(`${name} is no longer claimed by this run`);
     const changed = change(doc);
     const next = { ...changed, requests: queued(changed.requests) };
-    if (putClaimed(name, next, stored.revision).ok) return next;
+    const written = putClaimed(name, next, stored.revision);
+    if (written.ok) return { doc: next, revision: written.revision.revision };
   }
   throw new Error(`${name} kept changing: three conditional writes conflicted`);
 }

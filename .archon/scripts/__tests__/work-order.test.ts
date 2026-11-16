@@ -88,7 +88,16 @@ function pick(env: Record<string, string>, inputs: Record<string, string>, runId
   const result: ScriptRun = runPackScript('build-pick/scripts/pick', {
     cwd: env.INTAKE_STATE_CWD,
     forge: { kind: 'command', argv: [process.execPath, FAKE_ARCHON], fakeForge: true },
-    inputs: { ...env, WORKFLOW_ID: runId, INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json', ARCHON_CALL_LOG: calls, ...inputs },
+    inputs: {
+      ...env,
+      WORKFLOW_ID: runId,
+      INPUTS_BUILD_QUEUE_BINDING: '/bindings/build-queue.json',
+      INPUTS_LIMIT: '10',
+      // The run every fake fire answers with is live unless a test ends it.
+      RUN_LISTING: JSON.stringify([{ id: 'fired-run', status: 'running' }]),
+      ARCHON_CALL_LOG: calls,
+      ...inputs,
+    },
   });
   if (result.code !== 0) throw new Error(`pick exited ${String(result.code)}: ${result.stderr}`);
   const argvs = existsSync(calls) ? readFileSync(calls, 'utf8').trim().split('\n').map(line => JSON.parse(line) as string[]) : [];
@@ -121,6 +130,21 @@ describe('the build pick', () => {
     expect(inStore(env, () => state.get('work/8').value)).toMatchObject({ claim: null });
     // An issue still waiting where the first pass found it is fired with the same delivery, which the engine starts once.
     expect(pick(env, {}, 'pick-2').fires).toEqual(first.fires);
+  }, 60_000);
+
+  test('a pass fires only the first `limit` waiting issues, in rank order', () => {
+    const env = store({ 'work/7': waiting(7), 'work/8': waiting(8, 'now'), 'work/9': waiting(9) });
+    const picked = pick(env, { INPUTS_LIMIT: '2' }, 'pick-1');
+    expect(firedItems(picked)).toEqual(['issue-8', 'issue-7']);
+    expect(picked.output).toMatchObject({ started: [8, 7], healthy: true });
+  }, 60_000);
+
+  test('an issue whose earlier start ended before it claimed the issue is named, and the pick ends not healthy', () => {
+    // The fire replays the receipt of a run that has since failed, and the issue still waits.
+    const ended = { RUN_LISTING: JSON.stringify([{ id: 'fired-run', status: 'failed' }]) };
+    const picked = pick(store({ 'work/7': waiting(7) }), ended, 'pick-1');
+    expect(picked.output).toMatchObject({ started: [], stranded: [7], healthy: false });
+    expect(picked.output.summary).toContain('#7 (stranded: run fired-run failed before it claimed the issue');
   }, 60_000);
 });
 

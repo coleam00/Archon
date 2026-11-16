@@ -23,7 +23,7 @@ import { parseQualifiedPr, type QualifiedPr } from '../../.shared/identity.ts';
 import { nullableJson } from '../../.shared/inputs.ts';
 import { appendSection } from '../../.shared/issue.ts';
 import { answeredChoice, rulingHeading } from '../../.shared/queue.ts';
-import { readWorkItem, updateClaimed } from '../../.shared/workitem.ts';
+import { readWorkItem, writeClaimed } from '../../.shared/workitem.ts';
 
 interface Asked {
   readonly ask: BuildAsk;
@@ -71,7 +71,7 @@ function main(): void {
     effect === 'continue'
       ? `${asked.brief}\n\nThe maintainer chose "${choice.label}": ${choice.does}${heading === '' ? '' : ` The ruling is the issue body's "${heading}" section, which is part of the contract.`}`
       : '';
-  updateClaimed(item, runId, doc =>
+  const { revision } = writeClaimed(item, runId, doc =>
     withBuild(doc, {
       at,
       run_id: runId,
@@ -90,7 +90,7 @@ function main(): void {
     })
   );
   const next = {
-    continue: () => nextRound(item, runId),
+    continue: () => nextRound(item, revision),
     ready: () => 'its pull request waits for the merge queue',
     park: () => 'the queue stops working it until a re-triage',
   }[effect]();

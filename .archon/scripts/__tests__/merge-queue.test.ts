@@ -678,7 +678,7 @@ describe('the merge queue scripts', () => {
     expect(heading).toMatch(/^Current scope \(maintainer ruling on the merge queue's question on PR 42, \d{4}-\d{2}-\d{2}\)$/);
     // The returned round starts at once through the build queue's binding, for the item.
     const fire = fireOf(calls);
-    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', 'build-round:ghe.example.com/example/repo#7:run-1']);
+    expect(fire?.slice(0, 6)).toEqual(['trigger', 'fire', '--config', '/bindings/build-queue.json', '--delivery-id', `build-start:ghe.example.com/example/repo#7@${String(stored(at).revision)}`]);
     expect(inputsOf(fire)).toEqual({ number: '7', repo_host: 'ghe.example.com', repo_path: 'example/repo' });
     expect(ruled.bodies).toEqual([`The contract.\n\n\n## ${heading}\n\nKeep the old prompt wording.\n`]);
     const doc = stored(at).value as WorkItem;

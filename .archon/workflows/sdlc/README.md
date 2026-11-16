@@ -337,7 +337,12 @@ recommends under `bindings:` in `.pack/pack.yaml`:
   run for each waiting issue, in rank order, by firing the `build-queue` file with the
   issue's number and item, and a round that continues fires it for its next round. The
   file's capacity decides how many run at once; the rest queue and start as slots
-  free. Intake fires the `build-pick` file for an item it routed, so the build queue
+  free. A pass fires at most `limit` issues, 10 by default, so each pass ranks afresh:
+  when you lower the build capacity, lower `limit` in the `build-pick` file's
+  `launch.inputs` to match. Set `"revisit_blocked": "true"` there to have the pick
+  also start the build queue's revisit of blocked items. A pick that names a stranded
+  issue ends as a failed outcome: that issue's start died before it claimed the
+  issue, and it waits for you to start it by hand (step 8) or re-triage it. Intake fires the `build-pick` file for an item it routed, so the build queue
   needs `build-pick` and `build-queue` together.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
 - `worktree-cleanup` removes merged worktrees, for an install that runs no server.

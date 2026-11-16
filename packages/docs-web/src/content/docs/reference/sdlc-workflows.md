@@ -79,11 +79,11 @@ The stage after intake. [`archon-build-pick`](#archon-build-pick) starts one run
 
 #### `archon-build-pick`
 
-Decides which waiting issues the build queue starts, and builds nothing itself. One script lists the work items that wait for the build queue, ranks them (most urgent, then most important, then smallest, then oldest) and fires the `build-queue` binding once per issue, with the issue's number and on the issue's engine item. The binding's capacity decides how many run at once, and the rest queue in the order fired. An issue still waiting where an earlier pick found it is fired with the same delivery, so it is not queued twice. With `orders_only` it starts only members of an open [work order](/guides/sdlc-operations/#work-orders). A pick that finds nothing waiting names the stored items no pickup can act on and completes with a failed outcome.
+Decides which waiting issues the build queue starts, and builds nothing itself. One script lists the work items that wait for the build queue, ranks them (most urgent, then most important, then smallest, then oldest) and fires the `build-queue` binding for the first `limit` of them (default 10, the recommended build capacity), each with the issue's number and on the issue's engine item. The binding's capacity decides how many run at once, and the rest queue in the order fired. An issue still waiting where an earlier pick or a finishing round fired it is fired with the same delivery, so it is not started twice and every pass ranks afresh. With `orders_only` it starts only members of an open [work order](/guides/sdlc-operations/#work-orders); with `revisit_blocked` it also starts the build queue's revisit of blocked items, at most once per six hours. It completes with a failed outcome when a fire started nothing, when an earlier start's run ended before it claimed its issue (it names the issue and the run; nothing starts that issue again until you start or re-triage it), or when nothing waits and stored items no pickup can act on were found.
 
 **When to use it**: On a schedule, through the `build-pick` binding, and from intake, which fires it for each item it routes. Run it by hand to start what waits now: `archon trigger fire --config <build-pick file>`. [Its bindings](/guides/sdlc-operations/#its-bindings) covers capacity, the queue and what admits a queued start.
 
-**What it produces**: One `archon-build-queue` start per waiting issue, and a summary naming each issue with the run or queued request it got.
+**What it produces**: One `archon-build-queue` start per waiting issue, up to `limit` per pass, and a summary naming each issue with the run or queued request it got, or why it is stranded.
 
 #### `archon-merge-queue`
 

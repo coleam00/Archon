@@ -60,7 +60,7 @@ import {
 } from '../../.shared/merge.ts';
 import { idleOutcome, stuckItems } from '../../.shared/stuck.ts';
 import { readMaintainers } from '../../.shared/maintainers.ts';
-import { updateClaimed, type WorkItem } from '../../.shared/workitem.ts';
+import { type WorkItem, writeClaimed } from '../../.shared/workitem.ts';
 
 interface Item {
   readonly item: QualifiedPr | null;
@@ -172,18 +172,21 @@ interface Writes {
   readonly failed: string[];
 }
 
-/** Change one claimed work item; one that cannot be written is reported and left for the next sweep. */
-function write(writes: Writes, subject: QualifiedPr, name: string, label: string, change: (doc: WorkItem) => WorkItem): boolean {
+/**
+ * Change one claimed work item and return the revision the write made; one that cannot
+ * be written is reported and left for the next sweep, and returns null.
+ */
+function write(writes: Writes, subject: QualifiedPr, name: string, label: string, change: (doc: WorkItem) => WorkItem): number | null {
   try {
-    updateClaimed(subject, writes.runId, change);
+    const { revision } = writeClaimed(subject, writes.runId, change);
     writes.lines.push(`${name}: ${label}`);
-    return true;
+    return revision;
   } catch (error) {
     const failure = `${name}: not recorded, the next sweep decides it again (${message(error)})`;
     console.error(`merge-queue record: ${failure}`);
     writes.lines.push(failure);
     writes.failed.push(failure);
-    return false;
+    return null;
   }
 }
 
@@ -217,10 +220,10 @@ function recordPr(writes: Writes, item: Item, outcome: Outcome & { readonly deci
     const returned = { ...entry, decision: 'returned by the merge queue' };
     return withBuild(recorded, { at, run_id: runId, round: null, entry: returned, status: 'next', brief: decision.brief, release: true });
   });
-  if (!written) return false;
+  if (written === null) return false;
   announcePr(item, outcome, String(item.item.number));
   // The claim is released, so the round the fire starts can claim the item.
-  if (status === 'returned') writes.lines.push(`${name}: ${nextRound(item.item, runId)}`);
+  if (status === 'returned') writes.lines.push(`${name}: ${nextRound(item.item, written)}`);
   return true;
 }
 

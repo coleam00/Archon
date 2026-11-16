@@ -51,6 +51,13 @@ export function runUser(runId: string): string | null {
   return typeof user === 'string' && user !== '' ? user : null;
 }
 
+/** A run's status, as `archon workflow get` reports it. A run the host does not know throws. */
+export function runStatus(runId: string): string {
+  const status = hostJson(['workflow', 'get', runId, '--json']).status;
+  if (typeof status !== 'string') throw new Error(`archon workflow get reported no status for run ${runId}`);
+  return status;
+}
+
 /**
  * This project's runs, newest first, as `archon workflow runs --json` lists them.
  * Refuses a listing that fell back to every project's runs: draining another

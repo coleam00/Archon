@@ -50,7 +50,8 @@ inputs:
     description: >-
       "true" makes a run with no number also revisit the blocked items: one agent
       judges which no longer look blocked, and each of those gets this run's re-triage
-      request and one intake pickup. Anything else revisits nothing.
+      request and one intake pickup. archon-build-pick starts such a run when its own
+      revisit_blocked is on. Anything else revisits nothing.
   round_limit:
     default: "3"
     description: >-
@@ -62,8 +63,8 @@ inputs:
       The absolute path of the operator's binding config for this repository's build
       queue. A decision that wants the item's next round now fires it with
       `archon trigger fire --item issue-<number>`, so the round is admitted under that
-      binding's resource, capacity and overlap policy, at most once per decision, on
-      the issue's item. Empty starts no follow-up; the next build pick starts the item.
+      binding's resource, capacity and overlap policy, once for the state the decision
+      left the item in, on the issue's item. Empty starts no follow-up; the next build pick starts the item.
 
 returns: apply
 
