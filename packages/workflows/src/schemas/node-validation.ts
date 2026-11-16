@@ -240,7 +240,7 @@ function validateWaitNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
 }
 
 function validateIncludeNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
-  if (data.with !== undefined) validateWithShape('include', data.with, ctx);
+  if (data.with !== undefined) validateLiteralWith('include', data.with, ctx);
   if (data.fan_out !== undefined) {
     const result = composeFanOutNodeSchema.pick({ fan_out: true }).safeParse(data);
     if (!result.success) addIssues(ctx, result.error.issues);
@@ -249,7 +249,7 @@ function validateIncludeNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
 }
 
 function validateWorkflowNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
-  if (data.with !== undefined) validateWithShape('workflow', data.with, ctx);
+  if (data.with !== undefined) validateLiteralWith('workflow', data.with, ctx);
   // A `workflow:` node has ONE input channel per invocation: either the untyped
   // `input:` string ($ARGUMENTS) or the named `with:` map ($INPUTS.<name>). Accepting
   // both would require a precedence rule between two overlapping channels — the exact
@@ -327,7 +327,8 @@ function validateComposedFanOut(data: DagNodeFields, ctx: z.RefinementCtx): void
  * `with:` is an identifier-keyed JSON-value map on include and workflow nodes
  * (#2470, values widened from string-only in #2637). For includes it inlines at
  * load time (applyInputsMacro); for sub-runs it becomes `$INPUTS.<name>` runtime
- * variables on the child. Returns the map when its shape is an object.
+ * variables on the child. Returns the map when its shape is an object. Include and
+ * workflow nodes also refuse directive-shaped objects (validateLiteralWith).
  */
 function validateWithShape(
   kind: 'include' | 'workflow' | 'command' | 'script',
@@ -365,6 +366,38 @@ function validateWithShape(
     }
   }
   return map;
+}
+
+/**
+ * Include/workflow `with:` values are JSON literals: these nodes read no directive. An
+ * object with exactly a command/script directive's shape would otherwise pass through
+ * as data while its author expects `if_skipped` (or `outputs`) to apply, so it is a load
+ * error. Only the strict shapes are refused; any other object, such as
+ * `{ from: 'alice', to: 'bob' }`, stays a literal. Only top-level values are checked,
+ * because command/script nodes read directives only at the top level.
+ */
+function validateLiteralWith(
+  kind: 'include' | 'workflow',
+  value: unknown,
+  ctx: z.RefinementCtx
+): void {
+  const map = validateWithShape(kind, value, ctx);
+  if (map === undefined) return;
+  for (const [key, entry] of Object.entries(map)) {
+    if (bindingDirectiveSchema.safeParse(entry).success) {
+      addIssue(
+        ctx,
+        `${kind} input '${key}': '{ from, if_skipped }' is a binding directive, which only command and script nodes read; on ${kind} nodes an object is passed as a literal and if_skipped would never apply. Pass the reference as a string, or bind it with if_skipped in a script node's own 'with:' and pass that node's output.`,
+        ['with', key]
+      );
+    } else if (typedOutputsDirectiveSchema.safeParse(entry).success) {
+      addIssue(
+        ctx,
+        `${kind} input '${key}': '{ outputs }' is a typed-outputs directive, which only a script node's own 'with:' reads; on ${kind} nodes an object is passed as a literal. Read the outputs in a script node and pass that node's output.`,
+        ['with', key]
+      );
+    }
+  }
 }
 
 /**

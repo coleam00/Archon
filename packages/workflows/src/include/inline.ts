@@ -1,5 +1,5 @@
 import type { DagNode, IncludeDirective, ResolvedWorkflow } from '../schemas';
-import { isIncludeDirective, isLoopGroupNode } from '../schemas';
+import { isIncludeDirective, isLoopGroupNode, startsSequentialSession } from '../schemas';
 import type { JsonValue } from '../output-ref';
 import { validateDagStructure } from '../loader/dag-structure';
 import {
@@ -30,8 +30,8 @@ export interface ExpandedInclude {
  * Record where a node was authored, and what it was authored with. WRITE-ONCE per
  * field: the innermost workflow that inlined this node already said the true thing,
  * and an outer level re-stating it would replace one file's answer with another's.
- * `blockEntry` is the exception — it is idempotently true, and a node can legitimately
- * be the entry of two nested blocks at once. `boundaries` is cumulative: each outer
+ * `blockSessionStart` is the exception — it is idempotently true, and a node can
+ * legitimately start the thread of two nested blocks at once. `boundaries` is cumulative: each outer
  * include prepends its own activation predicate without replacing the inner ones.
  */
 function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
@@ -43,14 +43,14 @@ function markComposedNode(node: DagNode, patch: ComposedNodeMeta): void {
       ...(patch.boundaries !== undefined ? { boundaries: cloneBoundaries(patch.boundaries) } : {}),
     };
   } else {
-    if (patch.blockEntry === true) existing.blockEntry = true;
+    if (patch.blockSessionStart === true) existing.blockSessionStart = true;
     if (patch.boundaries !== undefined) {
       existing.boundaries = [...cloneBoundaries(patch.boundaries), ...(existing.boundaries ?? [])];
     }
   }
   // A loop_group body node was authored in the same file and reads the same inputs, so
-  // it carries the same record — minus `blockEntry`, which is a position in the OUTER
-  // graph and means nothing inside a body. A body node is likewise never the entry of an
+  // it carries the same record — minus `blockSessionStart`, which is a position in the
+  // OUTER graph and means nothing inside a body (a body's first iteration starts fresh). A body node is likewise never the entry of an
   // enclosing outer-graph include, though it still inherits that boundary.
   if (isLoopGroupNode(node)) {
     const inherited = bodyComposedMeta(patch);
@@ -91,6 +91,8 @@ interface InlineScope {
   prefix: string;
   includeId: string;
   childTopLevelIds: ReadonlySet<string>;
+  /** Original ids of child nodes no session-starting child node runs before. */
+  sessionColdIds: ReadonlySet<string>;
   rename: (id: string) => string;
   parentDeps: string[];
   entryTriggerRules: ComposedBlockBoundary['entryTriggerRules'];
@@ -204,6 +206,7 @@ function inlineScope(
     commandContents,
     prefix,
     childTopLevelIds,
+    sessionColdIds: sessionColdIds(child.nodes),
     rename: id => (childTopLevelIds.has(id) ? prefix + id : id),
     parentDeps,
     entryTriggerRules: [firstEntryTriggerRule, ...remainingEntryTriggerRules],
@@ -211,6 +214,36 @@ function inlineScope(
     resolvedInputs: resolveIncludeInputs(includeNode, child),
     missingInputs: new Set<string>(),
   };
+}
+
+/**
+ * The child nodes that, run standalone, would find no session to continue: no node
+ * before them inside the child puts a session on the sequential cursor. Composed, the
+ * cursor at these nodes may hold the caller's session, so they are marked to start
+ * fresh (#5740). Marking only `depends_on`-free nodes missed a first AI node that
+ * follows an entry `bash:`/`script:` node. The child already passed
+ * `validateDagStructure`, so the walk terminates.
+ */
+function sessionColdIds(nodes: readonly DagNode[]): ReadonlySet<string> {
+  const byId = new Map(nodes.map(n => [n.id, n]));
+  const warm = new Map<string, boolean>();
+  // True when `id` or any node before it inside the child starts a session.
+  const startsOrFollowsSession = (id: string): boolean => {
+    const known = warm.get(id);
+    if (known !== undefined) return known;
+    const node = byId.get(id);
+    const result =
+      node !== undefined &&
+      (startsSequentialSession(node) ||
+        (node.depends_on ?? []).some(dep => byId.has(dep) && startsOrFollowsSession(dep)));
+    warm.set(id, result);
+    return result;
+  };
+  return new Set(
+    nodes
+      .filter(n => !(n.depends_on ?? []).some(dep => byId.has(dep) && startsOrFollowsSession(dep)))
+      .map(n => n.id)
+  );
 }
 
 function inlineChildNode(scope: InlineScope, cn: DagNode): DagNode {
@@ -262,7 +295,7 @@ function composedMeta(scope: InlineScope, cn: DagNode, wasEntry: boolean): Compo
     origin: scope.child.name,
     ...(pack !== undefined ? { pack: { source: pack.source, key: pack.key } } : {}),
     ...(Object.keys(resolvedInputs).length > 0 ? { inputs: { ...resolvedInputs } } : {}),
-    ...(wasEntry ? { blockEntry: true as const } : {}),
+    ...(scope.sessionColdIds.has(cn.id) ? { blockSessionStart: true as const } : {}),
     ...(scope.hasActivationBoundary ? { boundaries: [blockBoundary(scope, cn, wasEntry)] } : {}),
   };
 }

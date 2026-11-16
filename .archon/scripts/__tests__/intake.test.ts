@@ -754,6 +754,20 @@ describe('the intake scripts', () => {
     expect(stored(at).revision).toBe(revision);
   }, 60_000);
 
+  test('an idle pass that finds a stored item no pickup can act on fails, naming the item and why', () => {
+    const at = install();
+    const idle = { path: 'idle', item: null, decision: null };
+    const quiet = outcome(at, { runId: 'run-1' }, idle, SKIPPED_TRIAGE);
+    expect(quiet.code).toBe(0);
+    expect(JSON.parse(quiet.stdout)).toMatchObject({ path: 'idle', outcome: 'idle' });
+    inProcess(at, () => expect(state.put('work/9', { not: 'a work item' }, { ifRevision: 0 }).ok).toBe(true));
+    const stuck = outcome(at, { runId: 'run-2' }, idle, SKIPPED_TRIAGE);
+    expect(stuck.code).not.toBe(0);
+    expect(stuck.stdout).toBe('');
+    expect(stuck.stderr).toContain('work/9');
+    expect(stuck.stderr).toContain('does not parse');
+  }, 60_000);
+
   test('a failed run that resumes still holds its claim and writes its outcome', () => {
     const at = install();
     const decided = facts(at, { runId: 'run-1' }).output;

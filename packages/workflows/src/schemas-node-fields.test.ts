@@ -310,13 +310,19 @@ describe('dagNodeSchema — new Claude SDK options', () => {
     expect((result as AgentNode).betas).toEqual(['context-1m-2025-08-07']);
   });
 
-  test('parses sandbox object', () => {
-    const result = dagNodeSchema.parse({
-      id: 'n',
-      prompt: 'do it',
-      sandbox: { enabled: true, filesystem: { allowWrite: ['src/'] } },
-    });
-    expect((result as AgentNode).sandbox?.enabled).toBe(true);
+  test('keeps sandbox keys Archon does not list, including nested ones', () => {
+    const sandbox = {
+      enabled: true,
+      network: {
+        allowedDomains: ['github.com'],
+        deniedDomains: ['evil.example'],
+        strictAllowlist: true,
+      },
+      filesystem: { allowRead: ['/x'], denyRead: ['/y'] },
+      credentials: { files: [] },
+    };
+    const result = dagNodeSchema.parse({ id: 'n', prompt: 'do it', sandbox });
+    expect((result as AgentNode).sandbox).toEqual(sandbox);
   });
 
   test('parses systemPrompt string', () => {

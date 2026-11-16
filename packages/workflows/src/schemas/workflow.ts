@@ -352,7 +352,8 @@ export const WORKFLOW_ONLY_KEYS: ReadonlySet<string> = new Set(
  * KNOWN_NODE_NESTED_KEYS — an unknown key one level down is stripped just as
  * silently as one at the top (#2213).
  *
- * `sandbox` (`.passthrough()`) is omitted because it preserves unknown fields.
+ * `sandbox` (`.passthrough()` at every level) is omitted because it preserves
+ * unknown fields, nested ones included.
  * `nodes` is handled by the per-node check, not here.
  *
  * Constructed with `keyof typeof workflowDefinitionObjectSchema.shape` as the key type
