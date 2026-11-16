@@ -105,7 +105,7 @@ A claim that carries no lease of its run is held, and an idle pass names it. Aba
 - **Inputs.** `label_actor` is the one input that can create a promotion, never trust. Only the binding, or someone with access to the install, can supply it.
 - **Handoff.** A run that leaves its item waiting for the build queue fires the binding its `build_queue_binding` input names, keyed by the item and the run. The fire names no item: the run it starts takes the waiting item that sorts first, under that binding's own `orders_only`. A fire that finds every slot busy is skipped, and the item waits for the next scheduled run.
 
-Two bindings in the GitHub source plugin's configuration start intake: `intake-issues` on an issue opened, edited or reopened, and `intake-labels` on `archon-triage` added. They share one resource with `overlap: queue`, so runs queue instead of overlapping. The label binding's predicate names that label only to save runs: intake ignores any other label, and the pack's own route-label writes start no intake run. A binding file written before this change still lists the route labels; write it again with `archon pack bindings sdlc --only intake-labels`.
+Two bindings in the GitHub source plugin's configuration start intake: `intake-issues` on an issue opened, edited or reopened, and `intake-labels` on `archon-triage` added. They share one resource with `overlap: queue` and a capacity of 10: each run triages one issue and changes no checkout, so up to ten issues are triaged at once and a later event queues behind them. The label binding's predicate names that label only to save runs: intake ignores any other label, and the pack's own route-label writes start no intake run. A binding file written before this change still lists the route labels; write it again with `archon pack bindings sdlc --only intake-labels`.
 
 ## Build queue
 
@@ -163,7 +163,7 @@ The work item's `facts.build` holds the item's status, which says who owns it: t
 
 ### Its binding
 
-A schedule keeps items moving, because a run works one item and a continuation waits for the next run when no binding is set. Each run changes its checkout, so every run needs its own worktree: the `build-queue` binding launches in a worktree, with `overlap: skip`.
+A schedule keeps items moving, because a run works one item and a continuation waits for the next run when no binding is set. Each run changes its checkout, so every run needs its own worktree: the `build-queue` binding launches in a worktree, with `overlap: skip` and a capacity of 10. That number is how many issues are built at once, and it is a starting point: set `concurrency.resources.<resource>` in the install's config to what the machine and the provider's rate limits carry. The pack README's [Let it run on its own](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#10-let-it-run-on-its-own) says what to look at.
 
 The binding's `build_queue_binding` input names the binding's own file, so a run's follow-up rounds start through the same binding. One run of the queue holds a slot of the resource while it fires its follow-up, so the follow-up needs a free slot. Under `overlap: skip`, a follow-up fired while every slot is busy is dropped, and the item waits for the next scheduled run. Without the input, every follow-up waits for the next scheduled run.
 
@@ -297,7 +297,7 @@ An answer's ruling and your words are written into the issue body as a dated "Cu
 
 ### Its binding
 
-A run never changes its checkout, and the claim keeps two runs off the same item, so the `merge-queue` binding runs in the launch checkout. It is scheduled every 5 minutes with `overlap: skip`: a tick that finds a sweep running is skipped.
+A run never changes its checkout, and the claim keeps two runs off the same item, so the `merge-queue` binding runs in the launch checkout. It is scheduled every 5 minutes with `overlap: skip`: a tick that finds a sweep running is skipped. Its capacity stays 1, because a sweep judges the default branch once and merges against it, and a second sweep beside it would merge against a base it has not judged.
 
 The short schedule is the one thing that starts the merge queue. It is how a ready pull request is picked up, and how one with pending checks gets merged soon after they finish, since the forge delivers no event for checks settling at a head.
 

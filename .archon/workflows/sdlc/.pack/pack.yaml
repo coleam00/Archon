@@ -37,11 +37,17 @@ inputs:
 # them for one repository with `archon pack bindings sdlc` and registers each file.
 # The README's setup guide says how. https://archon.diy/guides/sdlc-operations/ says,
 # queue by queue, why each capacity and overlap is what it is.
+#
+# Capacity is how many runs hold a resource at once. Intake and the build queue work one
+# issue per run, so their number is how many issues move in parallel: 10 is a starting
+# point, and an install sets its own with `concurrency.resources.<resource>` in its
+# config, which wins over the number here. The other queues run one pass at a time over
+# everything that waits, so they declare none and hold one slot.
 bindings:
   intake-issues:
     workflow: archon-intake
     resource: intake
-    capacity: 2
+    capacity: 10
     overlap: queue
     event:
       kind: issue.lifecycle
@@ -56,7 +62,7 @@ bindings:
   intake-labels:
     workflow: archon-intake
     resource: intake
-    capacity: 2
+    capacity: 10
     overlap: queue
     event:
       kind: label.changed
@@ -78,7 +84,7 @@ bindings:
   build-queue:
     workflow: archon-build-queue
     resource: build
-    capacity: 2
+    capacity: 10
     overlap: skip
     isolation: { kind: worktree }
     schedule: { interval_seconds: 1800 }
@@ -96,7 +102,9 @@ bindings:
       repo_path: { repo: path }
   # A short interval stands in for an event the forge does not deliver: a pull request
   # whose checks were pending merges soon after they finish. A sweep where nothing
-  # changed runs no agent.
+  # changed runs no agent. One sweep at a time: it judges the default branch once and
+  # merges against it, so a second sweep beside it would merge against a base it has
+  # not judged. A higher capacity here would not merge more.
   merge-queue:
     workflow: archon-merge-queue
     resource: merge
