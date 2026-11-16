@@ -597,14 +597,14 @@ describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
     expect(message).toContain("binding 'mode'");
     expect(message).toContain('OBJECT');
 
-    // A directive-SHAPED caller object is rejected the same way — data must not be
-    // able to inject reference semantics the block never authored.
-    const sneaky = wf('parent', [
-      { id: 'use', include: 'bind-obj-blk', with: { mode: { from: '$use__consume.output' } } },
-    ]);
-    const second = expandWorkflowIncludes(mapOf(block, sneaky));
-    expect(second.workflows.has('parent')).toBe(false);
-    expect(second.errors.find(e => e.filename === 'parent')?.error).toContain("binding 'mode'");
+    // A directive-SHAPED caller object never reaches the expansion: the include's own
+    // `with:` refuses it at parse (#5734), so data cannot inject reference semantics
+    // the block never authored.
+    expect(() =>
+      wf('parent', [
+        { id: 'use', include: 'bind-obj-blk', with: { mode: { from: '$use__consume.output' } } },
+      ])
+    ).toThrow("include input 'mode'");
   });
 });
 

@@ -1933,6 +1933,16 @@ depends on whether the block declares `inputs:` (see
 `inputs:` ignores unrecognized keys; a block that declares `inputs:` rejects an undeclared
 key at load.
 
+An object value is a literal, with one exception. An object with exactly the shape of a
+command/script directive, `{ from, if_skipped }` or `{ outputs }`, is a load error naming the
+input. Those directives are read only on a command or script node's own `with:` (see
+[Binding values](#binding-values-into-command-and-script-nodes)); passed through an include
+it would reach the block as data, and its `if_skipped` would never apply. To carry a skip
+fallback across an include, bind it with `if_skipped` in a `script:` node's own `with:`, have
+that node print the value, and pass `$<that-node>.output` to the include. Any other object,
+such as `{ from: alice, to: bob }`, stays a literal. The same rule holds for a `workflow:`
+node's `with:`.
+
 Substitution applies everywhere the value could reach the model, including inside Markdown
 code fences and inline code spans: `$INPUTS.<name>` has no documentation-only meaning, so a
 fenced occurrence is still a live parameter.
@@ -2477,8 +2487,10 @@ nodes:
 A `workflow:` node has **one** input channel per invocation: either the untyped `input:` string
 (delivered as the child's `$ARGUMENTS`) **or** the named `with:` map (delivered as the child's
 `$INPUTS.<name>`. See [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)).
-Setting both on one node is a load error. Use `with:` when the child declares named `inputs:` or
-when its `command:` bodies need named values:
+Setting both on one node is a load error. Values follow the same rule as an include's `with:`:
+JSON literals, and a directive-shaped object such as `{ from, if_skipped }` is a load error (see
+[Passing values into an included block](#passing-values-into-an-included-block)). Use `with:`
+when the child declares named `inputs:` or when its `command:` bodies need named values:
 
 ```yaml
   - id: implement-qa
