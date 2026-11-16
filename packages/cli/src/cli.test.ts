@@ -1737,7 +1737,9 @@ describe('pre-dispatch gates --json error envelope', () => {
     expect(status).toBe(1);
     expect(envelope).not.toThrow();
     expect(envelope()).toMatchObject({ ok: false });
-    expect(envelope().error).toContain('Directory does not exist: /does/not/exist');
+    // The path is printed as the platform resolves it (a drive letter on Windows), so only
+    // the refusal itself is asserted.
+    expect(envelope().error).toContain('Directory does not exist');
   });
 
   it('emits { ok: false } on stdout when outside a git repository', () => {
