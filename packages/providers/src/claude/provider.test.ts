@@ -1893,7 +1893,13 @@ describe('cost of a resumed or forked session is the query’s own spend', () =>
 
 describe('SDK options', () => {
   test('passes request options through to the SDK', async () => {
-    const sandbox = { enabled: true, network: { allowedDomains: [] } };
+    // Nested keys Archon's schema does not list (deniedDomains, allowRead) must
+    // reach the SDK too: dropping one silently widens the sandbox.
+    const sandbox = {
+      enabled: true,
+      network: { allowedDomains: [], deniedDomains: ['evil.example'], strictAllowlist: true },
+      filesystem: { allowRead: ['/x'], denyRead: ['/y'] },
+    };
     const options = await optionsFor(
       {
         model: 'sonnet',
@@ -1913,8 +1919,8 @@ describe('SDK options', () => {
       maxBudgetUsd: 5.0,
       fallbackModel: 'claude-haiku-4-5',
       betas: ['context-1m-2025-08-07'],
-      sandbox,
     });
+    expect(options.sandbox).toEqual(sandbox);
   });
 
   test('enables agentProgressSummaries by default for workflow nodes', async () => {
