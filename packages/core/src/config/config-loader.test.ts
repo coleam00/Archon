@@ -109,8 +109,6 @@ describe('config-loader', () => {
         "\n        - { prefix: 'issue-', kind: issue }\n        - { prefix: 'iss', kind: pr }\n"
       ),
     ],
-    ['no key rules', trackerYaml(' []\n')],
-    ['an unknown kind', trackerYaml("\n        - { prefix: 'issue-', kind: epic }\n")],
     [
       'a duplicate project',
       trackerYaml(

@@ -1,8 +1,9 @@
 /**
  * The item tracker: one more destination for what the engine records about an item. For
  * each tracked project it keeps one status comment per item on the item's tracker
- * subject, edited in place when a run on the item starts or ends. It reads only engine
- * records and never reads the comment back.
+ * subject, edited in place when a run on the item starts or ends, and posts a new comment
+ * once for each question, ask and ruling, and for the final result. It reads only engine
+ * records and never reads a comment back.
  *
  * Like the attention router it polls durable facts instead of subscribing to the
  * in-process emitter: a run a CLI process ends never reaches this server's emitter, and a
@@ -24,11 +25,18 @@ import { readForgeConfig, sourceForgePlugins } from '@archon/forge/host-plugins'
 import { forgePluginConfigSchema } from '@archon/forge/plugin-config';
 import type { ItemTrackerConfig, TrackedProject } from '@archon/core/config/config-types';
 import { getDatabase } from '@archon/core/db/connection';
+import { listItemAsks } from '@archon/core/db/item-asks';
+import { listItemRulings } from '@archon/core/db/item-rulings';
 import { getItemRuns } from '@archon/core/db/items';
 import {
   listTrackerCandidateRuns,
+  listTrackerItemsOwingComments,
   recordTrackerBaseline,
+  runEndStartedStage,
+  trackerAskKey,
+  trackerRulingKey,
   type TrackerCandidateRun,
+  type TrackerRow,
 } from '@archon/core/db/item-tracker';
 import {
   hasAnyAttentionNotice,
@@ -37,11 +45,24 @@ import {
   persistWorkflowEvent,
 } from '@archon/core/db/workflow-events';
 import { splitAttentionRead } from '@archon/workflows/schemas/attention-degraded';
+import type { StoredItemAsk } from '@archon/workflows/schemas/item-ask';
 import { isTerminalRunStatus } from '@archon/workflows/schemas/run-status';
+import { runAttention, type WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import type { PushDestinationState } from './attention-router';
-import { ITEM_STATUS_MARKER, renderItemStatus, trackerSubject } from './item-tracker-render';
+import {
+  ITEM_STATUS_MARKER,
+  questionKey,
+  renderAsk,
+  renderItemStatus,
+  renderQuestion,
+  renderResult,
+  renderRuling,
+  trackerSubject,
+  type TrackerComment,
+} from './item-tracker-render';
 
 const UPSERT_OPERATION = 'workitem.comment.upsert';
+const RESULT_KEY = 'result';
 
 /** The forge plugin contract as the tracker uses it. Production binds it to `@archon/forge/dispatch`. */
 export interface ItemTrackerForge {
@@ -91,6 +112,8 @@ interface Tracked {
   destination: string;
   repo?: RepoRef;
   state: TrackerState;
+  /** The destination has a ledger row, so a restart does not baseline it again. */
+  anchored: boolean;
 }
 
 function itemTrackerDestinationId(projectKey: string): string {
@@ -116,6 +139,7 @@ export class ItemTracker {
       project,
       destination: itemTrackerDestinationId(project.project),
       state: 'misconfigured',
+      anchored: false,
     }));
   }
 
@@ -130,10 +154,13 @@ export class ItemTracker {
         );
         continue;
       }
-      if (!(await hasAnyAttentionNotice(tracked.destination)))
+      if (!(await hasAnyAttentionNotice(tracked.destination))) {
+        const pauses = await openQuestionRows(tracked);
         await getDatabase().withTransaction(query =>
-          recordTrackerBaseline(tracked.project.project, tracked.destination, query)
+          recordTrackerBaseline(tracked.project.project, tracked.destination, query, pauses)
         );
+      }
+      tracked.anchored = await hasAnyAttentionNotice(tracked.destination);
       tracked.state = 'active';
     }
   }
@@ -174,77 +201,147 @@ export class ItemTracker {
       if (tracked.state === 'active' && tracked.repo) await this.scanProject(tracked, tracked.repo);
   }
 
+  /**
+   * Each item that may owe a write: one with a live run (it may have paused), a run whose
+   * status comment does not show its current state, or an ask or ruling not yet posted.
+   */
   private async scanProject(tracked: Tracked, repo: RepoRef): Promise<void> {
-    for (const [itemKey, owed] of await owedRunsByItem(tracked)) {
+    const projectKey = tracked.project.project;
+    const candidates = await listTrackerCandidateRuns(projectKey, tracked.destination);
+    await this.anchor(tracked, candidates);
+    const owed = await owedRunsByItem(tracked, candidates);
+    const owingComments = await listTrackerItemsOwingComments(projectKey, tracked.destination);
+    const live = candidates.filter(run => !run.terminal).map(run => run.itemKey);
+    for (const itemKey of new Set([...owed.keys(), ...owingComments, ...live])) {
       const subject = trackerSubject(tracked.project, repo, itemKey);
-      if (subject) await this.writeStatus(tracked, itemKey, subject, owed);
-      else await this.settleUnmapped(tracked, owed);
+      const owedRuns = owed.get(itemKey) ?? [];
+      if (subject) await this.writeItem(tracked, itemKey, subject, owedRuns);
+      else if (owedRuns.length > 0 || owingComments.includes(itemKey))
+        await this.settleUnmapped(tracked, itemKey, owedRuns);
     }
   }
 
   /**
-   * An item with no tracker subject gets nothing. Its ended runs are recorded as shown,
-   * so the candidate set stays bounded and adding a key rule later cannot post on them.
+   * The project's first ledger row is what tells a restart the tracker was already on,
+   * so the activation baseline runs once. A first activation with nothing to baseline
+   * records that row on the first run the tracker sees, before any write can fail.
+   */
+  private async anchor(
+    tracked: Tracked,
+    candidates: readonly TrackerCandidateRun[]
+  ): Promise<void> {
+    const first = candidates[0];
+    if (tracked.anchored || !first) return;
+    await this.record(tracked, { runId: first.id, key: 'activated' }, true);
+    tracked.anchored = true;
+  }
+
+  /**
+   * An item with no tracker subject gets nothing. Its ended runs, asks and rulings are
+   * recorded as shown, so the scan stays bounded and adding a key rule later cannot post
+   * on them.
    */
   private async settleUnmapped(
     tracked: Tracked,
-    owed: readonly TrackerCandidateRun[]
+    itemKey: string,
+    owedRuns: readonly TrackerCandidateRun[]
   ): Promise<void> {
-    for (const run of owed.filter(candidate => candidate.terminal))
-      await persistWorkflowEvent({
-        workflow_run_id: run.id,
-        event_type: 'attention_notice_sent',
-        data: { destination: tracked.destination, key: 'terminal', baseline: true },
-      });
+    const facts = await itemFacts(tracked, itemKey);
+    const rows: TrackerRow[] = [
+      ...owedRuns.filter(run => run.terminal).map(run => ({ runId: run.id, key: 'terminal' })),
+      ...(facts ? facts.comments.map(comment => comment.row) : []),
+    ];
+    for (const row of rows) await this.record(tracked, row, true);
   }
 
-  private async writeStatus(
+  /**
+   * Write what the item's tracker subject is owed: the status comment when a run's state
+   * changed, a new comment for each question, ask and ruling not posted yet, and the
+   * result when the work is over. A run's status row is recorded only once its result,
+   * when it has one, is posted, so a failed result write is retried.
+   */
+  private async writeItem(
     tracked: Tracked,
     itemKey: string,
     subject: ForgeSubjectRef,
-    owed: readonly TrackerCandidateRun[]
+    owedRuns: readonly TrackerCandidateRun[]
   ): Promise<void> {
-    const write = `${tracked.destination}|${subject.kind}:${String(subject.ref.number)}|${ITEM_STATUS_MARKER}`;
-    if (this.refused.has(write)) return;
-    const found = await getItemRuns(tracked.project.project, itemKey);
-    if (!found) return;
-    const { values: runs } = splitAttentionRead(found.runs);
-    const runIds = runs.map(run => run.id);
-    const response = await this.upsert(tracked, subject, {
-      body: renderItemStatus(runs, await proposedChange(runIds), this.config.includeUsage),
-    });
-    if (!response.ok) {
-      this.reportFailure(tracked, found.item.id, write, response);
+    const facts = await itemFacts(tracked, itemKey);
+    if (!facts) return;
+    const { itemId, runs, comments } = facts;
+    const prUrl = owedRuns.length > 0 ? await proposedChange(runs.map(run => run.id)) : undefined;
+    const write = (comment: TrackerComment): Promise<boolean> =>
+      this.writeComment(tracked, itemId, subject, comment);
+    if (
+      owedRuns.length > 0 &&
+      !(await write({
+        marker: ITEM_STATUS_MARKER,
+        body: renderItemStatus(runs, prUrl, this.config.includeUsage),
+      }))
+    )
       return;
+    for (const { comment, row } of comments)
+      if (await write(comment)) await this.record(tracked, row);
+    const result = await finalResult(owedRuns, facts);
+    if (result) {
+      if (!(await write(renderResult(result, prUrl, this.config.includeUsage)))) return;
+      await this.record(tracked, { runId: result.id, key: RESULT_KEY });
     }
-    // Record the state each run was shown in; an unreadable run, which the comment
-    // cannot show, is recorded in the state the candidate read saw so it is not retried.
+    if (owedRuns.length > 0) await this.recordShown(tracked, owedRuns, runs);
+  }
+
+  /**
+   * Record the state each run was shown in; an unreadable run, which the comment cannot
+   * show, is recorded in the state the candidate read saw so it is not retried.
+   */
+  private async recordShown(
+    tracked: Tracked,
+    owedRuns: readonly TrackerCandidateRun[],
+    runs: readonly WorkflowRun[]
+  ): Promise<void> {
     const shown = new Map<string, StatusKey>(
-      owed.map(run => [run.id, statusKey(run.terminal)] as const)
+      owedRuns.map(run => [run.id, statusKey(run.terminal)] as const)
     );
     for (const run of runs) shown.set(run.id, statusKey(isTerminalRunStatus(run.status)));
     const latest = latestStatusKeys(
       await listAttentionNotices([...shown.keys()]),
       tracked.destination
     );
-    for (const [runId, key] of shown) {
-      if (latest.get(runId) === key) continue;
-      await persistWorkflowEvent({
-        workflow_run_id: runId,
-        event_type: 'attention_notice_sent',
-        data: { destination: tracked.destination, key },
-      });
+    for (const [runId, key] of shown)
+      if (latest.get(runId) !== key) await this.record(tracked, { runId, key });
+  }
+
+  /** A baseline row records a fact as shown without anything having been written. */
+  private async record(tracked: Tracked, row: TrackerRow, baseline = false): Promise<void> {
+    await persistWorkflowEvent({
+      workflow_run_id: row.runId,
+      event_type: 'attention_notice_sent',
+      data: { destination: tracked.destination, key: row.key, ...(baseline ? { baseline } : {}) },
+    });
+  }
+
+  /** Upsert one marked comment; false when it was not written. */
+  private async writeComment(
+    tracked: Tracked,
+    itemId: string,
+    subject: ForgeSubjectRef,
+    comment: TrackerComment
+  ): Promise<boolean> {
+    const write = `${tracked.destination}|${subject.kind}:${String(subject.ref.number)}|${comment.marker}`;
+    if (this.refused.has(write)) return false;
+    const response = await this.upsert(tracked, subject, comment);
+    if (!response.ok) {
+      this.reportFailure(tracked, itemId, write, response);
+      return false;
     }
-    this.log.info(
-      { destination: tracked.destination, itemId: found.item.id },
-      'item_tracker.status_written'
-    );
+    this.log.info({ destination: tracked.destination, itemId }, 'item_tracker.comment_written');
+    return true;
   }
 
   private async upsert(
     tracked: Tracked,
     subject: ForgeSubjectRef,
-    { body }: { body: string }
+    { marker, body }: TrackerComment
   ): Promise<ForgeResponse> {
     const operationId = randomUUID();
     try {
@@ -252,7 +349,7 @@ export class ItemTracker {
         operationId,
         op: UPSERT_OPERATION,
         subject,
-        marker: ITEM_STATUS_MARKER,
+        marker,
         body,
       });
     } catch (err) {
@@ -321,8 +418,10 @@ export class ItemTracker {
 }
 
 /** The project's runs whose status comment does not show their current state, by item key. */
-async function owedRunsByItem(tracked: Tracked): Promise<Map<string, TrackerCandidateRun[]>> {
-  const candidates = await listTrackerCandidateRuns(tracked.project.project, tracked.destination);
+async function owedRunsByItem(
+  tracked: Tracked,
+  candidates: readonly TrackerCandidateRun[]
+): Promise<Map<string, TrackerCandidateRun[]>> {
   const latest = latestStatusKeys(
     await listAttentionNotices(candidates.map(run => run.id)),
     tracked.destination
@@ -333,6 +432,104 @@ async function owedRunsByItem(tracked: Tracked): Promise<Map<string, TrackerCand
     owedByItem.set(run.itemKey, [...(owedByItem.get(run.itemKey) ?? []), run]);
   }
   return owedByItem;
+}
+
+interface OwedComment {
+  comment: TrackerComment;
+  row: TrackerRow;
+}
+
+interface ItemFacts {
+  itemId: string;
+  runs: WorkflowRun[];
+  openAsks: StoredItemAsk[];
+  /** `runId|key` of every row the destination recorded on the item's runs. */
+  posted: Set<string>;
+  /** The question, ask and ruling comments not posted yet. */
+  comments: OwedComment[];
+}
+
+const postedKey = (row: TrackerRow): string => `${row.runId}|${row.key}`;
+
+/** What the item holds that its tracker shows: its readable runs, asks, rulings and ledger. */
+async function itemFacts(tracked: Tracked, itemKey: string): Promise<ItemFacts | undefined> {
+  const found = await getItemRuns(tracked.project.project, itemKey);
+  if (!found) return undefined;
+  const { values: runs } = splitAttentionRead(found.runs);
+  const [asks, rulings] = await Promise.all([
+    listItemAsks(found.item.id),
+    listItemRulings(found.item.id),
+  ]);
+  const openAsks = splitAttentionRead(asks).values.filter(ask => ask.closed === null);
+  const ledger = await listAttentionNotices([
+    ...new Set([...runs.map(run => run.id), ...openAsks.map(ask => ask.runId)]),
+  ]);
+  const mine = ledger.filter(({ data }) => data.destination === tracked.destination);
+  const posted = new Set(mine.map(({ runId, data }) => postedKey({ runId, key: data.key })));
+  const comments: OwedComment[] = [
+    ...questionComments(runs),
+    ...openAsks.map(ask => ({
+      comment: renderAsk(ask),
+      row: { runId: ask.runId, key: trackerAskKey(ask.id) },
+    })),
+  ].filter(owed => !posted.has(postedKey(owed.row)));
+  // A ruling is shown once the item has a run, and its row is recorded on one; the
+  // baseline picks that run in SQL, so a posted ruling is found on any of them.
+  const postedKeys = new Set(mine.map(({ data }) => data.key));
+  const anchor = runs[0]?.id;
+  if (anchor !== undefined)
+    for (const ruling of rulings) {
+      if ('type' in ruling || ruling.withdrawn !== null) continue;
+      const key = trackerRulingKey(ruling.id);
+      if (!postedKeys.has(key))
+        comments.push({ comment: renderRuling(ruling), row: { runId: anchor, key } });
+    }
+  return { itemId: found.item.id, runs, openAsks, posted, comments };
+}
+
+/** The question each run paused at a gate or an attention wait asks. */
+function questionComments(runs: readonly WorkflowRun[]): OwedComment[] {
+  return runs.flatMap(run => {
+    const attention = runAttention(run);
+    if (attention?.kind !== 'awaiting_response' && attention?.kind !== 'attention') return [];
+    return [
+      {
+        comment: renderQuestion(run, attention),
+        row: { runId: run.id, key: questionKey(attention) },
+      },
+    ];
+  });
+}
+
+/** The project's open questions, for the activation baseline. */
+async function openQuestionRows(tracked: Tracked): Promise<TrackerRow[]> {
+  const candidates = await listTrackerCandidateRuns(tracked.project.project, tracked.destination);
+  const rows: TrackerRow[] = [];
+  for (const itemKey of new Set(candidates.filter(run => !run.terminal).map(run => run.itemKey))) {
+    const found = await getItemRuns(tracked.project.project, itemKey);
+    if (found)
+      rows.push(...questionComments(splitAttentionRead(found.runs).values).map(q => q.row));
+  }
+  return rows;
+}
+
+/**
+ * The run whose end is the end of the work on the item, or undefined while work remains:
+ * a run that just ended, when no run on the item is live, no ask is open and no ended
+ * run's end started a next stage. The last of them in start order reports the result.
+ */
+async function finalResult(
+  owedRuns: readonly TrackerCandidateRun[],
+  { runs, openAsks, posted }: ItemFacts
+): Promise<WorkflowRun | undefined> {
+  const endedNow = new Set(owedRuns.filter(run => run.terminal).map(run => run.id));
+  const ended = runs.filter(run => endedNow.has(run.id));
+  const last = ended.at(-1);
+  if (!last || openAsks.length > 0) return undefined;
+  if (runs.some(run => !isTerminalRunStatus(run.status))) return undefined;
+  if (posted.has(postedKey({ runId: last.id, key: RESULT_KEY }))) return undefined;
+  for (const run of ended) if (await runEndStartedStage(run.id)) return undefined;
+  return last;
 }
 
 function statusKey(terminal: boolean): StatusKey {

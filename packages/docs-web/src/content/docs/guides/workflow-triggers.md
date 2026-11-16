@@ -76,7 +76,7 @@ the Archon user their platform identity resolves to; link it to your existing us
 
 ## Show progress on the item's tracker
 
-`archon serve` can keep one status comment on the issue or pull request an [item](/reference/cli/#items) is about, so someone reading the tracker sees what Archon is doing with it without opening Archon. It is off unless `~/.archon/config.yaml` turns it on; repository config cannot carry it:
+`archon serve` can keep one status comment on the issue or pull request an [item](/reference/cli/#items) is about, and post a new comment when someone has to act or the work is over, so someone reading the tracker sees what Archon is doing with it without opening Archon. It is off unless `~/.archon/config.yaml` turns it on; repository config cannot carry it:
 
 ```yaml
 itemTracker:
@@ -93,11 +93,20 @@ An item names its tracker subject only through its key. The rest of the key afte
 
 The status comment carries the marker `<!-- archon-item-status -->` and lists the item's runs in the order they started: the workflow, `in progress` or how it ended (`completed`, `failed`, `cancelled`), and the outcome it completed with. Below the table it links the newest pull request a run on the item opened through `archon forge pr.create`. The comment is written when a run on the item starts and edited when one ends or resumes, never for progress inside a run, so after the first post an edit sends no notification. Archon writes it one way: nothing reads the comment back.
 
-The comment never contains local paths, user names or ids, prompts, messages, node names, logs, run results or error text; a failed run shows only its status. Cost and token counts appear only with `includeUsage: true`.
+A new comment is posted once for each of these, each with its own marker, so a retry edits it instead of posting twice:
+
+- **A question.** A run on the item paused at an approval gate or an attention wait: the wait's message, its options and recommendation, and the command that answers it, `archon workflow answer <run-id> --occurrence <id> --choose <option>` (or `archon workflow respond <run-id> <decision>` at a gate). Marker `<!-- archon-item-question: … -->`.
+- **An ask.** A completed run left an [ask](/reference/cli/#workflow-answer) on the item: its question, context, options with what each does and costs, the recommendation, and `archon workflow answer --ref ask:<id> --choose <option>`. Marker `<!-- archon-item-ask: <id> -->`.
+- **A ruling.** A ruling recorded on the item with `archon workflow rule`: its text and when it was recorded, never who recorded it. A ruling withdrawn before the tracker saw it is not posted. Marker `<!-- archon-item-ruling: <id> -->`.
+- **The result.** A run on the item ended, no run on the item is still live, no ask is open, and the end started no next stage through a [run-ended binding](#start-a-stage-when-a-run-on-an-item-ends): the stage, how it ended, its outcome and the proposed change. Marker `<!-- archon-item-result: <run-id> -->`.
+
+Answer from the commands; a reply on the tracker is not read.
+
+No comment contains local paths, user names or ids, prompts, chat messages, node progress, logs, run results or error text; a failed run shows only its status. Cost and token counts appear only with `includeUsage: true`.
 
 Writes go through the forge plugin's `workitem.comment.upsert` operation. At startup the server checks each project's plugin once: a plugin that does not claim the host, lacks the operation or has no credential is logged as `item_tracker.misconfigured`, shows as `tracker:<project>` with state `misconfigured` in `/api/health`, and writes nothing until a restart. A write that fails is logged as `item_tracker.write_failed` and retried on the next scan; one the forge refuses for good, such as a key naming an issue that does not exist, is not retried until a restart. A failed write never fails or delays a run.
 
-Turning the tracker on writes nothing for runs that already ended: the first startup records them as shown. Only `archon serve` writes the comment; a CLI-only install writes none. Two installs, or two projects, that map the same issue edit the same comment, which is not supported.
+Turning the tracker on writes nothing for what an item already holds: the first startup records its ended runs, open questions, open asks and rulings as shown. The tracker counts as on from the first time `archon serve` finds a run on the project; a run that starts and ends while the server is down before then is treated as history too. Only `archon serve` writes the comment; a CLI-only install writes none. Two installs, or two projects, that map the same issue edit the same comment, which is not supported.
 
 ## Find your run-as user ID
 

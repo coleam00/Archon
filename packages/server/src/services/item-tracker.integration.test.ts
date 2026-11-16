@@ -12,6 +12,8 @@ import {
 import type { ForgeAccessCheck } from '@archon/forge/dispatch';
 import type { ItemTrackerConfig } from '@archon/core/config/config-types';
 import { closeDatabase, getDatabase, resetDatabase } from '@archon/core/db/connection';
+import { openItemAsksForCompletedRun } from '@archon/core/db/item-asks';
+import { recordItemRuling, withdrawItemRuling } from '@archon/core/db/item-rulings';
 import { ensureItemInProject } from '@archon/core/db/items';
 import { createWorkflowRun } from '@archon/core/db/workflows';
 import { insertWorkflowEvent, listAttentionNotices } from '@archon/core/db/workflow-events';
@@ -160,7 +162,7 @@ async function startRun(itemKey: string, workflow: string): Promise<string> {
 
 async function endRun(
   runId: string,
-  status: 'completed' | 'failed' | 'running',
+  status: 'completed' | 'failed' | 'running' | 'paused',
   outcome: string | null = null,
   metadata: Record<string, unknown> = {}
 ): Promise<void> {
@@ -212,6 +214,11 @@ async function recordPullRequest(runId: string, number: number): Promise<void> {
   });
 }
 
+/** The ledger rows recording a write, without the baseline rows that record none. */
+async function shownRows(runId: string): Promise<unknown[]> {
+  return (await listAttentionNotices([runId])).filter(row => row.data.baseline !== true);
+}
+
 async function activeTracker(
   forge: ItemTrackerForge,
   config = trackerConfig()
@@ -243,7 +250,9 @@ test('one status comment, edited in place, shows every stage outcome and the pro
   await tracker.scan();
   expect(fake.calls.length).toBe(writes);
 
-  expect(fake.comments.size).toBe(1);
+  expect([...fake.comments.keys()].filter(key => key.endsWith(ITEM_STATUS_MARKER))).toEqual([
+    `issue:7|${ITEM_STATUS_MARKER}`,
+  ]);
   const status = fake.status();
   expect(status?.posts).toBe(1);
   expect(
@@ -290,7 +299,8 @@ test('an item with no tracker reference gets nothing, and its ended runs are not
       )
     ).rows.length;
   const settled = await terminalRows();
-  expect(settled).toBe(4);
+  // One terminal row per run, and the anchor that records the tracker as on.
+  expect(settled).toBe(5);
   await tracker.scan();
   expect(await terminalRows()).toBe(settled);
 });
@@ -328,7 +338,11 @@ test('turning the tracker on writes nothing for work that ended before', async (
   const later = await startRun('issue-8', 'implement');
   await endRun(later, 'completed', 'delivered');
   await (await activeTracker(fake.forge)).scan();
-  expect(fake.calls.map(call => call.subject.ref.number)).toEqual([8]);
+  expect(
+    fake.calls
+      .filter(call => call.marker === ITEM_STATUS_MARKER)
+      .map(call => call.subject.ref.number)
+  ).toEqual([8]);
 });
 
 test('an unknown write outcome is retried; a refused write is not retried before a restart', async () => {
@@ -346,7 +360,7 @@ test('an unknown write outcome is retried; a refused write is not retried before
     },
   });
   await tracker.scan();
-  expect(await listAttentionNotices([run])).toEqual([]);
+  expect(await shownRows(run)).toEqual([]);
   await tracker.scan();
   expect(fake.calls.length).toBe(2);
   expect(fake.status()?.posts).toBe(1);
@@ -365,7 +379,7 @@ test('an unknown write outcome is retried; a refused write is not retried before
   await tracker.scan();
   await tracker.scan();
   expect(fake.calls.filter(call => call.subject.ref.number === 404).length).toBe(1);
-  expect(await listAttentionNotices([missing])).toEqual([]);
+  expect(await shownRows(missing)).toEqual([]);
 });
 
 test('cost and token counts are written only when usage is turned on', async () => {
@@ -380,4 +394,181 @@ test('cost and token counts are written only when usage is turned on', async () 
     expect(body.includes('$1.50')).toBe(includeUsage);
     expect(body.includes('1200 in / 300 out')).toBe(includeUsage);
   }
+});
+
+/** Comments other than the status comment, in posting order of their first write. */
+function newComments(fake: ReturnType<typeof fakeForge>): string[] {
+  return [...fake.comments]
+    .filter(([key]) => !key.endsWith(ITEM_STATUS_MARKER))
+    .map(([, comment]) => comment.body);
+}
+
+const act = { via: 'cli', by: { declared: 'Private Person' }, fromRun: null } as const;
+
+async function leaveAsk(runId: string): Promise<void> {
+  await getDatabase().withTransaction(query =>
+    openItemAsksForCompletedRun(query, runId, [
+      {
+        question: 'Keep the old flag?',
+        context: 'Removing it breaks two scripts.',
+        options: [
+          { id: 'keep', does: 'Keeps the flag.', cost: 'Two names for one thing.' },
+          { id: 'drop', does: 'Removes the flag.', cost: 'Two scripts need edits.' },
+        ],
+        recommendation: { option: 'drop', why: 'The scripts are ours.' },
+        artifacts: [],
+      },
+    ])
+  );
+}
+
+async function pauseAtWait(runId: string): Promise<void> {
+  await endRun(runId, 'paused', null, {
+    wait: {
+      kind: 'attention',
+      owner: 'node',
+      nodeId: 'choose-base',
+      pauseId: 'pause-1',
+      waitingSince: '2026-11-16T01:00:00.000Z',
+      message: 'Which base branch?',
+      form: 'select',
+      options: [
+        { id: 'use-dev', label: 'dev', does: 'Targets dev.' },
+        { id: 'use-main', label: 'main' },
+      ],
+    },
+  });
+}
+
+async function recordRunEndedStart(endedRunId: string): Promise<void> {
+  await getDatabase().query(
+    `INSERT INTO remote_agent_start_receipts
+     (id, source_instance_id, delivery_id, content_digest, received_at, source_actor, outcome)
+     VALUES ($1, 'next-stage', $2, 'digest', $3, $4, 'matched')`,
+    [
+      crypto.randomUUID(),
+      endedRunId,
+      new Date().toISOString(),
+      JSON.stringify({ source: 'archon-run-ended', id: endedRunId }),
+    ]
+  );
+}
+
+test('an open ask gets one new comment with its options and the command that answers it', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const run = await startRun('issue-7', 'plan');
+  await endRun(run, 'completed', 'asked');
+  await leaveAsk(run);
+  await tracker.scan();
+  await tracker.scan();
+  const [ask, ...rest] = newComments(fake);
+  // An open ask means the work is not over, so no result comment follows it.
+  expect(rest).toEqual([]);
+  expect(ask).toContain('**Keep the old flag?**');
+  expect(ask).toContain('- `keep`: Keeps the flag. Cost: Two names for one thing.');
+  expect(ask).toContain('Recommended: `drop`. The scripts are ours.');
+  expect(ask).toMatch(/archon workflow answer --ref ask:\S+ --choose <option>/);
+  expect(fake.calls.filter(call => call.marker.includes('archon-item-ask')).length).toBe(1);
+});
+
+test('a run paused at an attention wait gets one question comment with its options', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const run = await startRun('issue-7', 'implement');
+  await tracker.scan();
+  await pauseAtWait(run);
+  await tracker.scan();
+  await tracker.scan();
+  const [question, ...rest] = newComments(fake);
+  expect(rest).toEqual([]);
+  expect(question).toContain('> Which base branch?');
+  expect(question).toContain('- `use-dev`: dev. Targets dev.');
+  expect(question).toContain(
+    `archon workflow answer ${run} --occurrence pause-1 --choose <option>`
+  );
+  // The status comment shows the paused run as in progress, and was not edited for the pause.
+  expect(fake.status()?.edits).toBe(0);
+});
+
+test('a recorded ruling gets one new comment with its text; a withdrawn one gets none', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  await startRun('issue-7', 'plan');
+  await tracker.scan();
+  await recordItemRuling({
+    projectKey: PROJECT,
+    key: 'issue-7',
+    text: 'Ship it behind the flag.',
+    ...act,
+  });
+  const withdrawn = await recordItemRuling({
+    projectKey: PROJECT,
+    key: 'issue-7',
+    text: 'Never mind.',
+    ...act,
+  });
+  await withdrawItemRuling({ rulingId: withdrawn.id, ...act });
+  await tracker.scan();
+  await tracker.scan();
+  const comments = newComments(fake);
+  expect(comments.length).toBe(1);
+  expect(comments[0]).toContain('> Ship it behind the flag.');
+  expect(comments[0]).not.toContain('Private Person');
+});
+
+test('the result is posted once, when a run ends without starting a next stage', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const plan = await startRun('issue-7', 'plan');
+  await recordRunEndedStart(plan);
+  await endRun(plan, 'completed', 'ready');
+  await tracker.scan();
+  expect(newComments(fake)).toEqual([]);
+
+  const implement = await startRun('issue-7', 'implement');
+  await recordPullRequest(implement, 12);
+  await endRun(implement, 'completed', 'delivered');
+  await tracker.scan();
+  await tracker.scan();
+  const comments = newComments(fake);
+  expect(comments.length).toBe(1);
+  expect(comments[0]).toContain(
+    'finished its work on this item: the `implement` stage completed with outcome `delivered`.'
+  );
+  expect(comments[0]).toContain('Proposed change: https://github.com/acme/widgets/pull/12');
+  expect(comments[0]).not.toContain('private');
+});
+
+test('turning the tracker on posts nothing for questions, asks and rulings already there', async () => {
+  const fake = fakeForge();
+  const asked = await startRun('issue-7', 'plan');
+  await endRun(asked, 'completed', 'asked');
+  await leaveAsk(asked);
+  await pauseAtWait(await startRun('issue-8', 'implement'));
+  await recordItemRuling({ projectKey: PROJECT, key: 'issue-7', text: 'Earlier ruling.', ...act });
+  const tracker = await activeTracker(fake.forge);
+  await tracker.scan();
+  await tracker.scan();
+  expect(newComments(fake)).toEqual([]);
+  // The paused run's item gets its status comment, since its run is live.
+  expect(fake.calls.map(call => call.subject.ref.number)).toEqual([8]);
+});
+
+test('after a refused write and a restart, a run that ended meanwhile is shown', async () => {
+  const fake = fakeForge();
+  // A first activation with no runs has nothing to baseline.
+  const tracker = await activeTracker(fake.forge);
+  const run = await startRun('issue-9', 'plan');
+  fake.fail({
+    operationId: 'op',
+    ok: false,
+    error: { kind: 'authorization', message: 'no' },
+    mutation: { op: 'workitem.comment.upsert', target: { repo, number: 9 }, outcome: 'refused' },
+  });
+  await tracker.scan();
+  await endRun(run, 'completed', 'ready');
+  await tracker.scan();
+  await (await activeTracker(fake.forge)).scan();
+  expect(fake.status(9)?.body).toContain('| plan | completed | ready |');
 });

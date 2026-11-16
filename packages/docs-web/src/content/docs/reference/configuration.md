@@ -119,8 +119,8 @@ streaming:
 #     destination: C0123456789
 
 # Item tracker (global config only, off when absent): archon serve keeps one status
-# comment on the issue or pull request an item's key names. includeUsage adds cost and
-# token counts. See "Show progress on the item's tracker" in the workflow triggers guide.
+# comment on the issue or pull request an item's key names, and posts a new comment for
+# each question, ask, ruling and final result. includeUsage adds cost and token counts. See "Show progress on the item's tracker" in the workflow triggers guide.
 # itemTracker:
 #   includeUsage: false
 #   projects:
