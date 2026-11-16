@@ -61,8 +61,7 @@ inputs:
     default: "auto"
     description: Silent-failure lens — auto, true, or false.
 
-returns: publish
-outcome_field: ready
+returns: { node: publish, outcome: ready }
 
 nodes:
   # Fixes what this round reviews before anything reads the change: whether it

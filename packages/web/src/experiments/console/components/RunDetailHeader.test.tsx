@@ -9,6 +9,7 @@ test('the shared detail header shows succeeded terminal output', () => {
   const run = toRun({
     ...detailFixture.run,
     outcome: 'succeeded',
+    completed_outcome: 'succeeded',
     terminal_record: terminalRecord(
       {
         availability: 'available',

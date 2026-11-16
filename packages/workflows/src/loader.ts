@@ -15,7 +15,7 @@ import {
   validateLoopGroupProseCompletion,
   validateNodeOutputFormats,
   validateRunBudgetShape,
-  validateWorkflowOutcomeDeclaration,
+  validateWorkflowResultContract,
 } from './loader/contracts';
 import {
   collectConditionalJoinWarnings,
@@ -33,7 +33,6 @@ import {
   parseInputs,
   parseMutatesCheckout,
   parseOptionalField,
-  parseOutcomeField,
   parseWorkflowResource,
   parseRequires,
   parseReturns,
@@ -83,6 +82,9 @@ function parseWorkflowHeader(
 
   if (Object.hasOwn(raw, 'thinking')) {
     return "'thinking:' has been removed; use 'effort:' instead";
+  }
+  if (Object.hasOwn(raw, 'outcome_field')) {
+    return "'outcome_field:' has been removed; declare 'returns: { node: <id>, outcome: <field> }' instead";
   }
   if (Object.hasOwn(raw, 'evidence_policy')) {
     return "'evidence_policy:' has been removed; use a 'bash:' or 'script:' node that exits non-zero to fail the run instead";
@@ -242,7 +244,7 @@ interface WorkflowFields {
   readonly requires: ReturnType<typeof parseRequires>;
   readonly inputs: WorkflowDefinition['inputs'];
   readonly returns: WorkflowDefinition['returns'];
-  readonly outcomeField: WorkflowDefinition['outcome_field'];
+  readonly result: WorkflowDefinition['result'];
   readonly deprecated: WorkflowDefinition['deprecated'];
 }
 
@@ -306,8 +308,6 @@ function parseWorkflowFields(
   if ('error' in inputs) return inputs.error;
   const returns = parseReturns(raw.returns, dagNodes, filename);
   if ('error' in returns) return returns.error;
-  const outcomeField = parseOutcomeField(raw.outcome_field, filename);
-  if ('error' in outcomeField) return outcomeField.error;
   const effort = resolveEffort(
     raw.effort,
     modelReasoningEffort,
@@ -339,8 +339,8 @@ function parseWorkflowFields(
     tags,
     requires,
     inputs: inputs.value,
-    returns: returns.value,
-    outcomeField: outcomeField.value,
+    returns: returns.value?.node,
+    result: returns.value?.result,
     deprecated: deprecated.value,
   };
 }
@@ -388,7 +388,7 @@ function runPolicies(fields: WorkflowFields): Partial<WorkflowDefinition> {
     ...(fields.requires !== undefined ? { requires: fields.requires } : {}),
     ...(fields.inputs !== undefined ? { inputs: fields.inputs } : {}),
     ...(fields.returns !== undefined ? { returns: fields.returns } : {}),
-    ...(fields.outcomeField !== undefined ? { outcome_field: fields.outcomeField } : {}),
+    ...(fields.result !== undefined ? { result: fields.result } : {}),
     ...(fields.deprecated !== undefined ? { deprecated: fields.deprecated } : {}),
   };
 }
@@ -415,7 +415,7 @@ function workflowContractError(
   const execInputValidation = validateInlineExecInputs(workflow, configuredEnvNames);
   parseWarnings.push(...execInputValidation.warnings);
   if (execInputValidation.errors.length > 0) return execInputValidation.errors.join(' ');
-  return validateWorkflowOutcomeDeclaration(workflow) ?? validateRunBudgetShape(workflow);
+  return validateWorkflowResultContract(workflow) ?? validateRunBudgetShape(workflow);
 }
 
 /**

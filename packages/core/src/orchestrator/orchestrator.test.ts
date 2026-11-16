@@ -315,6 +315,7 @@ mock.module('../workflows/store-adapter', () => ({
         workflow_name: data.workflow_name,
         status: 'pending',
         outcome: null,
+        completed_outcome: null,
         origin: data.origin ?? null,
         conversation_id: data.origin?.conversationId ?? null,
         parent_conversation_id: data.origin?.parentConversationId ?? null,

@@ -15,8 +15,7 @@ inputs:                      # declared signature; callers pass via --input name
   work:
     default: ""
     description: Optional work override; prompts read $ARGUMENTS explicitly for fallback
-returns: implement           # which node's output is the workflow's terminal output
-outcome_field: green         # persist one authored boolean beside run status (e.g. green/ready/rooted)
+returns: { node: implement, outcome: green }  # result node; `outcome` names a required boolean or string enum
 worktree:
   enabled: true              # pin worktree isolation. Bounds git files ONLY —
                              # not ~/.archon, env vars, database, or sessions

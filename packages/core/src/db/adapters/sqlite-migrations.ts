@@ -157,6 +157,12 @@ const sqliteMigrations: readonly Migration[] = [
   {
     kind: 'tolerated',
     scope: 'schema',
+    failureEvent: 'db.sqlite_migration_completed_outcome_column_failed',
+    apply: addCompletedOutcomeColumn,
+  },
+  {
+    kind: 'tolerated',
+    scope: 'schema',
     failureEvent: 'db.sqlite_migration_state_revisions_columns_failed',
     apply: addStateRevisionColumns,
   },
@@ -471,6 +477,13 @@ function addItemColumns(db: Database): void {
   db.run(
     'CREATE INDEX IF NOT EXISTS idx_workflow_runs_item ON remote_agent_workflow_runs(item_id) WHERE item_id IS NOT NULL'
   );
+}
+
+// The outcome a run completed with (#5660); see migrations/000_combined.sql.
+function addCompletedOutcomeColumn(db: Database): void {
+  if (!columnNames(db, 'remote_agent_workflow_runs').has('completed_outcome')) {
+    db.run('ALTER TABLE remote_agent_workflow_runs ADD COLUMN completed_outcome TEXT');
+  }
 }
 
 // writer_via: the surface a state write outside a run came through; older rows came

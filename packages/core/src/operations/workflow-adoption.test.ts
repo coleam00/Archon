@@ -28,6 +28,7 @@ function runRow(overrides: Partial<WorkflowRun> = {}): WorkflowRun {
     codebase_id: 'cb-1',
     status: 'failed',
     outcome: 'failed',
+    completed_outcome: null,
     user_message: '',
     metadata: {},
     active_phase_started_at: null,

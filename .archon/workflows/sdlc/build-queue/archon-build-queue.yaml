@@ -70,9 +70,8 @@ inputs:
       capacity and overlap policy, at most once per decision. Empty starts no
       follow-up; the next queue run picks the item up.
 
-returns: apply
 # False only when a run that claimed nothing found stored items no pickup can act on.
-outcome_field: healthy
+returns: { node: apply, outcome: healthy }
 
 nodes:
   - id: start

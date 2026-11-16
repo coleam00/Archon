@@ -748,6 +748,12 @@ ALTER TABLE remote_agent_resource_start_requests
 ALTER TABLE remote_agent_workflow_runs
   ADD COLUMN IF NOT EXISTS item_id UUID REFERENCES remote_agent_items(id);
 
+-- The outcome a run completed with (#5660), from its workflow's returns.outcome: an enum
+-- value as it is, a boolean as 'succeeded' or 'failed'. Written only by the write that
+-- completes the run, so it is never set on a run that has not ended. The older outcome
+-- column keeps its constraint and meaning; it cannot hold an enum value.
+ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS completed_outcome TEXT;
+
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;

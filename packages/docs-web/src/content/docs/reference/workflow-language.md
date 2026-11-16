@@ -72,7 +72,7 @@ The same tree works under `~/.archon/workflows/` for home-scoped workflows. Exis
 | `budget` | Ceiling on the run's total work and spend. See [Run budgets](#run-budgets). |
 | `persist_sessions` | Default for every AI node's `persist_session`. See [Persistent sessions](#persistent-sessions-across-re-runs). |
 | `requires` | `[github]` refuses the run before any work unless the triggering user has connected a GitHub identity. Enforced only when per-user GitHub is enabled (GitHub App mode with `TOKEN_ENCRYPTION_KEY`). `github` is the only value. |
-| `inputs`, `returns`, `outcome_field` | The workflow's signature. See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
+| `inputs`, `returns` | The workflow's signature, including the outcome a run completes with (`returns: { node, outcome }`). See [Workflow signature](#workflow-signature-inputs-returns-and-inputs). |
 | `tags` | Free-form labels carried on the parsed workflow. The engine gives them no meaning. |
 | `deprecated` | `{ message }` announces removal at every run start. See [Deprecating a workflow](#deprecating-a-workflow). |
 
@@ -1800,7 +1800,7 @@ and then removed from the definition, so nothing can fall back to an outer file'
 | `provider`, `model`, `effort`, `fallbackModel`, `betas`, `sandbox`, `persist_sessions` | **Travel** with the workflow, onto its own nodes. A node's own value always wins. |
 | `requires` | **Unions** into the composing workflow, so a missing capability refuses the run at invocation instead of failing mid-block. |
 | `inputs`, `returns` | **Consumed** by composition: `inputs:` validates the caller's `with:`, `returns:` selects `$includeId.output`. |
-| `outcome_field` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own field relative to its own `returns:`; an include alias is rebound before that contract is validated. |
+| `returns.outcome` | **Owned by the workflow being run.** An included workflow's declaration does not propagate to its composer. A top-level composer may declare its own outcome in its own `returns:`; an include alias is rebound before that contract is validated. |
 | `worktree`, `container`, `budget` | **Run-owned.** Whoever starts the run decides these; a composed file's values are dropped with a load-time warning. Declare them on the top-level workflow. |
 | `mutates_checkout` | **Run-owned.** It is dropped with the same warning, including under `include:` + `fan_out:`, whose instances run inside the composing run. |
 | `webSearchMode` | **Dropped, and this one is a real gap.** It is the only workflow-level field with no per-node counterpart, so there is nowhere for it to travel. Set it on the top-level workflow, where it then applies to every node in the run. |
@@ -1990,8 +1990,7 @@ inputs:
     description: the diff to review
   style:
     default: strict
-returns: synthesize          # the node whose output IS this block's result
-outcome_field: green         # required boolean field that authors this run's verdict
+returns: { node: synthesize, outcome: green }   # the result node, and the outcome it decides
 nodes:
   - id: gather
     prompt: Gather context for $INPUTS.diff (style $INPUTS.style).
@@ -2020,60 +2019,75 @@ nodes:
   lenient behavior: supplied keys **pass through unvalidated**: they are recorded on the run
   and still resolve as `$INPUTS.<name>` / `INPUTS_<UPPER_SNAKE>`, they are simply never checked
   against a declaration, because there isn't one.
-- **`returns:`**: the **node id** whose output IS the workflow's result. It selects by id, so
-  it works for any node type and even a **non-sink** node (a node other nodes depend on). For an
-  `include:` block, `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still
-  waits on every terminal node. For a `workflow:` sub-run child, the child's terminal output
-  (threaded back as `$node.output`) becomes the `returns:` node's output.
-- **`outcome_field:`**: an optional, explicit authored verdict relative to `returns:`. The
-  selected node must declare an object `output_format` (`type: object`) whose `properties`
-  declares the field, whose `required` guarantees its presence, and whose field schema
-  guarantees `type: boolean`; otherwise the workflow fails to load. Declarations and
-  guarantees may come from the root or through `allOf`, `anyOf`, or `oneOf`.
-  Root and `allOf` constraints combine; every `anyOf`/`oneOf` alternative except
-  literal `false` must supply each guarantee unless an enclosing constraint already
-  supplies it. Only literal `false` is exempt: the loader does not detect other
-  impossible branches such as `{not: {}}`. A `true` branch adds no constraint.
-  It cannot select a `loop_group` (which returns raw text) or a fan-out `workflow:` node
-  (which returns an aggregate array); add a structured collector node after either one.
-  Exact `true` is persisted as `outcome: succeeded`, exact `false` as `outcome: failed`.
-  This is independent from engine lifecycle `status`: a run may be `completed / failed-outcome`,
-  `failed / succeeded-outcome`, or `paused / succeeded-outcome`. Status still controls terminality,
-  resume, cancellation, filtering, automation, and CLI exit codes. A workflow with no declaration,
-  a selected node that has not completed, and historical runs read as `outcome: null`, never as
-  failure. Resume preserves an authored outcome until the selected node actually re-executes and
-  authors a replacement.
+- **`returns:`**: the **node id** whose output IS the workflow's result, written
+  `returns: <id>` or `returns: { node: <id> }`. It selects by id, so it works for any node type
+  and even a **non-sink** node (a node other nodes depend on). For an `include:` block,
+  `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still waits on every
+  terminal node. For a `workflow:` sub-run child, the child's terminal output (threaded back as
+  `$node.output`) becomes the `returns:` node's output. Everything else the engine reads from
+  that output is a key of the object form; an unknown key fails the workflow at load.
+- **`returns.outcome`**: an optional property of the `returns:` node's output whose value is the
+  outcome the run completes with. The selected node must declare an object `output_format`
+  (`type: object`) whose `properties` declares the field and whose `required` guarantees its
+  presence; otherwise the workflow fails to load. The field takes one of two forms:
+  - **A boolean.** Its schema must guarantee `type: boolean`. Declarations and guarantees may
+    come from the root or through `allOf`, `anyOf`, or `oneOf`. Root and `allOf` constraints
+    combine; every `anyOf`/`oneOf` alternative except literal `false` must supply each
+    guarantee unless an enclosing constraint already supplies it. Only literal `false` is
+    exempt: the loader does not detect other impossible branches such as `{not: {}}`. A `true`
+    branch adds no constraint. Exact `true` completes the run with outcome `succeeded`, exact
+    `false` with `failed`.
+  - **A named outcome.** A root property declared `type: string` with a non-empty `enum` of
+    strings, such as `{ type: string, enum: [built, stop] }`. The run completes with the value
+    as it is. A string with no `enum` fails to load, and so does an `enum` with an empty
+    string among its values: an outcome is a name an operator and a later stage read.
+
+  It cannot select a `loop_group` (which returns raw text) or a fan-out `workflow:` node (which
+  returns an aggregate array); add a structured collector node after either one. The removed
+  `outcome_field:` key fails to load with a message naming `returns: { node, outcome }`.
+
+  The outcome is written once, in the write that completes the run, so a run that has an
+  outcome has ended. A failed, cancelled or paused run has none, even when its `returns:` node
+  completed; what that node said stays readable from its `node_completed` event (`archon
+  workflow get <run-id> --json --verbose --events`). If the node completed with a value its
+  declaration does not admit, the run fails naming the field instead of completing. A
+  completed run whose `returns:` node was skipped has none. The outcome is independent from
+  lifecycle `status`: a run may be `completed` with outcome `failed`. Status still controls
+  terminality, resume, cancellation, filtering, automation, and CLI exit codes.
 
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.
-The REST run list, detail, by-worker, and dashboard JSON expose nullable `outcome` beside `status`.
-CLI, console, chat, and adapter result surfaces show a non-null authored outcome separately from
+The run row carries two columns. `completed_outcome` holds the outcome of both forms, and is the
+one to read: when it is set, the run is over. `outcome` holds `succeeded` or `failed` for the
+boolean form only, for readers that predate `completed_outcome`; both are written by the same
+write. The REST run list, detail, by-worker, and dashboard JSON expose both beside `status`.
+CLI, console, chat, and adapter result surfaces show a non-null outcome separately from
 execution status. A foreground CLI execution handoff reports only its observed status, omitting
-authored outcome and usage; its zero exit does not prove completion. Use `archon workflow wait <run-id>`
+the outcome and usage; its zero exit does not prove completion. Use `archon workflow wait <run-id>`
 to await a terminal or gate transition and `archon workflow get <run-id>` to inspect the current result.
-See [CLI handoff behavior](/reference/cli/#workflow-run-name-message). When `outcome` is null, result
-surfaces retain the normal status-only presentation. A dry run
-reports the same declaration separately as nullable `authoredOutcome`, derived from the declared
-return node's schema-valid stub (a structured value or JSON string), or its schema-certified
-`bash:` / `script:` output with `--exec-code`. Its existing `outcome` remains the simulation result
-and continues to control CLI exit codes and fixture `expect` checks. Fixtures can independently
-assert the authored verdict with `fixture.authored: succeeded` or `failed`. Generated placeholder
-stubs, including tolerated `all_done` joins, never author a verdict.
+See [CLI handoff behavior](/reference/cli/#workflow-run-name-message). When no outcome is set, result
+surfaces retain the normal status-only presentation. A dry run reports the same values as nullable
+`completedOutcome` and `authoredOutcome` (the boolean form only), set only when the simulation
+completed, derived from the declared return node's schema-valid stub (a structured value or JSON
+string), or its schema-certified `bash:` / `script:` output with `--exec-code`. Its existing
+`outcome` remains the simulation result and continues to control CLI exit codes and fixture
+`expect` checks. Fixtures can independently assert the outcome with `fixture.authored`:
+`succeeded` or `failed` for the boolean form, the value for a named outcome. Generated
+placeholder stubs, including tolerated `all_done` joins, never decide an outcome.
 
-### Deterministic checks and authored outcomes
+### Deterministic checks and run outcomes
 
 These are independent signals:
 
 - A deterministic check is an ordinary `bash:` or `script:` node. Exit zero completes the node;
   any other exit fails it and therefore affects lifecycle status. A named script read from captured
   source is also rejected if the run's full source capture no longer matches its pinned identity.
-- `outcome_field` records the workflow author's schema-declared boolean verdict. It does not control
-  lifecycle status. A succeeded outcome can remain on a run that later fails, and a failed outcome can
-  coexist with a completed run.
+- `returns.outcome` records the outcome the workflow's result declares. It does not control
+  lifecycle status, and a run carries it only once it has completed.
 
 There is no special verification node or verification status. Put a check in a deterministic node
-when its execution must govern success, and use `outcome_field` only when the workflow must record its
-own conclusion.
+when its execution must govern success, and use `returns.outcome` only when the workflow must record
+its own conclusion.
 
 ### Binding time: includes resolve at load, runs at runtime
 
@@ -3093,7 +3107,6 @@ reflects the current pass instead of replaying a cached completion.
 name: failure-report
 description: Preserve an authored report after a node failure
 returns: report
-outcome_field: ok
 nodes:
   - id: fail
     bash: exit 1
@@ -3120,8 +3133,8 @@ nodes:
       required: [ok, summary]
 ```
 
-The run's status stays `failed`; the authored outcome follows the reporter's
-[`outcome_field:`](#workflow-signature-inputs-returns-and-inputs) (`ok: false` here).
+The run's status stays `failed`, so it has no [outcome](#workflow-signature-inputs-returns-and-inputs);
+the report (`ok: false` here) stays readable from the reporter's `node_completed` event.
 The reporter owns the result schema and validates the value it passes through. Bind only
 the composer: a [failed producer always fails a binding](#reading-across-a-skipped-branch),
 so if the composer itself fails, this reporter fails too. Cancellation runs no further

@@ -244,15 +244,11 @@ export const workflowBaseSchema = z.object({
    * positional first-sink default) and the terminal output of a `workflow:`
    * sub-run child. Selecting by id (not text) works for every node type,
    * including a non-sink node.
+   *
+   * Authored as `returns: <id>` or `returns: { node: <id>, outcome: <field> }`. The
+   * loader keeps the node id here and the rest of the declaration in `result`.
    */
   returns: z.string().min(1).optional(),
-  /**
-   * Required boolean property on the declared `returns:` node that records the
-   * workflow author's verdict independently from the run lifecycle (#2618).
-   * The loader validates the selected node's `output_format` contract; the
-   * engine maps exact true/false values to succeeded/failed without inference.
-   */
-  outcome_field: z.string().trim().min(1).optional(),
   /**
    * Marks the workflow deprecated (#2781): run-start surfaces announce removal
    * in an upcoming release with a switch/copy escape hatch, while it keeps
@@ -272,8 +268,26 @@ export type WorkflowBase = z.infer<typeof workflowBaseSchema>;
  * Workflow definition parsed from YAML.
  * All workflows use DAG-based execution with `nodes`.
  */
+/** What the engine reads from a workflow's result, each part named in `returns: { node, ... }`. */
+export const workflowResultContractSchema = z.strictObject({
+  /**
+   * A required property of the returns node's `output_format`: a boolean, or a string
+   * with an `enum`. Its value is the outcome the run completed with, written once, in
+   * the write that completes the run.
+   */
+  outcome: z.string().min(1).optional(),
+});
+
+export type WorkflowResultContract = z.infer<typeof workflowResultContractSchema>;
+
 const workflowDefinitionObjectSchema = workflowBaseSchema.extend({
   nodes: z.array(dagNodeSchema),
+  /**
+   * What the engine reads from the `returns:` node's output, from the object form of
+   * `returns:`. Not authorable on its own key: the loader is its only writer, and
+   * `KNOWN_WORKFLOW_KEYS` leaves it out so an authored `result:` warns as unknown.
+   */
+  result: workflowResultContractSchema.optional(),
 });
 export const workflowDefinitionSchema = z.preprocess(
   rejectRetiredThinking,
@@ -320,7 +334,7 @@ export type ResolvedWorkflow = Omit<WorkflowDefinition, 'nodes'> &
  * Used by parseWorkflow to warn on unknown keys (#2213).
  */
 export const KNOWN_WORKFLOW_KEYS: ReadonlySet<string> = new Set(
-  Object.keys(workflowDefinitionObjectSchema.shape)
+  Object.keys(workflowDefinitionObjectSchema.shape).filter(key => key !== 'result')
 );
 
 /**
@@ -358,7 +372,7 @@ export const KNOWN_WORKFLOW_NESTED_KEYS: ReadonlyMap<string, NestedKeySpec> = ne
   ['deprecated', { kind: 'object', keys: new Set(Object.keys(workflowDeprecationSchema.shape)) }],
   // First `record` entry in this map: `inputs` is a record of input-name → spec,
   // so unknown keys under an individual spec (e.g. `inputs.diff.typo`) warn.
-  // `returns` and `outcome_field` are plain strings and need no nested registration.
+  // `returns` is parsed by the loader, which refuses an unknown key in its object form.
   [
     'inputs',
     {

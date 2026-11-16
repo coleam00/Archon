@@ -595,6 +595,20 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     }
   );
 
+  // A reader of workflow_completed (the chat host re-reads the run for its outcome) must
+  // find the completion stored, since the outcome lands only in that write (#5660).
+  it('emits workflow_completed after the completion write', async () => {
+    const store = createMockStore();
+    const emitted: string[] = [];
+    store.completeWorkflowRun = mock(async () => {
+      emitted.push('completion_stored');
+    });
+
+    await run(store, createMockPlatform(), [okNode], emitted);
+
+    expect(emitted.slice(-2)).toEqual(['completion_stored', 'workflow_completed']);
+  });
+
   it('still emits workflow_completed and telemetry when the completion write rejects', async () => {
     const store = createMockStore();
     store.completeWorkflowRun = mock(async () => {

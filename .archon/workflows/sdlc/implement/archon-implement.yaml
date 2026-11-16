@@ -19,15 +19,14 @@ inputs:
       description, or the repair of an existing pull request when this run was
       launched on its branch. When empty, the run's trigger message is the work.
 
-returns: implement
-outcome_field: green
+returns: { node: implement, outcome: green }
 
 nodes:
   # Run success ≠ green. The loop completes on `done`, which deliberately includes
   # a definitive blocked decline (green: false) — so a completed run's status never
   # certifies the work. Consumers read $implement.output.green; compositions gate on
   # it deterministically before spending or shipping (deliver's pr step does), and the
-  # workflow's outcome_field records it as the run's authored outcome.
+  # workflow's returns.outcome records it as the outcome the run completes with.
   # Each turn is a fresh session: work that continues past a seam is carried by its
   # commits and implementation.md, never by a conversation that grows with the work.
   - id: implement

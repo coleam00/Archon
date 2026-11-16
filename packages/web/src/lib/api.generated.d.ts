@@ -5508,11 +5508,13 @@ export interface components {
         };
       };
       returns?: string;
-      outcome_field?: string;
       deprecated?: {
         message: string;
       };
       nodes: components['schemas']['DagNode'][];
+      result?: {
+        outcome?: string;
+      };
     };
     DagNode: {
       id: string;
@@ -6000,6 +6002,7 @@ export interface components {
       status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       /** @enum {string|null} */
       outcome: 'succeeded' | 'failed' | null;
+      completed_outcome: string | null;
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;
@@ -7282,8 +7285,7 @@ export interface components {
         workflow: string;
         /** @enum {string} */
         status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
-        /** @enum {string|null} */
-        outcome: 'succeeded' | 'failed' | null;
+        outcome: string | null;
         /** Format: date-time */
         startedAt: string;
         /** Format: date-time */
@@ -8019,6 +8021,7 @@ export interface components {
       /** @enum {string} */
       status: 'pending' | 'running' | 'completed' | 'failed' | 'cancelled' | 'paused';
       outcome: components['schemas']['WorkflowRunOutcome'];
+      completed_outcome: string | null;
       user_message: string;
       metadata: components['schemas']['WorkflowRunMetadata'];
       started_at: string;

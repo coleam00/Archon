@@ -78,6 +78,7 @@ describe('workflowRunCommand — durable wait occurrence ownership', () => {
             parent_conversation_id: null,
             codebase_id: null,
             outcome: null,
+            completed_outcome: null,
             user_message: 'go',
             active_phase_started_at: null,
             started_at: new Date(),

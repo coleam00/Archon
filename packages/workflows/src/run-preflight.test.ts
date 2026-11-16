@@ -427,6 +427,7 @@ function savedRun(metadata: Record<string, unknown>): WorkflowRun {
     codebase_id: null,
     status: 'paused',
     outcome: null,
+    completed_outcome: null,
     user_message: '',
     metadata,
     active_phase_started_at: null,

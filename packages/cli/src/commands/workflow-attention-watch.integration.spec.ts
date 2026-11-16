@@ -187,7 +187,7 @@ const ASK =
   '  - id: finish\n    depends_on: [ask]\n    bash: "echo done"\n';
 
 const RED =
-  'name: watch-red\ndescription: Attention watch fixture.\nreturns: verdict\noutcome_field: green\nnodes:\n' +
+  'name: watch-red\ndescription: Attention watch fixture.\nreturns: { node: verdict, outcome: green }\nnodes:\n' +
   '  - id: verdict\n    bash: |\n      echo \'{"green": false, "summary": "main is red: lint fails on dev"}\'\n' +
   '    output_format:\n      type: object\n      properties:\n        green: { type: boolean }\n        summary: { type: string }\n' +
   '      required: [green, summary]\n';

@@ -184,6 +184,7 @@ export class InMemoryStore implements IWorkflowStore {
       codebase_id: data.codebase_id ?? null,
       status: 'pending',
       outcome: null,
+      completed_outcome: null,
       user_message: data.user_message,
       metadata: data.metadata ?? {},
       active_phase_started_at: null,
@@ -290,7 +291,6 @@ export class InMemoryStore implements IWorkflowStore {
     const r = this.runs.get(id);
     if (r) {
       if (updates.status) r.status = updates.status;
-      if (updates.outcome) r.outcome = updates.outcome;
       if (updates.metadata) r.metadata = { ...r.metadata, ...updates.metadata };
       // Write-once, mirroring the real store's COALESCE (#2200): a row must report the
       // output location it actually recorded, or a reader that resolves artifacts through
@@ -316,7 +316,12 @@ export class InMemoryStore implements IWorkflowStore {
   getWorkflowRunStatus = (id: string): Promise<WorkflowRun['status'] | null> =>
     Promise.resolve(this.runs.get(id)?.status ?? null);
 
-  completeWorkflowRun: IWorkflowStore['completeWorkflowRun'] = (id, _completion, metadata) => {
+  completeWorkflowRun: IWorkflowStore['completeWorkflowRun'] = (
+    id,
+    _completion,
+    metadata,
+    result
+  ) => {
     const r = this.runs.get(id);
     // Mirror the real store's CAS guard (`WHERE status = 'running'`): a run cancelled
     // mid-flight (e.g. a fan-out sibling cooperatively cancelled) must NOT be flipped
@@ -325,6 +330,9 @@ export class InMemoryStore implements IWorkflowStore {
       r.status = 'completed';
       r.completed_at = new Date();
       if (metadata) r.metadata = { ...r.metadata, ...metadata };
+      const outcome = result?.outcome;
+      r.outcome = outcome?.kind === 'boolean' ? outcome.value : null;
+      r.completed_outcome = outcome?.value ?? null;
     }
     return Promise.resolve();
   };

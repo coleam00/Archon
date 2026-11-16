@@ -177,6 +177,7 @@ const mockCreateWorkflowRun = mock<IWorkflowStore['createWorkflowRun']>(() => {
     codebase_id: 'cb-1',
     status: 'pending',
     outcome: null,
+    completed_outcome: null,
     user_message: 'run it',
     metadata: {},
     active_phase_started_at: null,

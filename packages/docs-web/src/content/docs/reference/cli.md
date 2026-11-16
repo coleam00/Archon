@@ -209,7 +209,7 @@ A relative path resolves from the invoking directory before the repository root.
 | Key | Meaning |
 | --- | --- |
 | `fixture.expect` | Simulation outcome: `completed` (the default), `failed`, `paused` or `cancelled` |
-| `fixture.authored` | Optional authored outcome expectation: `succeeded` or `failed`. A mismatch or an undeclared verdict fails the fixture |
+| `fixture.authored` | Optional authored outcome expectation: `succeeded` or `failed` for a boolean outcome, or the value of a named one. A mismatch or an undeclared outcome fails the fixture |
 | `fixture.fail-node` | Required when `expect: failed`. A node id, or a list naming the exact failed set (a loop body failure is the node and its group) |
 | `fixture.reached` | Nodes that must complete or be stubbed |
 | `fixture.inputs` | Values for the workflow's declared inputs |
@@ -491,7 +491,7 @@ With `--exec-code`, child processes inherit Archon's process environment, then a
 
 By default, bash and script nodes are never executed. `--exec-code` is an explicit opt-in for trusted local workflow code and is the only dry-run mode that can cause code-level side effects. An executed node that declares `output_format` is certified exactly as in a real run: stdout must be one JSON document that satisfies the schema, and downstream `$node.output.field` references read that certified value. Executed nodes receive `$ARTIFACTS_DIR` and `$STATE_DIR` under an ephemeral per-simulation directory in `~/.archon/temp/` (honoring `ARCHON_HOME`), created before the first executed node and removed when the simulation ends. A dry run writes nothing inside the repository, and a simulation that executes nothing creates no directory at all. An attention wait pauses the simulation where a real run would pause, unless the stub file gives that wait node a stub; the stub then stands in for its answer and must match the form's output, for example `review: { decision: approve, text: "" }`. Deprecated `approval:` nodes auto-complete unless `--pause-at-gates` is set. Dry-run is incompatible with lifecycle and isolation flags such as `--branch`, `--no-worktree`, `--folder`, `--container`, and `--detach`.
 
-The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, and safe output. The result reports two independent facts. `outcome` is the simulation execution result (`completed`, `failed`, `paused`, or `cancelled`) and still controls the CLI exit code. `authoredOutcome` is `succeeded`, `failed`, or `null`, derived only when the workflow declares `returns:` plus a boolean `outcome_field:` and the return node has a schema-valid structured result supplied by a stub or produced by code executed with `--exec-code`. Generated placeholders from `--default-stubs` or an unstubbed `all_done` node do not invent an authored verdict. A completed simulation can therefore report a failed authored outcome. Human output labels these as `Simulation outcome:` and `Authored outcome:`; simulation JSON always includes both fields. `--stubs-init --json` does not run a simulation and instead returns a scaffold acknowledgement with `workflow`, `stubsPath`, and `nodeCount`.
+The ordered trace records each node as completed, stubbed, skipped, failed, or paused, including its reason, resolved text, and safe output. The result reports two independent facts. `outcome` is the simulation execution result (`completed`, `failed`, `paused`, or `cancelled`) and still controls the CLI exit code. `completedOutcome` is the outcome the run would complete with, or `null`: set only when the simulation completed, the workflow declares `returns: { node, outcome }`, and the return node has a schema-valid structured result supplied by a stub or produced by code executed with `--exec-code`. It is `succeeded` or `failed` for a boolean outcome and the value for a named one; `authoredOutcome` carries the boolean form only, as the run row's `outcome` column would, and `declaresOutcome` says whether the workflow declares one. Generated placeholders from `--default-stubs` or an unstubbed `all_done` node do not invent an outcome. A completed simulation can therefore report a failed outcome. Human output labels these as `Simulation outcome:` and `Authored outcome:`; simulation JSON always includes the fields. `--stubs-init --json` does not run a simulation and instead returns a scaffold acknowledgement with `workflow`, `stubsPath`, and `nodeCount`.
 
 Every node that takes an AI turn also reports the provider and model it will run on and where each value came from, using the executor's own resolution. This answers what a node in a composed workflow runs on, since a composed workflow runs with the configuration its own file declares:
 
@@ -762,9 +762,11 @@ These are audit facts. They never name who answered, and nothing routes on them.
 
 - **Execution status** (`pending`, `running`, `paused`, `completed`, `failed`, or `cancelled`)
   controls terminality, resume and cancellation, filters, and CLI exit behavior.
-- **Authored outcome** (`succeeded` or `failed`) is the workflow's declared verdict from
-  `outcome_field`. Human output labels it separately when present. JSON always carries it as the
-  nullable `outcome` field beside `status`.
+- **Authored outcome** is the outcome a completed run declared through `returns.outcome`:
+  `succeeded` or `failed` for a boolean, the value for a named outcome. Only the write that
+  completes the run records it, so a run that has not completed shows none. Human output labels
+  it separately when present. JSON carries it as the nullable `completed_outcome` field beside
+  `status`, and the boolean form also as the older nullable `outcome` field.
 - **Reason** is why a run that ended needs a look, in up to two short lines: for a failed
   outcome, what the `returns:` node said (its first lines, or its text fields as `key: text`);
   for a failed run, the first line of its first failed node's error, falling back to the
@@ -773,10 +775,9 @@ These are audit facts. They never name who answered, and nothing routes on them.
   when the record holds no reason text. The full value stays in `terminal_record`.
 
 The axes may disagree without either being rewritten: `completed` with authored outcome `failed`
-means execution finished normally but the workflow judged the work unsuccessful; `failed` or
-`paused` with authored outcome `succeeded` records a successful verdict before execution later
-failed or paused. A null outcome means the workflow did not declare one, the selected node has not
-authored it yet, or the run predates the field. In that case human output keeps its status-only
+means execution finished normally but the workflow judged the work unsuccessful. A null outcome
+means the workflow did not declare one, the run has not completed, or the run predates the field.
+What the `returns:` node said before a later failure or pause stays in its `node_completed` event. In that case human output keeps its status-only
 presentation. Except on an [execution handoff](#workflow-run-name-message), foreground
 `workflow run` uses the same labels when an outcome exists, and its exit code follows execution
 success or failure. A handoff reports only the observed status and has the exit meaning described above.

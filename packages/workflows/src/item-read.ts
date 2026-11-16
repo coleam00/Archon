@@ -13,11 +13,12 @@ import {
 } from './attention-queue';
 import { attentionDegradedSchema, splitAttentionRead } from './schemas/attention-degraded';
 import { recordSurfaceSchema } from './schemas/record-surface';
-import { workflowRunOutcomeSchema, workflowRunStatusSchema } from './schemas/run-status';
+import { workflowRunStatusSchema } from './schemas/run-status';
 import {
   attentionAnswererSchema,
   attentionAnsweringRunSchema,
   attentionAnswerSchema,
+  displayedRunOutcome,
   workflowItemSchema,
   type WorkflowRun,
 } from './schemas/workflow-run';
@@ -28,7 +29,8 @@ export const itemRunSchema = z.object({
   id: z.string(),
   workflow: z.string(),
   status: workflowRunStatusSchema,
-  outcome: workflowRunOutcomeSchema.nullable(),
+  /** The outcome the run completed with, of either form; null until it completes. */
+  outcome: z.string().nullable(),
   startedAt: z.string().datetime(),
   /** Null while the run has not ended. */
   completedAt: z.string().datetime().nullable(),
@@ -95,7 +97,7 @@ function itemRun(run: WorkflowRun): ItemRun {
     id: run.id,
     workflow: run.workflow_name,
     status: run.status,
-    outcome: run.outcome,
+    outcome: displayedRunOutcome(run),
     startedAt: run.started_at.toISOString(),
     completedAt: run.completed_at?.toISOString() ?? null,
   };
