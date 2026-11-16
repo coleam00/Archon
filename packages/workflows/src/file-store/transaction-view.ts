@@ -83,6 +83,9 @@ export type TransactionView = Omit<
   | 'listItemRulings'
   | 'recordItemRuling'
   | 'withdrawItemRuling'
+  | 'listItemLinks'
+  | 'recordItemLink'
+  | 'endItemLink'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw

@@ -313,12 +313,19 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
 - **`remote_agent_items`** - The durable thing runs are about
   - `id`, `project_key`, `key` and `created_at`; `(project_key, key)` is unique. `project_key` is the engine's project key, the one `remote_agent_state_revisions` scopes by
   - Holds no status, stage or config. Where an item stands is derived from its runs
-  - Written the first time a start, run or ruling names the key in a project. The engine gives `key` no meaning and never parses it
+  - Written the first time a start, run, ruling or link names the key in a project. The engine gives `key` no meaning and never parses it
 
 - **`remote_agent_item_rulings`** - Rulings on an item: decisions recorded without a question, and their withdrawals
   - Append-only: a row is a ruling (`text` set) or the withdrawal of one (`withdraws` names it); no row is updated, and no column records where the item stands
   - `item_id`, `text`, `by_declared` or `by_user_id` (who, when they said), `via` (the surface), `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
   - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
+
+- **`remote_agent_item_links`** - Links between items: accepted, directed relations
+  - One row per link, read from `from_item_id` to `to_item_id`, with `kind` one of `depends_on`, `part_of` or `duplicate_of`. The engine gives the kinds no meaning
+  - `by_declared` or `by_user_id`, `via`, `from_run_id`, `from_node_path` and `created_at` record who recorded the link, as for rulings. They and the link itself are never updated
+  - Ending a link writes the `ended_*` columns once (`ended_at`, `ended_via`, who, and the calling run); the row is kept, never deleted. `ended_at` and `ended_via` are set together
+  - While `ended_at` is null, `(from_item_id, to_item_id, kind)` is unique (a partial unique index), so an active link is stored once. A link joins two different items. The schema allows the two items to be in different projects; the CLI records links within one
+  - `seq` orders links as they were recorded. `id` is text in both dialects
 
 - **`remote_agent_start_receipt_bindings`** - Per-binding preparation state for a source receipt
   - Keyed by `(receipt_id, binding_id)`; deleted with the owning receipt

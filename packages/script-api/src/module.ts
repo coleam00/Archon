@@ -318,8 +318,10 @@ export function outcomes(): NodeOutcomesListing {
  * The item this run belongs to (`archon workflow runs --item-of`): the item of the run's
  * root, since a `workflow:` child carries none of its own. It holds the item's runs, open
  * questions, and its answers and rulings in one list, oldest first; a withdrawn ruling
- * stays, with `withdrawn` set. Null when the run is on no item. Read it in a `script:`
- * node and `emit()` what a later node needs; the engine hands rulings to no node itself.
+ * stays, with `withdrawn` set. `links` holds every link from or to the item, each with
+ * its direction and the other item; an ended link stays, with `ended` set. Null when the
+ * run is on no item. Read it in a `script:` node and `emit()` what a later node needs; the
+ * engine hands rulings and links to no node itself.
  * A container run cannot call it, as it cannot call `state`.
  */
 export function item(): ItemRead | null {

@@ -154,6 +154,15 @@ export class InMemoryStore implements IWorkflowStore {
   withdrawItemRuling: IWorkflowStore['withdrawItemRuling'] = async () => {
     throw new Error('not used');
   };
+  listItemLinks: IWorkflowStore['listItemLinks'] = async () => {
+    throw new Error('not used');
+  };
+  recordItemLink: IWorkflowStore['recordItemLink'] = async () => {
+    throw new Error('not used');
+  };
+  endItemLink: IWorkflowStore['endItemLink'] = async () => {
+    throw new Error('not used');
+  };
   findOpenWorkRuns: IWorkflowStore['findOpenWorkRuns'] = async () => {
     throw new Error('Not used by this test');
   };

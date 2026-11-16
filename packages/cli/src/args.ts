@@ -117,6 +117,10 @@ export const cliArgOptions: CliArgOptions = {
   'item-of': { type: 'string' },
   // `workflow rule --withdraw <ruling-id>`.
   withdraw: { type: 'string' },
+  // `workflow link --item <key> --kind <kind> --to <key>`, or `workflow link --end <link-id>`.
+  kind: { type: 'string' },
+  to: { type: 'string' },
+  end: { type: 'string' },
   inputs: { type: 'string' },
   owner: { type: 'string' },
   // `archon pack bindings`: the operator's choices a pack's binding declaration lacks.

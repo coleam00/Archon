@@ -4,26 +4,15 @@
  * stays and says so. The engine stores the text and never reads it.
  */
 import { z } from 'zod';
-import { recordSurfaceSchema } from './record-surface';
-import { attentionAnswererSchema, attentionAnsweringRunSchema } from './run-wait';
-
-/** Who recorded or withdrew a ruling, through which surface and when. */
-const rulingActFields = {
-  at: z.string().datetime(),
-  via: recordSurfaceSchema,
-  /** Null when nobody said who they were. */
-  by: attentionAnswererSchema.nullable(),
-  /** The run and node the call came from, reported by its environment and not verified. */
-  fromRun: attentionAnsweringRunSchema.nullable(),
-};
+import { itemActFields } from './item-act';
 
 export const itemRulingSchema = z.object({
   kind: z.literal('ruling'),
   id: z.string().min(1),
   text: z.string().min(1),
-  ...rulingActFields,
+  ...itemActFields,
   /** Null while the ruling stands. */
-  withdrawn: z.object(rulingActFields).nullable(),
+  withdrawn: z.object(itemActFields).nullable(),
 });
 export type ItemRuling = z.infer<typeof itemRulingSchema>;
 
@@ -36,13 +25,6 @@ export const itemRulingDegradedSchema = z.object({
 export type ItemRulingDegraded = z.infer<typeof itemRulingDegradedSchema>;
 
 export type ItemRulingRead = ItemRuling | ItemRulingDegraded;
-
-/** Who records or withdraws a ruling, as the surface resolved them. */
-export interface ItemRulingAct {
-  via: z.infer<typeof recordSurfaceSchema>;
-  by: z.infer<typeof attentionAnswererSchema> | null;
-  fromRun: z.infer<typeof attentionAnsweringRunSchema> | null;
-}
 
 /** No ruling has this id; a withdrawal's own row is not a ruling either. */
 export class ItemRulingNotFoundError extends Error {

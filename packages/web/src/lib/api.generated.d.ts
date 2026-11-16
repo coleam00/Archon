@@ -7750,6 +7750,50 @@ export interface components {
             } | null;
           }
       )[];
+      links: {
+        id: string;
+        /** @enum {string} */
+        kind: 'depends_on' | 'part_of' | 'duplicate_of';
+        /** @enum {string} */
+        direction: 'outgoing' | 'incoming';
+        other: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        /** Format: date-time */
+        at: string;
+        via: string;
+        by:
+          | {
+              declared: string;
+            }
+          | {
+              userId: string;
+            }
+          | unknown;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+        ended: {
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        } | null;
+      }[];
       degraded: (
         | {
             /** @enum {string} */
@@ -7764,6 +7808,13 @@ export interface components {
             /** @enum {string} */
             reason: 'ruling_unreadable';
             rulingId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'link_unreadable';
+            linkId: string;
           }
       )[];
     };

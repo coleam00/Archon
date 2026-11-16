@@ -777,6 +777,36 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
   CHECK ((withdraws IS NULL) = (text IS NOT NULL))
 );
 
+-- Links between items: accepted, directed relations, read from from_item_id to to_item_id.
+-- One row per link. The link and who recorded it are written at insert and never change;
+-- ending a link writes the ended_* columns once, so the original fact and who ended it and
+-- when stay readable. Rows are never deleted. While active, the same (from, to, kind) is
+-- stored once (idx_item_links_active). The schema lets a link join items of two projects.
+-- The engine stores and reports links and gives the kinds no meaning. id is TEXT, as for
+-- rulings; from_run_id and ended_from_run_id have no foreign key.
+CREATE TABLE IF NOT EXISTS remote_agent_item_links (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  -- Recording order; timestamps tie within a millisecond and `id` is random.
+  seq BIGSERIAL NOT NULL UNIQUE,
+  from_item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  to_item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  kind TEXT NOT NULL CHECK (kind IN ('depends_on', 'part_of', 'duplicate_of')),
+  by_declared TEXT,
+  by_user_id TEXT,
+  via TEXT NOT NULL,
+  from_run_id TEXT,
+  from_node_path TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  ended_at TIMESTAMP WITH TIME ZONE,
+  ended_by_declared TEXT,
+  ended_by_user_id TEXT,
+  ended_via TEXT,
+  ended_from_run_id TEXT,
+  ended_from_node_path TEXT,
+  CHECK (from_item_id <> to_item_id),
+  CHECK ((ended_at IS NULL) = (ended_via IS NULL))
+);
+
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;
@@ -814,6 +844,14 @@ ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_taken_at
 -- Item rulings
 CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id
   ON remote_agent_item_rulings(item_id);
+
+-- Item links
+CREATE UNIQUE INDEX IF NOT EXISTS idx_item_links_active
+  ON remote_agent_item_links(from_item_id, to_item_id, kind) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_item_links_from_item_id
+  ON remote_agent_item_links(from_item_id);
+CREATE INDEX IF NOT EXISTS idx_item_links_to_item_id
+  ON remote_agent_item_links(to_item_id);
 
 -- Codebase env vars
 CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id

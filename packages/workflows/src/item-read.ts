@@ -1,6 +1,7 @@
 /**
- * The read of one item (`workflow runs --item`): its runs, the questions open in them, and
- * the answers recorded in them with the rulings recorded on the item, each oldest first.
+ * The read of one item (`workflow runs --item`): its runs, the questions open in them, the
+ * answers recorded in them with the rulings recorded on the item, each oldest first, and
+ * the links from and to it.
  * Where the item stands is left to the reader; this computes no position and stores nothing.
  */
 import { z } from 'zod';
@@ -12,6 +13,13 @@ import {
   type AttentionQueueSource,
 } from './attention-queue';
 import { attentionDegradedSchema, splitAttentionRead } from './schemas/attention-degraded';
+import { itemActFields } from './schemas/item-act';
+import {
+  itemLinkDegradedSchema,
+  itemLinkKindSchema,
+  type ItemLink,
+  type ItemLinkDegraded,
+} from './schemas/item-link';
 import {
   itemRulingDegradedSchema,
   itemRulingSchema,
@@ -95,20 +103,41 @@ export const itemAnswerSchema = z.discriminatedUnion('kind', [
 export type ItemAnswer = z.infer<typeof itemAnswerSchema>;
 
 /**
+ * A link seen from the item read: `outgoing` when this item is the link's `from` (it
+ * depends on, is part of, or is a duplicate of `other`), `incoming` when `other` points at
+ * this item. An ended link stays, with `ended` set; a link is active while `ended` is null.
+ */
+export const itemReadLinkSchema = z.object({
+  id: z.string(),
+  kind: itemLinkKindSchema,
+  direction: z.enum(['outgoing', 'incoming']),
+  other: workflowItemSchema,
+  ...itemActFields,
+  ended: z.object(itemActFields).nullable(),
+});
+export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
+
+/**
  * An item and what is recorded about it. `runs` are the item's own readable runs; a
  * `workflow:` child is left to `workflow get` on its parent. `questions` and `answers` come from the
  * whole run tree, because a question is often asked inside a child; each names the run
  * that holds it. `degraded` names each part that could not be read: one of the item's own
- * runs, a paused run the queue could not read (`run_unreadable`, by `runId`), or a ruling
- * (`ruling_unreadable`, by `rulingId`). The rest still reads.
+ * runs, a paused run the queue could not read (`run_unreadable`, by `runId`), a ruling
+ * (`ruling_unreadable`, by `rulingId`), or a link (`link_unreadable`, by `linkId`). The rest
+ * still reads.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
   runs: z.array(itemRunSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
+  links: z.array(itemReadLinkSchema),
   degraded: z.array(
-    z.discriminatedUnion('reason', [attentionDegradedSchema, itemRulingDegradedSchema])
+    z.discriminatedUnion('reason', [
+      attentionDegradedSchema,
+      itemRulingDegradedSchema,
+      itemLinkDegradedSchema,
+    ])
   ),
 });
 export type ItemRead = z.infer<typeof itemReadSchema>;
@@ -120,6 +149,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'getItemRuns'
       | 'listEventsForRuns'
       | 'listItemRulings'
+      | 'listItemLinks'
       | 'getStartReceipt'
       | 'getResourceStartRequest'
     >;
@@ -175,6 +205,13 @@ function itemAnswer(row: WorkflowEventRow): ItemAnswer {
   };
 }
 
+function readLink(itemId: string, link: ItemLink): ItemReadLink {
+  const { from, to, ...rest } = link;
+  // A link joins two different items, so exactly one side is this item.
+  const outgoing = from.id === itemId;
+  return { ...rest, direction: outgoing ? 'outgoing' : 'incoming', other: outgoing ? to : from };
+}
+
 /** Read the item `key` names in project `projectKey`; null when there is no such item. */
 export async function readItem(
   source: ItemReadSource,
@@ -203,6 +240,11 @@ export async function readItem(
   for (const read of await source.store.listItemRulings(found.item.id))
     if ('type' in read) unreadableRulings.push(read);
     else rulings.push(read);
+  const links: ItemReadLink[] = [];
+  const unreadableLinks: ItemLinkDegraded[] = [];
+  for (const read of await source.store.listItemLinks(found.item.id))
+    if ('type' in read) unreadableLinks.push(read);
+    else links.push(readLink(found.item.id, read));
   const answers = [...[...events.values()].flat().map(itemAnswer), ...rulings]
     // Stable, so rows that tie on `at` keep their store order: append order within a run,
     // recording order among rulings.
@@ -212,6 +254,7 @@ export async function readItem(
     runs: await Promise.all(own.values.map(run => itemRun(source, run))),
     questions,
     answers,
+    links,
     // A paused item run the store could not read is in both reports; list it once.
     degraded: [
       ...own.degraded,
@@ -219,6 +262,7 @@ export async function readItem(
         report => tree.has(report.runId) && !own.degraded.some(mine => mine.runId === report.runId)
       ),
       ...unreadableRulings,
+      ...unreadableLinks,
     ],
   };
 }

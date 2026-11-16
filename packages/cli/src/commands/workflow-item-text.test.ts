@@ -79,7 +79,50 @@ const read: ItemRead = {
       withdrawn: { at: '2026-11-01T10:05:00.000Z', via: 'api', by: null, fromRun: null },
     },
   ],
-  degraded: [{ type: 'degraded', reason: 'ruling_unreadable', rulingId: 'ruling-lost' }],
+  links: [
+    {
+      id: 'link-ended',
+      kind: 'part_of',
+      direction: 'outgoing',
+      other: { id: 'order-row', projectKey: 'acme/web', key: 'order-1' },
+      at: '2026-11-01T08:00:00.000Z',
+      via: 'cli',
+      by: null,
+      fromRun: null,
+      ended: {
+        at: '2026-11-01T08:30:00.000Z',
+        via: 'cli',
+        by: { declared: 'alice' },
+        fromRun: null,
+      },
+    },
+    {
+      id: 'link-out',
+      kind: 'depends_on',
+      direction: 'outgoing',
+      other: { id: 'other-row', projectKey: 'acme/api', key: 'issue-3' },
+      at: '2026-11-01T08:10:00.000Z',
+      via: 'cli',
+      by: null,
+      fromRun: null,
+      ended: null,
+    },
+    {
+      id: 'link-in',
+      kind: 'duplicate_of',
+      direction: 'incoming',
+      other: { id: 'dupe-row', projectKey: 'acme/web', key: 'issue-9' },
+      at: '2026-11-01T08:20:00.000Z',
+      via: 'cli',
+      by: null,
+      fromRun: null,
+      ended: null,
+    },
+  ],
+  degraded: [
+    { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'ruling-lost' },
+    { type: 'degraded', reason: 'link_unreadable', linkId: 'link-lost' },
+  ],
 };
 
 test('an item read prints its runs, open questions and answers', () => {
@@ -111,4 +154,16 @@ test('an item read prints its runs, open questions and answers', () => {
   expect(lines[ruling]).toContain('by operator-agent (self-declared)');
   expect(lines[ruling]).toContain('(withdrawn 2026-11-01T10:05Z)');
   expect(text).toContain('1 ruling(s) on this item could not be read: ruling-lost');
+});
+
+test('an item read prints its active links with direction, then the ended ones', () => {
+  const lines = itemReadLines(read);
+  const links = lines.slice(lines.indexOf('Links:') + 1, lines.indexOf('Open questions:') - 1);
+  expect(links).toEqual([
+    // Another project's item is named with its project.
+    '  link-out  this item depends_on → acme/api/issue-3',
+    '  link-in  ← issue-9 duplicate_of this item',
+    '  link-ended  this item part_of → order-1 (ended 2026-11-01T08:30Z by alice (self-declared), via cli)',
+    '  1 link(s) of this item could not be read: link-lost',
+  ]);
 });
