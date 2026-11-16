@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import type { StoredItemAsk } from './schemas/item-ask';
 import type { ItemLink } from './schemas/item-link';
 import type { ItemRuling } from './schemas/item-ruling';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -199,6 +200,67 @@ const source: ItemReadSource = {
 };
 
 describe('reading an item', () => {
+  test('a set with an unreadable ask row does not read as settled; a readable set does, with its run gone', async () => {
+    const act = { via: 'cli', by: null, fromRun: null } as const;
+    const stored = (
+      id: string,
+      runId: string,
+      at: string,
+      closed: 'answered' | 'withdrawn'
+    ): StoredItemAsk => ({
+      id,
+      itemId: item.id,
+      runId,
+      workflowName: 'deliver',
+      position: 0,
+      ask: {
+        question: `Ask ${id}?`,
+        context: 'Context.',
+        options: [
+          { id: 'keep', does: 'Keep it.', cost: 'None.' },
+          { id: 'drop', does: 'Drop it.', cost: 'None.' },
+        ],
+        recommendation: { option: 'keep', why: 'Cheaper.' },
+        artifacts: [],
+      },
+      openedAt: '2026-11-01T12:00:00.000Z',
+      closed:
+        closed === 'answered'
+          ? { as: 'answered', answer: { decision: 'keep', text: '' }, act: { ...act, at } }
+          : { as: 'withdrawn', act: { ...act, at } },
+    });
+    const unreadable = { type: 'degraded', reason: 'run_unreadable', runId: 'open-set' } as const;
+    const withAsks: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        // 'settled-set' has no run row: its run was deleted, and its asks stay on the item.
+        listItemAsks: async () => [
+          stored('a1', 'open-set', '2026-11-01T12:10:00.000Z', 'answered'),
+          unreadable,
+          stored('b1', 'settled-set', '2026-11-01T12:20:00.000Z', 'answered'),
+          stored('b2', 'settled-set', '2026-11-01T12:30:00.000Z', 'withdrawn'),
+        ],
+      },
+    };
+    const read = await readItem(withAsks, item.projectKey, item.key);
+    const asks = read?.answers.filter(
+      answer => answer.kind === 'ask' || answer.kind === 'asks_settled'
+    );
+    expect(asks?.map(answer => [answer.kind, answer.runId])).toEqual([
+      ['ask', 'open-set'],
+      ['ask', 'settled-set'],
+      ['ask', 'settled-set'],
+      ['asks_settled', 'settled-set'],
+    ]);
+    expect(asks?.at(-1)).toMatchObject({
+      at: '2026-11-01T12:30:00.000Z',
+      answered: 1,
+      withdrawn: 1,
+    });
+    expect(read?.degraded).toEqual([unreadable]);
+  });
+
   test('lists its own runs, and the questions and answers of their whole tree, oldest first', async () => {
     const read = await readItem(source, item.projectKey, item.key);
     expect(read?.item).toEqual(item);

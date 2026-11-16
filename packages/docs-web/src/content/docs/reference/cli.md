@@ -365,7 +365,7 @@ A real run prints a JSON payload only with `--detach`. Without it, `--json` supp
 | `--item <key>` | Name the [item](#items) this fresh run belongs to. Without it, a run started with `--adopt` or `--supersedes` belongs to the item of the run it continues. A resumed run keeps its own. |
 | `--quiet`, `-q` | Suppress the progress lines on stderr |
 | `--verbose`, `-v` | Also print tool calls (name and duration) in the progress lines, and debug logs |
-| `--detach` | Run in a detached background child and return before completion. Human output names the transcript and the child's log file; the `--json` acknowledgement carries `runId`, `transcriptPath` (the run's JSONL transcript) and `logPath` (the child process's stdout and stderr). Follow execution with [`workflow logs <run-id> --follow`](#workflow-logs) and wait for the next terminal or gate transition with [`workflow wait <run-id>`](#workflow-wait). A refusal the launch can decide from current state is the command's result, before the acknowledgement: a registered `--branch` worktree on another branch or without `--from` in its history, or a broken run-ended binding for an `--item` run. A failure the child meets later, such as creating the worktree or waiting for a resource, is recorded on the run; read it with `workflow get <run-id>`. `approve`, `reject`, `respond` and `resume` accept it too; see [Detached control verbs](#detached-control-verbs). |
+| `--detach` | Run in a detached background child and return before completion. Human output names the transcript and the child's log file; the `--json` acknowledgement carries `runId`, `transcriptPath` (the run's JSONL transcript) and `logPath` (the child process's stdout and stderr). Follow execution with [`workflow logs <run-id> --follow`](#workflow-logs) and wait for the next terminal or gate transition with [`workflow wait <run-id>`](#workflow-wait). A refusal the launch can decide from current state is the command's result, before the acknowledgement: a registered `--branch` worktree on another branch or without `--from` in its history, a broken run-ended binding for an `--item` run, or a workflow that declares `returns.asks` started without `--item`. A failure the child meets later, such as creating the worktree or waiting for a resource, is recorded on the run; read it with `workflow get <run-id>`. `approve`, `reject`, `respond` and `resume` accept it too; see [Detached control verbs](#detached-control-verbs). |
 | `--no-wait` | Refuse to start, naming the resource, when the workflow declares a `resource:` that is full. Without it the run waits as `pending`, prints `Waiting for resource '<name>'`, and starts when a slot frees. See [Workflows that declare a resource](/guides/workflow-triggers/#workflows-that-declare-a-resource) for where the capacity comes from. |
 | `--conversation-id <id>` | Correlation id for the run's messages. It creates no conversation and no `persist_session` scope. |
 | `--dry-run` | Simulate deterministic DAG control flow in memory. Creates no run, worktree, session, event, artifact, or provider request. |
@@ -652,7 +652,7 @@ than returning a partial report.
 
 `--item <key>` reads one [item](#items) in the current project and ignores the other filters. It prints four sections: the item's runs (id, workflow, status, authored outcome, start and end), oldest first; its [links](#workflow-link), active ones first, each with its id, its kind and an arrow for its direction (`this item depends_on → issue-3` for a link from this item, `← issue-9 duplicate_of this item` for a link to it), and ended ones after them, marked with who ended them and when; then, oldest first, the questions open in those runs or their sub-runs and the asks open on the item, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface) together with the item's [rulings](#workflow-rule) (text, time, surface, who when they said, and when it was withdrawn). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no position for the item. It needs a registered project.
 
-`--json` prints `{ item, runs, questions, answers, links, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. Each link is `{ id, kind, direction, other, at, via, by, fromRun, ended }` in recording order: `direction` is `outgoing` when this item is the one that depends on, is part of, or is a duplicate of `other`, and `incoming` when `other` points at this item; `other` is `{ id, projectKey, key }`; `ended` is null while the link is active, or `{ at, via, by, fromRun }`. An [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left reads as `kind` `ask`, with its `ref`, the `question` it asked, `answer` (null for a withdrawal), `chosen` (the chosen option's `id` and what it `does`, or null), `withdrawn`, `by` and `fromRun`, and `runId` naming the run that left it; `kind` `asks_settled` records that the last open ask of that run's set closed, with `answered` and `withdrawn` counts, at the time of that close. Both are read from the item's asks, so they stay after the run that left them is deleted. Open asks on the item are among its questions. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), a ruling (`reason: "ruling_unreadable"`, `rulingId`), or a link (`reason: "link_unreadable"`, `linkId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its rulings and links; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
+`--json` prints `{ item, runs, questions, answers, links, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. Each link is `{ id, kind, direction, other, at, via, by, fromRun, ended }` in recording order: `direction` is `outgoing` when this item is the one that depends on, is part of, or is a duplicate of `other`, and `incoming` when `other` points at this item; `other` is `{ id, projectKey, key }`; `ended` is null while the link is active, or `{ at, via, by, fromRun }`. An [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left reads as `kind` `ask`, with its `ref`, the `question` it asked, `answer` (null for a withdrawal), `chosen` (the chosen option's `id` and what it `does`, or null), `withdrawn`, `by` and `fromRun`, and `runId` naming the run that left it; `kind` `asks_settled` records that the last open ask of that run's set closed, with `answered` and `withdrawn` counts, at the time of that close; a set with an ask row that could not be read does not settle, and `degraded` names its run. Both are read from the item's asks, so they stay after the run that left them is deleted. Open asks on the item are among its questions. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), a ruling (`reason: "ruling_unreadable"`, `rulingId`), or a link (`reason: "link_unreadable"`, `linkId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its rulings and links; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
 
 `--item-of <run-id>` reads the item a run belongs to, the item of its top-level run when it is a `workflow:` sub-run, in whichever project the run is. It prints the same read as `--item`. A run on no item, or one the store does not know, exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "run": "<run-id>" }`. It is the host command behind the `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) export.
 
@@ -1052,6 +1052,19 @@ archon workflow wait <run-id> --json --timeout 900
 
 There is no default timeout. Pass `--timeout <seconds>` when the host needs an upper bound.
 
+`archon workflow wait --item <key>` waits on an [item](#items) instead of one run. It
+watches every run on the item that has not ended at call time, plus every run that starts
+on the item while it waits, and returns when the first of them reports something, as
+`workflow wait <run-id>` would for that run. Runs that had already ended are history and
+do not end the wait, unless one is resumed in place while waiting; it is then watched
+too, and reported even when it has already ended again by the time the wait looks. Each result names its run: one line per run, or
+under `--json` one `{ "ok", "action": "wait", "item", "results": [...] }` document whose
+`results` hold exactly what `workflow wait <run-id> --json` prints for each run, and whose
+`ok` is false when the exit status is `1`. Runs that reported together are all listed. An
+item with no live run is refused rather than waited on (`reason: "no_run"`, exit `1`,
+listing the item's runs). Exit codes are as above: `0` when a run reported, `3` when the
+timeout passed with every watched run still live.
+
 Exit codes describe the command, not the run:
 
 | Exit | Meaning |
@@ -1243,7 +1256,7 @@ run ID, without error text. Read the full error with `archon workflow get <run-i
 ([fields](/getting-started/operate/#the-full-protocol-for-programs)).
 Repeated run-projection failures send an identifier-free `degraded` line with
 `reason: "run_unreadable"` and the last handled `cursor`, without exiting. Independent
-readable deliveries can continue while unreadable deliveries are omitted. Store-wide
+readable deliveries can continue while unreadable deliveries are omitted. An open ask whose row turns unreadable stays open, with one `degraded` line, rather than reading as `resolved`. Store-wide
 projection outages retain the cursor and retry. Check the operator log and reconnect
 after repair to refresh the open set; replay from before the gap for historical transitions.
 Later bookmarks do not establish repaired coverage.
@@ -1626,7 +1639,22 @@ who owns the run:
 ```bash
 archon workflow cancel <run-id>
 archon workflow cancel <run-id> --json
+archon workflow cancel --item <key> [--all-runs]
 ```
+
+With `--item <key>`, cancel acts on the [item's](#items) run that is `running`, through
+the same path as `workflow cancel <run-id>`, so a live owner is handled the same way.
+Archon never chooses between runs: when several runs on the item are running, cancel
+refuses and lists them; name one by id, or pass `--all-runs` to cancel each in start
+order. With `--all-runs`, one run's failure does not stop the rest, every run is
+reported, and the command exits `1` if any failed. Cancel also refuses an item with no
+running run, and an item one of whose runs cannot be read, since that run may be the one
+to act on. Under `--json` the command prints one
+`{ "ok", "action": "cancel", "item", "results": [...] }` document whose `results` hold
+exactly what the run-id form prints for each run. A refusal prints
+`{ "ok": false, "action", "item", "reason", "error", "runs"? }`, where `reason` is
+`no_project`, `not_found`, `unreadable`, `no_run` or `several_runs`, and `runs` lists the
+runs to choose from.
 
 When cancel refuses, it exits nonzero. Under `--json` it also prints `{ "ok": false, "error": ... }`.
 `workflow resume` and `workflow abandon` follow the same contract, so a script or bash node can
@@ -1715,7 +1743,12 @@ this host:
 ```bash
 archon workflow abandon <run-id>
 archon workflow abandon <run-id> --json
+archon workflow abandon --item <key> [--all-runs]
 ```
+
+`--item <key>` works as it does for [`workflow cancel`](#workflow-cancel), for the item's
+run that is `pending`, `running` or `paused`. A failed run, or a cancelled run whose
+worktree removal you are retrying, is abandoned by id.
 
 `--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
@@ -2562,7 +2595,7 @@ Start workflows from deployment bindings and inspect durable resource admission;
 
 When a binding fails launch preparation, `trigger fire` exits nonzero and prints the refusal (with `--json`, in `error`). The stored receipt keeps only the failed stage, for example `launch_preparation_failed`. `trigger whoami` prints the Archon user ID of your CLI identity, for a binding's `runAsUserId`.
 
-`trigger check` lists every run-ended binding that is active: each file in `ARCHON_HOME/triggers/` with `on.runEnded`. For each it prints the file, source, binding, host, the workflow and outcome it starts after, and its `problems`, from checking it against the workflows of the project it launches in: the ended workflow exists and declares that outcome and every input the binding reads from it, and the started workflow exists and declares every input the binding maps. It also reports what no run is refused for: a `launch.cwd` that does not exist (the binding never starts), a binding that starts the workflow whose end fires it (a loop), and two files that bind the same outcome to the same stage in one project (the stage starts once per file). It exits nonzero when any binding has a problem or a file cannot be read. See [start a stage when a run on an item ends](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends).
+`trigger check` lists every run-ended binding that is active: each file in `ARCHON_HOME/triggers/` with `on.runEnded`. For each it prints the file, source, binding, host, the workflow and outcome it starts after, and its `problems`, from checking it against the workflows of the project it launches in: the ended workflow exists and declares that outcome and every input the binding reads from it, and the started workflow exists and declares every input the binding maps. For a binding with `checkout: "ended-run"`, neither workflow may pin `worktree.enabled: false`. It also reports what no run is refused for: a `launch.cwd` that does not exist (the binding never starts), a binding that starts the workflow whose end fires it (a loop), and two files that bind the same outcome to the same stage in one project (the stage starts once per file). It exits nonzero when any binding has a problem or a file cannot be read. See [start a stage when a run on an item ends](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends).
 
 A CLI process that ends a run starts the starts its own completion wrote, each on the host its binding names, so a hand `workflow run` needs no trigger host for the next stage to start. It drains a host's queue only when it serves that host: `trigger execute --host <hostId>` drains `<hostId>`, and any other command drains the host `ARCHON_TRIGGER_HOST` names when it is set.
 
@@ -2578,7 +2611,7 @@ A `trigger fire` from inside a run that names no item inherits that run's item, 
 
 A continuation started with `--adopt <run-id>` or `--supersedes <run-id>` and no `--item` belongs to the item of the run it continues, so a fix round or a rerun stays in the item's history. `--item <key>` names another item instead, and a continuation of a run with no item has none. `--supersedes` can name a run of another project by its full id; that run's item cannot be inherited, so the continuation is refused before it starts unless it passes `--item`. The same holds when the continuation has no registered project. A continuation of a run with no item starts in every case.
 
-A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP.
+A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand. `GET /api/items?project=<project>&key=<key>` is the same read over HTTP. `workflow wait`, `cancel` and `abandon` also accept `--item <key>` and never choose between an item's runs: `wait` reports every run that settled, and `cancel` and `abandon` refuse when more than one run applies unless `--all-runs` is passed.
 
 A ruling is a decision recorded on the item without a question having been asked ([`workflow rule`](#workflow-rule)). It is a fact about the item, like an answer, and needs no run: recording one on a key nothing has named writes the item. Withdrawing a ruling keeps the record and marks it withdrawn. A workflow reads its item's answers and rulings through `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to); the engine passes them to no node on its own.
 

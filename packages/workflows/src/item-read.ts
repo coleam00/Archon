@@ -17,6 +17,7 @@ import {
   attentionDegradedSchema,
   splitAttentionRead,
   type AttentionDegraded,
+  type IdentifiedAttentionDegraded,
 } from './schemas/attention-degraded';
 import { itemActFields } from './schemas/item-act';
 import {
@@ -40,6 +41,7 @@ import {
   attentionAnswerSchema,
   displayedRunOutcome,
   workflowItemSchema,
+  type WorkflowItem,
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -92,7 +94,9 @@ const answerFields = {
  * of that run's set closed, with how many were answered and withdrawn: `answered: 0` means
  * nothing was. Both read from the item's ask rows, not from run events, so they stay on the
  * item after the run that left the asks is deleted; `runId` names that run, `node` and
- * `occurrence` are null. A set that a newer one replaced before it closed never settles.
+ * `occurrence` are null. A set that a newer one replaced before it closed never settles. A
+ * set with an ask row that cannot be read does not settle in the read either; `degraded`
+ * names its run.
  */
 export const itemAnswerSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -246,6 +250,27 @@ function readLink(itemId: string, link: ItemLink): ItemReadLink {
   return { ...rest, direction: outgoing ? 'outgoing' : 'incoming', other: outgoing ? to : from };
 }
 
+/**
+ * The item `key` names in project `projectKey` and its own runs, in start order: the one
+ * read of an item's runs, for the item read and for every verb that acts on an item.
+ * `degraded` names each own run whose row could not be read. Null when there is no such item.
+ */
+export async function readItemRuns(
+  store: Pick<IWorkflowStore, 'getItemRuns'>,
+  projectKey: string,
+  key: string
+): Promise<{
+  item: WorkflowItem;
+  runs: WorkflowRun[];
+  degraded: IdentifiedAttentionDegraded[];
+  descendantIds: string[];
+} | null> {
+  const found = await store.getItemRuns(projectKey, key);
+  if (found === null) return null;
+  const { values, degraded } = splitAttentionRead(found.runs);
+  return { item: found.item, runs: values, degraded, descendantIds: found.descendantIds };
+}
+
 function distinctByRun(reports: readonly AttentionDegraded[]): AttentionDegraded[] {
   return reports.filter(
     (report, index) => reports.findIndex(other => other.runId === report.runId) === index
@@ -275,15 +300,17 @@ function askAnswer({ id, runId, ask, closed }: StoredItemAsk): ItemAnswer | null
 
 /**
  * The answers and settled sets the item's asks hold: one entry per answered or withdrawn
- * ask, and one `asks_settled` per set whose asks all closed that way, at its last close.
+ * ask, and one `asks_settled` per set whose asks all closed that way and all read, at its
+ * last close. `unreadable` names the sets with a row that could not be read: any of those
+ * rows may be an open ask, so the read cannot say the set settled.
  */
-function askAnswers(asks: readonly StoredItemAsk[]): ItemAnswer[] {
+function askAnswers(asks: readonly StoredItemAsk[], unreadable: ReadonlySet<string>): ItemAnswer[] {
   const sets = new Map<string, StoredItemAsk[]>();
   for (const ask of asks) sets.set(ask.runId, [...(sets.get(ask.runId) ?? []), ask]);
   return [...sets].flatMap(([runId, set]) => {
     const closes = set.map(askAnswer).filter(answer => answer?.kind === 'ask');
     const [first] = closes;
-    if (first === undefined || closes.length < set.length) return closes;
+    if (first === undefined || closes.length < set.length || unreadable.has(runId)) return closes;
     const answered = closes.filter(close => !close.withdrawn).length;
     const settled: ItemAnswer = {
       kind: 'asks_settled',
@@ -308,9 +335,9 @@ export async function readItem(
   projectKey: string,
   key: string
 ): Promise<ItemRead | null> {
-  const found = await source.store.getItemRuns(projectKey, key);
+  const found = await readItemRuns(source.store, projectKey, key);
   if (found === null) return null;
-  const own = splitAttentionRead(found.runs);
+  const own = { values: found.runs, degraded: found.degraded };
   const tree = new Set([
     ...own.values.map(run => run.id),
     ...own.degraded.map(report => report.runId),
@@ -340,7 +367,7 @@ export async function readItem(
   const answers = [
     ...[...events.values()].flat().map(itemAnswer),
     ...rulings,
-    ...askAnswers(asks.values),
+    ...askAnswers(asks.values, new Set(asks.degraded.map(report => report.runId))),
   ]
     // Stable, so rows that tie on `at` keep their store order: append order within a run,
     // recording order among rulings, and a set's last answer before its settle.
