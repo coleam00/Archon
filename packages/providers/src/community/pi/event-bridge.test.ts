@@ -48,7 +48,8 @@ describe('AsyncQueue', () => {
     const r2 = await iter.next();
     expect(r1).toEqual({ value: 10, done: false });
     expect(r2).toEqual({ value: 20, done: false });
-  });
+    // A broken waiter hangs instead of failing; bound it well under the suite default.
+  }, 1000);
 
   test('second iterator call throws (single-consumer invariant)', () => {
     const q = new AsyncQueue<number>();

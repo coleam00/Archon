@@ -176,6 +176,20 @@ describe('git utilities', () => {
       });
     });
 
+    test('keeps text-only fetch auth failures unclassified', async () => {
+      // Only stderr classifies; the same line in the message alone must not.
+      execSpy.mockRejectedValue(
+        new Error("fatal: Authentication failed for 'https://github.com/owner/repo.git/'")
+      );
+
+      const result = await git.syncRepository(repo('/workspace/repo'), branch('main'));
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.code).toBe('unknown');
+      }
+    });
+
     test('keeps text-only fetch disk failures unclassified', async () => {
       execSpy.mockRejectedValue(new Error('error: no space left on device'));
 

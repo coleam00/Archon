@@ -83,6 +83,26 @@ describe('PiProvider tools', () => {
     ).toBe(true);
   });
 
+  test('denied_tools alone starts from full built-in set', async () => {
+    process.env.GEMINI_API_KEY = 'sk-test';
+    resetScript(scriptedAgentEnd());
+
+    await consume(
+      new PiProvider().sendQuery('hi', '/tmp', undefined, {
+        model: 'google/gemini-2.5-pro',
+        nodeConfig: { denied_tools: ['bash', 'write'] },
+      })
+    );
+
+    const [callArgs] = mockCreateAgentSession.mock.calls[0] as [Record<string, unknown>];
+    const tools = callArgs.customTools as Array<{ __piTool: string }>;
+    expect(callArgs.noTools).toBe('builtin');
+    // Pi has 7 built-ins, 2 denied → 5 remain
+    expect(tools).toHaveLength(5);
+    expect(tools.find(t => t.__piTool === 'bash')).toBeUndefined();
+    expect(tools.find(t => t.__piTool === 'write')).toBeUndefined();
+  });
+
   test('no allowed_tools / denied_tools leaves Pi default tools in place', async () => {
     process.env.GEMINI_API_KEY = 'sk-test';
     resetScript(scriptedAgentEnd());
