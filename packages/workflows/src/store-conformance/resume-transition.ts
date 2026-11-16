@@ -8,6 +8,7 @@ import {
 import { readExecutionOwner } from '../schemas/run-metadata';
 import { workflowPathPriorityTime } from '../workflow-path-lock';
 import type { WorkflowStoreHarness } from '../store-conformance';
+import { testRunOwnerLease } from './fixtures';
 
 const approval = { nodeId: 'review', message: 'Choose', type: 'approval' as const };
 const schedule = {
@@ -38,7 +39,10 @@ export function describeResumeTransitionConformance(getHarness: () => WorkflowSt
     await store.updateWorkflowRun(run.id, { metadata: gone });
     const running = await store.getWorkflowRun(run.id);
     if (!running) throw new Error('Missing run');
-    const resumed = await store.resumeWorkflowRun(run.id, ownerlessResumeCursor(running));
+    const resumed = await store.resumeWorkflowRun(
+      run.id,
+      ownerlessResumeCursor(running, testRunOwnerLease(running.id))
+    );
     expect(readExecutionOwner(resumed.metadata)).toEqual(currentExecutionOwner());
     expect(await owner()).toEqual(currentExecutionOwner());
 
@@ -236,7 +240,10 @@ export function describeResumeTransitionConformance(getHarness: () => WorkflowSt
       if (!current) throw new Error('Missing run');
       const resumed =
         status === 'running'
-          ? await store.resumeWorkflowRun(run.id, ownerlessResumeCursor(current))
+          ? await store.resumeWorkflowRun(
+              run.id,
+              ownerlessResumeCursor(current, testRunOwnerLease(current.id))
+            )
           : await store.resumeWorkflowRun(run.id);
       expect(resumed.started_at).toEqual(creation);
       expect(resumed.active_phase_started_at?.getTime()).toBeGreaterThan(creation.getTime());

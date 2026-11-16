@@ -18,7 +18,7 @@ import {
 } from '@archon/core/operations/workflow-operations';
 import * as archonPaths from '@archon/paths';
 import { createLogger } from '@archon/paths';
-import type { ResumeClaimCursor } from '@archon/workflows/store';
+import type { ResumeRequestCursor } from '@archon/workflows/store';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import {
   ContinuedItemProjectError,
@@ -98,7 +98,7 @@ export interface WorkflowRunOptions {
    * Every resume passes it; `resume` without it is refused, never live discovery.
    */
   continuationRun?: WorkflowRun;
-  continuationCursor?: ResumeClaimCursor;
+  continuationCursor?: ResumeRequestCursor;
   quiet?: boolean;
   verbose?: boolean;
   /** Platform conversation ID (e.g. `cli-{ts}-{rand}`), NOT a DB UUID. */
