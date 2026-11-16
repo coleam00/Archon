@@ -613,8 +613,8 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
           })
         ).id;
       // Another admission holds the lock and makes `holder` hold the item, then commits
-      // while `attempt` is already waiting. Without the shared lock `attempt` reads before
-      // that commit and both runs hold the item.
+      // once `attempt` is waiting on that lock. An implementation that skips the lock never
+      // waits on it, and the test fails here instead of racing the commit.
       const racedBy = async <T>(holder: string, attempt: () => Promise<T>): Promise<T> => {
         let raced: Promise<T> | undefined;
         await db.withTransaction(async query => {
@@ -624,7 +624,15 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
           ]);
           raced = attempt();
           raced.catch(() => undefined);
-          await Bun.sleep(100);
+          for (let tries = 0; ; tries++) {
+            const waiting = await query<{ count: string | number }>(
+              `SELECT COUNT(*) AS count FROM pg_locks
+                WHERE locktype = 'advisory' AND classid = 0 AND objid = 1797 AND NOT granted`
+            );
+            if (Number(waiting.rows[0]?.count) > 0) break;
+            if (tries > 200) throw new Error('attempt never waited on the admission lock');
+            await Bun.sleep(10);
+          }
         });
         if (!raced) throw new Error('attempt did not start');
         return raced;

@@ -252,7 +252,9 @@ function OwnerLostCard({
             Abandon
           </button>
           {error !== null ? (
-            <span className="ml-2 font-mono text-console-11 text-error">{error}</span>
+            <span role="alert" className="ml-2 font-mono text-console-11 text-error">
+              {error}
+            </span>
           ) : null}
         </div>
       </div>

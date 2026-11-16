@@ -16,7 +16,9 @@ import type {
   ResourceBlocker,
   ResourceStartRequestInspection,
   QueuedResourceStartInspection,
+  ItemStartRequest,
 } from '@archon/workflows/resource-start-store';
+import type { AttentionRead } from '@archon/workflows/schemas/attention-degraded';
 export { SourceReceiptDigestConflictError } from '@archon/workflows/resource-start-store';
 export type {
   StartBindingInspection,
@@ -48,7 +50,9 @@ import {
   type TransactionQuery as Query,
 } from './resource-slots';
 import { loadResourceCapacities } from '../config/concurrency-config';
-import { getWorkflowRunsByIds, insertWorkflowRun } from './workflows';
+import { insertWorkflowRun } from './workflows';
+import { getLog } from './workflow-run-shared';
+import { normalizeWorkflowRun, type WorkflowRunRow } from './workflow-run-normalization';
 import { holdsItem, itemHolder, itemHolders } from '@archon/workflows/item-hold';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { ensureItem } from './items';
@@ -491,19 +495,49 @@ export async function getResourceStartRequest(
   return result.rows[0] ? inspectRequest(result.rows[0]) : null;
 }
 
-export async function listItemStartRequests(
-  itemId: string
-): Promise<ResourceStartRequestInspection[]> {
-  const result = await getDatabase().query<RequestInspectionRow>(
-    `${requestInspectionSelect}
-      WHERE r.item_id = $1 AND r.status IN ('queued', 'skipped')
-      ORDER BY r.queue_position`,
+export async function listItemStartRequests(itemId: string): Promise<ItemStartRequest[]> {
+  const result = await getDatabase().query<RequestRow>(
+    `SELECT * FROM remote_agent_resource_start_requests
+      WHERE item_id = $1 AND status IN ('queued', 'skipped')
+      ORDER BY queue_position`,
     [itemId]
   );
-  return result.rows.map(inspectRequest);
+  return result.rows.map(row => ({
+    id: String(row.id),
+    resource: String(row.resource_key),
+    status: row.status,
+    blocker:
+      (row.blocker_kind === 'run' || row.blocker_kind === 'request') &&
+      typeof row.blocker_run_id === 'string'
+        ? { kind: row.blocker_kind, id: row.blocker_run_id }
+        : null,
+    launch: preparedWorkflowLaunchSchema.parse(parseStoredJson(row.launch)),
+  }));
 }
 
-export async function listWaitedItemHolders(): Promise<WorkflowRun[]> {
+/** Runs by id; a row that cannot be normalized is reported `run_unreadable`. */
+async function readRunsForAttention(ids: readonly string[]): Promise<AttentionRead<WorkflowRun>[]> {
+  const runs: AttentionRead<WorkflowRun>[] = [];
+  for (const id of ids) {
+    const row = (
+      await getDatabase().query<WorkflowRunRow>(
+        'SELECT *, CAST(origin AS TEXT) AS origin FROM remote_agent_workflow_runs WHERE id = $1',
+        [id]
+      )
+    ).rows[0];
+    if (row === undefined) continue;
+    try {
+      runs.push(normalizeWorkflowRun(row));
+    } catch {
+      // Parser errors can quote stored data, including message text.
+      getLog().error({ workflowRunId: id }, 'attention_run_normalization_failed');
+      runs.push({ type: 'degraded', reason: 'run_unreadable', runId: id });
+    }
+  }
+  return runs;
+}
+
+export async function listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]> {
   const db = getDatabase();
   const runs = await liveItemRuns(db.query.bind(db));
   const queued = await db.query<{ id: string; item_id: string; launch: unknown }>(
@@ -529,7 +563,7 @@ export async function listWaitedItemHolders(): Promise<WorkflowRun[]> {
       return holder === undefined ? [] : [holder];
     })
   );
-  return ids.size === 0 ? [] : getWorkflowRunsByIds([...ids]);
+  return readRunsForAttention([...ids]);
 }
 
 export async function listQueuedResourceStartsForHost(

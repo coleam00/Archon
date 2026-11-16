@@ -28,6 +28,7 @@ import {
 import type { WorkflowResource } from './schemas/resource-name';
 import type { ResumeClaimCursor, ResumeRefusal } from './store';
 import { itemHolder, itemHoldKey } from './item-hold';
+import type { AttentionRead } from './schemas/attention-degraded';
 
 export function skippedFireNotice(
   receipt: Pick<SourceReceiptInput, 'deliveryId' | 'sourceActor'>,
@@ -155,6 +156,15 @@ export interface ResourceStartRequestInspection {
   blockerRunStatus: WorkflowRunStatus | null;
   launch: PreparedWorkflowLaunch;
 }
+
+/**
+ * A start request as the item read lists it. It reads no joined run status: a blocker
+ * whose stored status this binary cannot read must not fail the read of the item.
+ */
+export type ItemStartRequest = Pick<
+  ResourceStartRequestInspection,
+  'id' | 'resource' | 'status' | 'blocker' | 'launch'
+>;
 
 /** An admitted start whose run has not begun, and the host whose executor runs it. */
 export interface AwaitingExecution {
@@ -578,13 +588,13 @@ export interface IResourceStartStore {
    * The start requests that name item `itemId` and have no run: queued ones that wait, and
    * skipped ones that were refused. Oldest first. A store without items returns none.
    */
-  listItemStartRequests(itemId: string): Promise<ResourceStartRequestInspection[]>;
+  listItemStartRequests(itemId: string): Promise<ItemStartRequest[]>;
   /**
    * The runs that hold their item (`holdsItem`) while a later start of their workflow on
-   * it waits: a queued start request, or a pending hand start that holds nothing. A store
-   * without items returns none.
+   * it waits: a queued start request, or a pending hand start that holds nothing. A holder
+   * the store cannot read is reported `run_unreadable`. A store without items returns none.
    */
-  listWaitedItemHolders(): Promise<WorkflowRun[]>;
+  listWaitedItemHolders(): Promise<AttentionRead<WorkflowRun>[]>;
   listQueuedResourceStartsForHost(hostId: string): Promise<QueuedResourceStartInspection[]>;
   withdrawQueuedResourceStart(id: string): Promise<PreparedWorkflowLaunch | null>;
   claimStartBindingPreparation(input: {

@@ -429,11 +429,12 @@ export interface AttentionQueueSource {
   itemsWithoutRun?(): Promise<readonly AttentionRead<AttentionQueueItemWithoutRun>[]>;
   /**
    * Runs that hold their item while a later start of their workflow on it waits, and what
-   * this process observes about a run's execution owner. Without it the queue lists no
-   * `owner_lost` items and an item read observes no owners.
+   * this process observes about a run's execution owner. A holder the store cannot read
+   * is reported `run_unreadable`. Without it the queue lists no `owner_lost` items and an
+   * item read observes no owners.
    */
   ownerLost?: {
-    holders(): Promise<WorkflowRun[]>;
+    holders(): Promise<AttentionRead<WorkflowRun>[]>;
     observe(run: WorkflowRun): Promise<RunOwnerObservation | null>;
   };
 }
@@ -536,11 +537,19 @@ async function ownerLostItem(
   };
 }
 
-async function ownerLostItems(source: AttentionQueueSource): Promise<RunAttentionQueueItem[]> {
+/** The `owner_lost` items; a holder already reported unreadable in `reported` is not repeated. */
+async function ownerLostItems(
+  source: AttentionQueueSource,
+  reported: ReadonlySet<string>
+): Promise<AttentionRead<RunAttentionQueueItem>[]> {
   if (source.ownerLost === undefined) return [];
   const codebases: CodebaseCache = new Map();
-  const items: RunAttentionQueueItem[] = [];
+  const items: AttentionRead<RunAttentionQueueItem>[] = [];
   for (const run of await source.ownerLost.holders()) {
+    if (isAttentionDegraded(run)) {
+      if (!reported.has(run.runId)) items.push(run);
+      continue;
+    }
     const item = await ownerLostItem(source, run, codebases);
     if (item !== null) items.push(item);
   }
@@ -602,12 +611,14 @@ export async function listAttentionQueue(
   source: AttentionQueueSource,
   runs?: readonly AttentionRead<WorkflowRun>[]
 ): Promise<AttentionRead<AttentionQueueItem>[]> {
+  const held = await runAttentionQueueItems(
+    source,
+    runs ?? (await source.store.listAttentionQueueRows())
+  );
+  const reported = new Set(splitAttentionRead(held).degraded.map(report => report.runId));
   return [
-    ...(await runAttentionQueueItems(
-      source,
-      runs ?? (await source.store.listAttentionQueueRows())
-    )),
-    ...(await ownerLostItems(source)),
+    ...held,
+    ...(await ownerLostItems(source, reported)),
     ...((await source.itemsWithoutRun?.()) ?? []),
   ];
 }
@@ -625,7 +636,7 @@ export async function readAttentionQueueItem(
   if (run === null) return undefined;
   // A held item's holder whose owner is gone reads as the list lists it, by the same rule.
   if (run.item_id !== null && source.ownerLost !== undefined) {
-    const holders = await source.ownerLost.holders();
+    const holders = splitAttentionRead(await source.ownerLost.holders()).values;
     const lost = holders.some(holder => holder.id === run.id)
       ? await ownerLostItem(source, run, new Map())
       : null;

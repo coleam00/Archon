@@ -46,7 +46,11 @@ import {
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
-import { awaitingExecution, type ResourceStartRequestInspection } from './resource-start-store';
+import {
+  awaitingExecution,
+  type ItemStartRequest,
+  type ResourceStartRequestInspection,
+} from './resource-start-store';
 import { holdsItem, itemHolder, itemHolders } from './item-hold';
 import { runOwnerObservationSchema } from './schemas/workflow-run-listing';
 
@@ -313,7 +317,7 @@ async function itemHolds(source: ItemReadSource, itemId: string, runs: readonly 
         ? holderOf(run.id, run.workflow_name)
         : null;
     },
-    startHeldBehind: (start: ResourceStartRequestInspection) => {
+    startHeldBehind: (start: ItemStartRequest) => {
       const workflow = start.launch.run.workflow_name;
       if (start.status === 'queued') return holderOf(start.id, workflow);
       // A skipped start keeps the blocker it was refused for.

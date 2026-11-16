@@ -157,13 +157,53 @@ const source = () =>
 
 /** The item reads of a later start of `build` on issue-1 and the attention list. */
 async function readsOfHeldItem() {
-  const holder = (await getWorkflowRun((await store.listWaitedItemHolders())[0]?.id ?? ''))!;
+  const [first] = await store.listWaitedItemHolders();
+  if (first === undefined || 'type' in first) throw new Error('no readable holder is waited on');
+  const holder = first;
   const item = await store.getItem(String(holder.item_id));
   return {
     read: await readItem(source(), String(item?.projectKey), 'issue-1'),
     queue: await listAttentionQueue(source()),
     single: await readAttentionQueueItem(source(), holder.id),
   };
+}
+
+/** A hand start of `build` on issue-1 from a test platform that calls `onMessage`. */
+function handStart(onMessage: (message: string) => Promise<void>) {
+  registerBuiltinProviders();
+  const platform: IWorkflowPlatform = {
+    sendMessage: async (_conversation, message) => onMessage(message),
+    getPlatformType: () => 'test',
+    getStreamingMode: () => 'batch',
+  };
+  const deps: WorkflowDeps = {
+    store,
+    providers: providerRegistry,
+    getAgentProvider: () => {
+      throw new Error('Unexpected agent work');
+    },
+    loadConfig: async () => ({
+      assistant: 'claude',
+      assistants: { claude: {}, codex: {} },
+      commands: {},
+      defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
+    }),
+  };
+  return (noWait: boolean) =>
+    executeWorkflow(
+      deps,
+      platform,
+      CONVERSATION_ID,
+      root,
+      makeTestResolvedWorkflow({
+        name: 'build',
+        mutates_checkout: false,
+        nodes: [{ id: 'work', bash: 'true' }],
+      }),
+      '',
+      undefined,
+      { codebaseId: CODEBASE_ID, item: 'issue-1', noWait }
+    );
 }
 
 describe('one run of a workflow per item', () => {
@@ -325,6 +365,29 @@ describe('one run of a workflow per item', () => {
     expect(await admit(second)).toBeNull();
   });
 
+  test('an admitted run is refused its claim while a newer run of its workflow already runs on the item', async () => {
+    // This binary never admits the second run, but an older binary on the same database
+    // has no item rule: it can run a newer start while an older one is admitted and pending.
+    const older = await pending('build', 'issue-1');
+    const newer = await pending('build', 'issue-1');
+    expect(
+      await store.admitPendingRun({
+        resource: 'builds',
+        capacity: 3,
+        launch: launch(older, 'build'),
+      })
+    ).toBeNull();
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'running' WHERE id = $1",
+      [newer]
+    );
+    await expect(claimPendingWorkflowRun(older)).rejects.toMatchObject({
+      name: 'WorkflowItemHeldError',
+      holderRunId: newer,
+    });
+    expect((await getWorkflowRun(older))?.status).toBe('pending');
+  });
+
   test('a failed run on an item resumes only while no other run of its workflow holds the item', async () => {
     const failed = await pending('build', 'issue-1');
     await claimPendingWorkflowRun(failed);
@@ -429,45 +492,9 @@ describe('one run of a workflow per item', () => {
   });
 
   test('a hand start of a workflow with no resource waits for its item, or is refused under --no-wait', async () => {
-    registerBuiltinProviders();
     const holder = await pending('build', 'issue-1');
     await claimPendingWorkflowRun(holder);
-    const messages: string[] = [];
-    const platform: IWorkflowPlatform = {
-      sendMessage: async (_conversation, message) => {
-        messages.push(message);
-      },
-      getPlatformType: () => 'test',
-      getStreamingMode: () => 'batch',
-    };
-    const deps: WorkflowDeps = {
-      store,
-      providers: providerRegistry,
-      getAgentProvider: () => {
-        throw new Error('Unexpected agent work');
-      },
-      loadConfig: async () => ({
-        assistant: 'claude',
-        assistants: { claude: {}, codex: {} },
-        commands: {},
-        defaults: { loadDefaultCommands: false, loadDefaultWorkflows: false },
-      }),
-    };
-    const start = (noWait: boolean) =>
-      executeWorkflow(
-        deps,
-        platform,
-        CONVERSATION_ID,
-        root,
-        makeTestResolvedWorkflow({
-          name: 'build',
-          mutates_checkout: false,
-          nodes: [{ id: 'work', bash: 'true' }],
-        }),
-        '',
-        undefined,
-        { codebaseId: CODEBASE_ID, item: 'issue-1', noWait }
-      );
+    const start = handStart(async () => undefined);
     const refused = await start(true);
     if (refused.success) throw new Error('the start was not refused');
     expect(refused.error).toContain(`Item 'issue-1' is held by run ${holder}`);
@@ -492,6 +519,59 @@ describe('one run of a workflow per item', () => {
       status: 'cancelled',
       heldBehind: { runId: holder, workflow: 'build', status: 'completed', owner: null },
     });
+  });
+
+  test('a refused start claimed elsewhere while its refusal is sent is not cancelled', async () => {
+    const holder = await pending('build', 'issue-1');
+    await claimPendingWorkflowRun(holder);
+    // Another dispatcher claims the refused run while the refusal message is in flight.
+    const refused = await handStart(async message => {
+      if (!message.includes('not started')) return;
+      await getDatabase().query(
+        "UPDATE remote_agent_workflow_runs SET status = 'running' WHERE status = 'pending'"
+      );
+    })(true);
+    expect((await getWorkflowRun(String(refused.workflowRunId)))?.status).toBe('running');
+  });
+
+  test('an unreadable holder is reported once in the attention list, which still lists the rest', async () => {
+    const holder = await pending('build', 'issue-1');
+    await claimPendingWorkflowRun(holder);
+    await pending('build', 'issue-1');
+    const other = await pending('build', 'issue-2');
+    await claimPendingWorkflowRun(other);
+    await pending('build', 'issue-2');
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'paused', origin = '{' WHERE id = $1",
+      [holder]
+    );
+    const queue = await listAttentionQueue(source());
+    expect(queue).toEqual([
+      { type: 'degraded', reason: 'run_unreadable', runId: holder },
+      expect.objectContaining({ kind: 'owner_lost', run: expect.objectContaining({ id: other }) }),
+    ]);
+  });
+
+  test('an item read whose queued start names an unreadable blocker keeps its other sections', async () => {
+    const holder = await pending('build', 'issue-1');
+    await claimPendingWorkflowRun(holder);
+    const queued = await bindingStart({
+      workflow: 'build',
+      item: 'issue-1',
+      resource: 'builds',
+      overlap: 'queue',
+    });
+    expect(queued.disposition).toMatchObject({ status: 'queued' });
+    const item = await store.getItem(String((await getWorkflowRun(holder))?.item_id));
+    await getDatabase().query(
+      "UPDATE remote_agent_workflow_runs SET status = 'from_a_newer_binary' WHERE id = $1",
+      [holder]
+    );
+    const read = await readItem(source(), String(item?.projectKey), 'issue-1');
+    expect(read?.starts).toEqual([
+      expect.objectContaining({ requestId: queued.runId, status: 'queued' }),
+    ]);
+    expect(read?.degraded).toEqual([{ type: 'degraded', reason: 'run_unreadable', runId: holder }]);
   });
 
   test('the single read of a lost-owner holder that kept tool-call attention matches the list', async () => {

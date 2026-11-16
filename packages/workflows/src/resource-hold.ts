@@ -123,10 +123,16 @@ export async function refuseStart(
 ): Promise<WorkflowExecutionResult> {
   await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${error}`);
   await requireTerminalStatusWrite(
-    deps.store.cancelWorkflowRun(workflowRun.id, {
-      cancel_reason: 'precondition_failed',
-      ...(heldBy === undefined ? {} : { held_by_run_id: heldBy }),
-    }),
+    // Unclaimed, the row may be claimed by another dispatcher while the message is sent:
+    // cancel it only while it is still pending.
+    deps.store.cancelWorkflowRun(
+      workflowRun.id,
+      {
+        cancel_reason: 'precondition_failed',
+        ...(heldBy === undefined ? {} : { held_by_run_id: heldBy }),
+      },
+      { pendingOnly: true }
+    ),
     { workflowRunId: workflowRun.id, site: 'workflow.start_refused' }
   );
   return { success: false, workflowRunId: workflowRun.id, error };

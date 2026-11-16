@@ -123,7 +123,10 @@ export async function heldItemRefusal(
   if (!run || !statuses.includes(run.status)) return undefined;
   await lockAdmission(query);
   const itemId = String(run.item_id);
-  const holder = itemHolder(itemHolders(await liveItemRuns(query, itemId)), {
+  // Leave `runId` out before choosing the oldest holder: an admitted pending run holds the
+  // item itself and would otherwise hide a newer holder (one an older binary admitted).
+  const others = (await liveItemRuns(query, itemId)).filter(other => other.id !== runId);
+  const holder = itemHolder(itemHolders(others), {
     runId,
     workflow: run.workflow_name,
     itemId,
