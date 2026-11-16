@@ -31,7 +31,7 @@
  * runs against it, then stops it and deletes it. The package script passes
  * `--no-env-file`, so a DATABASE_URL in `.env` is not taken as a name.
  */
-import { spawn, spawnSync } from 'child_process';
+import { type SpawnSyncReturns, spawn, spawnSync } from 'child_process';
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { delimiter, join, resolve } from 'path';
@@ -248,11 +248,28 @@ function startThrowawayServer(): void {
 
   const dir = mkdtempSync(join(tmpdir(), 'archon-pg-'));
   const data = join(dir, 'data');
-  const init = spawnSync(
+  // Before any step that can leave something behind, so no exit is uncovered.
+  watchThrowawayServer(dir, data);
+
+  // The client settings are set before startup too: pg_ctl and the postmaster
+  // read PGPORT, so an inherited one would put the server on a port psql does
+  // not use. DATABASE_URL is unset on this path.
+  process.env.PGHOST = dir;
+  process.env.PGPORT = '5432';
+  process.env.PGUSER = 'postgres';
+  delete process.env.PGPASSWORD;
+
+  const init = startupStep(dir, [
     'initdb',
-    ['-D', data, '-U', 'postgres', '--auth=trust', '-E', 'UTF8', '--no-sync'],
-    { encoding: 'utf8', env: serverEnv() }
-  );
+    '-D',
+    data,
+    '-U',
+    'postgres',
+    '--auth=trust',
+    '-E',
+    'UTF8',
+    '--no-sync',
+  ]);
   if (init.error || init.status !== 0) {
     rmSync(dir, { recursive: true, force: true });
     console.error(`initdb failed for the throwaway server:\n${init.error?.message ?? init.stderr}`);
@@ -261,20 +278,17 @@ function startThrowawayServer(): void {
 
   throwaway = { dir, data };
   const log = join(dir, 'server.log');
-  const start = spawnSync(
+  const start = startupStep(dir, [
     'pg_ctl',
-    [
-      '-D',
-      data,
-      '-l',
-      log,
-      '-w',
-      '-o',
-      `-c listen_addresses='' -c unix_socket_directories='${dir}' -c fsync=off`,
-      'start',
-    ],
-    { encoding: 'utf8', env: serverEnv() }
-  );
+    '-D',
+    data,
+    '-l',
+    log,
+    '-w',
+    '-o',
+    `-c listen_addresses='' -c unix_socket_directories='${dir}' -c port=5432 -c fsync=off`,
+    'start',
+  ]);
   if (start.error || start.status !== 0) {
     console.error(`the throwaway server did not start:\n${start.error?.message ?? start.stderr}`);
     if (existsSync(log)) console.error(readFileSync(log, 'utf8'));
@@ -282,28 +296,36 @@ function startThrowawayServer(): void {
     process.exit(1);
   }
 
-  watchThrowawayServer(dir, data);
-
-  // psql(), admin() and connectionFor() read these; DATABASE_URL is unset on this path.
-  process.env.PGHOST = dir;
-  process.env.PGPORT = '5432';
-  process.env.PGUSER = 'postgres';
-  delete process.env.PGPASSWORD;
   console.log(`no server named: using a throwaway PostgreSQL in ${dir}\n`);
+}
+
+/**
+ * Runs initdb or pg_ctl start with its PID recorded in `<dir>/startup.pid`
+ * (`exec` keeps the shell's PID), so the watcher can wait for a step this
+ * process left running when it died.
+ */
+function startupStep(dir: string, argv: string[]): SpawnSyncReturns<string> {
+  return spawnSync('sh', ['-c', 'echo $$ > "$0/startup.pid" && exec "$@"', dir, ...argv], {
+    encoding: 'utf8',
+    env: serverEnv(),
+  });
 }
 
 /**
  * Covers the exits the `finally` below cannot: Ctrl-C and SIGTERM kill this
  * process outright, because Bun runs a signal handler only after synchronous
- * code returns, and this script is synchronous to the end. pg_ctl detaches the
- * postmaster from the terminal, so the server would outlive us. A detached
- * shell waits for this PID to go away, then stops the server through pg_ctl and
- * removes its dir. On a normal exit `stopThrowawayServer` has already done both
- * and the watcher finds nothing left to stop.
+ * code returns, and this script is synchronous to the end. initdb and pg_ctl
+ * outlive a killed parent, and pg_ctl detaches the postmaster, so the server
+ * would outlive us. A detached shell waits for this PID to go away, then for
+ * any startup step still running (its PID is in startup.pid), then stops the
+ * server through pg_ctl and removes the dir. On a normal exit
+ * `stopThrowawayServer` has already done both and the watcher finds the dir gone.
  */
 function watchThrowawayServer(dir: string, data: string): void {
   const script =
     'while kill -0 "$1" 2>/dev/null; do sleep 1; done; ' +
+    '[ -d "$2" ] || exit 0; ' +
+    'while [ -f "$2/startup.pid" ] && kill -0 "$(cat "$2/startup.pid")" 2>/dev/null; do sleep 1; done; ' +
     'if [ -f "$3/postmaster.pid" ]; then pg_ctl -D "$3" -m fast -w stop >/dev/null 2>&1 || exit 1; fi; ' +
     'rm -rf "$2"';
   spawn('sh', ['-c', script, 'sh', String(process.pid), dir, data], {
