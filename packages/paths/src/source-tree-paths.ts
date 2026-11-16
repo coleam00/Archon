@@ -5,6 +5,9 @@
 
 import { join, dirname } from 'path';
 import { access } from 'fs/promises';
+import { realpathSync } from 'fs';
+import { BUNDLED_IS_BINARY } from './bundled-build';
+import { getArchonWorkspacesPath, isPathInside } from './home-paths';
 import { createLogger } from './logger';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -23,6 +26,28 @@ function getLog(): ReturnType<typeof createLogger> {
  */
 function getSourceRepoRoot(): string {
   return dirname(dirname(dirname(import.meta.dir)));
+}
+
+/**
+ * Where this build's code lives when it sits inside the Archon home's
+ * workspaces tree, else null. A build there is code Archon checked out for work
+ * (a run's worktree or a managed clone), never the install that owns the home,
+ * so it must not open that home's database. Compared by real path, so the
+ * managed `source` symlink to an operator's own checkout does not match.
+ */
+export function runningBuildInsideWorkspaces(
+  buildLocation: string = BUNDLED_IS_BINARY ? process.execPath : getSourceRepoRoot()
+): string | null {
+  let workspaces: string;
+  try {
+    workspaces = realpathSync(getArchonWorkspacesPath());
+  } catch (error) {
+    // A home with no workspaces directory manages no checkout.
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw error;
+  }
+  const build = realpathSync(buildLocation);
+  return isPathInside(workspaces, build) ? build : null;
 }
 
 /**
