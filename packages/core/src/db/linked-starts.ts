@@ -113,7 +113,14 @@ async function receiptForHolder(
   const members = linked.rows.map(row => String(row.id)).sort();
   // A holder with no active member is never done: there is no set to have finished.
   if (members.length === 0) return undefined;
-  for (const id of members) if (!(await isDone(query, id, start))) return undefined;
+  for (const id of members) {
+    // The ended item is done by this completion, which ended with the outcome. Its own
+    // event cannot say so: PostgreSQL assigns an event's final order at commit (a deferred
+    // trigger), so until then this run's provisional order can sort behind another review
+    // of the same item that committed meanwhile, and the count would read that one.
+    if (id === start.endedItemId) continue;
+    if (!(await isDone(query, id, start))) return undefined;
+  }
   const set = createHash('sha256').update(JSON.stringify(members)).digest('hex');
   // The digest is the set, not the binding: an edited file then replays the receipt when a
   // member re-runs, rather than conflicting with it and failing that completion.

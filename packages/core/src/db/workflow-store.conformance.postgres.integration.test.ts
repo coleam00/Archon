@@ -374,6 +374,54 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
       await harness.close();
     }
   });
+  test('an all start stands when another review of the same member commits before it', async () => {
+    const harness = await makeHarness();
+    let interception: ReturnType<typeof spyOn> | undefined;
+    const release = Promise.withResolvers<void>();
+    let approving: Promise<unknown> | undefined;
+    try {
+      const { db, store } = harness;
+      await linkedOrder(harness, 'order', ['m']);
+      const { start, finish } = reviews(harness);
+      const approved = await start('m');
+      const declined = await start('m');
+      // Pause the approving completion right after it inserted its workflow_completed
+      // event, whose final order PostgreSQL assigns only at commit.
+      const inserted = Promise.withResolvers<void>();
+      const transaction = db.withTransaction.bind(db);
+      interception = spyOn(db, 'withTransaction').mockImplementation(callback =>
+        transaction(query =>
+          callback(async <T>(sql: string, params?: unknown[]) => {
+            const result = await query<T>(sql, params);
+            if (
+              sql.includes('INSERT INTO remote_agent_workflow_events') &&
+              params?.includes('workflow_completed')
+            ) {
+              inserted.resolve();
+              await release.promise;
+            }
+            return result;
+          })
+        )
+      );
+      approving = finish(approved, 'm', 'approved', 'all');
+      await inserted.promise;
+      interception.mockRestore();
+      interception = undefined;
+      // A second review commits first, so its event's final order is above the paused one's.
+      await finish(declined, 'm', 'declined', 'all');
+      release.resolve();
+      await approving;
+      const receipts = await store.listStartReceipts();
+      expect(receipts).toHaveLength(1);
+      expect((await store.getStartReceipt(receipts[0]?.id ?? ''))?.itemKey).toBe('order');
+    } finally {
+      release.resolve();
+      interception?.mockRestore();
+      await approving?.catch(() => undefined);
+      await harness.close();
+    }
+  });
   test.each(['each', 'all'] as const)(
     'an %s start and an unlink of its link are ordered: the unlink waits for the completion',
     async form => {

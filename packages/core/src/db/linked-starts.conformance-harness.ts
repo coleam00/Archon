@@ -322,6 +322,32 @@ export function describeLinkedStartConformance(makeHarness: () => Promise<Harnes
     }
   });
 
+  test('a linked start commits with the completion: one that cannot be written fails it', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      await link(harness, 'waiter', 'dependency', 'depends_on');
+      const { start, finish } = reviews(harness);
+      const runId = await start('dependency');
+      // Take the delivery the waiter's each start will use, with other content, so writing
+      // that start conflicts. Written after the run's commit, the run would stay completed.
+      const taken = linkedStart('each', WAIT, runId, await itemId(store, 'dependency'), 'x', 'x');
+      taken.acceptance.receipt.deliveryId = `${runId}:${await itemId(store, 'waiter')}`;
+      taken.acceptance.receipt.contentDigest = 'other';
+      await store.acceptStartReceipt(taken.acceptance);
+
+      await expect(finish(runId, 'dependency', 'approved', 'each', WAIT)).rejects.toThrow(
+        'Delivery identity was reused with different verified content'
+      );
+      expect((await store.getWorkflowRun(runId))?.status).toBe('running');
+      expect((await store.listStartReceipts()).map(({ id }) => id)).toEqual([
+        taken.acceptance.receipt.id,
+      ]);
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('a member completed before outcomes were recorded counts by its boolean outcome', async () => {
     const harness = await makeHarness();
     try {
