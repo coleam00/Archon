@@ -397,7 +397,6 @@ mock.module('@archon/workflows/router', () => ({
   suggestWorkflowNames: mock<typeof import('@archon/workflows/router').suggestWorkflowNames>(
     () => []
   ),
-  findWorkflow: mock(() => undefined),
   // Statically imported by the background dispatch path; a named import must link even
   // when the test never exercises it.
   resolveWorkflowName: mock(() => undefined),

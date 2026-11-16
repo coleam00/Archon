@@ -17,7 +17,7 @@ import { dirname, join } from 'path';
 import { packTreePath, receiptPath } from '@archon/plugin-manifest/store';
 import { removeTempTree, trackTempRoots } from '@archon/paths/test-utils';
 import { discoverWorkflowsWithConfig } from './workflow-discovery';
-import { findWorkflow, resolveWorkflowName } from './router';
+import { resolveWorkflowName } from './router';
 import { validateWorkflowResources } from './validator';
 import { loadCommandPrompt } from './load-command-prompt';
 import { discoverScriptsForCwd } from './script-discovery';
@@ -287,12 +287,10 @@ nodes:
     const definitions = workflows.map(entry => entry.workflow);
 
     // Explicit run (CLI, API, chat, run management, resume) resolves through
-    // resolveWorkflowName; chat routing's /invoke-workflow through findWorkflow.
+    // resolveWorkflowName.
     expect(resolveWorkflowName(REVIEW, definitions)?.name).toBe(REVIEW);
-    expect(findWorkflow(REVIEW, definitions)?.name).toBe(REVIEW);
     // Neither a support workflow nor a guess reaches past the entrypoints.
     expect(resolveWorkflowName(HELPER, definitions)).toBeUndefined();
-    expect(findWorkflow(HELPER, definitions)).toBeUndefined();
 
     // Validation resolves the pack's own command and script.
     const review = resolveWorkflowName(REVIEW, definitions) as ResolvedWorkflow;

@@ -142,7 +142,7 @@ function validateMetricRecords(value: unknown): StructuredValidationResult {
  * required field), rendered as `(root)`. Returns a single generic line when ajv
  * reports a failure with no error detail (shouldn't happen with `allErrors`).
  */
-export function formatSchemaErrors(errors: ErrorObject[] | null | undefined): string[] {
+function formatSchemaErrors(errors: ErrorObject[] | null | undefined): string[] {
   if (!errors || errors.length === 0) {
     return ['value does not match the declared schema'];
   }

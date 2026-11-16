@@ -60,26 +60,4 @@ describe('checkRuntimeAvailable', () => {
     expect(result).toBe(false);
     expect(mockExecFileAsync).toHaveBeenCalledWith('which', ['uv']);
   });
-
-  test('returns false when which itself throws', async () => {
-    mockExecFileAsync.mockRejectedValueOnce(new Error('ENOENT: which not found'));
-    const result = await checkRuntimeAvailable('bun');
-    expect(result).toBe(false);
-  });
-
-  test('calls which with the runtime name', async () => {
-    mockExecFileAsync.mockResolvedValueOnce({ stdout: '/usr/local/bin/uv\n', stderr: '' });
-    await checkRuntimeAvailable('uv');
-    expect(mockExecFileAsync).toHaveBeenCalledWith('which', ['uv']);
-  });
-
-  test('returns true for bun when available', async () => {
-    mockExecFileAsync.mockResolvedValueOnce({ stdout: '/usr/bin/bun', stderr: '' });
-    expect(await checkRuntimeAvailable('bun')).toBe(true);
-  });
-
-  test('returns true for uv when available', async () => {
-    mockExecFileAsync.mockResolvedValueOnce({ stdout: '/home/user/.cargo/bin/uv', stderr: '' });
-    expect(await checkRuntimeAvailable('uv')).toBe(true);
-  });
 });

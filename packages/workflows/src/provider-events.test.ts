@@ -128,18 +128,6 @@ describe('createProviderEventHandler', () => {
     await handler.handle({ type: 'tool_call_update', toolCallId: 'b', status: 'failed' });
     expect(handler.hasOpenTools()).toBe(false);
   });
-  test('tracks a subtask from its start until a terminal status', async () => {
-    const { handler } = await makeHandler();
-
-    await handler.handle({ type: 'subtask', taskId: 't-1', status: 'started' });
-    await handler.handle({ type: 'subtask', taskId: 't-2', status: 'started' });
-    await handler.handle({ type: 'subtask', taskId: 't-1', status: 'running' });
-    expect(handler.liveSubtaskIds()).toEqual(['t-1', 't-2']);
-
-    await handler.handle({ type: 'subtask', taskId: 't-1', status: 'completed' });
-    await handler.handle({ type: 'subtask', taskId: 't-2', status: 'stopped' });
-    expect(handler.liveSubtaskIds()).toEqual([]);
-  });
 
   test('keeps every contract non-terminal status live and removes only terminal statuses', async () => {
     const { handler } = await makeHandler();

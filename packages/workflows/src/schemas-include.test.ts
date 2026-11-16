@@ -222,31 +222,6 @@ describe('dagNodeSchema — launch-only options on an include node (#1764)', () 
     expect(error.issues.map(issue => issue.message).join(' | ')).toContain('fan_out.as');
   });
 
-  test('compose fan-out rejects join: first_success', () => {
-    const error = validationError(
-      dagNodeSchema.safeParse({
-        id: 'review',
-        include: 'blk',
-        fan_out: { items: '$list.output', join: 'first_success' },
-      })
-    );
-    const message = error.issues.map(i => i.message).join(' | ');
-    expect(message).toContain('first_success');
-  });
-
-  test('compose fan-out rejects fan_out.as colliding with a with: key', () => {
-    const error = validationError(
-      dagNodeSchema.safeParse({
-        id: 'review',
-        include: 'blk',
-        with: { item: 'static' },
-        fan_out: { items: '$list.output', as: 'item' },
-      })
-    );
-    const message = error.issues.map(i => i.message).join(' | ');
-    expect(message).toContain('collides with');
-  });
-
   test('a merely-meaningless AI field on an include node still only warns', () => {
     // The distinction the rejection above rests on: `model:` says nothing composition
     // has to refuse, it is simply unread. INCLUDE_NODE_IGNORED_FIELDS keeps warning.

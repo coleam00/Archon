@@ -1,87 +1,8 @@
 // @archon-test-isolated
 import { describe, it, expect } from 'bun:test';
-import { findWorkflow, resolveWorkflowName, suggestWorkflowNames } from './router';
-import type { WorkflowDefinition } from './schemas';
+import { resolveWorkflowName, suggestWorkflowNames } from './router';
 
 describe('Workflow Router', () => {
-  // Sample workflows for testing
-  const testWorkflows: WorkflowDefinition[] = [
-    {
-      name: 'fix-bug',
-      description: 'Fix a bug in the codebase',
-      nodes: [
-        { id: 'analyze', kind: 'agent', source: { kind: 'command', name: 'analyze' } },
-        {
-          id: 'fix',
-          kind: 'agent',
-          source: { kind: 'command', name: 'fix' },
-          depends_on: ['analyze'],
-        },
-      ],
-    },
-    {
-      name: 'add-feature',
-      description: 'Add a new feature',
-      nodes: [
-        { id: 'plan', kind: 'agent', source: { kind: 'command', name: 'plan' } },
-        {
-          id: 'implement',
-          kind: 'agent',
-          source: { kind: 'command', name: 'implement' },
-          depends_on: ['plan'],
-        },
-      ],
-    },
-    {
-      name: 'feature-development',
-      description: 'Full feature development workflow',
-      nodes: [
-        { id: 'plan', kind: 'agent', source: { kind: 'command', name: 'plan' } },
-        {
-          id: 'implement',
-          kind: 'agent',
-          source: { kind: 'command', name: 'implement' },
-          depends_on: ['plan'],
-        },
-        {
-          id: 'create-pr',
-          kind: 'agent',
-          source: { kind: 'command', name: 'create-pr' },
-          depends_on: ['implement'],
-        },
-      ],
-    },
-  ];
-
-  describe('findWorkflow', () => {
-    it('should return workflow by name', () => {
-      const workflow = findWorkflow('fix-bug', testWorkflows);
-
-      expect(workflow).toBeDefined();
-      expect(workflow?.name).toBe('fix-bug');
-      expect(workflow?.description).toBe('Fix a bug in the codebase');
-    });
-
-    it('should return undefined for non-existent workflow', () => {
-      const workflow = findWorkflow('does-not-exist', testWorkflows);
-
-      expect(workflow).toBeUndefined();
-    });
-
-    it('should return undefined when workflows array is empty', () => {
-      const workflow = findWorkflow('fix-bug', []);
-
-      expect(workflow).toBeUndefined();
-    });
-
-    it('should be case-sensitive for workflow names', () => {
-      const workflow = findWorkflow('Fix-Bug', testWorkflows);
-
-      // Workflow names are case-sensitive
-      expect(workflow).toBeUndefined();
-    });
-  });
-
   describe('resolveWorkflowName', () => {
     const workflows = [{ name: 'archon-review' }, { name: 'acme/review:run' }];
 
