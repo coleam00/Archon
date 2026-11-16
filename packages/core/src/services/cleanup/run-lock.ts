@@ -34,10 +34,15 @@ export type UseBlocker = LiveRunBlocker | HandoffBlocker;
  * its checkout that still waits (see getWaitingHandoffOfEnv). Historical conversation
  * references are data, not locks. A lookup failure throws; callers must refuse
  * removal rather than read it as "no use".
+ *
+ * The waiting start is read before the runs. Admission turns a queued request into a
+ * pending run in one transaction, so a start this read misses was already admitted,
+ * and the run read after it sees that run. The other order loses both.
  */
 export async function getUseBlocker(envId: string): Promise<UseBlocker | null> {
+  const handoff = await getHandoffBlocker(envId);
   const liveRun = await isolationEnvDb.getLiveRunOwningEnv(envId);
-  return liveRun ? toLiveRunBlocker(liveRun) : getHandoffBlocker(envId);
+  return liveRun ? toLiveRunBlocker(liveRun) : handoff;
 }
 
 /** The identifiers a log line records for a use lock. */
@@ -110,13 +115,15 @@ const RELEASE_REASONS: Record<CleanupSettlement['kind'], FailedRunReleaseReason>
  * Merged or closed-PR settlement already proved coverage of both local tips.
  *
  * A start handed the checkout that still waits locks whatever the settlement: no
- * outcome of the run that handed it releases the stage it started.
+ * outcome of the run that handed it releases the stage it started. It is read before
+ * the runs, for the reason getUseBlocker gives.
  */
 export async function getCleanupRunLock(
   env: { id: string; working_path: string; branch_name: string | null },
   repoPath: RepoPath,
   settlement: CleanupSettlement
 ): Promise<CleanupRunLock> {
+  const handoff = await getHandoffBlocker(env.id);
   const owner = await isolationEnvDb.getLiveRunOwningEnv(env.id);
   if (owner) {
     if (!isolationEnvDb.isSettleableRunStatus(owner.status)) {
@@ -128,7 +135,6 @@ export async function getCleanupRunLock(
     );
     if (lock) return { kind: 'locked', blocker: toLiveRunBlocker(lock) };
   }
-  const handoff = await getHandoffBlocker(env.id);
   if (handoff) return { kind: 'locked', blocker: handoff };
   if (settlement.kind === 'stale') {
     const commits = await countUnpushedCommits(env, repoPath);

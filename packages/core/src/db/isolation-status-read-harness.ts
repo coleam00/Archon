@@ -66,18 +66,10 @@ export function isolationStatusReadTests(
     expect(await getRunIdsByIsolationEnvId(env.id)).toEqual([failed, completed].sort());
   });
 
-  test('cleanup keeps a checkout handed to a waiting start, and only while it waits', async () => {
+  /** A completed run owning `envId` whose end handed its checkout to a start, still pending. */
+  async function seedHandoff(envId: string) {
     const db = getDb();
-    const { getCleanupRunLock } = await import('../services/cleanup/run-lock');
-    const { toRepoPath } = await import('@archon/git');
-    const env = await createEnv(randomUUID());
-    const lock = async () =>
-      getCleanupRunLock(
-        { id: env.id, working_path: env.working_path, branch_name: null },
-        toRepoPath('/tmp/no-repo'),
-        { kind: 'merged' }
-      );
-    const from = await seedRun(env.id, 'completed');
+    const from = await seedRun(envId, 'completed');
     const receiptId = randomUUID();
     await db.query(
       `INSERT INTO remote_agent_start_receipts (id, source_instance_id, content_digest, received_at, outcome)
@@ -95,6 +87,67 @@ export function isolationStatusReadTests(
         'UPDATE remote_agent_start_receipt_bindings SET preparation_status = $1 WHERE receipt_id = $2',
         [status, receiptId]
       );
+    /** Prepares the start and queues its request behind capacity. */
+    const queue = async (): Promise<string> => {
+      await setBinding('complete');
+      const requestId = randomUUID();
+      await db.query(
+        'INSERT INTO remote_agent_resource_slots (resource_key, capacity) VALUES ($1, 1) ON CONFLICT DO NOTHING',
+        ['handoff-test']
+      );
+      await db.query(
+        `INSERT INTO remote_agent_resource_start_requests (id, resource_key, host_id, overlap_policy, status, launch, receipt_id, binding_id)
+         VALUES ($1, 'handoff-test', 'host', 'queue', 'queued', '{}', $2, 'next')`,
+        [requestId, receiptId]
+      );
+      return requestId;
+    };
+    /** What admission writes: the request admitted and its pending run, with no env yet. */
+    const admit = async (
+      requestId: string,
+      query: IDatabase['query'] = db.query.bind(db)
+    ): Promise<void> => {
+      const conversationId = randomUUID();
+      await query(
+        `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
+         VALUES ($1, 'cli', $2)`,
+        [conversationId, conversationId]
+      );
+      await query(
+        `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, metadata)
+         VALUES ($1, $2, 'next-stage', 'test', 'pending', $3)`,
+        [
+          requestId,
+          conversationId,
+          JSON.stringify({ checkout_handoff: { ...checkoutFrom, lane: 'continue' } }),
+        ]
+      );
+      await query(
+        "UPDATE remote_agent_resource_start_requests SET status = 'admitted' WHERE id = $1",
+        [requestId]
+      );
+    };
+    return { from, setBinding, queue, admit };
+  }
+
+  async function cleanupLock(env: IsolationEnvironmentRow) {
+    const { getCleanupRunLock } = await import('../services/cleanup/run-lock');
+    const { toRepoPath } = await import('@archon/git');
+    return getCleanupRunLock(
+      { id: env.id, working_path: env.working_path, branch_name: null },
+      toRepoPath('/tmp/no-repo'),
+      { kind: 'merged' }
+    );
+  }
+
+  test('cleanup keeps a checkout handed to a waiting start, and only while it waits', async () => {
+    const db = getDb();
+    const env = await createEnv(randomUUID());
+    // An environment the handing run never owned: nothing handed to it, so nothing pins it.
+    const other = await createEnv(randomUUID());
+    await seedRun(other.id, 'completed');
+    const lock = () => cleanupLock(env);
+    const { from, setBinding, queue, admit } = await seedHandoff(env.id);
 
     for (const status of ['pending', 'preparing', 'failed']) {
       await setBinding(status);
@@ -103,6 +156,7 @@ export function isolationStatusReadTests(
         blocker: { reason: 'pending_handoff', waitingFor: 'preparation', fromRunId: from },
       });
     }
+    expect(await cleanupLock(other)).toEqual({ kind: 'free' });
     for (const status of ['rejected', 'unmatched']) {
       await setBinding(status);
       expect(await lock()).toEqual({ kind: 'free' });
@@ -111,16 +165,7 @@ export function isolationStatusReadTests(
     // Prepared and queued behind capacity: the request still waits for a slot.
     await setBinding('complete');
     expect(await lock()).toEqual({ kind: 'free' });
-    const requestId = randomUUID();
-    await db.query(
-      'INSERT INTO remote_agent_resource_slots (resource_key, capacity) VALUES ($1, 1) ON CONFLICT DO NOTHING',
-      ['handoff-test']
-    );
-    await db.query(
-      `INSERT INTO remote_agent_resource_start_requests (id, resource_key, host_id, overlap_policy, status, launch, receipt_id, binding_id)
-       VALUES ($1, 'handoff-test', 'host', 'queue', 'queued', '{}', $2, 'next')`,
-      [requestId, receiptId]
-    );
+    const requestId = await queue();
     const queued = await lock();
     expect(queued).toMatchObject({
       kind: 'locked',
@@ -129,6 +174,7 @@ export function isolationStatusReadTests(
     expect(queued.kind === 'locked' && queued.blocker.display).toContain(
       `archon trigger withdraw ${requestId}`
     );
+    expect(await cleanupLock(other)).toEqual({ kind: 'free' });
     const setRequest = (status: string) =>
       db.query('UPDATE remote_agent_resource_start_requests SET status = $1 WHERE id = $2', [
         status,
@@ -140,30 +186,46 @@ export function isolationStatusReadTests(
     }
 
     // Admitted: its run holds the checkout before its lane records an environment.
-    await setRequest('admitted');
-    const conversationId = randomUUID();
-    await db.query(
-      `INSERT INTO remote_agent_conversations (id, platform_type, platform_conversation_id)
-       VALUES ($1, 'cli', $2)`,
-      [conversationId, conversationId]
-    );
-    await db.query(
-      `INSERT INTO remote_agent_workflow_runs (id, conversation_id, workflow_name, user_message, status, metadata)
-       VALUES ($1, $2, 'next-stage', 'test', 'pending', $3)`,
-      [
-        requestId,
-        conversationId,
-        JSON.stringify({ checkout_handoff: { ...checkoutFrom, lane: 'continue' } }),
-      ]
-    );
+    await admit(requestId);
     expect(await lock()).toMatchObject({
       kind: 'locked',
       blocker: { reason: 'live_run', runId: requestId, runStatus: 'pending' },
     });
+    expect(await cleanupLock(other)).toEqual({ kind: 'free' });
     await db.query("UPDATE remote_agent_workflow_runs SET status = 'completed' WHERE id = $1", [
       requestId,
     ]);
     expect(await lock()).toEqual({ kind: 'free' });
+  });
+
+  test('a start admitted between the lock reads still keeps its checkout', async () => {
+    const db = getDb();
+    const { getUseBlocker } = await import('../services/cleanup/run-lock');
+    // Admission commits right after the first query a lock makes, whichever read that is.
+    async function admittedAfterFirstRead<T>(
+      read: (env: IsolationEnvironmentRow) => Promise<T>
+    ): Promise<T> {
+      const env = await createEnv(randomUUID());
+      const { queue, admit } = await seedHandoff(env.id);
+      const requestId = await queue();
+      const query = db.query.bind(db);
+      let admitted = false;
+      db.query = (async (...args: Parameters<IDatabase['query']>) => {
+        const result = await query(...args);
+        if (!admitted) {
+          admitted = true;
+          await admit(requestId, query);
+        }
+        return result;
+      }) as IDatabase['query'];
+      try {
+        return await read(env);
+      } finally {
+        db.query = query;
+      }
+    }
+    expect(await admittedAfterFirstRead(cleanupLock)).toMatchObject({ kind: 'locked' });
+    expect(await admittedAfterFirstRead(env => getUseBlocker(env.id))).not.toBeNull();
   });
 
   test.each(['unexpected', ''])(
