@@ -85,8 +85,51 @@ async function checkInlineScript(mode: (typeof launchModes)[number], shim: boole
   }
 }
 
+async function runInlineUv(checkout: string, artifactsDir: string): Promise<string> {
+  const invocation = scriptInvocation(
+    'uv',
+    { kind: 'inline', code: 'print("ok")' },
+    [],
+    artifactsDir
+  );
+  const result = await execFileAsync(invocation.command, invocation.args, {
+    cwd: checkout,
+    timeout: 60_000,
+  });
+  return result.stdout.trim();
+}
+
 test.skipIf(!Bun.which('uv'))(
-  'inline uv runs outside the checkout uv project, config and Python pin',
+  'inline uv writes no .venv or uv.lock into a checkout that is a uv project',
+  async () => {
+    const checkout = await mkdtemp(join(tmpdir(), 'archon-uv-checkout-'));
+    const artifactsDir = await mkdtemp(join(tmpdir(), 'archon-uv-artifacts-'));
+    try {
+      // A project uv can satisfy, so joining it succeeds and leaves files behind.
+      await writeFile(
+        join(checkout, 'pyproject.toml'),
+        [
+          '[project]',
+          'name = "checkout"',
+          'version = "0.0.0"',
+          'requires-python = ">=3.8"',
+          'dependencies = []',
+          '',
+        ].join('\n')
+      );
+      expect(await runInlineUv(checkout, artifactsDir)).toBe('ok');
+      expect(existsSync(join(checkout, '.venv'))).toBe(false);
+      expect(existsSync(join(checkout, 'uv.lock'))).toBe(false);
+    } finally {
+      await removeTempTree(checkout);
+      await removeTempTree(artifactsDir);
+    }
+  },
+  60_000
+);
+
+test.skipIf(!Bun.which('uv'))(
+  'inline uv ignores the checkout uv project, config and Python pin',
   async () => {
     const checkout = await mkdtemp(join(tmpdir(), 'archon-uv-checkout-'));
     const artifactsDir = await mkdtemp(join(tmpdir(), 'archon-uv-artifacts-'));
@@ -107,19 +150,7 @@ test.skipIf(!Bun.which('uv'))(
         ].join('\n')
       );
       await writeFile(join(checkout, '.python-version'), '3.99\n');
-      const invocation = scriptInvocation(
-        'uv',
-        { kind: 'inline', code: 'print("ok")' },
-        [],
-        artifactsDir
-      );
-      const result = await execFileAsync(invocation.command, invocation.args, {
-        cwd: checkout,
-        timeout: 60_000,
-      });
-      expect(result.stdout.trim()).toBe('ok');
-      expect(existsSync(join(checkout, '.venv'))).toBe(false);
-      expect(existsSync(join(checkout, 'uv.lock'))).toBe(false);
+      expect(await runInlineUv(checkout, artifactsDir)).toBe('ok');
     } finally {
       await removeTempTree(checkout);
       await removeTempTree(artifactsDir);
