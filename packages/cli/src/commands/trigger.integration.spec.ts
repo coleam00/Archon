@@ -590,7 +590,7 @@ describe('trigger CLI durable execution', () => {
     ]);
   }, 90_000);
 
-  test("a binding's item mapping wins over the fired-from run's item, and --item wins over it", async () => {
+  test("a binding's item mapping wins over the fired-from run's item, and --item or --no-item wins over it", async () => {
     const fixture = await heldTriggerRun('item-map');
     const root = join(fixture.projectRoot, '..');
     const mappedRoot = join(root, 'mapped');
@@ -654,8 +654,19 @@ describe('trigger CLI durable execution', () => {
       '--inputs',
       join(root, 'seven.json'),
     ]);
-    expect((await settled(4)).map(run => [run.workflow_name, run.item])).toEqual([
+    // --no-item wins over the mapping.
+    await invoke([
+      'trigger',
+      'fire',
+      '--config',
+      mappedConfig,
+      '--inputs',
+      join(root, 'seven.json'),
+      '--no-item',
+    ]);
+    expect((await settled(5)).map(run => [run.workflow_name, run.item])).toEqual([
       ['item-map-proof', 'item-1'],
+      ['mapped-proof', null],
       ['mapped-proof', 'issue-7'],
       ['mapped-proof', 'issue-7'],
       ['mapped-proof', 'named'],
@@ -670,7 +681,7 @@ describe('trigger CLI durable execution', () => {
         database,
         'SELECT COUNT(*) AS count FROM remote_agent_start_receipts'
       )
-    ).toEqual([{ count: 4 }]);
+    ).toEqual([{ count: 5 }]);
   }, 60_000);
 
   test('an inherited item is refused in another project, and an item named there starts', async () => {
