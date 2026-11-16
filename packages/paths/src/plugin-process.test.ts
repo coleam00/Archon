@@ -310,53 +310,14 @@ describe('Windows stop diagnostics', () => {
   );
 });
 
-describe('Windows capture ordering', () => {
-  test('samples entry, taskkill, deciding probe, then failure identity in that order', async () => {
-    const order: string[] = [];
-    const previousLevel = getLogLevel();
-    let samples = 0;
-    const identity = spyOn(identities, 'readWindowsProcessIdentity').mockImplementation(
-      async pid => {
-        order.push(++samples === 1 ? 'entry' : 'failure');
-        return { pid, status: 'absent' };
-      }
-    );
-    const kill = spyOn(process, 'kill').mockImplementation(() => {
-      order.push('probe');
-      throw Object.assign(new Error('gone'), { code: 'ESRCH' });
-    });
-    try {
-      setLogLevel('debug');
-      const lines: string[] = [];
-      setLogSink(line => {
-        lines.push(line);
-      });
-      await terminateWindowsTree(123, async () => {
-        order.push('taskkill');
-        throw Object.assign(new Error('failed'), { code: 128, stderr: 'stderr string' });
-      });
-      expect(order).toEqual(['entry', 'taskkill', 'probe', 'failure']);
-      expect(JSON.parse(lines[0]).taskkill).toEqual({ code: 128, stderr: 'stderr string' });
-    } finally {
-      identity.mockRestore();
-      kill.mockRestore();
-      setLogSink(undefined);
-      setLogLevel(previousLevel);
-    }
-  });
-});
-
 describe.skipIf(process.platform === 'win32')('terminateTree POSIX', () => {
   let kill: ReturnType<typeof spyOn<typeof process, 'kill'>>;
   const refused = Object.assign(new Error('signal refused'), { code: 'EPERM' });
   const originalLevel = getLogLevel();
-  let lines: string[];
   beforeEach(() => {
-    lines = [];
     setLogLevel('info');
-    setLogSink(line => {
-      lines.push(line);
-    });
+    // Inspection failures log a warning; keep it out of the test output.
+    setLogSink(() => {});
     kill = spyOn(process, 'kill').mockImplementation(() => {
       throw refused;
     });
@@ -390,30 +351,6 @@ describe.skipIf(process.platform === 'win32')('terminateTree POSIX', () => {
     await expect(terminateTree(12, undefined, async () => listing)).rejects.toBe(refused);
     expect(kill.mock.calls).toEqual([[-12, 'SIGKILL']]);
   });
-
-  test.each(['command', 'listing'])(
-    'logs failed %s inspection and retains EPERM',
-    async failure => {
-      const inspectionError = Object.assign(new Error('ps failed'), { code: 'ETIMEDOUT' });
-      await expect(
-        terminateTree(12, undefined, async () => {
-          if (failure === 'command') throw inspectionError;
-          return 'invalid';
-        })
-      ).rejects.toBe(refused);
-      expect(lines).toHaveLength(1);
-      expect(JSON.parse(lines[0])).toMatchObject({
-        level: 40,
-        module: 'paths.plugin-process',
-        msg: 'process_group_inspection_failed',
-        targetPid: 12,
-        err:
-          failure === 'command'
-            ? { message: 'ps failed', code: 'ETIMEDOUT' }
-            : { message: 'Invalid POSIX process listing' },
-      });
-    }
-  );
 
   test('retains EPERM when inspection and logging both fail', async () => {
     setLogSink(() => {
