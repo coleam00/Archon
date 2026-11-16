@@ -206,7 +206,6 @@ export interface WorkflowOutputs {
       readonly summary: string;
     };
     round: {
-      readonly round: number;
       readonly done: boolean;
       readonly ready: boolean;
       readonly reason: string;

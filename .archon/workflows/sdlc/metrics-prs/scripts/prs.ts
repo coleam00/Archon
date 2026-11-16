@@ -5,7 +5,7 @@
  * the queue worked, whether it was built and merged, its lead time, rounds and asks, in
  * total and per route. Pull requests a
  * round only continued, and merged ones whose rounds cannot be counted, are reported in
- * `skipped`; the metrics no record carries yet are reported in `not_available`.
+ * `skipped`.
  * Merged pull requests merged at or after `lines_since` also record the test and
  * production lines they added; without it, none do.
  *
@@ -22,19 +22,6 @@ import { artifactsDir, emit, input, refuse, state } from 'archon:script';
 import { lineRecords, readPrFiles } from '../../.shared/pr-lines.ts';
 import { backfillRunReviews, droppedRoundPrs, prBuildRounds, reviewRoundRecords } from '../../.shared/review-rounds.ts';
 import { read } from '../../.shared/workitem.ts';
-
-/** The review set's metrics that no record the pack writes can count yet. */
-const NOT_AVAILABLE = [
-  {
-    metric: 'merged pull requests later reverted, or fixed by a follow-up',
-    reason:
-      'no record links a merged pull request to its revert or to the change that fixed it: the merge record keeps no landed commit, the forge contract has no read that finds a revert, and a follow-up names what it fixes only in prose',
-  },
-  {
-    metric: 'blocking findings on code the change did not modify',
-    reason: 'review findings carry no typed origin yet',
-  },
-];
 
 const since = input('since').trim() || '7d';
 const until = input('until').trim();
@@ -66,7 +53,6 @@ try {
     review_rounds_skipped: reviews.skipped,
     review_rounds_distribution: reviews.distribution,
     lines_skipped: lines.skipped,
-    not_available: NOT_AVAILABLE,
   });
 } catch (error) {
   refuse(`prs: ${error instanceof Error ? error.message : String(error)}`);
