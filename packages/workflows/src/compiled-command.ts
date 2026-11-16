@@ -157,9 +157,10 @@ export type ComposedBlockBoundary = ComposedBlockBoundaryBase &
  *    delivered to its `bash:`/`script:` nodes as `INPUTS_<UPPER_SNAKE>` env vars.
  *    Write-once for the same reason, and because input names carry no namespace:
  *    two levels both declaring `plan` have no disambiguator, so the inner one wins.
- *  - `blockEntry` — this node starts its block. The executor clears the sequential
- *    session cursor there so a composed workflow begins as coldly as it would
- *    standalone.
+ *  - `blockSessionStart` — no session-starting node runs before this one inside its
+ *    block. The executor clears the sequential session cursor at it, so the block's
+ *    first AI node begins as coldly as it would standalone, even when the block starts
+ *    with a `bash:` or `script:` node.
  *  - `boundaries` — caller-level activation predicates for enclosing include instances,
  *    outermost first. Non-entry descendants enforce them before their local trigger rule.
  *  - `pack` — the pack the authoring workflow was loaded from, which `$PACK_DIR` names.
@@ -170,7 +171,7 @@ export interface ComposedNodeMeta {
   origin: string;
   pack?: Pick<WorkflowPack, 'source' | 'key'>;
   inputs?: Record<string, JsonValue>;
-  blockEntry?: true;
+  blockSessionStart?: true;
   boundaries?: ComposedBlockBoundary[];
 }
 
