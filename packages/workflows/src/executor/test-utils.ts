@@ -253,7 +253,7 @@ export function makeStore(overrides: Partial<IWorkflowStore> = {}): IWorkflowSto
     getCodebase: mock(async () => null),
     getCodebaseEnvVars: mock(async () => ({})),
     updateWorkflowActivity: mock(async () => undefined),
-    completeWorkflowRun: mock(async () => undefined),
+    completeWorkflowRun: mock(async () => ({ startReceipts: [] })),
     pauseWorkflowRun: mock(async () => undefined),
     pauseWorkflowRunForWait: mock(async () => undefined),
     clearWorkflowWaitContext: mock(

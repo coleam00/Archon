@@ -25,6 +25,7 @@ import {
 } from '@archon/workflows/store';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/schemas/run-ai-configuration';
 import { PAUSE_CAUSE_METADATA_KEY } from '@archon/workflows/schemas/pause-cause';
+import type { SourceReceiptAcceptance } from '@archon/workflows/schemas/resource-start';
 import {
   CANCELLATION_NOOP_WORKFLOW_STATUSES,
   RUN_STOP_REASON_METADATA_KEY,
@@ -51,6 +52,7 @@ import {
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertStartReceipt } from './start-receipt-writes';
+import { insertLinkedStarts } from './linked-starts';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -344,7 +346,7 @@ export async function completeWorkflowRun(
   completion: { duration_ms: number },
   metadata?: Record<string, unknown>,
   result?: Parameters<IWorkflowStore['completeWorkflowRun']>[3]
-): Promise<void> {
+): ReturnType<IWorkflowStore['completeWorkflowRun']> {
   validateWorkflowWaitMetadata(metadata);
   const dialect = getDialect();
   const outcome = result?.outcome;
@@ -353,7 +355,10 @@ export async function completeWorkflowRun(
     outcome?.kind === 'boolean' ? outcome.value : null,
     outcome?.value ?? null,
   ];
-  let written: Awaited<ReturnType<IDatabase['query']>>;
+  let written: {
+    update: Awaited<ReturnType<IDatabase['query']>>;
+    started: SourceReceiptAcceptance[];
+  };
   try {
     const artifacts = await observeRunTerminalArtifacts(id);
     written = await getDatabase().withTransaction(async query => {
@@ -381,20 +386,26 @@ export async function completeWorkflowRun(
           artifacts
         );
         // The starts this end causes commit with it, and only when this write won.
-        for (const receipt of result?.startReceipts ?? []) await insertStartReceipt(query, receipt);
+        const started: SourceReceiptAcceptance[] = [];
+        for (const receipt of result?.startReceipts ?? [])
+          if (!(await insertStartReceipt(query, receipt)).replay) started.push(receipt);
+        // After the write above, so a linked count sees this run as completed.
+        started.push(...(await insertLinkedStarts(query, result?.linkedStarts ?? [])));
+        return { update, started };
       }
-      return update;
+      return { update, started: [] };
     });
   } catch (error) {
     const err = error as Error;
     getLog().error({ err }, 'db.workflow_run_complete_failed');
     throw new Error(`Failed to complete workflow run: ${err.message}`);
   }
-  if (written.rowCount === 0) {
+  if (written.update.rowCount === 0) {
     getLog().warn({ workflowRunId: id }, 'db.workflow_run_complete_no_match');
     throw new Error(`Workflow run not found or not in running state (id: ${id})`);
   }
   await reportRunTerminal(id);
+  return { startReceipts: written.started };
 }
 
 /**

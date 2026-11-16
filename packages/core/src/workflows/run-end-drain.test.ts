@@ -3,8 +3,9 @@ import { drainAfterRunEnds, serializedDrain, type TerminalWriters } from './run-
 
 function terminalStore(wins: boolean): TerminalWriters {
   const store = {
-    completeWorkflowRun: async (): Promise<void> => {
+    completeWorkflowRun: async () => {
       if (!wins) throw new Error('Workflow run not found or not in running state');
+      return { startReceipts: [] };
     },
     failWorkflowRun: async () => ({ failed: wins }),
     cancelWorkflowRun: async () => ({ cancelled: wins }),

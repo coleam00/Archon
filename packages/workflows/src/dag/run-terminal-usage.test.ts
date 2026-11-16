@@ -42,7 +42,7 @@ import { executeDagWorkflow } from '../dag-executor';
 import type { DagNode, AgentNode, WorkflowRun } from '../schemas';
 import type { IWorkflowStore, PersistedNodeOutput } from '../store';
 import type { RunEndedFacts, WorkflowDeps } from '../deps';
-import type { SourceReceiptAcceptance } from '../schemas/resource-start';
+import type { LinkedRunEndedStart, SourceReceiptAcceptance } from '../schemas/resource-start';
 
 /**
  * #2469 — a run's spend has to survive its outcome. Usage used to be written only in
@@ -1059,13 +1059,14 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
     mockStructuredResult({ green: true, plan: 'ship it' });
     const store = createMockStore();
     const receipt = { receipt: { id: 'r' } } as unknown as SourceReceiptAcceptance;
+    const linked = { form: 'all', endedRunId: 'ended-run' } as unknown as LinkedRunEndedStart;
     const seen: RunEndedFacts[] = [];
 
     await run(store, [resultNode()], {
       workflowRun: makeWorkflowRun('ended-run', { metadata: { inputs: { issue: 'i-1' } } }),
       runEndedStarts: async ended => {
         seen.push(ended);
-        return [receipt];
+        return { receipts: [receipt], linked: [linked] };
       },
     });
 
@@ -1081,6 +1082,7 @@ describe('executeDagWorkflow -- the outcome is written when the run completes (#
     expect(completedWith(store)).toEqual({
       outcome: { kind: 'boolean', value: 'succeeded' },
       startReceipts: [receipt],
+      linkedStarts: [linked],
     });
   });
 

@@ -10,7 +10,7 @@
  */
 import type { AttentionRead } from './schemas/attention-degraded';
 import type { IResourceStartStore } from './resource-start-store';
-import type { SourceReceiptAcceptance } from './schemas/resource-start';
+import type { LinkedRunEndedStart, SourceReceiptAcceptance } from './schemas/resource-start';
 import type { CheckoutObservation } from './schemas/checkout-observation';
 import type { ProviderEventQuery, ProviderEventRecord } from './schemas/provider-event';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -473,6 +473,14 @@ export interface IWorkflowStore
    * after the commit leaves them pending for their host's next drain, and a second
    * completion is refused before it can write them again. A store without items refuses
    * a non-empty list.
+   *
+   * `result.linkedStarts` are run-ended bindings whose stage starts on the items linked to
+   * the ended run's item. The store resolves them in the same transaction, after the
+   * completing write: the holders through active links of the named kind, and for `all`
+   * the count of linked items done, read under a lock on the holder so two members ending
+   * together cause exactly one start. It returns every receipt this call wrote, from both
+   * lists, and not the ones that replayed; the caller starts those. A store without items
+   * refuses a non-empty list.
    */
   completeWorkflowRun(
     id: string,
@@ -481,8 +489,9 @@ export interface IWorkflowStore
     result?: {
       outcome?: RunCompletedOutcome;
       startReceipts?: readonly SourceReceiptAcceptance[];
+      linkedStarts?: readonly LinkedRunEndedStart[];
     }
-  ): Promise<void>;
+  ): Promise<{ startReceipts: SourceReceiptAcceptance[] }>;
   /**
    * Atomically fail a pending or running run and persist its matching lifecycle event.
    * `failed` is false when the run was already terminal: a no-op that leaves the winning

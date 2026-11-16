@@ -16,6 +16,7 @@ import {
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
 import { describeItemLinkConformance } from './item-links.conformance-harness';
+import { describeLinkedStartConformance, linkedOrder } from './linked-starts.conformance-harness';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
 
@@ -317,6 +318,57 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
 
   describeSqlStatusReadConformance(makeHarness);
   describeItemLinkConformance(makeHarness);
+  describeLinkedStartConformance(makeHarness);
+  test('two members ending at the same moment start an all stage exactly once', async () => {
+    const harness = await makeHarness();
+    let interception: ReturnType<typeof spyOn> | undefined;
+    try {
+      const { db, store } = harness;
+      const order = await linkedOrder(harness, 'order', ['a', 'b', 'c']);
+      await order.complete('a', 'approved', 'all');
+      // Each completion that counted the order's members holds its commit until the other
+      // has counted too, or is waiting on a lock (the holder lock). So both count while
+      // the other is uncommitted unless the lock orders them; without it each sees the
+      // other unfinished and the order never starts.
+      let arrivals = 0;
+      const lockWaiter = async (): Promise<boolean> => {
+        const result = await db.query<{ waiting: boolean }>(
+          `SELECT EXISTS (SELECT 1 FROM pg_stat_activity WHERE datname = current_database() AND wait_event_type = 'Lock') AS waiting`
+        );
+        return result.rows[0]?.waiting ?? false;
+      };
+      const transaction = db.withTransaction.bind(db);
+      interception = spyOn(db, 'withTransaction').mockImplementation(callback =>
+        transaction(async query => {
+          let counted = false;
+          const result = await callback(async <T>(sql: string, params?: unknown[]) => {
+            if (sql.includes('ORDER BY completed_at DESC')) counted = true;
+            return query<T>(sql, params);
+          });
+          if (counted) {
+            arrivals++;
+            for (let attempt = 0; attempt < 500; attempt++) {
+              if (arrivals >= 2 || (await lockWaiter())) break;
+              await Bun.sleep(10);
+            }
+          }
+          return result;
+        })
+      );
+      const [b, c] = await Promise.all([
+        order.complete('b', 'approved', 'all'),
+        order.complete('c', 'approved', 'all'),
+      ]);
+      expect(arrivals).toBe(2);
+      expect(b.written.length + c.written.length).toBe(1);
+      const receipts = await store.listStartReceipts();
+      expect(receipts).toHaveLength(1);
+      expect((await store.getStartReceipt(receipts[0]?.id ?? ''))?.itemKey).toBe('order');
+    } finally {
+      interception?.mockRestore();
+      await harness.close();
+    }
+  });
   test('SQL attention reads report unreadable origins without losing valid rows or writing state', async () => {
     const harness = await makeHarness();
     try {

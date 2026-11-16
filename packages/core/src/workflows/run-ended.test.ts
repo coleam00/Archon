@@ -103,7 +103,7 @@ describe('run-ended starts', () => {
       // A schedule or fire-only file is not a run-ended binding and is not read further.
       'refresh.json': { ...trigger({ sourceInstanceId: 'refresh' }), on: undefined },
     });
-    const [receipt, ...rest] = await starts(facts());
+    const [receipt, ...rest] = (await starts(facts())).receipts;
     expect(rest).toEqual([]);
     expect(receipt).toMatchObject({
       outcome: 'matched',
@@ -126,9 +126,11 @@ describe('run-ended starts', () => {
 
   test('the stage started is the one the binding names, whatever the ended run returned', async () => {
     const starts = await triggersWith({ 'build.json': trigger() });
-    const [receipt] = await starts(
-      facts({ result: { outcome: 'planned', plan: 'p', next: 'deploy', workflow: 'deploy' } })
-    );
+    const [receipt] = (
+      await starts(
+        facts({ result: { outcome: 'planned', plan: 'p', next: 'deploy', workflow: 'deploy' } })
+      )
+    ).receipts;
     expect(receipt?.bindings.map(binding => binding.launch.workflowName)).toEqual(['build']);
   });
 
@@ -138,7 +140,7 @@ describe('run-ended starts', () => {
     ['another outcome', facts({ outcome: { kind: 'enum', value: 'blocked' } })],
   ])('%s starts nothing', async (_label, ended) => {
     const starts = await triggersWith({ 'build.json': trigger() });
-    expect(await starts(ended)).toEqual([]);
+    expect(await starts(ended)).toEqual({ receipts: [], linked: [] });
   });
 
   test('a run with no item reads no trigger file, so a malformed one cannot fail it', async () => {
@@ -150,7 +152,10 @@ describe('run-ended starts', () => {
       projectKeyOf: async () => ITEM.projectKey,
     };
     const noItem = endedRun({ item_id: null });
-    expect(await createRunEndedStarts(dependencies)(facts({ run: noItem }))).toEqual([]);
+    expect(await createRunEndedStarts(dependencies)(facts({ run: noItem }))).toEqual({
+      receipts: [],
+      linked: [],
+    });
     const preflight = createRunEndedPreflight({
       ...dependencies,
       providers: providerRegistry,
@@ -166,7 +171,7 @@ describe('run-ended starts', () => {
         on: { runEnded: { workflowName: 'plan', outcome: 'typo' } },
       }),
     });
-    expect(await starts(facts())).toEqual([]);
+    expect(await starts(facts())).toEqual({ receipts: [], linked: [] });
   });
 
   test('no triggers directory starts nothing', async () => {
@@ -175,7 +180,80 @@ describe('run-ended starts', () => {
       getItem: async () => ITEM,
       projectKeyOf: async () => ITEM.projectKey,
     });
-    expect(await starts(facts())).toEqual([]);
+    expect(await starts(facts())).toEqual({ receipts: [], linked: [] });
+  });
+
+  test('a linked binding becomes a linked start for the write to resolve, and no receipt', async () => {
+    const starts = await triggersWith({
+      'each.json': trigger({
+        sourceInstanceId: 'review-each',
+        on: {
+          runEnded: {
+            workflowName: 'plan',
+            outcome: 'planned',
+            linked: { kind: 'part_of', holder: 'to', form: 'each' },
+            inputs: { member: { item: 'key' }, plan: { result: '/plan' } },
+          },
+        },
+      }),
+      'all.json': trigger({
+        sourceInstanceId: 'review-all',
+        on: {
+          runEnded: {
+            workflowName: 'plan',
+            outcome: 'planned',
+            linked: { kind: 'part_of', holder: 'to', form: 'all' },
+          },
+        },
+      }),
+    });
+    const { receipts, linked } = await starts(facts());
+    expect(receipts).toEqual([]);
+    expect(linked).toMatchObject([
+      {
+        form: 'all',
+        link: { kind: 'part_of', holder: 'to' },
+        workflowName: 'plan',
+        outcome: 'planned',
+        endedRunId: endedRun().id,
+        endedItemId: ITEM.id,
+        acceptance: { outcome: 'matched', receipt: { sourceInstanceId: 'review-all' } },
+      },
+      {
+        form: 'each',
+        // Which member ended, and what it ended with.
+        acceptance: {
+          receipt: { sourceActor: { source: 'archon-run-ended', id: endedRun().id } },
+          bindings: [{ eventInputs: { member: ITEM.key, plan: { steps: ['a', 'b'] } } }],
+        },
+      },
+    ]);
+    // Another outcome causes nothing, in either form.
+    expect(await starts(facts({ outcome: { kind: 'enum', value: 'blocked' } }))).toEqual({
+      receipts: [],
+      linked: [],
+    });
+  });
+
+  test('a linked all binding with inputs, or a link kind that does not exist, is refused', async () => {
+    for (const linked of [
+      { kind: 'part_of', holder: 'to', form: 'all' },
+      { kind: 'blocks', holder: 'to', form: 'each' },
+    ]) {
+      const starts = await triggersWith({
+        'all.json': trigger({
+          on: {
+            runEnded: {
+              workflowName: 'plan',
+              outcome: 'planned',
+              linked,
+              inputs: { plan: { result: '/plan' } },
+            },
+          },
+        }),
+      });
+      await expect(starts(facts())).rejects.toThrow('all.json is invalid');
+    }
   });
 
   test('a result pointer that names nothing is recorded as a rejected binding', async () => {
@@ -190,7 +268,7 @@ describe('run-ended starts', () => {
         },
       }),
     });
-    const [receipt, ...rest] = await starts(facts());
+    const [receipt, ...rest] = (await starts(facts())).receipts;
     expect(rest).toEqual([]);
     expect(receipt).toMatchObject({
       outcome: 'unmatched',

@@ -23,7 +23,7 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorktreeDisposition } from './schemas/terminal-record';
-import type { SourceReceiptAcceptance } from './schemas/resource-start';
+import type { LinkedRunEndedStart, SourceReceiptAcceptance } from './schemas/resource-start';
 import type { RunCompletedOutcome } from './schemas';
 import type { JsonValue } from './output-ref';
 import type { OutcomeForm } from './completed-outcome';
@@ -286,6 +286,15 @@ export interface RunEndedFacts {
   inputs: Readonly<Record<string, JsonValue>>;
 }
 
+/**
+ * The starts a completion causes: receipts for the ended run's own item, and linked
+ * starts the completing write resolves against the items linked to it.
+ */
+export interface RunEndedStarts {
+  receipts: readonly SourceReceiptAcceptance[];
+  linked: readonly LinkedRunEndedStart[];
+}
+
 export interface WorkflowDeps {
   /**
    * Releases a terminal run's recorded verification images; retains live writers and returns
@@ -298,12 +307,13 @@ export interface WorkflowDeps {
   providers: ProviderRegistry;
   store: IWorkflowStore;
   /**
-   * Optional: the starts a run's completion causes (run-ended bindings), as receipts the
-   * completing write accepts in its own transaction. Absent, a completion causes none.
+   * Optional: the starts a run's completion causes (run-ended bindings), as receipts and
+   * linked starts the completing write accepts in its own transaction. Absent, a
+   * completion causes none.
    * It throws when a binding it must read is unreadable or invalid, and the run then
    * fails naming the reason, so a completion never silently drops its hand-off.
    */
-  runEndedStarts?: (ended: RunEndedFacts) => Promise<readonly SourceReceiptAcceptance[]>;
+  runEndedStarts?: (ended: RunEndedFacts) => Promise<RunEndedStarts>;
   /**
    * Optional: refuse a run before it starts when a run-ended binding its end could fire
    * is broken (a missing stage, an undeclared outcome or input). Throws the reason.

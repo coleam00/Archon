@@ -335,7 +335,8 @@ export function createTransactionView(
     ): ReturnType<IWorkflowStore['completeWorkflowRun']> => {
       validateWorkflowWaitMetadata(metadata);
       // A start receipt names an item, and items are refused here before a run starts.
-      if ((result?.startReceipts?.length ?? 0) > 0) throw new FileStoreUnsupportedError('items');
+      if ((result?.startReceipts?.length ?? 0) > 0 || (result?.linkedStarts?.length ?? 0) > 0)
+        throw new FileStoreUnsupportedError('items');
       const run = structuredClone(row(id));
       if (run.status !== 'running') throw new Error('Run not in running state');
       run.status = 'completed';
@@ -348,6 +349,7 @@ export function createTransactionView(
         event_type: TERMINAL_RUN_EVENT_TYPE.completed,
         data: completion,
       });
+      return { startReceipts: [] };
     },
     failWorkflowRun: async (id, error, options): ReturnType<IWorkflowStore['failWorkflowRun']> => {
       const run = prepareWorkflowRunFailure(id, runs.get(id), error, options);

@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { isJsonPointer } from '../json-pointer';
 import { jsonValueSchema } from '../output-ref';
+import { itemLinkKindSchema } from './item-link';
 import { itemKeySchema, workflowRunOriginSchema } from './workflow-run';
 import {
   DEFAULT_RESOURCE_CAPACITY,
@@ -369,27 +370,80 @@ export type SourceReceiptAcceptance = z.infer<typeof sourceReceiptAcceptanceSche
 
 /**
  * Where a run-ended binding reads one input of the stage it starts: a JSON Pointer into
- * the ended run's result (its `returns:` node output), or one of the ended run's own
- * inputs by name. Data only: no expression, and nothing here names a workflow.
+ * the ended run's result (its `returns:` node output), one of the ended run's own inputs
+ * by name, or the key of the ended run's item (which member ended, for a linked start).
+ * Data only: no expression, and nothing here names a workflow.
  */
 export const runEndedInputSourceSchema = z.union([
   z.object({ result: z.string().refine(isJsonPointer, 'Invalid JSON Pointer') }).strict(),
   z.object({ input: z.string().min(1) }).strict(),
+  z.object({ item: z.literal('key') }).strict(),
 ]);
 export type RunEndedInputSource = z.infer<typeof runEndedInputSourceSchema>;
 
 /**
+ * `on.runEnded.linked`: the stage starts on the items the ended run's item is linked to,
+ * not on that item. `kind` names the link and `holder` the end of it the started item is
+ * on; the ended run's item is on the other end. An order whose members are `part_of` it
+ * uses `holder: 'to'`; an item that `depends_on` another uses `holder: 'from'`. The engine
+ * gives the kind no meaning: the file names both the kind and the end. Only active links
+ * count.
+ *
+ * `form: 'all'` starts the stage once, when every item linked to the holder by `kind`
+ * has completed `workflowName` with `outcome` (each item counted by its latest completed
+ * run of it); the engine only counts. `form: 'each'` starts it every time one of them
+ * does, and the stage judges whether the holder is ready.
+ */
+export const runEndedLinkedSchema = z
+  .object({
+    kind: itemLinkKindSchema,
+    holder: z.enum(['from', 'to']),
+    form: z.enum(['all', 'each']),
+  })
+  .strict();
+export type RunEndedLinked = z.infer<typeof runEndedLinkedSchema>;
+
+/**
  * `on.runEnded` of a trigger file: the binding starts when a run of `workflowName`
- * completes with `outcome` on an item, in the project the binding launches in.
+ * completes with `outcome` on an item, in the project the binding launches in. Without
+ * `linked`, the stage starts on the same item.
  */
 export const runEndedTriggerSchema = z
   .object({
     workflowName: z.string().min(1),
     outcome: z.string(),
     inputs: z.record(z.string().min(1), runEndedInputSourceSchema).optional(),
+    linked: runEndedLinkedSchema.optional(),
   })
-  .strict();
+  .strict()
+  // An all start is about a set of items, not the one run that happened to end last, so
+  // its receipt carries nothing from that run; it is also what lets a member's re-run
+  // replay the receipt instead of conflicting with it.
+  .refine(trigger => trigger.linked?.form !== 'all' || trigger.inputs === undefined, {
+    message:
+      "A linked 'all' start takes no inputs: it is about a set of items, not one run; read the item's links in the stage",
+    path: ['inputs'],
+  });
 export type RunEndedTrigger = z.infer<typeof runEndedTriggerSchema>;
+
+/**
+ * A linked run-ended start, as the completing write resolves it. The engine matched the
+ * binding against the ended run; which items hold a link, and for `all` whether every
+ * linked item is done, can only be read inside the transaction that completes the run, so
+ * two members ending together see each other. `acceptance` is the receipt for the ended
+ * run; the store sets its `id`, `itemKey` and `deliveryId` per holder, and for `all` its
+ * `contentDigest`.
+ */
+export interface LinkedRunEndedStart {
+  form: RunEndedLinked['form'];
+  link: Pick<RunEndedLinked, 'kind' | 'holder'>;
+  /** What every linked item must have completed, for `all`. */
+  workflowName: string;
+  outcome: string;
+  endedRunId: string;
+  endedItemId: string;
+  acceptance: SourceReceiptAcceptance;
+}
 
 /**
  * A trigger file: the binding, and what starts it. With `schedule` a clock fires it; with

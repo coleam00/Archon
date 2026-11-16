@@ -503,6 +503,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     });
     store.completeWorkflowRun = mock(async () => {
       expect(committed).toEqual(['node_started', 'node_completed']);
+      return { startReceipts: [] };
     });
     await run(store, createMockPlatform(), [okNode], []);
     expect(store.completeWorkflowRun).toHaveBeenCalledTimes(1);
@@ -602,6 +603,7 @@ describe('executeDagWorkflow -- side effects survive a failed terminal write', (
     const emitted: string[] = [];
     store.completeWorkflowRun = mock(async () => {
       emitted.push('completion_stored');
+      return { startReceipts: [] };
     });
 
     await run(store, createMockPlatform(), [okNode], emitted);
@@ -707,6 +709,7 @@ describe('executeDagWorkflow -- completed run worktree release', () => {
     const mockDeps = createMockDeps();
     mockDeps.store.completeWorkflowRun.mockImplementation(async () => {
       order.push('complete');
+      return { startReceipts: [] };
     });
     // The in-memory run predates the proof a pre-created run's row receives later.
     mockDeps.store.getWorkflowRun.mockImplementation(readRun);

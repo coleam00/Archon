@@ -87,6 +87,15 @@ nodes:
     bash: echo "building $INPUTS_PLAN"
 `;
 
+// The stage an order starts once its members are planned; it reads nothing from them.
+const SHIP = `name: ship
+description: Ship an order.
+mutates_checkout: false
+nodes:
+  - id: ship
+    bash: echo shipping
+`;
+
 // Holds a slot of resource 'pool' until the test writes \`release\`.
 const HELD = `name: held
 description: Hold the pool slot until released.
@@ -126,6 +135,7 @@ async function makeFixture(label: string): Promise<Fixture> {
   writeFileSync(join(workflows, 'pool-work.yaml'), POOL);
   writeFileSync(join(workflows, 'held.yaml'), HELD);
   writeFileSync(join(workflows, 'quick.yaml'), QUICK);
+  writeFileSync(join(workflows, 'ship.yaml'), SHIP);
   expect(await Bun.spawn(['git', 'init', '-q'], { cwd: projectRoot }).exited).toBe(0);
 
   const spawnCli = (args: string[], env: Record<string, string> = {}) =>
@@ -327,6 +337,67 @@ describe('a run-ended binding', () => {
     expect(await fixture.cli(['workflow', 'runs', '--item', 'issue-1'])).toContain(
       `after run ${runs[2]?.id.slice(0, 8)} ended`
     );
+  }, 90_000);
+
+  test('an all binding starts the order once, after its last member ends with the outcome', async () => {
+    const fixture = await makeFixture('order');
+    fixture.bind(
+      'ship-order',
+      {
+        runEnded: {
+          workflowName: 'stage-a',
+          outcome: 'planned',
+          linked: { kind: 'part_of', holder: 'to', form: 'all' },
+        },
+      },
+      { workflowName: 'ship' }
+    );
+    // A link names items of a registered project, and the first run registers it.
+    await fixture.cli(['workflow', 'run', 'ship', '--no-worktree']);
+    const members = ['m1', 'm2', 'm3'];
+    for (const member of members)
+      await fixture.cli([
+        'workflow',
+        'link',
+        '--item',
+        member,
+        '--kind',
+        'part_of',
+        '--to',
+        'order-1',
+      ]);
+    const plan = async (member: string, count: number): Promise<RunRow[]> => {
+      await fixture.cli([
+        'workflow',
+        'run',
+        'stage-a',
+        '--no-worktree',
+        '--item',
+        member,
+        '--input',
+        `plan=${member}`,
+        '--input',
+        'issue=i1',
+      ]);
+      return waitFor(() => completedRuns(fixture, count), `${member} and what its end started`);
+    };
+    await plan('m1', 2);
+    await plan('m2', 3);
+    const runs = await plan('m3', 5);
+    expect(runs.map(run => run.workflow_name)).toEqual([
+      'ship',
+      'stage-a',
+      'stage-a',
+      'stage-a',
+      'ship',
+    ]);
+
+    const order = itemReadSchema.parse(
+      JSON.parse(await fixture.cli(['workflow', 'runs', '--item', 'order-1', '--json']))
+    );
+    expect(order.runs.map(run => [run.workflow, run.cause])).toEqual([
+      ['ship', { kind: 'run_ended', runId: runs[3]?.id }],
+    ]);
   }, 90_000);
 
   test('a hand run with no trigger host starts the stage its end caused, with no other command', async () => {
@@ -532,6 +603,13 @@ describe('trigger check', () => {
     fixture.bind('plan-again', RUN_ENDED, { workflowName: 'stage-a' });
     const gone = join(fixture.root, 'deleted-checkout');
     fixture.bind('stale', RUN_ENDED, { cwd: gone });
+    const linked = { kind: 'part_of', holder: 'to', form: 'each' };
+    // A linked binding starts the stage on other items: no duplicate of a same-item one.
+    fixture.bind('order-after-plan', { runEnded: { ...RUN_ENDED.runEnded, linked } });
+    fixture.bind('order-typo', {
+      runEnded: { workflowName: 'stage-a', outcome: 'plannned', linked },
+    });
+    fixture.bind('order-missing', { runEnded: { workflowName: 'stage-z', outcome: 'x', linked } });
 
     const checked = await fixture.attempt(['trigger', 'check']);
     expect(checked.exitCode).not.toBe(0);
@@ -547,6 +625,11 @@ describe('trigger check', () => {
     expect(problems.get('plan-again')).toEqual([
       "binding starts 'stage-a', the workflow whose end fires it: each run that completes with 'planned' starts another on the same item",
     ]);
+    expect(problems.get('order-after-plan')).toEqual([]);
+    expect(problems.get('order-typo')).toEqual([
+      "outcome 'plannned' is not one 'stage-a' completes with ('planned', 'blocked')",
+    ]);
+    expect(problems.get('order-missing')).toEqual(["workflow 'stage-z' is not in this project"]);
     expect(problems.get('stale')).toEqual([
       `binding.launch.cwd '${gone}' does not exist, so this binding never starts; fix the path or remove the file`,
     ]);

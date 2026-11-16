@@ -1317,7 +1317,10 @@ HTTP; see the [API reference](/reference/api/).
 
 Record a link from one item of the current project to another, or end one. A link is a
 directed relation the engine stores and reports; it gives the kinds no meaning, and ranks,
-holds or starts nothing because of a link. Both items' reads show it
+holds or starts nothing because of a link by itself. A trigger file can start a stage on an
+item when the items linked to it end a workflow; see [start a stage on an item when the items
+it links to end](/guides/workflow-triggers/#start-a-stage-on-an-item-when-the-items-it-links-to-end).
+Both items' reads show it
 ([`runs --item`](#workflow-runs)), and a run on either item can read it through
 [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to).
 
@@ -2525,7 +2528,7 @@ Start workflows from deployment bindings and inspect durable resource admission;
 
 When a binding fails launch preparation, `trigger fire` exits nonzero and prints the refusal (with `--json`, in `error`). The stored receipt keeps only the failed stage, for example `launch_preparation_failed`. `trigger whoami` prints the Archon user ID of your CLI identity, for a binding's `runAsUserId`.
 
-`trigger check` lists every run-ended binding that is active: each file in `ARCHON_HOME/triggers/` with `on.runEnded`. For each it prints the file, source, binding, host, the workflow and outcome it starts after, and its `problems`, from checking it against the workflows of the project it launches in: the ended workflow exists and declares that outcome and every input the binding reads from it, and the started workflow exists and declares every input the binding maps. It also reports what no run is refused for: a `launch.cwd` that does not exist (the binding never starts), a binding that starts the workflow whose end fires it (a loop), and two files that bind the same outcome to the same stage in one project (the stage starts once per file). It exits nonzero when any binding has a problem or a file cannot be read. See [start a stage when a run on an item ends](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends).
+`trigger check` lists every run-ended binding that is active: each file in `ARCHON_HOME/triggers/` with `on.runEnded`. For each it prints the file, source, binding, host, the workflow and outcome it starts after, and its `problems`, from checking it against the workflows of the project it launches in: the ended workflow exists and declares that outcome and every input the binding reads from it, and the started workflow exists and declares every input the binding maps. It also reports what no run is refused for: a `launch.cwd` that does not exist (the binding never starts), a binding without `linked` that starts the workflow whose end fires it (a loop), and two files that bind the same outcome to the same stage in one project with the same `linked` (the stage starts once per file). It exits nonzero when any binding has a problem or a file cannot be read. See [start a stage when a run on an item ends](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends).
 
 A CLI process that ends a run starts the starts its own completion wrote, each on the host its binding names, so a hand `workflow run` needs no trigger host for the next stage to start. It drains a host's queue only when it serves that host: `trigger execute --host <hostId>` drains `<hostId>`, and any other command drains the host `ARCHON_TRIGGER_HOST` names when it is set.
 

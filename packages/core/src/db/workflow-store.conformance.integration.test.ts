@@ -10,6 +10,7 @@ import {
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
 import { describeItemLinkConformance } from './item-links.conformance-harness';
+import { describeLinkedStartConformance } from './linked-starts.conformance-harness';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
 
 const trackTempRoot = trackTempRoots();
@@ -33,6 +34,7 @@ describeWorkflowStoreConformance('SQLite', makeHarness);
 
 describeSqlStatusReadConformance(makeHarness);
 describeItemLinkConformance(makeHarness);
+describeLinkedStartConformance(makeHarness);
 
 test('explicit deletion retains SQL feed payloads from an earlier cursor', async () => {
   const harness = await makeHarness();

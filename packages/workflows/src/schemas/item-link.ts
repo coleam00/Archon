@@ -1,7 +1,9 @@
 /**
  * A link: an accepted, directed relation from one item to another. The engine stores and
  * reports links and gives their kinds no meaning; it ranks, holds or starts nothing because
- * of one. A link that stops being true is ended, and the record stays and says so.
+ * of one by itself. A run-ended trigger file can name a kind and start a stage across it
+ * (`on.runEnded.linked`). A link that stops being true is ended, and the record stays and
+ * says so.
  */
 import { z } from 'zod';
 import { itemActFields } from './item-act';

@@ -51,9 +51,9 @@ export const itemRunSchema = z.object({
   /** Null while the run has not ended. */
   completedAt: z.string().datetime().nullable(),
   /**
-   * What started the run, read from the start receipt its start recorded: a run on this
-   * item that ended, a node that fired it, or another trigger source. Null for a start
-   * by hand, which has no receipt.
+   * What started the run, read from the start receipt its start recorded: a run that
+   * ended (on this item, or on an item linked to it), a node that fired it, or another
+   * trigger source. Null for a start by hand, which has no receipt.
    */
   cause: startCauseSchema.nullable(),
   /**

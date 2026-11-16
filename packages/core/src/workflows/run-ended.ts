@@ -1,9 +1,11 @@
 /**
  * Run-ended bindings: a trigger file in `ARCHON_HOME/triggers/` with `on.runEnded` starts
  * its binding when a run of the named workflow completes with the named outcome on an
- * item. The receipts built here are written by the write that completes the run, so a
- * start exists exactly when the end does, and then go through the one start path:
- * preparation, admission, capacity and the item.
+ * item, on that item or, with `linked`, on the items linked to it. The receipts built
+ * here are written by the write that completes the run, so a start exists exactly when
+ * the end does, and then go through the one start path: preparation, admission, capacity
+ * and the item. A linked start is matched here and resolved by that write, which alone can
+ * read the links and the linked items' runs as they are when the run completes.
  *
  * The deployment owns these files. They are read from the install's home only, never
  * from a repository, and fresh at every completion, so removing a file turns it off.
@@ -12,13 +14,14 @@ import { createHash, randomUUID } from 'node:crypto';
 import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
-import type { RunEndedFacts } from '@archon/workflows/deps';
+import type { RunEndedFacts, RunEndedStarts } from '@archon/workflows/deps';
 import { resolveJsonPointer } from '@archon/workflows/json-pointer';
 import type { JsonValue } from '@archon/workflows/output-ref';
 import {
   RUN_ENDED_SOURCE_ACTOR,
   sourceReceiptAcceptanceSchema,
   triggerConfigSchema,
+  type LinkedRunEndedStart,
   type ResourceStartBindingIntent,
   type RunEndedTrigger,
   type SourceReceiptAcceptance,
@@ -58,8 +61,9 @@ export async function readRunEndedBindings(directory: string): Promise<RunEndedB
   for (const name of names) {
     const binding = await readRunEndedFile(join(directory, name));
     if (!binding) continue;
-    // The ended run's id is every receipt's delivery id, so two files with one source
-    // would collide on it and the second start would replay as the first.
+    // A receipt's delivery id is made from the ended run (and for a linked start its
+    // holder) without the file, so two files with one source would collide on it and the
+    // second start would replay as the first.
     const other = bySource.get(binding.sourceInstanceId);
     if (other)
       throw new Error(
@@ -120,10 +124,15 @@ export function runEndedBindingProblems(
 /** The target inputs a binding maps from the ended run, or the first that did not resolve. */
 function mappedInputs(
   runEnded: RunEndedTrigger,
-  ended: RunEndedFacts
+  ended: RunEndedFacts,
+  item: WorkflowItem
 ): { inputs: Record<string, JsonValue> } | { missing: string } {
   const inputs: Record<string, JsonValue> = {};
   for (const [target, source] of Object.entries(runEnded.inputs ?? {})) {
+    if ('item' in source) {
+      inputs[target] = item.key;
+      continue;
+    }
     if ('input' in source) {
       // A declared input the run was not given passes nothing; the target's own
       // declaration decides at preparation whether that start can run.
@@ -153,25 +162,29 @@ export interface RunEndedStartsDependencies {
 }
 
 /**
- * The receipts the completion of `ended` causes. Only a run on an item causes starts (a
- * `workflow:` child is created with no item). A binding matches when it names
- * the run's workflow and outcome and launches in the item's project. Each match gets its
- * own receipt, keyed by the binding's source and the ended run, so a replayed completion
- * could never start it twice even if it reached the store.
+ * The starts the completion of `ended` causes. Only a run on an item causes starts (a
+ * `workflow:` child is created with no item). A binding matches when it names the run's
+ * workflow and outcome and launches in the item's project. Each match on the same item
+ * gets its own receipt, keyed by the binding's source and the ended run, so a replayed
+ * completion could never start it twice even if it reached the store. A match with
+ * `linked` becomes a linked start, which the completing write turns into receipts on the
+ * items linked to this one.
  */
 export function createRunEndedStarts(
   dependencies: RunEndedStartsDependencies
-): (ended: RunEndedFacts) => Promise<SourceReceiptAcceptance[]> {
+): (ended: RunEndedFacts) => Promise<RunEndedStarts> {
   return async ended => {
     const { run } = ended;
-    if (!run.item_id) return [];
+    const none = { receipts: [], linked: [] };
+    if (!run.item_id) return none;
     const candidates = (await readRunEndedBindings(dependencies.triggersDirectory())).filter(
       candidate => candidate.runEnded.workflowName === run.workflow_name
     );
-    if (candidates.length === 0) return [];
+    if (candidates.length === 0) return none;
     const item = await dependencies.getItem(run.item_id);
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     const receipts: SourceReceiptAcceptance[] = [];
+    const linked: LinkedRunEndedStart[] = [];
     for (const candidate of candidates) {
       // A binding that launches in another project is not about this item, even when a
       // workflow there has the same name.
@@ -180,9 +193,23 @@ export function createRunEndedStarts(
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
       if (candidate.runEnded.outcome !== ended.outcome.value) continue;
-      receipts.push(receiptFor(candidate, ended, item, dependencies.now?.() ?? new Date()));
+      const acceptance = receiptFor(candidate, ended, item, dependencies.now?.() ?? new Date());
+      const link = candidate.runEnded.linked;
+      if (!link) {
+        receipts.push(acceptance);
+        continue;
+      }
+      linked.push({
+        form: link.form,
+        link: { kind: link.kind, holder: link.holder },
+        workflowName: candidate.runEnded.workflowName,
+        outcome: candidate.runEnded.outcome,
+        endedRunId: run.id,
+        endedItemId: item.id,
+        acceptance,
+      });
     }
-    return receipts;
+    return { receipts, linked };
   };
 }
 
@@ -219,7 +246,7 @@ function receiptFor(
   item: WorkflowItem,
   now: Date
 ): SourceReceiptAcceptance {
-  const mapped = mappedInputs(candidate.runEnded, ended);
+  const mapped = mappedInputs(candidate.runEnded, ended, item);
   // Computed as `trigger fire` computes it, over the binding alone.
   const bindingRevision = createHash('sha256')
     .update(JSON.stringify(candidate.binding))
@@ -335,15 +362,18 @@ export async function runEndedTriggerCheck(
     // Starts match an item by project, so two checkouts of one project start the stage
     // twice; a path not registered yet is a project of its own.
     const project = (await bindingProjectKey(candidate, deps)) ?? binding.launch.cwd;
+    // A linked binding starts the stage on other items, so it never collides with a
+    // same-item one, nor with a linked one of another kind, end or form.
     const stage = JSON.stringify([
       project,
       runEnded.workflowName,
       runEnded.outcome,
       binding.launch.workflowName,
+      runEnded.linked ?? null,
     ]);
     stages.set(stage, [...(stages.get(stage) ?? []), index]);
     const found = await runEndedBindingCheck(candidate, deps);
-    if (binding.launch.workflowName === runEnded.workflowName)
+    if (!runEnded.linked && binding.launch.workflowName === runEnded.workflowName)
       found.push(
         `binding starts '${runEnded.workflowName}', the workflow whose end fires it: each run that completes with '${runEnded.outcome}' starts another on the same item`
       );

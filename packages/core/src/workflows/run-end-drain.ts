@@ -46,9 +46,11 @@ export function drainAfterRunEnds<S extends TerminalWriters>(
   return {
     ...store,
     completeWorkflowRun: async (id, completion, metadata, result) => {
-      // A completion that lost throws, so only a won one writes and starts its receipts.
-      await store.completeWorkflowRun(id, completion, metadata, result);
-      await after(id, result?.startReceipts);
+      // A completion that lost throws, so only a won one writes and starts its receipts:
+      // the ones the store wrote, which include the linked starts it resolved.
+      const written = await store.completeWorkflowRun(id, completion, metadata, result);
+      await after(id, written.startReceipts);
+      return written;
     },
     failWorkflowRun: async (id, ...rest) => {
       const result = await store.failWorkflowRun(id, ...rest);

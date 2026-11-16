@@ -290,9 +290,44 @@ If the process dies after the commit, what is left depends on how far it got:
 - **Before the start was admitted**, the start waits as a pending binding until the next drain of its host: another run ending there, a `trigger fire`, `archon trigger drain --host <hostId>` or the server's loop. That drain starts exactly one run.
 - **After the start was admitted and before its executor was spawned**, the start's run exists as `pending` and holds its slot, but no process runs it. Nothing tells a dead process from a slow one, so no drain retries it. `archon workflow runs --item <key>` shows it as admitted and not started, with the command that runs it, and `archon trigger list` lists it under its receipt's `awaitingExecution`. Check it with `archon trigger inspect <request-id>`, then run it once with `archon trigger execute <request-id> --host <hostId>`. A second `trigger execute` of the same request is refused.
 
-`archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with an `awaitingExecution` (above, `null` unless its start is admitted and not yet running) and a `cause`: `{"kind": "run_ended", "runId"}` for a start a run's end caused, `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution; runs that start in the same second are listed in the order they were written.
+`archon workflow runs --item <key> --json` lists the item's runs in the order they started, each with an `awaitingExecution` (above, `null` unless its start is admitted and not yet running) and a `cause`: `{"kind": "run_ended", "runId"}` for a start a run's end caused, `{"kind": "run_fired", "runId", "node"}` for one a node fired, `{"kind": "receipt", "receiptId", "sourceInstanceId"}` for any other trigger, or `null` for a start by hand. The receipt records the ended run as its `sourceActor` (`{"source": "archon-run-ended", "id": <run id>, "display": <outcome>}`) and, for a binding without `linked`, uses the ended run's ID as its delivery ID. Start times on SQLite have one-second resolution; runs that start in the same second are listed in the order they were written.
 
 Run-ended bindings need the database store, as items do. With `store: files`, `archon trigger check` refuses any run-ended file, and such a file never fires: the file store refuses every run on an item, and a run with no item causes nothing.
+
+## Start a stage on an item when the items it links to end
+
+A run-ended binding with `linked` starts its stage on the items the ended run's item is [linked](/reference/cli/#workflow-link) to, instead of on that item. With it, a work order starts its own stage when its members are done, and an item that depends on another starts when that one is done, with no one watching. It is the same binding as above, read at the same moment, through the same receipt, preparation, admission, capacity, overlap and queue order, and written in the same transaction that completes the run.
+
+```json
+"on": {
+  "runEnded": {
+    "workflowName": "review",
+    "outcome": "approved",
+    "linked": { "kind": "part_of", "holder": "to", "form": "all" }
+  }
+}
+```
+
+- `kind` is the link kind to follow: `depends_on`, `part_of` or `duplicate_of`. The engine gives the kind no meaning; the file says which kind matters.
+- `holder` is the end of the link the started item is on. The ended run's item is on the other end. A link reads from `from` to `to`, so members that are `part_of` an order (`archon workflow link --item m1 --kind part_of --to order-3`) start the order with `holder: "to"`. An item that `depends_on` another (`--item issue-42 --kind depends_on --to issue-17`) starts when `issue-17` ends with `holder: "from"`.
+- `form` is `all` or `each`.
+
+**`all`** starts the stage once, when every item linked to the holder by `kind` has completed `workflowName` with `outcome`. The engine only counts. Each linked item counts by its latest completed run of that workflow, so a member reviewed again to another outcome is no longer done; failed and cancelled runs count for nothing either way. A start for one set of linked items happens once: a member that runs the workflow again later starts nothing, and an edited file does not change that. Linking a new member makes a new set, so the stage can start again once that set is done. Two members ending at the same moment cause exactly one start. An `all` binding takes no `inputs`, because its start is about the set and not about the run that happened to end last; the stage reads the holder's links and their runs itself, with [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) or `archon workflow runs --item`.
+
+**`each`** starts the stage every time a linked item ends `workflowName` with `outcome`, and the stage judges whether the holder is ready. `inputs` maps from the run that ended as above, plus `{ "item": "key" }`, the key of the item whose run ended:
+
+```json
+"inputs": {
+  "member": { "item": "key" },
+  "verdict": { "result": "/verdict" }
+}
+```
+
+Prefer `all`: it costs no run per member. Use `each` when readiness needs a judgment the count cannot make, for example an order that should proceed when one member was declined, or a decision that weighs what each member returned.
+
+Only active links count. A link ended before the run completed causes nothing, and an item with no active link of the kind never starts by this binding. The holder is in the same project as the ended item, because a link joins two items of one project. A failed or cancelled run, or a run that completes with another outcome, starts nothing in either form.
+
+`archon workflow runs --item <holder> --json` shows each run the binding started with `cause` `{"kind": "run_ended", "runId": <the run whose end caused it>}`: for `all`, the member run whose end completed the set. An `each` receipt's delivery ID is `<ended run ID>:<holder item ID>`; an `all` receipt's is `all:<holder item ID>:<digest of the set of linked item IDs>`. `archon trigger check` checks a linked binding as it checks any run-ended binding, and does not report one as a duplicate of a same-item binding to the same stage.
 
 ## Choose a resource, capacity, and overlap policy
 
