@@ -461,7 +461,11 @@ describe('executeDagWorkflow -- node scratch', () => {
     expect(existsSync(own)).toBe(false);
     expect(worktreePaths(repo)).toHaveLength(4);
     for (const path of [join(other, 'wt'), sibling, missing]) {
-      expect(worktreePaths(repo).some(line => line.endsWith(path))).toBe(true);
+      // Git prints forward slashes on Windows; the path here is the platform's own.
+      const suffix = path.replaceAll('\\', '/');
+      expect(worktreePaths(repo).some(line => line.replaceAll('\\', '/').endsWith(suffix))).toBe(
+        true
+      );
     }
   });
 
