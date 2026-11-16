@@ -1507,9 +1507,13 @@ declare module 'archon:script' {
     };
     'check': {
       readonly request: {
-        readonly host?: string;
-        readonly remote?: string;
         readonly operations: ReadonlyArray<string>;
+        readonly host: string;
+        readonly remote?: never;
+      } | {
+        readonly operations: ReadonlyArray<string>;
+        readonly remote: string;
+        readonly host?: never;
       };
       readonly result: {
         readonly host: string;

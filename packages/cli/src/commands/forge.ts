@@ -362,11 +362,26 @@ const NAMED_FIELDS = 6;
  * the request. Schema messages describe the expected type, never the supplied value.
  */
 function invalidFields(error: z.ZodError): string {
-  const named = error.issues
+  const issues = refusedIssues(error.issues);
+  const named = issues
     .slice(0, NAMED_FIELDS)
     .map(issue => `${issue.path.join('.') || '(request)'}: ${issue.message}`);
-  const rest = error.issues.length - named.length;
+  const rest = issues.length - named.length;
   return [...named, ...(rest > 0 ? [`and ${rest} more`] : [])].join('; ');
+}
+
+/** A request no alternative admits is named by the alternative it came closest to. */
+function refusedIssues(issues: readonly z.core.$ZodIssue[]): z.core.$ZodIssue[] {
+  return issues.flatMap(issue => {
+    if (issue.code !== 'invalid_union' || issue.errors.length === 0) return [issue];
+    const closest = issue.errors.reduce((best, errors) =>
+      errors.length < best.length ? errors : best
+    );
+    return refusedIssues(closest).map(nested => ({
+      ...nested,
+      path: [...issue.path, ...nested.path],
+    }));
+  });
 }
 
 function writeResponse(
