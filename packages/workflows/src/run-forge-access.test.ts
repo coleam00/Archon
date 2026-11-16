@@ -80,10 +80,18 @@ describe('assertRunForgeAccess', () => {
 
   test('a checkout with no remote, or a project that is not a git repository, is refused', async () => {
     const plainFolder = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-access-')));
-    for (const cwd of [checkout({}), plainFolder]) {
-      const failures = await refusal(assertFor(cwd, async () => undefined));
-      expect(failures).toEqual([expect.objectContaining({ reason: 'no_forge_remote' })]);
-    }
+    expect(await refusal(assertFor(checkout({}), async () => undefined))).toEqual([
+      expect.objectContaining({
+        reason: 'no_forge_remote',
+        message: 'the checkout has no git remote',
+      }),
+    ]);
+    expect(await refusal(assertFor(plainFolder, async () => undefined))).toEqual([
+      expect.objectContaining({
+        reason: 'no_forge_remote',
+        message: 'the project is not a git repository',
+      }),
+    ]);
   });
 
   test('each remote is asked for the declared capabilities, and one that serves the run is enough', async () => {

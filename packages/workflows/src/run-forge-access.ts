@@ -13,7 +13,11 @@
 import { mkdtemp, rm, writeFile } from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { cliForgeResponseSchema } from '@archon/forge';
+import {
+  cliForgeResponseSchema,
+  type ForgeAccessRefusalKind,
+  isForgeAccessRefusalKind,
+} from '@archon/forge';
 import { execFileAsync, GitFailure } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import type { WorkflowEnvironment } from './deps';
@@ -25,16 +29,14 @@ const log = createLogger('workflow.run-forge-access');
 const CHECK_TIMEOUT_MS = 30_000;
 
 /**
- * Why a run cannot reach the forge its pack needs. The middle three are the forge's own
- * refusals; `no_forge_path` and `no_forge_remote` are the run's; `check_failed` is a check
- * that could not answer, which refuses too, because the run's forge calls would fail alike.
+ * Why a run cannot reach the forge its pack needs. The forge's own refusals pass through;
+ * `no_forge_path` and `no_forge_remote` are the run's; `check_failed` is a check that could
+ * not answer, which refuses too, because the run's forge calls would fail alike.
  */
 export type ForgeRequirementReason =
   | 'no_forge_path'
   | 'no_forge_remote'
-  | 'no_plugin_for_host'
-  | 'unsupported_op'
-  | 'no_credential'
+  | ForgeAccessRefusalKind
   | 'check_failed';
 
 export interface ForgeRequirementFailure {
@@ -168,14 +170,15 @@ export async function assertRunForgeAccess(
 
 /**
  * The checkout's configured remotes (before any `insteadOf` rewrite), or undefined when
- * it is not a git repository at all.
+ * it is not a git repository at all. `--local` is what tells the two apart: without it,
+ * `git config` outside a repository reads only global config and exits 1 like an empty one.
  */
 async function checkoutRemotes(cwd: string): Promise<{ name: string; url: string }[] | undefined> {
   let stdout: string;
   try {
     ({ stdout } = await execFileAsync(
       'git',
-      ['-C', cwd, 'config', '-z', '--get-regexp', '^remote\\..*\\.url$'],
+      ['-C', cwd, 'config', '--local', '-z', '--get-regexp', '^remote\\..*\\.url$'],
       { timeout: 10_000 }
     ));
   } catch (error) {
@@ -262,12 +265,7 @@ export function forgeCheckFailure(
   }
   if (answer.data.ok) return undefined;
   const { error, unsupported, remedy } = answer.data;
-  const reason =
-    error.kind === 'no_plugin_for_host' ||
-    error.kind === 'unsupported_op' ||
-    error.kind === 'no_credential'
-      ? error.kind
-      : 'check_failed';
+  const reason = isForgeAccessRefusalKind(error.kind) ? error.kind : 'check_failed';
   return {
     reason,
     message: error.message,
