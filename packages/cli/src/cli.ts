@@ -404,6 +404,8 @@ const NO_GIT_COMMANDS = [
   'user',
   'ai',
   'project',
+  // Isolation commands act on every registered project and never read the working directory.
+  'isolation',
 ];
 
 function requiresGitRepo(command: string | undefined, subcommand: string | undefined): boolean {

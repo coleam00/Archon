@@ -42,6 +42,7 @@ import {
   loopGroupIterationOutput,
   type LoopGroupBodyResult,
   type LoopGroupProgress,
+  type InterruptedIteration,
   type LoopGroupResume,
   type LoopGroupRun,
   type LoopGroupState,
@@ -71,7 +72,8 @@ export function readLoopGroupResume(
   node: LoopGroupNode,
   bodyNodes: readonly DagNode[],
   stepName: string,
-  progress: LoopGroupProgress
+  progress: LoopGroupProgress,
+  interrupted: InterruptedIteration | undefined
 ): LoopGroupResume {
   const { loopGateMeta, ownerInvocationKey, enclosingPauseFrame } = readPausedInvocation(
     ctx,
@@ -92,11 +94,11 @@ export function readLoopGroupResume(
   });
   // Leaf rows already own prior spend; only its completeness proof carries into this segment.
   progress.usage.costPartial = hasIncompleteGroupCost(ctx, loopGateMeta, ownerInvocationKey);
-  const startIteration = isLoopResume
-    ? resumeIteration + 1
-    : shape.restoredAncestry !== undefined
-      ? (enclosingPauseFrame?.iteration ?? 1)
-      : 1;
+  const { startIteration, restoredIteration, interruptedRound } = startOf(
+    { ...shape, isLoopResume, resumeIteration, enclosingPauseFrame, interrupted },
+    node,
+    progress
+  );
   const loopGateRunMeta = (ctx.workflowRun.metadata ?? {}) as LoopGateRunMetadata;
   const feedbackGiven = loopGateRunMeta.loop_feedback_given === true;
   // max_iterations bounds autonomous work. An explicit answer authorizes one fresh iteration
@@ -115,12 +117,73 @@ export function readLoopGroupResume(
     isLoopResume,
     bodySessionCursors,
     bodySessionCursorAncestry: withOwnCursors(ctx, shape.ownerInvocationKey, bodySessionCursors),
-    resumeIteration,
+    interruptedRound,
+    resumeIteration: restoredIteration,
     startIteration,
     feedbackGiven,
     iterationLimit: answered ? Math.max(maxIterations, startIteration) : maxIterations,
     loopUserInput: isLegacyInteractiveLoopResume ? (loopGateRunMeta.loop_user_input ?? '') : '',
   };
+}
+
+/**
+ * The iteration a group starts at, and the iteration it resumes from. Every pause shape
+ * keeps its own start; only a failure or kill outside a pause continues from the round it
+ * stopped in.
+ */
+function startOf(
+  shape: Pick<ResumeShape, 'restoredAncestry'> & {
+    isLoopResume: boolean;
+    resumeIteration: number;
+    enclosingPauseFrame: { iteration: number } | undefined;
+    interrupted: InterruptedIteration | undefined;
+  },
+  node: LoopGroupNode,
+  progress: LoopGroupProgress
+): {
+  startIteration: number;
+  restoredIteration: number;
+  interruptedRound: LoopGroupResume['interruptedRound'];
+} {
+  const { isLoopResume, resumeIteration, enclosingPauseFrame, interrupted } = shape;
+  const paused = { restoredIteration: resumeIteration, interruptedRound: undefined };
+  if (isLoopResume) return { ...paused, startIteration: resumeIteration + 1 };
+  if (shape.restoredAncestry !== undefined || enclosingPauseFrame !== undefined) {
+    return {
+      ...paused,
+      startIteration:
+        shape.restoredAncestry !== undefined ? (enclosingPauseFrame?.iteration ?? 1) : 1,
+    };
+  }
+  if (interrupted === undefined) return { ...paused, startIteration: 1 };
+  progress.lastStartedIteration = interrupted.iteration;
+  // An interactive group's gate follows the completion check, so a finished round re-runs.
+  const done =
+    interrupted.exhausted || (interrupted.finished && node.loop_group.interactive !== true);
+  return {
+    startIteration: done ? interrupted.iteration + 1 : interrupted.iteration,
+    restoredIteration: interrupted.iteration,
+    interruptedRound: { ...interrupted, done },
+  };
+}
+
+/**
+ * Finish the round a kill or failure interrupted after its body finished: re-run its
+ * completion check against its restored outputs. Undefined when the group goes on to the
+ * next round. A group that ran out of rounds already failed this check and is not rechecked.
+ */
+export async function completeInterruptedRound(
+  run: LoopGroupRun,
+  roundOutputs: Map<string, NodeOutput>
+): Promise<LoopGroupBodyResult | undefined> {
+  const round = run.resume.interruptedRound;
+  if (round?.done !== true || round.exhausted) return undefined;
+  const roundResult = loopGroupIterationOutput(run.bodyNodes, roundOutputs);
+  const rawIterationOutput = roundResult?.output ?? '';
+  const completed = await resumedCompletion(run, roundOutputs, rawIterationOutput);
+  if (typeof completed !== 'boolean') return completed;
+  if (!completed) return undefined;
+  return completeResumedIteration(run, roundResult, rawIterationOutput);
 }
 
 function hasIncompleteGroupCost(
@@ -588,16 +651,25 @@ export function initialLoopGroupState(
 ): LoopGroupState {
   const { resume, bodyNodes } = run;
   const group = run.node.loop_group;
+  const prevResult =
+    loopPrevOutputs === undefined
+      ? undefined
+      : loopGroupIterationOutput(bodyNodes, loopPrevOutputs);
   return {
     loopPrevOutputs,
     lastOutput:
       loopPrevOutputs === undefined
         ? ''
-        : stripCompletionTags(
-            loopGroupIterationOutput(bodyNodes, loopPrevOutputs)?.output ?? '',
-            group.until
-          ),
-    lastStructuredOutput: undefined,
+        : stripCompletionTags(prevResult?.output ?? '', group.until),
+    // A failure or kill restores the round's payload with its text, so a group that then
+    // completes on exhaustion keeps the finished round's structured output. Pause shapes
+    // keep their existing state.
+    lastStructuredOutput:
+      resume.interruptedRound !== undefined &&
+      prevResult !== undefined &&
+      'structuredOutput' in prevResult
+        ? prevResult.structuredOutput
+        : undefined,
     lastSequentialSession: resumedSequentialSession(resume),
   };
 }

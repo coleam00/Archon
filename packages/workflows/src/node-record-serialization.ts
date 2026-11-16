@@ -488,6 +488,8 @@ export function serializeNodeTranscript(
   const base = { step: record.node.id, execution };
   const usage = transcriptUsage(record);
   const content = transcriptNodeContent(record.node);
+  const fanOutOutcome = record.diagnostics?.fanOutOutcome;
+  const fanOut = fanOutOutcome !== undefined ? { fan_out_outcome: fanOutOutcome } : {};
   switch (lifecycle.status) {
     case 'started':
       return { ...base, type: 'node_start', content };
@@ -495,6 +497,7 @@ export function serializeNodeTranscript(
       return {
         ...base,
         ...usage,
+        ...fanOut,
         type: 'node_complete',
         content,
         ...(record.timing.durationMs !== undefined
@@ -502,7 +505,7 @@ export function serializeNodeTranscript(
           : {}),
       };
     case 'failed':
-      return { ...base, ...usage, type: 'node_error', error: lifecycle.error };
+      return { ...base, ...usage, ...fanOut, type: 'node_error', error: lifecycle.error };
     case 'skipped':
       return { ...base, type: 'node_skipped', content: lifecycle.reason, cause: lifecycle.cause };
     case 'suspended':

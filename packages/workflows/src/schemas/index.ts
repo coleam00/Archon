@@ -147,6 +147,7 @@ export {
   isWorkflowNode,
   isComposeFanOutNode,
   isIncludeDirective,
+  startsSequentialSession,
 } from './node-guards';
 export {
   collectLoopBodyNodeIds,

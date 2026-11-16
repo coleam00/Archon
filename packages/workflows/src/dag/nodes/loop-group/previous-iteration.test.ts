@@ -334,6 +334,7 @@ test('resumed completion preserves enclosing previous-output scopes', async () =
         isEscalatedGateResume: true,
         isEscalatedWaitResume: false,
         isLoopResume: true,
+        interruptedRound: undefined,
         bodySessionCursors: undefined,
         bodySessionCursorAncestry: new Map(),
         resumeIteration: 2,

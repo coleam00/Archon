@@ -328,6 +328,8 @@ recommends under `bindings:` in `.pack/pack.yaml`:
   changed runs no agent.
 - `metrics-prs` and `metrics-test-value` refresh the pack's metrics.
 - `worktree-cleanup` removes merged worktrees, for an install that runs no server.
+  `archon isolation cleanup schedule install` schedules the same sweep with no workflow;
+  prefer it.
 
 **Ask the user** which to enable. Then write them as files:
 
@@ -384,6 +386,37 @@ archon workflow wake schedule install   # macOS
 On Linux or Windows, run `archon workflow wake` from cron, systemd or Task Scheduler
 every minute. Without either, an answered run waits forever, and it keeps its place in
 the queue, so the runs behind it wait too.
+
+**Ask the user** how many issues the factory works at once. The pack recommends 10 for
+intake and 10 for the build queue; the merge queue, the split queue and the discoveries
+drain run one pass at a time. Ten build runs at once is a lot for one machine, so set the
+number to what this one has, in `~/.archon/config.yaml`:
+
+```yaml
+concurrency:
+  resources:
+    "sdlc:github.com/acme/widgets:build": 3
+    "sdlc:github.com/acme/widgets:intake": 5
+```
+
+The resource name is `sdlc:<host>/<owner>/<name>:<resource>`, with the repository the
+bindings were written for. What to look at when choosing the build number:
+
+- **Provider rate limits.** Every build run holds several agent sessions. A run that hits
+  a usage limit waits and continues by itself, so too high a number shows as runs that
+  sit waiting, not as failures.
+- **Memory and CPU.** Each run installs the project's dependencies and runs its checks,
+  and reviewers do the same in scratch worktrees. Ten runs can mean ten test suites at
+  once.
+- **Disk.** Each run has its own worktree with installed dependencies, and each review
+  round adds scratch worktrees that are removed when the round ends. Measured on Archon
+  itself: about 0.7 GB per worktree with dependencies, one or two scratch worktrees in a
+  typical review round and up to six in a large one. Ten runs is roughly 15 to 20 GB in
+  the usual case and up to about 50 GB when every run is in a large round. A full disk
+  ends runs without a clean failure, so leave room.
+
+Intake runs read the checkout and write only to the tracker and the state store, so
+their number is bounded by the provider's rate limit alone.
 
 Later changes:
 

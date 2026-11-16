@@ -17,7 +17,7 @@ import {
 } from './schemas/workflow-run';
 import { settlingProvider } from './test-settling-provider';
 import { describe, it, expect, beforeEach, afterEach, mock } from 'bun:test';
-import { mkdir, writeFile } from 'fs/promises';
+import { mkdir, readFile, writeFile } from 'fs/promises';
 import { removeTempTree, testTimeout } from '@archon/paths/test-utils';
 import { join } from 'path';
 import { tmpdir } from 'os';
@@ -40,6 +40,15 @@ function workFanOutOutcome(
 ): unknown {
   return events.filter(e => e.event_type === eventType && e.step_name === 'work').at(-1)?.data
     ?.fan_out_outcome;
+}
+
+/** The run's JSONL log lines, one parsed object per line. */
+async function runLogLines(run: WorkflowRun): Promise<Record<string, unknown>[]> {
+  const raw = await readFile(join(run.output_root!, 'logs', `${run.id}.jsonl`), 'utf-8');
+  return raw
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line) as Record<string, unknown>);
 }
 
 function sentMessages(platform: ReturnType<typeof makePlatform>): string {
@@ -1046,6 +1055,13 @@ nodes:
         { index: 1, outcome: 'failed', child_run_id: childBoom.id },
       ],
     });
+    // The run log line carries that same record, so a JSONL reader needs no database.
+    const logLines = await runLogLines(parentRun!);
+    const workLogLine = logLines.find(l => l.type === 'node_complete' && l.step === 'work');
+    expect(workLogLine?.fan_out_outcome).toEqual(workFanOutOutcome(store.events, 'node_completed'));
+    expect(logLines.find(l => l.type === 'node_complete' && l.step === 'plan')).not.toHaveProperty(
+      'fan_out_outcome'
+    );
     expect(sentMessages(platform)).toContain(
       '**Fan-out completed with unfinished children** (node `work`): ' +
         `1 of 2 children did not complete (1 failed). Each slot's outcome is in the console run view and \`archon workflow get ${String(parentRun?.id)}\`.`
@@ -1390,6 +1406,14 @@ nodes:
     );
     expect(String(nodeFailed?.data?.error)).toContain('all_success');
     expect(String(nodeFailed?.data?.error)).toContain('child 0');
+    // The failed node's log line carries the same per-child record as its event.
+    const workErrorLine = (await runLogLines(parentRun!)).find(
+      l => l.type === 'node_error' && l.step === 'work'
+    );
+    expect(workErrorLine?.fan_out_outcome).toEqual(nodeFailed?.data?.fan_out_outcome);
+    expect(workErrorLine?.fan_out_outcome).toMatchObject({
+      tally: { total: 3, completed: 2, failed: 1 },
+    });
   });
 
   it('#2821: all-refused all_done fails at the fan-out and re-dispatches on resume', async () => {

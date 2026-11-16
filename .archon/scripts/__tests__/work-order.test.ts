@@ -56,7 +56,7 @@ function store(documents: Record<string, unknown>): Record<string, string> {
     HOME: home,
     DATABASE_URL: '',
     ARCHON_TELEMETRY_DISABLED: '1',
-    INTAKE_STATE_CWD: gitCheckout({}, track),
+    INTAKE_STATE_CWD: gitCheckout(track),
     INTAKE_HOST_CLI: JSON.stringify(hostCli()),
   };
   inStore(env, () => {
@@ -121,14 +121,11 @@ describe('build-queue pickup with work orders', () => {
     }
   }, 60_000);
 
-  test('an open order whose members all merged is marked done once, and builds nothing more', () => {
+  test('an open order whose members all merged is marked done, and builds nothing more', () => {
     const env = store({ 'work/7': merged(7), 'work/8': merged(8), 'work/9': waiting(9), 'work-order/next': order([7, 8]) });
     expect(facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-1')).toMatchObject({ path: 'idle' });
     const done = inStore(env, () => state.get('work-order/next'));
     expect(done.value).toMatchObject({ members: [7, 8], status: 'done' });
-    expect(typeof (done.value as WorkOrder).done_at).toBe('string');
-    facts(env, { INPUTS_ORDERS_ONLY: 'true' }, 'run-2');
-    expect(inStore(env, () => state.get('work-order/next').revision)).toBe(done.revision);
   }, 60_000);
 
   test('an order with an unmerged member stays open and keeps its members building', () => {

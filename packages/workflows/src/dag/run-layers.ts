@@ -16,6 +16,7 @@ import {
   nodeUsesPersistedScope,
   readSubrunMetadata,
   isNodeContextResume,
+  startsSequentialSession,
 } from '../schemas';
 import type { PersistedNodeOutput } from '../store';
 import type { NodeExecutionResult } from '../node-record-serialization';
@@ -608,7 +609,7 @@ async function aggregateLayerResults(
     if (output.state === 'completed' && node?.output_type) {
       await writeTypedArtifacts(ctx, node, node.output_type, output.output);
     }
-    advanceSequentialSession(ctx, result.value, isParallelLayer);
+    advanceSequentialSession(ctx, result.value, node, isParallelLayer);
     if (output.state === 'failed') layerHadFailure = true;
   }
   return layerHadFailure;
@@ -721,10 +722,14 @@ async function writeTypedArtifacts(
 function advanceSequentialSession(
   ctx: RunLayersContext,
   result: LayerNodeResult,
+  node: DagNode | undefined,
   isParallelLayer: boolean
 ): void {
   const { output } = result;
   if (output.state !== 'completed' || isParallelLayer || output.sessionId === undefined) return;
+  // Include expansion decides which block nodes start fresh from the same predicate,
+  // so a node kind moves the cursor here only once it is counted there too.
+  if (node === undefined || !startsSequentialSession(node)) return;
   // Tag the cursor with the provider that created the session (#1992). A session
   // id from a path that can't attest its provider is never threaded — fail-safe:
   // a fresh downstream session beats a guaranteed-broken cross-provider resume.
