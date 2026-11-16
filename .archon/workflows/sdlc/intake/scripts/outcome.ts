@@ -35,6 +35,9 @@ import {
   type WorkItem,
 } from '../../.shared/workitem.ts';
 
+/** What the run returns. `outcome` is the run's outcome: the stage the item was left at, or `idle` when no item was claimed. */
+type Outcome = NodeOutput<'archon-intake', 'outcome'>;
+
 /** Triage's verdict from its node's typed output, or null when triage did not run on this path. */
 function triageResult(): TriageResult | null {
   const triage = nullableJson(input('triage')) as NodeOutput<'archon-triage-block', 'triage'> | null;
@@ -140,15 +143,22 @@ function announceOutcome(item: QualifiedPr, next: WorkItem, triage: TriageResult
 function main(): void {
   const path = input('path').trim();
   if (path === 'idle') {
+    const idle = idleOutcome('No item waits for intake.', stuckItems(workflowRunId(), 'intake'));
+    // Stuck items are not an outcome of an item: the pass fails, so the run shows as one
+    // that needs a look, naming each item and why no pickup can act on it.
+    if (!idle.healthy) {
+      refuse(idle.summary);
+      return;
+    }
     emit({
       path,
       item: null,
-      stage: null,
+      outcome: 'idle',
       trust: null,
       promoted: false,
       labels: [],
-      ...idleOutcome('No item waits for intake.', stuckItems(workflowRunId(), 'intake')),
-    });
+      summary: idle.summary,
+    } satisfies Outcome);
     return;
   }
   const runId = workflowRunId();
@@ -187,13 +197,12 @@ function main(): void {
   emit({
     path: decision.path,
     item: item.number,
-    stage: next.stage,
+    outcome: next.stage,
     trust: next.trust,
     promoted: next.promoted !== null,
     labels,
     summary: summary(item, next, runId),
-    healthy: true,
-  });
+  } satisfies Outcome);
 }
 
 try {

@@ -67,7 +67,7 @@ The standing front of the pack, started by trigger bindings on issue and label e
 
 **When to use it**: You want new issues triaged as they arrive without letting anyone who can open an issue spend tokens. The pack's [setup guide](https://github.com/coleam00/Archon/blob/dev/.archon/workflows/sdlc/README.md#set-up-the-pack) runs it by hand and binds it. [Intake](/guides/sdlc-operations/#intake) covers trust, promotion, pickup and closing.
 
-**What it produces**: A work item per issue (`archon state get work/<number>`) holding its trust, stage, triage fields, and history, and the labels that mirror it.
+**What it produces**: A work item per issue (`archon state get work/<number>`) holding its trust, stage, triage fields, and history, and the labels that mirror it. The run completes with the stage it left the item at as its outcome: a route (`deliver`, `plan`, `investigate`, `continue` or `split`), a stage that waits (`needs_maintainer`, `needs_contract` or `blocked`), `close`, or `new` for an item not yet triaged. A run that claimed no item completes `idle`, and fails when it also found stored items no pickup can act on.
 
 #### `archon-build-queue`
 
@@ -119,7 +119,7 @@ Establishes the proven causal chain for a bug, unexplained behavior, or open que
 archon workflow run archon-investigate "Why does the workflow list spin forever when no workflows exist?"
 ```
 
-**What it produces**: An evidence-backed report a fixer or planner can act on, with a verdict: `rooted` (a change is owed here and the fix is decided), `refuted` (no change is owed in this repository), or `inconclusive` (the cause is not established yet). The repository is left as it was found.
+**What it produces**: An evidence-backed report a fixer or planner can act on, with a verdict: `rooted` (a change is owed here and the fix is decided), `refuted` (no change is owed in this repository), or `inconclusive` (the cause is not established yet). The verdict is the run's outcome. The repository is left as it was found.
 
 #### `archon-plan`
 

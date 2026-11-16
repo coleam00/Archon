@@ -337,27 +337,16 @@ export interface WorkflowOutputs {
     outcome: {
       readonly path: 'idle' | 'quiet' | 'closed' | 'outside' | 'triage';
       readonly item: number | null;
-      readonly stage: string | null;
+      readonly outcome: 'new' | 'needs_maintainer' | 'investigate' | 'plan' | 'deliver' | 'continue' | 'split' | 'needs_contract' | 'blocked' | 'close' | 'idle';
       readonly trust: string | null;
       readonly promoted: boolean;
       readonly labels: ReadonlyArray<string>;
       readonly summary: string;
-      readonly healthy: boolean;
     };
   };
   'archon-investigate': {
     investigate: {
       readonly verdict: 'rooted' | 'refuted' | 'inconclusive';
-      readonly summary: string;
-      readonly report: {
-        readonly type: 'archon_artifact';
-        readonly run_id: string;
-        readonly path: 'investigation.md';
-      };
-    };
-    verdict: {
-      readonly verdict: 'rooted' | 'refuted' | 'inconclusive';
-      readonly rooted: boolean;
       readonly summary: string;
       readonly report: {
         readonly type: 'archon_artifact';
@@ -913,15 +902,11 @@ export const OUTPUT_ENUMS = {
     },
     outcome: {
       path: ['idle', 'quiet', 'closed', 'outside', 'triage'],
+      outcome: ['new', 'needs_maintainer', 'investigate', 'plan', 'deliver', 'continue', 'split', 'needs_contract', 'blocked', 'close', 'idle'],
     },
   },
   'archon-investigate': {
     investigate: {
-      verdict: ['rooted', 'refuted', 'inconclusive'],
-      'report.type': ['archon_artifact'],
-      'report.path': ['investigation.md'],
-    },
-    verdict: {
       verdict: ['rooted', 'refuted', 'inconclusive'],
       'report.type': ['archon_artifact'],
       'report.path': ['investigation.md'],
