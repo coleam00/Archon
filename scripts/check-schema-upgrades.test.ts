@@ -63,7 +63,7 @@ skipOnWindows('a DATABASE_URL with no host names no server on its own', () => {
 skipOnWindows('a DATABASE_URL that repeats or empties a server parameter is refused', () => {
   // libpq takes the last value of a repeated parameter, and an empty host means
   // the default socket, overriding both the authority and PGHOST.
-  for (const conn of [
+  for (const conn of <Record<string, string>[]>[
     { DATABASE_URL: 'postgres://named.invalid/app?host=' },
     { DATABASE_URL: 'postgres://named.invalid/app?host=named.invalid&host=' },
     { DATABASE_URL: 'postgres://named.invalid/app?hostaddr=' },
