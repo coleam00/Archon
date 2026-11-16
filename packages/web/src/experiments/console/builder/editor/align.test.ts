@@ -10,6 +10,7 @@ import {
   autoArrange,
   distributeH,
   distributeV,
+  type AlignMode,
   type NodeRect,
 } from './align';
 
@@ -59,9 +60,17 @@ describe('align kernels', () => {
     expect(out.get('b')?.y).toBe(100);
   });
 
-  test('align() dispatches every mode', () => {
-    for (const mode of ['left', 'right', 'top', 'bottom', 'centerH', 'centerV'] as const) {
-      expect(align(mode, TRIO).size).toBe(3);
+  test('align() dispatches every mode to its kernel', () => {
+    const kernels: Record<AlignMode, typeof alignLeft> = {
+      left: alignLeft,
+      right: alignRight,
+      top: alignTop,
+      bottom: alignBottom,
+      centerH: alignCenterH,
+      centerV: alignCenterV,
+    };
+    for (const mode of Object.keys(kernels) as AlignMode[]) {
+      expect(align(mode, TRIO)).toEqual(kernels[mode](TRIO));
     }
   });
 });
