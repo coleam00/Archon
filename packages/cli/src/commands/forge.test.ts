@@ -4,7 +4,8 @@ import { join } from 'node:path';
 import { tmpdir } from 'node:os';
 import { getPluginsPath } from '@archon/paths';
 import { trackTempRoots } from '@archon/paths/test-utils';
-import { forgeCommand, sourceForgePlugins } from './forge';
+import { sourceForgePlugins } from '@archon/forge/host-plugins';
+import { forgeCommand } from './forge';
 import {
   forgeAuditResponse,
   type ForgeRequest,
