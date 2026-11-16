@@ -57,8 +57,19 @@ interface NodeEventFold {
   nodes: Map<string, RunNodeState>;
   outputs: Map<string, Record<string, unknown>>;
   failureOrder: Map<string, number>;
-  /** Each key's latest recorded `metadata.timing`; a cache record carries none. */
-  timings: Map<string, NodeExecutionMetadata['timing']>;
+  /** Each key's invocation timing, folded from its attempts; a cache record carries none. */
+  timings: Map<string, InvocationTiming>;
+}
+
+/**
+ * An invocation's timing across its attempts: when its first attempt started, and each
+ * attempt's latest recorded duration by attempt id (undefined while that attempt runs).
+ * An attempt's start and its end are two records of one attempt, so keying by attempt id
+ * counts each attempt once.
+ */
+interface InvocationTiming {
+  startedAt: string;
+  attempts: Map<string, number | undefined>;
 }
 
 /**
@@ -76,7 +87,7 @@ function foldNodeEvents(
   const nodes = new Map<string, RunNodeState>();
   const outputs = new Map<string, Record<string, unknown>>();
   const failureOrder = new Map<string, number>();
-  const timings = new Map<string, NodeExecutionMetadata['timing']>();
+  const timings = new Map<string, InvocationTiming>();
   const folded = { graph, nodes, outputs, failureOrder, timings };
   if (graph)
     for (const nodeId of graph.node_ids)
@@ -103,6 +114,16 @@ function foldNodeEvents(
   return folded;
 }
 
+function foldTiming(
+  timings: Map<string, InvocationTiming>,
+  key: string,
+  { invocation, attempt, timing }: NodeExecutionMetadata
+): void {
+  const folded = timings.get(key) ?? { startedAt: invocation.startedAt, attempts: new Map() };
+  folded.attempts.set(attempt.id, timing.durationMs);
+  timings.set(key, folded);
+}
+
 function foldNodeRecord(
   { nodes, outputs, failureOrder, timings }: Omit<NodeEventFold, 'graph'>,
   record: ReadNodeRecordEvent,
@@ -112,7 +133,7 @@ function foldNodeRecord(
   const nodeId = record.path;
   // A reset discards the invocation's earlier timing with its state; a prior-success
   // replay carries no timing and keeps the entry the original completion wrote.
-  if (record.metadata) timings.set(key, record.metadata.timing);
+  if (record.metadata) foldTiming(timings, key, record.metadata);
   else if (
     record.eventType === 'node_always_run_reset' ||
     record.eventType === 'node_prior_cache_invalidated'
@@ -254,12 +275,15 @@ export function buildLoopRounds(
 
 function loopRoundNode(
   state: RunNodeState,
-  timing: NodeExecutionMetadata['timing'] | undefined,
+  timing: InvocationTiming | undefined,
   data: Record<string, unknown> | undefined
 ): LoopRoundNode {
   const entry: LoopRoundNode = { ...state };
   if (timing) entry.started_at = timing.startedAt;
-  if (timing?.durationMs !== undefined) entry.duration_ms = timing.durationMs;
+  const durations = timing ? [...timing.attempts.values()] : [];
+  // Only once every attempt has ended: a running retry has no duration yet.
+  if (durations.length > 0 && durations.every(ms => ms !== undefined))
+    entry.duration_ms = durations.reduce((total, ms) => total + ms, 0);
   if (!data) return entry;
   if (typeof data.node_output === 'string') entry.output = data.node_output;
   if (data.node_output_truncated === true) entry.output_truncated = true;

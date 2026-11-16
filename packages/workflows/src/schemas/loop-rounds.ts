@@ -4,7 +4,9 @@ import { runNodeStateSchema } from './terminal-record';
 
 /**
  * One body node's invocation in one loop round: its state as the terminal record folds
- * it, plus that invocation's timing and output. `output` and `output_truncated` are the
+ * it, plus that invocation's timing and output. `started_at` is when the invocation's
+ * first attempt started; `duration_ms` sums every attempt's recorded duration (retries
+ * included, the waits between them not), and is absent until the last attempt ends. `output` and `output_truncated` are the
  * stored `node_output` as the event log bounds it at write, present only on a completed
  * node, as `structured_output` is.
  */

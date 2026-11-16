@@ -706,6 +706,40 @@ describe('loop rounds', () => {
     ]);
   });
 
+  it('times a retried node from its first attempt over every attempt', () => {
+    const path = [{ groupId: 'group', iteration: 1 }];
+    const attempt = (id: string, startedAt: string, durationMs?: number) => ({
+      attempt: { id, startedAt },
+      timing: { startedAt, ...(durationMs === undefined ? {} : { durationMs }) },
+    });
+    const first = attempt('a1', '2026-11-16T10:00:00Z', 25);
+    const retry = attempt('a2', '2026-11-16T10:00:01Z', 4);
+    const events = [
+      invocation('node_started', 'group.check', path, attempt('a1', '2026-11-16T10:00:00Z')),
+      invocation('node_failed', 'group.check', path, { ...first, error: 'capacity' }),
+      invocation('node_started', 'group.check', path, attempt('a2', '2026-11-16T10:00:01Z')),
+    ];
+    expect(buildLoopRounds(loopRun, events)[0]?.nodes[0]).not.toHaveProperty('duration_ms');
+    const done = invocation('node_completed', 'group.check', path, { ...retry, node_output: 'ok' });
+    expect(buildLoopRounds(loopRun, [...events, done])[0]?.nodes[0]).toMatchObject({
+      state: 'completed',
+      started_at: '2026-11-16T10:00:00Z',
+      duration_ms: 29,
+    });
+  });
+
+  it('marks a round output the event log truncated', () => {
+    const path = [{ groupId: 'group', iteration: 1 }];
+    const [entry] =
+      buildLoopRounds(loopRun, [
+        invocation('node_completed', 'group.check', path, {
+          node_output: 'preview',
+          node_output_truncated: true,
+        }),
+      ])[0]?.nodes ?? [];
+    expect(entry?.output_truncated).toBe(true);
+  });
+
   it('is empty for a run that ran no loop', () => {
     expect(
       buildLoopRounds(run, [node('node_completed', 'discover', { node_output: 'ok' })])

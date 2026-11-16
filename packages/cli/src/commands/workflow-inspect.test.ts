@@ -2307,7 +2307,7 @@ describe('workflowGetCommand', () => {
     const { serializeNodeStateRecord } = await import(
       '@archon/workflows/node-record-serialization'
     );
-    const roundRow = (iteration: number, text: string): WorkflowEventRow => ({
+    const roundRow = (iteration: number, text?: string): WorkflowEventRow => ({
       ...serializeNodeStateRecord(
         finishNodeExecution(
           startNodeExecution({
@@ -2316,15 +2316,17 @@ describe('workflowGetCommand', () => {
             node: { id: 'check', kind: 'exec', runtime: 'sh', script: 'true' },
             invocation: newNodeInvocation([{ groupId: 'fix', iteration }]),
           }),
-          { status: 'completed' },
-          { durationMs: iteration * 1000, output: { text } }
+          text === undefined
+            ? { status: 'failed', error: 'check failed' }
+            : { status: 'completed' },
+          { durationMs: iteration * 1000, ...(text === undefined ? {} : { output: { text } }) }
         )
       ),
       id: `round-${String(iteration)}`,
       step_index: null,
       created_at: new Date().toISOString(),
     });
-    const events = [roundRow(1, 'first verdict'), roundRow(2, 'second verdict')];
+    const events = [roundRow(1, 'first verdict'), roundRow(2, 'second verdict'), roundRow(3)];
     const workflowDb = await import('@archon/core/db/workflows');
     const eventsDb = await import('@archon/core/db/workflow-events');
     const loopRun = {
@@ -2348,13 +2350,20 @@ describe('workflowGetCommand', () => {
     expect(parsed.loop_rounds.map(round => round.nodes[0]?.output)).toEqual([
       'first verdict',
       'second verdict',
+      undefined,
     ]);
 
     await workflowGetCommand(createTestWorkflowHost(), 'run-loop', false, true);
     const calls: string[] = consoleSpy.mock.calls.map((call: unknown[]) => String(call[0]));
     const rounds = calls.slice(calls.indexOf('  Rounds:'));
-    expect(rounds.filter(line => line.includes('fix round'))).toHaveLength(2);
-    expect(rounds.filter(line => line.includes('fix.check'))).toHaveLength(2);
+    expect(rounds.filter(line => line.includes('fix round'))).toHaveLength(3);
+    const nodeLines = rounds.filter(line => line.includes('fix.check'));
+    expect(nodeLines).toHaveLength(3);
+    // Each round's node line carries its own duration and state mark.
+    expect(nodeLines[0]).toContain('1s');
+    expect(nodeLines[0]).toContain('✓');
+    expect(nodeLines[2]).toContain('3s');
+    expect(nodeLines[2]).toContain('✗');
     expect(rounds.some(line => line.includes('first verdict'))).toBe(true);
   });
 
