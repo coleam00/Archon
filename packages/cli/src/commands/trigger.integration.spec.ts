@@ -707,7 +707,7 @@ nodes:
     );
     const database = join(fixture.archonHome, 'archon.db');
     const runs = () =>
-      readRows<{ workflow_name: string; status: string; item: string | null }>(
+      readRows<{ workflow_name: string; status: WorkflowRunStatus; item: string | null }>(
         database,
         `SELECT r.workflow_name, r.status, i.key || ' in ' || i.project_key AS item
            FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
@@ -722,13 +722,26 @@ nodes:
       '--item',
       'item-1',
     ]);
+    // Each of the script's fires is its own CLI process, so each start gets its own deadline.
+    // A script that throws ends the first run; that ends the wait at once instead of at the deadline.
+    const step = async (reached: () => boolean, label: string): Promise<void> => {
+      await waitFor(() => {
+        if (reached()) return true;
+        const first = runs()[0];
+        return first && isTerminalRunStatus(first.status) ? true : undefined;
+      }, label);
+      if (!reached())
+        throw new Error(`The first run ended before ${label}: ${JSON.stringify(runs())}`);
+    };
+    await step(() => runs().length >= 2, "the script's fire naming item-2 to record its run");
+    await step(() => existsSync(refusal), "the script's inherited fire to be refused");
+    await step(() => runs().length === 3, "the script's fire with no item to record its run");
+    // Nothing may still execute when afterEach removes the temp tree.
     const settled = await waitFor(
-      () =>
-        runs().length === 3 && runs().every(run => run.status === 'completed') ? runs() : undefined,
-      'all three runs to complete',
-      // Three detached runs take 12 to 19 s on Windows CI; the test's own limit is 60 s.
-      45_000
+      () => (runs().every(run => isTerminalRunStatus(run.status)) ? runs() : undefined),
+      'all three runs to end'
     );
+    expect(settled.map(run => run.status)).toEqual(['completed', 'completed', 'completed']);
     const projects = readRows<{ project_key: string; key: string }>(
       database,
       'SELECT project_key, key FROM remote_agent_items ORDER BY key'
