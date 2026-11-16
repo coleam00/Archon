@@ -18,6 +18,7 @@ import { sealWorkflowRunConfig } from '@archon/core/config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
+import { refuseBrokenRunEndedBindings } from '@archon/workflows/run-ended-refusal';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
@@ -538,12 +539,13 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
   // the stamps the executor only writes when IT creates the row. `working_path` is
   // the one field this process cannot know — the child cuts the worktree — so it
   // stays null until the child fills it in (write-once in the store).
+  // No reserved id: this process's own capture is discarded on the way out, and
+  // reusing its id would point the child's capture at a directory this process is
+  // about to reclaim. The row's generated id is what the child files under.
+  const launchToken = crypto.randomUUID();
+  let created: WorkflowRun;
   try {
-    // No reserved id: this process's own capture is discarded on the way out, and
-    // reusing its id would point the child's capture at a directory this process is
-    // about to reclaim. The row's generated id is what the child files under.
-    const launchToken = crypto.randomUUID();
-    const created = await host.deps.store.createWorkflowRun({
+    created = await host.deps.store.createWorkflowRun({
       workflow_name: workflow.name,
       origin: {
         userId: cliUserId,
@@ -568,12 +570,16 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
       ...(continuationDeclaration ? { adopted_from_run_id: continuationDeclaration.runId } : {}),
       ...(launch.options.item === undefined ? {} : { item_key: launch.options.item }),
     });
-    return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
   } catch (error) {
     throw new Error(
       `Failed to create the workflow run: ${(withItemHint(error) as Error).message}\nNothing was started.`
     );
   }
+  // Read on the created row, which carries the item the store resolved; the child's
+  // admission checks again before its claim (#5783).
+  const refusal = await refuseBrokenRunEndedBindings(host.deps, created);
+  if (refusal) throw new Error(`${refusal}\nNothing was started.`);
+  return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
 }
 
 /** The arguments the child gets on top of this process's argv. */

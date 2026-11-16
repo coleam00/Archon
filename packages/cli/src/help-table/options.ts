@@ -235,6 +235,12 @@ export const orderedFlags: FlagHelp[] = [
     ],
   },
   {
+    spec: '--no-item',
+    description:
+      "For 'trigger fire': start the run on no item instead of inheriting the firing run's item",
+    owners: [{ command: 'trigger', subcommand: 'fire' }],
+  },
+  {
     spec: '--open',
     description:
       "For 'workflow runs': the open-work inbox — failed runs nothing has adopted or superseded",

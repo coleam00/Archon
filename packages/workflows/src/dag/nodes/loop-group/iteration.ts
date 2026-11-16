@@ -298,13 +298,14 @@ function bodyIteration(run: LoopGroupRun, state: LoopGroupState, i: number): Bod
     // a loop_group body exec in the same place (host, or the container in Phase B)
     // — without this a loop_group body would be a host-escape hole.
     execContext: ctx.execContext,
-    // persist_session across iterations is out of v1 scope (body sessions reset per
-    // iteration, governed by fresh_context). Pass undefined/false so body nodes don't
-    // participate in cross-run session persistence inside the loop — and therefore
-    // no scope-artifact mirroring either.
+    // persist_session is not wired for loop bodies: pass undefined/false so body nodes
+    // don't use the thread scope, and get no scope-artifact mirroring either.
     persistScope: undefined,
     workflowPersistSessions: false,
     scopeArtifactsDir: undefined,
+    // `context: same` body nodes continue the item's session in their first round and
+    // write their newest round's session back, so the item scope does reach the body.
+    itemScope: ctx.itemScope,
     layers: iterBodyLayers,
     interactionAdmission: loopBodyAdmission(ctx.interactionAdmission),
     nodeOutputs: scopedNodeOutputs,

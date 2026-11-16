@@ -97,9 +97,10 @@ mock.module('@archon/paths', () => ({
 }));
 
 export const mockGetDefaultBranch = mock(async () => 'main');
+export const mockGetDefaultRemote = mock(async (): Promise<string | null> => 'origin');
 mock.module('@archon/git', () => ({
   getDefaultBranch: mockGetDefaultBranch,
-  getDefaultRemote: mock(async () => 'origin'),
+  getDefaultRemote: mockGetDefaultRemote,
   toRepoPath: mock((p: string) => p),
   // The checkout baseline of a container run probes the container through here. Tests use
   // container ids that do not exist, so answer the way a real `docker exec` would.
@@ -143,6 +144,8 @@ export function resetExecutorMocks(): void {
   mockCaptureWorkflowTerminal.mockClear();
   mockGetDefaultBranch.mockClear();
   mockGetDefaultBranch.mockImplementation(async () => 'main');
+  mockGetDefaultRemote.mockClear();
+  mockGetDefaultRemote.mockImplementation(async () => 'origin');
   mockExecuteDagWorkflow.mockClear();
   mockExecuteDagWorkflow.mockImplementation(async () => undefined);
 }

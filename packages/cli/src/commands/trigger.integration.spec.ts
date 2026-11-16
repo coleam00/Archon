@@ -588,22 +588,7 @@ describe('trigger CLI durable execution', () => {
   test('an inherited item is refused in another project, and an item named there starts', async () => {
     const fixture = await heldTriggerRun('item-cross');
     const root = join(fixture.projectRoot, '..');
-    const otherRoot = join(root, 'other');
-    mkdirSync(join(otherRoot, '.archon', 'workflows'), { recursive: true });
-    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: otherRoot }).exited).toBe(0);
-    writeFileSync(
-      join(otherRoot, '.archon', 'workflows', 'other-proof.yaml'),
-      'name: other-proof\ndescription: other proof.\nmutates_checkout: false\nnodes:\n  - id: done\n    bash: echo done\n'
-    );
-    const config = JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
-    config.binding = {
-      ...config.binding,
-      bindingId: 'other-proof',
-      resource: 'other:resource',
-      launch: { ...config.binding.launch, cwd: otherRoot, workflowName: 'other-proof' },
-    };
-    const otherConfig = join(root, 'other.json');
-    writeFileSync(otherConfig, JSON.stringify(config));
+    const otherConfig = await writeOtherProject(root);
     // The run fires into the other project with no item while that project is unregistered
     // and again once it is registered, and in between with an item named.
     const fire = `'${process.execPath}' '${fixture.cliPath}' trigger fire --config '${otherConfig}'`;
@@ -684,6 +669,97 @@ describe('trigger CLI durable execution', () => {
     expect(detached.stderr).toContain('--item');
     expect(runs()).toHaveLength(2);
   }, 60_000);
+
+  test('a script on an item names the item of a start, or starts it on no item', async () => {
+    const fixture = await heldTriggerRun('item-script');
+    const root = join(fixture.projectRoot, '..');
+    const otherConfig = await writeOtherProject(root);
+    const refusal = join(root, 'refusal');
+    // The run on item-1 fires into the other project naming item-2, then naming nothing,
+    // which would inherit item-1 across projects, then declining an item.
+    writeFileSync(
+      join(fixture.projectRoot, '.archon', 'workflows', 'item-script-proof.yaml'),
+      `name: item-script-proof
+description: item-script proof.
+mutates_checkout: false
+nodes:
+  - id: fire
+    runtime: bun
+    script: |
+      import { writeFileSync } from 'node:fs';
+      import { HostCommandError, trigger } from 'archon:script';
+      const binding = ${JSON.stringify(otherConfig)};
+      trigger.fire(binding, {}, { item: 'item-2' });
+      try {
+        trigger.fire(binding);
+        writeFileSync(${JSON.stringify(refusal)}, 'started');
+      } catch (error) {
+        if (!(error instanceof HostCommandError)) throw error;
+        writeFileSync(${JSON.stringify(refusal)}, error.message);
+      }
+      trigger.fire(binding, {}, { item: null });
+`
+    );
+    const database = join(fixture.archonHome, 'archon.db');
+    const runs = () =>
+      readRows<{ workflow_name: string; status: string; item: string | null }>(
+        database,
+        `SELECT r.workflow_name, r.status, i.key || ' in ' || i.project_key AS item
+           FROM remote_agent_workflow_runs r LEFT JOIN remote_agent_items i ON i.id = r.item_id
+          ORDER BY r.started_at, r.id`
+      );
+
+    await runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, [
+      'trigger',
+      'fire',
+      '--config',
+      join(root, 'trigger.json'),
+      '--item',
+      'item-1',
+    ]);
+    const settled = await waitFor(
+      () =>
+        runs().length === 3 && runs().every(run => run.status === 'completed') ? runs() : undefined,
+      'all three runs to complete'
+    );
+    const projects = readRows<{ project_key: string; key: string }>(
+      database,
+      'SELECT project_key, key FROM remote_agent_items ORDER BY key'
+    );
+    expect(projects.map(row => row.key)).toEqual(['item-1', 'item-2']);
+    const [own, other] = projects.map(row => row.project_key);
+    expect(own).not.toBe(other);
+    expect(settled.map(run => [run.workflow_name, run.item])).toEqual([
+      ['item-script-proof', `item-1 in ${String(own)}`],
+      ['other-proof', `item-2 in ${String(other)}`],
+      ['other-proof', null],
+    ]);
+    const message = readFileSync(refusal, 'utf8');
+    expect(message).toContain(`fired start runs in project '${String(other)}'`);
+    expect(message).toContain('--no-item');
+  }, 60_000);
+
+  test('--item and --no-item together are refused before a receipt', async () => {
+    const fixture = await heldTriggerRun('item-both');
+    const refused = await runCli(
+      fixture.cliPath,
+      fixture.projectRoot,
+      fixture.archonHome,
+      [
+        'trigger',
+        'fire',
+        '--config',
+        join(fixture.projectRoot, '..', 'trigger.json'),
+        '--item',
+        'x',
+        '--no-item',
+      ],
+      false
+    );
+    expect(refused.exitCode).not.toBe(0);
+    expect(refused.stderr).toContain('--item and --no-item are mutually exclusive');
+    expect(fixture.runs()).toEqual([]);
+  });
 
   test.skipIf(process.platform === 'win32')(
     'published polling recipes distinguish delimiter collisions and replay on both hosts',
@@ -1638,6 +1714,27 @@ nodes:
       }
     }
   }, 45_000);
+
+  /** A second git project with a fire-only binding into it, written next to the fixture's. */
+  async function writeOtherProject(root: string): Promise<string> {
+    const otherRoot = join(root, 'other');
+    mkdirSync(join(otherRoot, '.archon', 'workflows'), { recursive: true });
+    expect(await Bun.spawn(['git', 'init', '-q'], { cwd: otherRoot }).exited).toBe(0);
+    writeFileSync(
+      join(otherRoot, '.archon', 'workflows', 'other-proof.yaml'),
+      'name: other-proof\ndescription: other proof.\nmutates_checkout: false\nnodes:\n  - id: done\n    bash: echo done\n'
+    );
+    const config = JSON.parse(readFileSync(join(root, 'trigger.json'), 'utf8'));
+    config.binding = {
+      ...config.binding,
+      bindingId: 'other-proof',
+      resource: 'other:resource',
+      launch: { ...config.binding.launch, cwd: otherRoot, workflowName: 'other-proof' },
+    };
+    const otherConfig = join(root, 'other.json');
+    writeFileSync(otherConfig, JSON.stringify(config));
+    return otherConfig;
+  }
 
   /**
    * A trigger binding on a capacity-1 resource whose run holds its node in `sleep`, in a

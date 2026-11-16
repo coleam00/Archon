@@ -43,6 +43,7 @@ import {
 import { parseDagNodes } from './loader/node-parse';
 import {
   persistSessionError,
+  sameContextProviderError,
   sessionResumeProviderError,
   unknownProviderError,
 } from './loader/provider-checks';
@@ -269,7 +270,8 @@ function parseWorkflowFields(
   const providerError =
     unknownProviderError(provider, dagNodes, providers) ??
     sessionResumeProviderError(dagNodes, provider, providers) ??
-    persistSessionError(dagNodes, persistSessions, provider, providers, parseWarnings);
+    persistSessionError(dagNodes, persistSessions, provider, providers, parseWarnings) ??
+    sameContextProviderError(dagNodes, provider, providers, parseWarnings);
   if (providerError !== null) return providerError;
 
   const modelReasoningEffort = parseOptionalField(

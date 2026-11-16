@@ -11,6 +11,7 @@ import {
   mockCaptureWorkflowInvoked,
   mockExecuteDagWorkflow,
   mockGetDefaultBranch,
+  mockGetDefaultRemote,
   repoCodebase,
   recordedEvents,
   resetExecutorMocks,
@@ -476,6 +477,14 @@ describe('base branch resolution ($BASE_BRANCH)', () => {
     await startWorkflow({ store, cwd: '/tmp/ops', options: { codebaseId: 'cb-folder' } });
     // A non-git root never shells out to git, so $BASE_BRANCH resolves to empty
     // (unresolved-but-not-referenced) without the benign auto-detect warning.
+    expect(mockGetDefaultBranch).not.toHaveBeenCalled();
+    expect(dagCall()?.baseBranch).toBe('');
+    expect(logged('workflow.base_branch_auto_detect_failed')).toEqual([]);
+  });
+
+  it('leaves the base empty without a warning in a repository with no remote (#5775)', async () => {
+    mockGetDefaultRemote.mockImplementation(async () => null);
+    await startWorkflow({ cwd: '/tmp/local-repo' });
     expect(mockGetDefaultBranch).not.toHaveBeenCalled();
     expect(dagCall()?.baseBranch).toBe('');
     expect(logged('workflow.base_branch_auto_detect_failed')).toEqual([]);

@@ -11,6 +11,7 @@ import {
 import { registerOwnerResumeTests } from './__tests__/sessions-owner-resume';
 import { registerPersistenceTests, setupPersistTests } from './__tests__/sessions-persistence';
 import { registerProviderThreadingTests } from './__tests__/sessions-provider-threading';
+import { registerSameContextTests } from './__tests__/sessions-same';
 import {
   registerConcurrentPersistTests,
   registerPersistRecoveryTests,
@@ -30,3 +31,4 @@ describe('executeDagWorkflow -- addressable session resume', () => {
   registerSessionCheckpointTests(fixture);
 });
 registerProviderThreadingTests();
+registerSameContextTests();

@@ -631,7 +631,8 @@ export interface IWorkflowStore
   } | null>;
 
   // Per-node provider sessions persisted across workflow re-runs (opt-in via
-  // `persist_session: true` on a node, or `persist_sessions: true` at workflow root).
+  // `persist_session: true` on a node, `persist_sessions: true` at workflow root, or
+  // `context: same`, whose rows are scoped `item:<item_id>`).
   // The executor lists a scope's rows once at run start, so a run continues the sessions
   // that existed when it started, never one a concurrent run wrote afterwards (#2667).
   listWorkflowNodeSessions(scope: {
@@ -640,6 +641,7 @@ export interface IWorkflowStore
   }): Promise<readonly WorkflowNodeSession[]>;
   upsertWorkflowNodeSession(
     params: WorkflowNodeSessionKey & {
+      model: string | null;
       provider_session_id: string;
       last_run_id: string | null;
     }
