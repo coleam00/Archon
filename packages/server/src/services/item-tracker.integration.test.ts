@@ -540,6 +540,37 @@ test('the result is posted once, when a run ends without starting a next stage',
   expect(comments[0]).not.toContain('private');
 });
 
+test('a run-ended chain that ends between two scans still gets its result', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const plan = await startRun('issue-7', 'plan');
+  await tracker.scan();
+  await recordRunEndedStart(plan);
+  await endRun(plan, 'completed', 'ready');
+  const implement = await startRun('issue-7', 'implement');
+  await endRun(implement, 'completed', 'delivered');
+  await tracker.scan();
+  const comments = newComments(fake);
+  expect(comments.length).toBe(1);
+  expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');
+});
+
+test('a run that resumes after its result was posted replaces that result when it ends', async () => {
+  const fake = fakeForge();
+  const tracker = await activeTracker(fake.forge);
+  const run = await startRun('issue-7', 'implement');
+  await endRun(run, 'failed');
+  await tracker.scan();
+  expect(newComments(fake)[0]).toContain('the `implement` stage failed');
+  await endRun(run, 'running');
+  await tracker.scan();
+  await endRun(run, 'completed', 'delivered');
+  await tracker.scan();
+  const comments = newComments(fake);
+  expect(comments.length).toBe(1);
+  expect(comments[0]).toContain('the `implement` stage completed with outcome `delivered`.');
+});
+
 test('turning the tracker on posts nothing for questions, asks and rulings already there', async () => {
   const fake = fakeForge();
   const asked = await startRun('issue-7', 'plan');

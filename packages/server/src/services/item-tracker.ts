@@ -33,10 +33,13 @@ import {
   listTrackerItemsOwingComments,
   recordTrackerBaseline,
   runEndStartedStage,
+  TRACKER_STARTED_KEY,
+  TRACKER_TERMINAL_KEY,
   trackerAskKey,
   trackerRulingKey,
   type TrackerCandidateRun,
   type TrackerRow,
+  type TrackerStatusKey,
 } from '@archon/core/db/item-tracker';
 import {
   hasAnyAttentionNotice,
@@ -105,7 +108,6 @@ export function hostItemTrackerForge(env: NodeJS.ProcessEnv = process.env): Item
 }
 
 type TrackerState = Extract<PushDestinationState, 'active' | 'misconfigured'>;
-type StatusKey = 'started' | 'terminal';
 
 interface Tracked {
   project: TrackedProject;
@@ -248,7 +250,9 @@ export class ItemTracker {
   ): Promise<void> {
     const facts = await itemFacts(tracked, itemKey);
     const rows: TrackerRow[] = [
-      ...owedRuns.filter(run => run.terminal).map(run => ({ runId: run.id, key: 'terminal' })),
+      ...owedRuns
+        .filter(run => run.terminal)
+        .map(run => ({ runId: run.id, key: TRACKER_TERMINAL_KEY })),
       ...(facts ? facts.comments.map(comment => comment.row) : []),
     ];
     for (const row of rows) await this.record(tracked, row, true);
@@ -299,11 +303,11 @@ export class ItemTracker {
     owedRuns: readonly TrackerCandidateRun[],
     runs: readonly WorkflowRun[]
   ): Promise<void> {
-    const shown = new Map<string, StatusKey>(
+    const shown = new Map<string, TrackerStatusKey>(
       owedRuns.map(run => [run.id, statusKey(run.terminal)] as const)
     );
     for (const run of runs) shown.set(run.id, statusKey(isTerminalRunStatus(run.status)));
-    const latest = latestStatusKeys(
+    const latest = latestTrackerStatusKeys(
       await listAttentionNotices([...shown.keys()]),
       tracked.destination
     );
@@ -422,7 +426,7 @@ async function owedRunsByItem(
   tracked: Tracked,
   candidates: readonly TrackerCandidateRun[]
 ): Promise<Map<string, TrackerCandidateRun[]>> {
-  const latest = latestStatusKeys(
+  const latest = latestTrackerStatusKeys(
     await listAttentionNotices(candidates.map(run => run.id)),
     tracked.destination
   );
@@ -465,7 +469,12 @@ async function itemFacts(tracked: Tracked, itemKey: string): Promise<ItemFacts |
     ...new Set([...runs.map(run => run.id), ...openAsks.map(ask => ask.runId)]),
   ]);
   const mine = ledger.filter(({ data }) => data.destination === tracked.destination);
-  const posted = new Set(mine.map(({ runId, data }) => postedKey({ runId, key: data.key })));
+  const posted = new Set<string>();
+  for (const { runId, data } of mine) {
+    // A run that started again after its result was posted owes its result again.
+    if (data.key === TRACKER_STARTED_KEY) posted.delete(postedKey({ runId, key: RESULT_KEY }));
+    posted.add(postedKey({ runId, key: data.key }));
+  }
   const comments: OwedComment[] = [
     ...questionComments(runs),
     ...openAsks.map(ask => ({
@@ -515,8 +524,8 @@ async function openQuestionRows(tracked: Tracked): Promise<TrackerRow[]> {
 
 /**
  * The run whose end is the end of the work on the item, or undefined while work remains:
- * a run that just ended, when no run on the item is live, no ask is open and no ended
- * run's end started a next stage. The last of them in start order reports the result.
+ * the last run in start order that just ended, when no run on the item is live, no ask is
+ * open and its end started no next stage.
  */
 async function finalResult(
   owedRuns: readonly TrackerCandidateRun[],
@@ -528,23 +537,26 @@ async function finalResult(
   if (!last || openAsks.length > 0) return undefined;
   if (runs.some(run => !isTerminalRunStatus(run.status))) return undefined;
   if (posted.has(postedKey({ runId: last.id, key: RESULT_KEY }))) return undefined;
-  for (const run of ended) if (await runEndStartedStage(run.id)) return undefined;
+  // An earlier ended run was followed by a later one, so only the last can have started
+  // the stage that is still owed.
+  if (await runEndStartedStage(last.id)) return undefined;
   return last;
 }
 
-function statusKey(terminal: boolean): StatusKey {
-  return terminal ? 'terminal' : 'started';
+function statusKey(terminal: boolean): TrackerStatusKey {
+  return terminal ? TRACKER_TERMINAL_KEY : TRACKER_STARTED_KEY;
 }
 
 /** Each run's latest status row for `destination`; the ledger arrives in event order. */
-function latestStatusKeys(
+function latestTrackerStatusKeys(
   ledger: Awaited<ReturnType<typeof listAttentionNotices>>,
   destination: string
-): Map<string, StatusKey> {
-  const latest = new Map<string, StatusKey>();
+): Map<string, TrackerStatusKey> {
+  const latest = new Map<string, TrackerStatusKey>();
   for (const { runId, data } of ledger) {
     if (data.destination !== destination) continue;
-    if (data.key === 'started' || data.key === 'terminal') latest.set(runId, data.key);
+    if (data.key === TRACKER_STARTED_KEY || data.key === TRACKER_TERMINAL_KEY)
+      latest.set(runId, data.key);
   }
   return latest;
 }

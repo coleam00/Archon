@@ -98,7 +98,7 @@ A new comment is posted once for each of these, each with its own marker, so a r
 - **A question.** A run on the item paused at an approval gate or an attention wait: the wait's message, its options and recommendation, and the command that answers it, `archon workflow answer <run-id> --occurrence <id> --choose <option>` (or `archon workflow respond <run-id> <decision>` at a gate). Marker `<!-- archon-item-question: … -->`.
 - **An ask.** A completed run left an [ask](/reference/cli/#workflow-answer) on the item: its question, context, options with what each does and costs, the recommendation, and `archon workflow answer --ref ask:<id> --choose <option>`. Marker `<!-- archon-item-ask: <id> -->`.
 - **A ruling.** A ruling recorded on the item with `archon workflow rule`: its text and when it was recorded, never who recorded it. A ruling withdrawn before the tracker saw it is not posted. Marker `<!-- archon-item-ruling: <id> -->`.
-- **The result.** A run on the item ended, no run on the item is still live, no ask is open, and the end started no next stage through a [run-ended binding](#start-a-stage-when-a-run-on-an-item-ends): the stage, how it ended, its outcome and the proposed change. Marker `<!-- archon-item-result: <run-id> -->`.
+- **The result.** A run on the item ended, no run on the item is still live, no ask is open, and the end started no next stage through a [run-ended binding](#start-a-stage-when-a-run-on-an-item-ends): the stage, how it ended, its outcome and the proposed change. Marker `<!-- archon-item-result: <run-id> -->`. A run that resumes and ends again edits its result comment to show the new end.
 
 Answer from the commands; a reply on the tracker is not read.
 

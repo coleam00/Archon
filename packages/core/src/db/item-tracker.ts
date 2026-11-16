@@ -11,6 +11,11 @@ import type { IDatabase } from './adapters/types';
 import { getDialect, pool } from './connection';
 import { insertWorkflowEvent } from './workflow-events';
 
+/** The status rows: each run's latest one records the state its status comment showed. */
+export const TRACKER_STARTED_KEY = 'started';
+export const TRACKER_TERMINAL_KEY = 'terminal';
+export type TrackerStatusKey = typeof TRACKER_STARTED_KEY | typeof TRACKER_TERMINAL_KEY;
+
 export interface TrackerCandidateRun {
   id: string;
   itemKey: string;
@@ -41,8 +46,8 @@ export async function listTrackerCandidateRuns(
        FROM remote_agent_workflow_runs r JOIN remote_agent_items i ON i.id = r.item_id
       WHERE i.project_key = $1 AND (
         r.status NOT IN (${statuses})
-        OR NOT EXISTS (SELECT 1 FROM remote_agent_workflow_events t WHERE ${trackerRow('t', 'terminal')}
-          AND NOT EXISTS (SELECT 1 FROM remote_agent_workflow_events s WHERE ${trackerRow('s', 'started')}
+        OR NOT EXISTS (SELECT 1 FROM remote_agent_workflow_events t WHERE ${trackerRow('t', TRACKER_TERMINAL_KEY)}
+          AND NOT EXISTS (SELECT 1 FROM remote_agent_workflow_events s WHERE ${trackerRow('s', TRACKER_STARTED_KEY)}
             AND COALESCE(s.event_order, 0) > COALESCE(t.event_order, 0))))`,
     [projectKey, destination, ...TERMINAL_WORKFLOW_STATUSES]
   );
@@ -142,7 +147,7 @@ export async function recordTrackerBaseline(
   const asks = await query<{ id: string; run_id: string }>(OPEN_ASKS, [projectKey]);
   const rulings = await query<{ id: string; run_id: string }>(STANDING_RULINGS, [projectKey]);
   const baseline: TrackerRow[] = [
-    ...ended.rows.map(run => ({ runId: run.id, key: 'terminal' })),
+    ...ended.rows.map(run => ({ runId: run.id, key: TRACKER_TERMINAL_KEY })),
     ...asks.rows.map(ask => ({ runId: ask.run_id, key: trackerAskKey(ask.id) })),
     ...rulings.rows.map(ruling => ({ runId: ruling.run_id, key: trackerRulingKey(ruling.id) })),
     ...rows,
