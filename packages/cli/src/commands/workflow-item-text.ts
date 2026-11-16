@@ -11,12 +11,12 @@ function minute(at: string): string {
   return Number.isNaN(time.getTime()) ? at : `${time.toISOString().slice(0, 16)}Z`;
 }
 
-function answerText(answer: Exclude<ItemAnswer, { kind: 'ruling' }>): string {
-  if (answer.kind === 'gate') {
-    const text = answer.text === null || answer.text === '' ? '' : `: ${answer.text}`;
-    return `gate ${answer.decision ?? '(decision not recorded)'}${text}`;
-  }
-  if (answer.answer === null) return 'answered (answer not recorded)';
+/** What an answer chose and said, with who said it. */
+function answeredText(
+  answer: Extract<ItemAnswer, { kind: 'attention' | 'ask' }>,
+  subject: string
+): string {
+  if (answer.answer === null) return `${subject}answered (answer not recorded)`;
   const chosen =
     'decisions' in answer.answer
       ? answer.answer.decisions.join(', ')
@@ -24,7 +24,26 @@ function answerText(answer: Exclude<ItemAnswer, { kind: 'ruling' }>): string {
         ? answer.answer.decision
         : undefined;
   const parts = [chosen, answer.answer.text === '' ? undefined : answer.answer.text];
-  return `answered ${parts.filter(part => part !== undefined).join(': ')}${answererText(answer.by)}`;
+  return `${subject}answered ${parts.filter(part => part !== undefined).join(': ')}${answererText(answer.by)}`;
+}
+
+function answerText(answer: Exclude<ItemAnswer, { kind: 'ruling' }>): string {
+  switch (answer.kind) {
+    case 'gate': {
+      const text = answer.text === null || answer.text === '' ? '' : `: ${answer.text}`;
+      return `gate ${answer.decision ?? '(decision not recorded)'}${text}`;
+    }
+    case 'asks_settled':
+      return answer.answered === 0
+        ? `asks settled: all ${String(answer.withdrawn)} withdrawn, none answered`
+        : `asks settled: ${String(answer.answered)} answered, ${String(answer.withdrawn)} withdrawn`;
+    case 'ask':
+      return answer.withdrawn
+        ? `ask ${answer.ref} withdrawn${answererText(answer.by)}`
+        : answeredText(answer, `ask ${answer.ref} `);
+    case 'attention':
+      return answeredText(answer, '');
+  }
 }
 
 function causeText(cause: ItemRun['cause']): string {

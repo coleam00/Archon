@@ -51,6 +51,7 @@ import {
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertStartReceipt } from './start-receipt-writes';
+import { openItemAsksForCompletedRun } from './item-asks';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -382,6 +383,8 @@ export async function completeWorkflowRun(
         );
         // The starts this end causes commit with it, and only when this write won.
         for (const receipt of result?.startReceipts ?? []) await insertStartReceipt(query, receipt);
+        // The asks it leaves open with it too, replacing its workflow's open set on the item.
+        if (result?.asks !== undefined) await openItemAsksForCompletedRun(query, id, result.asks);
       }
       return update;
     });

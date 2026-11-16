@@ -232,6 +232,15 @@ export const workflowHelp: HelpGroup = {
           description: 'In place of --choose: the option the wait recommends',
         },
         { spec: '--text <text>', description: 'Free text recorded with the answer' },
+        {
+          spec: '--ref <ref>',
+          description:
+            "In place of <run-id> --occurrence: the item's ref as workflow attention lists it.\nThe only way to answer an ask a completed run left",
+        },
+        {
+          spec: '--withdraw <ref>',
+          description: 'Withdraw an ask a completed run left; it closes unanswered',
+        },
       ],
     },
     {

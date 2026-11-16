@@ -249,6 +249,36 @@ async function refuseBrokenRunEndedBindings(
 }
 
 /**
+ * A workflow that declares `returns.asks` leaves its asks on the run's item, so a top-level
+ * run of it with no item is refused before it does any work, naming why. A `workflow:`
+ * child carries no item and opens no asks, so it is not refused. A store without items
+ * refuses the item at creation, so asks are refused there before a run starts.
+ */
+async function refuseAsksWithoutItem(
+  deps: WorkflowDeps,
+  platform: IWorkflowPlatform,
+  conversationId: string,
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun
+): Promise<WorkflowExecutionResult | undefined> {
+  const field = workflow.result?.asks;
+  if (field === undefined || workflowRun.parent_run_id !== null || workflowRun.item_id !== null)
+    return undefined;
+  const reason = `Workflow '${workflow.name}' declares returns.asks '${field}', so it runs on an item: start it with --item <key>`;
+  await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
+  await requireTerminalStatusWrite(
+    // Before the claim another dispatcher may own this row: cancel it only while pending.
+    deps.store.cancelWorkflowRun(
+      workflowRun.id,
+      { cancel_reason: 'precondition_failed' },
+      { pendingOnly: true }
+    ),
+    { workflowRunId: workflowRun.id, site: 'workflow.asks_without_item_refused' }
+  );
+  return { success: false, workflowRunId: workflowRun.id, error: reason };
+}
+
+/**
  * Take the workflow's resource slot, win execution ownership of a pending row, then sample
  * the checkout the run starts from.
  */
@@ -264,6 +294,14 @@ async function claimPendingRun(
 ): Promise<RunPhase<CheckoutSample>> {
   const broken = await refuseBrokenRunEndedBindings(deps, platform, conversationId, workflowRun);
   if (broken) return { stopped: true, result: broken };
+  const askless = await refuseAsksWithoutItem(
+    deps,
+    platform,
+    conversationId,
+    workflow,
+    workflowRun
+  );
+  if (askless) return { stopped: true, result: askless };
   const refused = await holdWorkflowResource(
     deps,
     platform,

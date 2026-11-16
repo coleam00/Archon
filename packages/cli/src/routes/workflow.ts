@@ -412,6 +412,9 @@ export async function runWorkflowRespond(route: WorkflowRoute): Promise<number> 
 
 export async function runWorkflowAnswer(route: WorkflowRoute): Promise<number> {
   const { positionals, values, json, effectiveCwd } = route;
+  const ref = values.ref as string | undefined;
+  const withdraw = values.withdraw as string | undefined;
+  if (ref !== undefined || withdraw !== undefined) return await runWorkflowAnswerByRef(route);
   const answerRunId = positionals[2];
   const answerOccurrence = values.occurrence as string | undefined;
   const choose = (values.choose as string[] | undefined) ?? [];
@@ -437,6 +440,28 @@ export async function runWorkflowAnswer(route: WorkflowRoute): Promise<number> {
     effectiveCwd,
     values.as as string | undefined
   );
+}
+
+/** `workflow answer --ref <ref>` or `--withdraw <ref>`: an item named by its queue ref. */
+async function runWorkflowAnswerByRef(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands } = route;
+  const ref = values.ref as string | undefined;
+  const withdraw = values.withdraw as string | undefined;
+  const choose = (values.choose as string[] | undefined) ?? [];
+  const recommended = values.recommended === true;
+  const text = values.text as string | undefined;
+  const as = values.as as string | undefined;
+  const extra = positionals[2] !== undefined || values.occurrence !== undefined;
+  const request =
+    withdraw !== undefined && ref === undefined && choose.length === 0 && !recommended && !extra
+      ? text === undefined
+        ? { withdraw, as }
+        : undefined
+      : ref !== undefined && withdraw === undefined && !extra && !(recommended && choose.length > 0)
+        ? { ref, selection: recommended ? { recommended: true as const } : { choose }, text, as }
+        : undefined;
+  if (request === undefined) return await fail(json, commands.WORKFLOW_ANSWER_REF_USAGE);
+  return await commands.workflowAnswerRefCommand(route.host, request, json);
 }
 
 export async function runWorkflowAttention(route: WorkflowRoute): Promise<number> {

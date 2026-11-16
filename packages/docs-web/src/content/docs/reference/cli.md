@@ -650,9 +650,9 @@ reads events in batches of up to 20 runs; without the flag, listing costs are un
 Unreadable history or invalid typed execution metadata fails the opted-in request rather
 than returning a partial report.
 
-`--item <key>` reads one [item](#items) in the current project and ignores the other filters. It prints three sections, each oldest first: the item's runs (id, workflow, status, authored outcome, start and end), the questions open in those runs or their sub-runs, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface) together with the item's [rulings](#workflow-rule) (text, time, surface, who when they said, and when it was withdrawn). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no position for the item. It needs a registered project.
+`--item <key>` reads one [item](#items) in the current project and ignores the other filters. It prints three sections, each oldest first: the item's runs (id, workflow, status, authored outcome, start and end), the questions open in those runs or their sub-runs and the asks open on the item, and the answers recorded in them (attention answers and gate decisions, with the run, node, time and surface) together with the item's [rulings](#workflow-rule) (text, time, surface, who when they said, and when it was withdrawn). A sub-run is not listed as a run; its question or answer names its own run id, and `workflow get` on the parent shows it. The read reports recorded facts only; it computes no position for the item. It needs a registered project.
 
-`--json` prints `{ item, runs, questions, answers, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), or a ruling (`reason: "ruling_unreadable"`, `rulingId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its rulings; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
+`--json` prints `{ item, runs, questions, answers, degraded }`: `item` is `{ id, projectKey, key }`; each run is `{ id, workflow, status, outcome, startedAt, completedAt }`; each question is the attention queue item `workflow attention --json` lists; each answer has `kind` `attention` (with `answer`, `by`, `fromRun`) or `gate` (with `decision`, and `text` for its comment or rejection reason), and `runId`, `node`, `occurrence`, `at`, `via`, null where the row does not record them; or `kind` `ruling`, with `id`, `text`, `at`, `via`, `by`, `fromRun` and `withdrawn` (null, or `{ at, via, by, fromRun }`), and no run. An [ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run left reads as `kind` `ask`, with its `ref`, `answer` (null for a withdrawal), `withdrawn`, `by` and `fromRun`, on the run that left it; `kind` `asks_settled` records that the last open ask of that run's set closed, with `answered` and `withdrawn` counts. Open asks on the item are among its questions. `degraded` names each part that could not be read: a run in the item's tree, one of its own runs or a paused child (`reason: "run_unreadable"`, `runId`), or a ruling (`reason: "ruling_unreadable"`, `rulingId`); the rest of the item still reads. An item named with no run yet reads with empty sections but for its rulings; a key nothing has named exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "item": "<key>" }`.
 
 `--item-of <run-id>` reads the item a run belongs to, the item of its top-level run when it is a `workflow:` sub-run, in whichever project the run is. It prints the same read as `--item`. A run on no item, or one the store does not know, exits 1, and with `--json` prints `{ "ok": false, "error": "not_found", "run": "<run-id>" }`. It is the host command behind the `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to) export.
 
@@ -1399,6 +1399,38 @@ it; `archon serve` or [`workflow wake`](#workflow-wake) continues it. The HTTP e
 is `POST /api/workflows/runs/<run-id>/answer` with
 `{ occurrence, choose?, recommended?, text?, as? }`, where `recommended: true` takes the
 place of `choose`.
+
+#### Answering by ref
+
+`--ref <ref>` takes the place of `<run-id> --occurrence <id>`: it answers the item the
+[attention queue](#workflow-attention) lists under that `ref`, through the same answer
+operation the API and the chat tool use. It is the only way to answer an
+[ask](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) a completed run
+left, which has no paused run to name. For an item a paused run holds the ref works too, and
+the run is not continued from here. `--withdraw <ref>` closes an ask unanswered.
+
+```bash
+archon workflow answer --ref ask:<id> --choose keep --as planner --json   # answer an ask
+archon workflow answer --ref ask:<id> --recommended --text "Agreed"       # accept its recommendation
+archon workflow answer --ref ask:<id> --choose other --text "Split it"   # none of its options
+archon workflow answer --withdraw ask:<id> --json                         # withdraw an ask
+```
+
+An ask is a `select` question that also offers `other`, answered with text. Who may answer or
+withdraw it is the rule of the run that left it: its starter, or an admin; the operator always.
+`--as` and `fromRun` are recorded as for any answer. The same answer to an answered ask, or a
+second withdrawal, changes nothing; a different answer to an answered ask, withdrawing an
+answered one, or either on an ask a newer run replaced, is refused. The write that closes the
+last open ask of a run's set records `asks_settled` once.
+
+`--json` prints `{ ok: true, ref, action, settled?, unchanged? }`: `action` is `answer` or
+`withdraw`, `settled` is true when this write settled the set, and `unchanged: true` when
+nothing changed. An answer to a run-held item prints `runId`, `cancelled` and `continues`
+instead of `settled`. A refusal exits 1 and prints `{ ok: false, error, message }`, where
+`error` is `unknown` (nothing the caller may answer has the ref), `closed`, `moved`,
+`takes_no_answer`, `already_answered`, `already_withdrawn`, `already_replaced`, `not_an_ask`
+(a `--withdraw` of an item a paused run holds) or `error`. The HTTP equivalents are
+`POST /api/attention/answer` and `POST /api/attention/withdraw`.
 
 `approve`, `reject` and `respond <option>` also answer an attention wait, as shorthand:
 `approve [text]` answers a `message` wait with its text, and otherwise each verb chooses

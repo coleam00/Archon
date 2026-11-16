@@ -5,6 +5,7 @@
  */
 import { z } from 'zod';
 import {
+  askItemRef,
   attentionQueueItemSchema,
   compareAge,
   isHeldByRun,
@@ -19,6 +20,7 @@ import {
   type ItemRuling,
 } from './schemas/item-ruling';
 import { recordSurfaceSchema } from './schemas/record-surface';
+import { asksSettledDataSchema } from './schemas/item-ask';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import {
   attentionAnswererSchema,
@@ -73,7 +75,10 @@ const answerFields = {
  * One recorded answer: `attention` answers a question (`wait_answered`), `gate` resolves an
  * approval gate (`approval_received`), `ruling` is a decision recorded on the item with no
  * question asked (`ItemRuling`), which no run holds. `text` on a gate is its comment, or a
- * rejection's reason. A withdrawn ruling stays, with `withdrawn` set.
+ * rejection's reason. A withdrawn ruling stays, with `withdrawn` set. `ask` answers or
+ * withdraws an ask a completed run left (`ask_answered`, `ask_withdrawn`), and
+ * `asks_settled` records that the last open ask of that run's set closed, with how many
+ * were answered and withdrawn: `answered: 0` means nothing was.
  */
 export const itemAnswerSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -91,6 +96,24 @@ export const itemAnswerSchema = z.discriminatedUnion('kind', [
     text: z.string().nullable(),
   }),
   itemRulingSchema,
+  z.object({
+    kind: z.literal('ask'),
+    ...answerFields,
+    /** The ask's ref, as the queue listed it. */
+    ref: z.string(),
+    /** Null for a withdrawal. */
+    answer: attentionAnswerSchema.nullable(),
+    withdrawn: z.boolean(),
+    by: attentionAnswererSchema.nullable(),
+    /** Reported from the answering run's environment and not verified. */
+    fromRun: attentionAnsweringRunSchema.nullable(),
+  }),
+  z.object({
+    kind: z.literal('asks_settled'),
+    ...answerFields,
+    answered: z.number().int().nonnegative(),
+    withdrawn: z.number().int().nonnegative(),
+  }),
 ]);
 export type ItemAnswer = z.infer<typeof itemAnswerSchema>;
 
@@ -158,6 +181,25 @@ function itemAnswer(row: WorkflowEventRow): ItemAnswer {
     at: row.created_at,
     via: field(recordSurfaceSchema, data.via),
   };
+  if (row.event_type === 'ask_answered' || row.event_type === 'ask_withdrawn')
+    return {
+      kind: 'ask',
+      ...base,
+      ref: askItemRef(field(z.string(), data.ask) ?? ''),
+      answer: row.event_type === 'ask_answered' ? field(attentionAnswerSchema, data.answer) : null,
+      withdrawn: row.event_type === 'ask_withdrawn',
+      by: field(attentionAnswererSchema, data.by),
+      fromRun: field(attentionAnsweringRunSchema, data.fromRun),
+    };
+  if (row.event_type === 'asks_settled') {
+    const settled = field(asksSettledDataSchema, data);
+    return {
+      kind: 'asks_settled',
+      ...base,
+      answered: settled?.answered ?? 0,
+      withdrawn: settled?.withdrawn ?? 0,
+    };
+  }
   if (row.event_type === 'wait_answered')
     return {
       kind: 'attention',
@@ -191,13 +233,17 @@ export async function readItem(
   ]);
   // The one queue reader, so a question here reads as `workflow attention` lists it.
   const { values, degraded } = splitAttentionRead(await listAttentionQueue(source));
+  // An ask no run holds belongs to the item it was left on.
   const questions = values
-    .filter(item => isHeldByRun(item) && tree.has(item.run.id))
+    .filter(item => (isHeldByRun(item) ? tree.has(item.run.id) : item.item?.id === found.item.id))
     .sort(compareAge);
   const events =
     tree.size === 0
       ? new Map<string, WorkflowEventRow[]>()
-      : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
+      : await source.store.listEventsForRuns(
+          [...tree],
+          ['wait_answered', 'approval_received', 'ask_answered', 'ask_withdrawn', 'asks_settled']
+        );
   const rulings: ItemRuling[] = [];
   const unreadableRulings: ItemRulingDegraded[] = [];
   for (const read of await source.store.listItemRulings(found.item.id))

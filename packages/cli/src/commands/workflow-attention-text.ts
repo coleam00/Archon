@@ -79,7 +79,8 @@ function offerLines(ask: Ask): string[] {
   for (const option of ask.options) {
     const label = option.label === undefined ? '' : ` (${option.label})`;
     const does = option.does === undefined ? '' : `: ${oneLine(option.does)}`;
-    lines.push(`option ${option.id}${label}${does}`);
+    const cost = option.cost === undefined ? '' : ` (cost: ${oneLine(option.cost)})`;
+    lines.push(`option ${option.id}${label}${does}${cost}`);
   }
   return lines;
 }
@@ -98,6 +99,29 @@ function askLines(ask: RunAsk, detail: AttentionItemDetail): string[] {
     );
   lines.push(`answer: ${answerCommand(ask)}`);
   if (detail === 'brief') lines.push(`full question: ${command(`attention ${id}`)}`);
+  return lines;
+}
+
+/** An item no run holds, such as an ask a completed run left: answered by its ref. */
+function refItemLines(item: Ask, detail: AttentionItemDetail): string[] {
+  const lines = [question(item.message, detail)];
+  if (item.askedIn !== undefined)
+    lines.push(`left by run ${item.askedIn.runId} (${item.askedIn.workflow})`);
+  if (item.context !== undefined)
+    lines.push(`context: ${detail === 'full' ? item.context : firstLine(item.context)}`);
+  lines.push(...offerLines(item));
+  for (const artifact of item.artifacts ?? [])
+    lines.push(`artifact: ${artifact.path} (run ${artifact.run_id})`);
+  if (item.recommendation !== undefined)
+    lines.push(
+      `accept the recommendation: ${command(`answer --ref ${item.ref} --recommended [--text <why>]`)}`
+    );
+  lines.push(
+    `answer: ${command(`answer --ref ${item.ref} --choose <option> [--text <text>]`)}` +
+      (item.other === true ? " ('other' needs text)" : '')
+  );
+  if (item.askedIn !== undefined)
+    lines.push(`withdraw: ${command(`answer --withdraw ${item.ref}`)}`);
   return lines;
 }
 
@@ -147,10 +171,8 @@ export function attentionItemLines(
   const labels = Object.entries(item.labels);
   if (labels.length > 0)
     lines.push(`    labels: ${labels.map(([key, value]) => `${key}=${value}`).join(', ')}`);
-  // No run holds it, so no run command answers it: the text says what is asked and offered.
-  const body = isHeldByRun(item)
-    ? itemBody(item, detail)
-    : [question(item.message, detail), ...offerLines(item)];
+  // No run holds it, so no run command answers it: it is answered by its ref.
+  const body = isHeldByRun(item) ? itemBody(item, detail) : refItemLines(item, detail);
   for (const line of body) lines.push(`    ${line}`);
   return lines;
 }
@@ -207,6 +229,8 @@ function closedText(line: Extract<AttentionStreamLine, { type: 'resolved' }>): s
       return `was answered${line.answeredVia === null ? '' : ` via ${line.answeredVia}`}${answererText(line.answeredBy)}${line.answeredFromRun === null ? '' : ` from run ${line.answeredFromRun.runId} (node ${line.answeredFromRun.nodePath})`}.`;
     case 'withdrawn':
       return 'no longer needs attention.';
+    case 'replaced':
+      return `was replaced by the asks of run ${line.replacedByRunId}.`;
     case 'no_longer_listed':
       return 'is no longer listed.';
   }

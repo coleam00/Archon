@@ -28,6 +28,13 @@ import type {
 } from './schemas';
 import type { IStateDocumentStore } from './state-document-store';
 import type { ItemRulingAct } from './schemas/item-ruling';
+import type {
+  ItemAsk,
+  ItemAskActInput,
+  ItemAskCloseResult,
+  StoredItemAsk,
+} from './schemas/item-ask';
+import type { AttentionAnswer } from './schemas/run-wait';
 import type { AttentionAnswerWrite, AttentionLabelWrite } from './store/attention-writes';
 import type {
   PauseCursor,
@@ -229,6 +236,26 @@ export interface IWorkflowStore
   withdrawItemRuling(
     input: { rulingId: string; projectKey?: string } & ItemRulingAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
+  /**
+   * Every open ask, oldest first. An ask whose stored value does not read is reported in
+   * its place as its run's unreadable entry, not thrown. A store without items has none.
+   */
+  listOpenItemAsks(): Promise<AttentionRead<StoredItemAsk>[]>;
+  /** One ask, open or closed; null when no ask has the id. Throws when its row does not read. */
+  getItemAsk(id: string): Promise<StoredItemAsk | null>;
+  /**
+   * Answer an open ask. The same answer to an answered ask is `unchanged`; any other close
+   * stands and the answer is `refused`. The write that closes the last open ask of its set
+   * records `asks_settled` on the run that left them, once.
+   */
+  answerItemAsk(
+    input: { askId: string; answer: AttentionAnswer } & ItemAskActInput
+  ): Promise<ItemAskCloseResult>;
+  /**
+   * Withdraw an open ask. A withdrawn ask is `unchanged`; an answered or replaced one is
+   * `refused`. Settles its set as `answerItemAsk` does.
+   */
+  withdrawItemAsk(input: { askId: string } & ItemAskActInput): Promise<ItemAskCloseResult>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(
@@ -447,6 +474,12 @@ export interface IWorkflowStore
    * after the commit leaves them pending for their host's next drain, and a second
    * completion is refused before it can write them again. A store without items refuses
    * a non-empty list.
+   *
+   * `result.asks` is present when the run's workflow declares `returns.asks` and the run is
+   * top-level. In the same transaction, and only when this call wins, the asks still open
+   * from that workflow on the run's item close as `replaced`, and these open in their
+   * place, so the asks exist exactly when the completion does. A store refuses a
+   * non-empty list for a run with no item; a store without items refuses any.
    */
   completeWorkflowRun(
     id: string,
@@ -455,6 +488,7 @@ export interface IWorkflowStore
     result?: {
       outcome?: RunCompletedOutcome;
       startReceipts?: readonly SourceReceiptAcceptance[];
+      asks?: readonly ItemAsk[];
     }
   ): Promise<void>;
   /**

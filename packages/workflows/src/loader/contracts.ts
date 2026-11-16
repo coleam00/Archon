@@ -10,9 +10,11 @@ import { isOutputFormatEnforced } from '../schemas/node-ignored-fields';
 import { declaredFieldsFromSchema, outputFieldConstraints } from '../output-ref';
 import { compileOutputSchema } from '../structured-output';
 import { stringEnumValues } from '../completed-outcome';
+import { itemAsksJsonSchema } from '../schemas/item-ask';
+import { isDeepStrictEqual } from 'node:util';
 
 /**
- * Validate the result contract (`returns: { node, outcome }`) against its selected node.
+ * Validate the result contract (`returns: { node, outcome, asks }`) against its selected node.
  *
  * Include aliases are deliberately deferred: `parseWorkflow` can only see the
  * `include:` directive, while `expandWorkflowIncludes` owns rebinding that alias
@@ -25,34 +27,101 @@ export function validateWorkflowResultContract(
   }
 ): string | null {
   const field = workflow.result?.outcome;
-  if (field === undefined) return null;
+  const asks = workflow.result?.asks;
+  if (field === undefined && asks === undefined) return null;
   if (workflow.returns === undefined) {
-    return `Workflow declares returns.outcome: '${field}' without a returns node`;
+    return field !== undefined
+      ? `Workflow declares returns.outcome: '${field}' without a returns node`
+      : `Workflow declares returns.asks: '${asks}' without a returns node`;
   }
-  const subject = `Workflow returns.outcome: '${field}'`;
+  if (field !== undefined && field === asks) {
+    return `Workflow returns.asks: '${asks}' names the same property as returns.outcome; an outcome and the asks are different values`;
+  }
 
   const selectedNode = workflow.nodes.find(node => node.id === workflow.returns);
   if (selectedNode === undefined) {
     return `Workflow declares returns: '${workflow.returns}' but no top-level node has that id`;
   }
   if (isIncludeDirective(selectedNode)) return null;
-  if (isLoopGroupNode(selectedNode)) {
-    return `${subject} cannot select loop_group node '${workflow.returns}' because loop_group output_format is ignored and its runtime output is raw text; select a schema-enforced collector node instead`;
-  }
-  if (isWorkflowNode(selectedNode) && selectedNode.fan_out !== undefined) {
-    return `${subject} cannot select fan-out workflow node '${workflow.returns}' because its runtime output is an aggregate array; select a collector node with a required outcome property instead`;
-  }
-  if (isComposeFanOutNode(selectedNode)) {
-    return `${subject} cannot select composed fan-out node '${workflow.returns}' because its runtime output is an aggregate array; select a collector node with a required outcome property instead`;
-  }
-
-  return validateOutcomeFieldSchema(
-    workflow.name,
-    subject,
-    workflow.returns,
-    field,
-    selectedNode.output_format
+  return (
+    (field === undefined
+      ? null
+      : (selectedNodeShapeError(
+          `Workflow returns.outcome: '${field}'`,
+          workflow.returns,
+          selectedNode,
+          'a required outcome property'
+        ) ??
+        validateOutcomeFieldSchema(
+          workflow.name,
+          `Workflow returns.outcome: '${field}'`,
+          workflow.returns,
+          field,
+          selectedNode.output_format
+        ))) ??
+    (asks === undefined
+      ? null
+      : (selectedNodeShapeError(
+          `Workflow returns.asks: '${asks}'`,
+          workflow.returns,
+          selectedNode,
+          'an object output_format'
+        ) ??
+        validateAsksFieldSchema(
+          `Workflow returns.asks: '${asks}'`,
+          workflow.returns,
+          asks,
+          selectedNode
+        )))
   );
+}
+
+/** Why the returns node cannot carry a property the engine reads: its output is no object it declares. */
+function selectedNodeShapeError(
+  subject: string,
+  nodeId: string,
+  node: DagNode,
+  needs: string
+): string | null {
+  if (isLoopGroupNode(node)) {
+    return `${subject} cannot select loop_group node '${nodeId}' because loop_group output_format is ignored and its runtime output is raw text; select a schema-enforced collector node instead`;
+  }
+  if (isWorkflowNode(node) && node.fan_out !== undefined) {
+    return `${subject} cannot select fan-out workflow node '${nodeId}' because its runtime output is an aggregate array; select a collector node with ${needs} instead`;
+  }
+  if (isComposeFanOutNode(node)) {
+    return `${subject} cannot select composed fan-out node '${nodeId}' because its runtime output is an aggregate array; select a collector node with ${needs} instead`;
+  }
+  return null;
+}
+
+/**
+ * The asks property is the engine's: the node declares an object output, and the property
+ * is either absent (the loader adds it) or exactly the engine's schema, which it is after
+ * the loader added it and this check runs again on the expanded or dispatched workflow.
+ */
+function validateAsksFieldSchema(
+  subject: string,
+  nodeId: string,
+  field: string,
+  node: DagNode
+): string | null {
+  const schema = node.output_format;
+  if (schema === undefined || !isOutputFormatEnforced(node)) {
+    return `${subject} selects node '${nodeId}', but that node declares no output_format the engine enforces; give it an object output_format`;
+  }
+  if (!outputFieldConstraints(schema, field).object) {
+    return `${subject} requires node '${nodeId}' output_format to declare type: object`;
+  }
+  const properties = schema.properties;
+  const declared =
+    properties !== null && typeof properties === 'object' && !Array.isArray(properties)
+      ? (properties as Record<string, unknown>)[field]
+      : undefined;
+  if (declared !== undefined && !isDeepStrictEqual(declared, itemAsksJsonSchema())) {
+    return `${subject} on node '${nodeId}': the engine defines this property; remove it from output_format`;
+  }
+  return null;
 }
 
 function validateOutcomeFieldSchema(

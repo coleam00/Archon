@@ -43,7 +43,7 @@ import type { WorktreeOwnershipReaders } from '../services/cleanup/run-worktree'
 import { createWorkflowOperations } from '../operations/workflow-operations';
 import { requestDetachedRunStop } from '../services/run-owner-stop';
 import { runOwnerLossWatch } from '../services/run-attention-watch';
-import { attentionQueueSource } from '../operations/attention-queue';
+import { attentionQueueSource, watchSource } from '../operations/attention-queue';
 import { isRunOwnedByThisProcess, isRunOwnerAnswering } from '../services/run-live-owner';
 
 const worktreeReferenceSchema = ownedWorktreeSchema.pick({ envId: true }).loose();
@@ -393,7 +393,7 @@ export async function createFileWorkflowHost(
     records,
     deps,
     engine: new InProcessWorkflowEngine(deps, {
-      branchOf: attentionQueueSource(store, records.isolation).branchOf,
+      ...watchSource(attentionQueueSource(store, records.isolation)),
       ownerLoss: runOwnerLossWatch(store),
     }),
     operations: createWorkflowOperations({

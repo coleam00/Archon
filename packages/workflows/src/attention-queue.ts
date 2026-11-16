@@ -21,7 +21,10 @@ import {
   projectKeyForStorageRoot,
   resolveRunStorageRoot,
 } from '@archon/paths/archon-paths';
+import { artifactPointerSchema } from './schemas/artifact-pointer';
+import type { StoredItemAsk } from './schemas/item-ask';
 import {
+  OTHER_ATTENTION_OPTION,
   attentionFormSchema,
   attentionLabelKeySchema,
   attentionLabelsSchema,
@@ -130,10 +133,17 @@ export const attentionQueueItemSchema = z.discriminatedUnion('kind', [
     run: answerableRunSchema.optional(),
     message: z.string(),
     form: attentionFormSchema,
-    options: z.array(attentionOptionSchema),
+    /** An ask's options also say what each one costs. */
+    options: z.array(attentionOptionSchema.extend({ cost: z.string().min(1).optional() })),
     /** The option with id `other` is the reserved one: an answer choosing it needs text. */
     other: z.literal(true).optional(),
     recommendation: attentionRecommendationSchema.optional(),
+    /** An ask's context: what is at stake and why it came up. */
+    context: z.string().optional(),
+    /** Artifacts an ask points its answerer to. */
+    artifacts: z.array(artifactPointerSchema).optional(),
+    /** Set on an ask a completed run left: the run, which no longer holds anything. */
+    askedIn: z.object({ runId: z.string(), workflow: z.string() }).optional(),
   }),
   z.object({
     kind: z.literal('awaiting_response'),
@@ -166,6 +176,80 @@ export function isHeldByRun(item: AttentionQueueItem): item is RunAttentionQueue
 export type AttentionQueueItemWithoutRun = Extract<AttentionQueueItem, { kind: 'attention' }> & {
   run?: undefined;
 };
+
+const ASK_REF_PREFIX = 'ask:';
+
+/**
+ * The ref of an ask a completed run left. `askIdOfRef` reads it back; nothing else builds
+ * or parses one. A run id is a UUID, so no run ref takes this form.
+ */
+export function askItemRef(askId: string): string {
+  return `${ASK_REF_PREFIX}${askId}`;
+}
+
+/** The ask id an ask ref names, or undefined when the ref is not an ask's. */
+export function askIdOfRef(ref: string): string | undefined {
+  return ref.startsWith(ASK_REF_PREFIX) && ref.length > ASK_REF_PREFIX.length
+    ? ref.slice(ASK_REF_PREFIX.length)
+    : undefined;
+}
+
+/** The store reads an ask's queue item needs. */
+export type AskItemStore = Pick<
+  IWorkflowStore,
+  'listOpenItemAsks' | 'getItem' | 'getWorkflowRun' | 'getCodebase'
+>;
+
+/**
+ * The queue item an ask is: a `select` question with the reserved `other` option, held by
+ * no run. Its project is the run's that left it, by the rule every item uses, or, once
+ * that run is gone, the item's own project key.
+ */
+export async function askQueueItem(
+  store: Omit<AskItemStore, 'listOpenItemAsks'>,
+  ask: StoredItemAsk,
+  codebases: CodebaseCache = new Map()
+): Promise<AttentionQueueItemWithoutRun> {
+  const item = await store.getItem(ask.itemId);
+  const run = await store.getWorkflowRun(ask.runId);
+  const project =
+    run !== null
+      ? await runProject({ store }, run, codebases)
+      : item !== null && stateProjectKeySchema.safeParse(item.projectKey).success
+        ? projectRef(item.projectKey, null)
+        : null;
+  return {
+    kind: 'attention',
+    ref: askItemRef(ask.id),
+    project,
+    ...(item === null ? {} : { item }),
+    revision: 1,
+    labels: {},
+    pausedAt: ask.openedAt,
+    message: ask.ask.question,
+    form: 'select',
+    options: [
+      ...ask.ask.options.map(option => ({ id: option.id, does: option.does, cost: option.cost })),
+      OTHER_ATTENTION_OPTION,
+    ],
+    other: true,
+    recommendation: { option: ask.ask.recommendation.option, why: ask.ask.recommendation.why },
+    context: ask.ask.context,
+    artifacts: ask.ask.artifacts.map(({ type, run_id, path }) => ({ type, run_id, path })),
+    askedIn: { runId: ask.runId, workflow: ask.workflowName },
+  };
+}
+
+/** The open asks as queue items, for `AttentionQueueSource.itemsWithoutRun`. */
+export async function openAskItems(
+  store: AskItemStore
+): Promise<AttentionRead<AttentionQueueItemWithoutRun>[]> {
+  const codebases: CodebaseCache = new Map();
+  const items: AttentionRead<AttentionQueueItemWithoutRun>[] = [];
+  for (const ask of await store.listOpenItemAsks())
+    items.push(isAttentionDegraded(ask) ? ask : await askQueueItem(store, ask, codebases));
+  return items;
+}
 
 const RUN_REF_SEPARATOR = ':';
 
@@ -323,10 +407,11 @@ export interface AttentionQueueSource {
   /** The branch of a run's checkout; null when the host has no record of one. */
   branchOf(run: WorkflowRun): Promise<string | null>;
   /**
-   * The open items no run holds. Nothing stores one yet, so no host sets this; it is
-   * where a source of such items joins the one reader.
+   * The open items no run holds: the asks completed runs left (`openAskItems`), which a
+   * host sets here. It is where a source of such items joins the one reader. An entry
+   * that does not read is reported in its place.
    */
-  itemsWithoutRun?(): Promise<readonly AttentionQueueItemWithoutRun[]>;
+  itemsWithoutRun?(): Promise<readonly AttentionRead<AttentionQueueItemWithoutRun>[]>;
 }
 
 export type CodebaseCache = Map<string, Promise<AttentionQueueItemSources['codebase']>>;
@@ -499,8 +584,12 @@ export async function readAttentionQueueItemByRef(
   source: AttentionQueueSource,
   ref: string
 ): Promise<AttentionItemRefRead> {
-  const withoutRun = (await source.itemsWithoutRun?.())?.find(item => item.ref === ref);
+  const withoutRun = (await source.itemsWithoutRun?.())?.find(
+    (item): item is AttentionQueueItemWithoutRun => !isAttentionDegraded(item) && item.ref === ref
+  );
   if (withoutRun !== undefined) return { kind: 'found', item: withoutRun };
+  // An ask that closed is no longer an item: its ref names nothing open.
+  if (askIdOfRef(ref) !== undefined) return { kind: 'none' };
   const runId = runIdOfRef(ref);
   if (runId === '') return { kind: 'unknown' };
   const item = await readAttentionQueueItem(source, runId);

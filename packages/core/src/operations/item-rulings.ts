@@ -33,8 +33,13 @@ export function assertMayRule(actor: RunActor, role: UserRole | undefined): void
   if (!authorizeRunAction(actor, null, role)) throw new ItemRulingForbiddenError();
 }
 
-async function rulingAct(
-  store: RulingStore,
+/**
+ * Who acts on an item, as a ruling or an ask's answer records it: the declared name or
+ * user, checked as an answer's attribution is, and the run the call came from, which
+ * must be one this store knows.
+ */
+export async function itemAct(
+  store: Pick<IWorkflowStore, 'getWorkflowRun'>,
   actor: RunActor,
   via: RecordSurface
 ): Promise<ItemRulingAct> {
@@ -44,7 +49,7 @@ async function rulingAct(
   const fromRun = actor.kind === 'operator' ? (actor.fromRun ?? null) : null;
   if (fromRun !== null && (await store.getWorkflowRun(fromRun.runId)) === null)
     throw new Error(
-      `The ruling comes from inside run ${fromRun.runId}, which this store does not know.`
+      `The call comes from inside run ${fromRun.runId}, which this store does not know.`
     );
   return { via, by, fromRun };
 }
@@ -55,7 +60,7 @@ export async function recordItemRuling(
   actor: RunActor,
   via: RecordSurface
 ): Promise<ItemRuling> {
-  return store.recordItemRuling({ ...target, ...(await rulingAct(store, actor, via)) });
+  return store.recordItemRuling({ ...target, ...(await itemAct(store, actor, via)) });
 }
 
 /** `projectKey` scopes the withdrawal: a ruling on another project's item is refused. */
@@ -65,5 +70,5 @@ export async function withdrawItemRuling(
   actor: RunActor,
   via: RecordSurface
 ): Promise<ItemRuling> {
-  return store.withdrawItemRuling({ ...target, ...(await rulingAct(store, actor, via)) });
+  return store.withdrawItemRuling({ ...target, ...(await itemAct(store, actor, via)) });
 }

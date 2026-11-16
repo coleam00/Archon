@@ -1920,6 +1920,158 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/attention/answer': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Answer an attention queue item by its ref */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['AnswerAttentionItemBody'];
+        };
+      };
+      responses: {
+        /** @description Answered, or the item already had this answer */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AttentionItemActionResponse'];
+          };
+        };
+        /** @description Bad request: the answer does not fit the item */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Nothing the caller may answer has this ref */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The item is closed, moved, takes no answer, or was answered differently */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/attention/withdraw': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Withdraw an ask a completed run left, by its ref */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['WithdrawAttentionItemBody'];
+        };
+      };
+      responses: {
+        /** @description Withdrawn, or already withdrawn */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['AttentionItemActionResponse'];
+          };
+        };
+        /** @description The ref names an item a paused run holds, which is answered, not withdrawn */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Nothing the caller may withdraw has this ref */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The ask was already answered or replaced */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/runs/{runId}/attention': {
     parameters: {
       query?: never;
@@ -5674,6 +5826,7 @@ export interface components {
       nodes: components['schemas']['DagNode'][];
       result?: {
         outcome?: string;
+        asks?: string;
       };
     };
     DagNode: {
@@ -7059,6 +7212,7 @@ export interface components {
             label?: string;
             does?: string;
             value?: unknown;
+            cost?: string;
           }[];
           /** @enum {boolean} */
           other?: true;
@@ -7067,6 +7221,17 @@ export interface components {
             why: string;
             /** @enum {string} */
             confidence?: 'low' | 'medium' | 'high';
+          };
+          context?: string;
+          artifacts?: {
+            /** @enum {string} */
+            type: 'archon_artifact';
+            run_id: string;
+            path: string;
+          }[];
+          askedIn?: {
+            runId: string;
+            workflow: string;
           };
         }
       | {
@@ -7238,6 +7403,26 @@ export interface components {
             };
           }[];
         };
+    AttentionItemActionResponse: {
+      ref: string;
+      /** @enum {string} */
+      action: 'answer' | 'withdraw';
+      unchanged: boolean;
+      settled?: boolean;
+      runId?: string;
+      continues?: boolean;
+      cancelled?: boolean;
+    };
+    AnswerAttentionItemBody: {
+      ref: string;
+      choose?: string[];
+      /** @enum {boolean} */
+      recommended?: true;
+      text?: string;
+    };
+    WithdrawAttentionItemBody: {
+      ref: string;
+    };
     AttentionQueueItemResponse: {
       item:
         | {
@@ -7286,6 +7471,7 @@ export interface components {
               label?: string;
               does?: string;
               value?: unknown;
+              cost?: string;
             }[];
             /** @enum {boolean} */
             other?: true;
@@ -7294,6 +7480,17 @@ export interface components {
               why: string;
               /** @enum {string} */
               confidence?: 'low' | 'medium' | 'high';
+            };
+            context?: string;
+            artifacts?: {
+              /** @enum {string} */
+              type: 'archon_artifact';
+              run_id: string;
+              path: string;
+            }[];
+            askedIn?: {
+              runId: string;
+              workflow: string;
             };
           }
         | {
@@ -7527,6 +7724,7 @@ export interface components {
               label?: string;
               does?: string;
               value?: unknown;
+              cost?: string;
             }[];
             /** @enum {boolean} */
             other?: true;
@@ -7535,6 +7733,17 @@ export interface components {
               why: string;
               /** @enum {string} */
               confidence?: 'low' | 'medium' | 'high';
+            };
+            context?: string;
+            artifacts?: {
+              /** @enum {string} */
+              type: 'archon_artifact';
+              run_id: string;
+              path: string;
+            }[];
+            askedIn?: {
+              runId: string;
+              workflow: string;
             };
           }
         | {
@@ -7749,6 +7958,53 @@ export interface components {
               } | null;
             } | null;
           }
+        | {
+            /** @enum {string} */
+            kind: 'ask';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            ref: string;
+            answer:
+              | {
+                  text: string;
+                }
+              | {
+                  decision: string;
+                  text: string;
+                }
+              | {
+                  decisions: string[];
+                  text: string;
+                }
+              | unknown;
+            withdrawn: boolean;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+          }
+        | {
+            /** @enum {string} */
+            kind: 'asks_settled';
+            runId: string;
+            node: string | null;
+            occurrence: string | null;
+            at: string;
+            via: string | null;
+            answered: number;
+            withdrawn: number;
+          }
       )[];
       degraded: (
         | {
@@ -7875,6 +8131,7 @@ export interface components {
                   label?: string;
                   does?: string;
                   value?: unknown;
+                  cost?: string;
                 }[];
                 /** @enum {boolean} */
                 other?: true;
@@ -7883,6 +8140,17 @@ export interface components {
                   why: string;
                   /** @enum {string} */
                   confidence?: 'low' | 'medium' | 'high';
+                };
+                context?: string;
+                artifacts?: {
+                  /** @enum {string} */
+                  type: 'archon_artifact';
+                  run_id: string;
+                  path: string;
+                }[];
+                askedIn?: {
+                  runId: string;
+                  workflow: string;
                 };
               }
             | {
@@ -8061,6 +8329,24 @@ export interface components {
               occurrence: string | null;
               /** @enum {string} */
               reason: 'withdrawn';
+            }
+          | {
+              /** @enum {string} */
+              type: 'resolved';
+              cursor: string;
+              project: {
+                key: string;
+                codebaseId: string | null;
+                name: string;
+              } | null;
+              ref: string;
+              runId?: string;
+              workflow: string | null;
+              parentRunId: string | null;
+              occurrence: string | null;
+              /** @enum {string} */
+              reason: 'replaced';
+              replacedByRunId: string;
             }
           | {
               /** @enum {string} */

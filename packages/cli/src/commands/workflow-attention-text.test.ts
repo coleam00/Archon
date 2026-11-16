@@ -152,13 +152,15 @@ test('the close of an ask is one line that says who answered when that was recor
   ).toHaveLength(1);
 });
 
-test('an item no run holds is named by its ref and offers no run command', () => {
+test('an item no run holds is named by its ref and answered by it, not by a run command', () => {
   const { run: _, ...withoutRun } = ask;
   const block = opened({ ...withoutRun, ref: 'ask:1' });
   expect(block).toContain('ask:1');
   expect(block).toContain('Merge pull request 42?');
   expect(block).toContain('option merge: Squash-merge it.');
-  expect(block).not.toContain('archon workflow');
+  expect(block).toContain('archon workflow answer --ref ask:1 --choose <option>');
+  expect(block).not.toContain('respond');
+  expect(block).not.toContain('resume');
   expect(
     text({
       type: 'resolved',

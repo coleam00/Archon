@@ -2041,12 +2041,23 @@ declare module 'archon:script' {
         readonly label?: string;
         readonly does?: string;
         readonly value?: unknown;
+        readonly cost?: string;
       }>;
       readonly other?: true;
       readonly recommendation?: {
         readonly option: string;
         readonly why: string;
         readonly confidence?: 'low' | 'medium' | 'high';
+      };
+      readonly context?: string;
+      readonly artifacts?: ReadonlyArray<{
+        readonly type: 'archon_artifact';
+        readonly run_id: string;
+        readonly path: string;
+      }>;
+      readonly askedIn?: {
+        readonly runId: string;
+        readonly workflow: string;
       };
     } | {
       readonly kind: 'awaiting_response';
@@ -2214,6 +2225,42 @@ declare module 'archon:script' {
           readonly nodePath: string;
         } | null;
       } | null;
+    } | {
+      readonly kind: 'ask';
+      readonly runId: string;
+      readonly node: string | null;
+      readonly occurrence: string | null;
+      readonly at: string;
+      readonly via: string | null;
+      readonly ref: string;
+      readonly answer: {
+        readonly text: string;
+      } | {
+        readonly decision: string;
+        readonly text: string;
+      } | {
+        readonly decisions: ReadonlyArray<string>;
+        readonly text: string;
+      } | null;
+      readonly withdrawn: boolean;
+      readonly by: {
+        readonly declared: string;
+      } | {
+        readonly userId: string;
+      } | null;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+    } | {
+      readonly kind: 'asks_settled';
+      readonly runId: string;
+      readonly node: string | null;
+      readonly occurrence: string | null;
+      readonly at: string;
+      readonly via: string | null;
+      readonly answered: number;
+      readonly withdrawn: number;
     }>;
     readonly degraded: ReadonlyArray<{
       readonly type: 'degraded';

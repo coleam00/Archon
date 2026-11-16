@@ -320,6 +320,11 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `item_id`, `text`, `by_declared` or `by_user_id` (who, when they said), `via` (the surface), `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
   - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
 
+- **`remote_agent_item_asks`** - Asks a completed run left on its item ([`returns.asks`](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item))
+  - Opened in the write that completes the run; `run_id` is the run that left the ask and names its set, `workflow_name` the run's workflow, `position` its place in the set and `ask` the JSON the run left
+  - Closes once: `closed_as` is `answered`, `withdrawn` or `replaced`, NULL while open. An answer or withdrawal sets `answer` (answers only), `closed_at`, `closed_via`, `closed_by_declared` or `closed_by_user_id`, and `closed_from_run_id` and `closed_from_node_path` (unverified); a replacement sets `closed_at` and `replaced_by_run_id`
+  - `run_id` has no foreign key, so run cleanup keeps the record. `ask` and `answer` are read tolerantly, since more than one binary reads them. The answer and withdrawal events, and `asks_settled`, are on the run that left the set
+
 - **`remote_agent_start_receipt_bindings`** - Per-binding preparation state for a source receipt
   - Keyed by `(receipt_id, binding_id)`; deleted with the owning receipt
   - Tracks binding revision, host, intent, preparation status, owner, and error
