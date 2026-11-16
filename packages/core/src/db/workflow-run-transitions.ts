@@ -253,7 +253,7 @@ export async function claimPendingWorkflowRun(
  * instead of continuing a stale run.
  *
  * The status set is exactly what the two resume lookups can return —
- * findResumableRunByParentConversation ('failed'/'paused') and
+ * listResumableRunsByParentConversation ('failed'/'paused') and
  * getPausedWorkflowRun ('paused'). `pending` and `running` are deliberately NOT
  * matched: neither lookup can ever return them, so leaving them alone cannot
  * cause the stale continuation this exists to prevent, while cancelling them

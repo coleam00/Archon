@@ -69,3 +69,32 @@ export function buildFailedRunResumePrompt(
     '```',
   ].join('\n');
 }
+
+/** The reply when more than one run could continue: none is continued, the operator names one. */
+export function buildAmbiguousContinuationPrompt(
+  surface: WorkflowCommandSurface,
+  workflowName: string,
+  runs: readonly WorkflowRun[],
+  userMessage: string
+): string {
+  const listing = runs.flatMap(run => [
+    '',
+    `**Run \`${run.id}\`** (${formatResumableRunState(run.status)}, started ${run.started_at.toISOString()})`,
+    `> ${formatPriorRunPromptPreview(run.user_message)}`,
+    '```',
+    spellWorkflowCommand(surface, `resume ${run.id}`),
+    '```',
+  ]);
+  return [
+    `Found ${runs.length} open runs of **${workflowName}** in this conversation, so none was continued. Name the one to continue:`,
+    ...listing,
+    '',
+    'Or start fresh with your current message and leave them as they are:',
+    '```',
+    spellWorkflowCommand(
+      surface,
+      `run ${workflowName} --force "${escapeWorkflowCommandArg(userMessage)}"`
+    ),
+    '```',
+  ].join('\n');
+}

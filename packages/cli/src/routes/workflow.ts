@@ -583,6 +583,25 @@ export async function runWorkflowRule(route: WorkflowRoute): Promise<number> {
   return await commands.workflowRuleCommand(route.host, effectiveCwd, request, json);
 }
 
+export async function runWorkflowLink(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  const item = values.item as string | undefined;
+  const kind = values.kind as string | undefined;
+  const to = values.to as string | undefined;
+  const end = values.end as string | undefined;
+  const as = values.as as string | undefined;
+  if (positionals[2] !== undefined) return await fail(json, commands.WORKFLOW_LINK_USAGE);
+  // Exactly one of the two forms: a link to record, or the id of one to end.
+  const request =
+    end !== undefined && item === undefined && kind === undefined && to === undefined
+      ? { end, as }
+      : end === undefined && item !== undefined && kind !== undefined && to !== undefined
+        ? { item, kind, to, as }
+        : undefined;
+  if (request === undefined) return await fail(json, commands.WORKFLOW_LINK_USAGE);
+  return await commands.workflowLinkCommand(route.host, effectiveCwd, request, json);
+}
+
 const EVENT_EMIT_USAGE = 'Usage: archon workflow event emit --run-id <run-id> --type <event-type>';
 
 export async function runWorkflowEvent(route: WorkflowRoute): Promise<number> {
@@ -637,6 +656,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, cleanup, reset-sessions, event, notice, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, link, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

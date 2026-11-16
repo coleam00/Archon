@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import type { ItemLink } from './schemas/item-link';
 import type { ItemRuling } from './schemas/item-ruling';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
@@ -144,6 +145,22 @@ const rulings: ItemRuling[] = [
   },
 ];
 
+const other: WorkflowItem = { id: 'other-row', projectKey: 'acme/web', key: 'issue-3' };
+const whole: WorkflowItem = { id: 'whole-row', projectKey: 'acme/web', key: 'order-1' };
+const linkAct = { at: '2026-11-01T09:00:00.000Z', via: 'cli', by: null, fromRun: null } as const;
+const links: ItemLink[] = [
+  { id: 'link-out', kind: 'depends_on', from: item, to: other, ...linkAct, ended: null },
+  { id: 'link-in', kind: 'duplicate_of', from: other, to: item, ...linkAct, ended: null },
+  {
+    id: 'link-ended',
+    kind: 'part_of',
+    from: item,
+    to: whole,
+    ...linkAct,
+    ended: { ...linkAct, at: '2026-11-01T09:30:00.000Z', by: { declared: 'alice' } },
+  },
+];
+
 const source: ItemReadSource = {
   branchOf: async () => null,
   store: {
@@ -160,6 +177,7 @@ const source: ItemReadSource = {
     getItem: async id => (id === item.id ? item : null),
     listItemAsks: async () => [],
     listItemRulings: async id => (id === item.id ? rulings : []),
+    listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
@@ -264,15 +282,44 @@ describe('reading an item', () => {
     expect(await readItem(source, item.projectKey, 'issue-8')).toBeNull();
     const empty: ItemReadSource = {
       ...source,
-      store: { ...source.store, getItemRuns: async () => ({ item, runs: [], descendantIds: [] }) },
+      store: {
+        ...source.store,
+        getItemRuns: async () => ({ item, runs: [], descendantIds: [] }),
+        listItemLinks: async () => [],
+      },
     };
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
       runs: [],
       questions: [],
       answers: rulings,
+      links: [],
       degraded: [],
     });
+  });
+
+  test('links read from this item: outgoing to what it points at, incoming from what points at it', async () => {
+    const read = await readItem(source, item.projectKey, item.key);
+    expect(read?.links).toEqual([
+      { id: 'link-out', kind: 'depends_on', direction: 'outgoing', other, ...linkAct, ended: null },
+      {
+        id: 'link-in',
+        kind: 'duplicate_of',
+        direction: 'incoming',
+        other,
+        ...linkAct,
+        ended: null,
+      },
+      // An ended link stays in the read with who ended it and when.
+      {
+        id: 'link-ended',
+        kind: 'part_of',
+        direction: 'outgoing',
+        other: whole,
+        ...linkAct,
+        ended: { ...linkAct, at: '2026-11-01T09:30:00.000Z', by: { declared: 'alice' } },
+      },
+    ]);
   });
 
   test('a run reads the item of its root, and a run with no item reads null', async () => {
@@ -308,6 +355,9 @@ describe('reading an item', () => {
         listItemRulings: async () => [
           { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
         ],
+        listItemLinks: async () => [
+          { type: 'degraded', reason: 'link_unreadable', linkId: 'lost-link' },
+        ],
       },
     };
     const read = await readItem(broken, item.projectKey, item.key);
@@ -323,6 +373,7 @@ describe('reading an item', () => {
       { ...unreadable, runId: 'lost-root' },
       { ...unreadable, runId: 'lost-child' },
       { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
+      { type: 'degraded', reason: 'link_unreadable', linkId: 'lost-link' },
     ]);
   });
 });

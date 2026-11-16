@@ -9,23 +9,14 @@ import {
   ItemRulingWithdrawnError,
   itemRulingSchema,
   type ItemRuling,
-  type ItemRulingAct,
   type ItemRulingRead,
 } from '@archon/workflows/schemas/item-ruling';
+import type { ItemAct } from '@archon/workflows/schemas/item-act';
 import { getDatabase, pool } from './connection';
+import { actColumns, actRead, type ActColumns } from './item-act';
 import { ensureItemInProject } from './items';
 import type { TransactionQuery } from './resource-slots';
-import { toHydratedTimestamp } from './timestamps';
 import { getLog } from './workflow-run-shared';
-
-interface ActColumns {
-  by_declared: string | null;
-  by_user_id: string | null;
-  via: string;
-  from_run_id: string | null;
-  from_node_path: string | null;
-  created_at: string | Date;
-}
 
 interface RulingRow extends ActColumns {
   id: string;
@@ -39,51 +30,16 @@ interface RulingRow extends ActColumns {
   w_created_at: string | Date | null;
 }
 
-function actColumns(act: ItemRulingAct): unknown[] {
-  return [
-    act.by !== null && 'declared' in act.by ? act.by.declared : null,
-    act.by !== null && 'userId' in act.by ? act.by.userId : null,
-    act.via,
-    act.fromRun?.runId ?? null,
-    act.fromRun?.nodePath ?? null,
-    // Written here, to the millisecond: SQLite's default keeps only seconds. Order is `seq`.
-    new Date().toISOString(),
-  ];
-}
-
-/** The stored time in ISO form; one that does not parse is left as stored, and fails the read. */
-function isoTime(value: string | Date): string {
-  const time = toHydratedTimestamp(value);
-  return Number.isNaN(time.getTime()) ? String(value) : time.toISOString();
-}
-
-function act(row: ActColumns): unknown {
-  return {
-    at: isoTime(row.created_at),
-    via: row.via,
-    by:
-      row.by_declared !== null
-        ? { declared: row.by_declared }
-        : row.by_user_id !== null
-          ? { userId: row.by_user_id }
-          : null,
-    fromRun:
-      row.from_run_id === null
-        ? null
-        : { runId: row.from_run_id, nodePath: row.from_node_path ?? '' },
-  };
-}
-
 function rulingRead(row: RulingRow): ItemRulingRead {
   const parsed = itemRulingSchema.safeParse({
     kind: 'ruling',
     id: row.id,
     text: row.text,
-    ...(act(row) as object),
+    ...actRead(row),
     withdrawn:
       row.w_id === null
         ? null
-        : act({
+        : actRead({
             by_declared: row.w_by_declared,
             by_user_id: row.w_by_user_id,
             // NOT NULL in the schema; a missing value fails the parse below.
@@ -127,7 +83,7 @@ const INSERT_COLUMNS =
   'item_id, withdraws, text, by_declared, by_user_id, via, from_run_id, from_node_path, created_at';
 
 export async function recordItemRuling(
-  input: { projectKey: string; key: string; text: string } & ItemRulingAct
+  input: { projectKey: string; key: string; text: string } & ItemAct
 ): Promise<ItemRuling> {
   if (input.text.trim() === '') throw new Error('A ruling needs text.');
   return getDatabase().withTransaction(async query => {
@@ -145,7 +101,7 @@ export async function recordItemRuling(
 
 /** With `projectKey`, a ruling on an item of another project is refused and not withdrawn. */
 export async function withdrawItemRuling(
-  input: { rulingId: string; projectKey?: string } & ItemRulingAct
+  input: { rulingId: string; projectKey?: string } & ItemAct
 ): Promise<ItemRuling> {
   return getDatabase().withTransaction(async query => {
     const found = await query<{ item_id: string; withdraws: string | null; project_key: string }>(

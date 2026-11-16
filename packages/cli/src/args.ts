@@ -71,6 +71,7 @@ export const cliArgOptions: CliArgOptions = {
   'conversation-id': { type: 'string' },
   detach: { type: 'boolean' },
   'no-wait': { type: 'boolean' },
+  'no-item': { type: 'boolean' },
   all: { type: 'boolean' },
   status: { type: 'string' },
   limit: { type: 'string' },
@@ -117,6 +118,10 @@ export const cliArgOptions: CliArgOptions = {
   'item-of': { type: 'string' },
   // `workflow rule --withdraw <ruling-id>` and `workflow answer --withdraw <ref>`.
   withdraw: { type: 'string' },
+  // `workflow link --item <key> --kind <kind> --to <key>`, or `workflow link --end <link-id>`.
+  kind: { type: 'string' },
+  to: { type: 'string' },
+  end: { type: 'string' },
   // `workflow answer --ref <ref>`: answer an attention item by the ref the queue gives it.
   ref: { type: 'string' },
   inputs: { type: 'string' },

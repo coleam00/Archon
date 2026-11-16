@@ -296,6 +296,7 @@ test('resumed completion preserves enclosing previous-output scopes', async () =
         execContext: { kind: 'host' },
         workflowLevelOptions: {},
         persistScope: undefined,
+        itemScope: undefined,
         workflowPersistSessions: false,
         scopeArtifactsDir: undefined,
         layers: [],

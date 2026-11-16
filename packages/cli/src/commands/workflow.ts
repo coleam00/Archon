@@ -27,6 +27,7 @@ export {
 export { workflowAttentionCommand, workflowAttentionLabelCommand } from './workflow-attention';
 export { workflowNoticeCommand, WORKFLOW_NOTICE_USAGE } from './workflow-notice';
 export { workflowRuleCommand, WORKFLOW_RULE_USAGE } from './workflow-rule';
+export { workflowLinkCommand, WORKFLOW_LINK_USAGE } from './workflow-link';
 export { workflowAnswerRefCommand, WORKFLOW_ANSWER_REF_USAGE } from './workflow-answer-ref';
 export {
   workflowAbandonCommand,

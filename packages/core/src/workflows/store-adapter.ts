@@ -18,6 +18,7 @@ import type { WorkflowConfig, WorkflowDeps } from '@archon/workflows/deps';
 import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event';
 import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
+import * as itemLinksDb from '../db/item-links';
 import * as itemRulingsDb from '../db/item-rulings';
 import * as itemAsksDb from '../db/item-asks';
 import * as workflowDb from '../db/workflows';
@@ -146,6 +147,9 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemRulings: itemRulingsDb.listItemRulings,
     recordItemRuling: itemRulingsDb.recordItemRuling,
     withdrawItemRuling: itemRulingsDb.withdrawItemRuling,
+    listItemLinks: itemLinksDb.listItemLinks,
+    recordItemLink: itemLinksDb.recordItemLink,
+    endItemLink: itemLinksDb.endItemLink,
     listOpenItemAsks: itemAsksDb.listOpenItemAsks,
     listItemAsks: itemAsksDb.listItemAsks,
     getItemAsk: itemAsksDb.getItemAsk,

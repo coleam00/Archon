@@ -5839,7 +5839,7 @@ export interface components {
       model?: string | string[];
       provider?: string;
       context?:
-        | ('fresh' | 'shared')
+        | ('fresh' | 'shared' | 'same')
         | {
             resume: string;
           };
@@ -6435,6 +6435,7 @@ export interface components {
           [key: string]: {
             sessionId: string;
             provider: string;
+            model?: string;
           };
         };
         bodySessionCursorAncestry?: {
@@ -6442,6 +6443,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
         };
@@ -7022,6 +7024,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -7029,6 +7032,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -7052,6 +7056,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -7059,6 +7064,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -7086,6 +7092,7 @@ export interface components {
             [key: string]: {
               sessionId: string;
               provider: string;
+              model?: string;
             };
           };
           bodySessionCursorAncestry?: {
@@ -7093,6 +7100,7 @@ export interface components {
               [key: string]: {
                 sessionId: string;
                 provider: string;
+                model?: string;
               };
             };
           };
@@ -8011,6 +8019,50 @@ export interface components {
             withdrawn: number;
           }
       )[];
+      links: {
+        id: string;
+        /** @enum {string} */
+        kind: 'depends_on' | 'part_of' | 'duplicate_of';
+        /** @enum {string} */
+        direction: 'outgoing' | 'incoming';
+        other: {
+          id: string;
+          projectKey: string;
+          key: string;
+        };
+        /** Format: date-time */
+        at: string;
+        via: string;
+        by:
+          | {
+              declared: string;
+            }
+          | {
+              userId: string;
+            }
+          | unknown;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+        ended: {
+          /** Format: date-time */
+          at: string;
+          via: string;
+          by:
+            | {
+                declared: string;
+              }
+            | {
+                userId: string;
+              }
+            | unknown;
+          fromRun: {
+            runId: string;
+            nodePath: string;
+          } | null;
+        } | null;
+      }[];
       degraded: (
         | {
             /** @enum {string} */
@@ -8025,6 +8077,13 @@ export interface components {
             /** @enum {string} */
             reason: 'ruling_unreadable';
             rulingId: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'link_unreadable';
+            linkId: string;
           }
       )[];
     };

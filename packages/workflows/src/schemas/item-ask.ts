@@ -10,12 +10,8 @@
  */
 import { z } from 'zod';
 import { artifactPointerSchema } from './artifact-pointer';
-import {
-  attentionAnswerSchema,
-  attentionAnswererSchema,
-  attentionAnsweringRunSchema,
-} from './run-wait';
-import { recordSurfaceSchema } from './record-surface';
+import { type ItemAct, itemActFields } from './item-act';
+import { attentionAnswerSchema } from './run-wait';
 import {
   attentionOptionSchema,
   attentionRecommendationSchema,
@@ -189,15 +185,8 @@ export function parseItemAsks(
 export const itemAskClosureSchema = z.enum(['answered', 'withdrawn', 'replaced']);
 export type ItemAskClosure = z.infer<typeof itemAskClosureSchema>;
 
-/** Who answered or withdrew an ask, through which surface and when. */
-export const itemAskActSchema = z.object({
-  at: z.string().datetime(),
-  via: recordSurfaceSchema,
-  /** Null when nobody said who they were. */
-  by: attentionAnswererSchema.nullable(),
-  /** The run and node the call came from, reported by its environment and not verified. */
-  fromRun: attentionAnsweringRunSchema.nullable(),
-});
+/** Who answered or withdrew an ask, through which surface and when: an act on its item. */
+export const itemAskActSchema = z.object(itemActFields);
 export type ItemAskAct = z.infer<typeof itemAskActSchema>;
 
 /** An ask as the store holds it: what the run left, and how it closed once it did. */
@@ -218,7 +207,7 @@ export interface StoredItemAsk {
 }
 
 /** Who answers or withdraws an ask, as the surface resolved them. */
-export type ItemAskActInput = Omit<ItemAskAct, 'at'>;
+export type ItemAskActInput = ItemAct;
 
 /** What became of answering or withdrawing an ask. */
 export type ItemAskCloseResult =
@@ -239,14 +228,14 @@ export const asksSettledDataSchema = z.object({
 export type AsksSettledData = z.infer<typeof asksSettledDataSchema>;
 
 /** Data of the `ask_answered` and `ask_withdrawn` events. */
-export const askClosedEventDataSchema = z.object({
-  ask: z.string().min(1),
-  via: recordSurfaceSchema,
-  by: attentionAnswererSchema.nullable(),
-  fromRun: attentionAnsweringRunSchema.nullable(),
-  /** Set on `ask_answered` only. */
-  answer: attentionAnswerSchema.optional(),
-});
+export const askClosedEventDataSchema = z
+  .object(itemActFields)
+  .omit({ at: true })
+  .extend({
+    ask: z.string().min(1),
+    /** Set on `ask_answered` only. */
+    answer: attentionAnswerSchema.optional(),
+  });
 export type AskClosedEventData = z.infer<typeof askClosedEventDataSchema>;
 
 /**

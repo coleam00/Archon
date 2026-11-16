@@ -135,6 +135,7 @@ export async function finishRun(
     runTranscriptUsage,
     completionResult(returned, startReceipts)
   );
+  await reportNoOutcome(ctx, outcome);
   await reportUnstartedStages(ctx, startReceipts);
   return terminal.output;
 }
@@ -176,6 +177,28 @@ async function readReturnedResult(
     // Present, even empty, whenever the run declares asks: the write replaces the open set.
     ...(asks.kind === 'asks' ? { asks: asks.asks } : {}),
   };
+}
+
+/**
+ * A workflow that declares an outcome but whose returns node did not complete (a `when:`
+ * can skip it) completes with none, so nothing bound to its outcome starts; say so where
+ * the run ends, since the completion alone does not show why no stage followed.
+ */
+async function reportNoOutcome(
+  ctx: RunTerminalContext,
+  outcome: RunCompletedOutcome | undefined
+): Promise<void> {
+  const { workflow, nodeOutputs } = ctx;
+  if (outcome !== undefined || workflow.returns === undefined) return;
+  if (declaredOutcome(workflow) === undefined) return;
+  const why =
+    nodeOutputs.get(workflow.returns)?.state === 'skipped' ? 'was skipped' : 'did not complete';
+  await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    `\u2139\ufe0f Workflow '${workflow.name}' completed with no outcome: its returns node '${workflow.returns}' ${why}, so nothing bound to its outcome starts.`,
+    { workflowId: ctx.workflowRun.id }
+  );
 }
 
 /**

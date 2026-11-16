@@ -23,7 +23,7 @@ import {
   type WorkflowRun,
 } from '@archon/workflows/schemas/workflow-run';
 import type { IWorkflowStore } from '@archon/workflows/store';
-import { itemAct } from './item-rulings';
+import { itemAct } from './item-act';
 import { RunActionForbiddenError, type RunActor } from './run-authorization';
 import {
   expectedGateForOccurrence,

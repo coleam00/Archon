@@ -366,6 +366,15 @@ export async function createFileWorkflowStore(
     withdrawItemRuling: async () => {
       throw new FileStoreUnsupportedError('items');
     },
+    listItemLinks: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    recordItemLink: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
+    endItemLink: async () => {
+      throw new FileStoreUnsupportedError('items');
+    },
     // An ask belongs to an item, and this store holds none, so it holds no asks: the
     // readers see an empty set rather than a failure that would break every queue read.
     listOpenItemAsks: async () => [],

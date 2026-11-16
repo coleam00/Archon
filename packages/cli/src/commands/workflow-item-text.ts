@@ -1,8 +1,8 @@
 /**
- * The text of an item read (`workflow runs --item`): its runs, open questions, and answers
- * with rulings, each oldest first. Built from the same `ItemRead` that `--json` prints.
+ * The text of an item read (`workflow runs --item`): its runs, links, open questions, and
+ * answers with rulings, each oldest first. Built from the same `ItemRead` that `--json` prints.
  */
-import type { ItemAnswer, ItemRead, ItemRun } from '@archon/workflows/item-read';
+import type { ItemAnswer, ItemRead, ItemReadLink, ItemRun } from '@archon/workflows/item-read';
 import { answererText, attentionItemLines } from './workflow-attention-text';
 
 /** A recorded time to the minute, or the stored text when it does not parse. */
@@ -71,6 +71,26 @@ function runLines(run: ItemRun): string[] {
   return lines;
 }
 
+/**
+ * One link, read from the item it is printed under: `→` points at what this item depends
+ * on, is part of or duplicates; `←` names an item that points at this one.
+ */
+function linkLine(link: ItemReadLink, projectKey: string): string {
+  const other =
+    link.other.projectKey === projectKey
+      ? link.other.key
+      : `${link.other.projectKey}/${link.other.key}`;
+  const relation =
+    link.direction === 'outgoing'
+      ? `this item ${link.kind} → ${other}`
+      : `← ${other} ${link.kind} this item`;
+  const ended =
+    link.ended === null
+      ? ''
+      : ` (ended ${minute(link.ended.at)}${answererText(link.ended.by)}, via ${link.ended.via})`;
+  return `  ${link.id}  ${relation}${ended}`;
+}
+
 /** One answer or ruling; a ruling is held by no run, so it names its id instead. */
 function answerLine(answer: ItemAnswer): string {
   const via = answer.via === null ? '' : ` (via ${answer.via})`;
@@ -87,6 +107,17 @@ export function itemReadLines(read: ItemRead): string[] {
   const lines = [`Item ${read.item.key} (${read.item.projectKey})`, '', 'Runs:'];
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));
+  lines.push('', 'Links:');
+  // Active links first; an ended one stays readable below them.
+  const active = read.links.filter(link => link.ended === null);
+  const ended = read.links.filter(link => link.ended !== null);
+  if (read.links.length === 0) lines.push('  none');
+  for (const link of [...active, ...ended]) lines.push(linkLine(link, read.item.projectKey));
+  const links = read.degraded.flatMap(report => ('linkId' in report ? [report.linkId] : []));
+  if (links.length > 0)
+    lines.push(
+      `  ${String(links.length)} link(s) of this item could not be read: ${links.join(', ')}`
+    );
   lines.push('', 'Open questions:');
   if (read.questions.length === 0) lines.push('  none');
   for (const question of read.questions) lines.push(...attentionItemLines(question, 'brief'));

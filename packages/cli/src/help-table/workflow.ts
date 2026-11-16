@@ -280,6 +280,19 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'link',
+      spec: 'workflow link --item <key> --kind <kind> --to <key>',
+      description:
+        "Record a link from one item of this project to another: depends_on, part_of or\nduplicate_of, read from --item to --to. Recording it again leaves one link; prints the link's id",
+      scopedFlags: [
+        {
+          spec: '--end <link-id>',
+          description: 'End a link instead; the record stays and says who ended it and when',
+        },
+      ],
+    },
+    {
+      command: 'workflow',
       subcommand: 'notice',
       spec: 'workflow notice <text>',
       description:
