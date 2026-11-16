@@ -1,9 +1,5 @@
 import type { OwnedRunLease } from '../utils/owned-run-lease';
-import {
-  getIsolationProvider,
-  recordWorktreeAdoption,
-  refuseUnappliedStartPoint,
-} from '@archon/isolation';
+import { recordWorktreeAdoption } from '@archon/isolation';
 import type {
   ExecutionContext,
   IsolationEnvironmentRow,
@@ -63,6 +59,7 @@ import {
   type ContinuationDeclaration,
 } from './workflow-run-preflight';
 import { launchDetachedRun } from './workflow-detach';
+import { refuseUnreusableBranchWorktree, reusedBranchWorktree } from './workflow-branch-reuse';
 import {
   prepareLaneAiConfiguration,
   type LaneConfigSource,
@@ -73,8 +70,9 @@ import {
 /**
  * Preflight before handing execution to a detached child. Refusals must reach the
  * caller before `Started`, rather than disappearing into the child's log (#2872).
- * The parent creates a queryable run; worktree provisioning and execution belong
- * to the child, which revalidates against the live checkout.
+ * The parent creates a queryable run and makes the refusals a read of current state can
+ * decide; creating the worktree and executing belong to the child, which revalidates
+ * against the live checkout.
  */
 export async function launchDetachedOwnedRun(
   request: OwnedRunRequest,
@@ -123,6 +121,11 @@ export async function launchDetachedOwnedRun(
         : (admission.continuationRun?.working_path ?? cwd)
     );
   }
+  await refuseUnreusableBranchWorktree(host, detachCodebase, options, {
+    isFolder: detachIsFolder,
+    wantsIsolation: admission.wantsIsolation,
+    adoption: adoptionLane,
+  });
   const prepared = await prepareLaneAiConfiguration(
     request,
     admission,
@@ -598,26 +601,13 @@ async function provisionWorktree(
   // Configure isolation with repo config loader (same as orchestrator)
   configureWorktreeIsolation();
 
-  const existingEnv = launch.existingBranchEnv;
-  if (existingEnv && (await getIsolationProvider().healthCheck(existingEnv.working_path))) {
-    const actualBranch = await git.getCurrentBranchStrict(
-      git.toWorktreePath(existingEnv.working_path)
-    );
-    if (actualBranch !== branchIdentifier) {
-      throw new Error(
-        `Cannot reuse worktree at '${existingEnv.working_path}': expected branch ` +
-          `'${branchIdentifier}', found '${actualBranch ?? 'detached HEAD'}'.`
-      );
-    }
-    const fromBranch = options.fromBranch?.trim();
-    if (fromBranch) {
-      await refuseUnappliedStartPoint(
-        git.toRepoPath(codebase.default_cwd),
-        git.toWorktreePath(existingEnv.working_path),
-        branchIdentifier,
-        fromBranch
-      );
-    }
+  const existingEnv = await reusedBranchWorktree(
+    launch.existingBranchEnv,
+    codebase,
+    branchIdentifier,
+    options.fromBranch
+  );
+  if (existingEnv) {
     await warnOnReusedWorktree(
       existingEnv,
       codebase,

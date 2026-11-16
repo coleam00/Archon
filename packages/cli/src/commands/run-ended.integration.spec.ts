@@ -541,7 +541,7 @@ describe('a run-ended binding', () => {
     expect(checked.exitCode).not.toBe(0);
     expect(checked.stdout).toContain("workflow 'missing-stage' is not in this project");
 
-    const started = await fixture.attempt([
+    const launch = [
       'workflow',
       'run',
       'stage-a',
@@ -552,17 +552,27 @@ describe('a run-ended binding', () => {
       'plan=p',
       '--input',
       'issue=i',
-    ]);
+    ];
+    const started = await fixture.attempt(launch);
     expect(started.exitCode).not.toBe(0);
     expect(started.stdout + started.stderr).toContain(
       "workflow 'missing-stage' is not in this project"
     );
+    // A detached launch is refused in the result it prints, not later in its child.
+    const detached = await fixture.attempt([...launch, '--detach', '--json']);
+    expect(detached.exitCode).not.toBe(0);
+    const refused = JSON.parse(detached.stdout) as { ok: boolean; error: string };
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain("workflow 'missing-stage' is not in this project");
     const runs = fixture.rows<{ status: string; events: number }>(
       `SELECT r.status, (SELECT COUNT(*) FROM remote_agent_workflow_events e
          WHERE e.workflow_run_id = r.id AND e.event_type = 'node_started') AS events
          FROM remote_agent_workflow_runs r`
     );
-    expect(runs).toEqual([{ status: 'cancelled', events: 0 }]);
+    expect(runs).toEqual([
+      { status: 'cancelled', events: 0 },
+      { status: 'cancelled', events: 0 },
+    ]);
   }, 90_000);
 });
 
