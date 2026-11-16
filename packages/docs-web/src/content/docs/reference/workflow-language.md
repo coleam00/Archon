@@ -1842,10 +1842,11 @@ Two consequences worth knowing:
 - **A composition can span providers.** Parent on Claude, one composed block on Pi, another
   on Codex, all in one run: each resolves independently. `archon workflow run <name>
   --dry-run` prints each node's effective provider and model and where the value came from.
-- **A composed workflow's entry node starts a fresh session**, exactly as it would if you
-  ran that file on its own, even when the preceding node used the same provider. Set
-  `context: shared` on the entry node if you deliberately want the caller's thread to
-  continue into the block.
+- **A composed workflow's first AI node starts a fresh session**, exactly as it would if
+  you ran that file on its own, even when the preceding node used the same provider. That
+  holds when the block starts with a `bash:` or `script:` node too: the first AI node
+  after it is still fresh. Set `context: shared` on that node if you deliberately want the
+  caller's thread to continue into the block.
 
 ### How expansion works
 

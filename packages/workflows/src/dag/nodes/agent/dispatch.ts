@@ -259,16 +259,16 @@ function selectSession(
   // SAME provider — on a provider change the node starts fresh instead of failing
   // (Claude) or silently cold-falling-back (Codex) on a foreign session id.
   //
-  // A composed workflow's ENTRY node is the third fresh case (#1764). Standalone,
-  // that node runs first and has no cursor to inherit; composed, it would silently
-  // pick up the session of whatever the parent ran before it — the same file
-  // behaving differently depending on who composed it. The boundary is where a
+  // The first AI node of a composed workflow is the third fresh case (#1764, #5740).
+  // Standalone, no session exists before that node, so it has no cursor to inherit;
+  // composed, it would silently pick up the session of whatever the parent ran
+  // before it — the same file behaving differently depending on who composed it. The boundary is where a
   // different file's history begins, so the cursor is cleared for the same reason
   // a parallel layer clears it. `context: 'shared'` is the individual opt-out for
   // an author who genuinely wants the parent's thread to continue into the block.
-  const composedBlockEntry =
-    readComposedMeta(node)?.blockEntry === true && node.context !== 'shared';
-  const isFreshSequential = isParallelLayer || node.context === 'fresh' || composedBlockEntry;
+  const composedSessionStart =
+    readComposedMeta(node)?.blockSessionStart === true && node.context !== 'shared';
+  const isFreshSequential = isParallelLayer || node.context === 'fresh' || composedSessionStart;
   const cursor = ctx.lastSequentialSession;
   if (isFreshSequential || cursor === undefined) {
     return { resumeSessionId: undefined, resumeIntent: 'ordinary', named: false };
