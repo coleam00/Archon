@@ -29,7 +29,6 @@ import { declaredOutcome } from '@archon/workflows/completed-outcome';
 import { resolveWorkflowName } from '@archon/workflows/router';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import { discoverWorkflowsWithConfig } from '@archon/workflows/workflow-discovery';
-import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 
 /** A trigger file whose binding the end of a run starts. */
 export interface RunEndedBinding {
@@ -306,23 +305,5 @@ export function createRunEndedPreflight(
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
     }
-  };
-}
-
-/**
- * The pre-run check on the file store, which has no items and so cannot hold the starts
- * a run-ended binding causes. A run of a workflow a run-ended binding names is refused
- * before it starts, as a run on an item is, instead of completing with a binding that
- * silently does nothing.
- */
-export function createFileStoreRunEndedRefusal(
-  triggersDirectory: () => string
-): (run: WorkflowRun) => Promise<void> {
-  return async run => {
-    if (run.parent_run_id) return;
-    const named = (await readRunEndedBindings(triggersDirectory())).find(
-      candidate => candidate.runEnded.workflowName === run.workflow_name
-    );
-    if (named) throw new FileStoreUnsupportedError(`Run-ended trigger ${named.file}`);
   };
 }

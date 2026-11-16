@@ -1096,7 +1096,7 @@ describe('durable resource starts', () => {
     expect((await listStartReceipts()).map(row => row.id)).toEqual([first.receipt.id]);
   });
 
-  test('a start a completion wrote before its process died is prepared once by the next drains', async () => {
+  test('a start a completion wrote before its process died stays pending and can be claimed only once', async () => {
     const { claimStartBindingPreparation, listPendingStartBindings } = createWorkflowStore();
     const ended = '0e0e0e0e-0e0e-4e0e-8e0e-0e0e0e0e0e0e';
     await admitResourceStart({
