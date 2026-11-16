@@ -121,7 +121,7 @@ export function createInMemoryResourceStartStore(
     const previous = requests.get(intent.launch.run.id);
     if (previous) return decision(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker(await occupancy(intent.resource), launch);
+    const blocker = resourceStartBlocker(await occupancy(intent.resource), launch, intent.hostId);
     const request: ResourceStartRequestInspection = {
       id: launch.run.id,
       resource: intent.resource,
@@ -208,7 +208,8 @@ export function createInMemoryResourceStartStore(
         throw new Error(`Run '${id}' is ${run?.status ?? 'missing'}, not pending`);
       const blocker = resourceStartBlocker(
         { ...(await occupancy(resource)), capacity: installed.get(resource) ?? capacity },
-        launch
+        launch,
+        DIRECT_START_HOST_ID
       );
       if (blocker) return blocker;
       requests.set(id, {
@@ -309,9 +310,11 @@ export function createInMemoryResourceStartStore(
     listPendingStartBindings: async ({
       hostId,
       limit = 100,
+      receiptIds,
     }): ReturnType<IResourceStartStore['listPendingStartBindings']> =>
       structuredClone(
         [...receipts.values()]
+          .filter(receipt => !receiptIds || receiptIds.includes(receipt.id))
           .flatMap(receipt => receipt.bindings)
           .filter(
             item =>

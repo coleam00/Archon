@@ -371,7 +371,11 @@ export function createAdmissionTransaction(
     const previous = await request(intent.launch.run.id);
     if (previous) return disposition(previous);
     const launch = preparedWorkflowLaunchSchema.parse(intent.launch);
-    const blocker = resourceStartBlocker(await occupancy(intent.resource, launch), launch);
+    const blocker = resourceStartBlocker(
+      await occupancy(intent.resource, launch),
+      launch,
+      intent.hostId
+    );
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));
     const row: Request = {
       id: intent.launch.run.id,
@@ -412,7 +416,8 @@ export function createAdmissionTransaction(
         ...(await occupancy(resourceName, launch)),
         capacity: (await resourceCapacity(resourceName)) ?? declaredCapacity,
       },
-      launch
+      launch,
+      DIRECT_START_HOST_ID
     );
     if (blocker) return blocker;
     const head = z.object({ seq: z.number() }).parse(await readJson(join(root, 'head.json')));

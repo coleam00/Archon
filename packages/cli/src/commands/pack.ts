@@ -21,7 +21,7 @@ import {
 } from '@archon/workflows/schemas/pack-bindings';
 import type { WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { writeJsonLine } from '../utils/stdout';
-import { triggerFireConfigSchema } from './trigger';
+import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import { loadWorkflows } from './workflow-list';
 
 export interface PackBindingsOptions {
@@ -155,7 +155,7 @@ function generate(
 function assertLoadable({ id, kind, document }: Generated, target: Target): void {
   const result =
     kind !== 'event'
-      ? triggerFireConfigSchema.safeParse(document)
+      ? triggerConfigSchema.safeParse(document)
       : // The plugin reads a binding only inside its configuration, so the binding is checked
         // there. The secret name is the operator's and is not part of what is written.
         githubWebhookSourceConfigSchema.safeParse({

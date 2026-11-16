@@ -60,6 +60,8 @@
     "./engine-contract-tests": "./src/engine-contract-tests.ts",
     "./webhook-source-plugin": "./src/webhook-source-plugin.ts",
     "./output-ref": "./src/output-ref.ts",
+    "./json-pointer": "./src/json-pointer.ts",
+    "./completed-outcome": "./src/completed-outcome.ts",
     "./fan-out-identity": "./src/fan-out-identity.ts",
     "./test-utils": "./src/test-utils.ts",
     "./node-record-reader": "./src/node-record-reader.ts",

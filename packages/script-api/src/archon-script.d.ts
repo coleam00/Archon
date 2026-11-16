@@ -1983,6 +1983,22 @@ declare module 'archon:script' {
       readonly outcome: string | null;
       readonly startedAt: string;
       readonly completedAt: string | null;
+      readonly cause: {
+        readonly kind: 'run_ended';
+        readonly runId: string;
+      } | {
+        readonly kind: 'run_fired';
+        readonly runId: string;
+        readonly node: string | null;
+      } | {
+        readonly kind: 'receipt';
+        readonly receiptId: string;
+        readonly sourceInstanceId: string;
+      } | null;
+      readonly awaitingExecution: {
+        readonly requestId: string;
+        readonly hostId: string;
+      } | null;
     }>;
     readonly questions: ReadonlyArray<{
       readonly kind: 'attention';

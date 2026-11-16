@@ -50,6 +50,7 @@ import {
   observeRunTerminalArtifacts,
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
+import { insertStartReceipt } from './start-receipt-writes';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -379,6 +380,8 @@ export async function completeWorkflowRun(
           },
           artifacts
         );
+        // The starts this end causes commit with it, and only when this write won.
+        for (const receipt of result?.startReceipts ?? []) await insertStartReceipt(query, receipt);
       }
       return update;
     });
@@ -498,7 +501,8 @@ export async function failWorkflowRun(
 
 export async function cancelWorkflowRun(
   id: string,
-  event?: WorkflowCancellationEventDetails
+  event?: WorkflowCancellationEventDetails,
+  options?: { pendingOnly?: true }
 ): Promise<{ cancelled: boolean }> {
   const dialect = getDialect();
   let result: Awaited<ReturnType<IDatabase['query']>>;
@@ -508,7 +512,7 @@ export async function cancelWorkflowRun(
       const update = await query(
         `UPDATE remote_agent_workflow_runs
          SET status = 'cancelled', completed_at = ${dialect.now()}
-         WHERE id = $1 AND status NOT IN (${CANCELLATION_NOOP_WORKFLOW_STATUSES.map((_, index) => `$${index + 2}`).join(', ')})`,
+         WHERE id = $1 AND status NOT IN (${CANCELLATION_NOOP_WORKFLOW_STATUSES.map((_, index) => `$${index + 2}`).join(', ')})${options?.pendingOnly ? " AND status = 'pending'" : ''}`,
         [id, ...CANCELLATION_NOOP_WORKFLOW_STATUSES]
       );
       if ((update.rowCount ?? 0) > 0) {

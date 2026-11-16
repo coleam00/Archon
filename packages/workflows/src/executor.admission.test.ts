@@ -2,6 +2,7 @@
 import {
   containerBackend,
   makeCliPlatform,
+  makeDeps,
   makePlatform,
   makeRun,
   makeStore,
@@ -686,5 +687,47 @@ describe('run checkout baseline (#3305)', () => {
       'Checkout baseline could not be recorded: disk full'
     );
     expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+  });
+});
+
+describe('run-ended binding refusal', () => {
+  /** Starts a pre-created row whose run-ended check fails after `beforeThrow` runs. */
+  async function refused(beforeThrow: (store: IWorkflowStore, runId: string) => Promise<void>) {
+    const root = await mkdtemp(join(tmpdir(), 'run-ended-refusal-'));
+    try {
+      const store = await createFileWorkflowStore({ root });
+      const run = await store.createWorkflowRun({
+        workflow_name: 'plan',
+        user_message: '',
+        working_path: '/tmp',
+      });
+      const deps = {
+        ...makeDeps(store),
+        checkRunEndedBindings: async () => {
+          await beforeThrow(store, run.id);
+          throw new Error('Trigger file /home/triggers/build.json: workflow build is missing');
+        },
+      };
+      const result = await startWorkflow({ deps, options: { preCreatedRun: run } });
+      expect(result.success).toBe(false);
+      expect(mockExecuteDagWorkflow).not.toHaveBeenCalled();
+      return (await store.getWorkflowRun(run.id))?.status;
+    } finally {
+      await removeTempTree(root);
+    }
+  }
+
+  it('cancels its own pending row', async () => {
+    expect(await refused(async () => {})).toBe('cancelled');
+  });
+
+  // Before the claim this dispatcher does not own the row; cancelling it would stop a
+  // run another dispatcher claimed meanwhile and is running.
+  it('leaves a row another dispatcher claimed running', async () => {
+    expect(
+      await refused(async (store, runId) => {
+        await store.claimPendingWorkflowRun(runId);
+      })
+    ).toBe('running');
   });
 });
