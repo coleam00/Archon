@@ -12,8 +12,8 @@ import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import { existsSync } from 'node:fs';
 import {
   buildPackGraph,
-  declaredRunEndedWorkflows,
   nearestPackBindings,
+  packWorkflowIdentities,
   packWorkflows,
   type InstalledArrow,
   type PackGraph,
@@ -91,9 +91,11 @@ export async function readPackGraph(
   const workflows = packWorkflows(discovered, packKey, source);
   const stages = workflows.map(entry => entry.workflow);
   const declared = nearestPackBindings(workflows);
-  const names = [...stages.map(stage => stage.name), ...declaredRunEndedWorkflows(declared)];
-  const touches = (name: string): boolean =>
-    names.some(own => name === own || name.endsWith(`:${own}`));
+  const own = packWorkflowIdentities(
+    stages.map(stage => stage.name),
+    declared
+  );
+  const touches = (name: string): boolean => own.has(name);
   return buildPackGraph({
     packKey,
     stages,

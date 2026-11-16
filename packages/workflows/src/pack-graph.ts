@@ -175,21 +175,43 @@ export function nearestPackBindings(
     .sort((a, b) => SCOPE_RANK[a.source] - SCOPE_RANK[b.source])[0]?.bindings;
 }
 
-/** The workflow names the pack's run-ended bindings declare, as written. */
-export function declaredRunEndedWorkflows(
-  declared: Readonly<Record<string, PackBinding>> | undefined
-): string[] {
-  return Object.values(declared ?? {}).flatMap(binding => {
-    const kinded = kindedPackBinding(binding);
-    return kinded.kind === 'run_ended'
-      ? [kinded.binding.run_ended.workflow, kinded.binding.workflow]
-      : [];
-  });
+/**
+ * The full name a workflow declared inside the pack has here. A binding names a stage as
+ * its pack authored it (`plan`); an installed pack's stages are named `owner/plugin:plan`,
+ * so the name gets the pack's own prefix, never another pack's. A name that is a stage, or
+ * that names another pack outright, is kept as written.
+ */
+function qualifiedPackWorkflowName(names: readonly string[], declared: string): string {
+  if (names.includes(declared) || declared.includes(':')) return declared;
+  const first = names[0] ?? '';
+  const separator = first.indexOf(':');
+  return separator === -1 ? declared : `${first.slice(0, separator + 1)}${declared}`;
 }
 
-/** An installed pack's workflow is named `owner/plugin:<name>`; a binding may name `<name>`. */
+/** The stage a binding names, by its full name within the pack, or undefined when none. */
 export function packWorkflowName(names: readonly string[], declared: string): string | undefined {
-  return names.find(n => n === declared || n.endsWith(`:${declared}`));
+  const qualified = qualifiedPackWorkflowName(names, declared);
+  return names.find(n => n === qualified);
+}
+
+/**
+ * Every full workflow name that belongs to the pack: its stages, and each name its
+ * run-ended bindings declare, qualified within the pack, so a stage that failed to load
+ * still counts. A run-ended file touches the pack when one of its ends is in this set,
+ * compared exactly, as a completion compares the ended run's workflow name.
+ */
+export function packWorkflowIdentities(
+  stageNames: readonly string[],
+  declared: Readonly<Record<string, PackBinding>> | undefined
+): ReadonlySet<string> {
+  const names = new Set(stageNames);
+  for (const binding of Object.values(declared ?? {})) {
+    const kinded = kindedPackBinding(binding);
+    if (kinded.kind !== 'run_ended') continue;
+    for (const name of [kinded.binding.run_ended.workflow, kinded.binding.workflow])
+      names.add(qualifiedPackWorkflowName(stageNames, name));
+  }
+  return names;
 }
 
 /** A run-ended trigger file in this install whose binding launches in the pack's project. */
@@ -243,8 +265,8 @@ function fanOutBlocks(
   for (let node = pending.shift(); node !== undefined; node = pending.shift()) {
     const name = node.fanOut?.workflow;
     if (name === undefined || blocks.some(block => block.workflow === name)) continue;
-    const body =
-      workflows.find(w => w.name === name) ?? workflows.find(w => w.name.endsWith(`:${name}`));
+    // Discovery has already qualified an installed pack's include to its own full name.
+    const body = workflows.find(w => w.name === name);
     // Discovery refuses a fan-out whose target does not resolve, so this is a caller's bug.
     if (body === undefined)
       throw new Error(`Fan-out include '${name}' is not a discovered workflow`);
@@ -294,13 +316,14 @@ function declaredArrows(input: GraphInput): {
     const kinded = kindedPackBinding(binding);
     if (kinded.kind !== 'run_ended') return [];
     const problems: string[] = [];
+    // A name that is not a stage keeps its full name in the pack, so a file for it matches.
     const stageName = (declared: string): string => {
       const name = packWorkflowName(names, declared);
       if (name !== undefined) return name;
       problems.push(
         `names workflow '${declared}', which is not a stage of pack '${input.packKey}' as it loaded; see discoveryErrors`
       );
-      return declared;
+      return qualifiedPackWorkflowName(names, declared);
     };
     const from = stageName(kinded.binding.run_ended.workflow);
     const to = stageName(kinded.binding.workflow);

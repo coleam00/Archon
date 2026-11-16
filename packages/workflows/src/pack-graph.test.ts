@@ -1,7 +1,12 @@
 import { describe, expect, test } from 'bun:test';
 import { expandWorkflowIncludes } from './include-expander';
 import { mapOf, wf } from './include-expander.fixtures';
-import { buildPackGraph, type InstalledArrow, packGraphSchema } from './pack-graph';
+import {
+  buildPackGraph,
+  type InstalledArrow,
+  packGraphSchema,
+  packWorkflowIdentities,
+} from './pack-graph';
 import { packRunEndedBindingSchema } from './schemas/pack-bindings';
 
 function decide(values: string[]) {
@@ -125,6 +130,35 @@ describe('a pack graph', () => {
       ['b', true, ['done', 'stuck']],
       ['c', false, ['shipped']],
     ]);
+  });
+
+  test('an installed pack resolves plain binding names to its own stages, never to another pack', () => {
+    // Two installed packs share the authored stage names `plan` and `build`.
+    const first = stages(stage('acme/first:plan', ['ready']), stage('acme/first:build', ['done']));
+    const declared = { build: runEnded('build', 'plan', 'ready') };
+    const own = packWorkflowIdentities(
+      first.map(s => s.name),
+      { ...declared, gone: runEnded('gone', 'plan', 'ready') }
+    );
+    expect([...own].sort()).toEqual(['acme/first:build', 'acme/first:gone', 'acme/first:plan']);
+    // A completion compares names exactly, so the other pack's ends are not this pack's.
+    expect(own.has('acme/second:plan') || own.has('acme/second:build')).toBe(false);
+
+    const graph = graphOf(first, {
+      declared,
+      installed: [
+        installed('acme/first:plan', 'ready', 'acme/first:build', 'own'),
+        // A genuine cross-pack arrow: it starts one of this pack's stages.
+        installed('acme/second:plan', 'ready', 'acme/first:build', 'into-first'),
+      ],
+    });
+    expect(
+      graph.arrows.map(a => [a.from.stage, a.to, a.active, a.declared?.binding ?? null])
+    ).toEqual([
+      ['acme/first:plan', 'acme/first:build', true, 'build'],
+      ['acme/second:plan', 'acme/first:build', true, null],
+    ]);
+    expect(graph.arrows[0]?.declared?.problems).toEqual([]);
   });
 
   test('a trigger file the pack does not declare is an active arrow with no declaration', () => {
