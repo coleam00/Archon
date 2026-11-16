@@ -2,7 +2,8 @@
  * The read of one item (`workflow runs --item`): its runs, the questions open in them, the
  * answers recorded in them with the rulings recorded on the item, each oldest first, and
  * the links from and to it.
- * Where the item stands is left to the reader; this computes no position and stores nothing.
+ * Its starts still waiting for capacity are listed too, with the queue order recorded for
+ * them. Where the item stands is left to the reader; this computes no stage and stores nothing.
  */
 import { z } from 'zod';
 import {
@@ -45,7 +46,12 @@ import {
   type WorkflowRun,
 } from './schemas/workflow-run';
 import type { WorkflowEventRow } from './schemas/workflow-event';
-import { readResourceStartReceiptId, startCause, startCauseSchema } from './schemas/resource-start';
+import {
+  queuedItemStartSchema,
+  readResourceStartReceiptId,
+  startCause,
+  startCauseSchema,
+} from './schemas/resource-start';
 import type { IWorkflowStore } from './store';
 import { awaitingExecution } from './resource-start-store';
 
@@ -156,7 +162,8 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
  * An item and what is recorded about it. `runs` are the item's own readable runs; a
  * `workflow:` child is left to `workflow get` on its parent. `questions` and `answers` come from the
  * whole run tree, because a question is often asked inside a child; each names the run
- * that holds it. `degraded` names each part that could not be read: one of the item's own
+ * that holds it. `queued` are the item's starts still waiting for capacity, which have no run
+ * yet; `archon trigger withdraw <requestId>` withdraws one. `degraded` names each part that could not be read: one of the item's own
  * runs, a paused run the queue could not read (`run_unreadable`, by `runId`), a ruling
  * (`ruling_unreadable`, by `rulingId`), or a link (`link_unreadable`, by `linkId`). The rest
  * still reads.
@@ -164,6 +171,7 @@ export type ItemReadLink = z.infer<typeof itemReadLinkSchema>;
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
   runs: z.array(itemRunSchema),
+  queued: z.array(queuedItemStartSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
   links: z.array(itemReadLinkSchema),
@@ -188,6 +196,7 @@ export interface ItemReadSource extends AttentionQueueSource {
       | 'listItemAsks'
       | 'getStartReceipt'
       | 'getResourceStartRequest'
+      | 'listQueuedItemStarts'
     >;
 }
 
@@ -371,6 +380,7 @@ export async function readItem(
   return {
     item: found.item,
     runs: await Promise.all(own.values.map(run => itemRun(source, run))),
+    queued: await source.store.listQueuedItemStarts(found.item.id),
     questions,
     answers,
     links,

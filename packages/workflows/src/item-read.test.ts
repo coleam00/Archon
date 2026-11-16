@@ -179,6 +179,7 @@ const source: ItemReadSource = {
     listItemRulings: async id => (id === item.id ? rulings : []),
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,
+    listQueuedItemStarts: async () => [],
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
         ? {
@@ -291,6 +292,7 @@ describe('reading an item', () => {
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
       runs: [],
+      queued: [],
       questions: [],
       answers: rulings,
       links: [],

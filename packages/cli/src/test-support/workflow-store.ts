@@ -251,6 +251,7 @@ export function createInMemoryWorkflowStore(
     listQueuedResourceStartsForHost: admit(
       admission.listQueuedResourceStartsForHost.bind(admission)
     ),
+    listQueuedItemStarts: admit(admission.listQueuedItemStarts.bind(admission)),
     withdrawQueuedResourceStart: admit(admission.withdrawQueuedResourceStart.bind(admission)),
     claimStartBindingPreparation: admit(admission.claimStartBindingPreparation.bind(admission)),
     completeStartBindingPreparation: admit(

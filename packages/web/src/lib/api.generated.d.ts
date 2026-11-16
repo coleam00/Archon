@@ -7685,6 +7685,15 @@ export interface components {
           hostId: string;
         } | null;
       }[];
+      queued: {
+        requestId: string;
+        workflow: string | null;
+        resource: string;
+        hostId: string;
+        /** Format: date-time */
+        queuedAt: string;
+        ahead: number;
+      }[];
       questions: (
         | {
             /** @enum {string} */
