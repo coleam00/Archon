@@ -511,6 +511,18 @@ describe('the build queue scripts', () => {
     expect(stored(at).value?.claim).toMatchObject({ run_id: 'run-1' });
   }, 60_000);
 
+  test('a message that is new work takes the handoff path: nothing is claimed and no round starts', () => {
+    const at = install();
+    seed(at, triaged());
+    const interpreted = JSON.stringify({ decision: 'intake', number: null, options: [], issue: null, reason: 'new work' });
+    const handed = ok(run(at, 'facts', { ...SELECTED, INPUTS_INTERPRETED: interpreted, INPUTS_PICKED: 'null' }));
+    expect(handed).toMatchObject({ path: 'handoff', item: null, pull_request: null, continues: null });
+    // The waiting item is left as it was: no claim, no build record.
+    const doc = stored(at).value as WorkItem;
+    expect(doc.claim).toBeNull();
+    expect(doc.facts.build).toBeUndefined();
+  }, 60_000);
+
   test('new work from a message is filed once and handed to intake, never built in the run', () => {
     const at = install();
     const calls = join(track(mkdtempSync(join(tmpdir(), 'archon-calls-'))), 'calls.jsonl');

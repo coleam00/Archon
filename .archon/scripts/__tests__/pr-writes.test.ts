@@ -10,6 +10,7 @@ import { spawnSync } from 'node:child_process';
 import { existsSync, readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { DESCRIPTION_SECTION } from '../../workflows/sdlc/.shared/pr';
+import { readReviewStamp } from '../../workflows/sdlc/.shared/review-comment';
 import { PUBLISHED_REPORT_FILE } from '../../workflows/sdlc/.shared/review-item';
 import { trackTempRoots } from './temp-roots';
 import {
@@ -463,6 +464,8 @@ describe('publish-review keeps one canonical comment per pull request', () => {
       contract_left: ['acceptance: the console shows it'],
     });
     expect(first.comments).toEqual([{ issue: 42, body: `${MARKER}\nReviewed commit: \`${REVIEWED}\`\nVerdict: ready\nContract: open\n\n${REPORT}` }]);
+    // The merge gate's reader takes the reviewed commit and the verdict from what was written.
+    expect(readReviewStamp(first.comments[0]?.body ?? '')).toMatchObject({ reviewed: REVIEWED, ready: true, contract: 'open' });
 
     const second = publishReview({
       inputs: report,

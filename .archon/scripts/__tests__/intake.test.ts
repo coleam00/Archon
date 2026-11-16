@@ -473,10 +473,13 @@ describe('the intake scripts', () => {
       importance: { value: 'high' },
       urgency: { value: 'soon' },
     });
-    // Related work is stored for later rounds.
+    // Related work is stored for later rounds; the run-only fields are not.
     expect(doc.facts.triage?.related).toEqual([
       { url: 'https://ghe.example.com/example/repo/issues/5', relation: 'an earlier attempt, closed' },
     ]);
+    for (const runOnly of ['closure', 'questions', 'labels', 'summary', 'report']) {
+      expect(doc.facts.triage).not.toHaveProperty(runOnly);
+    }
   }, 60_000);
 
   test('labels that fail to write leave the stage stored and the claim held, and the next pickup writes them', () => {
