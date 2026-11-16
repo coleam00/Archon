@@ -19,7 +19,11 @@ import {
 import { getWorkflowEventEmitter } from '../event-emitter';
 import { requireTerminalStatusWrite } from '../terminal-status-write';
 import { rootOutputFields, type DeclaredOutputPaths, type JsonValue } from '../output-ref';
-import { declaredOutcome, readCompletedOutcome } from '../completed-outcome';
+import {
+  type CompletedOutcomeReading,
+  declaredOutcome,
+  readCompletedOutcome,
+} from '../completed-outcome';
 import type { SourceReceiptAcceptance } from '../schemas/resource-start';
 import { resolveRunInputs } from './references';
 import { logWorkflowComplete, logWorkflowError, type WorkflowUsage } from '../logger';
@@ -139,8 +143,31 @@ export async function finishRun(
       ? { outcome: outcome.outcome, ...(startReceipts.length > 0 ? { startReceipts } : {}) }
       : undefined
   );
+  await reportNoOutcome(ctx, outcome);
   await reportUnstartedStages(ctx, startReceipts);
   return terminal.output;
+}
+
+/**
+ * A workflow that declares an outcome but whose returns node did not complete (a `when:`
+ * can skip it) completes with none, so nothing bound to its outcome starts; say so where
+ * the run ends, since the completion alone does not show why no stage followed.
+ */
+async function reportNoOutcome(
+  ctx: RunTerminalContext,
+  outcome: CompletedOutcomeReading
+): Promise<void> {
+  const { workflow, nodeOutputs } = ctx;
+  if (outcome.kind !== 'none' || workflow.returns === undefined) return;
+  if (declaredOutcome(workflow) === undefined) return;
+  const why =
+    nodeOutputs.get(workflow.returns)?.state === 'skipped' ? 'was skipped' : 'did not complete';
+  await safeSendMessage(
+    ctx.platform,
+    ctx.conversationId,
+    `\u2139\ufe0f Workflow '${workflow.name}' completed with no outcome: its returns node '${workflow.returns}' ${why}, so nothing bound to its outcome starts.`,
+    { workflowId: ctx.workflowRun.id }
+  );
 }
 
 /**

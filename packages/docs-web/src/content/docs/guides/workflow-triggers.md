@@ -257,8 +257,10 @@ A binding starts once for an ended run that meets all of these:
 
 - The run is on an item. A `workflow:` child is created with no item, so a parent that runs two stages as children never starts a third from one child's outcome.
 - Its workflow is `workflowName`, matched exactly.
-- It completed with `outcome`: a value of the outcome the workflow declares in [`returns: { node, outcome }`](/reference/workflow-language/), or `succeeded` or `failed` for a boolean outcome. A failed or cancelled run starts nothing; it only frees its resource.
-- The binding's `launch.cwd` is in the item's project. A run of a workflow with the same name in another project never starts it.
+- It completed with `outcome`: a value of the outcome the workflow declares in [`returns: { node, outcome }`](/reference/workflow-language/), or `succeeded` or `failed` for a boolean outcome. A failed or cancelled run starts nothing; it only frees its resource. A run whose `returns:` node did not complete, for example because a `when:` skipped it, completes with no outcome and starts nothing. The command that ended it prints that, `archon workflow runs --item <key> --json` shows its `outcome` as `null`, and `archon workflow get <run-id>` shows which node was skipped.
+- The binding's `launch.cwd` is in the item's project. A run of a workflow with the same name in another project never starts it. A `launch.cwd` that does not exist is in no project, so the binding is skipped; `archon trigger check` reports it.
+
+Two files that bind the same outcome of the same workflow to the same stage in one project each write their own receipt, so the stage starts once per file on the item. A binding that starts the workflow that ended starts it again each time a run completes with that outcome, a loop the file's author owns; to repeat work inside one run, use a [`loop:` node](/reference/workflow-language/) instead. `archon trigger check` reports both.
 
 The started run is on the same item. `inputs` maps each input of the started workflow to data from the ended run, and nothing else:
 
@@ -273,13 +275,15 @@ A result pointer that names nothing in the result starts nothing. The run still 
 archon trigger fire --config ~/.archon/triggers/build-after-plan.json --item <key> --inputs inputs.json
 ```
 
-A run on an item is refused before it starts, naming the file, when a run-ended binding its end could fire in its project is broken: the started workflow does not exist or does not declare an input the binding maps, or the ended workflow does not declare the binding's outcome or an input it reads. The run is cancelled before its first node, so a binding that names a missing stage is found before the stage feeding it does any work. With `--detach`, the refusal is the command's result and the run is cancelled before the child starts. These are the problems `archon trigger check` reports.
+A run on an item is refused before it starts, naming the file, when a run-ended binding its end could fire in its project is broken: the started workflow does not exist or does not declare an input the binding maps, or the ended workflow does not declare the binding's outcome or an input it reads. The run is cancelled before its first node, so a binding that names a missing stage is found before the stage feeding it does any work. With `--detach`, the refusal is the command's result and the run is cancelled before the child starts. `archon trigger check` reports these problems, and also a `launch.cwd` that does not exist, a binding that starts the workflow that ended, and two files that start the same stage, which no run is refused for.
 
 A file can change while a run is running. The ended run fails instead of completing, naming the file, when a file in the directory is not JSON or has an invalid `on`, when two run-ended files share a `sourceInstanceId`, or when a binding for the ended workflow in its project names an outcome that workflow cannot complete with or reads an input it does not declare. A run never completes without the hand-off it owes. Fix the file, then run `archon workflow resume <run-id>`; the resumed run completes and writes the start.
 
 The start is written in the same database transaction that completes the run, so it exists exactly when the end does. A run completes once, so its end causes each start once. Right after the commit, the CLI process that ended the run prepares the starts its own completion wrote, each on the host its binding names, and spawns each admitted run's executor, as `trigger fire` does for its receipt. A hand `archon workflow run` needs no trigger host for the next stage to start.
 
-That process drains a host's queue only when it serves the host: a `trigger execute --host <hostId>` process drains `<hostId>`, and any other CLI process, such as `workflow run`, `workflow cancel` or `workflow abandon`, drains the host `ARCHON_TRIGGER_HOST` names when it is set. Other work queued on a host is that host's to drain. A server with `ARCHON_TRIGGER_HOST` drains its host on its loop, a few seconds after a run ends there.
+That process drains a host's queue only when it serves the host: a `trigger execute --host <hostId>` process drains `<hostId>`, and any other CLI process, such as `workflow run`, `workflow cancel` or `workflow abandon`, drains the host `ARCHON_TRIGGER_HOST` names when it is set. Other work queued on a host is that host's to drain.
+
+A run the server ends, one started from the Web UI, chat, a webhook or the server's own trigger host, has no such step. A start on the host the server's `ARCHON_TRIGGER_HOST` names begins on the server's loop, within about five seconds. A start on any other host, or on any host when the server has no `ARCHON_TRIGGER_HOST`, waits as a pending binding until that host drains: run `archon trigger drain --host <hostId>` there, or schedule it. A binding whose feeding stage runs on the server should name the server's host.
 
 If the process dies after the commit, what is left depends on how far it got:
 

@@ -11,7 +11,7 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { readRunEndedBindings, runEndedBindingCheck } from '@archon/core/workflows/run-ended';
+import { readRunEndedBindings, runEndedTriggerCheck } from '@archon/core/workflows/run-ended';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
@@ -535,6 +535,8 @@ export function triggersDirectory(): string {
  * ended workflow declares the outcome and every input the binding reads from it, and
  * the started workflow exists and declares every input the binding maps. A run on an
  * item whose end could fire such a binding is refused before it starts, by the same check.
+ * It also reports what a run is not refused for: a `launch.cwd` that does not exist, a
+ * binding that starts the workflow that ended, and two files that start the same stage.
  */
 async function checkTriggers(host: WorkflowHost): Promise<void> {
   const checked = [];
@@ -544,7 +546,11 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
     throw new FileStoreUnsupportedError(
       `Run-ended triggers (${bindings.map(entry => entry.file).join(', ')})`
     );
-  for (const entry of bindings) {
+  const problems = await runEndedTriggerCheck(bindings, {
+    ...host.deps,
+    projectKeyOf: cwd => registeredProjectKeyForPath(cwd, host.records.codebases),
+  });
+  for (const [index, entry] of bindings.entries()) {
     checked.push({
       file: entry.file,
       sourceInstanceId: entry.sourceInstanceId,
@@ -553,7 +559,7 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
       runEnded: entry.runEnded,
       workflowName: entry.binding.launch.workflowName,
       cwd: entry.binding.launch.cwd,
-      problems: await runEndedBindingCheck(entry, host.deps),
+      problems: problems[index],
     });
   }
   await writeJsonLine({ directory: triggersDirectory(), runEnded: checked });
