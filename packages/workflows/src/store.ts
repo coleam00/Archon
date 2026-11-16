@@ -189,12 +189,19 @@ export interface IWorkflowStore
   /**
    * The item `itemKey` names in a project, with every run whose `item_id` is that item, in
    * the order they started; null when the project has no item under the key. A `workflow:`
-   * sub-run never carries an item, so the runs are top-level runs and continuations.
+   * sub-run never carries an item, so the runs are top-level runs and continuations. A run
+   * row that does not normalize is reported as unreadable in its place, not thrown.
+   * `descendantIds` holds every run below those runs, at any depth and width, found by
+   * `parent_run_id` without reading the rows, so an unreadable child is still found.
    */
   getItemRuns(
     projectKey: string,
     itemKey: string
-  ): Promise<{ item: import('./schemas/workflow-run').WorkflowItem; runs: WorkflowRun[] } | null>;
+  ): Promise<{
+    item: import('./schemas/workflow-run').WorkflowItem;
+    runs: AttentionRead<WorkflowRun>[];
+    descendantIds: string[];
+  } | null>;
   getItem(id: string): Promise<import('./schemas/workflow-run').WorkflowItem | null>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */

@@ -360,8 +360,11 @@ type MockCodebase = {
 };
 export const mockGetCodebase = mock(async (_id: string) => null as null | MockCodebase);
 
+export const mockListCodebases = mock(
+  async (): Promise<unknown[]> => [{ default_cwd: '/tmp/project' }]
+);
 mock.module('@archon/core/db/codebases', () => ({
-  listCodebases: mock(async () => [{ default_cwd: '/tmp/project' }]),
+  listCodebases: mockListCodebases,
   getCodebase: mockGetCodebase,
   deleteCodebase: mock(async () => {}),
 }));

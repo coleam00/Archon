@@ -40,13 +40,18 @@ export function registerItemRoutes(app: OpenAPIHono): void {
 
   registerOpenApiRoute(getItemRoute, async c => {
     const query = getValidatedQuery(c, itemReadQuerySchema);
-    let projectKey: string;
     try {
-      projectKey = (await resolveAttentionProject(codebaseDb, query.project)).key;
-    } catch (refusal) {
-      return apiError(c, 400, (refusal as Error).message);
-    }
-    try {
+      // Read the codebases here so a database failure is a 500. Only the resolver's own
+      // refusals (no such project, an ambiguous name) are the caller's 400.
+      const codebases = await codebaseDb.listCodebases();
+      let projectKey: string;
+      try {
+        projectKey = (
+          await resolveAttentionProject({ listCodebases: async () => codebases }, query.project)
+        ).key;
+      } catch (refusal) {
+        return apiError(c, 400, (refusal as Error).message);
+      }
       const read = await readItem(source, projectKey, query.key);
       if (read === null) return apiError(c, 404, `No item '${query.key}' in project ${projectKey}`);
       return c.json(read);

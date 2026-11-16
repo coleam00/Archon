@@ -466,10 +466,15 @@ export function describeSqlStatusReadConformance(
       );
       const listed = await store.getItemRuns(project, 'a');
       expect(listed?.item).toMatchObject({ projectKey: project, key: 'a' });
-      expect(listed?.runs.map(row => row.id)).toEqual([started.runId, second.id]);
-      expect(listed?.runs.map(row => row.id)).not.toContain(child.id);
+      expect(listed?.runs.map(row => ('id' in row ? row.id : row))).toEqual([
+        started.runId,
+        second.id,
+      ]);
+      expect(listed?.descendantIds).toEqual([child.id]);
       expect(await store.getItem(second.item_id ?? '')).toEqual(listed?.item ?? null);
-      expect(listed?.runs.every(row => row.item_id === listed.item.id)).toBe(true);
+      expect(listed?.runs.every(row => 'item_id' in row && row.item_id === listed.item.id)).toBe(
+        true
+      );
       // An item with no run yet and a key nothing named read apart.
       const waiting = await store.getItemRuns(project, 'c');
       expect(waiting?.item).toMatchObject({ projectKey: project, key: 'c' });
@@ -485,6 +490,47 @@ export function describeSqlStatusReadConformance(
         `c in ${project}`,
       ]);
       await expect(run(undefined, 'a')).rejects.toThrow();
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test('an item read finds every run below the item, and reports the ones it cannot read', async () => {
+    const harness = await makeHarness();
+    try {
+      const { db, store } = harness;
+      const create = (fields: { item_key?: string; parent_run_id?: string }) =>
+        store.createWorkflowRun({
+          workflow_name: 'item',
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+          ...fields,
+        });
+      const root = await create({ item_key: 'tree' });
+      const broken = await create({ item_key: 'tree' });
+      await harness.backdate(root.id, { started_at: new Date('2026-01-01T00:00:00Z') });
+      await harness.backdate(broken.id, { started_at: new Date('2026-01-02T00:00:00Z') });
+      const child = await create({ parent_run_id: root.id });
+      const sibling = await create({ parent_run_id: root.id });
+      const grandchild = await create({ parent_run_id: child.id });
+      // An origin that does not normalize, on one of the item's runs and on a child.
+      for (const id of [broken.id, child.id])
+        await db.query('UPDATE remote_agent_workflow_runs SET origin = $1 WHERE id = $2', [
+          '[]',
+          id,
+        ]);
+      const project = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const read = await store.getItemRuns(project, 'tree');
+      expect(read?.runs.map(row => ('type' in row ? row : row.id))).toEqual([
+        root.id,
+        { type: 'degraded', reason: 'run_unreadable', runId: broken.id },
+      ]);
+      expect([...(read?.descendantIds ?? [])].sort()).toEqual(
+        [child.id, sibling.id, grandchild.id].sort()
+      );
     } finally {
       await harness.close();
     }

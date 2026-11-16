@@ -71,10 +71,11 @@ export const itemAnswerSchema = z.discriminatedUnion('kind', [
 export type ItemAnswer = z.infer<typeof itemAnswerSchema>;
 
 /**
- * An item and what is recorded about it. `runs` are the item's own runs; a `workflow:`
- * child is left to `workflow get` on its parent. `questions` and `answers` come from the
+ * An item and what is recorded about it. `runs` are the item's own readable runs; a
+ * `workflow:` child is left to `workflow get` on its parent. `questions` and `answers` come from the
  * whole run tree, because a question is often asked inside a child; each names the run
- * that holds it. `degraded` reports runs in the tree the queue could not read.
+ * that holds it. `degraded` names each run in the tree that could not be read: one of the
+ * item's own runs, or a paused run the queue could not read. The rest still reads.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
@@ -86,8 +87,7 @@ export const itemReadSchema = z.object({
 export type ItemRead = z.infer<typeof itemReadSchema>;
 
 export interface ItemReadSource extends AttentionQueueSource {
-  store: AttentionQueueSource['store'] &
-    Pick<IWorkflowStore, 'getItemRuns' | 'findChildRuns' | 'listEventsForRuns'>;
+  store: AttentionQueueSource['store'] & Pick<IWorkflowStore, 'getItemRuns' | 'listEventsForRuns'>;
 }
 
 function itemRun(run: WorkflowRun): ItemRun {
@@ -132,27 +132,6 @@ function itemAnswer(row: WorkflowEventRow): ItemAnswer {
   };
 }
 
-/**
- * Every run in the trees under `roots`, roots included. Complete rather than bounded like
- * `gatherDescendantRunIds`: a fan-out has no limit on its children, and a cut-off walk
- * would report an item with an open question as having none. `seen` keeps a corrupted
- * `parent_run_id` cycle from looping.
- */
-async function runTree(
-  store: Pick<IWorkflowStore, 'findChildRuns'>,
-  roots: readonly WorkflowRun[]
-): Promise<Set<string>> {
-  const seen = new Set(roots.map(run => run.id));
-  const queue = [...seen];
-  for (let id = queue.shift(); id !== undefined; id = queue.shift())
-    for (const child of await store.findChildRuns(id))
-      if (!seen.has(child.id)) {
-        seen.add(child.id);
-        queue.push(child.id);
-      }
-  return seen;
-}
-
 /** Read the item `key` names in project `projectKey`; null when there is no such item. */
 export async function readItem(
   source: ItemReadSource,
@@ -161,7 +140,12 @@ export async function readItem(
 ): Promise<ItemRead | null> {
   const found = await source.store.getItemRuns(projectKey, key);
   if (found === null) return null;
-  const tree = await runTree(source.store, found.runs);
+  const own = splitAttentionRead(found.runs);
+  const tree = new Set([
+    ...own.values.map(run => run.id),
+    ...own.degraded.map(report => report.runId),
+    ...found.descendantIds,
+  ]);
   // The one queue reader, so a question here reads as `workflow attention` lists it.
   const { values, degraded } = splitAttentionRead(await listAttentionQueue(source));
   const questions = values
@@ -178,9 +162,15 @@ export async function readItem(
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   return {
     item: found.item,
-    runs: found.runs.map(itemRun),
+    runs: own.values.map(itemRun),
     questions,
     answers,
-    degraded: degraded.filter(report => tree.has(report.runId)),
+    // A paused item run the store could not read is in both reports; list it once.
+    degraded: [
+      ...own.degraded,
+      ...degraded.filter(
+        report => tree.has(report.runId) && !own.degraded.some(mine => mine.runId === report.runId)
+      ),
+    ],
   };
 }

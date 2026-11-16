@@ -116,8 +116,9 @@ const source: ItemReadSource = {
   branchOf: async () => null,
   store: {
     getItemRuns: async (projectKey, key) =>
-      projectKey === item.projectKey && key === item.key ? { item, runs: [first, second] } : null,
-    findChildRuns: async id => [...runs.values()].filter(row => row.parent_run_id === id),
+      projectKey === item.projectKey && key === item.key
+        ? { item, runs: [first, second], descendantIds: ['child', 'sibling'] }
+        : null,
     listEventsForRuns: async ids =>
       new Map(ids.map(id => [id, events.filter(row => row.workflow_run_id === id)])),
     listAttentionQueueRows: async () => [unrelated, child, sibling],
@@ -206,7 +207,7 @@ describe('reading an item', () => {
     expect(await readItem(source, item.projectKey, 'issue-8')).toBeNull();
     const empty: ItemReadSource = {
       ...source,
-      store: { ...source.store, getItemRuns: async () => ({ item, runs: [] }) },
+      store: { ...source.store, getItemRuns: async () => ({ item, runs: [], descendantIds: [] }) },
     };
     expect(await readItem(empty, item.projectKey, item.key)).toEqual({
       item,
@@ -217,32 +218,34 @@ describe('reading an item', () => {
     });
   });
 
-  test('reaches a question below a fan-out of any width', async () => {
-    const root = run('root');
-    const fanOut = Array.from({ length: 64 }, (_, n) =>
-      run(`fan-${String(n)}`, { parent_run_id: 'root', item_id: null })
-    );
-    const deep = asking('deep', '2026-11-01T12:00:00.000Z', {
-      parent_run_id: 'fan-63',
-      item_id: null,
-    });
-    const tree = new Map([root, ...fanOut, deep].map(row => [row.id, row]));
-    const answered = event('deep', 'wait_answered', '2026-11-01T11:50:00.000Z', { via: 'cli' });
-    const wide: ItemReadSource = {
+  test('a run the store could not read is reported, and the rest of the item still reads', async () => {
+    // One of the item's own runs and one paused child do not normalize. The store still
+    // finds both by id, and the queue reports the paused one as unreadable.
+    const unreadable = { type: 'degraded', reason: 'run_unreadable' } as const;
+    const broken: ItemReadSource = {
       ...source,
       store: {
         ...source.store,
-        getItemRuns: async () => ({ item, runs: [root] }),
-        findChildRuns: async id => [...tree.values()].filter(row => row.parent_run_id === id),
-        listEventsForRuns: async ids =>
-          new Map(ids.map(id => [id, id === 'deep' ? [answered] : []])),
-        listAttentionQueueRows: async () => [deep],
-        getWorkflowRun: async id => tree.get(id) ?? null,
-        getWorkflowRunForAttention: async id => tree.get(id) ?? null,
+        getItemRuns: async () => ({
+          item,
+          runs: [first, { ...unreadable, runId: 'lost-root' }, second],
+          descendantIds: ['child', 'lost-child'],
+        }),
+        listAttentionQueueRows: async () => [child, { ...unreadable, runId: 'lost-child' }],
       },
     };
-    const read = await readItem(wide, item.projectKey, item.key);
-    expect(read?.questions.map(question => question.run?.id)).toEqual(['deep']);
-    expect(read?.answers.map(answer => answer.runId)).toEqual(['deep']);
+    const read = await readItem(broken, item.projectKey, item.key);
+    expect(read?.runs.map(row => row.id)).toEqual(['first', 'second']);
+    expect(read?.questions.map(question => question.run?.id)).toEqual(['child']);
+    expect(read?.answers.map(answer => answer.runId)).toEqual([
+      'first',
+      'first',
+      'child',
+      'second',
+    ]);
+    expect(read?.degraded).toEqual([
+      { ...unreadable, runId: 'lost-root' },
+      { ...unreadable, runId: 'lost-child' },
+    ]);
   });
 });

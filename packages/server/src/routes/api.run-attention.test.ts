@@ -7,6 +7,7 @@ import {
   mockLabelAttentionWait,
   mockGetItemRuns,
   mockListEventsForRuns,
+  mockListCodebases,
   MOCK_RUNNING_RUN,
   makeDashboardWorkflowRun,
   makeApp,
@@ -281,7 +282,9 @@ describe('reading an item over HTTP', () => {
 
   test('reads a known item by project and key, with its question and answers', async () => {
     mockGetItemRuns.mockImplementationOnce(async (projectKey, key) =>
-      projectKey === item.projectKey && key === item.key ? { item, runs: [asking] } : null
+      projectKey === item.projectKey && key === item.key
+        ? { item, runs: [asking], descendantIds: [] }
+        : null
     );
     mockListAttentionQueueRows.mockImplementationOnce(async () => [
       makeDashboardWorkflowRun(asking),
@@ -324,5 +327,17 @@ describe('reading an item over HTTP', () => {
     );
     expect(unknown.status).toBe(404);
     expect((await app.request('/api/items?key=nope')).status).toBe(400);
+  });
+
+  test('a database failure while resolving the project is an opaque 500, not a 400', async () => {
+    mockListCodebases.mockImplementationOnce(async () => {
+      throw new Error('connection refused at 10.0.0.5:5432');
+    });
+    const { app } = makeApp();
+    const response = await app.request(
+      `/api/items?project=${encodeURIComponent(item.projectKey)}&key=${encodeURIComponent(item.key)}`
+    );
+    expect(response.status).toBe(500);
+    expect(JSON.stringify(await response.json())).not.toContain('10.0.0.5');
   });
 });
