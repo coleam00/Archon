@@ -271,6 +271,19 @@ test('a destination thread hosts the notice, and the follow-up closes it in that
   });
   expect(slack.posts[1]).toMatchObject({ channel: 'C9', thread_ts: '100.1' });
   expect(JSON.stringify(blocksOf(1))).toContain('authored outcome: built');
+  await plugin.attentionNotice({
+    destination: 'C9:100.1',
+    conversationId,
+    notice: {
+      type: 'terminal',
+      runId: 'run-2',
+      workflowName: 'deploy',
+      status: 'completed',
+      completedOutcome: 'unavailable',
+    },
+  });
+  expect(JSON.stringify(blocksOf(2))).toContain('authored outcome: unavailable');
+  expect(JSON.stringify(blocksOf(2))).not.toContain('failed to read');
   expect(JSON.stringify(blocksOf(1))).toContain('total cost: $0.5000');
   expect(slack.updates).toEqual([
     expect.objectContaining({

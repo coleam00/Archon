@@ -284,7 +284,7 @@ describe('buildStatusBlocks', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
       snapshot({
         status: 'completed',
-        outcome: 'failed',
+        outcome: { kind: 'value', value: 'failed' },
       }),
       startedAt + 1000
     );
@@ -296,7 +296,7 @@ describe('buildStatusBlocks', () => {
 
   test('terminal snapshot shows a named outcome', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
-      snapshot({ status: 'completed', outcome: 'built' }),
+      snapshot({ status: 'completed', outcome: { kind: 'value', value: 'built' } }),
       startedAt + 1000
     );
     expect((blocks[0] as { text: { text: string } }).text.text).toContain(
@@ -309,7 +309,7 @@ describe('buildStatusBlocks', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
       snapshot({
         status: 'completed',
-        outcome: 'unavailable',
+        outcome: { kind: 'read_failed' },
       }),
       startedAt + 1000
     );

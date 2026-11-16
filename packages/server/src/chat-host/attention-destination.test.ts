@@ -178,21 +178,29 @@ test('an attention notice carries the recommendation and what options do, never 
 });
 
 test.each([
-  ['a named outcome', { outcome: null, completed_outcome: 'built' }, { completedOutcome: 'built' }],
+  [
+    'a named outcome',
+    'completed',
+    { outcome: null, completed_outcome: 'built' },
+    { completedOutcome: 'built' },
+  ],
   [
     'a boolean outcome',
+    'completed',
     { outcome: 'failed', completed_outcome: 'failed' },
     { completedOutcome: 'failed', authoredOutcome: 'failed' },
   ],
-  ['no declared outcome', { outcome: null, completed_outcome: null }, {}],
-] as const)('a terminal notice carries status, cost and %s', (_, outcomes, expected) => {
+  ['no declared outcome', 'completed', { outcome: null, completed_outcome: null }, {}],
+  // An older binary may write the legacy outcome while the run runs; it did not complete.
+  ['no outcome for a failed run', 'failed', { outcome: 'succeeded', completed_outcome: null }, {}],
+] as const)('a terminal notice carries status, cost and %s', (_, status, outcomes, expected) => {
   expect(
-    chatAttentionNotice(notice('terminal', 'completed', { total_cost_usd: 0.25 }, outcomes))
+    chatAttentionNotice(notice('terminal', status, { total_cost_usd: 0.25 }, outcomes))
   ).toEqual({
     type: 'terminal',
     runId: 'run',
     workflowName: 'nightly',
-    status: 'completed',
+    status,
     ...expected,
     totalCostUsd: 0.25,
   });

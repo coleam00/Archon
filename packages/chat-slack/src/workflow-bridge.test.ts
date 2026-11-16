@@ -298,6 +298,31 @@ test('a named outcome is shown without an outcome reaction', async () => {
   ]);
 });
 
+test.each([
+  [
+    'a named outcome unavailable is shown as its value',
+    { completedOutcome: 'unavailable' },
+    '`unavailable`',
+  ],
+  [
+    'a legacy unavailable outcome is a read failure',
+    { authoredOutcome: 'unavailable' },
+    'failed to read persisted run',
+  ],
+] as const)('%s', async (_, fields, expected) => {
+  await started();
+  await plugin.onRunEvent({ type: 'terminal', runId: 'run', status: 'completed', ...fields });
+  expect(rendered()).toContain(expected);
+  if ('completedOutcome' in fields) expect(rendered()).not.toContain('failed to read');
+});
+
+test('a run with no declared outcome shows no outcome', async () => {
+  await started();
+  await plugin.onRunEvent({ type: 'terminal', runId: 'run', status: 'completed' });
+  expect(rendered()).not.toContain('Authored outcome');
+  expect(rendered()).not.toContain('authored outcome');
+});
+
 test('prior-success replay preserves completed duration and suspended nodes stay running', async () => {
   await started();
   await plugin.onRunEvent({

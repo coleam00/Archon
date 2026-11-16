@@ -25,6 +25,12 @@ export interface NodeSnapshot {
   error?: string;
 }
 
+/**
+ * An outcome to show. `read_failed` is only the legacy `authoredOutcome: 'unavailable'`;
+ * a completed outcome is always shown as its value, even a named value `unavailable`.
+ */
+export type ShownOutcome = { kind: 'value'; value: string } | { kind: 'read_failed' };
+
 export interface RunSnapshot {
   runId: string;
   workflowName: string;
@@ -32,7 +38,7 @@ export interface RunSnapshot {
   nodes: NodeSnapshot[];
   status: 'running' | 'paused' | RunTerminalStatus;
   /** The outcome the run completed with, named or boolean; see `shownOutcome`. */
-  outcome?: string;
+  outcome?: ShownOutcome;
   totalCostUsd?: number;
   failureReason?: string;
   approvalDeliveryFailed?: boolean;
@@ -309,12 +315,19 @@ export function buildStatusBlocks(
  */
 export function shownOutcome(
   message: Pick<TerminalEvent, 'completedOutcome' | 'authoredOutcome'>
-): string | undefined {
-  return message.completedOutcome ?? message.authoredOutcome;
+): ShownOutcome | undefined {
+  if (message.completedOutcome !== undefined)
+    return { kind: 'value', value: message.completedOutcome };
+  if (message.authoredOutcome === 'unavailable') return { kind: 'read_failed' };
+  if (message.authoredOutcome !== undefined)
+    return { kind: 'value', value: message.authoredOutcome };
+  return undefined;
 }
 
-function outcomeText(outcome: string): string {
-  return outcome === 'unavailable' ? 'unavailable — failed to read persisted run' : outcome;
+const READ_FAILED_TEXT = 'unavailable — failed to read persisted run';
+
+function outcomeText(outcome: ShownOutcome): string {
+  return outcome.kind === 'read_failed' ? READ_FAILED_TEXT : outcome.value;
 }
 
 function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: string): KnownBlock {
@@ -322,9 +335,9 @@ function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: strin
     snapshot.outcome === undefined
       ? ''
       : `\n*Execution status:* \`${snapshot.status}\` · *Authored outcome:* ${
-          snapshot.outcome === 'unavailable'
-            ? outcomeText(snapshot.outcome)
-            : `\`${snapshot.outcome}\``
+          snapshot.outcome.kind === 'read_failed'
+            ? READ_FAILED_TEXT
+            : `\`${snapshot.outcome.value}\``
         }`;
   return {
     type: 'section',
