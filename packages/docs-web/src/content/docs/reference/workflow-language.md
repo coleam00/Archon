@@ -240,7 +240,7 @@ nodes:
   - id: deliver
     loop_group:
       max_iterations: 4
-      until_bash: test "$checks.output" = PASS
+      until_bash: 'checks=$checks.output; [ "$checks" = PASS ]'
       nodes:
         - id: build
           prompt: |

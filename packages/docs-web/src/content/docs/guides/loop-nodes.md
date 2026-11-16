@@ -948,7 +948,7 @@ nodes:
   - id: corrections
     loop_group:
       max_iterations: 3
-      until_bash: 'test $review.output.done = true'
+      until_bash: 'ready=$review.output.done; [ "$ready" = true ]'
       nodes:
         - id: build
           context: same
