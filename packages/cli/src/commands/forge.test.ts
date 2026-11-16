@@ -606,7 +606,8 @@ test('a release binary loads the installed GitHub plugin and nothing from source
 async function checkForge(
   data: object,
   env: NodeJS.ProcessEnv,
-  mode = 'token'
+  mode = 'token',
+  tokenEnv?: string
 ): Promise<{ code: number; response: unknown }> {
   const output: unknown[] = [];
   const code = await forgeCommand(
@@ -626,6 +627,7 @@ async function checkForge(
               '--mode',
               mode,
             ],
+            ...(tokenEnv ? { token_env: tokenEnv } : {}),
           },
         ],
       }),
@@ -704,6 +706,22 @@ test('forge check exits 1 with a typed reason for a missing plugin, capability o
   });
 });
 
+test('forge check names the configured token_env, not the plugin declaration, for a missing credential', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = { HOME: root, ARCHON_HOME: root, PATH: '', TEST_FORGE_TOKEN: 'ignored' };
+  const { code, response } = await checkForge(
+    { host: 'forge.example', operations: ['checks.state'] },
+    env,
+    'token',
+    'CONFIGURED_FORGE_TOKEN'
+  );
+  expect(code).toBe(1);
+  expect(response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
+  const remedy = (response as { remedy: string }).remedy;
+  expect(remedy).toContain('CONFIGURED_FORGE_TOKEN');
+  expect(remedy).not.toContain('TEST_FORGE_TOKEN');
+});
+
 test('forge check by remote selects the plugin a resolve of that remote selects', async () => {
   const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
   const env = { HOME: root, ARCHON_HOME: root, PATH: '', TEST_FORGE_TOKEN: 'secret-token-value' };
@@ -722,7 +740,13 @@ test('forge check by remote selects the plugin a resolve of that remote selects'
   expect(JSON.stringify(local.response)).not.toContain('/srv/git');
 
   const both = await checkForge({ host: 'forge.example', remote: 'git@forge.example:a/b' }, env);
-  expect(both.response).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
+  expect(both.response).toMatchObject({
+    ok: false,
+    error: {
+      kind: 'invalid_request',
+      message: expect.stringContaining('name the forge by exactly one of host or remote'),
+    },
+  });
 });
 
 test('forge check under a source checkout answers for the source GitHub plugin', async () => {

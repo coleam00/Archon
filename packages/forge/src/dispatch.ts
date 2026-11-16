@@ -352,17 +352,29 @@ function pluginCredential(
   options: DispatchOptions
 ): Promise<OperationCredential> {
   const env = options.env ?? process.env;
+  const { names, github } = credentialEnvNames(plugin, discovery, selectedHost);
+  return selectCredential(names, github, selectedHost, options.credentialEnv ?? env, env);
+}
+
+/**
+ * The environment variables a plugin's credential is read from: a `token_env` configured
+ * under `forge.hosts` or `forge.plugins` replaces the plugin's own list.
+ */
+function credentialEnvNames(
+  plugin: DiscoveredPlugin,
+  discovery: PluginDiscovery,
+  selectedHost: string
+): { names: readonly string[]; override?: string; github: boolean } {
   const metadata = plugin.metadata;
   const override =
     discovery.hostConfig.get(selectedHost)?.token_env ??
     discovery.pluginTokenEnv.get(metadata.name);
+  if (override) return { names: [override], override, github: false };
   const github =
     metadata.forge === 'github' &&
-    !override &&
     metadata.token_env.length > 0 &&
     metadata.token_env.every(name => GH_DOTCOM_TOKEN_KEYS.some(key => key === name));
-  const names = override ? [override] : github ? GH_DOTCOM_TOKEN_KEYS : metadata.token_env;
-  return selectCredential(names, github, selectedHost, options.credentialEnv ?? env, env);
+  return { names: github ? GH_DOTCOM_TOKEN_KEYS : metadata.token_env, github };
 }
 
 function credentialFailure(
@@ -458,7 +470,11 @@ export async function checkForgeAccess(
   const credential = await pluginCredential(plugin, discovery, host, options);
   if (credential.kind === 'failed') return { ok: false, error: credentialFailure(credential) };
   if (credential.kind === 'missing') {
-    return refused({ kind: 'no_credential', message: credential.message }, plugin.metadata);
+    return refused(
+      { kind: 'no_credential', message: credential.message },
+      plugin.metadata,
+      credentialEnvNames(plugin, discovery, host).override
+    );
   }
   return {
     ok: true,
@@ -471,14 +487,23 @@ export async function checkForgeAccess(
 /** A refusal the operator fixes, with their next step: the plugin's text, else forge's. */
 function refused(
   error: ForgeError & { kind: ForgeAccessRefusalKind },
-  metadata?: PluginMetadata
+  metadata?: PluginMetadata,
+  tokenEnvOverride?: string
 ): Extract<ForgeAccessCheck, { ok: false }> {
-  return { ok: false, error, remedy: remedy(error.kind, metadata) };
+  return { ok: false, error, remedy: remedy(error.kind, metadata, tokenEnvOverride) };
 }
 
-function remedy(kind: ForgeAccessRefusalKind, metadata: PluginMetadata | undefined): string {
+function remedy(
+  kind: ForgeAccessRefusalKind,
+  metadata: PluginMetadata | undefined,
+  tokenEnvOverride: string | undefined
+): string {
   if (kind === 'no_plugin_for_host' || metadata === undefined) {
     return "Install a forge plugin that claims this host with `archon plugin add`, or map the host to an installed plugin under `forge.hosts` in Archon's config.";
+  }
+  // The plugin's own text names the variables it declares, which a configured token_env replaces.
+  if (kind === 'no_credential' && tokenEnvOverride) {
+    return `Set ${tokenEnvOverride}, the token_env Archon's config names for plugin ${metadata.name}, in Archon's env file or the run's environment.`;
   }
   const own = metadata.remedies?.[kind];
   if (own) return own;
