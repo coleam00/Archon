@@ -19,6 +19,7 @@ import type {
   ForgeFailure,
   ForgeOperations,
   ItemRead,
+  ItemWindow,
   NodeOutcomesListing,
   StartDisposition,
   StateClaimResult,
@@ -328,6 +329,25 @@ export function item(): ItemRead | null {
   if (answer.code === 1 && isRecord(answer.value) && answer.value.error === 'not_found')
     return null;
   throw failed('workflow runs --item-of', answer);
+}
+
+/**
+ * A page of this project's items with a run started in a window (`archon workflow
+ * items`), each read as `item()` reads one, with all its runs. `since` and `until` take
+ * `archon metrics` syntax (default the last 30 days); `limit` is at most 100. Pass a page's
+ * `next` as `after`, alone, to read the following page; `next` is null on the last.
+ */
+export function items(
+  query: { since?: string; until?: string; limit?: number; after?: string } = {}
+): ItemWindow {
+  const args = ['--json'];
+  if (query.since !== undefined) args.push('--since', query.since);
+  if (query.until !== undefined) args.push('--until', query.until);
+  if (query.limit !== undefined) args.push('--limit', String(query.limit));
+  if (query.after !== undefined) args.push('--after', query.after);
+  const answer = archon('workflow items', args);
+  if (answer.code !== 0 || !isRecord(answer.value)) throw failed('workflow items', answer);
+  return answer.value as ItemWindow;
 }
 
 /**

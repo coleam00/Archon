@@ -436,8 +436,12 @@ export const mockGetItemRuns = mock<typeof import('@archon/core/db/items')['getI
 const unusedItemWrite = mock(async () => {
   throw new Error('Item writes are not used by the route tests');
 });
+export const mockListItemsInWindow = mock<
+  typeof import('@archon/core/db/items')['listItemsInWindow']
+>(async () => []);
 mock.module('@archon/core/db/items', () => ({
   getItemRuns: mockGetItemRuns,
+  listItemsInWindow: mockListItemsInWindow,
   getItem: mock(async () => null),
   ensureItem: unusedItemWrite,
   ensureItemInProject: unusedItemWrite,
@@ -455,6 +459,10 @@ mock.module('@archon/core/db/item-rulings', () => ({
   listItemRulings: mockListItemRulings,
   recordItemRuling: mockRecordItemRuling,
   withdrawItemRuling: mockWithdrawItemRuling,
+}));
+mock.module('@archon/core/db/item-merges', () => ({
+  getItemMerge: mock(async () => null),
+  recordItemMerge: unusedItemWrite,
 }));
 
 mock.module('@archon/core/db/workflow-events', () => ({

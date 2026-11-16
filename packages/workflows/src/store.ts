@@ -229,6 +229,34 @@ export interface IWorkflowStore
   withdrawItemRuling(
     input: { rulingId: string; projectKey?: string } & ItemRulingAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
+  /**
+   * The items of a project with one of their own runs (`item_id` set, so not a
+   * `workflow:` child) started in `[since, until)`, ordered by item id, after
+   * `afterItemId` when given. The id order is a resume key, not a ranking.
+   */
+  listItemsInWindow(query: {
+    projectKey: string;
+    since: Date;
+    until: Date;
+    afterItemId: string | null;
+    limit: number;
+  }): Promise<import('./schemas/workflow-run').WorkflowItem[]>;
+  /** The merge recorded on an item; null when none is. An unreadable row is reported, not thrown. */
+  getItemMerge(
+    itemId: string
+  ): Promise<
+    | import('./schemas/item-merge').ItemMerge
+    | import('./schemas/item-merge').ItemMergeDegraded
+    | null
+  >;
+  /**
+   * Record that the item `key` names merged, as the forge reported it. Recorded once: a
+   * second report keeps the first and returns it with `recorded: false`. Null when the
+   * project has no item under the key; a merge never creates an item.
+   */
+  recordItemMerge(
+    input: import('./schemas/item-merge').ItemMergeReport
+  ): Promise<import('./schemas/item-merge').ItemMergeRecorded | null>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(

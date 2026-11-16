@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import type { ItemMerge } from './schemas/item-merge';
 import type { ItemRuling } from './schemas/item-ruling';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
@@ -76,6 +77,7 @@ const first = run('first', {
   completed_outcome: 'built',
   started_at: new Date('2026-11-01T09:00:00.000Z'),
   completed_at: new Date('2026-11-01T09:30:00.000Z'),
+  metadata: { total_cost_usd: 0.42, total_tokens_in: 1200, total_tokens_out: 300 },
 });
 // The second run was started by the end of the first; its receipt holds that cause.
 const SECOND_RECEIPT = '5a4f7f9e-2b0e-4a4c-9d36-1c1f1f6f3a10';
@@ -144,6 +146,15 @@ const rulings: ItemRuling[] = [
   },
 ];
 
+const merge: ItemMerge = {
+  change: 'https://github.com/acme/web/pull/12',
+  commit: null,
+  at: '2026-11-01T12:30:00.000Z',
+  recordedAt: '2026-11-01T12:31:00.000Z',
+  via: 'cli',
+  fromRun: null,
+};
+
 const source: ItemReadSource = {
   branchOf: async () => null,
   store: {
@@ -159,6 +170,7 @@ const source: ItemReadSource = {
     getCodebase: async () => null,
     getItem: async id => (id === item.id ? item : null),
     listItemRulings: async id => (id === item.id ? rulings : []),
+    getItemMerge: async id => (id === item.id ? merge : null),
     getResourceStartRequest: async () => null,
     getStartReceipt: async id =>
       id === SECOND_RECEIPT
@@ -193,6 +205,7 @@ describe('reading an item', () => {
         completedAt: '2026-11-01T09:30:00.000Z',
         cause: null,
         awaitingExecution: null,
+        spend: { usd: 0.42, inputTokens: 1200, outputTokens: 300 },
       },
       {
         id: 'second',
@@ -203,6 +216,7 @@ describe('reading an item', () => {
         completedAt: null,
         cause: { kind: 'run_ended', runId: 'first' },
         awaitingExecution: null,
+        spend: { usd: null, inputTokens: null, outputTokens: null },
       },
     ]);
     // The children's questions are the item's, under their own run ids, oldest first; the
@@ -256,6 +270,7 @@ describe('reading an item', () => {
         text: 'ship it',
       },
     ]);
+    expect(read?.merged).toEqual(merge);
     expect(read?.degraded).toEqual([]);
   });
 
@@ -270,6 +285,7 @@ describe('reading an item', () => {
       runs: [],
       questions: [],
       answers: rulings,
+      merged: merge,
       degraded: [],
     });
   });
@@ -307,6 +323,11 @@ describe('reading an item', () => {
         listItemRulings: async () => [
           { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
         ],
+        getItemMerge: async () => ({
+          type: 'degraded',
+          reason: 'merge_unreadable',
+          itemId: item.id,
+        }),
       },
     };
     const read = await readItem(broken, item.projectKey, item.key);
@@ -322,6 +343,8 @@ describe('reading an item', () => {
       { ...unreadable, runId: 'lost-root' },
       { ...unreadable, runId: 'lost-child' },
       { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
+      { type: 'degraded', reason: 'merge_unreadable', itemId: item.id },
     ]);
+    expect(read?.merged).toBeNull();
   });
 });

@@ -63,7 +63,11 @@ function answerLine(answer: ItemAnswer): string {
 
 /** The item read as lines a terminal prints, each section saying `none` when empty. */
 export function itemReadLines(read: ItemRead): string[] {
-  const lines = [`Item ${read.item.key} (${read.item.projectKey})`, '', 'Runs:'];
+  const lines = [`Item ${read.item.key} (${read.item.projectKey})`];
+  if (read.merged !== null) lines.push(`Merged ${minute(read.merged.at)}: ${read.merged.change}`);
+  if (read.degraded.some(report => report.reason === 'merge_unreadable'))
+    lines.push('The merge recorded on this item could not be read.');
+  lines.push('', 'Runs:');
   if (read.runs.length === 0) lines.push('  none');
   for (const run of read.runs) lines.push(...runLines(run));
   lines.push('', 'Open questions:');

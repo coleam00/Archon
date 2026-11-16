@@ -15,6 +15,7 @@ import { z } from '@hono/zod-openapi';
 import { openAttentionQueueCountsSchema } from '@archon/workflows/attention-counts';
 import { attentionQueueItemSchema } from '@archon/workflows/attention-queue';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemWindowSchema } from '@archon/workflows/item-window';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import {
   attentionWatchLevelSchema,
@@ -439,6 +440,21 @@ export const itemReadQuerySchema = z.object({
 
 /** GET /api/items response: the item, its runs, open questions and answers. */
 export const itemReadResponseSchema = itemReadSchema.meta({ id: 'ItemRead' });
+
+/**
+ * GET /api/items/window query: the project as for GET /api/items, and either a window
+ * (`since`, `until` in `archon metrics` syntax) or the `after` cursor a page returned.
+ */
+export const itemWindowQuerySchema = z.object({
+  project: z.string().min(1),
+  since: z.string().min(1).optional(),
+  until: z.string().min(1).optional(),
+  limit: z.coerce.number().int().optional(),
+  after: z.string().min(1).optional(),
+});
+
+/** GET /api/items/window response: a page of items, as `archon workflow items --json`. */
+export const itemWindowResponseSchema = itemWindowSchema.meta({ id: 'ItemWindow' });
 
 /** POST /api/items/rulings body: the item, by project and key, and the ruling's text. */
 export const recordItemRulingBodySchema = z

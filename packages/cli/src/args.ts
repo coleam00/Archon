@@ -117,6 +117,10 @@ export const cliArgOptions: CliArgOptions = {
   'item-of': { type: 'string' },
   // `workflow rule --withdraw <ruling-id>`.
   withdraw: { type: 'string' },
+  // `workflow merged --change <ref> --at <ISO> --commit <sha>`: the merge the forge reported.
+  change: { type: 'string' },
+  at: { type: 'string' },
+  commit: { type: 'string' },
   inputs: { type: 'string' },
   owner: { type: 'string' },
   // `archon pack bindings`: the operator's choices a pack's binding declaration lacks.

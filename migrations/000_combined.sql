@@ -777,6 +777,22 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
   CHECK ((withdraws IS NULL) = (text IS NOT NULL))
 );
 
+-- The merge of an item's change, as the forge reported it to the caller that recorded it.
+-- An append-only fact beside the item, like a ruling: the primary key on item_id makes it
+-- recorded once, so a second report keeps the first. change is the forge's identity of
+-- the merged change (a pull request URL), stored and never parsed. from_run_id has no
+-- foreign key, so run cleanup keeps the fact.
+CREATE TABLE IF NOT EXISTS remote_agent_item_merges (
+  item_id UUID PRIMARY KEY REFERENCES remote_agent_items(id),
+  change TEXT NOT NULL,
+  merge_commit TEXT,
+  merged_at TIMESTAMP WITH TIME ZONE NOT NULL,
+  via TEXT NOT NULL,
+  from_run_id TEXT,
+  from_node_path TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
+);
+
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;

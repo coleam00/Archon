@@ -657,6 +657,102 @@ export function describeSqlStatusReadConformance(
     }
   });
 
+  test('a window lists the items with an own run started in it, by id, after a cursor once', async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const projectKey = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const at = async (key: string, workflow: string, started: string, parent?: string) => {
+        const run = await store.createWorkflowRun({
+          workflow_name: workflow,
+          user_message: '',
+          codebase_id: CONFORMANCE_CODEBASE_ID,
+          ...(parent ? { parent_run_id: parent } : { item_key: key }),
+        });
+        await harness.backdate(run.id, { started_at: new Date(started) });
+        return run;
+      };
+      const a = await at('a', 'build', '2026-10-20T00:00:00Z');
+      await at('a', 'review', '2026-11-02T00:00:00Z');
+      // Only a `workflow:` child of b's run started in the window: b has no own run in it.
+      const b = await at('b', 'build', '2026-10-05T00:00:00Z');
+      await at('', 'review', '2026-11-05T00:00:00Z', b.id);
+      await at('c', 'build', '2026-11-30T23:59:59Z');
+      await at('d', 'review', '2026-12-01T00:00:00Z');
+      const window = {
+        projectKey,
+        since: new Date('2026-11-01T00:00:00Z'),
+        until: new Date('2026-12-01T00:00:00Z'),
+      };
+      const all = await store.listItemsInWindow({ ...window, afterItemId: null, limit: 10 });
+      expect(all.map(item => item.key).sort()).toEqual(['a', 'c']);
+      expect(all.map(item => item.id)).toEqual(all.map(item => item.id).sort());
+      expect(all.find(item => item.key === 'a')?.id).toBe(a.item_id ?? '');
+      const first = await store.listItemsInWindow({ ...window, afterItemId: null, limit: 1 });
+      const after = first[0]?.id ?? '';
+      const rest = await store.listItemsInWindow({ ...window, afterItemId: after, limit: 10 });
+      expect([...first, ...rest]).toEqual(all);
+      expect(
+        await store.listItemsInWindow({
+          ...window,
+          projectKey: 'other',
+          afterItemId: null,
+          limit: 10,
+        })
+      ).toEqual([]);
+    } finally {
+      await harness.close();
+    }
+  });
+
+  test("an item's merge is recorded once, never creates an item, and reads back", async () => {
+    const harness = await makeHarness();
+    try {
+      const { store } = harness;
+      const projectKey = projectKeyForCodebase(
+        { name: 'conformance', default_cwd: '/conformance' },
+        ''
+      );
+      const report = {
+        projectKey,
+        key: 'merged',
+        change: 'https://github.com/acme/web/pull/1',
+        commit: 'a'.repeat(40),
+        at: '2026-11-02T10:00:00+02:00',
+        via: 'cli',
+        fromRun: { runId: 'run-1', nodePath: 'record' },
+      };
+      expect(await store.recordItemMerge(report)).toBeNull();
+      expect(await store.getItemRuns(projectKey, 'merged')).toBeNull();
+      await store.createWorkflowRun({
+        workflow_name: 'build',
+        user_message: '',
+        codebase_id: CONFORMANCE_CODEBASE_ID,
+        item_key: 'merged',
+      });
+      const first = await store.recordItemMerge(report);
+      expect(first).toMatchObject({
+        recorded: true,
+        merge: {
+          change: report.change,
+          commit: report.commit,
+          at: '2026-11-02T08:00:00.000Z',
+          via: 'cli',
+          fromRun: report.fromRun,
+        },
+      });
+      const again = await store.recordItemMerge({ ...report, change: 'other', commit: null });
+      expect(again).toEqual(first && { merge: first.merge, recorded: false });
+      const item = await store.getItemRuns(projectKey, 'merged');
+      expect(await store.getItemMerge(item?.item.id ?? '')).toEqual(first?.merge ?? null);
+    } finally {
+      await harness.close();
+    }
+  });
+
   test('a continuation belongs to the item of the run it continues unless it names its own', async () => {
     const harness = await makeHarness();
     try {

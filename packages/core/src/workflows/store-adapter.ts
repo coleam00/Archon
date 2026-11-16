@@ -19,6 +19,7 @@ import type { WorkflowEventRow } from '@archon/workflows/schemas/workflow-event'
 import type { MergedConfig } from '../config/config-types';
 import * as itemsDb from '../db/items';
 import * as itemRulingsDb from '../db/item-rulings';
+import * as itemMergesDb from '../db/item-merges';
 import * as workflowDb from '../db/workflows';
 import * as resourceStarts from '../db/resource-starts';
 import { toHydratedTimestamp } from '../db/timestamps';
@@ -145,6 +146,9 @@ export function createWorkflowStore(): IWorkflowStore {
     listItemRulings: itemRulingsDb.listItemRulings,
     recordItemRuling: itemRulingsDb.recordItemRuling,
     withdrawItemRuling: itemRulingsDb.withdrawItemRuling,
+    listItemsInWindow: itemsDb.listItemsInWindow,
+    getItemMerge: itemMergesDb.getItemMerge,
+    recordItemMerge: itemMergesDb.recordItemMerge,
     findAdoptingRuns: workflowDb.findAdoptingRuns,
     deleteOldWorkflowRuns: workflowDb.deleteOldWorkflowRuns,
     getWorkflowEventHead: async () => sqlCursor(await workflowEventDb.getWorkflowEventHead()),

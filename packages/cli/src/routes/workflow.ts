@@ -558,6 +558,48 @@ export async function runWorkflowRule(route: WorkflowRoute): Promise<number> {
   return await commands.workflowRuleCommand(route.host, effectiveCwd, request, json);
 }
 
+export async function runWorkflowItems(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  if (positionals[2] !== undefined) return await fail(json, commands.WORKFLOW_ITEMS_USAGE);
+  const rawLimit = values.limit as string | undefined;
+  const limit = rawLimit === undefined ? undefined : Number(rawLimit);
+  const since = values.since as string | undefined;
+  const until = values.until as string | undefined;
+  const after = values.after as string | undefined;
+  return await commands.workflowItemsCommand(
+    route.host,
+    effectiveCwd,
+    {
+      ...(since === undefined ? {} : { since }),
+      ...(until === undefined ? {} : { until }),
+      ...(after === undefined ? {} : { after }),
+      ...(limit === undefined ? {} : { limit }),
+    },
+    json
+  );
+}
+
+export async function runWorkflowMerged(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  const item = values.item as string | undefined;
+  const change = values.change as string | undefined;
+  const at = values.at as string | undefined;
+  const commit = values.commit as string | undefined;
+  if (
+    item === undefined ||
+    change === undefined ||
+    at === undefined ||
+    positionals[2] !== undefined
+  )
+    return await fail(json, commands.WORKFLOW_MERGED_USAGE);
+  return await commands.workflowMergedCommand(
+    route.host,
+    effectiveCwd,
+    { item, change, at, ...(commit === undefined ? {} : { commit }) },
+    json
+  );
+}
+
 const EVENT_EMIT_USAGE = 'Usage: archon workflow event emit --run-id <run-id> --type <event-type>';
 
 export async function runWorkflowEvent(route: WorkflowRoute): Promise<number> {
@@ -612,6 +654,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, cleanup, reset-sessions, event, notice, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, items, merged, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

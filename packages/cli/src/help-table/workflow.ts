@@ -271,6 +271,33 @@ export const workflowHelp: HelpGroup = {
     },
     {
       command: 'workflow',
+      subcommand: 'items',
+      spec: 'workflow items',
+      description:
+        "This project's items with a run started in a window (default the last 30 days),\neach with all its runs, questions, answers and merge, ordered by item id",
+      scopedFlags: [
+        { spec: '--since <40m|7d|24h|2w|ISO>', description: 'Start of the window' },
+        { spec: '--until <ISO>', description: 'End of the window, exclusive (default now)' },
+        {
+          spec: '--after <cursor>',
+          description: "Read the page after the one that returned this 'next' cursor",
+        },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'merged',
+      spec: 'workflow merged --item <key> --change <ref> --at <ISO>',
+      description:
+        "Record that an item's change merged, as the forge reported it. Recorded once:\na second report keeps the first",
+      scopedFlags: [
+        { spec: '--change <ref>', description: 'The merged change, such as its pull request URL' },
+        { spec: '--at <ISO>', description: 'When the forge says it merged' },
+        { spec: '--commit <sha>', description: 'The merge commit, when the forge reported one' },
+      ],
+    },
+    {
+      command: 'workflow',
       subcommand: 'notice',
       spec: 'workflow notice <text>',
       description:

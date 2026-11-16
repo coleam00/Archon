@@ -322,6 +322,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - `item_id`, `text`, `by_declared` or `by_user_id` (who, when they said), `via` (the surface), `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
   - `UNIQUE(withdraws)` refuses a second withdrawal. `id` is text in both dialects. The engine stores the text and never reads it
 
+- **`remote_agent_item_merges`** - The merge of an item's change, as the forge reported it (`archon workflow merged`)
+  - Append-only, one row per item: `item_id` is the primary key, so the fact is recorded once and a second report keeps the first
+  - `change` (the forge's identity of the merged change, never parsed), `merge_commit` (nullable), `merged_at` (the forge's merge time), `via`, `from_run_id` and `from_node_path` (the calling run and node, unverified, with no foreign key) and `created_at`
+
 - **`remote_agent_start_receipt_bindings`** - Per-binding preparation state for a source receipt
   - Keyed by `(receipt_id, binding_id)`; deleted with the owning receipt
   - Tracks binding revision, host, intent, preparation status, owner, and error

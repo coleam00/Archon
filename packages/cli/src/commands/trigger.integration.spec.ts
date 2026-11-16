@@ -16,6 +16,7 @@ import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemWindowSchema } from '@archon/workflows/item-window';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
 import {
@@ -470,6 +471,50 @@ describe('trigger CLI durable execution', () => {
       itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', 'item-new', '--json']))
         .answers
     ).toEqual([withdrawn]);
+
+    // The merged fact is recorded once, never on a key nothing named, and the item read carries it.
+    const merged = [
+      'workflow',
+      'merged',
+      '--item',
+      'item-1',
+      '--change',
+      'https://github.com/acme/web/pull/1',
+      '--at',
+      '2026-11-02T10:00:00Z',
+      '--json',
+    ];
+    expect(await readJson(merged)).toMatchObject({ recorded: true });
+    const again = await readJson([...merged.slice(0, 5), 'other', ...merged.slice(6)]);
+    expect(again).toMatchObject({
+      recorded: false,
+      merge: { change: 'https://github.com/acme/web/pull/1' },
+    });
+    const notNamed = await invoke([...merged.slice(0, 3), 'item-9', ...merged.slice(4)], false);
+    expect(notNamed.exitCode).toBe(1);
+    expect(JSON.parse(notNamed.stdout)).toEqual({ ok: false, error: 'not_found' });
+
+    // The window read returns the items with a run in it, each read as --item reads it, and
+    // a page past the limit hands a cursor that returns the rest once.
+    const page = itemWindowSchema.parse(await readJson(['workflow', 'items', '--json']));
+    expect(page.items.map(entry => entry.item.key).sort()).toEqual(['item-1', 'item-2']);
+    const one = page.items.find(entry => entry.item.key === 'item-1');
+    expect(one).toEqual(
+      itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', 'item-1', '--json']))
+    );
+    expect(one?.merged?.change).toBe('https://github.com/acme/web/pull/1');
+    const first = itemWindowSchema.parse(
+      await readJson(['workflow', 'items', '--limit', '1', '--json'])
+    );
+    const rest = itemWindowSchema.parse(
+      await readJson(['workflow', 'items', '--after', first.next ?? '', '--json'])
+    );
+    expect([...first.items, ...rest.items]).toEqual(page.items);
+    expect(rest.next).toBeNull();
+    const badCursor = await invoke(['workflow', 'items', '--after', 'nope', '--json'], false);
+    expect(badCursor.exitCode).toBe(1);
+    expect(JSON.parse(badCursor.stdout)).toMatchObject({ ok: false });
+
     // Under a selected project, a ruling on another project's item is not withdrawn.
     const scratch = new Database(database);
     let codebaseId: string;
