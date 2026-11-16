@@ -103,10 +103,10 @@ export const packRunEndedBindingSchema = z
   .strict();
 
 /**
- * A binding no clock, no event and no ended run starts: only `archon trigger fire` does, from a run or
- * an operator. It is its own strict shape, so a `schedule:` or `event:` key that is
- * present but invalid is refused by its own schema and never read as fire-only. So is a
- * `run_ended:` key.
+ * A binding no clock, no event and no ended run starts: only `archon trigger fire` does,
+ * from a run or an operator. It is its own strict shape, so a `schedule:`, `event:` or
+ * `run_ended:` key that is present but invalid is refused by its own schema and never read
+ * as fire-only.
  */
 export const packFireBindingSchema = z.object(bindingShape).strict();
 
