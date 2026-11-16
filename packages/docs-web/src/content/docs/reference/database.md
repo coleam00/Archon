@@ -170,9 +170,7 @@ the result against a fresh install — columns, indexes, column comments, constr
 Run the same check yourself with `bun run check:schema-upgrades`. It creates and drops databases, so
 it runs only on a server you name, and that server should be a scratch PostgreSQL you started for
 it: set `PGHOST` or `PGHOSTADDR`, or a `DATABASE_URL` that carries a host. With none of them it
-exits before connecting. It also refuses settings that can still leave psql on the default local
-socket: a host list with an empty entry, a repeated URL `host` parameter, and a service
-(`PGSERVICE` or `?service=`). `PGPORT`, `PGUSER` and a hostless `DATABASE_URL` do not name a
+exits before connecting. `PGPORT`, `PGUSER` and a hostless `DATABASE_URL` do not name a
 server on their own, and a `DATABASE_URL` in `.env` is not read.
 
 If schema application fails (permissions, syntax error, network), the process aborts at the first DB operation with the underlying Postgres error logged at `db.postgres_schema_init_failed`.

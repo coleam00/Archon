@@ -24,14 +24,12 @@
  * Connection: the check creates and drops databases, so it only touches a server
  * someone named for it, and exits 1 before any psql call otherwise. Name one
  * with PGHOST, PGHOSTADDR, or a DATABASE_URL that carries a host (in the
- * authority, or as a host/hostaddr parameter); unnamedServerError() has the
- * exact rule. A host list with an empty entry, a repeated URL parameter and a
- * service (PGSERVICE or `?service=`) are refused, since each can leave psql on
- * the default socket. A DATABASE_URL keeps its options; its database name is
- * replaced. PGPORT, PGUSER, PGPASSWORD and a hostless DATABASE_URL refine a
- * named server but do not name one: on their own psql reaches the default
- * local socket, which is whatever PostgreSQL happens to run on the machine. The package script passes
- * `--no-env-file`, so a DATABASE_URL in `.env` is not taken as a name.
+ * authority, or as a host/hostaddr parameter). A DATABASE_URL keeps its
+ * options; its database name is replaced. PGPORT, PGUSER, PGPASSWORD and a
+ * hostless DATABASE_URL do not name a server: on their own psql reaches the
+ * default local socket, which is whatever PostgreSQL happens to run on the
+ * machine. The package script passes `--no-env-file`, so a DATABASE_URL in
+ * `.env` is not taken as a name.
  */
 import { spawnSync } from 'child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'fs';
@@ -207,71 +205,27 @@ function dbNameFor(ref: string): string {
 }
 
 /**
- * Why the run must not start, or undefined when a server is named. The rule is
- * that every host psql could pick is written out, so nothing is left to libpq's
- * default local socket:
- * - each of PGHOST, PGHOSTADDR and a DATABASE_URL `host`/`hostaddr` parameter
- *   that is set is a host list with no empty entry (an empty entry, as in `,`
- *   or `a,`, means the default socket), and a URL parameter appears once
- *   (libpq takes the last value);
- * - at least one of them, or the URL's authority, names a host;
- * - no service is used (PGSERVICE or `?service=`): a service file can leave the
- *   host unset or override PGHOST, and this script does not read service files.
- * A URI `URL` cannot parse passes here; connectionFor() refuses it before any
- * psql call.
+ * Why the run must not start, or undefined when a server is named: PGHOST,
+ * PGHOSTADDR, or a DATABASE_URL with a host in its authority or as a
+ * `host`/`hostaddr` parameter. A URI `URL` cannot parse passes here;
+ * connectionFor() refuses it before any psql call.
  */
 function unnamedServerError(): string | undefined {
+  if (process.env.PGHOST || process.env.PGHOSTADDR) return undefined;
   const fix =
     'This check creates and drops databases, so it only runs on a scratch server you name:\n' +
     '  PGHOST=<host or socket dir> PGUSER=<user> bun run check:schema-upgrades\n' +
     '  DATABASE_URL=postgres://<user>@<host>:<port>/postgres bun run check:schema-upgrades';
-  if (process.env.PGSERVICE) {
-    return `PGSERVICE is set; this check does not resolve service files.\n${fix}`;
-  }
-  const hostLists: [string, string][] = [];
-  for (const k of ['PGHOST', 'PGHOSTADDR'] as const) {
-    const v = process.env[k];
-    if (v) hostLists.push([k, v]);
-  }
-  const url = process.env.DATABASE_URL ? urlHosts(process.env.DATABASE_URL) : undefined;
-  if (url === 'unparseable') return undefined;
-  if (url && 'refused' in url) return `${url.refused}\n${fix}`;
-  if (url) hostLists.push(...url.hostLists);
-  for (const [source, list] of hostLists) {
-    if (list.split(',').includes('')) {
-      return `${source} has an empty host entry, which means the default local socket.\n${fix}`;
-    }
-  }
-  if (hostLists.length > 0 || url?.authorityHost) return undefined;
-  return url
-    ? `DATABASE_URL names no host, so psql would use the default local socket.\n${fix}`
-    : `No PostgreSQL server was named.\n${fix}`;
-}
-
-/** The host settings a DATABASE_URL carries, or why it is refused outright. */
-function urlHosts(
-  url: string
-): 'unparseable' | { refused: string } | { hostLists: [string, string][]; authorityHost: boolean } {
+  const url = process.env.DATABASE_URL;
+  if (!url) return `No PostgreSQL server was named.\n${fix}`;
   let u: URL;
   try {
     u = new URL(url);
   } catch {
-    return 'unparseable';
+    return undefined;
   }
-  if (u.searchParams.has('service')) {
-    return { refused: 'DATABASE_URL uses a service; this check does not resolve service files.' };
-  }
-  const hostLists: [string, string][] = [];
-  for (const k of ['host', 'hostaddr']) {
-    const values = u.searchParams.getAll(k);
-    if (values.length > 1) {
-      return {
-        refused: `DATABASE_URL repeats its ${k} parameter; libpq would use the last value.`,
-      };
-    }
-    if (values.length === 1) hostLists.push([`DATABASE_URL ${k}`, values[0]]);
-  }
-  return { hostLists, authorityHost: !!u.hostname };
+  if (u.hostname || u.searchParams.get('host') || u.searchParams.get('hostaddr')) return undefined;
+  return `DATABASE_URL names no host, so psql would use the default local socket.\n${fix}`;
 }
 
 const unnamed = unnamedServerError();
