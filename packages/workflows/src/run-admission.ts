@@ -236,7 +236,12 @@ async function refuseBrokenRunEndedBindings(
     const reason = `Run-ended trigger is invalid: ${(error as Error).message}`;
     await sendCriticalMessage(platform, conversationId, `❌ **Workflow not started**: ${reason}`);
     await requireTerminalStatusWrite(
-      deps.store.cancelWorkflowRun(workflowRun.id, { cancel_reason: 'precondition_failed' }),
+      // Before the claim another dispatcher may own this row: cancel it only while pending.
+      deps.store.cancelWorkflowRun(
+        workflowRun.id,
+        { cancel_reason: 'precondition_failed' },
+        { pendingOnly: true }
+      ),
       { workflowRunId: workflowRun.id, site: 'workflow.run_ended_binding_refused' }
     );
     return { success: false, workflowRunId: workflowRun.id, error: reason };

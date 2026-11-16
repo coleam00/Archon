@@ -6,7 +6,7 @@ import { trackTempRoots } from '@archon/paths/test-utils';
 import type { RunEndedFacts } from '@archon/workflows/deps';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { providerRegistry } from '@archon/providers';
-import { createRunEndedPreflight, createRunEndedStarts } from './run-ended';
+import { createRunEndedPreflight, createRunEndedStarts, launchProjectKey } from './run-ended';
 
 const track = trackTempRoots();
 
@@ -239,5 +239,36 @@ describe('run-ended starts', () => {
     const starts = await triggersWith(files);
     const refused = starts(facts());
     for (const name of named) await expect(refused).rejects.toThrow(name);
+  });
+
+  test('a binding whose project cannot be resolved fails naming its file', async () => {
+    const directory = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-')));
+    await writeFile(join(directory, 'build.json'), JSON.stringify(trigger()));
+    const dependencies = {
+      triggersDirectory: () => directory,
+      getItem: async () => ITEM,
+      projectKeyOf: () => Promise.reject(new Error('Failed to find repo root for /srv/widgets')),
+    };
+    for (const read of [
+      () => createRunEndedStarts(dependencies)(facts()),
+      () =>
+        createRunEndedPreflight({
+          ...dependencies,
+          providers: providerRegistry,
+          loadConfig: () => Promise.reject(new Error('not reached')),
+        })(endedRun()),
+    ]) {
+      const refused = read();
+      await expect(refused).rejects.toThrow('build.json');
+      await expect(refused).rejects.toThrow('Failed to find repo root');
+    }
+  });
+
+  // A stale file for another project must not fail item runs of its workflow here.
+  test('a launch from a checkout that no longer exists is in no project', async () => {
+    const present = track(await mkdtemp(join(tmpdir(), 'archon-run-ended-cwd-')));
+    const projectKeyOf = launchProjectKey(async () => ITEM.projectKey);
+    expect(await projectKeyOf(present)).toBe(ITEM.projectKey);
+    expect(await projectKeyOf(join(present, 'deleted'))).toBeNull();
   });
 });

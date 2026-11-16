@@ -420,9 +420,14 @@ export class InMemoryStore implements IWorkflowStore {
   releaseWritebackClaim = (): Promise<void> => Promise.resolve();
 
   // Both cancels write their terminal event in the same step, as the SQL transitions do.
-  cancelWorkflowRun: IWorkflowStore['cancelWorkflowRun'] = (id, event) => {
+  cancelWorkflowRun: IWorkflowStore['cancelWorkflowRun'] = (id, event, options) => {
     const r = this.runs.get(id);
-    if (r && r.status !== 'completed' && r.status !== 'cancelled') {
+    if (
+      r &&
+      r.status !== 'completed' &&
+      r.status !== 'cancelled' &&
+      (!options?.pendingOnly || r.status === 'pending')
+    ) {
       r.status = 'cancelled';
       r.completed_at = new Date();
       const { step_name, ...data } = event ?? {};

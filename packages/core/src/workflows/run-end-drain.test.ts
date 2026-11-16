@@ -53,4 +53,18 @@ describe('the drain after a run ends', () => {
     expect(passes).toBe(2);
     expect(deepest).toBe(1);
   });
+
+  test('a pass that fails still runs the pass requested during it, then throws', async () => {
+    let passes = 0;
+    const drain: () => Promise<void> = serializedDrain(async () => {
+      passes++;
+      if (passes === 1) {
+        // A run ended during this pass asked for another, and was told it was covered.
+        await drain();
+        throw new Error('host unavailable');
+      }
+    });
+    await expect(drain()).rejects.toThrow('host unavailable');
+    expect(passes).toBe(2);
+  });
 });

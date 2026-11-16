@@ -81,7 +81,9 @@ export function drainAfterRunEnds<S extends TerminalWriters>(
 /**
  * One drain at a time per process: a request while a pass runs schedules exactly one
  * more, which covers it. A drain can itself end a run (a launch that fails before its
- * first node), and that end must not start a second drain inside the first.
+ * first node), and that end must not start a second drain inside the first. A failed
+ * pass does not cancel the one requested meanwhile, whose caller was already told it
+ * was covered: that pass still runs, and the first failure is thrown after it.
  */
 export function serializedDrain(pass: () => Promise<void>): () => Promise<void> {
   let active = false;
@@ -92,13 +94,19 @@ export function serializedDrain(pass: () => Promise<void>): () => Promise<void> 
       return;
     }
     active = true;
+    let failure: { error: unknown } | undefined;
     try {
       do {
         again = false;
-        await pass();
+        try {
+          await pass();
+        } catch (error) {
+          failure ??= { error };
+        }
       } while (again);
     } finally {
       active = false;
     }
+    if (failure) throw failure.error;
   };
 }

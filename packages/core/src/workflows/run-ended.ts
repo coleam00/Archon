@@ -9,6 +9,7 @@
  * from a repository, and fresh at every completion, so removing a file turns it off.
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { existsSync } from 'node:fs';
 import { readdir, readFile } from 'node:fs/promises';
 import { isAbsolute, join } from 'node:path';
 import type { RunEndedFacts } from '@archon/workflows/deps';
@@ -143,7 +144,10 @@ export interface RunEndedStartsDependencies {
   /** The directory the trigger files are read from: `ARCHON_HOME/triggers`. */
   triggersDirectory: () => string;
   getItem: (id: string) => Promise<WorkflowItem | null>;
-  /** The project a start from `cwd` runs in, or null when none is registered there. */
+  /**
+   * The project a start from `cwd` runs in, or null when none is registered there or the
+   * path is gone (see `launchProjectKey`).
+   */
   projectKeyOf: (cwd: string) => Promise<string | null>;
   now?: () => Date;
 }
@@ -171,8 +175,7 @@ export function createRunEndedStarts(
     for (const candidate of candidates) {
       // A binding that launches in another project is not about this item, even when a
       // workflow there has the same name.
-      if ((await dependencies.projectKeyOf(candidate.binding.launch.cwd)) !== item.projectKey)
-        continue;
+      if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
       const problems = runEndedBindingProblems(candidate.runEnded, ended);
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);
@@ -181,6 +184,33 @@ export function createRunEndedStarts(
     }
     return receipts;
   };
+}
+
+/**
+ * The project of a start from `cwd`, for a binding's launch: null when the path no longer
+ * exists. A start cannot launch from a missing checkout in any project, so a stale file is
+ * not about this item; refusing it would fail every item run of its workflow, whatever
+ * project the run is in.
+ */
+export function launchProjectKey(
+  registered: (cwd: string) => Promise<string | null>
+): (cwd: string) => Promise<string | null> {
+  return async cwd => (existsSync(cwd) ? registered(cwd) : null);
+}
+
+/** The project a binding launches in; a failure to resolve it names the file. */
+async function bindingProjectKey(
+  candidate: RunEndedBinding,
+  dependencies: Pick<RunEndedStartsDependencies, 'projectKeyOf'>
+): Promise<string | null> {
+  try {
+    return await dependencies.projectKeyOf(candidate.binding.launch.cwd);
+  } catch (error) {
+    throw new Error(
+      `Trigger file ${candidate.file}: the project of binding.launch.cwd '${candidate.binding.launch.cwd}' could not be resolved: ${(error as Error).message}`,
+      { cause: error }
+    );
+  }
 }
 
 function receiptFor(
@@ -299,8 +329,7 @@ export function createRunEndedPreflight(
     const item = await dependencies.getItem(run.item_id);
     if (!item) throw new Error(`Run '${run.id}' names item '${run.item_id}', which is missing`);
     for (const candidate of candidates) {
-      if ((await dependencies.projectKeyOf(candidate.binding.launch.cwd)) !== item.projectKey)
-        continue;
+      if ((await bindingProjectKey(candidate, dependencies)) !== item.projectKey) continue;
       const problems = await runEndedBindingCheck(candidate, dependencies);
       if (problems.length > 0)
         throw new Error(`Trigger file ${candidate.file}: ${problems.join('; ')}`);

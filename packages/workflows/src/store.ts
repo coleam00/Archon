@@ -535,11 +535,14 @@ export interface IWorkflowStore
   releaseWritebackClaim(id: string): Promise<void>;
   /**
    * Atomically cancel the run and persist its matching lifecycle event.
+   * `pendingOnly` cancels only a run still pending, so a caller that has not claimed the
+   * run never cancels one another process claimed meanwhile; a mismatch writes nothing.
    * Reports terminal telemetry after a won commit (see completeWorkflowRun).
    */
   cancelWorkflowRun(
     id: string,
-    event?: WorkflowCancellationEventDetails
+    event?: WorkflowCancellationEventDetails,
+    options?: { pendingOnly?: true }
   ): Promise<{ cancelled: boolean }>;
   /**
    * Atomically identify and cancel a fan-out child owned by the engine.

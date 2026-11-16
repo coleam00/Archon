@@ -499,9 +499,13 @@ export function createTransactionView(
       );
       return prior;
     },
-    cancelWorkflowRun: async (id, details) => {
+    cancelWorkflowRun: async (id, details, options) => {
       const run = structuredClone(runs.get(id));
-      if (!run || CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status))
+      if (
+        !run ||
+        CANCELLATION_NOOP_WORKFLOW_STATUSES.includes(run.status) ||
+        (options?.pendingOnly && run.status !== 'pending')
+      )
         return { cancelled: false };
       run.status = 'cancelled';
       const { step_name, ...data } = details ?? {};
