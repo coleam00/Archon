@@ -42,6 +42,15 @@ function workFanOutOutcome(
     ?.fan_out_outcome;
 }
 
+/** The run's JSONL log lines, one parsed object per line. */
+async function runLogLines(run: WorkflowRun): Promise<Record<string, unknown>[]> {
+  const raw = await readFile(join(run.output_root!, 'logs', `${run.id}.jsonl`), 'utf-8');
+  return raw
+    .trim()
+    .split('\n')
+    .map(line => JSON.parse(line) as Record<string, unknown>);
+}
+
 function sentMessages(platform: ReturnType<typeof makePlatform>): string {
   return (platform.sendMessage as ReturnType<typeof mock>).mock.calls
     .map(c => String(c[1]))
@@ -1047,12 +1056,7 @@ nodes:
       ],
     });
     // The run log line carries that same record, so a JSONL reader needs no database.
-    const logLines = (
-      await readFile(join(parentRun!.output_root!, 'logs', `${parentRun!.id}.jsonl`), 'utf-8')
-    )
-      .trim()
-      .split('\n')
-      .map(line => JSON.parse(line) as Record<string, unknown>);
+    const logLines = await runLogLines(parentRun!);
     const workLogLine = logLines.find(l => l.type === 'node_complete' && l.step === 'work');
     expect(workLogLine?.fan_out_outcome).toEqual(workFanOutOutcome(store.events, 'node_completed'));
     expect(logLines.find(l => l.type === 'node_complete' && l.step === 'plan')).not.toHaveProperty(
@@ -1402,6 +1406,14 @@ nodes:
     );
     expect(String(nodeFailed?.data?.error)).toContain('all_success');
     expect(String(nodeFailed?.data?.error)).toContain('child 0');
+    // The failed node's log line carries the same per-child record as its event.
+    const workErrorLine = (await runLogLines(parentRun!)).find(
+      l => l.type === 'node_error' && l.step === 'work'
+    );
+    expect(workErrorLine?.fan_out_outcome).toEqual(nodeFailed?.data?.fan_out_outcome);
+    expect(workErrorLine?.fan_out_outcome).toMatchObject({
+      tally: { total: 3, completed: 2, failed: 1 },
+    });
   });
 
   it('#2821: all-refused all_done fails at the fan-out and re-dispatches on resume', async () => {
