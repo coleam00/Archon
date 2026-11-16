@@ -87,12 +87,6 @@ test('only visible table rows with a purpose count as documentation', async () =
   expect(await referenceOperations(fixture)).toEqual([{ method: 'GET', path: '/visible' }]);
 });
 
-test('every generated API path has a reference table row', () => {
-  const documented = new Set(documentedOperations.map(operation => operation.path));
-  const missing = [...new Set(routes.map(route => route.path))].filter(path => !documented.has(path));
-  expect(missing).toEqual([]);
-});
-
 test('every generated API operation has a method and purpose in the reference', () => {
   const documented = new Set(documentedOperations.map(operation => `${operation.method} ${operation.path}`));
   const missing = routes

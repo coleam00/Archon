@@ -103,6 +103,14 @@ export const WORKFLOW_EVENT_TYPES = [
   // occurrence, the keys set and unset, and the revision it produced; the row's
   // timestamp is when.
   'attention_labeled',
+  // An ask a completed run left was answered or withdrawn (`schemas/item-ask.ts`). Written
+  // on the run that left it, after that run completed; `data` carries the ask's id, the
+  // surface (`via`), who (`by`, `fromRun`) and, for an answer, the answer.
+  'ask_answered',
+  'ask_withdrawn',
+  // The last open ask of a run's set closed. Written once, on the run that left the set;
+  // `data` counts the asks `answered` and `withdrawn`, so `answered: 0` means none was.
+  'asks_settled',
   'wait_completed',
   'wait_expired',
   'quota_resume_scheduled',

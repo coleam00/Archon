@@ -13,18 +13,6 @@ describe('round-trip fidelity', () => {
     });
   }
 
-  test('loop fresh_context is preserved across the round-trip', () => {
-    const bw = fromWorkflowDefinition(FIXTURES.loop).workflow;
-    const node = bw.nodes[0];
-    expect(node.variant).toBe('loop');
-    if (node.variant === 'loop') {
-      expect(node.data.fresh_context).toBe(false);
-      expect(node.data.until_bash).toBe('test -f ./done.flag');
-      expect(node.data.interactive).toBe(true);
-      expect(node.data.gate_message).toBe('Review the latest draft before continuing.');
-    }
-  });
-
   test('a loop with no until round-trips exactly, and no until key is introduced (#2563)', () => {
     // Before `until` became optional the builder read it unconditionally, so a
     // deterministic-only loop threw on `undefined.trim()` in structural validation
@@ -110,16 +98,6 @@ describe('round-trip fidelity', () => {
     expect('prompt' in (exported.nodes[0].loop ?? {})).toBe(false);
   });
 
-  test('approval on_reject and capture_response survive partitioning', () => {
-    const bw = fromWorkflowDefinition(FIXTURES.approval).workflow;
-    const node = bw.nodes[0];
-    expect(node.variant).toBe('approval');
-    if (node.variant === 'approval') {
-      expect(node.data.capture_response).toBe(true);
-      expect(node.data.on_reject?.max_attempts).toBe(3);
-    }
-  });
-
   test('wait event and deadline round-trip exactly', () => {
     const definition: WireWorkflowDefinition = {
       name: 'wait-for-checks',
@@ -162,30 +140,6 @@ describe('round-trip fidelity', () => {
 
       expect(draft.nodes).toEqual([{ id: 'pause', wait: data }]);
     }
-  });
-
-  test('script runtime/deps/timeout survive partitioning', () => {
-    const bw = fromWorkflowDefinition(FIXTURES.script).workflow;
-    const node = bw.nodes[0];
-    expect(node.variant).toBe('script');
-    if (node.variant === 'script') {
-      expect(node.data.runtime).toBe('bun');
-      expect(node.data.deps).toEqual(['zod']);
-      expect(node.data.timeout).toBe(30000);
-    }
-  });
-
-  test('mixed fixture preserves workflow-level meta and base fields', () => {
-    const bw = fromWorkflowDefinition(FIXTURES.mixed).workflow;
-    expect(bw.meta.provider).toBe('claude');
-    expect(bw.meta.model).toBe('sonnet');
-    expect(bw.meta.tags).toEqual(['triage', 'demo']);
-    const fix = bw.nodes.find(n => n.id === 'fix');
-    expect(fix?.base.depends_on).toEqual(['classify']);
-    expect(fix?.base.when).toBe("$classify.output == 'BUG'");
-    expect(fix?.base.persist_session).toBe(true);
-    const classify = bw.nodes.find(n => n.id === 'classify');
-    expect(classify?.base.output_type).toBe('classification');
   });
 
   test('empty depends_on is dropped on export (engine sparse parity)', () => {

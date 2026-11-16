@@ -1,6 +1,6 @@
 /**
  * The run state a DAG pass starts from: outputs of nodes a prior pass completed, the
- * cross-run session persistence scope, and the provider sessions named resumes read.
+ * cross-run session scopes (the launching thread's and the item's), and the provider sessions named resumes read.
  */
 import type { WorkflowDeps } from '../deps';
 import type {
@@ -14,6 +14,7 @@ import {
   definedOutputPaths,
   isLoopGroupNode,
   isNodeContextResume,
+  isNodeContextSame,
   persistScopeKey,
   runMayPersistSessions,
 } from '../schemas';
@@ -25,6 +26,7 @@ import type { PersistScope, SequentialSessionCursor } from './run-context';
 export interface RestoredRunState {
   nodeOutputs: Map<string, NodeOutput>;
   persistScope: PersistScope | undefined;
+  itemScope: PersistScope | undefined;
   namedResumeSourceIds: ReadonlySet<string>;
   nodeSessionHandles: Map<string, SequentialSessionCursor>;
 }
@@ -52,6 +54,7 @@ export function restoreRunState(
   return {
     nodeOutputs,
     persistScope: openPersistScope(store, workflow, workflowRun),
+    itemScope: openItemScope(store, workflow, workflowRun),
     namedResumeSourceIds,
     nodeSessionHandles,
   };
@@ -121,15 +124,47 @@ function openPersistScope(
 ): PersistScope | undefined {
   const key = persistScopeKey(workflowRun);
   if (!key || !runMayPersistSessions(workflow)) return undefined;
+  return openScope(store, workflow.name, key);
+}
+
+/**
+ * The run's item scope, which `context: same` nodes continue from across runs. A run
+ * without an item has none: those nodes then continue only between loop rounds. The key
+ * is prefixed so it never equals a thread scope key, which is a bare conversation id.
+ */
+function openItemScope(
+  store: WorkflowDeps['store'],
+  workflow: ResolvedWorkflow,
+  workflowRun: WorkflowRun
+): PersistScope | undefined {
+  if (workflowRun.item_id === null || !runMayContinueItemSessions(workflow.nodes)) return undefined;
+  return openScope(store, workflow.name, `item:${workflowRun.item_id}`);
+}
+
+/** Read a scope's rows once, at run start (#2667). */
+function openScope(store: WorkflowDeps['store'], workflowName: string, key: string): PersistScope {
   const sessionsAtStart = store.listWorkflowNodeSessions({
-    workflow_name: workflow.name,
+    workflow_name: workflowName,
     scope_key: key,
   });
   // A persisted node that never dispatches (skipped by `when:`, or after a failure)
   // never awaits this; a failed read must not become an unhandled rejection there.
   // Nodes that await it still see the rejection.
   sessionsAtStart.catch(() => undefined);
-  return { key, sessionsAtStart };
+  return { key, workflowName, sessionsAtStart };
+}
+
+/**
+ * True when some node, loop_group bodies included, declares `context: same`, or a
+ * composed fan-out could, since its body resolves only when it runs.
+ */
+function runMayContinueItemSessions(nodes: readonly DagNode[]): boolean {
+  return nodes.some(
+    node =>
+      node.kind === 'compose_fan_out' ||
+      isNodeContextSame(node.context) ||
+      (isLoopGroupNode(node) && runMayContinueItemSessions(resolvedBodyNodes(node.loop_group)))
+  );
 }
 
 /** Nodes whose provider session a `context: { resume }` node reads, loop_group bodies included. */

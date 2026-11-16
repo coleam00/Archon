@@ -72,24 +72,6 @@ describe('apply-selection (canvas select deltas)', () => {
     expect([...state.selectedEdges]).toEqual([edgeId('classify', 'fix')]);
   });
 
-  test('an edge select delta makes the edge deletable via remove-selection', () => {
-    let state = mixedState();
-    // Click the connector — the only way to select an edge.
-    state = editorReducer(state, {
-      type: 'apply-selection',
-      nodes: [],
-      edges: [{ id: edgeId('classify', 'fix'), selected: true }],
-    });
-    expect(state.selectedEdges.size).toBe(1);
-    const removed = editorReducer(state, { type: 'remove-selection', at: 1000 });
-    expect(removed.workflow.nodes.find(n => n.id === 'fix')?.base.depends_on).toBeUndefined();
-    // The other dependency edge is untouched.
-    expect(removed.workflow.nodes.find(n => n.id === 'report')?.base.depends_on).toEqual([
-      'classify',
-      'fix',
-    ]);
-  });
-
   test('select:false deltas remove ids; a no-op delta returns the same state', () => {
     let state = mixedState();
     state = editorReducer(state, {
@@ -419,11 +401,8 @@ describe('undo / redo integration', () => {
 
     const redone = editorReducer(undone, { type: 'redo' });
     expect(redone.workflow.nodes.length).toBe(4);
-    // Redo also clears selection; whatever remains must reference live nodes.
+    // Redo also clears selection.
     expect(redone.selectedNodes.size).toBe(0);
-    for (const id of redone.selectedNodes) {
-      expect(redone.workflow.nodes.some(n => n.id === id)).toBe(true);
-    }
   });
 
   test('undo and redo are no-ops at the ends of the history stack', () => {

@@ -441,7 +441,8 @@ async function createRunContext(
     priorUsage,
     workflowSourceRoots,
   } = options;
-  const { nodeOutputs, persistScope, namedResumeSourceIds, nodeSessionHandles } = restored;
+  const { nodeOutputs, persistScope, itemScope, namedResumeSourceIds, nodeSessionHandles } =
+    restored;
   const workflowRef = selectModelRef(workflow.model, aiProfile);
   const workflowTier = workflowRef && isTierName(workflowRef) ? workflowRef : undefined;
   // A budget always seeds from the run's own rows, never from `priorUsage`: a re-driven
@@ -501,6 +502,7 @@ async function createRunContext(
     configuredCommandFolder,
     issueContext,
     persistScope,
+    itemScope,
     workflowPersistSessions: workflow.persist_sessions === true,
     // Scope-keyed persistence surface: without a scope key there is no durable
     // scope to mirror into or recover from, so the dir is dropped alongside it.

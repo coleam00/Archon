@@ -89,6 +89,7 @@ export {
   dagNodeBaseSchema,
   nodeContextSchema,
   isNodeContextResume,
+  isNodeContextSame,
 } from './dag-node-base';
 export {
   nodeMcpSchema,

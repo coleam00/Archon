@@ -108,7 +108,7 @@ A node without `depends_on` starts in the first layer. A node starts when every 
 | `depends_on` | string[] | `[]` | Node IDs that must complete before this node runs |
 | `when` | string | unset | Condition expression. Node is skipped if false. See [Condition Syntax](#when-condition-syntax) |
 | `trigger_rule` | string | `all_success` | Join semantics when multiple upstreams exist. Distinct from a fan-out node's [`fan_out.join`](#the-four-fields), which reduces one node's N children and defaults to `all_done` |
-| `context` | `'fresh'` \| `'shared'` \| `{ resume: node-id }` | unset | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `resume` = fork the exact completed upstream node's session. Parallel layers require named resume or fresh context |
+| `context` | `'fresh'` \| `'shared'` \| `'same'` \| `{ resume: node-id }` | unset | `fresh` = new session; `shared` = inherit the ambient prior session in a sequential layer; `same` = continue the session this node itself last had, in its previous loop round or an earlier run on the same item (see [Continuing a node's own session](#continuing-a-nodes-own-session)); `resume` = fork the exact completed upstream node's session. Parallel layers require named resume, `same`, or fresh context |
 | `idle_timeout` | number | unset | Kill node after this many milliseconds without a provider chunk. Any chunk counts as progress, thinking included. Open tool calls and reported live background work suspend the timer until a result arrives. After a result, silence counts toward this timeout while waiting for turn settlement, even if work remains live; a timeout fails the node as incomplete. A new running wake turn or newly started tool or subtask restores live-work protection until its next result |
 | `retry` | object | unset | Per-node retry configuration. See [Retry Configuration](#retry-configuration) |
 | `mutates_checkout` | boolean | unset | `false` asserts this node leaves the git checkout untouched. The engine compares before/after Git status and content fingerprints of Git-visible dirty and individually listed untracked paths, excluding the run's artifacts, state, and log directories. It fails the node naming changed paths, including edits to already-dirty files and additions inside already-untracked directories. Dirty checkout cost scales with the visible dirty/untracked bytes read. This observation does not prevent writes or detect changes restored before the final snapshot; ignored paths and recursive submodule contents are not fingerprinted. Enforced on `command`, `prompt`, `bash`, and `script` nodes; the check is skipped outside a git repository or when Git or required filesystem reads fail. This includes Git status output exceeding the subprocess buffer limit (1 MiB on stdout or stderr); a large untracked tree can skip the entire assertion, even when those paths would be excluded from fingerprinting. A layer whose parallel nodes all declare it still runs in parallel, and a violation there also names the guarded siblings that ran in the same layer, since the change may not be the failing node's alone. Since one snapshot covers the whole checkout, every guarded node running when the write lands fails, not only the writer. A layer that mixes guarded nodes with any node that isn't checkout-guarded (a node of another kind, or one without `mutates_checkout: false`) runs one node at a time, so a sibling's write is never blamed on a guarded node. Distinct from the workflow-level [`mutates_checkout`](#running-sub-runs-side-by-side), which controls the path lock |
@@ -230,6 +230,47 @@ This is an exact, immutable fork contract:
 - Run resume restores these private handles for completed nodes, so a pause or process restart does not lose declared ancestry. Each node's full session ID is recorded on its node record; transcripts and logs carry at most an eight-character preview.
 
 This is separate from `persist_session`: `{ resume: source }` selects ancestry within one governed run, while `persist_session` continues the same node across separate workflow invocations. If both apply to a consumer, the named source wins for the current invocation and the resulting branch is still saved for its next invocation.
+
+### Continuing a node's own session
+
+`context: same` continues the session the node itself last had, so one node can build in round one and fix what a check returned in round two, or pick up again when a later run on the same item starts its stage again. Fresh stays the default; each node opts in.
+
+```yaml
+nodes:
+  - id: deliver
+    loop_group:
+      max_iterations: 4
+      until_bash: 'checks=$checks.output; [ "$checks" = PASS ]'
+      nodes:
+        - id: build
+          prompt: |
+            Build $ARGUMENTS. The last checks reported:
+            $LOOP_PREV.checks.output
+          context: same
+        - id: checks
+          bash: ./scripts/check.sh
+          depends_on: [build]
+```
+
+The node reads, in order:
+
+1. **Its own earlier round in this loop invocation.** Round two continues round one's session in place: it is the same run and the same node.
+2. **Otherwise, the run's item.** The newest session this workflow and node left on the run's item, in whichever run, is forked. The earlier run's session stays as it was, so two runs never append to one session. The node's path names it (`deliver.build` inside the group above), so a differently named node, or the same name in another workflow, never shares it.
+3. **Otherwise, a fresh session.** This includes a run with no item, and every run on the file store, which has no items. Inside a loop, such a node still continues between rounds.
+
+The session is the node's own:
+
+- It never takes the shared sequential cursor, so it does not continue another node's session.
+- A parallel layer, `fresh_context: true` on the loop, and the start of a composed block do not reset it. Nodes that run side by side each continue their own session.
+- A default-context node after it in a sequential layer still forks its session, as it would any node's. Set that node to `context: fresh` if it should start clean.
+
+Every round writes its session under the item, so a later run, or a [failure resume](/guides/loop-nodes/#resume) that restarts mid-loop, continues the newest round. A pause inside the loop (an attention wait, a durable wait, an approval) keeps the cursor, and the next round continues it.
+
+A recorded session that ran on another provider or model than the node now resolves to is not continued. The node starts fresh, the run records a `node_session_not_continued` event with `reason: provider_changed` or `model_changed` and both pairs, and posts a notice naming them. A provider without `sessionFork` continues between rounds but starts fresh across runs, with `reason: no_fork`. Sessions are kept one per provider, and a store may record their time to the second, so two providers' sessions can tie as the newest; neither is then provably the last, and the node starts fresh with `reason: ambiguous`. A provider without `sessionResume` cannot use `same`: the workflow fails to load when the provider is written in the file, and the node fails when it runs otherwise. A failed lookup runs the node fresh and posts a notice.
+
+`same` is a different thing from `shared` and from `persist_session`. `shared` continues the previous sequential node's session in this run. `persist_session` continues a node across runs launched from one conversation; `same` continues it across runs on one item, which a CLI or trigger run has too. A node cannot declare both.
+
+A node that keeps its session keeps its earlier reasoning too. A reviewer that continues its own session may defend findings it made in an earlier round, where a fresh one would look again. Choose per node.
 
 ### Claude SDK Advanced Options
 
@@ -1119,7 +1160,7 @@ To continue a node's conversation outside Archon, read its session id from `arch
 
 ### `context: fresh` overrides
 
-A node with `context: fresh` skips persistence (and in-run threading). The explicit "always fresh" intent wins over `persist_session`.
+A node with `context: fresh` skips persistence (and in-run threading). The explicit "always fresh" intent wins over `persist_session`. A `context: same` node also takes no workflow-level `persist_sessions` default: it carries its own cross-run continuity, scoped to the run's item (see [Continuing a node's own session](#continuing-a-nodes-own-session)).
 
 `context: { resume: source }` also wins over the consumer's saved cross-run session for that invocation. After the exact named fork succeeds, its new branch is saved normally when `persist_session` applies.
 
@@ -1637,8 +1678,9 @@ a guarantee; a prompt instructing an AI node to append is a convention it may no
 A run on an [item](/reference/cli/#items) can read what is recorded about it: the item's
 runs, the questions open in them, and the answers to them together with the item's
 [rulings](/reference/cli/#workflow-rule), the decisions an operator recorded without a
-question being asked. A ruling given to one run reaches every later run on the item this
-way, whichever workflow it is. The engine adds none of it to a prompt; a workflow that
+question being asked, and the item's [links](/reference/cli/#workflow-link) to other items.
+A ruling given to one run reaches every later run on the item this way, whichever workflow
+it is. The engine adds none of it to a prompt; a workflow that
 wants it reads it in a `script:` node and hands it on like any other output:
 
 ```yaml
@@ -1661,7 +1703,9 @@ nodes:
 
 `item()` reads the item of the run's top-level run, so a `workflow:` child reads its
 parent's item. It returns `null` for a run on no item. A withdrawn ruling stays in the
-list with `withdrawn` set; what a ruling means is for the reading node to judge. Like
+list with `withdrawn` set; what a ruling means is for the reading node to judge. `links`
+holds every link from or to the item, each with its `direction` and the `other` item; an
+ended link stays with `ended` set, and the engine acts on no link. Like
 `state`, it runs on the host: a container-isolated node cannot call it.
 
 ## Durable state documents
@@ -2070,7 +2114,7 @@ nodes:
   and still resolve as `$INPUTS.<name>` / `INPUTS_<UPPER_SNAKE>`, they are simply never checked
   against a declaration, because there isn't one.
 - **`returns:`**: the **node id** whose output IS the workflow's result, written
-  `returns: <id>` or `returns: { node: <id> }`. It selects by id, so it works for any node type
+  `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field> }`. It selects by id, so it works for any node type
   and even a **non-sink** node (a node other nodes depend on). For an `include:` block,
   `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still waits on every
   terminal node. For a `workflow:` sub-run child, the child's terminal output (threaded back as
@@ -2105,6 +2149,9 @@ nodes:
   lifecycle `status`: a run may be `completed` with outcome `failed`. Status still controls
   terminality, resume, cancellation, filtering, automation, and CLI exit codes.
 
+- **`returns.asks`**: a property of the `returns:` node's output, defined and required by the engine, that holds the
+  decisions the run leaves for an operator: its asks. See [Asks](#asks-decisions-a-run-leaves-on-its-item).
+
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.
 The run row carries two columns. `completed_outcome` holds the outcome of both forms, and is the
@@ -2124,6 +2171,72 @@ string), or its schema-certified `bash:` / `script:` output with `--exec-code`. 
 `expect` checks. Fixtures can independently assert the outcome with `fixture.authored`:
 `succeeded` or `failed` for the boolean form, the value for a named outcome. Generated
 placeholder stubs, including tolerated `all_done` joins, never decide an outcome.
+
+### Asks: decisions a run leaves on its item
+
+A stage that needs a decision it cannot make finishes its work and leaves an ask, instead of
+pausing mid-run. `returns: { node: decide, asks: asks }` names the property of the returns
+node's output that holds them. Nothing is inferred from a field's name: a workflow that does
+not declare `asks` keeps an `asks` field as ordinary data.
+
+The engine owns the ask schema (`packages/workflows/src/schemas/item-ask.ts`). Leave the
+property out of the node's `output_format`: when the workflow is resolved, the engine adds its
+schema there, so the provider call, output validation and a dry run all see it. The engine adds
+the property to the node's `required` too, and every field of an ask is required, because a
+provider in OpenAI strict mode (Codex) refuses an optional property. An empty list means there
+is nothing to decide, so a `bash:` or `script:` returns node emits `"asks": []` when it leaves
+none. An ask holds:
+
+- `question`: one sentence that can be answered by picking an option.
+- `context`: what is at stake and why it came up.
+- `options`: at least two, each with a kebab-case `id`, what it `does` and what it `cost`s.
+  The id `other` is reserved: every ask also offers it, answered with text.
+- `recommendation`: `{ option, why }`; `option` must name one of the ask's options.
+- `artifacts`: [artifact pointers](#a-small-result-that-points-at-a-large-file) the operator
+  should read to decide; empty when there are none.
+
+The schema's descriptions are how a node learns what an ask is, with no line in its prompt:
+providers receive the output schema whole (`json_schema` on Claude, `outputSchema` on Codex).
+Pi has no native structured output; its best-effort path sends the whole schema, descriptions
+included, as the `structured_output` tool's parameters and in the prompt. A node of a workflow
+that declares no asks sees none of this. The property's description reads:
+
+> Decisions you leave for an operator. Leave one when finishing your work needs a decision that is not yours to make: the work can be read two ways that lead to different changes; doing it means giving up something the project holds to; or the right answer depends on where the project is going or what it costs someone else. Do not leave one for a choice you can make yourself (make it and say why), for something the project already decided, for something you can find out by reading or running, for a doubt rather than a decision, or to ask permission to do your work. If nobody would choose differently from you, it is not an ask. Leave every decision you need, not only the first. What happens after: when this run completes, each ask opens for an operator on the item the run is for. The operator answers it (choosing an option, accepting the recommendation, or saying what to do instead) or withdraws it. When every ask is answered or withdrawn, the set is settled and the engine records it on the item. A later completed run of this workflow on the same item replaces the asks still open. Work that depends on an open ask should wait for its answer, not build on your recommendation. Leave the list empty when there is nothing to decide.
+
+A pack can say more in its own prompt, such as which decisions its project wants to be asked.
+
+The workflow fails to load, naming `returns.asks`, when it declares asks without a returns
+node, when the returns node has no object `output_format` the engine enforces, when the node
+is a `loop_group` or a fan-out node, when `asks` names the same property as `outcome`, or when
+the node's `output_format` declares that property itself (`the engine defines this property;
+remove it from output_format`).
+
+What the engine does with them:
+
+- **They belong to an item.** A top-level run of a workflow that declares asks, started with no
+  item, is refused before any node runs and cancelled as `precondition_failed`: start it with
+  `--item <key>`. The file store holds no items, so it refuses the run before it starts.
+- **They open with the completion.** When the run completes, its asks open on its item in the
+  same write that completes the run. A run that fails or is cancelled opens none, even when its
+  returns node ran. A value that is not a list of asks fails the run at its end, naming the
+  path, such as `returns.asks 'asks' on node 'decide': [0].recommendation.option names 'z',
+  which is not one of the ask's options`.
+- **Only a top-level run opens them.** A `workflow:` child has no item of its own; its asks stay
+  data in the result it hands its parent.
+- **A newer set replaces the open one.** A later completed run of the same workflow on the same
+  item closes that workflow's open asks as `replaced`, even when it leaves none itself.
+- **They are answered by ref.** Open asks are listed in the attention queue with no run behind
+  them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
+  --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
+  tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
+- **The run stays while its asks are open.** Deleting a run that left open asks is refused, and
+  run cleanup skips it, until each ask is answered or withdrawn: the run's starter decides who
+  may answer. Once they are closed the run may go; the item keeps its asks, their answers and
+  the settled set, and `archon workflow runs --item` still reads them.
+- **A set settles once.** When every ask a run left is answered or withdrawn, the engine records
+  `asks_settled` on that run once, with how many were `answered` and `withdrawn`; `answered: 0`
+  means every ask was withdrawn. Settling records a fact and starts nothing: no trigger binds to
+  it yet.
 
 ### Deterministic checks and run outcomes
 

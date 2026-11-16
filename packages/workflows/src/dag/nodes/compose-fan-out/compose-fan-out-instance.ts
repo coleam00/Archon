@@ -205,6 +205,7 @@ function instanceRunContext(
     configuredCommandFolder: ctx.configuredCommandFolder,
     issueContext: ctx.issueContext,
     persistScope: ctx.persistScope,
+    itemScope: ctx.itemScope,
     workflowPersistSessions: ctx.workflowPersistSessions,
     scopeArtifactsDir: undefined,
     // Runtime cardinality changes only the deterministic instance prefix; the body

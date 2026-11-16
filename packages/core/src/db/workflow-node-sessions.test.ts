@@ -39,6 +39,7 @@ describe('workflow-node-sessions', () => {
         node_id: 'planner',
         scope_key: 'conv-1',
         provider,
+        model: null,
         provider_session_id: `sess-${provider}`,
         last_run_id: 'run-1',
         created_at: '2026-05-28T00:00:00.000Z',
@@ -63,6 +64,7 @@ describe('workflow-node-sessions', () => {
         node_id: 'planner',
         scope_key: 'conv-1',
         provider: 'claude',
+        model: 'sonnet',
         provider_session_id: 'sess-abc',
         last_run_id: 'run-1',
       });
@@ -70,7 +72,15 @@ describe('workflow-node-sessions', () => {
       expect(sql).toContain('INSERT INTO remote_agent_workflow_node_sessions');
       expect(sql).toContain('ON CONFLICT (workflow_name, node_id, scope_key, provider)');
       expect(sql).toContain('DO UPDATE SET provider_session_id = EXCLUDED.provider_session_id');
-      expect(params).toEqual(['feature-dev', 'planner', 'conv-1', 'claude', 'sess-abc', 'run-1']);
+      expect(params).toEqual([
+        'feature-dev',
+        'planner',
+        'conv-1',
+        'claude',
+        'sonnet',
+        'sess-abc',
+        'run-1',
+      ]);
     });
 
     test('accepts a null last_run_id (FK is ON DELETE SET NULL)', async () => {
@@ -79,11 +89,20 @@ describe('workflow-node-sessions', () => {
         node_id: 'planner',
         scope_key: 'conv-1',
         provider: 'claude',
+        model: null,
         provider_session_id: 'sess-abc',
         last_run_id: null,
       });
       const [, params] = mockQuery.mock.calls[0] as [string, unknown[]];
-      expect(params).toEqual(['feature-dev', 'planner', 'conv-1', 'claude', 'sess-abc', null]);
+      expect(params).toEqual([
+        'feature-dev',
+        'planner',
+        'conv-1',
+        'claude',
+        null,
+        'sess-abc',
+        null,
+      ]);
     });
 
     test('rethrows DB errors after logging (CLAUDE.md INSERT contract)', async () => {
@@ -94,6 +113,7 @@ describe('workflow-node-sessions', () => {
           node_id: 'planner',
           scope_key: 'conv-1',
           provider: 'claude',
+          model: null,
           provider_session_id: 'sess-abc',
           last_run_id: 'run-1',
         })
