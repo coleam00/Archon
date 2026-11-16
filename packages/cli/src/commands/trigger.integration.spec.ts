@@ -42,8 +42,12 @@ afterEach(async () => {
   for (const root of tempRoots.splice(0)) await removeTempTree(root);
 });
 
-async function waitFor<T>(read: () => T | undefined, label: string): Promise<T> {
-  const deadline = Date.now() + DEADLINE_MS;
+async function waitFor<T>(
+  read: () => T | undefined,
+  label: string,
+  deadlineMs = DEADLINE_MS
+): Promise<T> {
+  const deadline = Date.now() + deadlineMs;
   let lastError: unknown;
   while (Date.now() < deadline) {
     try {
@@ -720,7 +724,9 @@ nodes:
     const settled = await waitFor(
       () =>
         runs().length === 3 && runs().every(run => run.status === 'completed') ? runs() : undefined,
-      'all three runs to complete'
+      'all three runs to complete',
+      // Three detached runs take 12 to 19 s on Windows CI; the test's own limit is 60 s.
+      45_000
     );
     const projects = readRows<{ project_key: string; key: string }>(
       database,
