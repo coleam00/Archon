@@ -311,6 +311,11 @@ export function describeLinkedStartConformance(makeHarness: () => Promise<Harnes
       // Completed in the other order, within one second on SQLite.
       await finish(second, 'm1', 'declined', 'all');
       await finish(first, 'm1', 'approved', 'all');
+      // completed_at says the other way, so only completion order can say first finished last.
+      await harness.db.query(
+        "UPDATE remote_agent_workflow_runs SET completed_at = '2000-01-01 00:00:00' WHERE id = $1",
+        [first]
+      );
       expect((await complete('m2', 'approved', 'all')).written).toHaveLength(1);
     } finally {
       await harness.close();
