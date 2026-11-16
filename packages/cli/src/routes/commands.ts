@@ -382,13 +382,14 @@ export async function runValidate({
   positionals,
   effectiveCwd,
   json,
+  forgeTrustedEnv,
 }: CliRouteContext): Promise<number> {
   const { validateWorkflowsCommand, validateCommandsCommand } = await loadRoute(
     () => import('../commands/validate')
   );
   switch (subcommand) {
     case 'workflows':
-      return await validateWorkflowsCommand(effectiveCwd, positionals[2], json);
+      return await validateWorkflowsCommand(effectiveCwd, positionals[2], json, forgeTrustedEnv);
 
     case 'commands':
       return await validateCommandsCommand(effectiveCwd, positionals[2], json);

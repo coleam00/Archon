@@ -15,6 +15,7 @@ import {
   prepareRunAiConfiguration,
   type PreparedRunAiConfiguration,
 } from './run-preflight';
+import { assertRunForgeAccess } from './run-forge-access';
 import { hydrateResumableRun, inspectResumableRun } from './run-resume';
 import {
   prepareWorkflowSource,
@@ -374,6 +375,13 @@ async function prepareChildAiConfiguration(
       ...(runConfig ? { runConfig } : {}),
     });
     await assertRunCredentials(deps, childPrepared, { cwd: configCwd });
+    if (!resumeChild) {
+      // A child run executes on the host; it does not inherit a parent's container.
+      await assertRunForgeAccess(deps, childWorkflow, childPrepared, {
+        cwd: configCwd,
+        codebaseId: args.codebaseId,
+      });
+    }
     return proceed(childPrepared);
   } catch (error) {
     return refuse((error as Error).message, resumeChild?.run.id);
