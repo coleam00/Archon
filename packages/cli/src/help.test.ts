@@ -272,8 +272,9 @@ Options:
   --as <name>                For 'workflow approve/reject/respond/answer/rule': the name the answerer declares for itself,
                              recorded with an attention wait's answer or a ruling as a claim (never checked; refused at a gate)
   --detach                   Run 'workflow run'/'approve'/'reject'/'respond'/'resume' in a detached background child (resume returns after acceptance, before completion)
-  --no-wait                  For 'workflow run': refuse, naming the resource, instead of waiting when the workflow's
-                             resource is full
+  --no-wait                  For 'workflow run': refuse instead of waiting, naming the resource when the workflow's
+                             resource is full, or the holding run when another run of the workflow on the same --item
+                             is not terminal (with or without a resource:)
   --all                      For 'workflow status/runs': list across all projects (ignore cwd scope)
   --status <status>          For 'workflow runs': filter to one status (running, completed, failed, ...)
   --item <key>               The item a 'workflow run' or 'trigger fire' start belongs to; for 'workflow runs': read the item's runs, open questions and answers; for 'workflow rule': the item the ruling is on

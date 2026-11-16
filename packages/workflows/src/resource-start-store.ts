@@ -409,8 +409,8 @@ function runnableQueue(slot: ResourceSlotOccupancy): QueuedStart[] {
  * queued request shares a host with) takes any free slot, and on a busy resource can
  * delay queued work.
  *
- * A live run of the same workflow on the start's item blocks it whatever the capacity: one
- * item is worked by one run of a workflow at a time. The blocker is that run, so a reader
+ * A live run of the same workflow on the start's item blocks it whatever the capacity or
+ * queue: one item is worked by one run of a workflow at a time. The blocker is that run, so a reader
  * tells an item hold from a capacity hold by the blocker run's workflow and item.
  */
 export function resourceStartBlocker(
@@ -421,10 +421,12 @@ export function resourceStartBlocker(
 ): ResourceBlocker | null {
   readAdmissionCheckoutGuard(launch);
   if (slot.queueError) throw slot.queueError;
-  const older = runnableQueue(slot).find(start => start.hostId === hostId);
-  if (older) return { kind: 'request', id: older.id };
+  // The item check comes first: a refused (skipped) start records this blocker, and the
+  // item read names the holder only when it is the run on the same item.
   const itemRun = queuedItemHolder(slot.heldItems, { launch, itemId });
   if (itemRun !== undefined) return { kind: 'run', id: itemRun };
+  const older = runnableQueue(slot).find(start => start.hostId === hostId);
+  if (older) return { kind: 'request', id: older.id };
   const holder = checkoutHolder(slot, launch);
   if (holder !== undefined) return { kind: 'run', id: holder };
   const first = slot.holders[0] ?? slot.waiters[0];

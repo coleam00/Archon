@@ -233,6 +233,52 @@ describe('one run of a workflow per item', () => {
     ]);
   });
 
+  test('a start refused on a held item names its holder even when an older queued request could take a slot', async () => {
+    const holder = await pending('build', 'issue-1');
+    expect((await claimPendingWorkflowRun(holder))?.status).toBe('running');
+    const fill = [];
+    for (let i = 0; i < 5; i++)
+      fill.push(
+        await bindingStart({
+          workflow: 'deploy',
+          item: `other-${i}`,
+          resource: 'builds',
+          overlap: 'queue',
+        })
+      );
+    const older = await bindingStart({
+      workflow: 'deploy',
+      item: 'other-5',
+      resource: 'builds',
+      overlap: 'queue',
+    });
+    expect(older.disposition).toMatchObject({ status: 'queued' });
+    await claimPendingWorkflowRun(fill[0]!.runId);
+    await end(fill[0]!.runId);
+
+    const skipped = await bindingStart({
+      workflow: 'build',
+      item: 'issue-1',
+      resource: 'builds',
+      overlap: 'skip',
+    });
+    expect(skipped.disposition).toMatchObject({
+      status: 'skipped',
+      blocker: { kind: 'run', id: holder },
+    });
+    const item = await store.getItem(String((await getWorkflowRun(holder))?.item_id));
+    const read = await readItem(source(), String(item?.projectKey), 'issue-1');
+    expect(read?.starts).toEqual([
+      {
+        requestId: skipped.runId,
+        workflow: 'build',
+        resource: 'builds',
+        status: 'skipped',
+        heldBehind: { runId: holder, workflow: 'build', status: 'running', owner: 'unreachable' },
+      },
+    ]);
+  });
+
   test('a hand start of a workflow with no resource waits at its claim while another run holds the item', async () => {
     const first = await pending('build', 'issue-1');
     const second = await pending('build', 'issue-1');

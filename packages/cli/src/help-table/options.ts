@@ -205,7 +205,7 @@ export const orderedFlags: FlagHelp[] = [
   {
     spec: '--no-wait',
     description:
-      "For 'workflow run': refuse, naming the resource, instead of waiting when the workflow's\nresource is full",
+      "For 'workflow run': refuse instead of waiting, naming the resource when the workflow's\nresource is full, or the holding run when another run of the workflow on the same --item\nis not terminal (with or without a resource:)",
     owners: [{ command: 'workflow', subcommand: 'run' }],
   },
   {

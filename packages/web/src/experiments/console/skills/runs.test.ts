@@ -162,9 +162,43 @@ test('attention list refuses a count response instead of claiming an empty queue
 });
 
 test('attention list normalizes run rows and an omitted degraded list', async () => {
-  respond({ runs: [detailFixture.run] });
+  respond({ runs: [detailFixture.run], items: [] });
   expect(await listRunsNeedingAttention()).toEqual({
     runs: [toRun(detailFixture.run)],
+    ownerLost: [],
     degraded: [],
   });
+});
+
+test('attention list keeps a lost-owner item holder, which has no paused run row', async () => {
+  const items: components['schemas']['RunsNeedingAttentionResponse']['items'] = [
+    {
+      kind: 'owner_lost',
+      ref: 'holder-1',
+      project: { key: 'p', codebaseId: 'cb-1', name: 'demo' },
+      item: { id: 'i-1', projectKey: 'p', key: 'issue-1' },
+      revision: 1,
+      labels: {},
+      pausedAt: null,
+      run: {
+        id: 'holder-1',
+        workflow: 'build',
+        parentRunId: null,
+        fanOut: null,
+        context: { artifactsDir: null, transcript: null, workingPath: null, branch: null },
+      },
+      observedStatus: 'running',
+    },
+  ];
+  respond({ runs: [], items });
+  expect((await listRunsNeedingAttention()).ownerLost).toEqual([
+    {
+      runId: 'holder-1',
+      workflow: 'build',
+      projectId: 'cb-1',
+      projectName: 'demo',
+      itemKey: 'issue-1',
+      observedStatus: 'running',
+    },
+  ]);
 });

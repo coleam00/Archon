@@ -297,7 +297,42 @@ export interface ListRunsOptions {
 }
 
 type AttentionResponse = components['schemas']['RunsNeedingAttentionResponse'];
+type AttentionItem = AttentionResponse['items'][number];
+
+/**
+ * A run that holds its item while its owner is gone (the queue's `owner_lost` item): later
+ * starts of its workflow on the item wait behind it until the operator resumes or abandons it.
+ */
+export interface OwnerLostHolder {
+  runId: string;
+  workflow: string;
+  projectId: string | null;
+  projectName: string | null;
+  /** The item's key; null when the item could not be read. */
+  itemKey: string | null;
+  /** The run's stored status, unchanged: the engine never ends it by itself. */
+  observedStatus: Extract<AttentionItem, { kind: 'owner_lost' }>['observedStatus'];
+}
+
 export interface RunsAttention {
   runs: Run[];
+  ownerLost: OwnerLostHolder[];
   degraded: NonNullable<AttentionResponse['degraded']>;
+}
+
+export function toOwnerLostHolders(items: AttentionItem[]): OwnerLostHolder[] {
+  return items.flatMap(item =>
+    item.kind === 'owner_lost'
+      ? [
+          {
+            runId: item.run.id,
+            workflow: item.run.workflow,
+            projectId: item.project?.codebaseId ?? null,
+            projectName: item.project?.name ?? null,
+            itemKey: item.item?.key ?? null,
+            observedStatus: item.observedStatus,
+          },
+        ]
+      : []
+  );
 }
