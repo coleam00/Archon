@@ -26,6 +26,7 @@ import type {
   WorkflowRunNodeSession,
 } from './schemas';
 import type { IStateDocumentStore } from './state-document-store';
+import type { ItemRulingAct } from './schemas/item-ruling';
 import type { AttentionAnswerWrite, AttentionLabelWrite } from './store/attention-writes';
 import type {
   PauseCursor,
@@ -207,6 +208,26 @@ export interface IWorkflowStore
     descendantIds: string[];
   } | null>;
   getItem(id: string): Promise<import('./schemas/workflow-run').WorkflowItem | null>;
+  /**
+   * The rulings recorded on an item, oldest first, each with its withdrawal folded in. A
+   * row that does not read is reported as unreadable in its place, not thrown.
+   */
+  listItemRulings(itemId: string): Promise<import('./schemas/item-ruling').ItemRulingRead[]>;
+  /**
+   * Record a ruling on the item `key` names in a project, writing the item on first use
+   * the way a start does, so a ruling can come before any run.
+   */
+  recordItemRuling(
+    input: { projectKey: string; key: string; text: string } & ItemRulingAct
+  ): Promise<import('./schemas/item-ruling').ItemRuling>;
+  /**
+   * Withdraw a ruling by appending a withdrawal; the ruling's own row is never changed.
+   * Throws `ItemRulingNotFoundError` for an id that names no ruling and
+   * `ItemRulingWithdrawnError` for one already withdrawn.
+   */
+  withdrawItemRuling(
+    input: { rulingId: string; projectKey?: string } & ItemRulingAct
+  ): Promise<import('./schemas/item-ruling').ItemRuling>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(

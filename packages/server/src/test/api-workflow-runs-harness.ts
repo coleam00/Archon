@@ -440,7 +440,21 @@ mock.module('@archon/core/db/items', () => ({
   getItemRuns: mockGetItemRuns,
   getItem: mock(async () => null),
   ensureItem: unusedItemWrite,
+  ensureItemInProject: unusedItemWrite,
   continuedItem: unusedItemWrite,
+}));
+type ItemRulingsDb = typeof import('@archon/core/db/item-rulings');
+export const mockListItemRulings = mock<ItemRulingsDb['listItemRulings']>(async () => []);
+export const mockRecordItemRuling = mock<ItemRulingsDb['recordItemRuling']>(async () => {
+  throw new Error('Unexpected recordItemRuling');
+});
+export const mockWithdrawItemRuling = mock<ItemRulingsDb['withdrawItemRuling']>(async () => {
+  throw new Error('Unexpected withdrawItemRuling');
+});
+mock.module('@archon/core/db/item-rulings', () => ({
+  listItemRulings: mockListItemRulings,
+  recordItemRuling: mockRecordItemRuling,
+  withdrawItemRuling: mockWithdrawItemRuling,
 }));
 
 mock.module('@archon/core/db/workflow-events', () => ({

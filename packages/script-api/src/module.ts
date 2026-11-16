@@ -18,6 +18,7 @@ import { join } from 'node:path';
 import type {
   ForgeFailure,
   ForgeOperations,
+  ItemRead,
   NodeOutcomesListing,
   StartDisposition,
   StateClaimResult,
@@ -311,6 +312,22 @@ export const state = {
  */
 export function outcomes(): NodeOutcomesListing {
   return JSON.parse(readFileSync(engineEnv('NODE_OUTCOMES_FILE'), 'utf8')) as NodeOutcomesListing;
+}
+
+/**
+ * The item this run belongs to (`archon workflow runs --item-of`): the item of the run's
+ * root, since a `workflow:` child carries none of its own. It holds the item's runs, open
+ * questions, and its answers and rulings in one list, oldest first; a withdrawn ruling
+ * stays, with `withdrawn` set. Null when the run is on no item. Read it in a `script:`
+ * node and `emit()` what a later node needs; the engine hands rulings to no node itself.
+ * A container run cannot call it, as it cannot call `state`.
+ */
+export function item(): ItemRead | null {
+  const answer = archon('workflow runs', ['--item-of', runId(), '--json']);
+  if (answer.code === 0 && isRecord(answer.value)) return answer.value as ItemRead;
+  if (answer.code === 1 && isRecord(answer.value) && answer.value.error === 'not_found')
+    return null;
+  throw failed('workflow runs --item-of', answer);
 }
 
 /**

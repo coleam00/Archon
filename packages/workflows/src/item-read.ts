@@ -1,7 +1,7 @@
 /**
- * The read of one item (`workflow run --item`): its runs, the questions open in them and
- * the answers recorded in them, each oldest first. Where the item stands is left to the
- * reader; this computes no position and stores nothing.
+ * The read of one item (`workflow runs --item`): its runs, the questions open in them, and
+ * the answers recorded in them with the rulings recorded on the item, each oldest first.
+ * Where the item stands is left to the reader; this computes no position and stores nothing.
  */
 import { z } from 'zod';
 import {
@@ -12,6 +12,12 @@ import {
   type AttentionQueueSource,
 } from './attention-queue';
 import { attentionDegradedSchema, splitAttentionRead } from './schemas/attention-degraded';
+import {
+  itemRulingDegradedSchema,
+  itemRulingSchema,
+  type ItemRulingDegraded,
+  type ItemRuling,
+} from './schemas/item-ruling';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import { workflowRunStatusSchema } from './schemas/run-status';
 import {
@@ -51,8 +57,9 @@ const answerFields = {
 
 /**
  * One recorded answer: `attention` answers a question (`wait_answered`), `gate` resolves an
- * approval gate (`approval_received`). `text` on a gate is its comment, or a rejection's
- * reason.
+ * approval gate (`approval_received`), `ruling` is a decision recorded on the item with no
+ * question asked (`ItemRuling`), which no run holds. `text` on a gate is its comment, or a
+ * rejection's reason. A withdrawn ruling stays, with `withdrawn` set.
  */
 export const itemAnswerSchema = z.discriminatedUnion('kind', [
   z.object({
@@ -69,6 +76,7 @@ export const itemAnswerSchema = z.discriminatedUnion('kind', [
     decision: z.string().nullable(),
     text: z.string().nullable(),
   }),
+  itemRulingSchema,
 ]);
 export type ItemAnswer = z.infer<typeof itemAnswerSchema>;
 
@@ -76,20 +84,24 @@ export type ItemAnswer = z.infer<typeof itemAnswerSchema>;
  * An item and what is recorded about it. `runs` are the item's own readable runs; a
  * `workflow:` child is left to `workflow get` on its parent. `questions` and `answers` come from the
  * whole run tree, because a question is often asked inside a child; each names the run
- * that holds it. `degraded` names each run in the tree that could not be read: one of the
- * item's own runs, or a paused run the queue could not read. The rest still reads.
+ * that holds it. `degraded` names each part that could not be read: one of the item's own
+ * runs, a paused run the queue could not read (`run_unreadable`, by `runId`), or a ruling
+ * (`ruling_unreadable`, by `rulingId`). The rest still reads.
  */
 export const itemReadSchema = z.object({
   item: workflowItemSchema,
   runs: z.array(itemRunSchema),
   questions: z.array(attentionQueueItemSchema),
   answers: z.array(itemAnswerSchema),
-  degraded: z.array(attentionDegradedSchema),
+  degraded: z.array(
+    z.discriminatedUnion('reason', [attentionDegradedSchema, itemRulingDegradedSchema])
+  ),
 });
 export type ItemRead = z.infer<typeof itemReadSchema>;
 
 export interface ItemReadSource extends AttentionQueueSource {
-  store: AttentionQueueSource['store'] & Pick<IWorkflowStore, 'getItemRuns' | 'listEventsForRuns'>;
+  store: AttentionQueueSource['store'] &
+    Pick<IWorkflowStore, 'getItemRuns' | 'listEventsForRuns' | 'listItemRulings'>;
 }
 
 function itemRun(run: WorkflowRun): ItemRun {
@@ -157,10 +169,14 @@ export async function readItem(
     tree.size === 0
       ? new Map<string, WorkflowEventRow[]>()
       : await source.store.listEventsForRuns([...tree], ['wait_answered', 'approval_received']);
-  const answers = [...events.values()]
-    .flat()
-    .map(itemAnswer)
-    // Stable, so rows of one run within the same second keep their append order.
+  const rulings: ItemRuling[] = [];
+  const unreadableRulings: ItemRulingDegraded[] = [];
+  for (const read of await source.store.listItemRulings(found.item.id))
+    if ('type' in read) unreadableRulings.push(read);
+    else rulings.push(read);
+  const answers = [...[...events.values()].flat().map(itemAnswer), ...rulings]
+    // Stable, so rows that tie on `at` keep their store order: append order within a run,
+    // recording order among rulings.
     .sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
   return {
     item: found.item,
@@ -173,6 +189,22 @@ export async function readItem(
       ...degraded.filter(
         report => tree.has(report.runId) && !own.degraded.some(mine => mine.runId === report.runId)
       ),
+      ...unreadableRulings,
     ],
   };
+}
+
+/**
+ * Read the item the run `runId` belongs to: the item of its root run, since a `workflow:`
+ * child carries no item of its own. Null when the run is unknown or its root names no item.
+ */
+export async function readItemOfRun(
+  source: ItemReadSource,
+  runId: string
+): Promise<ItemRead | null> {
+  let run = await source.store.getWorkflowRun(runId);
+  while (run?.parent_run_id) run = await source.store.getWorkflowRun(run.parent_run_id);
+  if (!run?.item_id) return null;
+  const item = await source.store.getItem(run.item_id);
+  return item === null ? null : readItem(source, item.projectKey, item.key);
 }

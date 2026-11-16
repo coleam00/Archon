@@ -21,10 +21,19 @@ export async function ensureItem(
   codebaseId: string | undefined,
   key: string
 ): Promise<string> {
-  assertItemKey(key);
   const project = await codebaseProjectKey(query, codebaseId);
   if (!project) throw new Error('naming an item needs a registered project');
-  const named = [project, key];
+  return ensureItemInProject(query, project, key);
+}
+
+/** The item `key` names in project `projectKey`, written on first use. */
+export async function ensureItemInProject(
+  query: TransactionQuery,
+  projectKey: string,
+  key: string
+): Promise<string> {
+  assertItemKey(key);
+  const named = [projectKey, key];
   await query(
     'INSERT INTO remote_agent_items (project_key, key) VALUES ($1, $2) ON CONFLICT DO NOTHING',
     named
@@ -117,11 +126,10 @@ export async function getItemRuns(
 /**
  * Every run below `roots` by `parent_run_id`, reading ids only. Unbounded, unlike
  * `gatherDescendantRunIds`: a fan-out has no limit on its children, and a cut-off walk
- * would report an item with an open question as having none. `seen` keeps a corrupted
- * `parent_run_id` cycle from looping.
+ * would report an item with an open question as having none. `parent_run_id` is written
+ * only when a run is created, naming a run that already exists, so the walk cannot cycle.
  */
 async function descendantRunIds(roots: readonly string[]): Promise<string[]> {
-  const seen = new Set(roots);
   const found: string[] = [];
   const queue = [...roots];
   for (let id = queue.shift(); id !== undefined; id = queue.shift()) {
@@ -129,12 +137,10 @@ async function descendantRunIds(roots: readonly string[]): Promise<string[]> {
       'SELECT id FROM remote_agent_workflow_runs WHERE parent_run_id = $1 ORDER BY started_at, id',
       [id]
     );
-    for (const child of children.rows)
-      if (!seen.has(child.id)) {
-        seen.add(child.id);
-        found.push(child.id);
-        queue.push(child.id);
-      }
+    for (const child of children.rows) {
+      found.push(child.id);
+      queue.push(child.id);
+    }
   }
   return found;
 }

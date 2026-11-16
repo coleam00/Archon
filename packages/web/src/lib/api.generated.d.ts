@@ -2129,6 +2129,160 @@ export interface paths {
     patch?: never;
     trace?: never;
   };
+  '/api/items/rulings': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Record a ruling on an item: a decision made without a question being asked */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path?: never;
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['RecordItemRulingBody'];
+        };
+      };
+      responses: {
+        /** @description The ruling as recorded */
+        201: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemRuling'];
+          };
+        };
+        /** @description Bad request */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Only the operator or an admin may record a ruling */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
+  '/api/items/rulings/{rulingId}/withdraw': {
+    parameters: {
+      query?: never;
+      header?: never;
+      path?: never;
+      cookie?: never;
+    };
+    get?: never;
+    put?: never;
+    /** Withdraw a ruling; the record stays and says it was withdrawn */
+    post: {
+      parameters: {
+        query?: never;
+        header?: never;
+        path: {
+          rulingId: string;
+        };
+        cookie?: never;
+      };
+      requestBody?: {
+        content: {
+          'application/json': components['schemas']['WithdrawItemRulingBody'];
+        };
+      };
+      responses: {
+        /** @description The ruling, now withdrawn */
+        200: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['ItemRuling'];
+          };
+        };
+        /** @description Bad request, an unknown project, or a ruling outside the named project */
+        400: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Only the operator or an admin may withdraw a ruling */
+        403: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description No ruling with that id */
+        404: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description The ruling was already withdrawn */
+        409: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+        /** @description Server error */
+        500: {
+          headers: {
+            [name: string]: unknown;
+          };
+          content: {
+            'application/json': components['schemas']['Error'];
+          };
+        };
+      };
+    };
+    delete?: never;
+    options?: never;
+    head?: never;
+    patch?: never;
+    trace?: never;
+  };
   '/api/runs/attention/stream': {
     parameters: {
       query?: never;
@@ -7522,14 +7676,109 @@ export interface components {
             decision: string | null;
             text: string | null;
           }
+        | {
+            /** @enum {string} */
+            kind: 'ruling';
+            id: string;
+            text: string;
+            /** Format: date-time */
+            at: string;
+            via: string;
+            by:
+              | {
+                  declared: string;
+                }
+              | {
+                  userId: string;
+                }
+              | unknown;
+            fromRun: {
+              runId: string;
+              nodePath: string;
+            } | null;
+            withdrawn: {
+              /** Format: date-time */
+              at: string;
+              via: string;
+              by:
+                | {
+                    declared: string;
+                  }
+                | {
+                    userId: string;
+                  }
+                | unknown;
+              fromRun: {
+                runId: string;
+                nodePath: string;
+              } | null;
+            } | null;
+          }
       )[];
-      degraded: {
-        /** @enum {string} */
-        type: 'degraded';
-        /** @enum {string} */
-        reason: 'run_unreadable';
-        runId?: string;
-      }[];
+      degraded: (
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'run_unreadable';
+            runId?: string;
+          }
+        | {
+            /** @enum {string} */
+            type: 'degraded';
+            /** @enum {string} */
+            reason: 'ruling_unreadable';
+            rulingId: string;
+          }
+      )[];
+    };
+    ItemRuling: {
+      /** @enum {string} */
+      kind: 'ruling';
+      id: string;
+      text: string;
+      /** Format: date-time */
+      at: string;
+      via: string;
+      by:
+        | {
+            declared: string;
+          }
+        | {
+            userId: string;
+          }
+        | unknown;
+      fromRun: {
+        runId: string;
+        nodePath: string;
+      } | null;
+      withdrawn: {
+        /** Format: date-time */
+        at: string;
+        via: string;
+        by:
+          | {
+              declared: string;
+            }
+          | {
+              userId: string;
+            }
+          | unknown;
+        fromRun: {
+          runId: string;
+          nodePath: string;
+        } | null;
+      } | null;
+    };
+    RecordItemRulingBody: {
+      project: string;
+      key: string;
+      text: string;
+      as?: string;
+    };
+    WithdrawItemRulingBody: {
+      project?: string;
+      as?: string;
     };
     AttentionStreamLine: (
       | {

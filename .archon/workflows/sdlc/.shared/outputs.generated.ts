@@ -847,7 +847,8 @@ export type NodeOutput<
 
 /**
  * The values of every `enum` in those schemas, by workflow, node and schema path:
- * `.` enters a property, `[]` an array's items, `anyOf[n]` an alternative, and `$`
+ * `.` enters a property, `.*` a record's values, `{}` an object's keys
+ * (`propertyNames`), `[]` an array's items, `anyOf[n]` an alternative, and `$`
  * is the schema itself.
  */
 export const OUTPUT_ENUMS = {

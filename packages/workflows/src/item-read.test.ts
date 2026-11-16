@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { readItem, type ItemReadSource } from './item-read';
+import { readItem, readItemOfRun, type ItemReadSource } from './item-read';
+import type { ItemRuling } from './schemas/item-ruling';
 import type { WorkflowEventRow } from './schemas/workflow-event';
 import type { WorkflowItem, WorkflowRun } from './schemas/workflow-run';
 
@@ -113,6 +114,31 @@ const events: WorkflowEventRow[] = [
   event('unrelated', 'wait_answered', '2026-11-01T08:30:00.000Z', { via: 'cli' }),
 ];
 
+// Rulings come from the store oldest first; one falls between the item's answers, and
+// a withdrawn one still reads.
+const rulings: ItemRuling[] = [
+  {
+    kind: 'ruling',
+    id: 'ruling-1',
+    text: 'do not accept an empty outcome',
+    at: '2026-11-01T09:22:00.000Z',
+    via: 'api',
+    by: null,
+    fromRun: null,
+    withdrawn: { at: '2026-11-01T12:00:00.000Z', via: 'cli', by: null, fromRun: null },
+  },
+  {
+    kind: 'ruling',
+    id: 'ruling-2',
+    text: 'leave the chat readers for a follow-up',
+    at: '2026-11-01T11:15:00.000Z',
+    via: 'cli',
+    by: { declared: 'operator-agent' },
+    fromRun: { runId: 'elsewhere', nodePath: 'triage' },
+    withdrawn: null,
+  },
+];
+
 const source: ItemReadSource = {
   branchOf: async () => null,
   store: {
@@ -126,7 +152,8 @@ const source: ItemReadSource = {
     getWorkflowRun: async id => runs.get(id) ?? null,
     getWorkflowRunForAttention: async id => runs.get(id) ?? null,
     getCodebase: async () => null,
-    getItem: async () => null,
+    getItem: async id => (id === item.id ? item : null),
+    listItemRulings: async id => (id === item.id ? rulings : []),
   },
 };
 
@@ -169,6 +196,7 @@ describe('reading an item', () => {
         decision: 'rejected',
         text: 'needs tests',
       },
+      rulings[0],
       {
         kind: 'gate',
         runId: 'first',
@@ -190,6 +218,7 @@ describe('reading an item', () => {
         by: { declared: 'triage-agent' },
         fromRun: null,
       },
+      rulings[1],
       {
         kind: 'gate',
         runId: 'second',
@@ -204,7 +233,7 @@ describe('reading an item', () => {
     expect(read?.degraded).toEqual([]);
   });
 
-  test('an unknown key reads as null, an item with no runs as empty', async () => {
+  test('an unknown key reads as null, an item with no runs as empty but for its rulings', async () => {
     expect(await readItem(source, item.projectKey, 'issue-8')).toBeNull();
     const empty: ItemReadSource = {
       ...source,
@@ -214,9 +243,25 @@ describe('reading an item', () => {
       item,
       runs: [],
       questions: [],
-      answers: [],
+      answers: rulings,
       degraded: [],
     });
+  });
+
+  test('a run reads the item of its root, and a run with no item reads null', async () => {
+    expect((await readItemOfRun(source, 'child'))?.item).toEqual(item);
+    // Two levels down: the walk must reach the root, not stop at the first parent.
+    const grandchild = run('grandchild', { parent_run_id: 'child', item_id: null });
+    const deeper: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        getWorkflowRun: async id => (id === 'grandchild' ? grandchild : (runs.get(id) ?? null)),
+      },
+    };
+    expect((await readItemOfRun(deeper, 'grandchild'))?.item).toEqual(item);
+    expect(await readItemOfRun(source, 'unrelated')).toBeNull();
+    expect(await readItemOfRun(source, 'missing')).toBeNull();
   });
 
   test('a run the store could not read is reported, and the rest of the item still reads', async () => {
@@ -233,12 +278,15 @@ describe('reading an item', () => {
           descendantIds: ['child', 'lost-child'],
         }),
         listAttentionQueueRows: async () => [child, { ...unreadable, runId: 'lost-child' }],
+        listItemRulings: async () => [
+          { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
+        ],
       },
     };
     const read = await readItem(broken, item.projectKey, item.key);
     expect(read?.runs.map(row => row.id)).toEqual(['first', 'second']);
     expect(read?.questions.map(question => question.run?.id)).toEqual(['child']);
-    expect(read?.answers.map(answer => answer.runId)).toEqual([
+    expect(read?.answers.map(answer => answer.kind !== 'ruling' && answer.runId)).toEqual([
       'first',
       'first',
       'child',
@@ -247,6 +295,7 @@ describe('reading an item', () => {
     expect(read?.degraded).toEqual([
       { ...unreadable, runId: 'lost-root' },
       { ...unreadable, runId: 'lost-child' },
+      { type: 'degraded', reason: 'ruling_unreadable', rulingId: 'lost-ruling' },
     ]);
   });
 });
