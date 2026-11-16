@@ -23,7 +23,11 @@ import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/s
 import { loadConfig } from '@archon/core/config/config-loader';
 import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
 import { loadStoreSelection } from '@archon/core/config/store-selection';
-import { getTriggersPath, runEndedBindingCheck } from '@archon/core/workflows/run-ended';
+import {
+  getTriggersPath,
+  type RunEndedBinding,
+  runEndedBindingCheck,
+} from '@archon/core/workflows/run-ended';
 import { providerRegistry } from '@archon/providers';
 import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import {
@@ -213,8 +217,14 @@ function generate(
   }
 }
 
-/** Check a generated document against the schema of the loader that will read it. */
-function assertLoadable({ id, kind, document }: Generated, target: Target): void {
+/**
+ * Check a generated document against the schema of the loader that will read it, and
+ * return the run-ended binding a run-ended file holds, as the engine reads it.
+ */
+function assertLoadable(
+  { id, kind, path, document }: Generated,
+  target: Target
+): RunEndedBinding | undefined {
   const result =
     kind !== 'event'
       ? triggerConfigSchema.safeParse(document)
@@ -226,7 +236,11 @@ function assertLoadable({ id, kind, document }: Generated, target: Target): void
           host: target.repo.host,
           bindings: [document],
         });
-  if (result.success) return;
+  if (result.success) {
+    if (!('on' in result.data) || result.data.on === undefined) return undefined;
+    const { sourceInstanceId, binding, on } = result.data;
+    return { file: path, sourceInstanceId, binding, runEnded: on.runEnded };
+  }
   const reader = kind === 'event' ? 'GitHub source plugin binding' : 'trigger file';
   const issues = result.error.issues
     .map(issue => `${issue.path.join('.')}: ${issue.message}`)
@@ -373,8 +387,9 @@ function targetFrom(packKey: string, options: PackBindingsOptions): Target {
  * before any is written: a file that fails here would fail every item run of its ended
  * workflow once it is in the triggers directory.
  */
-async function assertRunEndedChecks(generated: readonly Generated[]): Promise<void> {
-  const ended = generated.filter(item => item.kind === 'run_ended');
+async function assertRunEndedChecks(
+  ended: readonly { id: string; check: RunEndedBinding }[]
+): Promise<void> {
   if (ended.length === 0) return;
   // The file store has no items, so a run-ended binding can never start anything there.
   if ((await loadStoreSelection()) === 'files')
@@ -382,15 +397,10 @@ async function assertRunEndedChecks(generated: readonly Generated[]): Promise<vo
       `Run-ended bindings (${[...new Set(ended.map(item => item.id))].join(', ')})`
     );
   const problems: string[] = [];
-  for (const item of ended) {
-    const { sourceInstanceId, binding, on } = triggerConfigSchema.parse(item.document);
-    if (on === undefined) continue;
-    const found = await runEndedBindingCheck(
-      { file: item.path, sourceInstanceId, binding, runEnded: on.runEnded },
-      { loadConfig, providers: providerRegistry }
-    );
+  for (const { id, check } of ended) {
+    const found = await runEndedBindingCheck(check, { loadConfig, providers: providerRegistry });
     for (const problem of found)
-      problems.push(`  Binding '${item.id}' (outcome '${on.runEnded.outcome}'): ${problem}`);
+      problems.push(`  Binding '${id}' (outcome '${check.runEnded.outcome}'): ${problem}`);
   }
   if (problems.length > 0)
     throw new Error(
@@ -434,16 +444,18 @@ async function generateChecked(
   target: Target
 ): Promise<Generated[]> {
   const generated: Generated[] = [];
+  const ended: { id: string; check: RunEndedBinding }[] = [];
   for (const id of ids) {
     const binding = pack.bindings[id];
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
     for (const item of generate(id, binding, pack, target)) {
-      assertLoadable(item, target);
+      const check = assertLoadable(item, target);
+      if (check !== undefined) ended.push({ id, check });
       generated.push(item);
     }
   }
-  await assertRunEndedChecks(generated);
+  await assertRunEndedChecks(ended);
   return generated;
 }
 
