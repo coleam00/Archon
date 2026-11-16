@@ -126,10 +126,6 @@ async function writePack(declaration: string, dir: string = cwd): Promise<void> 
   await writeWorkflow(pack, 'fixture-build', BUILD_WORKFLOW);
 }
 
-function triggersDir(): string {
-  return join(root, 'home', 'triggers');
-}
-
 function options(extra: Partial<PackBindingsOptions> = {}): PackBindingsOptions {
   return {
     cwd,
@@ -323,7 +319,7 @@ describe('archon pack bindings', () => {
   it.each([
     [{ only: 'nope' }, "--only names 'nope'"],
     [{ repo: 'acme/widgets' }, '--repo must be <host>/<owner>/<name>'],
-    [{ out: undefined }, '--out is required'],
+    [{ out: undefined }, 'Usage: archon pack bindings'],
     [{ host: undefined }, 'Usage: archon pack bindings'],
   ])('refuses %p', async (extra, reason) => {
     await writePack(DECLARATION);
@@ -342,7 +338,7 @@ describe('archon pack bindings', () => {
 });
 
 describe('archon pack bindings: run-ended', () => {
-  it('writes one active trigger file per outcome, mapping inputs from the ended run', async () => {
+  it('writes one trigger file per outcome to --out, mapping inputs from the ended run, and activates none', async () => {
     const source = join(root, 'pack source');
     const runConfig = join(root, 'run.yaml');
     await writeFile(runConfig, 'assistants: {}\n');
@@ -351,11 +347,11 @@ describe('archon pack bindings: run-ended', () => {
     await packCommand(
       'bindings',
       ['fixture'],
-      options({ out: undefined, config: runConfig, workflowSource: source })
+      options({ config: runConfig, workflowSource: source })
     );
 
-    expect(existsSync(out)).toBe(false);
-    const bindings = await readRunEndedBindings(triggersDir());
+    expect(existsSync(join(root, 'home', 'triggers'))).toBe(false);
+    const bindings = await readRunEndedBindings(out);
     expect(bindings.map(entry => entry.runEnded.outcome).sort()).toEqual(['blocked', 'planned']);
     for (const entry of bindings) {
       const name = basename(entry.file, '.json');
@@ -409,7 +405,7 @@ describe('archon pack bindings: run-ended', () => {
   ])('refuses %s, writing nothing', async (_case, declaration, reason) => {
     await writePack(declaration);
     await expect(packCommand('bindings', ['fixture'], options())).rejects.toThrow(reason);
-    expect(existsSync(triggersDir())).toBe(false);
+    expect(existsSync(out)).toBe(false);
   });
 
   it('refuses run-ended bindings on the file store, writing nothing', async () => {
@@ -426,6 +422,6 @@ describe('archon pack bindings: run-ended', () => {
       if (databaseUrl === undefined) delete process.env.DATABASE_URL;
       else process.env.DATABASE_URL = databaseUrl;
     }
-    expect(existsSync(triggersDir())).toBe(false);
+    expect(existsSync(out)).toBe(false);
   });
 });

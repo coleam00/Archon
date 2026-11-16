@@ -30,7 +30,7 @@ export const operatorHelp: HelpGroup = {
       subcommand: 'bindings',
       spec: 'pack bindings <pack>',
       description:
-        "Write a pack's recommended trigger bindings as files for one repository;\nrun-ended bindings are active once written, the rest are registered by hand",
+        "Write a pack's recommended trigger bindings as files for one repository;\nregisters and schedules nothing. Needs --repo, --host, --run-as and --out",
       scopedFlags: [
         { spec: '--repo <host>/<owner>/<name>', description: 'The repository the bindings act on' },
         { spec: '--host <host-id>', description: 'The execution host that runs the starts' },
@@ -38,10 +38,7 @@ export const operatorHelp: HelpGroup = {
           spec: '--run-as <user-id>',
           description: 'The Archon user the runs act as (see trigger whoami)',
         },
-        {
-          spec: '--out <dir>',
-          description: 'Where timer, fire-only and event binding files are written',
-        },
+        { spec: '--out <dir>', description: 'Where the binding files are written' },
         {
           spec: '--cwd <checkout>',
           description: 'The checkout the runs launch in and the pack is read from',

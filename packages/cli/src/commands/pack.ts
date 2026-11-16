@@ -6,19 +6,19 @@
  * supplies the repository, the host, the run-as user and the checkout, and optionally the
  * run config every start launches with and where the pack's workflows are discovered.
  *
- * Timer, fire-only and event files go to `--out` and nothing registers them: the operator
- * still runs `archon trigger fire` and `archon trigger schedule install` for a timer
- * binding, and adds an event binding to the source plugin's configuration. A fire-only
- * file is what a run or an operator passes to `archon trigger fire`.
+ * Every file goes to `--out` and nothing registers it: the operator still runs
+ * `archon trigger fire` and `archon trigger schedule install` for a timer binding, adds an
+ * event binding to the source plugin's configuration, and copies a run-ended file into the
+ * triggers directory, where the engine reads it. A fire-only file is what a run or an
+ * operator passes to `archon trigger fire`.
  *
- * A run-ended binding is written to the triggers directory, where the engine reads it, so
- * it is active once written. One invalid file there fails item runs on the whole install,
- * so every run-ended file is checked as `archon trigger check` checks it before anything
- * is written.
+ * One invalid run-ended file in the triggers directory fails item runs on the whole
+ * install, so every run-ended file is checked as `archon trigger check` checks it before
+ * anything is written.
  */
 import { createHash } from 'node:crypto';
 import { access, mkdir, writeFile } from 'node:fs/promises';
-import { dirname, join, resolve } from 'node:path';
+import { join, resolve } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
 import { loadConfig } from '@archon/core/config/config-loader';
 import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
@@ -61,7 +61,7 @@ export interface PackBindingsOptions {
 }
 
 const USAGE =
-  'Usage: archon pack bindings <pack> --repo <host>/<owner>/<name> --host <host-id> --run-as <user-id> [--out <dir>] [--cwd <checkout>] [--config <file>] [--workflow-source <dir>] [--only <id,...>] [--force]';
+  'Usage: archon pack bindings <pack> --repo <host>/<owner>/<name> --host <host-id> --run-as <user-id> --out <dir> [--cwd <checkout>] [--config <file>] [--workflow-source <dir>] [--only <id,...>] [--force]';
 
 interface Target {
   packKey: string;
@@ -69,8 +69,7 @@ interface Target {
   hostId: string;
   runAsUserId: string;
   cwd: string;
-  /** Required only to write a timer, fire-only or event file, or a path to one. */
-  outDir?: string;
+  outDir: string;
   configSource?: string;
   discoveryCwd?: string;
 }
@@ -108,12 +107,8 @@ function bindingName(target: Target, id: string, outcome?: string): string {
   return `${readable.join('-')}-${digest}`;
 }
 
-function bindingPath(target: Target, id: string): string {
-  if (target.outDir === undefined)
-    throw new Error(
-      `--out is required to write timer, fire-only and event binding files (binding '${id}').`
-    );
-  return join(target.outDir, `${bindingName(target, id)}.json`);
+function bindingPath(target: Target, id: string, outcome?: string): string {
+  return join(target.outDir, `${bindingName(target, id, outcome)}.json`);
 }
 
 function generate(
@@ -162,7 +157,7 @@ function generate(
       return {
         id,
         kind: kinded.kind,
-        path: join(getTriggersPath(), `${name}.json`),
+        path: bindingPath(target, id, value),
         outcome: value,
         document: {
           version: 1,
@@ -328,11 +323,14 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
   const lines: string[] = [];
   const ended = generated.filter(g => g.kind === 'run_ended');
   if (ended.length > 0) {
+    const triggers = shellQuote(getTriggersPath());
     lines.push(
       '',
-      `Run-ended bindings. Active now: each starts its workflow when a run on an item ends with its outcome. \`archon trigger check\` lists them; deleting a file turns it off:`
+      'Run-ended bindings. Copy each into the triggers directory, where it is active at once: it starts its workflow when a run on an item ends with its outcome. Then list and check them with `archon trigger check`; deleting a copy turns it off:',
+      `  mkdir -p ${triggers}`
     );
-    for (const item of ended) lines.push(`  ${item.path} (outcome '${item.outcome ?? ''}')`);
+    for (const item of ended)
+      lines.push(`  cp ${shellQuote(item.path)} ${triggers}/  # outcome '${item.outcome ?? ''}'`);
   }
   const timers = generated.filter(g => g.kind === 'timer');
   const events = generated.filter(g => g.kind === 'event');
@@ -367,7 +365,7 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
 }
 
 function targetFrom(packKey: string, options: PackBindingsOptions): Target {
-  if (!options.repo || !options.host || !options.runAs) throw new Error(USAGE);
+  if (!options.repo || !options.host || !options.runAs || !options.out) throw new Error(USAGE);
   const absolute = (path: string | undefined): string | undefined =>
     path === undefined ? undefined : resolve(path);
   return {
@@ -376,7 +374,7 @@ function targetFrom(packKey: string, options: PackBindingsOptions): Target {
     hostId: options.host,
     runAsUserId: options.runAs,
     cwd: resolve(options.cwd),
-    outDir: absolute(options.out),
+    outDir: resolve(options.out),
     configSource: absolute(options.config),
     discoveryCwd: absolute(options.workflowSource),
   };
@@ -384,8 +382,9 @@ function targetFrom(packKey: string, options: PackBindingsOptions): Target {
 
 /**
  * Check every run-ended file as `archon trigger check` checks it before any is written: a
- * file that fails a run's preflight would fail every item run of its ended workflow once it
- * is in the triggers directory, and one that never starts or loops is refused with it.
+ * file that fails a run's preflight would fail every item run of its ended workflow once the
+ * operator copies it into the triggers directory, and one that never starts or loops is
+ * refused with it.
  */
 async function assertRunEndedChecks(
   ended: readonly { id: string; check: RunEndedBinding }[]
@@ -474,8 +473,7 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
   const generated = await generateChecked(pack, selectIds(pack, options.only), target);
   if (!options.force) await assertNothingOverwritten(generated);
 
-  for (const directory of new Set(generated.map(item => dirname(item.path))))
-    await mkdir(directory, { recursive: true });
+  await mkdir(target.outDir, { recursive: true });
   for (const item of generated) {
     // `wx` never replaces a file that appeared after the check above.
     await writeFile(item.path, `${JSON.stringify(item.document, null, 2)}\n`, {
@@ -495,15 +493,9 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
     });
     return;
   }
-  const registered = generated.filter(item => item.kind !== 'run_ended').length;
   console.log(
     [
-      `Wrote ${generated.length} binding file${generated.length === 1 ? '' : 's'} for ${repo.host}/${repo.path}.`,
-      ...(registered > 0 && target.outDir !== undefined
-        ? [
-            `Timer, fire-only and event files are in ${target.outDir}; nothing registers or schedules them yet.`,
-          ]
-        : []),
+      `Wrote ${generated.length} binding file${generated.length === 1 ? '' : 's'} for ${repo.host}/${repo.path} to ${target.outDir}. Nothing is registered or scheduled yet.`,
       ...nextSteps(generated, target),
     ].join('\n')
   );

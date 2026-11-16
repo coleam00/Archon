@@ -2432,9 +2432,9 @@ result on its row; a resumed run keeps those values even if the project file cha
 A pack can also declare the [trigger bindings](/guides/workflow-triggers/) it recommends, in a
 top-level `bindings:` block of the same `<pack>/.pack/pack.yaml`. A declaration starts nothing
 and installs nothing. An operator turns it into binding files for one repository with
-[`archon pack bindings`](/reference/cli/#pack-bindings) and registers each file, except a
-run-ended binding, which the command writes where it is active. The pack states what it knows;
-the command fills in the repository, the execution host, the run-as user and the checkout.
+[`archon pack bindings`](/reference/cli/#pack-bindings) and registers each file. The pack
+states what it knows; the command fills in the repository, the execution host, the run-as user
+and the checkout.
 
 ```yaml
 # .archon/workflows/review-kit/.pack/pack.yaml
@@ -2490,8 +2490,8 @@ it starts its workflow on an item when a run of `run_ended.workflow`, a workflow
 completes on that item with `run_ended.outcome`. `{ input: <name> }` and
 `{ result: <JSON Pointer> }` inputs read the ended run's inputs and result, as
 `on.runEnded.inputs` does; every other input is written as the start's own input.
-`archon pack bindings` writes one file per outcome into the triggers directory, where it is
-active at once, and refuses the whole set, writing nothing, when the ended workflow does not
+`archon pack bindings` writes one file per outcome, which the operator registers by copying it
+into the triggers directory, and refuses the whole set, writing nothing, when the ended workflow does not
 declare the outcome or an input read from it, or the started workflow does not declare an input
 mapped to it. A stage that needs both a clock and a hand-off declares two bindings with the
 same `workflow` and `resource`; they share the resource's slots and overlap policy.

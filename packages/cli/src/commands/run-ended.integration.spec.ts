@@ -5,9 +5,11 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { Database } from 'bun:sqlite';
 import {
+  copyFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
+  readdirSync,
   readFileSync,
   realpathSync,
   rmSync,
@@ -329,7 +331,7 @@ describe('a run-ended binding', () => {
     );
   }, 90_000);
 
-  test('a pack declares it and `pack bindings` writes it where the end of a run starts it', async () => {
+  test('a pack declares it, `pack bindings` writes it inactive, and once copied into the triggers directory the end of a run starts it', async () => {
     const fixture = await makeFixture('pack');
     const pack = join(fixture.projectRoot, '.archon', 'workflows', 'chain');
     for (const [name, body] of [
@@ -367,8 +369,18 @@ describe('a run-ended binding', () => {
       HOST,
       '--run-as',
       runAsUserId,
+      '--out',
+      join(fixture.root, 'bindings'),
       '--json',
     ]);
+    const written = JSON.parse(await fixture.cli(['trigger', 'check'])) as { runEnded: unknown[] };
+    expect(written.runEnded).toEqual([]);
+    mkdirSync(join(fixture.archonHome, 'triggers'), { recursive: true });
+    for (const file of readdirSync(join(fixture.root, 'bindings')))
+      copyFileSync(
+        join(fixture.root, 'bindings', file),
+        join(fixture.archonHome, 'triggers', file)
+      );
     const listed = JSON.parse(await fixture.cli(['trigger', 'check'])) as {
       runEnded: { workflowName: string; problems: string[] }[];
     };
