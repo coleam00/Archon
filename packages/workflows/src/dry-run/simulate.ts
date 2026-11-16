@@ -27,7 +27,10 @@ import { simulateLoopGroup } from './nodes/loop-group';
 import { simulateWait } from './nodes/wait';
 import { simulateChildRunNode } from './nodes/workflow';
 import { nodePackDir } from '../pack-dir';
-import { runWithPackDir } from '../workflow-variables';
+import { runWithNodeScratch, runWithPackDir } from '../workflow-variables';
+import { getNodeScratchDir } from '@archon/paths/archon-paths';
+import { randomUUID } from 'node:crypto';
+import { releaseNodeScratch } from '../run-scratch';
 
 /** Whether the node runs at all; a node the trigger rule or its `when:` turns away is recorded here. */
 function isReached(
@@ -144,9 +147,25 @@ async function simulateNode(
     return;
   }
   try {
-    await runWithPackDir(await nodePackDir(ctx.sourceRoots, ctx.workflow.pack, node), async () =>
-      simulateNodeKind(node, outputs, ctx, iteration, execution)
-    );
+    const packDir = await nodePackDir(ctx.sourceRoots, ctx.workflow.pack, node);
+    // Released when the simulated node ends, as in a live run, so a dependent that adds a
+    // worktree on the same branch behaves as it would live.
+    const invocationId = randomUUID();
+    try {
+      await runWithNodeScratch(getNodeScratchDir(ctx.artifactsDir, invocationId), () =>
+        runWithPackDir(packDir, async () =>
+          simulateNodeKind(node, outputs, ctx, iteration, execution)
+        )
+      );
+    } finally {
+      await releaseNodeScratch({
+        artifactsDir: ctx.artifactsDir,
+        invocationId,
+        repoPath: ctx.execWorkspace,
+        execContext: { kind: 'host' },
+        logContext: { workflowRunId: 'dry-run', nodeId: node.id, invocationId },
+      });
+    }
   } catch (error) {
     recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
   }

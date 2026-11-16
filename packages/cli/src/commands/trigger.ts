@@ -11,7 +11,7 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { readRunEndedBindings, runEndedBindingCheck } from '@archon/core/workflows/run-ended';
+import { readRunEndedBindings, runEndedTriggerCheck } from '@archon/core/workflows/run-ended';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
@@ -111,6 +111,7 @@ type TriggerOptions = {
   deliveryId?: string;
   inputs?: string;
   item?: string;
+  noItem?: boolean;
 };
 
 type TriggerDispatch = (requestId: string, hostId: string) => Promise<void>;
@@ -200,13 +201,30 @@ async function inheritedItemKey(
   const project = await registeredProjectKeyForPath(start.cwd, host.records.codebases);
   if (project === null)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start's checkout (${start.cwd}) is not a registered project, so it cannot be that item's project. The start cannot inherit the item: pass --item <key> to name its item there, or --no-item to start it on no item.`
     );
   if (project !== item.projectKey)
     throw new Error(
-      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start runs in project '${project}'. An item belongs to one project, so the start cannot inherit it: pass --item <key> to name its item there.`
+      `This run is on item '${item.key}' in project '${item.projectKey}', but the fired start runs in project '${project}'. An item belongs to one project, so the start cannot inherit it: pass --item <key> to name its item there, or --no-item to start it on no item.`
     );
   return item.key;
+}
+
+function assertItemOptions(options: TriggerOptions): void {
+  if (options.item === undefined) return;
+  if (options.noItem) throw new Error('--item and --no-item are mutually exclusive.');
+  assertItemKey(options.item);
+}
+
+/** The item the fired start is on: `--item`, none with `--no-item`, else the caller's. */
+async function firedItemKey(
+  host: WorkflowHost,
+  options: TriggerOptions,
+  sourceActor: SourceReceiptInput['sourceActor'],
+  start: { cwd: string; recorded: boolean }
+): Promise<string | undefined> {
+  if (options.noItem) return undefined;
+  return options.item ?? (await inheritedItemKey(host, sourceActor, start));
 }
 
 async function triggerFire(
@@ -231,7 +249,7 @@ async function triggerFire(
       );
     }
   }
-  if (options.item !== undefined) assertItemKey(options.item);
+  assertItemOptions(options);
   const config = await loadFireConfig(options.config);
   const sourceActor = await requestingSourceActor(host, env);
   // A redelivery keeps the binding snapshot of its first acceptance, so today's users
@@ -243,9 +261,10 @@ async function triggerFire(
     options.deliveryId !== undefined &&
     (await host.deps.store.hasStartReceiptForDelivery(config.sourceInstanceId, options.deliveryId));
   if (!recorded) await assertKnownRunAsUser(host, config);
-  const itemKey =
-    options.item ??
-    (await inheritedItemKey(host, sourceActor, { cwd: config.binding.launch.cwd, recorded }));
+  const itemKey = await firedItemKey(host, options, sourceActor, {
+    cwd: config.binding.launch.cwd,
+    recorded,
+  });
   const binding = {
     ...config.binding,
     ...(eventInputs !== undefined ? { eventInputs } : {}),
@@ -535,6 +554,8 @@ export function triggersDirectory(): string {
  * ended workflow declares the outcome and every input the binding reads from it, and
  * the started workflow exists and declares every input the binding maps. A run on an
  * item whose end could fire such a binding is refused before it starts, by the same check.
+ * It also reports what a run is not refused for: a `launch.cwd` that does not exist, a
+ * binding that starts the workflow that ended, and two files that start the same stage.
  */
 async function checkTriggers(host: WorkflowHost): Promise<void> {
   const checked = [];
@@ -544,7 +565,11 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
     throw new FileStoreUnsupportedError(
       `Run-ended triggers (${bindings.map(entry => entry.file).join(', ')})`
     );
-  for (const entry of bindings) {
+  const problems = await runEndedTriggerCheck(bindings, {
+    ...host.deps,
+    projectKeyOf: cwd => registeredProjectKeyForPath(cwd, host.records.codebases),
+  });
+  for (const [index, entry] of bindings.entries()) {
     checked.push({
       file: entry.file,
       sourceInstanceId: entry.sourceInstanceId,
@@ -553,7 +578,7 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
       runEnded: entry.runEnded,
       workflowName: entry.binding.launch.workflowName,
       cwd: entry.binding.launch.cwd,
-      problems: await runEndedBindingCheck(entry, host.deps),
+      problems: problems[index],
     });
   }
   await writeJsonLine({ directory: triggersDirectory(), runEnded: checked });
