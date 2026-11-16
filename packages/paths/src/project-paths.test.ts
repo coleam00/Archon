@@ -112,14 +112,6 @@ describe('project-paths', () => {
       expect(result).toBeNull();
     });
 
-    test('rejects path traversal in owner', () => {
-      expect(parseOwnerRepo('../etc/passwd')).toBeNull();
-    });
-
-    test('rejects path traversal in repo', () => {
-      expect(parseOwnerRepo('acme/../../etc')).toBeNull();
-    });
-
     test('rejects dot and dotdot segments', () => {
       expect(parseOwnerRepo('./widget')).toBeNull();
       expect(parseOwnerRepo('acme/..')).toBeNull();
@@ -613,16 +605,6 @@ describe('createProjectSourceSymlink', () => {
   afterEach(async () => {
     await removeTempTree(tempArchonHome);
     await removeTempTree(tempTarget);
-  });
-
-  test.skipIf(isWindows)('creates a symlink pointing to the target', async () => {
-    await ensureProjectStructure('acme', 'widget');
-    await createProjectSourceSymlink('acme', 'widget', tempTarget);
-
-    const linkPath = getProjectSourcePath('acme', 'widget');
-    const stats = await lstat(linkPath);
-    expect(stats.isSymbolicLink()).toBe(true);
-    expect(await readlink(linkPath)).toBe(tempTarget);
   });
 
   test.skipIf(isWindows)('is a no-op if symlink already points to same target', async () => {

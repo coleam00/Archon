@@ -175,6 +175,7 @@ const source: ItemReadSource = {
     getWorkflowRunForAttention: async id => runs.get(id) ?? null,
     getCodebase: async () => null,
     getItem: async id => (id === item.id ? item : null),
+    listItemAsks: async () => [],
     listItemRulings: async id => (id === item.id ? rulings : []),
     listItemLinks: async id => (id === item.id ? links : []),
     getResourceStartRequest: async () => null,

@@ -330,6 +330,10 @@ The tables defined in `migrations/000_combined.sql` are prefixed with `remote_ag
   - Ending a link writes the `ended_*` columns once (`ended_at`, `ended_via`, who, and the calling run); the row is kept, never deleted. `ended_at` and `ended_via` are set together
   - While `ended_at` is null, `(from_item_id, to_item_id, kind)` is unique (a partial unique index), so an active link is stored once. A link joins two different items. The schema allows the two items to be in different projects; the CLI records links within one
   - `seq` orders links as they were recorded. `id` is text in both dialects
+- **`remote_agent_item_asks`** - Asks a completed run left on its item ([`returns.asks`](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item))
+  - Opened in the write that completes the run; `run_id` is the run that left the ask and names its set, `workflow_name` the run's workflow, `position` its place in the set and `ask` the JSON the run left
+  - Closes once: `closed_as` is `answered`, `withdrawn` or `replaced`, NULL while open. An answer or withdrawal sets `answer` (answers only), `closed_at`, `closed_via`, `closed_by_declared` or `closed_by_user_id`, and `closed_from_run_id` and `closed_from_node_path` (unverified); a replacement sets `closed_at` and `replaced_by_run_id`
+  - `run_id` has no foreign key, so run cleanup keeps the record: the item read takes its asks, their answers and its settled sets from these rows. `ask` and `answer` are read tolerantly, since more than one binary reads them. The `ask_answered`, `ask_withdrawn` and `asks_settled` events on the run that left the set notify readers of the run's event tail, and go with that run
 
 - **`remote_agent_start_receipt_bindings`** - Per-binding preparation state for a source receipt
   - Keyed by `(receipt_id, binding_id)`; deleted with the owning receipt

@@ -2114,7 +2114,7 @@ nodes:
   and still resolve as `$INPUTS.<name>` / `INPUTS_<UPPER_SNAKE>`, they are simply never checked
   against a declaration, because there isn't one.
 - **`returns:`**: the **node id** whose output IS the workflow's result, written
-  `returns: <id>` or `returns: { node: <id> }`. It selects by id, so it works for any node type
+  `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field> }`. It selects by id, so it works for any node type
   and even a **non-sink** node (a node other nodes depend on). For an `include:` block,
   `$blk.output` resolves to the `returns:` node; `depends_on: [blk]` still waits on every
   terminal node. For a `workflow:` sub-run child, the child's terminal output (threaded back as
@@ -2149,6 +2149,9 @@ nodes:
   lifecycle `status`: a run may be `completed` with outcome `failed`. Status still controls
   terminality, resume, cancellation, filtering, automation, and CLI exit codes.
 
+- **`returns.asks`**: a property of the `returns:` node's output, defined and required by the engine, that holds the
+  decisions the run leaves for an operator: its asks. See [Asks](#asks-decisions-a-run-leaves-on-its-item).
+
 An included workflow's outcome declaration never becomes the composer's outcome, and a
 `workflow:` child owns its outcome on its own run row; neither propagates implicitly to a parent.
 The run row carries two columns. `completed_outcome` holds the outcome of both forms, and is the
@@ -2168,6 +2171,72 @@ string), or its schema-certified `bash:` / `script:` output with `--exec-code`. 
 `expect` checks. Fixtures can independently assert the outcome with `fixture.authored`:
 `succeeded` or `failed` for the boolean form, the value for a named outcome. Generated
 placeholder stubs, including tolerated `all_done` joins, never decide an outcome.
+
+### Asks: decisions a run leaves on its item
+
+A stage that needs a decision it cannot make finishes its work and leaves an ask, instead of
+pausing mid-run. `returns: { node: decide, asks: asks }` names the property of the returns
+node's output that holds them. Nothing is inferred from a field's name: a workflow that does
+not declare `asks` keeps an `asks` field as ordinary data.
+
+The engine owns the ask schema (`packages/workflows/src/schemas/item-ask.ts`). Leave the
+property out of the node's `output_format`: when the workflow is resolved, the engine adds its
+schema there, so the provider call, output validation and a dry run all see it. The engine adds
+the property to the node's `required` too, and every field of an ask is required, because a
+provider in OpenAI strict mode (Codex) refuses an optional property. An empty list means there
+is nothing to decide, so a `bash:` or `script:` returns node emits `"asks": []` when it leaves
+none. An ask holds:
+
+- `question`: one sentence that can be answered by picking an option.
+- `context`: what is at stake and why it came up.
+- `options`: at least two, each with a kebab-case `id`, what it `does` and what it `cost`s.
+  The id `other` is reserved: every ask also offers it, answered with text.
+- `recommendation`: `{ option, why }`; `option` must name one of the ask's options.
+- `artifacts`: [artifact pointers](#a-small-result-that-points-at-a-large-file) the operator
+  should read to decide; empty when there are none.
+
+The schema's descriptions are how a node learns what an ask is, with no line in its prompt:
+providers receive the output schema whole (`json_schema` on Claude, `outputSchema` on Codex).
+Pi has no native structured output; its best-effort path sends the whole schema, descriptions
+included, as the `structured_output` tool's parameters and in the prompt. A node of a workflow
+that declares no asks sees none of this. The property's description reads:
+
+> Decisions you leave for an operator. Leave one when finishing your work needs a decision that is not yours to make: the work can be read two ways that lead to different changes; doing it means giving up something the project holds to; or the right answer depends on where the project is going or what it costs someone else. Do not leave one for a choice you can make yourself (make it and say why), for something the project already decided, for something you can find out by reading or running, for a doubt rather than a decision, or to ask permission to do your work. If nobody would choose differently from you, it is not an ask. Leave every decision you need, not only the first. What happens after: when this run completes, each ask opens for an operator on the item the run is for. The operator answers it (choosing an option, accepting the recommendation, or saying what to do instead) or withdraws it. When every ask is answered or withdrawn, the set is settled and the engine records it on the item. A later completed run of this workflow on the same item replaces the asks still open. Work that depends on an open ask should wait for its answer, not build on your recommendation. Leave the list empty when there is nothing to decide.
+
+A pack can say more in its own prompt, such as which decisions its project wants to be asked.
+
+The workflow fails to load, naming `returns.asks`, when it declares asks without a returns
+node, when the returns node has no object `output_format` the engine enforces, when the node
+is a `loop_group` or a fan-out node, when `asks` names the same property as `outcome`, or when
+the node's `output_format` declares that property itself (`the engine defines this property;
+remove it from output_format`).
+
+What the engine does with them:
+
+- **They belong to an item.** A top-level run of a workflow that declares asks, started with no
+  item, is refused before any node runs and cancelled as `precondition_failed`: start it with
+  `--item <key>`. The file store holds no items, so it refuses the run before it starts.
+- **They open with the completion.** When the run completes, its asks open on its item in the
+  same write that completes the run. A run that fails or is cancelled opens none, even when its
+  returns node ran. A value that is not a list of asks fails the run at its end, naming the
+  path, such as `returns.asks 'asks' on node 'decide': [0].recommendation.option names 'z',
+  which is not one of the ask's options`.
+- **Only a top-level run opens them.** A `workflow:` child has no item of its own; its asks stay
+  data in the result it hands its parent.
+- **A newer set replaces the open one.** A later completed run of the same workflow on the same
+  item closes that workflow's open asks as `replaced`, even when it leaves none itself.
+- **They are answered by ref.** Open asks are listed in the attention queue with no run behind
+  them, next to paused runs, and answered or withdrawn by their ref (`archon workflow answer
+  --ref`/`--withdraw`, `POST /api/attention/answer`, `POST /api/attention/withdraw`, or the chat
+  tool). Who may answer is the rule of the run that left the ask: its starter, or an admin.
+- **The run stays while its asks are open.** Deleting a run that left open asks is refused, and
+  run cleanup skips it, until each ask is answered or withdrawn: the run's starter decides who
+  may answer. Once they are closed the run may go; the item keeps its asks, their answers and
+  the settled set, and `archon workflow runs --item` still reads them.
+- **A set settles once.** When every ask a run left is answered or withdrawn, the engine records
+  `asks_settled` on that run once, with how many were `answered` and `withdrawn`; `answered: 0`
+  means every ask was withdrawn. Settling records a fact and starts nothing: no trigger binds to
+  it yet.
 
 ### Deterministic checks and run outcomes
 
@@ -2463,18 +2532,41 @@ bindings:
       actions: [opened]
     inputs:
       number: { event: subject.number }   # an event field; event bindings only
-  follow-up:                          # neither schedule nor event: fire-only
+  follow-up:                          # no schedule, event or run_ended: fire-only
     workflow: review-follow-up
     resource: follow-up
     overlap: queue
+  fix:
+    workflow: review-fix
+    resource: fix
+    overlap: queue
+    run_ended:                        # starts when a run of this pack's workflow ends
+      workflow: review-pull-request
+      outcome: [changes, blocked]     # one outcome, or a list: one file per outcome
+    inputs:
+      number: { input: number }       # one of the ended run's inputs; run-ended bindings only
+      findings: { result: /findings } # a JSON Pointer into the ended run's result
 ```
 
-A binding sets `schedule:` (a timer binding, written as a file
+A binding sets at most one of `schedule:` (a timer binding, written as a file
 `archon trigger fire --config` reads), `event:` (an entry for the GitHub source plugin's
-`bindings` array), or neither. With neither it is a
+`bindings` array) and `run_ended:`. With none it is a
 [fire-only binding](/guides/workflow-triggers/#start-a-binding-only-with-trigger-fire): the
 same file as a timer binding without a schedule, started only when a run or an operator fires
-it. Setting both is refused, and so is a `schedule:` or `event:` key with an invalid value.
+it. Setting more than one is refused, and so is a `schedule:`, `event:` or `run_ended:` key
+with an invalid value.
+
+A `run_ended:` binding is a
+[run-ended trigger file](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends):
+it starts its workflow on an item when a run of `run_ended.workflow`, a workflow of this pack,
+completes on that item with `run_ended.outcome`. `{ input: <name> }` and
+`{ result: <JSON Pointer> }` inputs read the ended run's inputs and result, as
+`on.runEnded.inputs` does; every other input is written as the start's own input.
+`archon pack bindings` writes one file per outcome, which the operator registers by copying it
+into the triggers directory, and refuses the whole set, writing nothing, when the ended workflow does not
+declare the outcome or an input read from it, or the started workflow does not declare an input
+mapped to it. A stage that needs both a clock and a hand-off declares two bindings with the
+same `workflow` and `resource`; they share the resource's slots and overlap policy.
 `capacity`, `overlap` and `isolation` mean what they mean in a
 [binding](/guides/workflow-triggers/#choose-a-resource-capacity-and-overlap-policy). The
 resource is written as `<pack>:<host>/<owner>/<name>:<resource>`, so bindings that declare the
@@ -2486,8 +2578,9 @@ binding's `capacity` applies to it. An omitted `capacity` means the workflow's d
 
 The declaration is validated when the pack loads, and an invalid one fails every workflow of
 the pack, naming the file and the binding. Beyond each binding's shape, a `{ binding: <id> }`
-input must name a declared timer or fire-only binding, and an `{ event: <field> }` input belongs to an
-event binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
+input must name a declared timer or fire-only binding, an `{ event: <field> }` input belongs to an
+event binding, and an `{ input: <name> }` or `{ result: <pointer> }` input to a run-ended
+binding. Bindings sharing a resource need not agree on its capacity. An `event:` selector
 and its fields are checked against the source plugin when a binding is generated, not at load.
 
 ## Launching a Separate Governed Run with `workflow:`

@@ -1,3 +1,4 @@
+// @archon-test-isolated
 import { setPlatformPolicies } from '@archon/core/platforms/registry';
 import { expect, spyOn, test } from 'bun:test';
 import { mkdtemp, mkdir, writeFile, realpath } from 'node:fs/promises';

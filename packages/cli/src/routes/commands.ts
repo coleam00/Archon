@@ -109,6 +109,8 @@ export async function runPack({
     host: text('host'),
     runAs: text('run-as'),
     out: text('out'),
+    config: text('config'),
+    workflowSource: text('workflow-source'),
     only: text('only'),
     force: values.force === true,
     json,

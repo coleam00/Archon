@@ -1,4 +1,4 @@
-/** Resolving who acts on an item, shared by rulings and links. */
+/** Resolving who acts on an item, shared by rulings, links and answers to asks. */
 import type { ItemAct } from '@archon/workflows/schemas/item-act';
 import type { RecordSurface } from '@archon/workflows/schemas/record-surface';
 import { attentionAnswererSchema } from '@archon/workflows/schemas/workflow-run';

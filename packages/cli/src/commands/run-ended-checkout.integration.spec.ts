@@ -1,3 +1,4 @@
+// @archon-test-isolated
 /**
  * A loop made of runs: build, then a read-only check on the built commit, then build again
  * on the same branch when the check returns it. Three run-ended bindings with

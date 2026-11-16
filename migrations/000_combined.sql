@@ -811,6 +811,33 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_links (
   CHECK ((ended_at IS NULL) = (ended_via IS NULL))
 );
 
+-- Asks: decisions a completed run left for an operator on its item (returns.asks). A row
+-- opens in the write that completes the run and closes once: answered, withdrawn, or
+-- replaced when a later completed run of the same workflow on the same item leaves its
+-- own set. run_id is the run that left it and names the set; like from_run_id on a
+-- ruling it has no foreign key, so run cleanup keeps the record. `ask` is the JSON the
+-- run left, read tolerantly because more than one binary reads it.
+-- closed_as is checked in code, not by a constraint: a later binary may close an ask in a
+-- way this one does not know, and a reader treats that row as unreadable, not as open.
+CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  run_id TEXT NOT NULL,
+  workflow_name TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  ask JSONB NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  closed_as TEXT,
+  answer JSONB,
+  closed_at TIMESTAMP WITH TIME ZONE,
+  closed_via TEXT,
+  closed_by_declared TEXT,
+  closed_by_user_id TEXT,
+  closed_from_run_id TEXT,
+  closed_from_node_path TEXT,
+  replaced_by_run_id TEXT
+);
+
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;
@@ -861,6 +888,11 @@ CREATE INDEX IF NOT EXISTS idx_item_links_from_item_id
   ON remote_agent_item_links(from_item_id);
 CREATE INDEX IF NOT EXISTS idx_item_links_to_item_id
   ON remote_agent_item_links(to_item_id);
+-- Item asks
+CREATE INDEX IF NOT EXISTS idx_item_asks_open
+  ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
+CREATE INDEX IF NOT EXISTS idx_item_asks_run_id
+  ON remote_agent_item_asks(run_id);
 
 -- Codebase env vars
 CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id

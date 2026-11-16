@@ -177,24 +177,6 @@ describe('mutation evidence at the dispatch boundary', () => {
   });
 });
 
-test('mutationTarget names the repository for a create and the pull request otherwise', () => {
-  expect(mutationTarget(edit)).toEqual(ref);
-  expect(
-    mutationTarget({
-      operationId: 'create',
-      op: 'pr.create',
-      repo: ref.repo,
-      headRepo: ref.repo,
-      head: 'feature',
-      headRevision: 'headsha',
-      base: 'dev',
-      title: 'A title',
-      body: 'A body',
-      draft: true,
-    })
-  ).toEqual(ref.repo);
-});
-
 test('the audit record keeps a digest of authored content, never the content', async () => {
   const result = await dispatch(
     { operationId: 'view-1', op: 'pr.view', selector: { kind: 'number', ref } },

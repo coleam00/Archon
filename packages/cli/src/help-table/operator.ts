@@ -43,6 +43,14 @@ export const operatorHelp: HelpGroup = {
           spec: '--cwd <checkout>',
           description: 'The checkout the runs launch in and the pack is read from',
         },
+        {
+          spec: '--config <file>',
+          description: 'A run config every written binding launches with (model aliases)',
+        },
+        {
+          spec: '--workflow-source <dir>',
+          description: "Where the pack's workflows are found when it is not in the checkout",
+        },
         { spec: '--only <id,...>', description: 'Write only these bindings' },
         { spec: '--force', description: 'Replace binding files that already exist' },
       ],

@@ -78,6 +78,11 @@ async function confirmedRunContainer(
   return envId;
 }
 
+/** Only a running run has live work for cancel to stop. */
+export function isCancellableRun(run: Pick<WorkflowRun, 'status'>): boolean {
+  return run.status === 'running';
+}
+
 /**
  * Cancel a running run, the same way on every surface.
  *
@@ -96,7 +101,7 @@ export async function cancelWorkflow(
 ): Promise<CancelWorkflowResult> {
   const run = await ctx.getRunOrThrow(runId, 'operations.workflow_cancel_lookup_failed');
   await ctx.assertMayAct(run, actor, 'cancel');
-  if (run.status !== 'running') {
+  if (!isCancellableRun(run)) {
     throw new CancelRefusedError(
       'not_running',
       `Cannot cancel run with status '${run.status}'. Only a running run has live work to stop; ` +

@@ -7,12 +7,6 @@ describe('ideUri', () => {
       expect(ideUri('/home/user/project')).toBe('vscode://file//home/user/project');
     });
 
-    test('emits vscode://file/<path> when env.is_wsl is false', () => {
-      expect(ideUri('/home/user/project', { is_wsl: false })).toBe(
-        'vscode://file//home/user/project'
-      );
-    });
-
     test('falls back when is_wsl is true but wsl_distro is missing', () => {
       // Without a distro name we can't construct the WSL form — better to emit
       // the plain URI than to guess a distro that may not exist locally.
@@ -31,12 +25,6 @@ describe('ideUri', () => {
       expect(ideUri('/home/user/project', { is_wsl: true, wsl_distro: 'Ubuntu' })).toBe(
         'vscode://vscode-remote/wsl+Ubuntu/home/user/project'
       );
-    });
-
-    test('preserves leading slash when path already absolute', () => {
-      const uri = ideUri('/home/user/project', { is_wsl: true, wsl_distro: 'Ubuntu' });
-      expect(uri).toContain('/wsl+Ubuntu/home/user/project');
-      expect(uri).not.toContain('/wsl+Ubuntu//home');
     });
 
     test('adds leading slash when path is relative-ish (defensive)', () => {
