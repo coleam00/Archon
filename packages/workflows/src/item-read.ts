@@ -344,6 +344,11 @@ export async function readItem(
   projectKey: string,
   key: string
 ): Promise<ItemRead | null> {
+  const resolved = await readItemRuns(source.store, projectKey, key);
+  if (resolved === null) return null;
+  // Queued starts first, then the runs: a start admitted between the two reads then shows
+  // in both (its run id is its request id), and is listed once as a run, never in neither.
+  const waiting = await source.store.listQueuedItemStarts(resolved.item.id);
   const found = await readItemRuns(source.store, projectKey, key);
   if (found === null) return null;
   const own = { values: found.runs, degraded: found.degraded };
@@ -384,7 +389,7 @@ export async function readItem(
   return {
     item: found.item,
     runs: await Promise.all(own.values.map(run => itemRun(source, run))),
-    queued: await source.store.listQueuedItemStarts(found.item.id),
+    queued: waiting.filter(start => !tree.has(start.requestId)),
     questions,
     answers,
     links,

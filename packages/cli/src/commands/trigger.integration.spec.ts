@@ -350,7 +350,7 @@ describe('trigger CLI durable execution', () => {
     // The first run fires one follow-up start and names no item for it, then holds the
     // slot until the test releases it, so the follow-up stays queued meanwhile.
     fixture.writeWorkflow(
-      `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --config '${configPath}'; until [ -e '${release}' ]; do sleep 0.1; done; }`
+      `[ -e '${fired}' ] || { touch '${fired}'; '${process.execPath}' '${fixture.cliPath}' trigger fire --config '${configPath}'; for _ in $(seq 600); do [ -e '${release}' ] && break; sleep 0.1; done; [ -e '${release}' ] || exit 1; }`
     );
     const invoke = (args: string[], expectSuccess?: boolean) =>
       runCli(fixture.cliPath, fixture.projectRoot, fixture.archonHome, args, expectSuccess);

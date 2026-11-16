@@ -172,7 +172,13 @@ test('an item read prints a start waiting for capacity with the id that withdraw
   expect(section).toHaveLength(2);
   expect(section[0]).toContain('b6f1c2d4-0000-4000-8000-000000000001');
   expect(section[0]).toContain('build');
-  expect(section[0]).toContain('12 ahead');
+  expect(section[0]).toContain('12 ahead on host host');
+  // The host that must drain the start shows when it is next, too.
+  const next = itemReadLines({
+    ...read,
+    queued: read.queued.map(start => ({ ...start, ahead: 0 })),
+  });
+  expect(next.find(line => line.includes('b6f1c2d4'))).toContain('on host host');
   const empty = itemReadLines({ ...read, queued: [] });
   expect(empty[empty.indexOf('Waiting for capacity:') + 1]).toBe('  none');
 });

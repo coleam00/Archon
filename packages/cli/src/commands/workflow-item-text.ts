@@ -80,7 +80,7 @@ function runLines(run: ItemRun): string[] {
 function queuedLine(start: QueuedItemStart): string {
   const waits =
     start.ahead === 0
-      ? 'next for a free slot'
+      ? `next for a free slot on host ${start.hostId}`
       : `${String(start.ahead)} ahead on host ${start.hostId}`;
   return `  ${start.requestId}  ${start.workflow ?? '(launch unreadable)'}  on ${start.resource}, ${waits}, queued ${minute(start.queuedAt)}`;
 }

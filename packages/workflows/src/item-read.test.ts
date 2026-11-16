@@ -362,6 +362,36 @@ describe('reading an item', () => {
     });
   });
 
+  test('a start admitted while the item is read is listed once, as a run', async () => {
+    const admitted: WorkflowRun = { ...first, id: 'admitted', status: 'pending', metadata: {} };
+    let reads = 0;
+    const racing: ItemReadSource = {
+      ...source,
+      store: {
+        ...source.store,
+        // The start is admitted after the first read: the next read has its run.
+        getItemRuns: async () => ({
+          item,
+          runs: reads++ === 0 ? [] : [admitted],
+          descendantIds: [],
+        }),
+        listQueuedItemStarts: async () => [
+          {
+            requestId: 'admitted',
+            workflow: 'deliver',
+            resource: 'build',
+            hostId: 'host',
+            queuedAt: '2026-11-01T11:05:00.000Z',
+            ahead: 0,
+          },
+        ],
+      },
+    };
+    const read = await readItem(racing, item.projectKey, item.key);
+    expect(read?.runs.map(run => run.id)).toEqual(['admitted']);
+    expect(read?.queued).toEqual([]);
+  });
+
   test('links read from this item: outgoing to what it points at, incoming from what points at it', async () => {
     const read = await readItem(source, item.projectKey, item.key);
     expect(read?.links).toEqual([
