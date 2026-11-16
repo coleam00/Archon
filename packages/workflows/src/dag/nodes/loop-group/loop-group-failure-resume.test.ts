@@ -279,6 +279,20 @@ test('a group that ran out of rounds fails again on resume without a new round',
     );
   }));
 
+test('a group that failed mid-round runs out of rounds at max_iterations across the resume', () =>
+  inTempRoot(async root => {
+    const result = await stopThenResume(root, { group: {}, failOnce: true });
+    expect(result.counterAfterFirstRun).toBe('2');
+    expect(result.status).toBe('failed');
+    // Rounds 2 and 3 only: round one's use still counts against max_iterations: 3.
+    expect(result.counter).toBe('4');
+    expect(result.iterations).toEqual([1, 2, 2, 3]);
+    const lifecycle = result.lastGroupRecord?.metadata?.lifecycle;
+    expect(lifecycle?.status === 'failed' ? lifecycle.failureKind : undefined).toBe(
+      'max_iterations'
+    );
+  }));
+
 test('a group stopped after its first body node resumes in that round', () =>
   inTempRoot(async root => {
     const result = await stopThenResume(root, {
