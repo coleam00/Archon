@@ -6298,6 +6298,9 @@ export interface components {
     RunsNeedingAttentionResponse: {
       runs: components['schemas']['DashboardWorkflowRun'][];
       items: components['schemas']['AttentionQueueItem'][];
+      answerRefusals: {
+        [key: string]: string;
+      };
       degraded?: {
         /** @enum {string} */
         type: 'degraded';
