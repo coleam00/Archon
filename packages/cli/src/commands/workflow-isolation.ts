@@ -141,9 +141,6 @@ function folderWorktreeOptionError(): Error {
  * Warn that `--base` is only HALF applied when an existing worktree is adopted
  * by `--branch` reuse: its cut-from is already fixed, but the
  * override still reaches `$BASE_BRANCH` and retargets the PR.
- *
- * Deliberately not `--from`'s "was not applied" wording — that is accurate for
- * `--from`, which is wholly inert on reuse, and would understate this case.
  */
 export function warnBaseOverrideOnReuse(workingPath: string, flagBase: string): void {
   getLog().warn(
@@ -603,25 +600,14 @@ async function containerMounts(
 
 /**
  * Warn about what an explicit `--branch` reuse of a healthy worktree does not apply:
- * `--from`, a `--base` cut-from, and a base the worktree was not cut from.
+ * a `--base` cut-from, and a base the worktree was not cut from.
  */
 export async function warnOnReusedWorktree(
   existingEnv: IsolationEnvironmentRow,
   codebase: Codebase,
-  options: WorkflowRunOptions,
   flagBase: string | undefined,
   codebaseDefaultBranch: string | undefined
 ): Promise<void> {
-  if (options.fromBranch) {
-    getLog().warn(
-      { path: existingEnv.working_path, fromBranch: options.fromBranch },
-      'worktree.reuse_from_branch_ignored'
-    );
-    console.warn(
-      `Warning: Reusing existing worktree at ${existingEnv.working_path}. ` +
-        `--from ${options.fromBranch} was not applied (worktree already exists).`
-    );
-  }
   if (flagBase) {
     warnBaseOverrideOnReuse(existingEnv.working_path, flagBase);
   }

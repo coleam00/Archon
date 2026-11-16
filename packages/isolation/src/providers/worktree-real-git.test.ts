@@ -1341,6 +1341,41 @@ describe('WorktreeProvider against real git', () => {
     expect(recreated.metadata.creationId).not.toBe(fresh.metadata.creationId);
   });
 
+  test('target-path reuse refuses a --from outside the worktree history and keeps one inside it', async () => {
+    await git(repoPath, 'remote', 'add', 'origin', repoPath);
+    const oldBase = (await git(repoPath, 'rev-parse', 'HEAD')).trim();
+    const reuseRequest = (fromBranch: string): IsolationRequest => ({
+      ...request,
+      workflowType: 'task',
+      taskBranch: {
+        kind: 'new',
+        branch: toBranchName('factory/x'),
+        fromBranch: toBranchName(fromBranch),
+      },
+    });
+    const { workingPath: target } = await provider.create(reuseRequest(oldBase));
+    await writeFile(join(target, 'work.txt'), 'branch work\n');
+    await git(target, 'add', 'work.txt');
+    await git(target, 'commit', '-qm', 'branch work');
+    await writeFile(join(repoPath, 'merged.txt'), 'merged on main\n');
+    await git(repoPath, 'add', 'merged.txt');
+    await git(repoPath, 'commit', '-qm', 'main moves on');
+    await writeFile(join(target, 'README.md'), 'operator edits\n');
+    const head = await git(target, 'rev-parse', 'HEAD');
+    const status = await git(target, 'status', '--porcelain');
+
+    const failure = await typedFailure(provider.create(reuseRequest('main')));
+    expect(failure.kind).toBe('branch_exists');
+    expect(failure.message).toContain(`worktree at ${target}`);
+    expect(failure.message).toContain(`based on ${oldBase.slice(0, 12)}`);
+    expect(failure.message).toContain('--from main');
+    expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);
+    expect((await git(target, 'branch', '--show-current')).trim()).toBe('factory/x');
+    expect(await git(target, 'status', '--porcelain')).toBe(status);
+
+    expect((await provider.create(reuseRequest(oldBase))).workingPath).toBe(target);
+  });
+
   test('marker write failure rolls back the locked setup and retains trust', async () => {
     const config = process.env.GIT_CONFIG_GLOBAL;
     if (!config) throw new Error('Scratch global config missing');
