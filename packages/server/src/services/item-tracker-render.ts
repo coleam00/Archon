@@ -94,7 +94,7 @@ function cell(value: string): string {
   return value.replace(/\s+/g, ' ').replaceAll('|', '\\|');
 }
 
-/** A comment posted once: its marker, its body and the ledger key that records it. */
+/** A marked comment: the marker the upsert finds it by, and its body. */
 export interface TrackerComment {
   marker: string;
   body: string;
