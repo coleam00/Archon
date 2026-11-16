@@ -22,19 +22,19 @@
  *   bun run check:schema-upgrades v0.7.0 HEAD~50
  *
  * Connection: the check creates and drops databases, so it only touches a server
- * someone named for it. Name one with PGHOST, PGHOSTADDR, PGSERVICE or
- * DATABASE_URL (a DATABASE_URL keeps its options; its database name is replaced).
- * PGPORT, PGUSER and PGPASSWORD refine a named server but do not name one: on
- * their own psql still reaches the default local socket, which is whatever
- * PostgreSQL happens to run on the machine. With no server named, the script
- * starts a throwaway PostgreSQL (initdb + pg_ctl, socket-only, in a temp dir),
- * runs against it, then stops it and deletes it. The package script passes
+ * someone named for it, and exits 1 before any psql call otherwise. Name one
+ * with PGHOST, PGHOSTADDR, PGSERVICE, or a DATABASE_URL that carries a host
+ * (in the authority, or as a host/hostaddr/service parameter). A DATABASE_URL
+ * keeps its options; its database name is replaced. PGPORT, PGUSER, PGPASSWORD
+ * and a hostless DATABASE_URL refine a named server but do not name one: on
+ * their own psql reaches the default local socket, which is whatever
+ * PostgreSQL happens to run on the machine. The package script passes
  * `--no-env-file`, so a DATABASE_URL in `.env` is not taken as a name.
  */
-import { type SpawnSyncReturns, spawn, spawnSync } from 'child_process';
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'fs';
+import { spawnSync } from 'child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
-import { delimiter, join, resolve } from 'path';
+import { join, resolve } from 'path';
 import { defaultBaselines, SCHEMA_REPO_PATH } from './schema-upgrade-baselines';
 
 const SCHEMA_PATH = resolve(import.meta.dir, '..', SCHEMA_REPO_PATH);
@@ -200,170 +200,46 @@ function dbNameFor(ref: string): string {
   return `archon_upgrade_${ref.replace(/[^a-zA-Z0-9]/g, '_').toLowerCase()}`;
 }
 
-/** True when the caller picked a server; see the Connection note in the header. */
-function serverNamed(): boolean {
-  return ['DATABASE_URL', 'PGHOST', 'PGHOSTADDR', 'PGSERVICE'].some(k => !!process.env[k]);
-}
+/** Settings other than DATABASE_URL that pick a server for psql. */
+const SERVER_KEYS = ['PGHOST', 'PGHOSTADDR', 'PGSERVICE'] as const;
 
 /**
- * The bin dir holding initdb and pg_ctl, or undefined. PATH first, then
- * `pg_config --bindir` (Debian and Homebrew keg installs keep the server
- * binaries off PATH). The dir is put first on PATH so initdb, pg_ctl and psql
- * all come from one install.
+ * Why the run must not start, or undefined when a server is named. See the
+ * Connection note in the header for what counts as naming one.
  */
-function findServerBinDir(): string | undefined {
-  if (!spawnSync('initdb', ['--version']).error && !spawnSync('pg_ctl', ['--version']).error) {
-    return '';
+function unnamedServerError(): string | undefined {
+  const envNamesServer = SERVER_KEYS.some(k => !!process.env[k]);
+  const url = process.env.DATABASE_URL;
+  const fix =
+    'This check creates and drops databases, so it only runs on a scratch server you name:\n' +
+    '  PGHOST=<host or socket dir> PGUSER=<user> bun run check:schema-upgrades\n' +
+    '  DATABASE_URL=postgres://<user>@<host>:<port>/postgres bun run check:schema-upgrades';
+  if (url && !envNamesServer && !urlNamesServer(url)) {
+    return `DATABASE_URL names no host, so psql would use the default local socket.\n${fix}`;
   }
-  const cfg = spawnSync('pg_config', ['--bindir'], { encoding: 'utf8' });
-  if (cfg.error || cfg.status !== 0) return undefined;
-  const dir = cfg.stdout.trim();
-  return existsSync(join(dir, 'initdb')) && existsSync(join(dir, 'pg_ctl')) ? dir : undefined;
+  if (!url && !envNamesServer) return `No PostgreSQL server was named.\n${fix}`;
+  return undefined;
 }
 
 /**
- * Data dir of the throwaway server this run started, if any. Its own short temp
- * dir, separate from workDir: the socket lives there and macOS caps a socket
- * path at about 103 bytes.
+ * Whether a DATABASE_URL picks a server itself: a host in the authority, or a
+ * host/hostaddr/service query parameter. A URI `URL` cannot parse counts as
+ * naming one; connectionFor() reports it on first use, as before.
  */
-let throwaway: { dir: string; data: string } | undefined;
-
-// macOS: without a C locale initdb rejects the locale and the postmaster dies
-// with "postmaster became multithreaded during startup".
-const serverEnv = (): NodeJS.ProcessEnv => ({ ...process.env, LC_ALL: 'C' });
-
-function startThrowawayServer(): void {
-  const bin = findServerBinDir();
-  if (bin === undefined) {
-    console.error(
-      'No PostgreSQL server was named, and no initdb/pg_ctl was found to start a throwaway one.\n' +
-        'This check creates and drops databases, so it will not fall back to the default local socket.\n' +
-        'Install the PostgreSQL server binaries, or name a scratch server you own:\n' +
-        '  PGHOST=<host or socket dir> PGUSER=<user> bun run check:schema-upgrades\n' +
-        '  DATABASE_URL=postgres://user@host:port/any bun run check:schema-upgrades'
-    );
-    process.exit(1);
-  }
-  if (bin) process.env.PATH = `${bin}${delimiter}${process.env.PATH ?? ''}`;
-
-  const dir = mkdtempSync(join(tmpdir(), 'archon-pg-'));
-  const data = join(dir, 'data');
-  // Before any step that can leave something behind, so no exit is uncovered.
-  watchThrowawayServer(dir, data);
-
-  // The client settings are set before startup too: pg_ctl and the postmaster
-  // read PGPORT, so an inherited one would put the server on a port psql does
-  // not use. DATABASE_URL is unset on this path.
-  process.env.PGHOST = dir;
-  process.env.PGPORT = '5432';
-  process.env.PGUSER = 'postgres';
-  delete process.env.PGPASSWORD;
-
-  const init = startupStep(dir, [
-    'initdb',
-    '-D',
-    data,
-    '-U',
-    'postgres',
-    '--auth=trust',
-    '-E',
-    'UTF8',
-    '--no-sync',
-  ]);
-  if (init.error || init.status !== 0) {
-    rmSync(dir, { recursive: true, force: true });
-    console.error(`initdb failed for the throwaway server:\n${init.error?.message ?? init.stderr}`);
-    process.exit(1);
-  }
-
-  throwaway = { dir, data };
-  const log = join(dir, 'server.log');
-  const start = startupStep(dir, [
-    'pg_ctl',
-    '-D',
-    data,
-    '-l',
-    log,
-    '-w',
-    '-o',
-    `-c listen_addresses='' -c unix_socket_directories='${dir}' -c port=5432 -c fsync=off`,
-    'start',
-  ]);
-  if (start.error || start.status !== 0) {
-    console.error(`the throwaway server did not start:\n${start.error?.message ?? start.stderr}`);
-    if (existsSync(log)) console.error(readFileSync(log, 'utf8'));
-    stopThrowawayServer();
-    process.exit(1);
-  }
-
-  console.log(`no server named: using a throwaway PostgreSQL in ${dir}\n`);
-}
-
-/**
- * Runs initdb or pg_ctl start with its PID recorded in `<dir>/startup.pid`
- * (`exec` keeps the shell's PID), so the watcher can wait for a step this
- * process left running when it died.
- */
-function startupStep(dir: string, argv: string[]): SpawnSyncReturns<string> {
-  return spawnSync('sh', ['-c', 'echo $$ > "$0/startup.pid" && exec "$@"', dir, ...argv], {
-    encoding: 'utf8',
-    env: serverEnv(),
-  });
-}
-
-/**
- * Covers the exits the `finally` below cannot: Ctrl-C and SIGTERM kill this
- * process outright, because Bun runs a signal handler only after synchronous
- * code returns, and this script is synchronous to the end. initdb and pg_ctl
- * outlive a killed parent, and pg_ctl detaches the postmaster, so the server
- * would outlive us. A detached shell waits for this PID to go away, then for
- * any startup step still running (its PID is in startup.pid), then stops the
- * server through pg_ctl and removes the dir. On a normal exit
- * `stopThrowawayServer` has already done both and the watcher finds the dir gone.
- */
-function watchThrowawayServer(dir: string, data: string): void {
-  const script =
-    'while kill -0 "$1" 2>/dev/null; do sleep 1; done; ' +
-    '[ -d "$2" ] || exit 0; ' +
-    'while [ -f "$2/startup.pid" ] && kill -0 "$(cat "$2/startup.pid")" 2>/dev/null; do sleep 1; done; ' +
-    'if [ -f "$3/postmaster.pid" ]; then pg_ctl -D "$3" -m fast -w stop >/dev/null 2>&1 || exit 1; fi; ' +
-    'rm -rf "$2"';
-  spawn('sh', ['-c', script, 'sh', String(process.pid), dir, data], {
-    detached: true,
-    stdio: 'ignore',
-    env: serverEnv(),
-  }).unref();
-}
-
-/**
- * Stops the throwaway server through pg_ctl, which signals the PID recorded in
- * postmaster.pid, then removes its dir. If the stop fails the dir is kept: it
- * holds that PID, which the operator needs to stop the server by hand.
- * Returns false when a server was left running. Idempotent.
- */
-function stopThrowawayServer(): boolean {
-  if (!throwaway) return true;
-  const { dir, data } = throwaway;
-  throwaway = undefined;
-  const pidFile = join(data, 'postmaster.pid');
-  if (!existsSync(pidFile)) {
-    rmSync(dir, { recursive: true, force: true });
+function urlNamesServer(url: string): boolean {
+  let u: URL;
+  try {
+    u = new URL(url);
+  } catch {
     return true;
   }
-  const stop = spawnSync('pg_ctl', ['-D', data, '-m', 'fast', '-w', 'stop'], {
-    encoding: 'utf8',
-    env: serverEnv(),
-  });
-  if (!stop.error && stop.status === 0) {
-    rmSync(dir, { recursive: true, force: true });
-    return true;
-  }
-  const pid = readFileSync(pidFile, 'utf8').split('\n')[0];
-  console.error(
-    `could not stop the throwaway PostgreSQL (pid ${pid}, data dir ${data}, log ${join(dir, 'server.log')}):\n` +
-      `${stop.error?.message ?? stop.stderr}\nStop it with: pg_ctl -D ${data} stop`
-  );
-  return false;
+  return !!u.hostname || ['host', 'hostaddr', 'service'].some(k => !!u.searchParams.get(k));
+}
+
+const unnamed = unnamedServerError();
+if (unnamed) {
+  console.error(unnamed);
+  process.exit(1);
 }
 
 const requested = process.argv.slice(2).filter(a => !a.startsWith('-'));
@@ -372,9 +248,6 @@ if (refs.length === 0) {
   console.error('no baseline refs to test (no release tags carry the schema file)');
   process.exit(1);
 }
-
-// Started after the early exit above, so that exit cannot leave a server behind.
-if (!serverNamed()) startThrowawayServer();
 
 const workDir = mkdtempSync(join(tmpdir(), 'archon-schema-upgrade-'));
 let failures = 0;
@@ -498,7 +371,6 @@ try {
     if (r.code !== 0) console.error(`warning: could not drop scratch database ${db}\n${r.out}`);
   }
   rmSync(workDir, { recursive: true, force: true });
-  if (!stopThrowawayServer()) failures++;
 }
 
 // The exception above must keep describing real drift, or it is a hole that
