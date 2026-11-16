@@ -232,18 +232,24 @@ async function answerCheck(input: ForgeInput, context: ForgeCommandContext): Pro
     credentialEnv: env,
   });
   if (!check.ok) {
-    const { error, unsupported } = check;
-    await write({ operationId, ok: false, error, ...(unsupported ? { unsupported } : {}) });
+    const { error, unsupported, remedy } = check;
+    await write({
+      operationId,
+      ok: false,
+      error,
+      ...(unsupported ? { unsupported } : {}),
+      ...(remedy ? { remedy } : {}),
+    });
     return 1;
   }
-  const { plugin, credentialSource } = check;
+  const { host, plugin, credentialSource } = check;
   await write({
     operationId,
     ok: true,
     result: {
       op: 'check',
       value: {
-        host: request.host.toLowerCase(),
+        host,
         plugin,
         operations: request.operations,
         ...(credentialSource ? { credentialSource } : {}),

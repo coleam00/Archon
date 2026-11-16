@@ -134,6 +134,12 @@ export const pluginMetadataSchema = pluginIdentitySchema.extend({
   hosts: z.array(z.string().min(1)),
   capabilities: z.array(z.string().min(1)),
   token_env: z.array(z.string().min(1)).default([]),
+  // The operator's next step when `forge check` refuses for this plugin; forge supplies
+  // generic text for a plugin that states none.
+  remedies: z
+    .object({ unsupported_op: z.string().min(1), no_credential: z.string().min(1) })
+    .partial()
+    .optional(),
 });
 export type PluginMetadata = z.infer<typeof pluginMetadataSchema>;
 /**

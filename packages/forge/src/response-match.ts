@@ -93,8 +93,12 @@ function matchesResolvedHost(request: ForgeRequest, observed: string, host: stri
 /** The bare host an HTTPS remote on the default port names, or undefined for any other remote. */
 export function httpsDefaultPortHost(request: ForgeRequest): string | undefined {
   if (request.op !== 'resolve' || !request.remote) return undefined;
+  return httpsDefaultPortRemoteHost(request.remote);
+}
+
+export function httpsDefaultPortRemoteHost(remote: string): string | undefined {
   try {
-    const { url, host } = parseRemoteUrl(request.remote.trim());
+    const { url, host } = parseRemoteUrl(remote.trim());
     // HTTPS :443 used to select bare-host claims before explicit ports were preserved.
     if (url.protocol === 'https:' && host === `${url.hostname}:443`) {
       return normalizeHost(url.hostname);

@@ -669,7 +669,11 @@ test('forge check exits 1 with a typed reason for a missing plugin, capability o
 
   const unclaimed = await checkForge({ host: 'other.example', operations: [] }, env);
   expect(unclaimed.code).toBe(1);
-  expect(unclaimed.response).toMatchObject({ ok: false, error: { kind: 'no_plugin_for_host' } });
+  expect(unclaimed.response).toMatchObject({
+    ok: false,
+    error: { kind: 'no_plugin_for_host' },
+    remedy: expect.stringContaining('archon plugin add'),
+  });
 
   // Capabilities are refused before the credential is read, so the absent token is not the reason.
   const unsupported = await checkForge(
@@ -679,8 +683,10 @@ test('forge check exits 1 with a typed reason for a missing plugin, capability o
   expect(unsupported.code).toBe(1);
   expect(unsupported.response).toMatchObject({
     ok: false,
-    error: { kind: 'unsupported_op', message: 'plugin test does not support pr.merge' },
+    error: { kind: 'unsupported_op', message: 'plugin test 1.0.0 does not support pr.merge' },
     unsupported: ['pr.merge'],
+    // The test plugin states no remedies, so forge names the generic step.
+    remedy: expect.stringContaining('archon plugin update'),
   });
 
   const noCredential = await checkForge(
@@ -688,7 +694,32 @@ test('forge check exits 1 with a typed reason for a missing plugin, capability o
     env
   );
   expect(noCredential.code).toBe(1);
-  expect(noCredential.response).toMatchObject({ ok: false, error: { kind: 'no_credential' } });
+  expect(noCredential.response).toMatchObject({
+    ok: false,
+    error: { kind: 'no_credential' },
+    remedy: expect.stringContaining('TEST_FORGE_TOKEN'),
+  });
+});
+
+test('forge check by remote selects the plugin a resolve of that remote selects', async () => {
+  const root = trackTempRoot(mkdtempSync(join(tmpdir(), 'forge-check-')));
+  const env = { HOME: root, ARCHON_HOME: root, PATH: '', TEST_FORGE_TOKEN: 'secret-token-value' };
+
+  for (const remote of ['git@forge.example:a/b.git', 'https://u:p@forge.example:443/a/b']) {
+    const { code, response } = await checkForge({ remote, operations: ['checks.state'] }, env);
+    expect(code).toBe(0);
+    expect(response).toMatchObject({
+      ok: true,
+      result: { op: 'check', value: { host: 'forge.example', plugin: { name: 'test' } } },
+    });
+  }
+
+  const local = await checkForge({ remote: '/srv/git/repo.git', operations: [] }, env);
+  expect(local.response).toMatchObject({ ok: false, error: { kind: 'no_plugin_for_host' } });
+  expect(JSON.stringify(local.response)).not.toContain('/srv/git');
+
+  const both = await checkForge({ host: 'forge.example', remote: 'git@forge.example:a/b' }, env);
+  expect(both.response).toMatchObject({ ok: false, error: { kind: 'invalid_request' } });
 });
 
 test('forge check under a source checkout answers for the source GitHub plugin', async () => {
@@ -713,4 +744,25 @@ test('forge check under a source checkout answers for the source GitHub plugin',
     },
   });
   expect(code).toBe(0);
+});
+
+test('forge check carries the GitHub plugin remedy for a missing credential', async () => {
+  const home = homeWithUnusableInstalledGithubPlugin();
+  const output: unknown[] = [];
+  await forgeCommand(
+    'check',
+    { data: JSON.stringify({ remote: 'git@github.com:o/r.git', operations: ['pr.view'] }) },
+    {
+      env: { HOME: home, ARCHON_HOME: home, PATH: '', GH_TOKEN: '' },
+      readConfig: async () => ({ scanPath: false }),
+      write: async value => {
+        output.push(value);
+      },
+    }
+  );
+  expect(output[0]).toMatchObject({
+    ok: false,
+    error: { kind: 'no_credential' },
+    remedy: expect.stringContaining('archon auth github'),
+  });
 });

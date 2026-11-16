@@ -1446,11 +1446,16 @@ declare module 'archon:script' {
         readonly hosts: ReadonlyArray<string>;
         readonly capabilities: ReadonlyArray<string>;
         readonly token_env: ReadonlyArray<string>;
+        readonly remedies?: {
+          readonly unsupported_op?: string;
+          readonly no_credential?: string;
+        };
       };
     };
     'check': {
       readonly request: {
-        readonly host: string;
+        readonly host?: string;
+        readonly remote?: string;
         readonly operations: ReadonlyArray<string>;
       };
       readonly result: {
@@ -1731,6 +1736,7 @@ declare module 'archon:script' {
     };
     readonly credentialSource?: string;
     readonly unsupported?: ReadonlyArray<string>;
+    readonly remedy?: string;
   };
 
   /** A document's lease; `live` says whether its run still owns it. */
