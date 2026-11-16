@@ -103,6 +103,7 @@ describe('resolveProjectPaths', () => {
     expect(result.artifactsDir).toBe(wsPath('acme', 'widget', 'artifacts', 'runs', 'run-xyz'));
     expect(result.stateDir).toBe(wsPath('acme', 'widget', 'state'));
     expect(result.outputRoot).toBe(wsPath('acme', 'widget'));
+    expect(result.identityFaulted).toBe(false);
   });
 
   // The retry addresses the TRANSIENT case only. A sustained fault must still reach the

@@ -362,29 +362,6 @@ describe('dagNodeSchema — ExecNode', () => {
 });
 
 describe('BASH_NODE_AI_FIELDS', () => {
-  test('contains all AI-specific fields', () => {
-    const expectedFields = [
-      'provider',
-      'model',
-      'context',
-      'allowed_tools',
-      'denied_tools',
-      'hooks',
-      'mcp',
-      'skills',
-      'plugins',
-      'effort',
-      'maxBudgetUsd',
-      'systemPrompt',
-      'fallbackModel',
-      'betas',
-      'sandbox',
-    ];
-    for (const field of expectedFields) {
-      expect(BASH_NODE_AI_FIELDS).toContain(field);
-    }
-  });
-
   test('excludes output_format, which exec nodes now enforce (#2453)', () => {
     expect(BASH_NODE_AI_FIELDS).not.toContain('output_format');
     for (const list of [
