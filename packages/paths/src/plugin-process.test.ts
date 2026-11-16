@@ -314,10 +314,13 @@ describe.skipIf(process.platform === 'win32')('terminateTree POSIX', () => {
   let kill: ReturnType<typeof spyOn<typeof process, 'kill'>>;
   const refused = Object.assign(new Error('signal refused'), { code: 'EPERM' });
   const originalLevel = getLogLevel();
+  let lines: string[];
   beforeEach(() => {
+    lines = [];
     setLogLevel('info');
-    // Inspection failures log a warning; keep it out of the test output.
-    setLogSink(() => {});
+    setLogSink(line => {
+      lines.push(line);
+    });
     kill = spyOn(process, 'kill').mockImplementation(() => {
       throw refused;
     });
@@ -350,6 +353,15 @@ describe.skipIf(process.platform === 'win32')('terminateTree POSIX', () => {
   ])('retains original EPERM for live or ambiguous listing %p', async listing => {
     await expect(terminateTree(12, undefined, async () => listing)).rejects.toBe(refused);
     expect(kill.mock.calls).toEqual([[-12, 'SIGKILL']]);
+  });
+
+  test('logs failed inspection and retains EPERM', async () => {
+    await expect(
+      terminateTree(12, undefined, async () => {
+        throw new Error('ps failed');
+      })
+    ).rejects.toBe(refused);
+    expect(lines.map(line => JSON.parse(line).msg)).toEqual(['process_group_inspection_failed']);
   });
 
   test('retains EPERM when inspection and logging both fail', async () => {
