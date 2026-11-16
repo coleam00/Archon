@@ -399,6 +399,9 @@ export function createInMemoryWorkflowStore(
     listItemRulings: unsupported,
     recordItemRuling: unsupported,
     withdrawItemRuling: unsupported,
+    listItemLinks: unsupported,
+    recordItemLink: unsupported,
+    endItemLink: unsupported,
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),

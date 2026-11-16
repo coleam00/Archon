@@ -17,6 +17,7 @@ import { removeTempTree } from '@archon/paths/test-utils';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import { itemReadSchema } from '@archon/workflows/item-read';
 import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
+import { itemLinkSchema } from '@archon/workflows/schemas/item-link';
 import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
 import {
   isTerminalRunStatus,
@@ -500,6 +501,63 @@ describe('trigger CLI durable execution', () => {
     ).toContain('outside project');
     // Without a selected project, a withdrawal by id is not scoped.
     expect(itemRulingSchema.parse(await readJson(scoped)).withdrawn).not.toBeNull();
+
+    // A link is recorded from the CLI and read from both items.
+    const linkArgs = ['workflow', 'link', '--item', 'item-new', '--kind', 'depends_on'];
+    const recorded = itemLinkSchema.parse(
+      await readJson([...linkArgs, '--to', 'item-1', '--as', 'triage-agent', '--json'])
+    );
+    expect(recorded).toMatchObject({
+      kind: 'depends_on',
+      from: { key: 'item-new' },
+      to: { key: 'item-1' },
+      by: { declared: 'triage-agent' },
+      ended: null,
+    });
+    const readLinks = async (key: string) =>
+      itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', key, '--json'])).links;
+    expect(await readLinks('item-new')).toMatchObject([
+      { id: recorded.id, direction: 'outgoing', other: { key: 'item-1' } },
+    ]);
+    expect(await readLinks('item-1')).toMatchObject([
+      { id: recorded.id, direction: 'incoming', other: { key: 'item-new' } },
+    ]);
+    // Recording it again leaves one link.
+    expect(await readJson([...linkArgs, '--to', 'item-1', '--json'])).toMatchObject({
+      id: recorded.id,
+      created: false,
+    });
+    expect(await readLinks('item-new')).toHaveLength(1);
+    // A self-link and an unknown kind are refused, saying why.
+    for (const [args, error] of [
+      [[...linkArgs, '--to', 'item-new'], 'self_link'],
+      [
+        ['workflow', 'link', '--item', 'item-new', '--kind', 'same_as', '--to', 'item-1'],
+        'unknown_kind',
+      ],
+    ] as const) {
+      const refused = await invoke([...args, '--json'], false);
+      expect(refused.exitCode).toBe(1);
+      expect(JSON.parse(refused.stdout)).toEqual({ ok: false, error });
+    }
+    const unknownKind = await invoke(
+      ['workflow', 'link', '--item', 'item-new', '--kind', 'same_as', '--to', 'item-1'],
+      false
+    );
+    expect(unknownKind.stderr).toContain('depends_on, part_of, duplicate_of');
+    // Ended once: the fact stays readable with who ended it, and is no longer active.
+    const endedLink = itemLinkSchema.parse(
+      await readJson(['workflow', 'link', '--end', recorded.id, '--as', 'alice', '--json'])
+    );
+    expect(endedLink).toMatchObject({
+      ...recorded,
+      ended: { via: 'cli', by: { declared: 'alice' } },
+    });
+    expect(await readLinks('item-1')).toMatchObject([
+      { id: recorded.id, ended: { by: { declared: 'alice' } } },
+    ]);
+    const again = await invoke(['workflow', 'link', '--end', recorded.id, '--json'], false);
+    expect(JSON.parse(again.stdout)).toEqual({ ok: false, error: 'already_ended' });
 
     // A continuation stays on the item of the run it continues; `--item` still wins, and
     // continuing a run with no item gives none. `--adopt` writes the same

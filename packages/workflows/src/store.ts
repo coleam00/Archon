@@ -27,7 +27,7 @@ import type {
   WorkflowRunNodeSession,
 } from './schemas';
 import type { IStateDocumentStore } from './state-document-store';
-import type { ItemRulingAct } from './schemas/item-ruling';
+import type { ItemAct } from './schemas/item-act';
 import type { AttentionAnswerWrite, AttentionLabelWrite } from './store/attention-writes';
 import type {
   PauseCursor,
@@ -219,7 +219,7 @@ export interface IWorkflowStore
    * the way a start does, so a ruling can come before any run.
    */
   recordItemRuling(
-    input: { projectKey: string; key: string; text: string } & ItemRulingAct
+    input: { projectKey: string; key: string; text: string } & ItemAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
   /**
    * Withdraw a ruling by appending a withdrawal; the ruling's own row is never changed.
@@ -227,8 +227,34 @@ export interface IWorkflowStore
    * `ItemRulingWithdrawnError` for one already withdrawn.
    */
   withdrawItemRuling(
-    input: { rulingId: string; projectKey?: string } & ItemRulingAct
+    input: { rulingId: string; projectKey?: string } & ItemAct
   ): Promise<import('./schemas/item-ruling').ItemRuling>;
+  /**
+   * Every link from or to an item, ended ones included, in recording order. A row that does
+   * not read is reported as unreadable in its place, not thrown.
+   */
+  listItemLinks(itemId: string): Promise<import('./schemas/item-link').ItemLinkRead[]>;
+  /**
+   * Record a link between the items two keys name in a project, writing each on first use.
+   * An active link of the same kind and direction is returned with `created: false`.
+   * Throws `ItemLinkSelfError` when both keys name one item.
+   */
+  recordItemLink(
+    input: {
+      projectKey: string;
+      fromKey: string;
+      toKey: string;
+      kind: import('./schemas/item-link').ItemLinkKind;
+    } & ItemAct
+  ): Promise<{ link: import('./schemas/item-link').ItemLink; created: boolean }>;
+  /**
+   * End a link, recording who ended it and when; what the link says is never changed.
+   * Throws `ItemLinkNotFoundError`, `ItemLinkOutsideProjectError` with `projectKey`, or
+   * `ItemLinkEndedError` for a link already ended.
+   */
+  endItemLink(
+    input: { linkId: string; projectKey?: string } & ItemAct
+  ): Promise<import('./schemas/item-link').ItemLink>;
   deleteOldWorkflowRuns(olderThanDays: number): Promise<{ count: number }>;
   /** Event reads use explicit UTC offsets; batched reads preserve durable append order. */
   listWorkflowEvents(

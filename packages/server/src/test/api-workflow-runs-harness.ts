@@ -456,6 +456,16 @@ mock.module('@archon/core/db/item-rulings', () => ({
   recordItemRuling: mockRecordItemRuling,
   withdrawItemRuling: mockWithdrawItemRuling,
 }));
+type ItemLinksDb = typeof import('@archon/core/db/item-links');
+mock.module('@archon/core/db/item-links', () => ({
+  listItemLinks: mock<ItemLinksDb['listItemLinks']>(async () => []),
+  recordItemLink: mock<ItemLinksDb['recordItemLink']>(async () => {
+    throw new Error('Unexpected recordItemLink');
+  }),
+  endItemLink: mock<ItemLinksDb['endItemLink']>(async () => {
+    throw new Error('Unexpected endItemLink');
+  }),
+}));
 
 mock.module('@archon/core/db/workflow-events', () => ({
   listWorkflowEvents: mockListWorkflowEvents,

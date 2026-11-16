@@ -541,6 +541,8 @@ async function dispatchGatedCommand(ctx: CliRouteContext): Promise<number> {
           return await workflowRoutes.runWorkflowNotice(route);
         case 'rule':
           return await workflowRoutes.runWorkflowRule(route);
+        case 'link':
+          return await workflowRoutes.runWorkflowLink(route);
         default:
           return await workflowRoutes.runUnknownWorkflowSubcommand(route);
       }
