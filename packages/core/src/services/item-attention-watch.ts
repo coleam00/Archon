@@ -38,14 +38,15 @@ export interface ItemRunWait {
 
 /**
  * Watch every run on the item that is not terminal in `initial` (the item's runs at call
- * time, start order), and every run that first appears in `reread` while waiting, in
- * whatever state it is first seen. A run already terminal at call time is history and
- * never ends the wait.
+ * time, start order), and every run `reread` shows that is not yet watched: one that
+ * first appears, in whatever state, or a run that was terminal at call time and is now in
+ * another state (a failed run resumed in place). A run that stays in the terminal state
+ * it had at call time is history and never ends the wait.
  *
  * The first run that needs attention, ends, loses its owner or disappears stops the
- * others. Every result is returned, in the order the runs were first seen, so runs that
+ * others. Every result is returned, in the order the runs were first watched, so runs that
  * settle together are all reported. At the deadline, each watched run reports `deadline`.
- * A `reread` failure stops every watch and is thrown.
+ * A `reread` failure stops every watch and is thrown, unless a run had already reported.
  */
 export async function waitForItemAttention(
   store: RunAttentionReadStore,
@@ -56,25 +57,29 @@ export async function waitForItemAttention(
   const deadlineAt = opts.deadlineMs === undefined ? undefined : Date.now() + opts.deadlineMs;
   const pollIntervalMs = opts.pollIntervalMs ?? DEFAULT_ATTENTION_POLL_INTERVAL_MS;
   const stop = new AbortController();
-  const seen = new Set(initial.map(run => run.id));
+  // The status each run ended with before the call; the rows are read again, not kept.
+  const history = new Map<string, WorkflowRunStatus>();
+  for (const run of initial)
+    if (TERMINAL_WORKFLOW_STATUSES.includes(run.status)) history.set(run.id, run.status);
+  const watched = new Set<string>();
   const watches: Promise<Watched>[] = [];
-  const watch = (runId: string): void => {
-    watches.push(watchRun(store, runId, stop, { ...opts, pollIntervalMs }, deadlineAt));
+  const watchUnlessHistory = (run: WorkflowRun): void => {
+    if (watched.has(run.id) || history.get(run.id) === run.status) return;
+    watched.add(run.id);
+    watches.push(watchRun(store, run.id, stop, { ...opts, pollIntervalMs }, deadlineAt));
   };
 
-  for (const run of initial) if (!TERMINAL_WORKFLOW_STATUSES.includes(run.status)) watch(run.id);
+  for (const run of initial) watchUnlessHistory(run);
   try {
     while (await nextPoll(stop.signal, pollIntervalMs, deadlineAt)) {
-      for (const run of await reread()) {
-        if (seen.has(run.id)) continue;
-        seen.add(run.id);
-        watch(run.id);
-      }
+      for (const run of await reread()) watchUnlessHistory(run);
     }
   } catch (error) {
+    const alreadyReported = stop.signal.aborted;
     stop.abort();
-    await Promise.all(watches);
-    throw error;
+    const settled = await Promise.all(watches);
+    if (!alreadyReported) throw error;
+    return reported(settled);
   }
   return reported(await Promise.all(watches));
 }

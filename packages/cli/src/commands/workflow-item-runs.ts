@@ -10,7 +10,10 @@ import { findCodebaseForCheckoutPath } from '@archon/core/services/codebase-chec
 import { readItemRuns } from '@archon/workflows/item-read';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
 import { waitForItemAttention, type ItemRunWait } from '@archon/core/services/item-attention-watch';
-import type { CancelWorkflowResult } from '@archon/core/operations/workflow-operations';
+import {
+  isCancellableRun,
+  type CancelWorkflowResult,
+} from '@archon/core/operations/workflow-operations';
 import { TERMINAL_WORKFLOW_STATUSES } from '@archon/workflows/schemas/workflow-run';
 import { writeJsonLine, writeStderr } from '../utils/stdout';
 import { announceWaitAttached, formatWaitOutcome, waitOutcomePayload } from './workflow-inspect';
@@ -75,7 +78,6 @@ export class ItemRunsRefusal extends Error {
 }
 
 export interface ItemRuns {
-  projectKey: string;
   /** Re-reads the item's runs; refuses when the item or one of its runs no longer reads. */
   read: () => Promise<WorkflowRun[]>;
   /** The item's own runs, in start order. */
@@ -116,7 +118,7 @@ export async function resolveItemRuns(
     }
     return found.runs;
   };
-  return { projectKey: project.key, read, runs: await read() };
+  return { read, runs: await read() };
 }
 
 /**
@@ -194,8 +196,7 @@ interface ItemRunAction<Result> {
 const CANCEL_ITEM_RUN: ItemRunAction<CancelWorkflowResult> = {
   verb: 'cancel',
   statePhrase: 'running',
-  // The state `cancelWorkflow` accepts.
-  applies: run => run.status === 'running',
+  applies: isCancellableRun,
   act: cancelOneRun,
   payload: cancelResultPayload,
   print: printCancelResult,
@@ -295,12 +296,8 @@ export async function workflowWaitItemCommand(
   let results: ItemRunWait[];
   try {
     const item = await resolveItemRuns(host, cwd, key, 'wait');
-    selectItemRuns(item.runs, run => !TERMINAL_WORKFLOW_STATUSES.includes(run.status), {
-      key,
-      verb: 'wait',
-      statePhrase: 'live',
-      allRuns: true,
-    });
+    if (item.runs.every(run => TERMINAL_WORKFLOW_STATUSES.includes(run.status)))
+      throw new ItemRunsRefusal('no_run', `No live run on item '${key}'.`, item.runs);
     results = await waitForItemAttention(host.deps.store, item.runs, item.read, {
       doorbell: host.doorbell,
       ...(timeoutSeconds === undefined ? {} : { deadlineMs: timeoutSeconds * 1000 }),
@@ -313,9 +310,10 @@ export async function workflowWaitItemCommand(
     return writeItemRefusal(error, 'wait', key, json);
   }
 
+  const exitCode = waitItemExitCode(results);
   if (json) {
     await writeJsonLine({
-      ok: true,
+      ok: exitCode !== 1,
       action: 'wait',
       item: key,
       results: results.map(({ runId, result }) => waitOutcomePayload(runId, runId, result)),
@@ -323,6 +321,11 @@ export async function workflowWaitItemCommand(
   } else {
     for (const { runId, result } of results) console.log(formatWaitOutcome(runId, result));
   }
+  return exitCode;
+}
+
+/** 0 when a run needs attention or lost its owner, 3 when the deadline came first, else 1. */
+function waitItemExitCode(results: readonly ItemRunWait[]): number {
   if (results.some(({ result }) => result.kind === 'attention' || result.kind === 'owner_lost'))
     return 0;
   return results.some(({ result }) => result.kind === 'deadline') ? 3 : 1;

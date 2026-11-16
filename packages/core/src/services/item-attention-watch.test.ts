@@ -108,6 +108,20 @@ describe('waitForItemAttention', () => {
     expect(results.map(r => r.runId)).toEqual(['late']);
   });
 
+  test('a run that had failed and is resumed in place is watched again', async () => {
+    const old = putRun('old', { status: 'failed', completed_at: new Date() });
+    putRun('busy');
+    const waiting = waitOnItem();
+    await Bun.sleep(20);
+    old.status = 'running';
+    await Bun.sleep(20);
+    old.status = 'paused';
+    old.metadata = { approval: { nodeId: 'gate', message: 'Go?' } };
+
+    const results = await waiting;
+    expect(results.map(r => [r.runId, r.result.kind])).toEqual([['old', 'attention']]);
+  });
+
   test('runs that end together are all reported, in start order', async () => {
     const a = putRun('a');
     const b = putRun('b');

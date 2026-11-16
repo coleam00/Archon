@@ -3,6 +3,7 @@
  * refusals that keep the engine from choosing between runs.
  */
 import {
+  mockWaitForRunAttention,
   spyOnJsonStdout,
   spyOnStderr,
   firstJsonPayload,
@@ -181,6 +182,41 @@ describe('wait, cancel and abandon --item', () => {
     expect(cancelWorkflow).not.toHaveBeenCalled();
     expect(JSON.parse(firstJsonPayload(stdoutSpy))).toMatchObject({ reason: 'unreadable' });
   });
+
+  it.each([
+    [
+      'attention',
+      { kind: 'attention', attention: { kind: 'terminal', runId: 'live', status: 'failed' } },
+      0,
+      true,
+    ],
+    ['deadline', { kind: 'deadline', runId: 'live', observedStatus: 'running' }, 3, true],
+    ['not_found', { kind: 'not_found', runId: 'live' }, 1, false],
+  ] as const)(
+    'wait names the run that reported %s, with the run-id form exit status',
+    async (kind, result, exitCode, ok) => {
+      const { host } = itemHost([run('done', 'completed'), run('live', 'running')]);
+      mockWaitForRunAttention.mockResolvedValueOnce(result);
+
+      // A run's deadline does not stop the item's wait; the item's own deadline does.
+      const code = await workflowWaitItemCommand(host, 'issue-42', '/test/path', {
+        json: true,
+        timeoutSeconds: 0.01,
+      });
+
+      expect(code).toBe(exitCode);
+
+      expect(mockWaitForRunAttention.mock.calls.at(-1)?.[1]).toBe('live');
+      const payload = JSON.parse(firstJsonPayload(stdoutSpy));
+      expect(payload).toMatchObject({ ok, action: 'wait', item: 'issue-42' });
+      expect(payload.results).toHaveLength(1);
+      expect(payload.results[0]).toMatchObject(
+        kind === 'not_found'
+          ? { runId: 'live', error: 'not_found' }
+          : { runId: 'live', result: kind }
+      );
+    }
+  );
 
   it('wait refuses an item with no live run instead of blocking', async () => {
     const { host } = itemHost([run('done', 'completed')]);
