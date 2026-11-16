@@ -1472,7 +1472,10 @@ that settlement matches; the command then prepares it, as the end of a run prepa
 binding, and reports each start by where its preparation stands: prepared, waiting for its
 host's next drain, or not started, with its receipt and how to start it by hand. The answer is
 recorded either way. A trigger file that cannot be read refuses the close that would settle the
-set, naming the file.
+set, naming the file. An answer recorded through the server (the Web UI, the API or chat) writes
+the start the same way, but the server prepares only starts on the host its
+`ARCHON_TRIGGER_HOST` names; a start on any other host waits for that host's next drain. See
+[who prepares the start](/guides/workflow-triggers/#who-prepares-the-start).
 
 `--json` prints `{ ok: true, ref, action, settled?, unchanged?, waiting?, notStarted? }`:
 `action` is `answer` or `withdraw`, `settled` is true when this write settled the set,

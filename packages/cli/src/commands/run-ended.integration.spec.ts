@@ -601,8 +601,6 @@ describe('an asks-settled binding', () => {
       items.find(item => item.message === message)?.ref ?? '';
 
     await fixture.cli(['workflow', 'answer', '--ref', refOf('Keep the flag?'), '--recommended']);
-    // The answering process writes and admits any start before it exits.
-    expect(fixture.rows<RunRow>(RUNS_SQL)).toHaveLength(1);
     const last = ['workflow', 'answer', '--ref', refOf('Rename it?'), '--choose', 'drop'];
     await fixture.cli([...last, '--as', 'reviewer']);
     await fixture.cli([...last, '--as', 'reviewer']);
@@ -641,6 +639,64 @@ describe('an asks-settled binding', () => {
       .split('\n')
       .find(line => line.includes(runs[1]?.id.slice(0, 8) ?? '-'));
     expect(startedLine).toContain(runs[0]?.id.slice(0, 8));
+  }, 90_000);
+
+  test('a settlement recorded by a process that does not prepare it waits for its host, whose drain starts it once', async () => {
+    const fixture = await makeFixture('asks-recorded-elsewhere');
+    fixture.bind('build-after-answers', ASKS_SETTLED, { workflowName: 'build-answers' });
+    await fixture.cli([
+      'workflow',
+      'run',
+      'ask-plan',
+      '--no-worktree',
+      '--item',
+      'issue-1',
+      '--input',
+      'issue=Fix the login page',
+    ]);
+    const { items } = JSON.parse(
+      await fixture.cli(['workflow', 'attention', '--all', '--json'])
+    ) as { items: { ref: string }[] };
+    // Records both answers through the store every surface shares, as the server does for an
+    // answer on a host it does not serve, or a CLI that dies right after its commit: nothing
+    // follows the commit.
+    const answerer = join(fixture.root, 'answer-elsewhere.ts');
+    const core = resolve(import.meta.dir, '..', '..', '..', 'core', 'src');
+    writeFileSync(
+      answerer,
+      `const { createWorkflowStore } = await import(${JSON.stringify(join(core, 'workflows', 'store-adapter.ts'))});
+const { attentionQueueSource } = await import(${JSON.stringify(join(core, 'operations', 'attention-queue.ts'))});
+const { answerAttentionItem } = await import(${JSON.stringify(join(core, 'operations', 'attention-items.ts'))});
+const { closeDatabase } = await import(${JSON.stringify(join(core, 'db', 'connection.ts'))});
+const notUsed = async () => { throw new Error('not used for an ask'); };
+const deps = {
+  queue: attentionQueueSource(createWorkflowStore(), { findLatestByCodebaseAndWorkingPath: async () => null }),
+  operations: { answerWorkflow: notUsed, respondToWorkflow: notUsed, assertRunActionAllowed: async () => undefined },
+};
+for (const ref of process.argv.slice(2))
+  await answerAttentionItem(deps, ref, { recommended: true }, { kind: 'operator', declared: 'reviewer' }, 'api');
+await closeDatabase();
+`
+    );
+    const answered = Bun.spawn([process.execPath, answerer, ...items.map(item => item.ref)], {
+      cwd: fixture.projectRoot,
+      env: { ...process.env, DATABASE_URL: '', ARCHON_HOME: fixture.archonHome },
+      stdout: 'pipe',
+      stderr: 'pipe',
+    });
+    expect(await answered.exited).toBe(0);
+    const pending = () =>
+      fixture.rows<{ host_id: string }>(
+        "SELECT host_id FROM remote_agent_start_receipt_bindings WHERE preparation_status = 'pending'"
+      );
+    expect(pending()).toEqual([{ host_id: HOST }]);
+    expect(fixture.rows<RunRow>(RUNS_SQL).map(run => run.workflow_name)).toEqual(['ask-plan']);
+
+    await fixture.cli(['trigger', 'drain', '--host', HOST]);
+    await fixture.cli(['trigger', 'drain', '--host', HOST]);
+    const runs = await waitFor(() => completedRuns(fixture, 2), 'the build the drain started');
+    expect(runs.map(run => run.workflow_name)).toEqual(['ask-plan', 'build-answers']);
+    expect(pending()).toEqual([]);
   }, 90_000);
 
   test('an answer whose bound stage cannot be prepared succeeds and reports the stage as not started', async () => {

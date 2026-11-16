@@ -572,6 +572,12 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
         sourceActor: { source: 'archon-asks-settled', id: run.id, display: 'answered' },
       });
       expect(receipt?.bindings).toHaveLength(1);
+      // The binding's inputs, and nothing else: the answers, the run's result and its inputs.
+      expect(Object.keys(receipt?.bindings[0]?.intent?.eventInputs ?? {}).sort()).toEqual([
+        'decisions',
+        'issue',
+        'progress',
+      ]);
       expect(receipt?.bindings[0]?.intent).toMatchObject({
         runAsUserId: 'factory-operator',
         launch: { workflowName: 'build' },
@@ -717,7 +723,7 @@ export function describeSqlItemAskConformance(makeHarness: () => Promise<Harness
           },
           () => [taken]
         )
-      ).rejects.toThrow();
+      ).rejects.toThrow(`Source receipt id '${taken.receipt.id}' already exists`);
       expect(await openRefs(harness)).toEqual([b ?? '']);
       expect(await settledEvents(harness, runId)).toEqual([]);
     } finally {

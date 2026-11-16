@@ -296,7 +296,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 
 ## Start a stage again when its asks are answered
 
-A stage can end with [asks](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) instead of guessing: the run completes, its questions open on the item, and an operator answers them. A trigger file with `on.asksSettled` starts its binding on the same item once every ask that run left is answered or withdrawn, with the answers as an input. Nothing is held open while the questions wait, and nothing has to run besides the process that records the last answer.
+A stage can end with [asks](/reference/workflow-language/#asks-decisions-a-run-leaves-on-its-item) instead of guessing: the run completes, its questions open on the item, and an operator answers them. A trigger file with `on.asksSettled` starts its binding on the same item once every ask that run left is answered or withdrawn, with the answers as an input. Nothing is held open while the questions wait. The start belongs to the host the trigger file names, as a run-ended start does: it begins at once when the last answer is recorded by `archon workflow answer` or by a server that serves that host, and otherwise waits for that host's next drain ([below](#who-prepares-the-start)).
 
 A stage that ends in an ask and starts again with the answer takes two files in `~/.archon/triggers/`. `build-after-plan.json` starts `build` when `plan` ends, as [above](#start-a-stage-when-a-run-on-an-item-ends). `build-after-answers.json` starts `build` again when the asks a `build` run left are answered:
 
@@ -324,6 +324,7 @@ A stage that ends in an ask and starts again with the answer takes two files in 
       "settled": "answered",
       "inputs": {
         "decisions": { "answers": true },
+        "plan": { "input": "plan" },
         "issue": { "input": "issue" },
         "progress": { "result": "/summary" }
       }
@@ -332,7 +333,7 @@ A stage that ends in an ask and starts again with the answer takes two files in 
 }
 ```
 
-`build` declares `returns: { node, asks }` and the inputs `decisions`, `issue` and `progress`. A run that leaves asks completes; when the last of them is answered, the next `build` starts on the item with the answers as decisions already made. A run that leaves no asks settles nothing, so the loop ends there. Each file has its own `sourceInstanceId`.
+`build` declares `returns: { node, asks }` and the inputs `plan`, `issue`, `decisions` and `progress`, none of them required: the start after `plan` passes `plan` and `issue`, and the start after the answers passes the same `plan` and `issue` again, with `decisions` and `progress`. A run that leaves asks completes; when the last of them is answered, the next `build` starts on the item with the answers as decisions already made. A run that leaves no asks settles nothing, so the loop ends there. Each file has its own `sourceInstanceId`.
 
 A binding starts once for a set of asks that meets all of these:
 
@@ -357,11 +358,17 @@ The start is written in the same database transaction that records the settlemen
 
 Answering is not starting. Who may answer or withdraw an ask is unchanged: the rule of the run that left it. The started run acts as the binding's `runAsUserId`, as any binding start does, so an operator who may answer and may not start work still only answers.
 
-Right after the commit, the CLI process that recorded the last answer, `archon workflow answer --ref` or `--withdraw`, prepares the starts and spawns each admitted run's executor, as the end of a run does for a run-ended binding, and drains the host it serves. An answer the server records, from the Web UI, the API or chat, behaves as a run the server ends: the server only runs work for the host it serves, so a start on the server's own `ARCHON_TRIGGER_HOST` begins on its loop, within about five seconds, and a start on any other host, or on any host when the server has no `ARCHON_TRIGGER_HOST`, waits for that host's next drain. A binding whose asks are answered through the server should name the server's host. If the process dies after the commit, the start waits as a pending binding until its host's next drain, which starts exactly one run.
-
 `archon workflow runs --item <key>` shows the started run's `cause` as `{"kind": "asks_settled", "runId"}`, naming the run whose asks they were. The receipt records that run as its `sourceActor` (`{"source": "archon-asks-settled", "id": <run id>, "display": "answered" | "withdrawn"}`) and uses its ID as the delivery ID. `archon trigger check` lists asks-settled bindings under `asksSettled` and reports one whose asking workflow declares no `returns.asks`.
 
 Asks-settled bindings need the database store, as asks do. A [`wait: attention`](/reference/workflow-language/) node is unchanged: it pauses its own run and resumes it with the answer, and starts nothing.
+
+### Who prepares the start
+
+The start is always written with the settlement, whichever surface recorded the last answer. Preparing it belongs to the host the trigger file's `hostId` names, as for a run-ended binding, so when the stage begins depends on which process recorded that answer:
+
+- **`archon workflow answer --ref` or `--withdraw`.** Right after the commit, the CLI process prepares the starts its settlement wrote, each on the host its binding names, and spawns each admitted run's executor, as the end of a hand `workflow run` does for a run-ended binding. It drains a host's other queued work only when it serves that host. No trigger host needs to be running.
+- **The server: the Web UI, the API or chat.** The server runs work only for the host its `ARCHON_TRIGGER_HOST` names. A start on that host begins on its loop, within about five seconds. A start on any other host, or on any host when the server sets no `ARCHON_TRIGGER_HOST`, waits as a pending binding until that host's next drain: a run ending there, a `trigger fire`, `archon trigger drain --host <hostId>` or the loop of a server that serves it. The server never prepares a start for a host it does not serve. If you answer through the server, name the server's host in the binding, or run that host's drain.
+- **A process that dies after the commit.** The start waits as a pending binding until its host's next drain, which starts exactly one run.
 
 ## Choose a resource, capacity, and overlap policy
 
