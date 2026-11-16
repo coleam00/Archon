@@ -24,7 +24,7 @@ import {
   mockEnsureArchonWorkspacesPath,
   mockExecuteWorkflow,
   mockExistsSync,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockFindWorkflowRunsByIdPrefix,
   mockGetActiveSession,
   mockGetCodebase,
@@ -885,8 +885,8 @@ describe('paused approval gate routing', () => {
     mockListCodebases.mockReset();
     mockListCodebases.mockImplementation(() => Promise.resolve([]));
     mockExecuteWorkflow.mockClear();
-    mockFindResumableRunByParentConversation.mockReset();
-    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
+    mockListResumableRunsByParentConversation.mockReset();
+    mockListResumableRunsByParentConversation.mockImplementation(() => Promise.resolve([]));
     mockHydrateResumableRun.mockClear();
     mockUpdateWorkflowRun.mockClear();
     mockUpdateWorkflowRun.mockImplementation(() => Promise.resolve());
