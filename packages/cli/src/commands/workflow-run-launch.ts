@@ -49,14 +49,12 @@ import {
   folderRunsInContainer,
   prepareFolderExecution,
   resolveRunCodebase,
-  warnBaseOverrideOnReuse,
   warnOnReusedWorktree,
   type FolderExecution,
 } from './workflow-isolation';
 import { assertContainerRunCredentials, runExecutesInContainer } from './workflow-native-auth';
 import {
   buildNoResumableRunError,
-  buildResumeLookupFailureError,
   resolveContinuationDeclaration,
   type ContinuationDeclaration,
 } from './workflow-run-preflight';
@@ -143,7 +141,6 @@ export async function launchDetachedOwnedRun(
     workflow: admission.workflow,
     isContinuation: admission.isContinuation,
     continuationRun: admission.continuationRun,
-    resumeLookupError: admission.resumeLookupError,
     cliUserId: admission.cliUserId,
     codebase: detachCodebase,
     isFolder: detachIsFolder,
@@ -235,7 +232,7 @@ export interface ForegroundLaunch {
    */
   readonly codebaseDefaultBranch: string | undefined;
   readonly continuation: LaunchContinuation;
-  /** The prior run `--resume` continues; the executor performs no implicit resume detection. */
+  /** The prior run a resume continues; the executor performs no implicit resume detection. */
   readonly resumable: WorkflowRun | null;
   /**
    * Branch of the prior run's worktree, from the isolation record the resume path
@@ -405,7 +402,7 @@ async function bindAdoptionLane(
   }
 }
 
-/** Handle --resume: bind the prior run and reuse its worktree. */
+/** Handle a resume: bind the prior run and reuse its worktree. */
 async function bindResumableRun(
   request: OwnedRunRequest,
   admission: OwnedRunAdmission,
@@ -419,9 +416,6 @@ async function bindResumableRun(
       'Cannot resume: Not in a git repository.\n' +
         'Either run from a git repo or use /clone first.'
     );
-  }
-  if (admission.resumeLookupError) {
-    throw buildResumeLookupFailureError(admission.resumeLookupError);
   }
   // Located during selection, because the graph this run executes had to be chosen from it.
   const resumable = admission.continuationRun;
@@ -455,10 +449,6 @@ async function bindResumableRun(
   console.log(`Working path: ${workspace.workingCwd}`);
   console.log('');
 
-  // --resume adopts the prior run's worktree, so --base is half-applied here exactly as
-  // it is on --branch reuse: the cut-from is already fixed, but flagBase still rides
-  // opts.baseOverride into $BASE_BRANCH.
-  if (admission.flagBase) warnBaseOverrideOnReuse(workspace.workingCwd, admission.flagBase);
   return { resumable, resumeBranch: matchingEnv?.branch_name };
 }
 

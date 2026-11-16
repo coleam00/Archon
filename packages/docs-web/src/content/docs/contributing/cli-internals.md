@@ -167,7 +167,7 @@ Repository env normally overrides home env. The CLI preserves the user-scope `GH
 ┌───────────────────────────┐   ┌───────────────────────────────────┐
 │ launchDetachedOwnedRun()  │   │ prepareForegroundLaunch()         │
 │ Pre-flight, write the run │   │ Destination, project, adoption    │
-│ row, fork the child       │   │ lane, --resume binding, AI config │
+│ row, fork the child       │   │ lane, resume binding, AI config   │
 └───────────────────────────┘   └───────────────┬───────────────────┘
                                                 │
                                                 ▼

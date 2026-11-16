@@ -4,6 +4,7 @@ import { inspectResumableRun } from '@archon/workflows/run-resume';
 import { assertRunCredentials } from '@archon/workflows/run-preflight';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import type { WorkflowRun } from '@archon/workflows/schemas/workflow-run';
+import { checkedResumeCursor } from '@archon/workflows/store';
 import { spellWorkflowCommand, type WorkflowDeps } from '@archon/workflows/deps';
 import * as workflowDb from '../../db/workflows';
 import { startRunLiveOwner, withRunLiveOwner } from '../../services/run-live-owner';
@@ -99,6 +100,8 @@ async function admitResume(
         parentConversationId: conversation.id,
       },
       run: resumableRun,
+      // A running run got here only through `resumeWorkflow` (`detectContinuation`).
+      cursor: checkedResumeCursor(resumableRun),
       options: {
         codebaseId: codebase.id,
         source: scope.source,

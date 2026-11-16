@@ -7,13 +7,18 @@ import {
   isScheduledWorkflowResume,
   pausedUsageLimitWait,
 } from './schemas/workflow-run';
+import { EXECUTION_OWNER_METADATA_KEY } from './schemas/run-metadata';
 import {
   EXECUTION_CLAIM_METADATA_KEY,
+  currentExecutionOwner,
   workflowUnpausedEvent,
   type WorkflowEventInput,
 } from './store';
 
-/** Null patch values clear metadata; each adapter applies its native merge semantics. */
+/**
+ * Null patch values clear metadata; each adapter applies its native merge semantics.
+ * The new claim and this process as its owner land in one update (`currentExecutionOwner`).
+ */
 export function resumeTransition(run: Pick<WorkflowRun, 'id' | 'status' | 'metadata'>): {
   metadataPatch: WorkflowRun['metadata'];
   events: WorkflowEventInput[];
@@ -26,6 +31,7 @@ export function resumeTransition(run: Pick<WorkflowRun, 'id' | 'status' | 'metad
     [CAPACITY_WAIT_METADATA_KEY]: null,
     [SOURCE_RELEASE_METADATA_KEY]: null,
     [EXECUTION_CLAIM_METADATA_KEY]: crypto.randomUUID(),
+    [EXECUTION_OWNER_METADATA_KEY]: currentExecutionOwner(),
   };
   const events: WorkflowEventInput[] = [];
   const error =

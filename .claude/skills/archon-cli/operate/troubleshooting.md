@@ -82,7 +82,7 @@ A node references `$BASE_BRANCH`, but the run has no resolved base. Causes:
 2. For the reused-branch child, start a new parent run so the child cuts a new isolated branch with a known base.
 3. Or remove the `$BASE_BRANCH` reference if the node doesn't need it.
 
-A resumed run keeps its recorded base unless it is retargeted with `--base`. See [`$BASE_BRANCH` fail-fast](https://archon.diy/reference/variables/#base_branch-fail-fast).
+A resumed run keeps its recorded base, even an unresolved one; `--base` is refused when continuing a run. To use a different base, start a new run. See [`$BASE_BRANCH` fail-fast](https://archon.diy/reference/variables/#base_branch-fail-fast).
 
 ### "Claude Code not found" / "Codex CLI binary not found"
 
@@ -122,7 +122,7 @@ archon workflow get <run-id>
 archon workflow resume <run-id>
 ```
 
-`archon workflow resume <run-id>` targets that exact run and reuses its recorded working path/worktree. As a convenience, `archon workflow run my-workflow --resume` resumes the most recent resumable run for that workflow at the invocation cwd. A bare `archon workflow run my-workflow` starts a fresh run.
+`archon workflow resume <run-id>` targets that exact run and reuses its recorded working path/worktree. It takes a failed or paused run, or a run its killed process left `running` when no owner answers for it. A bare `archon workflow run my-workflow` starts a fresh run.
 
 **Session caveat:** A cold resume does not reconstruct the ambient sequential
 `context: shared` cursor. Explicit `context: { resume: node-id }` ancestry is

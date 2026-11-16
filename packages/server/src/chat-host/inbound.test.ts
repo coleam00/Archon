@@ -337,6 +337,16 @@ test('resume continues a wait paused before answers, and refuses an unanswered f
   expect(resume).toHaveBeenCalledTimes(1);
 });
 
+test('resume of a running run whose owner is gone carries the claim the owner check read', async () => {
+  const killed = await run();
+  const claim = (await getWorkflowRun(killed.id))?.metadata.execution_claim ?? null;
+  expect(
+    await action({ runId: killed.id, action: 'resume', sender: { platformUserId: 'starter' } })
+  ).toEqual({ status: 'done', result: { kind: 'resumed', resumed: true } });
+  // The continuation host continues a `running` run only under this cursor.
+  expect(resume.mock.calls[0]?.[4]).toEqual({ kind: 'ownerless', executionClaim: claim });
+});
+
 test('a resume refused for capacity reports a wait only for a run that keeps its place', async () => {
   const resumeAs = (runId: string) =>
     action({ runId, action: 'resume', sender: { platformUserId: 'starter' } });

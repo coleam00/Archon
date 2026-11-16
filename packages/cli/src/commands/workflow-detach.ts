@@ -41,11 +41,7 @@ import {
   type RunDestination,
   type WorkflowRunOptions,
 } from './workflow-shared';
-import {
-  buildNoResumableRunError,
-  buildResumeLookupFailureError,
-  type ContinuationDeclaration,
-} from './workflow-run-preflight';
+import { buildNoResumableRunError, type ContinuationDeclaration } from './workflow-run-preflight';
 import {
   DETACHED_RESUME_RECEIPT_ENV,
   DETACHED_RESUME_RECEIPT_FD,
@@ -444,7 +440,6 @@ export interface DetachedLaunch {
   workflow: ResolvedWorkflow;
   isContinuation: boolean;
   continuationRun: WorkflowRun | undefined;
-  resumeLookupError: Error | undefined;
   cliUserId: string | undefined;
   codebase: Codebase | null;
   isFolder: boolean;
@@ -527,7 +522,6 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     userMessage,
     workflow,
     continuationRun,
-    resumeLookupError,
     cliUserId,
     codebase: detachCodebase,
     prepared: detachedPrepared,
@@ -535,7 +529,6 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
     declaration: continuationDeclaration,
   } = launch;
   if (launch.isContinuation) {
-    if (resumeLookupError) throw buildResumeLookupFailureError(resumeLookupError);
     if (!continuationRun) throw buildNoResumableRunError(workflowName, cwd);
     return { detachedRunId: continuationRun.id };
   }

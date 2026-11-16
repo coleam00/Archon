@@ -320,9 +320,6 @@ export function createMockStore(): MockWorkflowStore {
     getActiveWorkflowRunByPath: mock<IWorkflowStore['getActiveWorkflowRunByPath']>(
       async (_workingPath, _self) => null
     ),
-    findResumableRun: mock<IWorkflowStore['findResumableRun']>(
-      async (_workflowName, _workingPath) => null
-    ),
     resumeWorkflowRun: mock<IWorkflowStore['resumeWorkflowRun']>(async _id => mockWorkflowRun()),
     recoverCancelledFanOutRun: mock<IWorkflowStore['recoverCancelledFanOutRun']>(async _id =>
       mockWorkflowRun()
