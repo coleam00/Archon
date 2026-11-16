@@ -3,7 +3,7 @@ import { toPersistedMessageMetadata } from '@archon/core/types';
 import { cliProgramArguments } from '../utils/cli-program-arguments';
 import { createHash, randomUUID } from 'node:crypto';
 import { readFile, rm } from 'node:fs/promises';
-import { isAbsolute, join, resolve } from 'node:path';
+import { isAbsolute, resolve } from 'node:path';
 import { z } from '@hono/zod-openapi';
 import { getArchonHome } from '@archon/paths';
 import {
@@ -11,7 +11,11 @@ import {
   ResourceStartDrainError,
   startAdmittedResourceStart,
 } from '@archon/core/workflows/resource-start-host';
-import { readRunEndedBindings, runEndedTriggerCheck } from '@archon/core/workflows/run-ended';
+import {
+  getTriggersPath,
+  readRunEndedBindings,
+  runEndedTriggerCheck,
+} from '@archon/core/workflows/run-ended';
 import { registeredProjectKeyForPath } from '@archon/core/services/codebase-checkout-resolver';
 import { sanitizeCredentials } from '@archon/core/utils/credential-sanitizer';
 import {
@@ -543,11 +547,6 @@ async function installTimer(
   });
 }
 
-/** The directory run-ended bindings are read from; `trigger check` lists the same files. */
-export function triggersDirectory(): string {
-  return join(getArchonHome(), 'triggers');
-}
-
 /**
  * List every run-ended binding that is active (each `on.runEnded` file in the triggers
  * directory) and check it against the workflows of the project it launches in: the
@@ -559,7 +558,7 @@ export function triggersDirectory(): string {
  */
 async function checkTriggers(host: WorkflowHost): Promise<void> {
   const checked = [];
-  const bindings = await readRunEndedBindings(triggersDirectory());
+  const bindings = await readRunEndedBindings(getTriggersPath());
   // The file store has no items, so a run-ended binding can never start anything there.
   if (host.deps.credentialStore === 'files' && bindings.length > 0)
     throw new FileStoreUnsupportedError(
@@ -581,7 +580,7 @@ async function checkTriggers(host: WorkflowHost): Promise<void> {
       problems: problems[index],
     });
   }
-  await writeJsonLine({ directory: triggersDirectory(), runEnded: checked });
+  await writeJsonLine({ directory: getTriggersPath(), runEnded: checked });
   const broken = checked.filter(entry => entry.problems.length > 0).length;
   if (broken > 0)
     throw new Error(`${String(broken)} run-ended binding(s) have problems; see "problems" above.`);

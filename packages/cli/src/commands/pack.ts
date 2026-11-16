@@ -3,16 +3,33 @@
  * one repository.
  *
  * The pack declares each binding once (`bindings:` in its `.pack/pack.yaml`); the operator
- * supplies the repository, the host, the run-as user and the checkout. The command only
- * writes files. It registers and schedules nothing: the operator still runs
- * `archon trigger fire` and `archon trigger schedule install` for a timer binding, and adds
- * an event binding to the source plugin's configuration. A fire-only binding needs neither:
- * its file is what a run or an operator passes to `archon trigger fire`.
+ * supplies the repository, the host, the run-as user and the checkout, and optionally the
+ * run config every start launches with and where the pack's workflows are discovered.
+ *
+ * Every file goes to `--out` and nothing registers it: the operator still runs
+ * `archon trigger fire` and `archon trigger schedule install` for a timer binding, adds an
+ * event binding to the source plugin's configuration, and copies a run-ended file into the
+ * triggers directory, where the engine reads it. A fire-only file is what a run or an
+ * operator passes to `archon trigger fire`.
+ *
+ * One invalid run-ended file in the triggers directory fails item runs on the whole
+ * install, so every run-ended file is checked as `archon trigger check` checks it before
+ * anything is written.
  */
 import { createHash } from 'node:crypto';
 import { access, mkdir, writeFile } from 'node:fs/promises';
 import { join, resolve } from 'node:path';
 import { githubWebhookSourceConfigSchema } from '@archon/adapters/forge/github/source-config';
+import { loadConfig } from '@archon/core/config/config-loader';
+import { loadWorkflowRunConfigFile } from '@archon/core/config/run-config';
+import { loadStoreSelection } from '@archon/core/config/store-selection';
+import {
+  getTriggersPath,
+  type RunEndedBinding,
+  runEndedTriggerCheck,
+} from '@archon/core/workflows/run-ended';
+import { providerRegistry } from '@archon/providers';
+import { FileStoreUnsupportedError } from '@archon/workflows/file-store';
 import {
   kindedPackBinding,
   type PackBinding,
@@ -21,7 +38,10 @@ import {
 } from '@archon/workflows/schemas/pack-bindings';
 import type { WorkflowSource } from '@archon/workflows/schemas/workflow';
 import { writeJsonLine } from '../utils/stdout';
-import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
+import {
+  triggerConfigSchema,
+  type RunEndedInputSource,
+} from '@archon/workflows/schemas/resource-start';
 import { loadWorkflows } from './workflow-list';
 
 export interface PackBindingsOptions {
@@ -31,13 +51,17 @@ export interface PackBindingsOptions {
   host?: string;
   runAs?: string;
   out?: string;
+  /** A run config file every written binding launches with (`launch.configSource`). */
+  config?: string;
+  /** Where the pack's workflows are discovered when it does not live in the checkout. */
+  workflowSource?: string;
   only?: string;
   force?: boolean;
   json?: boolean;
 }
 
 const USAGE =
-  'Usage: archon pack bindings <pack> --repo <host>/<owner>/<name> --host <host-id> --run-as <user-id> --out <dir> [--cwd <checkout>] [--only <id,...>] [--force]';
+  'Usage: archon pack bindings <pack> --repo <host>/<owner>/<name> --host <host-id> --run-as <user-id> --out <dir> [--cwd <checkout>] [--config <file>] [--workflow-source <dir>] [--only <id,...>] [--force]';
 
 interface Target {
   packKey: string;
@@ -46,6 +70,8 @@ interface Target {
   runAsUserId: string;
   cwd: string;
   outDir: string;
+  configSource?: string;
+  discoveryCwd?: string;
 }
 
 interface Generated {
@@ -53,6 +79,8 @@ interface Generated {
   kind: PackBindingKind;
   path: string;
   document: unknown;
+  /** The outcome a run-ended file starts on; one file per outcome. */
+  outcome?: string;
 }
 
 function parseRepo(repo: string): Target['repo'] {
@@ -63,36 +91,41 @@ function parseRepo(repo: string): Target['repo'] {
 }
 
 /**
- * One name for a binding's file, its binding id and a timer's source instance. The
- * readable part flattens the repository path, so `a-b/c` and `a/b-c` read alike; the
- * digest of the whole identity keeps distinct packs, hosts and repositories apart.
+ * One name for a binding's file, its binding id and its source instance. The readable
+ * part flattens the repository path, so `a-b/c` and `a/b-c` read alike; the digest of the
+ * whole identity keeps distinct packs, hosts, repositories and outcomes apart.
  */
-function bindingName(target: Target, id: string): string {
+function bindingName(target: Target, id: string, outcome?: string): string {
   const { packKey, repo } = target;
-  const digest = createHash('sha256')
-    .update(JSON.stringify([packKey, repo.host, repo.path, id]))
-    .digest('hex')
-    .slice(0, 12);
-  return `${packKey}-${repo.path.replaceAll('/', '-')}-${id}-${digest}`;
+  const identity = [packKey, repo.host, repo.path, id, ...(outcome === undefined ? [] : [outcome])];
+  const digest = createHash('sha256').update(JSON.stringify(identity)).digest('hex').slice(0, 12);
+  const slug = outcome
+    ?.toLowerCase()
+    .replaceAll(/[^a-z0-9]+/g, '-')
+    .replaceAll(/^-|-$/g, '');
+  const readable = [packKey, repo.path.replaceAll('/', '-'), id, ...(slug ? [slug] : [])];
+  return `${readable.join('-')}-${digest}`;
 }
 
-function bindingPath(target: Target, id: string): string {
-  return join(target.outDir, `${bindingName(target, id)}.json`);
+function bindingPath(target: Target, id: string, outcome?: string): string {
+  return join(target.outDir, `${bindingName(target, id, outcome)}.json`);
 }
 
 function generate(
   id: string,
   binding: PackBinding,
-  workflowName: string,
+  pack: DeclaredPack,
   target: Target
-): Generated {
+): Generated[] {
   const literals: Record<string, string> = {};
   const fields: Record<string, { source: 'field'; field: string }> = {};
+  const fromEnded: Record<string, RunEndedInputSource> = {};
   const resolveInput = (name: string, input: PackBindingInput): void => {
     if (typeof input === 'string') literals[name] = input;
     else if ('repo' in input) literals[name] = target.repo[input.repo];
     else if ('binding' in input) literals[name] = bindingPath(target, input.binding);
-    else fields[name] = { source: 'field', field: input.event };
+    else if ('event' in input) fields[name] = { source: 'field', field: input.event };
+    else fromEnded[name] = input;
   };
   for (const [name, input] of Object.entries(binding.inputs)) resolveInput(name, input);
 
@@ -107,11 +140,36 @@ function generate(
     overlap: binding.overlap,
     launch: {
       cwd: target.cwd,
-      workflowName,
+      workflowName: workflowNameFor(pack, id, binding.workflow),
       inputs: literals,
+      ...(target.discoveryCwd === undefined ? {} : { discoveryCwd: target.discoveryCwd }),
+      ...(target.configSource === undefined ? {} : { configSource: target.configSource }),
       isolation: binding.isolation,
     },
   };
+  const kinded = kindedPackBinding(binding);
+  if (kinded.kind === 'run_ended') {
+    const { workflow, outcome } = kinded.binding.run_ended;
+    const workflowName = workflowNameFor(pack, id, workflow);
+    const hasMapped = Object.keys(fromEnded).length > 0;
+    return (typeof outcome === 'string' ? [outcome] : outcome).map(value => {
+      const name = bindingName(target, id, value);
+      return {
+        id,
+        kind: kinded.kind,
+        path: bindingPath(target, id, value),
+        outcome: value,
+        document: {
+          version: 1,
+          sourceInstanceId: name,
+          binding: { ...intent, bindingId: name, bindingRevision: null },
+          on: {
+            runEnded: { workflowName, outcome: value, ...(hasMapped ? { inputs: fromEnded } : {}) },
+          },
+        },
+      };
+    });
+  }
   const path = bindingPath(target, id);
   // A timer and a fire-only binding are the same `trigger fire --config` file; only the
   // timer carries a schedule.
@@ -120,39 +178,48 @@ function generate(
     sourceInstanceId: bindingName(target, id),
     binding: { ...intent, bindingRevision: null },
   };
-  const kinded = kindedPackBinding(binding);
   switch (kinded.kind) {
     case 'fire':
-      return { id, kind: kinded.kind, path, document: fireConfig };
+      return [{ id, kind: kinded.kind, path, document: fireConfig }];
     case 'timer':
-      return {
-        id,
-        kind: kinded.kind,
-        path,
-        document: {
-          ...fireConfig,
-          schedule: {
-            intervalSeconds: kinded.binding.schedule.interval_seconds,
-            runAtLoad: false,
+      return [
+        {
+          id,
+          kind: kinded.kind,
+          path,
+          document: {
+            ...fireConfig,
+            schedule: {
+              intervalSeconds: kinded.binding.schedule.interval_seconds,
+              runAtLoad: false,
+            },
           },
         },
-      };
+      ];
     case 'event':
-      return {
-        id,
-        kind: kinded.kind,
-        path,
-        document: {
-          ...intent,
-          selector: { ...kinded.binding.event, repository: target.repo },
-          inputMapping: fields,
+      return [
+        {
+          id,
+          kind: kinded.kind,
+          path,
+          document: {
+            ...intent,
+            selector: { ...kinded.binding.event, repository: target.repo },
+            inputMapping: fields,
+          },
         },
-      };
+      ];
   }
 }
 
-/** Check a generated document against the schema of the loader that will read it. */
-function assertLoadable({ id, kind, document }: Generated, target: Target): void {
+/**
+ * Check a generated document against the schema of the loader that will read it, and
+ * return the run-ended binding a run-ended file holds, as the engine reads it.
+ */
+function assertLoadable(
+  { id, kind, path, document }: Generated,
+  target: Target
+): RunEndedBinding | undefined {
   const result =
     kind !== 'event'
       ? triggerConfigSchema.safeParse(document)
@@ -164,8 +231,12 @@ function assertLoadable({ id, kind, document }: Generated, target: Target): void
           host: target.repo.host,
           bindings: [document],
         });
-  if (result.success) return;
-  const reader = kind === 'event' ? 'GitHub source plugin binding' : '`trigger fire` configuration';
+  if (result.success) {
+    if (!('on' in result.data) || result.data.on === undefined) return undefined;
+    const { sourceInstanceId, binding, on } = result.data;
+    return { file: path, sourceInstanceId, binding, runEnded: on.runEnded };
+  }
+  const reader = kind === 'event' ? 'GitHub source plugin binding' : 'trigger file';
   const issues = result.error.issues
     .map(issue => `${issue.path.join('.')}: ${issue.message}`)
     .join('; ');
@@ -250,6 +321,17 @@ function shellQuote(path: string): string {
 
 function nextSteps(generated: readonly Generated[], target: Target): string[] {
   const lines: string[] = [];
+  const ended = generated.filter(g => g.kind === 'run_ended');
+  if (ended.length > 0) {
+    const triggers = shellQuote(getTriggersPath());
+    lines.push(
+      '',
+      'Run-ended bindings. Copy each into the triggers directory, where it is active at once: it starts its workflow when a run on an item ends with its outcome. Then list and check them with `archon trigger check`; deleting a copy turns it off:',
+      `  mkdir -p ${triggers}`
+    );
+    for (const item of ended)
+      lines.push(`  cp ${shellQuote(item.path)} ${triggers}/  # outcome '${item.outcome ?? ''}'`);
+  }
   const timers = generated.filter(g => g.kind === 'timer');
   const events = generated.filter(g => g.kind === 'event');
   if (timers.length > 0) {
@@ -284,15 +366,51 @@ function nextSteps(generated: readonly Generated[], target: Target): string[] {
 
 function targetFrom(packKey: string, options: PackBindingsOptions): Target {
   if (!options.repo || !options.host || !options.runAs || !options.out) throw new Error(USAGE);
-  const repo = parseRepo(options.repo);
+  const absolute = (path: string | undefined): string | undefined =>
+    path === undefined ? undefined : resolve(path);
   return {
     packKey,
-    repo,
+    repo: parseRepo(options.repo),
     hostId: options.host,
     runAsUserId: options.runAs,
     cwd: resolve(options.cwd),
     outDir: resolve(options.out),
+    configSource: absolute(options.config),
+    discoveryCwd: absolute(options.workflowSource),
   };
+}
+
+/**
+ * Check every run-ended file as `archon trigger check` checks it before any is written: a
+ * file that fails a run's preflight would fail every item run of its ended workflow once the
+ * operator copies it into the triggers directory, and one that never starts or loops is
+ * refused with it.
+ */
+async function assertRunEndedChecks(
+  ended: readonly { id: string; check: RunEndedBinding }[]
+): Promise<void> {
+  if (ended.length === 0) return;
+  // The file store has no items, so a run-ended binding can never start anything there.
+  if ((await loadStoreSelection()) === 'files')
+    throw new FileStoreUnsupportedError(
+      `Run-ended bindings (${[...new Set(ended.map(item => item.id))].join(', ')})`
+    );
+  const found = await runEndedTriggerCheck(
+    ended.map(item => item.check),
+    // Without the install's codebase records each checkout counts as its own project, so a
+    // duplicate of a file already installed, or one in another checkout of the project, is
+    // left to `archon trigger check`.
+    { loadConfig, providers: providerRegistry, projectKeyOf: async () => null }
+  );
+  const problems = ended.flatMap(({ id, check }, index) =>
+    found[index].map(
+      problem => `  Binding '${id}' (outcome '${check.runEnded.outcome}'): ${problem}`
+    )
+  );
+  if (problems.length > 0)
+    throw new Error(
+      ['Run-ended bindings have problems:', ...problems, 'Nothing was written.'].join('\n')
+    );
 }
 
 /**
@@ -324,22 +442,35 @@ async function assertNothingOverwritten(generated: readonly Generated[]): Promis
   );
 }
 
-async function packBindings(packKey: string, options: PackBindingsOptions): Promise<void> {
-  const target = targetFrom(packKey, options);
-  const { repo } = target;
-  const pack = await findPack(target.cwd, packKey);
-  const ids = selectIds(pack, options.only);
-
-  // Every binding is generated and checked before the first file is written.
+/** Every selected binding, generated and checked before the first file is written. */
+async function generateChecked(
+  pack: DeclaredPack,
+  ids: readonly string[],
+  target: Target
+): Promise<Generated[]> {
   const generated: Generated[] = [];
+  const ended: { id: string; check: RunEndedBinding }[] = [];
   for (const id of ids) {
     const binding = pack.bindings[id];
     if (binding === undefined) continue;
     await assertSiblingFiles(id, binding, ids, target);
-    const item = generate(id, binding, workflowNameFor(pack, id, binding.workflow), target);
-    assertLoadable(item, target);
-    generated.push(item);
+    for (const item of generate(id, binding, pack, target)) {
+      const check = assertLoadable(item, target);
+      if (check !== undefined) ended.push({ id, check });
+      generated.push(item);
+    }
   }
+  await assertRunEndedChecks(ended);
+  return generated;
+}
+
+async function packBindings(packKey: string, options: PackBindingsOptions): Promise<void> {
+  const target = targetFrom(packKey, options);
+  const { repo } = target;
+  // A bad run config path fails here, not at the first start that loads it.
+  if (target.configSource !== undefined) await loadWorkflowRunConfigFile(target.configSource);
+  const pack = await findPack(target.discoveryCwd ?? target.cwd, packKey);
+  const generated = await generateChecked(pack, selectIds(pack, options.only), target);
   if (!options.force) await assertNothingOverwritten(generated);
 
   await mkdir(target.outDir, { recursive: true });
@@ -353,7 +484,12 @@ async function packBindings(packKey: string, options: PackBindingsOptions): Prom
   if (options.json) {
     await writeJsonLine({
       pack: packKey,
-      written: generated.map(({ id, kind, path }) => ({ id, kind, path })),
+      written: generated.map(({ id, kind, path, outcome }) => ({
+        id,
+        kind,
+        path,
+        ...(outcome === undefined ? {} : { outcome }),
+      })),
     });
     return;
   }

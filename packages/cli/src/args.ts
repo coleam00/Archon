@@ -128,7 +128,8 @@ export const cliArgOptions: CliArgOptions = {
   ref: { type: 'string' },
   inputs: { type: 'string' },
   owner: { type: 'string' },
-  // `archon pack bindings`: the operator's choices a pack's binding declaration lacks.
+  // `archon pack bindings`: the operator's choices a pack's binding declaration lacks. It
+  // also reads `--out`, `--config` and `--workflow-source`, declared above.
   repo: { type: 'string' },
   'run-as': { type: 'string' },
   only: { type: 'string' },

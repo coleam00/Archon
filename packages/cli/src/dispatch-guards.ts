@@ -54,7 +54,8 @@ export function rejectRunFlagsOnContinue(
 }
 
 /**
- * Accepts run configuration and trigger deployment configuration on their owning commands.
+ * Accepts run configuration and trigger deployment configuration on their owning commands,
+ * and the run configuration `pack bindings` writes into every binding it generates.
  * `--config-from-run` names another run's run config, which only `workflow run` takes.
  */
 export function rejectConfigOutsideRun(
@@ -69,8 +70,9 @@ export function rejectConfigOutsideRun(
   }
   const triggerConfig =
     command === 'trigger' && (subcommand === 'fire' || subcommand === 'schedule');
-  if (config !== undefined && !triggerConfig && !workflowRun) {
-    return 'Error: --config can only be used with workflow run, trigger fire, or trigger schedule.';
+  const packBindings = command === 'pack' && subcommand === 'bindings';
+  if (config !== undefined && !triggerConfig && !workflowRun && !packBindings) {
+    return 'Error: --config can only be used with workflow run, trigger fire, trigger schedule, or pack bindings.';
   }
   return undefined;
 }
