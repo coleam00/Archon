@@ -19,11 +19,10 @@ inputs:
       What to investigate — an issue reference, a symptom, a failing command, or
       a question. When empty, the run's trigger message is the target.
 
-# Only `rooted` owes delivery. `refuted` and `inconclusive` are valid completions
-# with an authored outcome of false — lifecycle status and work outcome are separate
-# facts. The boolean is derived from the verdict by the verdict node, never declared
-# a second time by the agent.
-returns: { node: verdict, outcome: rooted }
+# The run completes with the investigator's verdict as its outcome. Only `rooted`
+# owes delivery; `refuted` and `inconclusive` are valid completions, so lifecycle
+# status and the verdict are separate facts.
+returns: { node: investigate, outcome: verdict }
 
 nodes:
 
@@ -56,26 +55,3 @@ nodes:
             path: { type: string, enum: [investigation.md] }
           required: [type, run_id, path]
       required: [verdict, summary, report]
-
-  - id: verdict
-    script: verdict
-    runtime: bun
-    depends_on: [investigate]
-    with:
-      verdict: "$investigate.output.verdict"
-      summary: "$investigate.output.summary"
-      report: { from: "$investigate.output.report" }
-    output_format:
-      type: object
-      properties:
-        verdict: { type: string, enum: [rooted, refuted, inconclusive] }
-        rooted: { type: boolean }
-        summary: { type: string }
-        report:
-          type: object
-          properties:
-            type: { type: string, enum: [archon_artifact] }
-            run_id: { type: string }
-            path: { type: string, enum: [investigation.md] }
-          required: [type, run_id, path]
-      required: [verdict, rooted, summary, report]
