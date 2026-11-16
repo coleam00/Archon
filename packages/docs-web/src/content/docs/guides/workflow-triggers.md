@@ -74,6 +74,31 @@ authorization as every surface: the run's starter or an admin may act. A chat me
 the Archon user their platform identity resolves to; link it to your existing user with
 `archon user link <id> slack:U123` to act on runs you started elsewhere.
 
+## Show progress on the item's tracker
+
+`archon serve` can keep one status comment on the issue or pull request an [item](/reference/cli/#items) is about, so someone reading the tracker sees what Archon is doing with it without opening Archon. It is off unless `~/.archon/config.yaml` turns it on; repository config cannot carry it:
+
+```yaml
+itemTracker:
+  includeUsage: false   # cost and token counts on the comment; off unless true
+  projects:
+    - project: acme/widgets                     # the item's project, as GET /api/items shows it
+      repo: { host: github.com, path: acme/widgets }
+      keys:
+        - { prefix: 'issue-', kind: issue }     # item issue-42 is issue 42 of acme/widgets
+        - { prefix: 'pr-', kind: pr }           # item pr-17 is pull request 17
+```
+
+An item names its tracker subject only through its key. The rest of the key after a prefix must be a plain number (`issue-42`, not `issue-042` or `issue-42a`), and no prefix in a project may start another. An item whose key matches no rule gets nothing. Give runs those keys with `workflow run --item issue-42` or `trigger fire --item issue-42`; a stage that a run-ended binding starts stays on the item of the run that ended.
+
+The status comment carries the marker `<!-- archon-item-status -->` and lists the item's runs in the order they started: the workflow, `in progress` or how it ended (`completed`, `failed`, `cancelled`), and the outcome it completed with. Below the table it links the newest pull request a run on the item opened through `archon forge pr.create`. The comment is written when a run on the item starts and edited when one ends or resumes, never for progress inside a run, so after the first post an edit sends no notification. Archon writes it one way: nothing reads the comment back.
+
+The comment never contains local paths, user names or ids, prompts, messages, node names, logs, run results or error text; a failed run shows only its status. Cost and token counts appear only with `includeUsage: true`.
+
+Writes go through the forge plugin's `workitem.comment.upsert` operation. At startup the server checks each project's plugin once: a plugin that does not claim the host, lacks the operation or has no credential is logged as `item_tracker.misconfigured`, shows as `tracker:<project>` with state `misconfigured` in `/api/health`, and writes nothing until a restart. A write that fails is logged as `item_tracker.write_failed` and retried on the next scan; one the forge refuses for good, such as a key naming an issue that does not exist, is not retried until a restart. A failed write never fails or delays a run.
+
+Turning the tracker on writes nothing for runs that already ended: the first startup records them as shown. Only `archon serve` writes the comment; a CLI-only install writes none. Two installs, or two projects, that map the same issue edit the same comment, which is not supported.
+
 ## Find your run-as user ID
 
 Every binding names the Archon user whose provider configuration and credentials the run uses, as `runAsUserId`. To use your own CLI identity, run:

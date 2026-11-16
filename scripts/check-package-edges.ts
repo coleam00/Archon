@@ -72,6 +72,7 @@ export const PACKAGE_LAYERING: Layering = {
       'adapters',
       'chat-contract',
       'core',
+      'forge',
       'git',
       'paths',
       'provider-contract',

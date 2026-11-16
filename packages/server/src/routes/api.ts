@@ -12,6 +12,7 @@ import type { WebAdapter } from '../adapters/web';
 import { dagNodeSseEventSchema } from '../adapters/web/workflow-event.schemas';
 import { isApiGateEnabled } from '../auth';
 import type { AttentionRouter } from '../services/attention-router';
+import type { ItemTracker } from '../services/item-tracker';
 import type { WebPushDestination } from '../services/web-push';
 import { createOrchestratorDispatch } from './api-message-dispatch';
 import { requireWebUser, resolveAuthContext } from './api-request-auth';
@@ -50,7 +51,11 @@ export function registerApiRoutes(
   webAdapter: WebAdapter,
   lockManager: ConversationLockManager,
   activePlatforms?: readonly string[],
-  attention?: { webPush: WebPushDestination; router: AttentionRouter },
+  attention?: {
+    webPush: WebPushDestination;
+    router: AttentionRouter;
+    tracker?: Pick<ItemTracker, 'health'>;
+  },
   registration: Pick<CloneOptions, 'githubAppAuth'> = {},
   commit?: AppCommit
 ): void {

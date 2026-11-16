@@ -118,6 +118,17 @@ streaming:
 #   - platform: slack
 #     destination: C0123456789
 
+# Item tracker (global config only, off when absent): archon serve keeps one status
+# comment on the issue or pull request an item's key names. includeUsage adds cost and
+# token counts. See "Show progress on the item's tracker" in the workflow triggers guide.
+# itemTracker:
+#   includeUsage: false
+#   projects:
+#     - project: acme/widgets
+#       repo: { host: github.com, path: acme/widgets }
+#       keys:
+#         - { prefix: 'issue-', kind: issue }
+
 # Server-wide conversation admission
 # Precedence: default (10) < global YAML < MAX_CONCURRENT_CONVERSATIONS.
 # Repository config cannot change this limit.
@@ -170,7 +181,7 @@ Invalid assistants config in '/Users/you/.archon/config.yaml':
 
 `archon doctor` reports the same failure as the **Config files** check. To repair `~/.archon/config.yaml` through Archon, change the invalid value from the console settings; any other settings, `archon ai tier set`, or `archon ai alias set` change is refused until that value is fixed, because Archon validates the whole file before writing it. An `assistants:` entry for a provider this install has not registered is ignored, as before — there is no provider to validate it.
 
-The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotices` and `concurrency`, fail the same way when their own check refuses a value. So does a file that is not valid YAML, whose top level is not a map of settings, or that Archon cannot read. The failure names the file and stops startup, `archon doctor`, run starts, chat messages and workflow listings such as `archon workflow list`; Archon never loads the file with that block replaced by defaults. Only a missing file falls back: `~/.archon/config.yaml` is created from the template, and a missing repository config uses defaults.
+The other blocks, `tiers`, `aliases`, `workflows`, `streaming`, `attentionNotices`, `itemTracker` and `concurrency`, fail the same way when their own check refuses a value. So does a file that is not valid YAML, whose top level is not a map of settings, or that Archon cannot read. The failure names the file and stops startup, `archon doctor`, run starts, chat messages and workflow listings such as `archon workflow list`; Archon never loads the file with that block replaced by defaults. Only a missing file falls back: `~/.archon/config.yaml` is created from the template, and a missing repository config uses defaults.
 
 ## Provider concurrency caps
 
