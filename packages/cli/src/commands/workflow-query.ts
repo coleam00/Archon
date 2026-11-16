@@ -56,6 +56,7 @@ import {
   transcriptUnavailableMessage,
 } from './workflow-transcript';
 import { printStatusRun, announceWaitAttached, writeWaitOutcome } from './workflow-inspect';
+import { findRunsCodebase, type RunsCodebase } from './workflow-item-runs';
 
 async function reportUnavailablePlugins(): Promise<void> {
   // Discovery reports scan failures alongside any independently loaded workflows.
@@ -533,7 +534,7 @@ export async function workflowRunsCommand(
   if (codebase instanceof Error) return refuseRuns(opts, codebase);
   // The open-work inbox contains terminal failed runs with no adopter or successor.
   try {
-    if (opts.item !== undefined) return await readItemRuns(host, opts.item, opts, codebase);
+    if (opts.item !== undefined) return await readItemCommand(host, opts.item, opts, codebase);
     if (opts.open) return await listOpenWorkRuns(host, opts, codebase);
     return await listRecentRuns(host, cwd, opts, codebase, statusFilter);
   } catch (error) {
@@ -561,7 +562,6 @@ interface RunsOptions {
   itemOf?: string;
   verbose?: boolean;
 }
-type RunsCodebase = Awaited<ReturnType<typeof findCodebaseForCheckoutPath>> | undefined;
 
 /** --json never throws — emit one parseable {ok:false} line (write-command contract). */
 async function refuseRuns(
@@ -583,24 +583,8 @@ function parseRunsStatus(status: string | undefined): WorkflowRunStatus | undefi
   );
 }
 
-async function findRunsCodebase(
-  host: WorkflowHost,
-  cwd: string,
-  opts: RunsOptions
-): Promise<RunsCodebase | Error> {
-  try {
-    const inherited = await inheritedWorkflowCodebase(host, opts.all);
-    if (inherited !== undefined || opts.all) return inherited;
-    return await findCodebaseForCheckoutPath(cwd, host.records.codebases);
-  } catch (error) {
-    const err = error as Error;
-    getLog().error({ err, cwd }, 'cli.workflow_runs_codebase_lookup_failed');
-    return new Error(`Failed to resolve workflow runs project: ${err.message}`, { cause: err });
-  }
-}
-
 /** Read one item: its runs, open questions and answers (`readItem`), oldest first. */
-async function readItemRuns(
+async function readItemCommand(
   host: WorkflowHost,
   item: string,
   opts: RunsOptions,

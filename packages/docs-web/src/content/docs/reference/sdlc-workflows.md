@@ -101,14 +101,6 @@ Files the issues a large item splits into, when triage routed the item `split`. 
 
 **What it produces**: The filed issues, which come back through intake, the agent's comment on the item with them listed under it, and the queue's record on its work item (`facts.split`: status, kind and filed issues, or the route when the item was built whole).
 
-#### `archon-worktree-cleanup`
-
-Runs `archon isolation cleanup --merged` across every registered project: each merged worktree goes, with its local branch, including a branch the worktree adopted rather than created. Git base ancestry, patch equivalence, or one merged PR head must cover every existing local tip. Cleanup can discover that PR by the local commits even when it was published under another branch name. Cleanup retains remote branches with a logged warning, including with force. Enable GitHub's **Automatically delete head branches** setting for merged pull requests, or follow [manual remote branch recovery](/reference/cli/#recovering-remote-branch-cleanup). A worktree with uncommitted changes, a live run, or commits the merge does not cover stays. Set `include_closed` to `true` to also accept a closed PR whose head covers every existing local tip.
-
-**When to use it**: You run Archon without a server, whose cleanup schedule already does this, and merged worktrees pile up. [`archon isolation cleanup schedule install`](/reference/cli/#isolation-cleanup-schedule) schedules the same sweep with no workflow. The pack installs no binding; `archon pack bindings sdlc --only worktree-cleanup` writes the one it recommends. [Worktree cleanup](/guides/sdlc-operations/#worktree-cleanup) says who removes each checkout.
-
-**What it produces**: The cleanup report on the node's output. It changes no code.
-
 #### `archon-investigate`
 
 Establishes the proven causal chain for a bug, unexplained behavior, or open question, down to the root cause whose fix prevents the symptom.
@@ -264,7 +256,6 @@ archon workflow run archon-deliver --adopt <run-id> "#142: the flaky test is out
 | `archon-merge-queue` | Merge reviewed, green PRs the build queue finished (trigger-started) | No | No |
 | `archon-discoveries` | File, track or drop what finished runs discovered | No | No |
 | `archon-split` | File the issues a large item splits into when it can't be built whole (trigger-started) | No | No |
-| `archon-worktree-cleanup` | Remove merged worktrees on a schedule | No | No |
 | `archon-investigate` | Root-cause a bug or question | No | No |
 | `archon-plan` | Plan decided intent | No | No |
 | `archon-implement` | Build decided work | No | Yes (commits) |

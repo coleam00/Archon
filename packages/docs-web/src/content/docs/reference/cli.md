@@ -1052,6 +1052,19 @@ archon workflow wait <run-id> --json --timeout 900
 
 There is no default timeout. Pass `--timeout <seconds>` when the host needs an upper bound.
 
+`archon workflow wait --item <key>` waits on an [item](#items) instead of one run. It
+watches every run on the item that has not ended at call time, plus every run that starts
+on the item while it waits, and returns when the first of them reports something, as
+`workflow wait <run-id>` would for that run. Runs that had already ended are history and
+do not end the wait, unless one is resumed in place while waiting; it is then watched
+too, and reported even when it has already ended again by the time the wait looks. Each result names its run: one line per run, or
+under `--json` one `{ "ok", "action": "wait", "item", "results": [...] }` document whose
+`results` hold exactly what `workflow wait <run-id> --json` prints for each run, and whose
+`ok` is false when the exit status is `1`. Runs that reported together are all listed. An
+item with no live run is refused rather than waited on (`reason: "no_run"`, exit `1`,
+listing the item's runs). Exit codes are as above: `0` when a run reported, `3` when the
+timeout passed with every watched run still live.
+
 Exit codes describe the command, not the run:
 
 | Exit | Meaning |
@@ -1626,7 +1639,22 @@ who owns the run:
 ```bash
 archon workflow cancel <run-id>
 archon workflow cancel <run-id> --json
+archon workflow cancel --item <key> [--all-runs]
 ```
+
+With `--item <key>`, cancel acts on the [item's](#items) run that is `running`, through
+the same path as `workflow cancel <run-id>`, so a live owner is handled the same way.
+Archon never chooses between runs: when several runs on the item are running, cancel
+refuses and lists them; name one by id, or pass `--all-runs` to cancel each in start
+order. With `--all-runs`, one run's failure does not stop the rest, every run is
+reported, and the command exits `1` if any failed. Cancel also refuses an item with no
+running run, and an item one of whose runs cannot be read, since that run may be the one
+to act on. Under `--json` the command prints one
+`{ "ok", "action": "cancel", "item", "results": [...] }` document whose `results` hold
+exactly what the run-id form prints for each run. A refusal prints
+`{ "ok": false, "action", "item", "reason", "error", "runs"? }`, where `reason` is
+`no_project`, `not_found`, `unreadable`, `no_run` or `several_runs`, and `runs` lists the
+runs to choose from.
 
 When cancel refuses, it exits nonzero. Under `--json` it also prints `{ "ok": false, "error": ... }`.
 `workflow resume` and `workflow abandon` follow the same contract, so a script or bash node can
@@ -1715,7 +1743,12 @@ this host:
 ```bash
 archon workflow abandon <run-id>
 archon workflow abandon <run-id> --json
+archon workflow abandon --item <key> [--all-runs]
 ```
+
+`--item <key>` works as it does for [`workflow cancel`](#workflow-cancel), for the item's
+run that is `pending`, `running` or `paused`. A failed run, or a cancelled run whose
+worktree removal you are retrying, is abandoned by id.
 
 `--json` adds an `owner` object: `{ "outcome": "stopped", "pid": … }`, or
 `{ "outcome": "no_owner_answered", "thisHost", "recordedHost", "recordedPid",
@@ -2578,7 +2611,7 @@ A `trigger fire` from inside a run that names no item inherits that run's item, 
 
 A continuation started with `--adopt <run-id>` or `--supersedes <run-id>` and no `--item` belongs to the item of the run it continues, so a fix round or a rerun stays in the item's history. `--item <key>` names another item instead, and a continuation of a run with no item has none. `--supersedes` can name a run of another project by its full id; that run's item cannot be inherited, so the continuation is refused before it starts unless it passes `--item`. The same holds when the continuation has no registered project. A continuation of a run with no item starts in every case.
 
-A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand, and `hasResult`: whether it completed with a readable `returns:` value, which `archon workflow get <id> --json` shows at `terminal_record.returns.value` and a later run on the item reads through a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result). `GET /api/items?project=<project>&key=<key>` is the same read over HTTP.
+A run started with no item, and no run to inherit one from, has none. `archon workflow runs --item <key>` reads an item: its runs, open questions, and answers with rulings. Each run carries its `cause`: the run whose end started it, the run and node that fired it, the trigger source that started it, or `null` for a start by hand, and `hasResult`: whether it completed with a readable `returns:` value, which `archon workflow get <id> --json` shows at `terminal_record.returns.value` and a later run on the item reads through a [`result_of` input](/reference/workflow-language/#reading-an-earlier-runs-result). `GET /api/items?project=<project>&key=<key>` is the same read over HTTP. `workflow wait`, `cancel` and `abandon` also accept `--item <key>` and never choose between an item's runs: `wait` reports every run that settled, and `cancel` and `abandon` refuse when more than one run applies unless `--all-runs` is passed.
 
 A ruling is a decision recorded on the item without a question having been asked ([`workflow rule`](#workflow-rule)). It is a fact about the item, like an answer, and needs no run: recording one on a key nothing has named writes the item. Withdrawing a ruling keeps the record and marks it withdrawn. A workflow reads its item's answers and rulings through `archon:script` [`item()`](/reference/workflow-language/#reading-the-item-a-run-belongs-to); the engine passes them to no node on its own.
 
@@ -2596,19 +2629,22 @@ archon pack bindings <pack> \
   --host <host-id> \
   --run-as <user-id> \
   --out <dir> \
-  [--cwd <checkout>] [--only <id,...>] [--force]
+  [--cwd <checkout>] [--config <file>] [--workflow-source <dir>] \
+  [--only <id,...>] [--force]
 ```
 
-- `<pack>` is the pack's folder name (`sdlc`), or `<owner>.<name>` for an installed pack. It is discovered from `--cwd` as a run there would find it, so a project's copy of a pack wins over the bundled one.
+- `<pack>` is the pack's folder name (`sdlc`), or `<owner>.<name>` for an installed pack. It is discovered from `--cwd` as a run there would find it, so a project's copy of a pack wins over the bundled one. With `--workflow-source`, it is discovered from there instead.
 - `--repo` is the repository the bindings act on, such as `github.com/acme/widgets`.
 - `--host` is the execution host the starts are assigned to: the server's `ARCHON_TRIGGER_HOST`, or the host you pass to `trigger drain`.
 - `--run-as` is the Archon user the runs act as; `archon trigger whoami` prints yours. The command does not check that the user exists; `trigger schedule install` and a webhook delivery do.
 - `--cwd` is the checkout the runs launch in (default: the current directory). It is written as an absolute path.
-- `--out` is where the files go. Each is named `<pack>-<owner>-<name>-<binding id>-<digest>.json`, where the digest is of the pack, repository host and path, and binding ID, so two packs or repositories never share a name. That name without `.json` is its binding ID and a timer's `sourceInstanceId`.
+- `--config` is a [run config](#per-run-config-files) file every written binding launches with, written as `launch.configSource`. It is how model aliases reach a start without the pack naming a model. The file is loaded once before anything is written, so a bad path fails here.
+- `--workflow-source` is the directory the pack's workflows are discovered from when the pack does not live in the checkout, written as `launch.discoveryCwd`, as `workflow run --workflow-source` uses it.
+- `--out` is where the files go. Each is named `<pack>-<owner>-<name>-<binding id>-<digest>.json`, where the digest is of the pack, repository host and path, and binding ID, so two packs or repositories never share a name. That name without `.json` is its binding ID and its `sourceInstanceId`.
 - `--only` writes the listed bindings. A binding whose input names another binding's file needs that binding listed too, or its file already in `--out`.
 - `--force` replaces existing files. Without it, one existing file refuses the whole set and nothing is written.
 
-A timer binding is written as a complete `trigger fire --config` file. A fire-only binding is the same file without `schedule`; the command lists it under its own heading with the `trigger fire` command that starts it, and `trigger schedule install` refuses it. An event binding is written as one object for the `bindings` array of the GitHub source plugin's `config`, in the file `ARCHON_WEBHOOK_SOURCES` names, because the plugin reads bindings only from there. The plugin accepts `github.com` repositories, so the command refuses to write an event binding for another host. Every file is checked against the schema of the loader that will read it before any is written. `--json` prints `{"pack", "written": [{"id", "kind", "path"}]}`, where `kind` is `timer`, `event` or `fire`.
+A timer binding is written as a complete `trigger fire --config` file. A fire-only binding is the same file without `schedule`; the command lists it under its own heading with the `trigger fire` command that starts it, and `trigger schedule install` refuses it. An event binding is written as one object for the `bindings` array of the GitHub source plugin's `config`, in the file `ARCHON_WEBHOOK_SOURCES` names, because the plugin reads bindings only from there. The plugin accepts `github.com` repositories, so the command refuses to write an event binding for another host. A [run-ended binding](/guides/workflow-triggers/#start-a-stage-when-a-run-on-an-item-ends) is written as one trigger file per outcome it declares, named `<pack>-<owner>-<name>-<binding id>-<outcome>-<digest>.json`. The command prints the `cp` that registers each: the engine reads `ARCHON_HOME/triggers/` at every completion, so a copy there is active at once, `archon trigger check` lists it, and deleting it turns it off. Because one invalid file there fails item runs on the whole install, every run-ended file is checked as `trigger check` checks it (the ended workflow declares the outcome and every input read from it, the started workflow declares every input mapped to it, `launch.cwd` exists, and the binding does not start the workflow whose end fires it) before any file is written. A duplicate of a file already in the triggers directory, or of one in another checkout of the same project, is left to `trigger check`, which reads the install's projects, and the command refuses run-ended bindings on `store: files`. Every file is checked against the schema of the loader that will read it before any is written. `--json` prints `{"pack", "written": [{"id", "kind", "path"}]}`, where `kind` is `timer`, `event`, `fire` or `run_ended`, and a `run_ended` entry also has its `outcome`.
 
 ```bash
 archon pack bindings sdlc --repo github.com/acme/widgets --host build-host-1 \

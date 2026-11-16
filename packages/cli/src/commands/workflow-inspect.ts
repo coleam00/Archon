@@ -107,29 +107,24 @@ export async function writeWaitOutcome(
   result: RunWaitResult,
   json: boolean | undefined
 ): Promise<void> {
-  if (result.kind === 'not_found') {
-    if (json) {
-      await writeJsonLine({ ok: false, runId, action: 'wait', error: 'not_found' });
-    } else {
-      console.log(formatWaitOutcome(resolvedId, result));
-    }
-    return;
-  }
+  if (json) await writeJsonLine(waitOutcomePayload(runId, resolvedId, result));
+  else console.log(formatWaitOutcome(resolvedId, result));
+}
 
-  if (json) {
-    await writeJsonLine({
-      ok: true,
-      action: 'wait',
-      runId: resolvedId,
-      result: result.kind,
-      ...(result.kind === 'attention' ? { attention: result.attention } : {}),
-      ...(result.kind === 'deadline' || result.kind === 'owner_lost'
-        ? { observedStatus: result.observedStatus }
-        : {}),
-    });
-  } else {
-    console.log(formatWaitOutcome(resolvedId, result));
-  }
+/** The `--json` value `workflow wait` prints for one run: `runId` is the id as the caller gave it. */
+export function waitOutcomePayload(runId: string, resolvedId: string, result: RunWaitResult) {
+  if (result.kind === 'not_found')
+    return { ok: false, runId, action: 'wait', error: 'not_found' } as const;
+  return {
+    ok: true,
+    action: 'wait',
+    runId: resolvedId,
+    result: result.kind,
+    ...(result.kind === 'attention' ? { attention: result.attention } : {}),
+    ...(result.kind === 'deadline' || result.kind === 'owner_lost'
+      ? { observedStatus: result.observedStatus }
+      : {}),
+  } as const;
 }
 
 /**

@@ -261,7 +261,7 @@ export async function resolveRunTranscriptPath(
  * spelling, so the command is written here, where `archon workflow …` is what the operator
  * can actually type.
  */
-function cliRefusalText(error: unknown): string {
+export function cliRefusalText(error: unknown): string {
   return workflowOperationErrorMessage(error, CLI_WORKFLOW_SURFACE);
 }
 
@@ -299,7 +299,12 @@ export function withItemHint(error: unknown): unknown {
 }
 
 export function printJsonWriteError(runId: string, action: string, error: unknown): Promise<void> {
-  return writeJsonLine({ ok: false, runId, action, error: cliRefusalText(error) });
+  return writeJsonLine(jsonWriteError(runId, action, error));
+}
+
+/** The `{ ok: false }` value a write command reports for a run it could not act on. */
+export function jsonWriteError(runId: string, action: string, error: unknown) {
+  return { ok: false, runId, action, error: cliRefusalText(error) } as const;
 }
 
 export async function inheritedWorkflowCodebase(host: WorkflowHost, all?: boolean) {
