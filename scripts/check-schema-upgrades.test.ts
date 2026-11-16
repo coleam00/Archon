@@ -60,19 +60,30 @@ skipOnWindows('a DATABASE_URL with no host names no server on its own', () => {
   expect(r.out).toContain('DATABASE_URL names no host');
 });
 
-skipOnWindows('a DATABASE_URL that repeats or empties a server parameter is refused', () => {
-  // libpq takes the last value of a repeated parameter, and an empty host means
-  // the default socket, overriding both the authority and PGHOST.
+skipOnWindows('a setting that can leave psql on the default socket is refused', () => {
+  // Each names something, yet libpq may still pick its default local socket:
+  // an empty host entry, a repeated URL parameter (libpq takes the last), or a
+  // service whose file need not hold a host.
   for (const conn of <Record<string, string>[]>[
     { DATABASE_URL: 'postgres://named.invalid/app?host=' },
-    { DATABASE_URL: 'postgres://named.invalid/app?host=named.invalid&host=' },
+    { DATABASE_URL: 'postgres://named.invalid/app?host=named.invalid&host=other.invalid' },
     { DATABASE_URL: 'postgres://named.invalid/app?hostaddr=' },
     { DATABASE_URL: 'postgres:///app?host=', PGHOST: '/scratch/sock' },
+    { DATABASE_URL: 'postgres:///app?host=,' },
+    { DATABASE_URL: 'postgres:///app?host=named.invalid,' },
+    { PGHOST: ',' },
+    { PGHOST: '/scratch/sock,' },
+    { PGHOST: '/scratch/sock', PGHOSTADDR: '127.0.0.1,' },
+    { PGSERVICE: 'hostless' },
+    { PGSERVICE: 'hostless', PGHOST: '/scratch/sock' },
+    { DATABASE_URL: 'postgres:///app?service=hostless' },
+    { DATABASE_URL: 'postgres://named.invalid/app?service=hostless' },
   ]) {
+    const label = JSON.stringify(conn);
     const r = run(conn);
-    expect(r.status, conn.DATABASE_URL).toBe(1);
-    expect(r.calls, conn.DATABASE_URL).toEqual([]);
-    expect(r.out).toContain('repeats or empties');
+    expect(r.status, label).toBe(1);
+    expect(r.calls, label).toEqual([]);
+    expect(r.out, label).toContain('scratch server you name');
   }
 });
 
@@ -80,6 +91,9 @@ skipOnWindows('a named server is the one every psql call targets', () => {
   const byHost = run({ PGHOST: '/scratch/sock', PGUSER: 'postgres' });
   expect(byHost.calls.length).toBeGreaterThan(0);
   expect(new Set(byHost.calls)).toEqual(new Set(['PGHOST=/scratch/sock -d postgres']));
+
+  const byHostaddr = run({ PGHOSTADDR: '127.0.0.1', PGUSER: 'postgres' });
+  expect(byHostaddr.calls.length).toBeGreaterThan(0);
 
   const byUrl = run({ DATABASE_URL: 'postgres://u@scratch.example:5433/app?sslmode=disable' });
   expect(byUrl.calls.length).toBeGreaterThan(0);
