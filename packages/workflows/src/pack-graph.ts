@@ -15,7 +15,8 @@ import { declaredOutcome } from './completed-outcome';
 import { readComposedMeta } from './compiled-command';
 import type { PackBinding } from './schemas/pack-bindings';
 import { kindedPackBinding } from './schemas/pack-bindings';
-import { isComposeFanOutNode } from './schemas/node-guards';
+import { loopBodyStepNamePrefix, resolvedBodyNodes } from './graph-plan';
+import { isComposeFanOutNode, isLoopGroupNode } from './schemas/node-guards';
 import type { RunEndedTrigger } from './schemas/resource-start';
 import type {
   ResolvedWorkflow,
@@ -29,6 +30,12 @@ const packGraphNodeSchema = z.object({
   id: z.string(),
   kind: z.string(),
   dependsOn: z.array(z.string()),
+  /**
+   * The loop group whose body the node is in, by that group's id here; null at the top of
+   * the stage. A body node's `id` and `dependsOn` are step names, `<group>.<body id>`, the
+   * names its runs are recorded under.
+   */
+  loopGroup: z.string().nullable(),
   /** The include blocks the node came from, outermost first; empty when the stage authored it. */
   blocks: z.array(z.object({ include: z.string(), workflow: z.string() })),
   /**
@@ -197,17 +204,30 @@ export interface InstalledArrow {
 type Stage = Pick<ResolvedWorkflow, 'name' | 'returns' | 'result' | 'nodes'>;
 type GraphNode = PackGraph['stages'][number]['nodes'][number];
 
-function stageNodes(stage: Pick<Stage, 'nodes'>): GraphNode[] {
-  return stage.nodes.map(node => ({
-    id: node.id,
-    kind: node.kind,
-    dependsOn: [...(node.depends_on ?? [])],
-    blocks: (readComposedMeta(node)?.boundaries ?? []).map(({ boundary }) => ({
-      include: boundary.includeId,
-      workflow: boundary.workflow,
-    })),
-    fanOut: isComposeFanOutNode(node) ? { workflow: node.include } : null,
-  }));
+/**
+ * A stage's nodes, with each loop group's body after the group, recursively. Body nodes
+ * take the step names the engine runs them under (`loopBodyStepNamePrefix`).
+ */
+function stageNodes(stage: Pick<Stage, 'nodes'>, group: string | null = null): GraphNode[] {
+  const prefix = group === null ? '' : loopBodyStepNamePrefix(group);
+  return stage.nodes.flatMap(node => {
+    const id = prefix + node.id;
+    const graphNode: GraphNode = {
+      id,
+      kind: node.kind,
+      // The loader checks a body node's `depends_on` against its own body, so every one is a sibling.
+      dependsOn: (node.depends_on ?? []).map(dep => prefix + dep),
+      loopGroup: group,
+      blocks: (readComposedMeta(node)?.boundaries ?? []).map(({ boundary }) => ({
+        include: boundary.includeId,
+        workflow: boundary.workflow,
+      })),
+      fanOut: isComposeFanOutNode(node) ? { workflow: node.include } : null,
+    };
+    return isLoopGroupNode(node)
+      ? [graphNode, ...stageNodes({ nodes: resolvedBodyNodes(node.loop_group) }, id)]
+      : [graphNode];
+  });
 }
 
 /**

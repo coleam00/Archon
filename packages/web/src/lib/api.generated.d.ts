@@ -9516,6 +9516,7 @@ export interface components {
           id: string;
           kind: string;
           dependsOn: string[];
+          loopGroup: string | null;
           blocks: {
             include: string;
             workflow: string;
@@ -9565,6 +9566,7 @@ export interface components {
           id: string;
           kind: string;
           dependsOn: string[];
+          loopGroup: string | null;
           blocks: {
             include: string;
             workflow: string;

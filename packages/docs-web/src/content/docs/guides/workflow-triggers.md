@@ -317,13 +317,13 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
       },
       "asks": true,
       "nodes": [
-        { "id": "read", "kind": "agent", "dependsOn": [], "blocks": [], "fanOut": null },
-        { "id": "decide", "kind": "agent", "dependsOn": ["read"], "blocks": [], "fanOut": null }
+        { "id": "read", "kind": "agent", "dependsOn": [], "loopGroup": null, "blocks": [], "fanOut": null },
+        { "id": "decide", "kind": "agent", "dependsOn": ["read"], "loopGroup": null, "blocks": [], "fanOut": null }
       ]
     },
     {
       "name": "build",
-      "returns": "review__verdict",
+      "returns": "verdict",
       "outcome": {
         "field": "outcome",
         "form": "enum",
@@ -334,14 +334,17 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
       },
       "asks": false,
       "nodes": [
-        { "id": "implement", "kind": "agent", "dependsOn": [], "blocks": [], "fanOut": null },
+        { "id": "rounds", "kind": "loop_group", "dependsOn": [], "loopGroup": null, "blocks": [], "fanOut": null },
+        { "id": "rounds.implement", "kind": "agent", "dependsOn": [], "loopGroup": "rounds", "blocks": [], "fanOut": null },
         {
-          "id": "review__verdict",
+          "id": "rounds.review__check",
           "kind": "agent",
-          "dependsOn": ["implement"],
-          "blocks": [{ "include": "review", "workflow": "review-block" }],
+          "dependsOn": ["rounds.implement"],
+          "loopGroup": "rounds",
+          "blocks": [{ "include": "rounds.review", "workflow": "review-block" }],
           "fanOut": null
-        }
+        },
+        { "id": "verdict", "kind": "exec", "dependsOn": ["rounds"], "loopGroup": null, "blocks": [], "fanOut": null }
       ]
     },
     { "name": "ship", "returns": null, "outcome": null, "asks": false, "nodes": [] }
@@ -372,7 +375,7 @@ Run-ended bindings need the database store, as items do. With `store: files`, `a
 ```
 
 - A stage is a workflow of the pack. Its `outcome` is what its [`returns:`](/reference/workflow-language/) declares, read through an `include:` when the returns node is in an included block; a boolean outcome lists `succeeded` and `failed`.
-- `nodes` are the stage's nodes after includes are expanded, under the ids its runs record (`<include>__<id>`); `blocks` names the include each came from, outermost first. A `loop_group` is one node. An `include:` with `fan_out:` is one `compose_fan_out` node, because its width is known only at run time; its `fanOut.workflow` names its body in `fanOutBlocks`, which lists each such body's nodes once, including bodies a body fans out to.
+- `nodes` are the stage's nodes after includes are expanded, under the ids its runs record (`<include>__<id>`); `blocks` names the include each came from, outermost first. A `loop_group` is a node, and its body follows it: each body node has `loopGroup` set to the group's id, and its `id` and `dependsOn` are the step names its runs are recorded under (`<group>.<id>`, composing across nested groups, as in `rounds.review__check`). A body's included blocks are named the same way (`rounds.review`). An `include:` with `fan_out:` is one `compose_fan_out` node, because its width is known only at run time; its `fanOut.workflow` names its body in `fanOutBlocks`, which lists each such body's nodes once, including bodies a body fans out to.
 - An arrow is `active` when a trigger file launches it in this project. A declared arrow with no file is reported with `active: false`, not left out. `to` may be a workflow outside the pack. An active arrow's `installed.problems` is what `archon trigger check` reports as the check a run gets before it starts: when it is not empty, every run of `from.stage` on an item is refused before it starts, so the arrow starts nothing until the file is fixed. A file whose `launch.cwd` no longer exists is in no project, so the end of a run never starts it; it is shown with that problem because which project it was meant for cannot be known.
 - A declared binding that names a workflow which is not a stage as the pack loaded keeps the name as written, and its `declared.problems` says so. When that stage failed to load, its load error is in `discoveryErrors`; the rest of the graph is still read.
 - `startsNothing` marks an outcome no active arrow without problems leaves. With `asks: false` such an outcome ends in silence; whether that is right is the pack's call.

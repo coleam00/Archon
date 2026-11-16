@@ -137,8 +137,9 @@ describe('readPackGraph', () => {
 
     const [arrow] = graph.arrows;
     if (!arrow?.active) throw new Error('the installed file is not an active arrow');
+    // One problem, naming the checkout that is gone; its wording is free to change.
     expect(arrow.installed.problems).toEqual([
-      expect.stringContaining('does not exist, so this binding never starts'),
+      expect.stringContaining(join(root, 'removed-checkout')),
     ]);
     expect(graph.stages.find(s => s.name === 'chain-a')?.outcome?.values).toContainEqual({
       value: 'ready',

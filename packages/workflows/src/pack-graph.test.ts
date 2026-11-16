@@ -74,7 +74,8 @@ const plain = (id: string, dependsOn: string[] = []) => ({
   id,
   kind: 'exec',
   dependsOn,
-  blocks: [],
+  loopGroup: null as string | null,
+  blocks: [] as { include: string; workflow: string }[],
   fanOut: null,
 });
 
@@ -196,6 +197,45 @@ describe('a pack graph', () => {
       plain('build'),
       { ...plain('check__look', ['build']), blocks },
       { ...plain('check__decide', ['check__look']), blocks },
+    ]);
+  });
+
+  test('a loop group lists its body, nested groups and included blocks under their step names', () => {
+    const pr = wf('pr', [
+      { id: 'open', bash: 'true' },
+      { id: 'publish', bash: 'true', depends_on: ['open'] },
+    ]);
+    const loop = (nodes: unknown[]) => ({ until: 'DONE', max_iterations: 2, nodes });
+    const deliver = wf('deliver', [
+      { id: 'start', bash: 'true' },
+      {
+        id: 'rounds',
+        depends_on: ['start'],
+        loop_group: loop([
+          { id: 'build', bash: 'true' },
+          { id: 'pr', include: 'pr', depends_on: ['build'] },
+          { id: 'inner', depends_on: ['pr'], loop_group: loop([{ id: 'check', bash: 'true' }]) },
+        ]),
+      },
+    ]);
+    const graph = graphOf(
+      stages(pr, deliver).filter(s => s.name === 'deliver'),
+      { declared: undefined, installed: [] }
+    );
+
+    const blocks = [{ include: 'rounds.pr', workflow: 'pr' }];
+    const inRounds = (id: string, dependsOn: string[] = []) => ({
+      ...plain(`rounds.${id}`, dependsOn),
+      loopGroup: 'rounds',
+    });
+    expect(graph.stages[0]?.nodes).toEqual([
+      plain('start'),
+      { ...plain('rounds', ['start']), kind: 'loop_group' },
+      inRounds('build'),
+      { ...inRounds('pr__open', ['rounds.build']), blocks },
+      { ...inRounds('pr__publish', ['rounds.pr__open']), blocks },
+      { ...inRounds('inner', ['rounds.pr__publish']), kind: 'loop_group' },
+      { ...plain('rounds.inner.check'), loopGroup: 'rounds.inner' },
     ]);
   });
 
