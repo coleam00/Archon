@@ -464,7 +464,9 @@ describe('detached run worktree ownership', () => {
       { name: otherName, bash },
     ]);
     const paths = new Set<string>();
-    for (const workflow of [name, name, otherName]) {
+    // Two runs prove a prefix-sharing launch gets its own checkout; a repeat of the same
+    // name differs only by run id, which the branch-naming unit test already covers.
+    for (const workflow of [name, otherName]) {
       const { ack, run, databasePath } = await completeDetachedWorktreeRun(fixture, workflow);
       const environments = readWorktreeEnvironments(databasePath);
       const env = environments.find(env => env.working_path === run.working_path);
@@ -484,6 +486,6 @@ describe('detached run worktree ownership', () => {
         reason: 'uncommitted_changes',
       });
     }
-    expect(fixture.git('worktree', 'list', '--porcelain').split('worktree ')).toHaveLength(5);
+    expect(fixture.git('worktree', 'list', '--porcelain').split('worktree ')).toHaveLength(4);
   }, 30_000);
 });

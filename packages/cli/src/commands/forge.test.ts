@@ -673,14 +673,17 @@ test('forge check exits 1 with a typed reason for a missing plugin, capability o
 
   // Capabilities are refused before the credential is read, so the absent token is not the reason.
   const unsupported = await checkForge(
-    { host: 'forge.example', operations: ['checks.state', 'pr.merge'] },
+    { host: 'forge.example', operations: ['checks.state', 'pr.merge', 'pr.review.submit'] },
     env
   );
   expect(unsupported.code).toBe(1);
   expect(unsupported.response).toMatchObject({
     ok: false,
-    error: { kind: 'unsupported_op', message: 'plugin test does not support pr.merge' },
-    unsupported: ['pr.merge'],
+    error: {
+      kind: 'unsupported_op',
+      message: 'plugin test does not support pr.merge, pr.review.submit',
+    },
+    unsupported: ['pr.merge', 'pr.review.submit'],
   });
 
   const noCredential = await checkForge(

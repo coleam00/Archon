@@ -264,7 +264,7 @@ Archon provides the `archon:script` module to every `runtime: bun` script: named
 | `outcomes()` | The engine's listing of what each node of the run has recorded (`$NODE_OUTCOMES_FILE`) |
 | `trigger.fire(binding, inputs, options)` | Fires a trigger binding (`archon trigger fire`) and returns the admission its request got |
 | `notice(text, labels)` | Tells whoever watches attention with `--notices` what the run did (`archon workflow notice`). The run does not pause |
-| `item()` | The [item](/reference/cli/#items) the run belongs to (`archon workflow runs --item-of`): its runs, open questions, and answers with rulings, oldest first; `null` when the run is on no item. See [Reading the item a run belongs to](/reference/workflow-language/#reading-the-item-a-run-belongs-to) |
+| `item()` | The [item](/reference/cli/#items) the run belongs to (`archon workflow runs --item-of`): its runs, open questions, and answers with rulings, oldest first, and its links; `null` when the run is on no item. See [Reading the item a run belongs to](/reference/workflow-language/#reading-the-item-a-run-belongs-to) |
 
 Write `input('<name>')` with a string literal. Archon checks at load that every input a script reads is provided, and it reads `input('pr-number')` in the node's own script the way it reads `process.env.INPUTS_PR_NUMBER`. A computed name, or a read inside an imported module, is not checked.
 
@@ -288,6 +288,8 @@ try {
 Every function that calls the host throws `HostCommandError` when the CLI gives no answer at all; after a write, treat it as possibly applied. The host validates each forge request and result against the forge contract, so the module does not validate them again. To refuse early when a host has no plugin, lacks an operation or has no credential, call `forge('check', { host, operations })` in the workflow's first node; see [Check forge access before a run spends](/reference/forge/#check-forge-access-before-a-run-spends).
 
 **State writes.** `state.put`, `patch` and `delete` return `{ ok: true, revision }`, or `{ ok: false, conflict }` when the store refused the write: `revision_moved`, `lease_held` or `lease_not_held`. Their options are `ifRevision`, `lease: 'take' | 'release'` and `held`, which are the CLI's `--if-revision`, `--lease`, `--release-lease` and `--held`. `state.claim(candidates)` returns `{ claimed, skipped }`; `claimed` is null when nothing could be taken.
+
+**Firing a binding.** `trigger.fire(binding, inputs, { deliveryId, item })` runs `archon trigger fire` with the same refusals. `item: '<key>'` puts the started run on that [item](/reference/cli/#items) in the run's own project (`--item`); `item: null` starts it on no item (`--no-item`). Leave `item` out and a fire from a run on an item inherits that item, which is refused when the binding starts its run in another project; the call then throws `HostCommandError` with the CLI's message.
 
 **Notices.** `notice('Merged pull request 7', { kind: 'merged', pr: '7' })` records one line about what the run did; a reader of `archon workflow attention --watch --notices` sees it, and `--notices --since 24h` lists it later. Call it when something real happened, not on a pass that found nothing to do. The text is one line of at most 300 characters and a run may emit 50; past a bound the call throws `HostCommandError`, so catch it where a refused notice must not fail the node. See [Notices](/getting-started/operate/#notices-what-the-work-did).
 

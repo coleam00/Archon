@@ -37,7 +37,12 @@ import {
 } from './loop';
 import { validateNodeHooks } from './hooks';
 import type { AgentNode } from './agent-node';
-import { dagNodeBaseSchema, isNodeContextResume, nodeContextResumeSchema } from './dag-node-base';
+import {
+  dagNodeBaseSchema,
+  isNodeContextResume,
+  isNodeContextSame,
+  nodeContextResumeSchema,
+} from './dag-node-base';
 import {
   bashExecAuthoringSchema,
   bashExecFlatSchema,
@@ -314,6 +319,19 @@ function validateDagNode(data: DagNodeFields, ctx: z.RefinementCtx): void {
   const mode = modes[0];
   if (isNodeContextResume(data.context) && mode !== 'command' && mode !== 'prompt') {
     addIssue(ctx, "'context.resume' is only supported on command and prompt nodes", ['context']);
+  }
+  if (isNodeContextSame(data.context)) {
+    if (mode !== 'command' && mode !== 'prompt') {
+      addIssue(ctx, "'context: same' is only supported on command and prompt nodes", ['context']);
+    }
+    // Two cross-run mechanisms with different scopes on one node: say which, never pick one.
+    if (data.persist_session !== undefined) {
+      addIssue(
+        ctx,
+        "'context: same' and 'persist_session' are mutually exclusive: 'same' already continues the node's session across runs on the same item",
+        ['persist_session']
+      );
+    }
   }
   if (mode === undefined) {
     validateModelessNode(data, ctx);

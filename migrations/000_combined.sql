@@ -236,7 +236,7 @@ CREATE TABLE IF NOT EXISTS remote_agent_workflow_node_sessions (
 );
 
 COMMENT ON TABLE remote_agent_workflow_node_sessions IS
-  'Per-node provider session IDs persisted across workflow re-runs. Keyed by (workflow, node, scope, provider). Scope is typically conversation UUID. No cascade on conversation delete (soft delete + never-reused UUID = harmless orphans); a future hard-delete path must delete by scope_key.';
+  'Per-node provider session IDs persisted across workflow re-runs. Keyed by (workflow, node, scope, provider). Scope is the launching conversation UUID for persist_session, or item:<item_id> for context: same. No cascade on conversation delete (soft delete + never-reused UUID = harmless orphans); a future hard-delete path must delete by scope_key.';
 
 -- ============================================================================
 -- Table 7: Messages
@@ -777,6 +777,63 @@ CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
   CHECK ((withdraws IS NULL) = (text IS NOT NULL))
 );
 
+-- Links between items: accepted, directed relations, read from from_item_id to to_item_id.
+-- One row per link. The link and who recorded it are written at insert and never change;
+-- ending a link writes the ended_* columns once, so the original fact and who ended it and
+-- when stay readable. Rows are never deleted. While active, the same (from, to, kind) is
+-- stored once (idx_item_links_active). The schema lets a link join items of two projects.
+-- The engine stores and reports links and gives the kinds no meaning. id is TEXT, as for
+-- rulings; from_run_id and ended_from_run_id have no foreign key.
+CREATE TABLE IF NOT EXISTS remote_agent_item_links (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  -- Recording order; timestamps tie within a millisecond and `id` is random.
+  seq BIGSERIAL NOT NULL UNIQUE,
+  from_item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  to_item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  kind TEXT NOT NULL,
+  by_declared TEXT,
+  by_user_id TEXT,
+  via TEXT NOT NULL,
+  from_run_id TEXT,
+  from_node_path TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  ended_at TIMESTAMP WITH TIME ZONE,
+  ended_by_declared TEXT,
+  ended_by_user_id TEXT,
+  ended_via TEXT,
+  ended_from_run_id TEXT,
+  ended_from_node_path TEXT,
+  CHECK (from_item_id <> to_item_id),
+  CHECK ((ended_at IS NULL) = (ended_via IS NULL))
+);
+
+-- Asks: decisions a completed run left for an operator on its item (returns.asks). A row
+-- opens in the write that completes the run and closes once: answered, withdrawn, or
+-- replaced when a later completed run of the same workflow on the same item leaves its
+-- own set. run_id is the run that left it and names the set; like from_run_id on a
+-- ruling it has no foreign key, so run cleanup keeps the record. `ask` is the JSON the
+-- run left, read tolerantly because more than one binary reads it.
+-- closed_as is checked in code, not by a constraint: a later binary may close an ask in a
+-- way this one does not know, and a reader treats that row as unreadable, not as open.
+CREATE TABLE IF NOT EXISTS remote_agent_item_asks (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  run_id TEXT NOT NULL,
+  workflow_name TEXT NOT NULL,
+  position INTEGER NOT NULL,
+  ask JSONB NOT NULL,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  closed_as TEXT,
+  answer JSONB,
+  closed_at TIMESTAMP WITH TIME ZONE,
+  closed_via TEXT,
+  closed_by_declared TEXT,
+  closed_by_user_id TEXT,
+  closed_from_run_id TEXT,
+  closed_from_node_path TEXT,
+  replaced_by_run_id TEXT
+);
+
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;
@@ -784,6 +841,11 @@ ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEX
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_run_id TEXT;
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_node_path TEXT;
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_taken_at TIMESTAMP WITH TIME ZONE;
+
+-- The model a persisted node session ran on (#5711), or NULL when the node resolved
+-- none. A `context: same` node does not continue a session from another model. Rows
+-- written before the column existed read as NULL.
+ALTER TABLE remote_agent_workflow_node_sessions ADD COLUMN IF NOT EXISTS model TEXT;
 
 -- ============================================================================
 -- Indexes and column comments
@@ -814,6 +876,19 @@ ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_taken_at
 -- Item rulings
 CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id
   ON remote_agent_item_rulings(item_id);
+
+-- Item links
+CREATE UNIQUE INDEX IF NOT EXISTS idx_item_links_active
+  ON remote_agent_item_links(from_item_id, to_item_id, kind) WHERE ended_at IS NULL;
+CREATE INDEX IF NOT EXISTS idx_item_links_from_item_id
+  ON remote_agent_item_links(from_item_id);
+CREATE INDEX IF NOT EXISTS idx_item_links_to_item_id
+  ON remote_agent_item_links(to_item_id);
+-- Item asks
+CREATE INDEX IF NOT EXISTS idx_item_asks_open
+  ON remote_agent_item_asks(item_id, workflow_name) WHERE closed_as IS NULL;
+CREATE INDEX IF NOT EXISTS idx_item_asks_run_id
+  ON remote_agent_item_asks(run_id);
 
 -- Codebase env vars
 CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id

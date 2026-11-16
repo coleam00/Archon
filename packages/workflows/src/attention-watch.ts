@@ -41,6 +41,7 @@ import {
   type Answered,
   type AnswerOrigin,
   type Resolution,
+  closedWithoutRun,
 } from './attention-watch-events';
 import { recordSurfaceSchema } from './schemas/record-surface';
 import type { WorkflowEventRow } from './schemas/workflow-event';
@@ -137,6 +138,14 @@ export const attentionStreamLineSchema = z.discriminatedUnion('type', [
       type: z.literal('resolved'),
       ...itemLineBase,
       occurrence: z.string().nullable(),
+      /** An ask a later completed run of the same workflow on the same item replaced. */
+      reason: z.literal('replaced'),
+      replacedByRunId: z.string(),
+    }),
+    z.object({
+      type: z.literal('resolved'),
+      ...itemLineBase,
+      occurrence: z.string().nullable(),
       /**
        * An item no run holds is no longer in the list. That is all the stream observed:
        * it does not know whether the item was answered or withdrawn.
@@ -223,6 +232,7 @@ export type AttentionWatchStore = Pick<
   | 'getWorkflowRunForAttention'
   | 'getCodebase'
   | 'getItem'
+  | 'getItemAsk'
   | 'listWorkflowRuns'
   | 'listEventsForRuns'
 >;
@@ -261,9 +271,13 @@ function lifecycleFields(
   };
 }
 
-/** The run fields of a line about `item`, from the run that holds it. */
+/** The run fields of a line about `item`, from the run that holds it or, for an ask, left it. */
 function itemContext(item: AttentionQueueItem): RunContext {
-  return { workflow: item.run?.workflow ?? null, parentRunId: item.run?.parentRunId ?? null };
+  const askedIn = item.kind === 'attention' ? item.askedIn : undefined;
+  return {
+    workflow: item.run?.workflow ?? askedIn?.workflow ?? null,
+    parentRunId: item.run?.parentRunId ?? null,
+  };
 }
 
 /** The key of `run`'s item; null for none, or when unreadable so the line still goes out. */
@@ -630,15 +644,17 @@ export async function watchAttentionQueue(
   };
 
   /**
-   * Items no run holds commit no event to the feed, so they are read again each time the
-   * tail reaches the head and compared with the open set. One that is gone closes as
-   * `no_longer_listed`: the stream saw it leave the list, and nothing it reads says why.
+   * Items no run holds commit no event of their own to the feed, so they are read again
+   * each time the tail reaches the head and compared with the open set. An ask's answer
+   * or withdrawal writes an event on the run that left it, which brings the tail here.
    */
   const reconcileItemsWithoutRun = async (): Promise<void> => {
     if (source.itemsWithoutRun === undefined) return;
     const cursor = position();
     const now = new Map(
-      (await source.itemsWithoutRun()).filter(inQuery).map(item => [item.ref, item])
+      splitAttentionRead(await source.itemsWithoutRun())
+        .values.filter(inQuery)
+        .map(item => [item.ref, item])
     );
     for (const prev of [...open.values()])
       if (!isHeldByRun(prev) && !now.has(prev.ref)) {
@@ -648,7 +664,7 @@ export async function watchAttentionQueue(
           project: prev.project,
           ...closedItemFields(prev),
           occurrence: null,
-          reason: 'no_longer_listed',
+          ...(await closedWithoutRun(store, prev.ref)),
         });
         open.delete(prev.ref);
       }

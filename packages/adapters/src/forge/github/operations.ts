@@ -17,7 +17,8 @@ import { handleGithubWorkItemComments } from './comments';
 import { handleGithubPrFiles, handleGithubRepoFile } from './files';
 import { handleGithubPrMergeState } from './merge-state';
 import { handleGithubMutation } from './lifecycle';
-import { handleGithubPrReviews, handleGithubPrView } from './pull-requests';
+import { handleGithubPrView } from './pull-requests';
+import { handleGithubPrReviews } from './reviews';
 import {
   handleGithubRepoLabelsList,
   handleGithubWorkItemList,
@@ -67,6 +68,7 @@ export const githubPluginMetadata = {
     'repo.file',
     'pr.thread.reply',
     'pr.thread.resolve',
+    'pr.review.submit',
   ],
   mutationConditions: { 'pr.merge': ['head'] },
   token_env: ['GH_TOKEN', 'GITHUB_TOKEN'],

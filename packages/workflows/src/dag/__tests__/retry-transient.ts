@@ -19,6 +19,7 @@ import {
   mockGetAgentProviderDag,
   mockSendQueryDag,
   runUsageWrites,
+  spyOnNodeExec,
 } from '../test-utils';
 
 export function registerTransientTests() {
@@ -518,6 +519,12 @@ export function registerTransientTests() {
       'capacity waits respect run status %s before another provider attempt',
       async stopStatus => {
         const realSetTimeout = globalThis.setTimeout;
+        // Node scratch release asks git for worktrees when the node ends. Its subprocess
+        // timers are not wait slices, so git answers without spawning: no registrations.
+        const execSpy = spyOnNodeExec().mockImplementation(async () => ({
+          stdout: '',
+          stderr: '',
+        }));
         try {
           for (const isLoop of [false, true]) {
             let status: WorkflowRun['status'] | null = 'running';
@@ -588,6 +595,7 @@ export function registerTransientTests() {
           }
         } finally {
           globalThis.setTimeout = realSetTimeout;
+          execSpy.mockRestore();
         }
       }
     );

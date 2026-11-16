@@ -18,7 +18,7 @@ import {
   mockDiscoverWorkflowsWithConfig,
   mockDispatchBackgroundWorkflow,
   mockExecuteWorkflow,
-  mockFindResumableRunByParentConversation,
+  mockListResumableRunsByParentConversation,
   mockGetCodebase,
   mockGetCodebaseEnvVars,
   mockGetOrCreateConversation,
@@ -412,8 +412,8 @@ describe('assistant command examples are ordinary text', () => {
     mockLoadConfig.mockImplementation(() => Promise.resolve(makeConfig()));
     mockGetPausedWorkflowRun.mockReset();
     mockGetPausedWorkflowRun.mockImplementation(() => Promise.resolve(null));
-    mockFindResumableRunByParentConversation.mockReset();
-    mockFindResumableRunByParentConversation.mockImplementation(() => Promise.resolve(null));
+    mockListResumableRunsByParentConversation.mockReset();
+    mockListResumableRunsByParentConversation.mockImplementation(() => Promise.resolve([]));
     mockParseCommand.mockReset();
     mockCreateCodebase.mockClear();
     mockRegisterRepository.mockClear();

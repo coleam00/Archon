@@ -14,7 +14,7 @@ import {
   writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { itemReadSchema } from '@archon/workflows/item-read';
 
@@ -44,9 +44,15 @@ interface Fixture {
     capacity?: number,
     hostId?: string
   ) => string;
-  /** Write a run-ended binding where the ending process reads it. */
-  bind: (name: string, file: Record<string, unknown>) => void;
-  userId: string;
+  /**
+   * Write a run-ended binding where the ending process reads it; by default it starts
+   * `stage-b` in the project.
+   */
+  bind: (
+    name: string,
+    file: Record<string, unknown>,
+    launch?: { workflowName?: string; cwd?: string }
+  ) => void;
 }
 
 // Stage A returns a named outcome and a plan derived from its input, so B's `plan` (read
@@ -201,7 +207,6 @@ async function makeFixture(label: string): Promise<Fixture> {
       return { exited: child.exited };
     },
     rows,
-    userId,
     fireConfig: (name, workflowName, resource, capacity, hostId) => {
       const path = join(root, `${name}.json`);
       writeFileSync(
@@ -214,14 +219,15 @@ async function makeFixture(label: string): Promise<Fixture> {
       );
       return path;
     },
-    bind: (name, on) => {
+    bind: (name, on, launch = {}) => {
       mkdirSync(join(archonHome, 'triggers'), { recursive: true });
+      const base = binding(name, 'stage-b', 'stage-b');
       writeFileSync(
         join(archonHome, 'triggers', `${name}.json`),
         JSON.stringify({
           version: 1,
           sourceInstanceId: name,
-          binding: binding(name, 'stage-b', 'stage-b'),
+          binding: { ...base, launch: { ...base.launch, ...launch } },
           on,
         })
       );
@@ -386,64 +392,6 @@ describe('a run-ended binding', () => {
     ).toEqual([{ count: 101 }]);
   }, 90_000);
 
-  test('a run end prepares every start it caused, even more than one page of them', async () => {
-    const fixture = await makeFixture('many');
-    // More bindings than one page holds. Each skips because a held run has their resource,
-    // so the test proves each was prepared without spawning a hundred executors.
-    const count = 101;
-    mkdirSync(join(fixture.archonHome, 'triggers'), { recursive: true });
-    for (let index = 0; index < count; index++)
-      writeFileSync(
-        join(fixture.archonHome, 'triggers', `many-${String(index)}.json`),
-        JSON.stringify({
-          version: 1,
-          sourceInstanceId: `many-${String(index)}`,
-          binding: {
-            bindingId: `many-${String(index)}`,
-            bindingRevision: null,
-            hostId: HOST,
-            runAsUserId: fixture.userId,
-            resource: 'pool',
-            overlap: 'skip',
-            launch: {
-              cwd: fixture.projectRoot,
-              workflowName: 'stage-b',
-              inputs: {},
-              isolation: { kind: 'in-place' },
-            },
-          },
-          on: RUN_ENDED,
-        })
-      );
-    const held = fixture.start(['workflow', 'run', 'held', '--no-worktree']);
-    try {
-      await waitFor(
-        () => (existsSync(join(fixture.projectRoot, 'held-started')) ? true : undefined),
-        'the held run to take the slot'
-      );
-      await fixture.cli([
-        'workflow',
-        'run',
-        'stage-a',
-        '--no-worktree',
-        '--item',
-        'issue-1',
-        '--input',
-        'plan=p1',
-        '--input',
-        'issue=i1',
-      ]);
-    } finally {
-      writeFileSync(join(fixture.projectRoot, 'release'), '');
-    }
-    expect(await held.exited).toBe(0);
-    expect(
-      fixture.rows<{ status: string; count: number }>(
-        "SELECT preparation_status AS status, COUNT(*) AS count FROM remote_agent_start_receipt_bindings WHERE binding_id LIKE 'many-%' GROUP BY preparation_status"
-      )
-    ).toEqual([{ status: 'complete', count }]);
-  }, 90_000);
-
   test('a start admitted by a process that died before spawning it is shown, and runs once by hand', async () => {
     const fixture = await makeFixture('stranded');
     fixture.bind('build-after-plan', RUN_ENDED);
@@ -541,7 +489,7 @@ describe('a run-ended binding', () => {
     expect(checked.exitCode).not.toBe(0);
     expect(checked.stdout).toContain("workflow 'missing-stage' is not in this project");
 
-    const started = await fixture.attempt([
+    const launch = [
       'workflow',
       'run',
       'stage-a',
@@ -552,17 +500,56 @@ describe('a run-ended binding', () => {
       'plan=p',
       '--input',
       'issue=i',
-    ]);
+    ];
+    const started = await fixture.attempt(launch);
     expect(started.exitCode).not.toBe(0);
     expect(started.stdout + started.stderr).toContain(
       "workflow 'missing-stage' is not in this project"
     );
+    // A detached launch is refused in the result it prints, not later in its child.
+    const detached = await fixture.attempt([...launch, '--detach', '--json']);
+    expect(detached.exitCode).not.toBe(0);
+    const refused = JSON.parse(detached.stdout) as { ok: boolean; error: string };
+    expect(refused.ok).toBe(false);
+    expect(refused.error).toContain("workflow 'missing-stage' is not in this project");
     const runs = fixture.rows<{ status: string; events: number }>(
       `SELECT r.status, (SELECT COUNT(*) FROM remote_agent_workflow_events e
          WHERE e.workflow_run_id = r.id AND e.event_type = 'node_started') AS events
          FROM remote_agent_workflow_runs r`
     );
-    expect(runs).toEqual([{ status: 'cancelled', events: 0 }]);
+    expect(runs).toEqual([
+      { status: 'cancelled', events: 0 },
+      { status: 'cancelled', events: 0 },
+    ]);
+  }, 90_000);
+});
+
+describe('trigger check', () => {
+  test('reports a duplicate stage, a stage bound to itself and a missing launch.cwd', async () => {
+    const fixture = await makeFixture('check');
+    fixture.bind('build-after-plan', RUN_ENDED);
+    fixture.bind('build-after-plan-copy', RUN_ENDED);
+    fixture.bind('plan-again', RUN_ENDED, { workflowName: 'stage-a' });
+    const gone = join(fixture.root, 'deleted-checkout');
+    fixture.bind('stale', RUN_ENDED, { cwd: gone });
+
+    const checked = await fixture.attempt(['trigger', 'check']);
+    expect(checked.exitCode).not.toBe(0);
+    const problems = new Map(
+      (
+        JSON.parse(checked.stdout) as { runEnded: { file: string; problems: string[] }[] }
+      ).runEnded.map(entry => [basename(entry.file, '.json'), entry.problems])
+    );
+    const duplicate = (other: string): string =>
+      `binds the same outcome to the same stage as ${join(fixture.archonHome, 'triggers', `${other}.json`)}: the stage starts once per file on the item`;
+    expect(problems.get('build-after-plan')).toEqual([duplicate('build-after-plan-copy')]);
+    expect(problems.get('build-after-plan-copy')).toEqual([duplicate('build-after-plan')]);
+    expect(problems.get('plan-again')).toEqual([
+      "binding starts 'stage-a', the workflow whose end fires it: each run that completes with 'planned' starts another on the same item",
+    ]);
+    expect(problems.get('stale')).toEqual([
+      `binding.launch.cwd '${gone}' does not exist, so this binding never starts; fix the path or remove the file`,
+    ]);
   }, 90_000);
 });
 

@@ -5,7 +5,9 @@
 import { canonicalizeProjectPath } from '@archon/paths';
 import { projectKeyForCodebase } from '@archon/paths/archon-paths';
 import {
+  openAskItems,
   projectRef,
+  type AskItemStore,
   type AttentionQueueSource,
   type ProjectRef,
 } from '@archon/workflows/attention-queue';
@@ -20,18 +22,21 @@ import type { IWorkflowHostStore } from '../workflows/host-store';
  * The queue's source on a host, keeping the store's type so a reader that needs more of
  * the store (`readItem`) takes the same source. A run's branch is the newest isolation record for its
  * checkout path; a paused run holds that path, so no later checkout can have taken it.
- * An item holder's owner is observed by the rule `workflow wait` uses (`observeRunOwner`),
- * so the queue lists a holder whose owner is gone and an item read says so; observing
- * never changes the run.
+ * The items no run holds are the open asks completed runs left. An item holder's owner is
+ * observed by the rule `workflow wait` uses (`observeRunOwner`), so the queue lists a
+ * holder whose owner is gone and an item read says so; observing never changes the run.
  */
 export function attentionQueueSource<
-  Store extends AttentionQueueSource['store'] & Pick<IWorkflowStore, 'listWaitedItemHolders'>,
+  Store extends AttentionQueueSource['store'] &
+    AskItemStore &
+    Pick<IWorkflowStore, 'listWaitedItemHolders'>,
 >(
   store: Store,
   isolation: Pick<IWorkflowHostStore['isolation'], 'findLatestByCodebaseAndWorkingPath'>
 ): AttentionQueueSource & { store: Store } {
   return {
     store,
+    itemsWithoutRun: () => openAskItems(store),
     branchOf: async run =>
       run.codebase_id === null || run.working_path === null
         ? null
@@ -46,6 +51,16 @@ export function attentionQueueSource<
       holders: () => store.listWaitedItemHolders(),
       observe: run => observeRunOwner(store, run),
     },
+  };
+}
+
+/** What the attention watch takes from a host's queue source: everything but the store. */
+export function watchSource(
+  source: AttentionQueueSource
+): Pick<AttentionQueueSource, 'branchOf' | 'itemsWithoutRun'> {
+  return {
+    branchOf: source.branchOf,
+    ...(source.itemsWithoutRun === undefined ? {} : { itemsWithoutRun: source.itemsWithoutRun }),
   };
 }
 

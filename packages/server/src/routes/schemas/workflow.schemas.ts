@@ -476,6 +476,44 @@ export const labelAttentionBodySchema = z
   })
   .openapi('LabelAttentionBody');
 
+/**
+ * POST /api/attention/answer body: the item's ref as the queue lists it, and the answer in
+ * its form. The ref is in the body because it is opaque and may hold a ':'.
+ */
+export const answerAttentionItemBodySchema = z
+  .object({
+    ref: z.string().min(1),
+    choose: z.array(z.string().min(1)).optional(),
+    recommended: z.literal(true).optional(),
+    text: z.string().optional(),
+  })
+  .refine(body => !(body.recommended === true && (body.choose?.length ?? 0) > 0), {
+    message: 'Use choose or recommended, not both',
+  })
+  .openapi('AnswerAttentionItemBody');
+
+/** POST /api/attention/withdraw body: the ref of an ask a completed run left. */
+export const withdrawAttentionItemBodySchema = z
+  .object({ ref: z.string().min(1) })
+  .openapi('WithdrawAttentionItemBody');
+
+/**
+ * POST /api/attention/answer and /api/attention/withdraw response. `settled` is set when
+ * the write closed the last open ask of its set; `unchanged` when the item already had
+ * this answer or was already withdrawn; `runId` names the paused run an answer went to.
+ */
+export const attentionItemActionResponseSchema = z
+  .object({
+    ref: z.string(),
+    action: z.enum(['answer', 'withdraw']),
+    unchanged: z.boolean(),
+    settled: z.boolean().optional(),
+    runId: z.string().optional(),
+    continues: z.boolean().optional(),
+    cancelled: z.boolean().optional(),
+  })
+  .openapi('AttentionItemActionResponse');
+
 /** POST /api/runs/{runId}/attention/labels response. */
 export const labelAttentionResponseSchema = z
   .object({

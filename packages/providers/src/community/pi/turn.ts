@@ -14,7 +14,6 @@ import { parsePiConfig, resolvePiExtensionSettings, type PiProviderDefaults } fr
 import { beginPiExtensionTurn } from './extension-error-broker';
 import type { PiModelRef } from './model-ref';
 import type { RequestModelRuntime } from './request-auth';
-import { Semaphore } from './semaphore';
 import {
   ensureBedrockProviderRegistered,
   ensurePiOAuthFlowsRegistered,
@@ -26,17 +25,6 @@ function getLog(): ReturnType<typeof createLogger> {
   if (!cachedLog) cachedLog = createLogger('provider.pi');
   return cachedLog;
 }
-
-// ─── Concurrency throttle ────────────────────────────────────────────────────
-
-/**
- * Caps concurrent Pi `session.prompt()` calls. Pi/Minimax has no built-in
- * SDK-level throttling; without this, large parallel workflow batches (e.g. 10+
- * concurrent review PRs × 5 aspects each) hit rate limits and cascade-fail.
- * Module-level so it's shared across all PiProvider instances within a process —
- * Pi concurrency is global (one upstream backend).
- */
-let piSemaphore: Semaphore | undefined;
 
 /** The Pi SDK and the Pi-dependent sibling modules a turn loads on demand. */
 type PiTurnModules = Awaited<ReturnType<typeof loadPiTurnModules>>;
@@ -339,7 +327,6 @@ async function* streamSession(
     // bridgeSession owns dispose() and abort wiring. When `interactive`
     // is on, it also binds/unbinds the UI stub's emitter so extension
     // notifications land on the same queue as Pi events.
-    const sem = await acquirePromptSlot(turn.piConfig.maxConcurrent, session, requestOptions);
     try {
       yield* withResumedOutcome(
         modules.eventBridge.bridgeSession(
@@ -356,8 +343,6 @@ async function* streamSession(
     } catch (err) {
       getLog().error({ err, piProvider: parsed.provider }, 'pi.prompt_failed');
       throw err;
-    } finally {
-      sem?.release();
     }
   } finally {
     extensionTurn?.close();
@@ -490,37 +475,4 @@ function piCustomTools(
       ? optionsTranslator.buildDefaultPiTools(cwd, requestOptions?.env, defaultToolNames)
       : undefined);
   return baseTools && [...baseTools, ...addedTools];
-}
-
-/**
- * Wait for a prompt slot when `maxConcurrent` caps Pi. The module-level semaphore
- * is initialized lazily from the first config that sets maxConcurrent and reused
- * for the lifetime of the process — this is a known v1 tradeoff. Pi concurrency is
- * global (one upstream backend) so a process-wide cap is the right scope. Disposes
- * the session when the wait fails.
- */
-async function acquirePromptSlot(
-  maxConcurrent: number | undefined,
-  session: { dispose(): void },
-  requestOptions: SendQueryOptions | undefined
-): Promise<Semaphore | undefined> {
-  if (maxConcurrent !== undefined && piSemaphore === undefined) {
-    piSemaphore = new Semaphore(maxConcurrent);
-    getLog().info({ maxConcurrent }, 'pi.semaphore_initialized');
-  }
-
-  // Snapshot before the first await — if a concurrent call initializes the
-  // module-level piSemaphore after this point, sem stays undefined and the
-  // caller's finally correctly skips release (we never acquired).
-  const sem = piSemaphore;
-  if (sem === undefined) return undefined;
-  getLog().debug('pi.semaphore_acquiring');
-  try {
-    await sem.acquire(requestOptions?.abortSignal);
-  } catch (err) {
-    session.dispose();
-    throw err;
-  }
-  getLog().debug('pi.semaphore_acquired');
-  return sem;
 }

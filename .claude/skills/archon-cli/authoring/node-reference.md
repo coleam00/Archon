@@ -69,6 +69,12 @@ Session context is explicit when it matters:
 - `context: fresh` always starts clean. Use it for independent verification.
 - `context: shared` explicitly inherits the ambient session in a sequential
   layer. It is invalid where parallel structure makes that ancestry ambiguous.
+- `context: same` continues the session the node itself last had: its previous
+  round in a `loop_group`, else the newest one it left on the run's item in an earlier
+  run (forked), else fresh. One node can build in round one and fix in round two, and a
+  stage run again on the item picks up where it left off. Parallel layers and
+  `fresh_context` do not reset it. A session from another provider or model is not
+  continued, and the run says so. Not combinable with `persist_session`.
 - `context: { resume: plan }` forks the named completed upstream node's session.
   Use it when one exact ancestry matters; the provider must support session forks.
   Inside a `loop_group` body the source can be an enclosing node, whose session the

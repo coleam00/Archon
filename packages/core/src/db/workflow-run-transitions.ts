@@ -51,6 +51,7 @@ import {
 } from './workflow-terminal-event';
 import { reportRunTerminal } from './workflow-terminal-telemetry';
 import { insertStartReceipt } from './start-receipt-writes';
+import { openItemAsksForCompletedRun } from './item-asks';
 
 export type WorkflowRunInsert = Parameters<IWorkflowStore['createWorkflowRun']>[0];
 
@@ -254,7 +255,7 @@ export async function claimPendingWorkflowRun(
  * instead of continuing a stale run.
  *
  * The status set is exactly what the two resume lookups can return —
- * findResumableRunByParentConversation ('failed'/'paused') and
+ * listResumableRunsByParentConversation ('failed'/'paused') and
  * getPausedWorkflowRun ('paused'). `pending` and `running` are deliberately NOT
  * matched: neither lookup can ever return them, so leaving them alone cannot
  * cause the stale continuation this exists to prevent, while cancelling them
@@ -384,6 +385,8 @@ export async function completeWorkflowRun(
         );
         // The starts this end causes commit with it, and only when this write won.
         for (const receipt of result?.startReceipts ?? []) await insertStartReceipt(query, receipt);
+        // The asks it leaves open with it too, replacing its workflow's open set on the item.
+        if (result?.asks !== undefined) await openItemAsksForCompletedRun(query, id, result.asks);
       }
       return update;
     });

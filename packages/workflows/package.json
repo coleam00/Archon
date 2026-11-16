@@ -6,6 +6,7 @@
     "./schemas/*": "./src/schemas/*.ts",
     "./run-ai-configuration": "./src/run-ai-configuration.ts",
     "./run-preflight": "./src/run-preflight.ts",
+    "./run-ended-refusal": "./src/run-ended-refusal.ts",
     "./run-credential-env": "./src/run-credential-env.ts",
     "./run-paths": "./src/run-paths.ts",
     "./run-source": "./src/run-source.ts",
