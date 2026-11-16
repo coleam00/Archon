@@ -5,8 +5,11 @@
 
 import {
   addSafeDirectory,
+  execFileAsync,
   findWorktreeByBranch,
+  GitFailure,
   getCurrentBranchStrict,
+  isAncestorOf,
   listWorktrees,
   toBranchName,
   toRepoPath,
@@ -14,7 +17,7 @@ import {
   verifyWorktreeOwnership,
   worktreeExists,
 } from '@archon/git';
-import type { BranchName, WorktreePath } from '@archon/git';
+import type { BranchName, RepoPath, WorktreePath } from '@archon/git';
 import { IsolationFailure } from '../../errors';
 import type { IsolationRequest, WorktreeCreationEnvironment } from '../../types';
 import { isPRIsolationRequest } from '../../types';
@@ -79,8 +82,71 @@ async function adoptAtPath(
       );
     }
   }
+  if (request.workflowType === 'task' && request.taskBranch?.kind === 'new') {
+    const { fromBranch } = request.taskBranch;
+    if (fromBranch) {
+      await refuseUnappliedStartPoint(
+        request.canonicalRepoPath,
+        worktreePath,
+        expectedBranch ?? branchName,
+        fromBranch
+      );
+    }
+  }
 
   return adoptWorktree(worktreePath, exactBranch ?? toBranchName(branchName), request);
+}
+
+/**
+ * Refuse to hand an existing checkout to a request that named a start point the
+ * checkout's history does not contain: the run would start from a different base
+ * than asked. A start point at or behind HEAD is accepted, so later stages that
+ * pass the same start point keep working once the branch has its own commits.
+ * The start point resolves in the canonical repository, where creation resolves
+ * it; resolved inside the worktree, `HEAD` or `HEAD~1` would name the worktree's
+ * own commits and always pass. Only reads; the operator owns the worktree and branch.
+ */
+export async function refuseUnappliedStartPoint(
+  repoPath: RepoPath,
+  worktreePath: WorktreePath,
+  branch: string,
+  fromBranch: string
+): Promise<void> {
+  const { stdout } = await execFileAsync(
+    'git',
+    ['-C', repoPath, 'rev-parse', '--verify', '--end-of-options', `${fromBranch}^{commit}`],
+    { timeout: 10000 }
+  );
+  const fromCommit = stdout.trim();
+  if (await isAncestorOf(worktreePath, fromCommit)) return;
+
+  const base = await mergeBase(worktreePath, fromCommit);
+  throw new IsolationFailure(
+    'branch_exists',
+    `Branch "${branch}" already has a worktree at ${worktreePath}, ` +
+      (base ? `based on ${base.slice(0, 12)}. ` : 'which shares no history with --from. ') +
+      `--from ${fromBranch} (${fromCommit.slice(0, 12)}) is not in its history, ` +
+      'so the run would start from a different base. Choose a different --branch, ' +
+      'omit --from to continue in this worktree, or remove the worktree and delete the ' +
+      `branch to start fresh from ${fromBranch}.`
+  );
+}
+
+/** The commit where the worktree's HEAD and `commit` meet, or null when they share no history. */
+async function mergeBase(worktreePath: WorktreePath, commit: string): Promise<string | null> {
+  try {
+    const { stdout } = await execFileAsync(
+      'git',
+      ['-C', worktreePath, 'merge-base', 'HEAD', commit],
+      {
+        timeout: 10000,
+      }
+    );
+    return stdout.trim();
+  } catch (error) {
+    if (error instanceof GitFailure && error.code === 1) return null;
+    throw error;
+  }
 }
 
 export async function findRegisteredWorktree(

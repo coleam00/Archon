@@ -1,5 +1,9 @@
 import type { OwnedRunLease } from '../utils/owned-run-lease';
-import { getIsolationProvider, recordWorktreeAdoption } from '@archon/isolation';
+import {
+  getIsolationProvider,
+  recordWorktreeAdoption,
+  refuseUnappliedStartPoint,
+} from '@archon/isolation';
 import type {
   ExecutionContext,
   IsolationEnvironmentRow,
@@ -605,10 +609,18 @@ async function provisionWorktree(
           `'${branchIdentifier}', found '${actualBranch ?? 'detached HEAD'}'.`
       );
     }
+    const fromBranch = options.fromBranch?.trim();
+    if (fromBranch) {
+      await refuseUnappliedStartPoint(
+        git.toRepoPath(codebase.default_cwd),
+        git.toWorktreePath(existingEnv.working_path),
+        branchIdentifier,
+        fromBranch
+      );
+    }
     await warnOnReusedWorktree(
       existingEnv,
       codebase,
-      options,
       admission.flagBase,
       launch.codebaseDefaultBranch
     );
