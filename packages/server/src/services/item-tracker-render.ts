@@ -122,44 +122,50 @@ export function renderQuestion(
     quote(attention.message),
     '',
   ];
-  if (attention.kind === 'awaiting_response') {
-    const approval = run.metadata.approval;
-    const decisions = isApprovalContext(approval) ? getApprovalDecisions(approval) : [];
-    lines.push(
-      ...(decisions.length > 0
-        ? ['Decisions:', ...decisions.map(decision => `- \`${decision.id}\``), '']
-        : []),
-      `Answer with \`archon workflow respond ${run.id} <decision> [text]\`.`
-    );
-  } else {
-    const options = attention.options.filter(option => option.id !== OTHER_ATTENTION_OPTION.id);
-    const answer = `archon workflow answer ${run.id} --occurrence ${attention.occurrence}`;
-    lines.push(
-      ...(options.length > 0
-        ? [
-            'Options:',
-            ...options.map(
-              option =>
-                `- \`${option.id}\`${option.label ? `: ${line(option.label)}` : ''}${option.does ? `. ${line(option.does)}` : ''}`
-            ),
-            '',
-          ]
-        : []),
-      ...(attention.recommendation
-        ? [
-            `Recommended: \`${attention.recommendation.option}\`. ${line(attention.recommendation.why)}`,
-            '',
-          ]
-        : []),
-      options.length > 0
-        ? `Answer with \`${answer} --choose <option>\`${attention.form === 'multi_select' ? ', repeating `--choose` for each option' : ''}.`
-        : `Answer with \`${answer} --text "<answer>"\`.`,
-      ...(attention.other === true
-        ? [`None of these? Answer with \`${answer} --choose other --text "<answer>"\`.`]
-        : [])
-    );
-  }
+  lines.push(
+    ...(attention.kind === 'awaiting_response'
+      ? gateAnswer(run, run.metadata.approval)
+      : waitAnswer(run.id, attention))
+  );
   return { marker: commentMarker, body: [...lines, ''].join('\n') };
+}
+
+function gateAnswer(run: Pick<WorkflowRun, 'id'>, approval: unknown): string[] {
+  const decisions = isApprovalContext(approval) ? getApprovalDecisions(approval) : [];
+  return [
+    ...(decisions.length > 0
+      ? ['Decisions:', ...decisions.map(decision => `- \`${decision.id}\``), '']
+      : []),
+    `Answer with \`archon workflow respond ${run.id} <decision> [text]\`.`,
+  ];
+}
+
+function waitAnswer(
+  runId: string,
+  attention: Extract<QuestionAttention, { kind: 'attention' }>
+): string[] {
+  const options = attention.options.filter(option => option.id !== OTHER_ATTENTION_OPTION.id);
+  const answer = `archon workflow answer ${runId} --occurrence ${attention.occurrence}`;
+  const { recommendation } = attention;
+  const repeat = attention.form === 'multi_select' ? ', repeating `--choose` for each option' : '';
+  return [
+    ...(options.length > 0 ? ['Options:', ...options.map(optionLine), ''] : []),
+    ...(recommendation
+      ? [`Recommended: \`${recommendation.option}\`. ${line(recommendation.why)}`, '']
+      : []),
+    options.length > 0
+      ? `Answer with \`${answer} --choose <option>\`${repeat}.`
+      : `Answer with \`${answer} --text "<answer>"\`.`,
+    ...(attention.other === true
+      ? [`None of these? Answer with \`${answer} --choose other --text "<answer>"\`.`]
+      : []),
+  ];
+}
+
+function optionLine(option: { id: string; label?: string; does?: string }): string {
+  const label = option.label ? `: ${line(option.label)}` : '';
+  const does = option.does ? `. ${line(option.does)}` : '';
+  return `- \`${option.id}\`${label}${does}`;
 }
 
 /** An open ask: its question, context and options, and the commands that answer it. */
