@@ -120,6 +120,14 @@ describe('assertRunForgeAccess', () => {
     expect(check.mock.calls.map(([request]) => request.remote)).toEqual(['git@github.com:o/r.git']);
   });
 
+  test('a remote is asked by the URL git fetches, after its insteadOf rewrite', async () => {
+    const dir = checkout({ origin: 'gh:o/r.git' });
+    Bun.spawnSync(['git', '-C', dir, 'config', 'url.git@github.com:.insteadOf', 'gh:']);
+    const check = mock<ForgeCheck>(async () => undefined);
+    await assertFor(dir, check);
+    expect(check.mock.calls.map(([request]) => request.remote)).toEqual(['git@github.com:o/r.git']);
+  });
+
   test('a refusal names each remote with its typed reason and remedy, never its URL', async () => {
     const failures = await refusal(
       assertFor(checkout({ origin: 'https://user:secret@github.com/o/r.git' }), async () => ({

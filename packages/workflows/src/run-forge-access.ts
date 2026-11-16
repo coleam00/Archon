@@ -169,34 +169,29 @@ export async function assertRunForgeAccess(
 }
 
 /**
- * The checkout's configured remotes (before any `insteadOf` rewrite), or undefined when
- * it is not a git repository at all. `--local` is what tells the two apart: without it,
- * `git config` outside a repository reads only global config and exits 1 like an empty one.
- * `--local` also turns include processing off, so `--includes` restores remotes that come
- * from an `include.path` or `includeIf` file, as `git remote` shows them.
+ * The checkout's remotes with the URLs git fetches them from, after any `insteadOf`
+ * rewrite, or undefined when it is not a git repository at all.
  */
 async function checkoutRemotes(cwd: string): Promise<{ name: string; url: string }[] | undefined> {
   let stdout: string;
   try {
-    ({ stdout } = await execFileAsync(
-      'git',
-      ['-C', cwd, 'config', '--local', '--includes', '-z', '--get-regexp', '^remote\\..*\\.url$'],
-      { timeout: 10_000 }
-    ));
+    ({ stdout } = await execFileAsync('git', ['-C', cwd, 'remote'], { timeout: 10_000 }));
   } catch (error) {
-    if (!(error instanceof GitFailure)) throw error;
-    // `--get-regexp` exits 1 when no key matches.
-    if (error.code === 1) return [];
-    if (error.kind === 'not_repository') return undefined;
+    if (error instanceof GitFailure && error.kind === 'not_repository') return undefined;
     throw error;
   }
-  // With -z each entry is `remote.<name>.url`, a newline, the value, then NUL.
-  return stdout.split('\0').flatMap(entry => {
-    const newline = entry.indexOf('\n');
-    if (newline < 0) return [];
-    const key = entry.slice(0, newline);
-    return [{ name: key.slice('remote.'.length, -'.url'.length), url: entry.slice(newline + 1) }];
-  });
+  const names = stdout
+    .split(/\r?\n/)
+    .map(name => name.trim())
+    .filter(name => name.length > 0);
+  return Promise.all(
+    names.map(async name => {
+      const { stdout: url } = await execFileAsync('git', ['-C', cwd, 'remote', 'get-url', name], {
+        timeout: 10_000,
+      });
+      return { name, url: url.trim() };
+    })
+  );
 }
 
 function hostCliCommand(): readonly string[] | undefined {
