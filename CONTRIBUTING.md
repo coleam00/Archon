@@ -22,9 +22,9 @@ Before you run a checkout, give it its own home and remove it afterwards:
 export ARCHON_HOME="$(mktemp -d)"
 ```
 
-If `DATABASE_URL` is set in your shell, point it at a scratch database you create and drop. Copy `config.yaml` into the scratch home when the change needs your configuration; do not copy `archon.db` or credentials.
+If `DATABASE_URL` is set, in your shell or in the checkout's `.env`, unset it or point it at a scratch database you create and drop. A scratch home does not change which database `DATABASE_URL` names. Copy `config.yaml` into the scratch home when the change needs your configuration; do not copy `archon.db` or credentials.
 
-A build running from inside an Archon home's `workspaces/` (a run's worktree or a managed clone) refuses to open that home's database and prints this instruction. That refusal is the guard; set a scratch home rather than routing around it.
+A build running from inside an Archon home's `workspaces/` (a run's worktree or a managed clone) refuses to open any database, SQLite or PostgreSQL, while `ARCHON_HOME` names that home, and prints this instruction. The check reads only the home: once `ARCHON_HOME` is a scratch directory, a `DATABASE_URL` is opened as given, live or not. Set a scratch home rather than routing around the refusal.
 
 ### Code Quality
 

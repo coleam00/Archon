@@ -5,11 +5,13 @@
  * - If DATABASE_URL is set: Use PostgreSQL (shared with server)
  * - Otherwise: Use SQLite at ~/.archon/archon.db (standalone CLI)
  * - Either way, refuse when this build runs from inside the home's workspaces:
- *   that is code under work, and opening would migrate the live database.
+ *   that is code under work, and opening would migrate the live database. The
+ *   check reads the home only, so a scratch ARCHON_HOME clears it and a
+ *   DATABASE_URL is then opened as given.
  */
 import { join } from 'path';
 import { getArchonHome } from '@archon/paths';
-import { runningBuildInsideWorkspacesOf } from '@archon/paths/source-tree-paths';
+import { runningBuildInsideWorkspaces } from '@archon/paths/source-tree-paths';
 import type { DbNotificationListener, IDatabase, SqlDialect, QueryResult } from './adapters/types';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
@@ -48,11 +50,13 @@ export function getSqliteDbPath(): string {
  * for this work, so the refusal has no override.
  */
 function refuseCodeUnderWork(): void {
-  const home = getArchonHome();
-  const build = runningBuildInsideWorkspacesOf(home);
+  const build = runningBuildInsideWorkspaces();
   if (!build) return;
+  const home = getArchonHome();
   const databaseHint = process.env.DATABASE_URL
-    ? ' DATABASE_URL is set, so also point it at a scratch database you create and drop.'
+    ? ' DATABASE_URL is set, and a scratch ARCHON_HOME does not change which database it ' +
+      'names: this check reads only the home, so unset DATABASE_URL or point it at a scratch ' +
+      'database you create and drop.'
     : '';
   throw new Error(
     `Refusing to open the database of Archon home ${home}. This build runs from ${build}, ` +

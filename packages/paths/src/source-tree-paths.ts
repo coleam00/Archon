@@ -7,7 +7,7 @@ import { join, dirname } from 'path';
 import { access } from 'fs/promises';
 import { realpathSync } from 'fs';
 import { BUNDLED_IS_BINARY } from './bundled-build';
-import { isPathInside } from './home-paths';
+import { getArchonWorkspacesPath, isPathInside } from './home-paths';
 import { createLogger } from './logger';
 
 /** Lazy-initialized logger (deferred so test mocks can intercept createLogger) */
@@ -29,19 +29,18 @@ function getSourceRepoRoot(): string {
 }
 
 /**
- * Where this build's code lives when it sits inside `archonHome`'s workspaces
- * tree, else null. A build there is code Archon checked out for work (a run's
- * worktree or a managed clone), never the install that owns the home, so it
- * must not open that home's database. Compared by real path, so the managed
- * `source` symlink to an operator's own checkout does not match.
+ * Where this build's code lives when it sits inside the Archon home's
+ * workspaces tree, else null. A build there is code Archon checked out for work
+ * (a run's worktree or a managed clone), never the install that owns the home,
+ * so it must not open that home's database. Compared by real path, so the
+ * managed `source` symlink to an operator's own checkout does not match.
  */
-export function runningBuildInsideWorkspacesOf(
-  archonHome: string,
+export function runningBuildInsideWorkspaces(
   buildLocation: string = BUNDLED_IS_BINARY ? process.execPath : getSourceRepoRoot()
 ): string | null {
   let workspaces: string;
   try {
-    workspaces = realpathSync(join(archonHome, 'workspaces'));
+    workspaces = realpathSync(getArchonWorkspacesPath());
   } catch (error) {
     // A home with no workspaces directory manages no checkout.
     if ((error as NodeJS.ErrnoException).code === 'ENOENT') return null;

@@ -111,7 +111,7 @@ With `store: database` (the default), **leave `DATABASE_URL` unset** in your she
 - Initialize the schema on first run and skip startup writes when its completion proof is current
 - Use this database for operations with `store: database`
 
-A build running from inside an Archon home's `workspaces/` directory, such as a run's worktree or a managed clone, refuses to open that home's database, SQLite or PostgreSQL, because opening it would apply that build's migrations to the live database. Set `ARCHON_HOME` to a scratch directory to run such a checkout.
+A build running from inside an Archon home's `workspaces/` directory, such as a run's worktree or a managed clone, refuses to open any database, SQLite or PostgreSQL, while `ARCHON_HOME` names that home, because opening it would apply that build's migrations to the live database. Set `ARCHON_HOME` to a scratch directory to run such a checkout. The check reads only the home: with a scratch `ARCHON_HOME`, a set `DATABASE_URL` is opened as given, so unset it or point it at a scratch database.
 
 **Pros:**
 - Zero configuration required

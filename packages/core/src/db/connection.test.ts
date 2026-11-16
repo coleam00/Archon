@@ -73,14 +73,26 @@ describe('getDatabase', () => {
     resetDatabase();
   });
 
-  it('refuses, writing nothing, when this checkout sits inside the home workspaces', () => {
+  function useHomeManagingThisCheckout(): string {
     const home = trackTempRoot(mkdtempSync(join(tmpdir(), 'archon-home-')));
     const repoRoot = resolve(import.meta.dir, '..', '..', '..', '..');
     symlinkSync(dirname(repoRoot), join(home, 'workspaces'), 'junction');
     process.env.ARCHON_HOME = home;
+    return home;
+  }
+
+  it('refuses, writing nothing, when this checkout sits inside the home workspaces', () => {
+    const home = useHomeManagingThisCheckout();
     delete process.env.DATABASE_URL;
 
     expect(() => getDatabase()).toThrow(/Set ARCHON_HOME to a scratch directory/);
     expect(existsSync(join(home, 'archon.db'))).toBe(false);
+  });
+
+  it('refuses before selecting PostgreSQL, and says a scratch home leaves DATABASE_URL as is', () => {
+    useHomeManagingThisCheckout();
+    process.env.DATABASE_URL = 'postgresql://user@127.0.0.1:1/live';
+
+    expect(() => getDatabase()).toThrow(/scratch ARCHON_HOME does not change which database/);
   });
 });
