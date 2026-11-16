@@ -14,3 +14,10 @@ export function ghTokenKeysForHost(
     ? GH_DOTCOM_TOKEN_KEYS
     : GH_ENTERPRISE_TOKEN_KEYS;
 }
+
+/**
+ * Set to `1` by an engine that spawns the Archon CLI with a run's resolved GitHub
+ * identity before the run has a `WORKFLOW_ID` (the start-time forge check). CLI
+ * startup then keeps that identity over Archon's env files, as it does inside a run.
+ */
+export const RUN_GITHUB_IDENTITY_HANDOFF_ENV = 'ARCHON_RUN_GITHUB_IDENTITY';

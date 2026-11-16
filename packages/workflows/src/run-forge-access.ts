@@ -20,6 +20,7 @@ import {
 } from '@archon/forge';
 import { execFileAsync, GitFailure } from '@archon/git';
 import { createLogger } from '@archon/paths';
+import { RUN_GITHUB_IDENTITY_HANDOFF_ENV } from '@archon/paths/github-token-env';
 import type { WorkflowEnvironment } from './deps';
 import { resolveWorkflowGithubEnvironment, type WorkflowGithubDeps } from './run-credential-env';
 import type { WorkflowPack } from './schemas/pack-settings';
@@ -143,14 +144,16 @@ export async function assertRunForgeAccess(
     ]);
   }
   // The env the run's script nodes call the forge with: the host's, the run's configured
-  // env, and the run's GitHub credential (an App installation token or a per-user token).
+  // env, and the run's GitHub credential (an App installation token, a per-user token or
+  // the per-user scrub). The handoff keeps the CLI's env files from replacing that
+  // credential, as WORKFLOW_ID does for the run's own forge calls.
   const layered = await resolveWorkflowGithubEnvironment(
     deps,
     site.codebaseId,
     prepared.executionUserId,
     prepared.config
   );
-  const env = { ...process.env, ...layered.envVars };
+  const env = { ...process.env, ...layered.envVars, [RUN_GITHUB_IDENTITY_HANDOFF_ENV]: '1' };
   const failures: ForgeRequirementFailure[] = [];
   const checked = new Set<string>();
   for (const { name, url } of remotes) {
