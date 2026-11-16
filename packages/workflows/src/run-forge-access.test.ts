@@ -110,6 +110,16 @@ describe('assertRunForgeAccess', () => {
     ]);
   });
 
+  test('a remote configured through an included git config file is asked like any other', async () => {
+    const dir = checkout({});
+    const included = join(dir, 'remotes.cfg');
+    Bun.spawnSync(['git', 'config', '-f', included, 'remote.origin.url', 'git@github.com:o/r.git']);
+    Bun.spawnSync(['git', '-C', dir, 'config', 'include.path', included]);
+    const check = mock<ForgeCheck>(async () => undefined);
+    await assertFor(dir, check);
+    expect(check.mock.calls.map(([request]) => request.remote)).toEqual(['git@github.com:o/r.git']);
+  });
+
   test('a refusal names each remote with its typed reason and remedy, never its URL', async () => {
     const failures = await refusal(
       assertFor(checkout({ origin: 'https://user:secret@github.com/o/r.git' }), async () => ({

@@ -172,13 +172,15 @@ export async function assertRunForgeAccess(
  * The checkout's configured remotes (before any `insteadOf` rewrite), or undefined when
  * it is not a git repository at all. `--local` is what tells the two apart: without it,
  * `git config` outside a repository reads only global config and exits 1 like an empty one.
+ * `--local` also turns include processing off, so `--includes` restores remotes that come
+ * from an `include.path` or `includeIf` file, as `git remote` shows them.
  */
 async function checkoutRemotes(cwd: string): Promise<{ name: string; url: string }[] | undefined> {
   let stdout: string;
   try {
     ({ stdout } = await execFileAsync(
       'git',
-      ['-C', cwd, 'config', '--local', '-z', '--get-regexp', '^remote\\..*\\.url$'],
+      ['-C', cwd, 'config', '--local', '--includes', '-z', '--get-regexp', '^remote\\..*\\.url$'],
       { timeout: 10_000 }
     ));
   } catch (error) {
