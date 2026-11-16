@@ -3081,7 +3081,9 @@ The engine records terminal facts even when failure skips your reporting node. U
 The record preserves execution status, authored outcome, node states and skip causes,
 the selected `returns:` value when available, and an artifact manifest. Execution
 status and authored outcome remain independent; the engine does not infer a delivery
-verdict from filenames or output prose. Runs created before this support may have no
+verdict from filenames or output prose. `outcome` is the boolean form; `completed_outcome`
+is the outcome the run completed with, named outcomes included, and is absent from records
+written before it existed. Runs created before this support may have no
 record. Resumed active runs expose `null` until their next terminal transition. The same
 response's `run.nodes` carries the engine's node states for every run: the record's when it
 exists, otherwise the same fold over the events recorded so far. Active, resumed, and older

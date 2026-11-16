@@ -31,7 +31,8 @@ export interface RunSnapshot {
   startedAt: number;
   nodes: NodeSnapshot[];
   status: 'running' | 'paused' | RunTerminalStatus;
-  authoredOutcome?: TerminalEvent['authoredOutcome'];
+  /** The outcome the run completed with, named or boolean; see `shownOutcome`. */
+  outcome?: string;
   totalCostUsd?: number;
   failureReason?: string;
   approvalDeliveryFailed?: boolean;
@@ -302,16 +303,29 @@ export function buildStatusBlocks(
   };
 }
 
+/**
+ * The outcome to show for a terminal event or notice. An archon-chat/1 host from before
+ * `completedOutcome` sends only the boolean `authoredOutcome`.
+ */
+export function shownOutcome(
+  message: Pick<TerminalEvent, 'completedOutcome' | 'authoredOutcome'>
+): string | undefined {
+  return message.completedOutcome ?? message.authoredOutcome;
+}
+
+function outcomeText(outcome: string): string {
+  return outcome === 'unavailable' ? 'unavailable — failed to read persisted run' : outcome;
+}
+
 function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: string): KnownBlock {
-  const authoredOutcomeLabel =
-    snapshot.authoredOutcome === 'unavailable'
-      ? 'unavailable — failed to read persisted run'
-      : snapshot.authoredOutcome === undefined
-        ? undefined
-        : `\`${snapshot.authoredOutcome}\``;
-  const runFacts = authoredOutcomeLabel
-    ? `\n*Execution status:* \`${snapshot.status}\` · *Authored outcome:* ${authoredOutcomeLabel}`
-    : '';
+  const runFacts =
+    snapshot.outcome === undefined
+      ? ''
+      : `\n*Execution status:* \`${snapshot.status}\` · *Authored outcome:* ${
+          snapshot.outcome === 'unavailable'
+            ? outcomeText(snapshot.outcome)
+            : `\`${snapshot.outcome}\``
+        }`;
   return {
     type: 'section',
     text: {
@@ -353,9 +367,7 @@ function statusFallbackText(
         ? `Workflow ${snapshot.workflowName} paused`
         : `Workflow ${snapshot.workflowName} running`
   }${
-    snapshot.authoredOutcome
-      ? ` · authored outcome: ${snapshot.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : snapshot.authoredOutcome}`
-      : ''
+    snapshot.outcome ? ` · authored outcome: ${outcomeText(snapshot.outcome)}` : ''
   }${approvalRecovery ? ` · ${approvalRecovery}` : ''}`;
 }
 
@@ -570,10 +582,8 @@ export function buildNoticeTerminalBlocks(notice: TerminalNotice): {
   fallbackText: string;
 } {
   const facts: string[] = [];
-  if (notice.authoredOutcome)
-    facts.push(
-      `authored outcome: ${notice.authoredOutcome === 'unavailable' ? 'unavailable — failed to read persisted run' : notice.authoredOutcome}`
-    );
+  const outcome = shownOutcome(notice);
+  if (outcome) facts.push(`authored outcome: ${outcomeText(outcome)}`);
   if (notice.totalCostUsd !== undefined)
     facts.push(`total cost: $${notice.totalCostUsd.toFixed(4)}`);
   const blocks: KnownBlock[] = [

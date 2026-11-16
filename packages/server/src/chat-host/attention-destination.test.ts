@@ -28,7 +28,10 @@ function notice(
   kind: AttentionNotice['kind'],
   status: WorkflowRun['status'],
   metadata: Record<string, unknown>,
-  outcome: WorkflowRun['outcome'] = null
+  outcomes: Pick<WorkflowRun, 'outcome' | 'completed_outcome'> = {
+    outcome: null,
+    completed_outcome: null,
+  }
 ): AttentionNotice {
   return {
     kind,
@@ -42,8 +45,7 @@ function notice(
       parent_conversation_id: null,
       codebase_id: null,
       status,
-      outcome,
-      completed_outcome: outcome,
+      ...outcomes,
       user_message: 'private input',
       metadata,
       active_phase_started_at: null,
@@ -175,15 +177,23 @@ test('an attention notice carries the recommendation and what options do, never 
   ]);
 });
 
-test('terminal notices carry status, authored outcome and cost', () => {
+test.each([
+  ['a named outcome', { outcome: null, completed_outcome: 'built' }, { completedOutcome: 'built' }],
+  [
+    'a boolean outcome',
+    { outcome: 'failed', completed_outcome: 'failed' },
+    { completedOutcome: 'failed', authoredOutcome: 'failed' },
+  ],
+  ['no declared outcome', { outcome: null, completed_outcome: null }, {}],
+] as const)('a terminal notice carries status, cost and %s', (_, outcomes, expected) => {
   expect(
-    chatAttentionNotice(notice('terminal', 'failed', { total_cost_usd: 0.25 }, 'failed'))
+    chatAttentionNotice(notice('terminal', 'completed', { total_cost_usd: 0.25 }, outcomes))
   ).toEqual({
     type: 'terminal',
     runId: 'run',
     workflowName: 'nightly',
-    status: 'failed',
-    authoredOutcome: 'failed',
+    status: 'completed',
+    ...expected,
     totalCostUsd: 0.25,
   });
 });

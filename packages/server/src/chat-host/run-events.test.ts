@@ -102,6 +102,7 @@ test.each([false, true])(
           transcriptPath: '/private/path',
         });
         emitter.emit({ type: 'node_started', runId: run.id, nodeId: 'node', nodeName: 'Node' });
+        // An older binary may write the legacy outcome on a running row; a pause shows none.
         await getDatabase().query(
           `UPDATE remote_agent_workflow_runs SET outcome = 'succeeded' WHERE id = $1`,
           [run.id]
@@ -113,6 +114,11 @@ test.each([false, true])(
           message: 'Choose',
         });
         emitter.unregisterRun(run.id);
+        await getDatabase().query(
+          `UPDATE remote_agent_workflow_runs
+           SET status = 'completed', outcome = NULL, completed_outcome = 'built' WHERE id = $1`,
+          [run.id]
+        );
         emitter.emit({
           type: 'workflow_completed',
           runId: run.id,
@@ -128,10 +134,13 @@ test.each([false, true])(
       expect(first.map(event => event.runId)).toEqual(Array(4).fill(runs[0]!.id));
       expect(second.map(event => event.runId)).toEqual(Array(4).fill(runs[1]!.id));
       expect(first[0]).toMatchObject({ conversationId: 'thread-fixture-chat' });
-      expect(first[2]).toMatchObject({ type: 'approval_pending', authoredOutcome: 'succeeded' });
-      expect(first[3]).toMatchObject({
+      expect(first[2]).toMatchObject({ type: 'approval_pending' });
+      expect(first[2]).not.toHaveProperty('authoredOutcome');
+      expect(first[3]).toEqual({
         type: 'terminal',
-        authoredOutcome: 'succeeded',
+        runId: runs[0]!.id,
+        status: 'completed',
+        completedOutcome: 'built',
         totalCostUsd: 0.25,
       });
       expect(JSON.stringify(first)).not.toContain('/private/path');

@@ -284,7 +284,7 @@ describe('buildStatusBlocks', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
       snapshot({
         status: 'completed',
-        authoredOutcome: 'failed',
+        outcome: 'failed',
       }),
       startedAt + 1000
     );
@@ -294,26 +294,22 @@ describe('buildStatusBlocks', () => {
     expect(fallbackText).toContain('authored outcome: failed');
   });
 
-  test('paused snapshot labels execution and authored outcome separately', () => {
+  test('terminal snapshot shows a named outcome', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
-      snapshot({
-        status: 'paused',
-        authoredOutcome: 'succeeded',
-      }),
+      snapshot({ status: 'completed', outcome: 'built' }),
       startedAt + 1000
     );
-    const header = (blocks[0] as { text: { text: string } }).text.text;
-    expect(header).toContain('Workflow paused');
-    expect(header).toContain('*Execution status:* `paused`');
-    expect(header).toContain('*Authored outcome:* `succeeded`');
-    expect(fallbackText).toContain('authored outcome: succeeded');
+    expect((blocks[0] as { text: { text: string } }).text.text).toContain(
+      '*Authored outcome:* `built`'
+    );
+    expect(fallbackText).toContain('authored outcome: built');
   });
 
   test('distinguishes an unavailable authored outcome from an undeclared outcome', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
       snapshot({
         status: 'completed',
-        authoredOutcome: 'unavailable',
+        outcome: 'unavailable',
       }),
       startedAt + 1000
     );

@@ -117,6 +117,9 @@ test('an unreadable item, a failed run and a lost owner say which run and what s
   expect(
     text({ type: 'terminal', ...run, status: 'completed', outcome: null, cause: null })
   ).not.toContain(more);
+  expect(
+    text({ type: 'terminal', ...run, status: 'completed', outcome: 'built', cause: null })
+  ).toContain('Run run-1 completed (built).');
 });
 
 test('the close of an ask is one line that says who answered when that was recorded', () => {

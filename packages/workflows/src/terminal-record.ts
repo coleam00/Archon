@@ -325,7 +325,7 @@ export function terminalArtifactsFor(
 
 /** Fold ordered durable events; never reconstruct producer values from artifact contents. */
 export function buildTerminalRecord(input: {
-  run: Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'metadata'>;
+  run: Pick<WorkflowRun, 'id' | 'status' | 'outcome' | 'completed_outcome' | 'metadata'>;
   events: readonly TerminalRecordEvent[];
   artifacts: ArtifactManifest;
 }): TerminalRecord {
@@ -337,6 +337,7 @@ export function buildTerminalRecord(input: {
     run_id: run.id,
     status: terminalStatusSchema.parse(run.status),
     outcome: run.outcome,
+    completed_outcome: run.completed_outcome,
     error: typeof run.metadata?.error === 'string' ? run.metadata.error : null,
     first_failed_node: [...failureOrder].sort((left, right) => left[1] - right[1])[0]?.[0] ?? null,
     nodes: [...nodes.values()],

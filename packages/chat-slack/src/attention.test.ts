@@ -265,10 +265,12 @@ test('a destination thread hosts the notice, and the follow-up closes it in that
       runId: 'run-1',
       workflowName: 'deploy',
       status: 'completed',
+      completedOutcome: 'built',
       totalCostUsd: 0.5,
     },
   });
   expect(slack.posts[1]).toMatchObject({ channel: 'C9', thread_ts: '100.1' });
+  expect(JSON.stringify(blocksOf(1))).toContain('authored outcome: built');
   expect(JSON.stringify(blocksOf(1))).toContain('total cost: $0.5000');
   expect(slack.updates).toEqual([
     expect.objectContaining({

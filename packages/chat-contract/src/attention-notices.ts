@@ -1,5 +1,9 @@
 import { z } from 'zod';
-import { chatApprovalDecisionSchema, chatAuthoredOutcomeSchema } from './run-events';
+import {
+  chatApprovalDecisionSchema,
+  chatAuthoredOutcomeSchema,
+  chatCompletedOutcomeSchema,
+} from './run-events';
 
 const id = z.string().min(1);
 /** An attention option: a decision plus what choosing it does, which a plugin may show. */
@@ -41,6 +45,7 @@ export const chatAttentionNoticeSchema = z.discriminatedUnion('type', [
     runId: id,
     workflowName: id,
     status: z.enum(['completed', 'failed', 'cancelled']),
+    completedOutcome: chatCompletedOutcomeSchema.optional(),
     authoredOutcome: chatAuthoredOutcomeSchema.optional(),
     totalCostUsd: z.number().nonnegative().optional(),
   }),

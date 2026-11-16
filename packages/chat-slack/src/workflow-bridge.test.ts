@@ -283,26 +283,19 @@ test('action RPC failure gives a generic note', async () => {
   expect(JSON.stringify(slack.posts)).toContain('Could not cancel');
   expect(JSON.stringify(slack.posts)).not.toContain('private details');
 });
-test('paused approvals retain their authored outcome during a pending node edit', async () => {
+test('a named outcome is shown without an outcome reaction', async () => {
   await started();
   await plugin.onRunEvent({
-    type: 'node_state',
+    type: 'terminal',
     runId: 'run',
-    nodeId: 'review',
-    nodeName: 'review',
-    state: 'running',
+    status: 'completed',
+    completedOutcome: 'built',
   });
-  await plugin.onRunEvent({
-    type: 'approval_pending',
-    runId: 'run',
-    nodeId: 'review',
-    message: 'Choose',
-    decisions: [{ id: 'ship' }],
-    authoredOutcome: 'succeeded',
-  });
-  await new Promise(resolve => setTimeout(resolve, 550));
-  expect(JSON.stringify(slack.updates.at(-1))).toContain('Workflow paused');
-  expect(JSON.stringify(slack.updates.at(-1))).toContain('succeeded');
+  expect(rendered()).toContain('built');
+  expect(slack.added.map(reaction => reaction.name)).toEqual([
+    'arrows_counterclockwise',
+    'white_check_mark',
+  ]);
 });
 
 test('prior-success replay preserves completed duration and suspended nodes stay running', async () => {

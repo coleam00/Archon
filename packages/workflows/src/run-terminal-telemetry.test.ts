@@ -35,7 +35,7 @@ async function failedRunEvents(): Promise<RunTelemetryEvent[]> {
       created_at: '2026-09-24 10:00:09',
     },
   ];
-  const terminalRun = { ...run, outcome: null, output_root: null };
+  const terminalRun = { ...run, outcome: null, completed_outcome: null, output_root: null };
   const terminalRecord = buildTerminalRecord({
     run: terminalRun,
     events,
@@ -121,7 +121,12 @@ describe('buildRunTerminalTelemetry', () => {
         { event_type: 'loop_iteration_completed', data: {}, created_at: '2026-09-24T10:00:06Z' },
         { event_type: 'loop_iteration_completed', data: {}, created_at: '2026-09-24T10:01:06Z' },
       ];
-      const terminalRun = { ...childRun, outcome: null, output_root: null };
+      const terminalRun = {
+        ...childRun,
+        outcome: null,
+        completed_outcome: null,
+        output_root: null,
+      };
       const terminalRecord = buildTerminalRecord({
         run: terminalRun,
         events,

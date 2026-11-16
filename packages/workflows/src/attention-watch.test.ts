@@ -21,6 +21,7 @@ import {
   type AttentionStreamLine,
   type AttentionWatchHost,
 } from './attention-watch';
+import { terminalFacts } from './attention-watch-events';
 import type { AttentionWatchOptions } from './engine-port';
 import { createFileWorkflowStore } from './file-store';
 import { splitAttentionRead } from './schemas/attention-degraded';
@@ -957,6 +958,48 @@ describe('watchAttentionQueue', () => {
       cause: null,
     });
     await stream.close();
+  });
+
+  test('a terminal line shows the outcome a run completed with, named outcomes included', async () => {
+    const store = await makeStore();
+    const stream = await watch(store);
+    const runId = await running(store);
+    await store.completeWorkflowRun(runId, { duration_ms: 1 }, undefined, {
+      outcome: { kind: 'enum', value: 'built' },
+    });
+    expect(await stream.next(ofRun(runId, 'terminal'))).toMatchObject({ outcome: 'built' });
+    await stream.close();
+  });
+
+  test.each([
+    ['a record from before completed_outcome', 'completed', { outcome: 'failed' }, 'failed'],
+    [
+      'a failed run whose legacy outcome an older binary wrote early',
+      'failed',
+      { outcome: 'succeeded' },
+      null,
+    ],
+  ] as const)('%s shows the engine display rule', (_, status, fields, expected) => {
+    const record = {
+      run_id: 'run',
+      status,
+      error: null,
+      first_failed_node: null,
+      nodes: [],
+      returns: { availability: 'unavailable', node_id: null, reason: 'not_declared' },
+      artifacts: { root: null, files: [], limitations: [] },
+      ...fields,
+    };
+    const event = {
+      id: 'event',
+      workflow_run_id: 'run',
+      event_type: `workflow_${status}`,
+      step_index: null,
+      step_name: null,
+      data: { terminal_record: record },
+      created_at: '2026-11-16T00:00:00.000Z',
+    };
+    expect(terminalFacts(event, status).outcome).toBe(expected);
   });
 
   test('a relabel moves an item between label filters by revision, and unmatched is stateless', async () => {
