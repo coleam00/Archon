@@ -21,7 +21,6 @@ import {
   collectConditionalJoinWarnings,
   collectLegacyPauseWarnings,
   collectUnknownWorkflowKeys,
-  warnSignalCompletesWithoutInteractive,
 } from './loader/parse-warnings';
 import {
   parseBetas,
@@ -290,8 +289,6 @@ function parseWorkflowFields(
     'invalid_web_search_mode',
     { valid: webSearchModeSchema.options }
   );
-
-  warnSignalCompletesWithoutInteractive(dagNodes, filename);
 
   const worktree = parseWorktreePolicy(raw.worktree, filename);
   const container = parseContainerPolicy(raw.container, filename);

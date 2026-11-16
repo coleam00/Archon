@@ -5,6 +5,7 @@ import {
   buildApprovalBlocks,
   parseApprovalValue,
   buildApprovalResolutionBlocks,
+  buildNoticeTerminalBlocks,
   buildStatusBlocks,
   formatCostFooter,
   type RunSnapshot,
@@ -284,7 +285,7 @@ describe('buildStatusBlocks', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
       snapshot({
         status: 'completed',
-        authoredOutcome: 'failed',
+        outcome: { kind: 'value', value: 'failed' },
       }),
       startedAt + 1000
     );
@@ -294,26 +295,46 @@ describe('buildStatusBlocks', () => {
     expect(fallbackText).toContain('authored outcome: failed');
   });
 
-  test('paused snapshot labels execution and authored outcome separately', () => {
+  test('terminal snapshot shows a named outcome', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
-      snapshot({
-        status: 'paused',
-        authoredOutcome: 'succeeded',
-      }),
+      snapshot({ status: 'completed', outcome: { kind: 'value', value: 'built' } }),
       startedAt + 1000
     );
-    const header = (blocks[0] as { text: { text: string } }).text.text;
-    expect(header).toContain('Workflow paused');
-    expect(header).toContain('*Execution status:* `paused`');
-    expect(header).toContain('*Authored outcome:* `succeeded`');
-    expect(fallbackText).toContain('authored outcome: succeeded');
+    expect((blocks[0] as { text: { text: string } }).text.text).toContain(
+      '*Authored outcome:* `built`'
+    );
+    expect(fallbackText).toContain('authored outcome: built');
+  });
+
+  test('a long named outcome stays within the Slack text limit', () => {
+    const long = 'x'.repeat(5000);
+    const status = buildStatusBlocks(
+      snapshot({ status: 'completed', outcome: { kind: 'value', value: long } }),
+      startedAt + 1000
+    );
+    const notice = buildNoticeTerminalBlocks({
+      type: 'terminal',
+      runId: 'run-1',
+      workflowName: 'assist',
+      status: 'completed',
+      completedOutcome: long,
+    });
+    const texts: string[] = [];
+    JSON.stringify([...status.blocks, ...notice.blocks], (key, value: unknown) => {
+      if (key === 'text' && typeof value === 'string') texts.push(value);
+      return value;
+    });
+    expect(texts.length).toBeGreaterThan(0);
+    for (const text of texts) expect(text.length).toBeLessThanOrEqual(3000);
+    expect(status.fallbackText.length).toBeLessThanOrEqual(3000);
+    expect(notice.fallbackText.length).toBeLessThanOrEqual(3000);
   });
 
   test('distinguishes an unavailable authored outcome from an undeclared outcome', () => {
     const { blocks, fallbackText } = buildStatusBlocks(
       snapshot({
         status: 'completed',
-        authoredOutcome: 'unavailable',
+        outcome: { kind: 'read_failed' },
       }),
       startedAt + 1000
     );

@@ -68,8 +68,18 @@ const read: ItemRead = {
       decision: 'approved',
       text: null,
     },
+    {
+      kind: 'ruling',
+      id: 'ruling-1',
+      text: 'leave the chat readers for a follow-up',
+      at: '2026-11-01T09:45:00.000Z',
+      via: 'cli',
+      by: { declared: 'operator-agent' },
+      fromRun: null,
+      withdrawn: { at: '2026-11-01T10:05:00.000Z', via: 'api', by: null, fromRun: null },
+    },
   ],
-  degraded: [],
+  degraded: [{ type: 'degraded', reason: 'ruling_unreadable', rulingId: 'ruling-lost' }],
 };
 
 test('an item read prints its runs, open questions and answers', () => {
@@ -94,4 +104,11 @@ test('an item read prints its runs, open questions and answers', () => {
   const approved = lines.findIndex(line => line.includes('gate approved'));
   expect(answered).toBeGreaterThan(rejected);
   expect(approved).toBeGreaterThan(answered);
+  // A ruling prints with the answers, with who said it and that it was withdrawn.
+  const ruling = lines.findIndex(line => line.includes('leave the chat readers'));
+  expect(ruling).toBeGreaterThan(approved);
+  expect(lines[ruling]).toContain('ruling ruling-1');
+  expect(lines[ruling]).toContain('by operator-agent (self-declared)');
+  expect(lines[ruling]).toContain('(withdrawn 2026-11-01T10:05Z)');
+  expect(text).toContain('1 ruling(s) on this item could not be read: ruling-lost');
 });

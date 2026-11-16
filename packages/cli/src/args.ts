@@ -113,6 +113,10 @@ export const cliArgOptions: CliArgOptions = {
   host: { type: 'string' },
   'delivery-id': { type: 'string' },
   item: { type: 'string' },
+  // `workflow runs --item-of <run-id>`: read the item a run belongs to.
+  'item-of': { type: 'string' },
+  // `workflow rule --withdraw <ruling-id>`.
+  withdraw: { type: 'string' },
   inputs: { type: 'string' },
   owner: { type: 'string' },
   // `archon pack bindings`: the operator's choices a pack's binding declaration lacks.

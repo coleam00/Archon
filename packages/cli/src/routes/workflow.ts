@@ -260,6 +260,7 @@ export async function runWorkflowRuns(route: WorkflowRoute): Promise<number> {
     limit,
     open: values.open as boolean | undefined,
     item: values.item as string | undefined,
+    itemOf: values['item-of'] as string | undefined,
     verbose: values.verbose as boolean | undefined,
     throughput: values.throughput as boolean | undefined,
   });
@@ -540,6 +541,23 @@ export async function runWorkflowNotice(route: WorkflowRoute): Promise<number> {
   );
 }
 
+export async function runWorkflowRule(route: WorkflowRoute): Promise<number> {
+  const { positionals, values, json, commands, effectiveCwd } = route;
+  const item = values.item as string | undefined;
+  const withdraw = values.withdraw as string | undefined;
+  const as = values.as as string | undefined;
+  const text = positionals[2];
+  // Exactly one of the two forms: a ruling's text after --, or the id of one to withdraw.
+  const request =
+    withdraw !== undefined && item === undefined && text === undefined
+      ? { withdraw, as }
+      : withdraw === undefined && item !== undefined && text?.trim() && positionals[3] === undefined
+        ? { item, text, as }
+        : undefined;
+  if (request === undefined) return await fail(json, commands.WORKFLOW_RULE_USAGE);
+  return await commands.workflowRuleCommand(route.host, effectiveCwd, request, json);
+}
+
 const EVENT_EMIT_USAGE = 'Usage: archon workflow event emit --run-id <run-id> --type <event-type>';
 
 export async function runWorkflowEvent(route: WorkflowRoute): Promise<number> {
@@ -594,6 +612,6 @@ export async function runUnknownWorkflowSubcommand({
       : `Unknown workflow subcommand: ${subcommand}`;
   return await fail(
     json,
-    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, cleanup, reset-sessions, event, notice, wake, signal`
+    `${problem}\nAvailable: list, run, test, types, status, get, artifacts, logs, wait, runs, resume, cancel, abandon, end-turn, approve, reject, respond, answer, attention, rule, cleanup, reset-sessions, event, notice, wake, signal`
   );
 }

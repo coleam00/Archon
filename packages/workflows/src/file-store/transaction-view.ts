@@ -80,6 +80,9 @@ export type TransactionView = Omit<
   | 'releasePausedRunSlot'
   | 'getItemRuns'
   | 'getItem'
+  | 'listItemRulings'
+  | 'recordItemRuling'
+  | 'withdrawItemRuling'
 > & {
   /**
    * The run `resumeWorkflowRun(id, cursor)` would continue; throws what it would throw

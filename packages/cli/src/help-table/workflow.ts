@@ -42,6 +42,10 @@ export const workflowHelp: HelpGroup = {
           spec: '--verbose, -v',
           description: "With --json: add each run's per-node state and attention",
         },
+        {
+          spec: '--item-of <run-id>',
+          description: "Read the item a run belongs to (its root run's item), as --item reads it",
+        },
       ],
     },
     {
@@ -249,6 +253,19 @@ export const workflowHelp: HelpGroup = {
         {
           spec: '--yes',
           description: 'Confirm cross-scope reset; refused without --scope or --yes',
+        },
+      ],
+    },
+    {
+      command: 'workflow',
+      subcommand: 'rule',
+      spec: 'workflow rule --item <key> -- <text>',
+      description:
+        "Record a ruling on an item of this project: a decision made without a question.\nEvery later read of the item shows it with the answers; prints the ruling's id",
+      scopedFlags: [
+        {
+          spec: '--withdraw <ruling-id>',
+          description: 'Withdraw a ruling instead; the record stays and says it was withdrawn',
         },
       ],
     },

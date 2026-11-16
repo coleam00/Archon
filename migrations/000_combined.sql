@@ -754,6 +754,29 @@ ALTER TABLE remote_agent_workflow_runs
 -- column keeps its constraint and meaning; it cannot hold an enum value.
 ALTER TABLE remote_agent_workflow_runs ADD COLUMN IF NOT EXISTS completed_outcome TEXT;
 
+-- Rulings on an item: decisions an operator recorded about it, with no question asked.
+-- Append-only facts, like the item itself: a row is a ruling (text set) or the withdrawal
+-- of one (withdraws set), never updated, and no column records where the item stands.
+-- The engine stores the text and never reads it. id is TEXT so a lookup by a malformed
+-- id finds nothing instead of failing a UUID cast; UNIQUE(withdraws) refuses a second
+-- withdrawal. from_run_id has no foreign key, so run cleanup keeps the ruling.
+CREATE TABLE IF NOT EXISTS remote_agent_item_rulings (
+  id TEXT PRIMARY KEY DEFAULT gen_random_uuid()::text,
+  -- Recording order. Timestamps tie within a millisecond and `id` is random, so rulings
+  -- are ordered by this database-assigned sequence.
+  seq BIGSERIAL NOT NULL UNIQUE,
+  item_id UUID NOT NULL REFERENCES remote_agent_items(id),
+  withdraws TEXT UNIQUE REFERENCES remote_agent_item_rulings(id),
+  text TEXT,
+  by_declared TEXT,
+  by_user_id TEXT,
+  via TEXT NOT NULL,
+  from_run_id TEXT,
+  from_node_path TEXT,
+  created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+  CHECK ((withdraws IS NULL) = (text IS NOT NULL))
+);
+
 -- The surface a state write outside a run came through (cli, api, ...). Nullable:
 -- rows written before it existed came through the CLI.
 ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS writer_via TEXT;
@@ -787,6 +810,10 @@ ALTER TABLE remote_agent_state_revisions ADD COLUMN IF NOT EXISTS lease_taken_at
 --
 -- Guarded by packages/core/src/db/migration-statement-order.test.ts and
 -- exercised against real PostgreSQL upgrades by scripts/check-schema-upgrades.ts.
+
+-- Item rulings
+CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id
+  ON remote_agent_item_rulings(item_id);
 
 -- Codebase env vars
 CREATE INDEX IF NOT EXISTS idx_codebase_env_vars_codebase_id

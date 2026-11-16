@@ -1630,6 +1630,38 @@ This is an **authoring** concern, not an engine one. Options, in order of prefer
 Put the state write in a `script:` node, not in an AI node's Write tool. A `script:` node is
 a guarantee; a prompt instructing an AI node to append is a convention it may not follow.
 
+## Reading the item a run belongs to
+
+A run on an [item](/reference/cli/#items) can read what is recorded about it: the item's
+runs, the questions open in them, and the answers to them together with the item's
+[rulings](/reference/cli/#workflow-rule), the decisions an operator recorded without a
+question being asked. A ruling given to one run reaches every later run on the item this
+way, whichever workflow it is. The engine adds none of it to a prompt; a workflow that
+wants it reads it in a `script:` node and hands it on like any other output:
+
+```yaml
+nodes:
+  - id: rulings
+    runtime: bun
+    script: |
+      import { emit, item } from 'archon:script';
+      const read = item();
+      emit({
+        rulings: (read?.answers ?? []).flatMap(answer =>
+          answer.kind === 'ruling' && answer.withdrawn === null ? [answer.text] : []
+        ),
+      });
+  - id: review
+    depends_on: [rulings]
+    prompt: |
+      Review the change. These rulings on the item stand: $rulings.output.rulings
+```
+
+`item()` reads the item of the run's top-level run, so a `workflow:` child reads its
+parent's item. It returns `null` for a run on no item. A withdrawn ruling stays in the
+list with `withdrawn` set; what a ruling means is for the reading node to judge. Like
+`state`, it runs on the host: a container-isolated node cannot call it.
+
 ## Durable state documents
 
 Use `archon state` for a standing agent's small JSON ledger, cursor or index when updates
@@ -1810,10 +1842,11 @@ Two consequences worth knowing:
 - **A composition can span providers.** Parent on Claude, one composed block on Pi, another
   on Codex, all in one run: each resolves independently. `archon workflow run <name>
   --dry-run` prints each node's effective provider and model and where the value came from.
-- **A composed workflow's entry node starts a fresh session**, exactly as it would if you
-  ran that file on its own, even when the preceding node used the same provider. Set
-  `context: shared` on the entry node if you deliberately want the caller's thread to
-  continue into the block.
+- **A composed workflow's first AI node starts a fresh session**, exactly as it would if
+  you ran that file on its own, even when the preceding node used the same provider. That
+  holds when the block starts with a `bash:` or `script:` node too: the first AI node
+  after it is still fresh. Set `context: shared` on that node if you deliberately want the
+  caller's thread to continue into the block.
 
 ### How expansion works
 
@@ -1900,6 +1933,21 @@ depends on whether the block declares `inputs:` (see
 [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)): a block with no
 `inputs:` ignores unrecognized keys; a block that declares `inputs:` rejects an undeclared
 key at load.
+
+An object value is a literal, with one exception. An object with exactly the shape of a
+command/script directive is a load error naming the input: `{ from }` with an optional
+`if_skipped`, or `{ outputs }` with an optional `if_unreadable`. Because those keys are
+optional, a plain `{ from: alice }` is refused too. Those directives are read only on a command or script node's own `with:` (see
+[Binding values](#binding-values-into-command-and-script-nodes)); passed through an include
+it would reach the block as data, and its `if_skipped` would never apply. To carry a skip
+fallback across an include, bind it with `if_skipped` in a `script:` node's own `with:`, set
+`trigger_rule: all_done` on that node so it runs when its source is skipped (see
+[Reading across a skipped branch](#reading-across-a-skipped-branch)), have it print the value,
+and pass `$<that-node>.output` to the include. Any other object,
+such as `{ from: alice, to: bob }`, stays a literal. There is no escape for passing a
+directive-shaped object as data, but only a top-level value is checked, so the same object
+nested inside an array or another object (`[{ from: alice }]`, `{ user: { from: alice } }`)
+passes as a literal. The same rule holds for a `workflow:` node's `with:`.
 
 Substitution applies everywhere the value could reach the model, including inside Markdown
 code fences and inline code spans: `$INPUTS.<name>` has no documentation-only meaning, so a
@@ -2445,8 +2493,10 @@ nodes:
 A `workflow:` node has **one** input channel per invocation: either the untyped `input:` string
 (delivered as the child's `$ARGUMENTS`) **or** the named `with:` map (delivered as the child's
 `$INPUTS.<name>`. See [Workflow Signature](#workflow-signature-inputs-returns-and-inputs)).
-Setting both on one node is a load error. Use `with:` when the child declares named `inputs:` or
-when its `command:` bodies need named values:
+Setting both on one node is a load error. Values follow the same rule as an include's `with:`:
+JSON literals, and a directive-shaped object such as `{ from, if_skipped }` is a load error (see
+[Passing values into an included block](#passing-values-into-an-included-block)). Use `with:`
+when the child declares named `inputs:` or when its `command:` bodies need named values:
 
 ```yaml
   - id: implement-qa
@@ -3081,7 +3131,9 @@ The engine records terminal facts even when failure skips your reporting node. U
 The record preserves execution status, authored outcome, node states and skip causes,
 the selected `returns:` value when available, and an artifact manifest. Execution
 status and authored outcome remain independent; the engine does not infer a delivery
-verdict from filenames or output prose. Runs created before this support may have no
+verdict from filenames or output prose. `outcome` is the boolean form; `completed_outcome`
+is the outcome the run completed with, named outcomes included, and is absent from records
+written before it existed. Runs created before this support may have no
 record. Resumed active runs expose `null` until their next terminal transition. The same
 response's `run.nodes` carries the engine's node states for every run: the record's when it
 exists, otherwise the same fold over the events recorded so far. Active, resumed, and older

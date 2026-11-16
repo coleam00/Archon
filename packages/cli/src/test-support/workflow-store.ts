@@ -396,6 +396,9 @@ export function createInMemoryWorkflowStore(
     findOpenWorkRuns: options => write(view => view.findOpenWorkRuns(options)),
     getItemRuns: unsupported,
     getItem: unsupported,
+    listItemRulings: unsupported,
+    recordItemRuling: unsupported,
+    withdrawItemRuling: unsupported,
     listWorkflowRuns: options => write(view => view.listWorkflowRuns(options)),
     listDueWorkflowContinuations: (now, limit) =>
       write(view => view.listDueWorkflowContinuations(now, limit)),

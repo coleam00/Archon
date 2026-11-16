@@ -358,7 +358,7 @@ export function registerAuthoredConfigTests() {
 export function registerRuntimeBoundariesTests() {
   // ---------------------------------------------------------------------------
   // Composition boundaries at run time (#1764):
-  //   - a composed workflow's entry node starts a session as coldly as it would standalone
+  //   - a composed workflow's first AI node starts a session as coldly as it would standalone
   //   - a composed workflow's declared inputs reach its shell nodes, named script included
   // ---------------------------------------------------------------------------
 
@@ -369,9 +369,13 @@ export function registerRuntimeBoundariesTests() {
       testDir = join(tmpdir(), `dag-comp-rt-${Date.now()}-${Math.random().toString(36).slice(2)}`);
       await mkdir(testDir, { recursive: true });
       mockSendQueryDag.mockClear();
+      // Each AI call gets its own session id (session-1, session-2, ...), so a test can
+      // tell which earlier node a resume continues.
+      let sessionCount = 0;
       mockSendQueryDag.mockImplementation(async function* () {
+        sessionCount += 1;
         yield { type: 'agent_message_chunk', text: 'response' };
-        yield { type: 'result', sessionId: 'session-1' };
+        yield { type: 'result', sessionId: `session-${sessionCount}` };
       });
     });
 
@@ -561,8 +565,9 @@ export function registerRuntimeBoundariesTests() {
       // inc__first: the block's entry — cold, exactly as it would be standalone, even
       // though `lead` just produced a resumable session on the same provider.
       expect(mockSendQueryDag.mock.calls[1][2]).toBeUndefined();
-      // inc__second: inside the block, so the block's own thread continues.
-      expect(mockSendQueryDag.mock.calls[2][2]).toBe('session-1');
+      // inc__second: inside the block, so the block's own thread (inc__first's
+      // session-2) continues, not lead's session-1.
+      expect(mockSendQueryDag.mock.calls[2][2]).toBe('session-2');
     });
 
     it("AC7 — context: 'shared' on the entry node opts back into the parent's thread", async () => {
@@ -577,6 +582,59 @@ export function registerRuntimeBoundariesTests() {
       await runExpanded([block, parent], 'sess-parent2');
 
       expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
+    });
+
+    it("a block's first AI node starts fresh when the block starts with a bash node (#5740)", async () => {
+      const block = buildWf('bash-entry-blk', [
+        { id: 'prep', bash: 'echo ready' },
+        { id: 'ask', prompt: 'block ask', depends_on: ['prep'] },
+      ]);
+      const parent = buildWf('bash-entry-parent', [
+        { id: 'first', prompt: 'parent first' },
+        { id: 'block', include: 'bash-entry-blk', depends_on: ['first'] },
+      ]);
+
+      await runExpanded([block, parent], 'bash-entry-parent');
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(2);
+      // block__ask: standalone, nothing before it holds a session, so composed it must
+      // not continue `first`'s session-1 either.
+      expect(mockSendQueryDag.mock.calls[1][2]).toBeUndefined();
+    });
+
+    it("context: 'shared' on a first AI node after a bash entry continues the caller's thread", async () => {
+      const block = buildWf('bash-shared-blk', [
+        { id: 'prep', bash: 'echo ready' },
+        { id: 'ask', prompt: 'block ask', depends_on: ['prep'], context: 'shared' },
+      ]);
+      const parent = buildWf('bash-shared-parent', [
+        { id: 'first', prompt: 'parent first' },
+        { id: 'block', include: 'bash-shared-blk', depends_on: ['first'] },
+      ]);
+
+      await runExpanded([block, parent], 'bash-shared-parent');
+
+      expect(mockSendQueryDag.mock.calls[1][2]).toBe('session-1');
+    });
+
+    it("an AI node after the block's own session-starting node keeps the block's thread", async () => {
+      const block = buildWf('mid-bash-blk', [
+        { id: 'a', prompt: 'block a' },
+        { id: 'prep', bash: 'echo ready', depends_on: ['a'] },
+        { id: 'ask', prompt: 'block ask', depends_on: ['prep'] },
+      ]);
+      const parent = buildWf('mid-bash-parent', [
+        { id: 'lead', prompt: 'parent lead' },
+        { id: 'inc', include: 'mid-bash-blk', depends_on: ['lead'] },
+      ]);
+
+      await runExpanded([block, parent], 'mid-bash-parent');
+
+      expect(mockSendQueryDag.mock.calls.length).toBe(3);
+      // inc__a: the block's first AI node, cold.
+      expect(mockSendQueryDag.mock.calls[1][2]).toBeUndefined();
+      // inc__ask: continues inc__a (session-2), as it would standalone.
+      expect(mockSendQueryDag.mock.calls[2][2]).toBe('session-2');
     });
 
     it("AC8 — a composed block's declared inputs reach a NAMED script as INPUTS_* env vars", async () => {

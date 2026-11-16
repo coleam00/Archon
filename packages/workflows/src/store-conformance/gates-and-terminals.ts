@@ -30,7 +30,7 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
       ['an enum', { kind: 'enum', value: 'built' }, { node_counts: { total: 1 } }, null, 'built'],
       ['no', undefined, { node_counts: { total: 1 } }, null, null],
     ] as const)(
-      'completion writes %s outcome in the write that completes the run (#5660)',
+      'completion writes %s outcome in the write that completes the run, and its terminal record (#5660)',
       async (_label, outcome, metadata, legacy, completed) => {
         const run = await running(store);
         await store.completeWorkflowRun(
@@ -41,6 +41,11 @@ export function describeGatesAndTerminalsConformance(getHarness: () => WorkflowS
         );
         expect(await store.getWorkflowRun(run.id)).toMatchObject({
           status: 'completed',
+          outcome: legacy,
+          completed_outcome: completed,
+        });
+        const [event] = await store.listWorkflowEvents(run.id);
+        expect(terminalRecordSchema.parse(event?.data.terminal_record)).toMatchObject({
           outcome: legacy,
           completed_outcome: completed,
         });

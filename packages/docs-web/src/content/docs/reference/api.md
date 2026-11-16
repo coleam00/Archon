@@ -487,7 +487,9 @@ These routes record the decision and return. The server's continuation scheduler
 | GET | `/api/runs/attention/stream` | Stream the attention queue as server-sent events; `level=quiet\|notices\|protocol` selects how much, and `Last-Event-ID` resumes ([stream over HTTP](/getting-started/operate/#stream-over-http)) |
 | GET | `/api/runs/{runId}/attention` | Read `{ item: <attention item> }`, or `{ item: null }` when there is no queue item |
 | POST | `/api/runs/{runId}/attention/labels` | Set or remove labels on the exact attention wait occurrence a run is paused at |
-| GET | `/api/items` | Read the [item](/reference/cli/#items) named by `key` in `project`: its runs, open questions and answers, as `archon workflow runs --item --json` prints them; 404 when no start has named the key. `project` takes a codebase id, a codebase name or a project key |
+| GET | `/api/items` | Read the [item](/reference/cli/#items) named by `key` in `project`: its runs, open questions, and answers with rulings, as `archon workflow runs --item --json` prints them; 404 when nothing has named the key. `project` takes a codebase id, a codebase name or a project key |
+| POST | `/api/items/rulings` | Record a ruling on the item named by `key` in `project`, from `{ project, key, text, as? }`: a decision made without a question, which every later read of the item shows with the answers. Writes the item if nothing named it yet. 201 with the ruling; 403 unless the caller is the operator or an admin; `as` declares the operator's name and is ignored for an identified user |
+| POST | `/api/items/rulings/{rulingId}/withdraw` | Withdraw a ruling, from `{ project?, as? }`. The ruling stays in the item read with `withdrawn` set. With `project`, a ruling on another project's item is refused with 400 and stays as it was; without it the id alone names the ruling. 200 with the ruling; 400 for an unknown project; 404 for no such ruling; 409 when it was already withdrawn; 403 unless the caller is the operator or an admin |
 
 List and count responses add a `degraded` array when a paused row or a descendant needed
 to project its attention item cannot be read:

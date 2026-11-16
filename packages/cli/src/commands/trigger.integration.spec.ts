@@ -16,6 +16,7 @@ import { getRunArtifactsDirForRoot } from '@archon/paths';
 import { removeTempTree } from '@archon/paths/test-utils';
 import { triggerConfigSchema } from '@archon/workflows/schemas/resource-start';
 import { itemReadSchema } from '@archon/workflows/item-read';
+import { itemRulingSchema } from '@archon/workflows/schemas/item-ruling';
 import { standardWebhooksSourceConfigSchema } from '@archon/adapters/sources/standard-webhooks/source-plugin';
 import {
   isTerminalRunStatus,
@@ -410,6 +411,95 @@ describe('trigger CLI durable execution', () => {
       questions: [],
       answers: [],
     });
+
+    // A ruling is recorded with no question asked, here on a key nothing has named yet.
+    const readJson = async (args: string[]) => JSON.parse((await invoke(args)).stdout) as unknown;
+    const ruling = itemRulingSchema.parse(
+      await readJson([
+        'workflow',
+        'rule',
+        '--item',
+        'item-new',
+        '--as',
+        'triage-agent',
+        '--json',
+        '--',
+        'leave the chat readers for a follow-up',
+      ])
+    );
+    expect(ruling).toMatchObject({
+      text: 'leave the chat readers for a follow-up',
+      by: { declared: 'triage-agent' },
+      via: 'cli',
+      withdrawn: null,
+    });
+    const fresh = itemReadSchema.parse(
+      await readJson(['workflow', 'runs', '--item', 'item-new', '--json'])
+    );
+    expect(fresh.runs).toEqual([]);
+    expect(fresh.answers).toEqual([ruling]);
+    // Any run of an item reads the item's rulings by its own id, as `archon:script` item() does.
+    await invoke(['workflow', 'rule', '--item', 'item-1', '--', 'do not accept an empty outcome']);
+    const ofRun = itemReadSchema.parse(
+      await readJson(['workflow', 'runs', '--item-of', started[0]?.id ?? '', '--json'])
+    );
+    expect(ofRun.item.key).toBe('item-1');
+    expect(
+      ofRun.answers.flatMap(answer => (answer.kind === 'ruling' ? [answer.text] : []))
+    ).toEqual(['do not accept an empty outcome']);
+    const noItem = await invoke(
+      ['workflow', 'runs', '--item-of', all.find(run => run.item_key === null)?.id ?? '', '--json'],
+      false
+    );
+    expect(noItem.exitCode).toBe(1);
+    expect(JSON.parse(noItem.stdout)).toMatchObject({ ok: false, error: 'not_found' });
+    // Withdrawn once; the record stays and says so.
+    const withdrawn = itemRulingSchema.parse(
+      await readJson(['workflow', 'rule', '--withdraw', ruling.id, '--json'])
+    );
+    expect(withdrawn.withdrawn).toMatchObject({ via: 'cli', by: null });
+    for (const [id, error] of [
+      [ruling.id, 'already_withdrawn'],
+      ['no-such-ruling', 'not_found'],
+    ] as const) {
+      const refused = await invoke(['workflow', 'rule', '--withdraw', id, '--json'], false);
+      expect(refused.exitCode).toBe(1);
+      expect(JSON.parse(refused.stdout)).toMatchObject({ ok: false, error });
+    }
+    expect(
+      itemReadSchema.parse(await readJson(['workflow', 'runs', '--item', 'item-new', '--json']))
+        .answers
+    ).toEqual([withdrawn]);
+    // Under a selected project, a ruling on another project's item is not withdrawn.
+    const scratch = new Database(database);
+    let codebaseId: string;
+    try {
+      scratch.run(
+        "INSERT INTO remote_agent_items (project_key, key) VALUES ('other/project', 'x')"
+      );
+      scratch.run(
+        `INSERT INTO remote_agent_item_rulings (id, item_id, text, via)
+         SELECT 'foreign-ruling', id, 'not yours', 'cli' FROM remote_agent_items WHERE key = 'x'`
+      );
+      codebaseId =
+        scratch.query<{ id: string }, []>('SELECT id FROM remote_agent_codebases').get()?.id ?? '';
+    } finally {
+      scratch.close();
+    }
+    const scoped = ['workflow', 'rule', '--withdraw', 'foreign-ruling', '--json'];
+    const outside = await invoke([...scoped, '--chat-project-id', codebaseId], false);
+    expect(outside.exitCode).toBe(1);
+    expect(JSON.parse(outside.stdout)).toMatchObject({ ok: false, error: 'outside_project' });
+    expect(
+      (
+        await invoke(
+          ['workflow', 'rule', '--withdraw', 'foreign-ruling', '--chat-project-id', codebaseId],
+          false
+        )
+      ).stderr
+    ).toContain('outside project');
+    // Without a selected project, a withdrawal by id is not scoped.
+    expect(itemRulingSchema.parse(await readJson(scoped)).withdrawn).not.toBeNull();
 
     // A continuation stays on the item of the run it continues; `--item` still wins, and
     // continuing a run with no item gives none. `--adopt` writes the same
