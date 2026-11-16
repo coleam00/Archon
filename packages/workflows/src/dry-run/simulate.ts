@@ -30,6 +30,7 @@ import { nodePackDir } from '../pack-dir';
 import { runWithNodeScratch, runWithPackDir } from '../workflow-variables';
 import { getNodeScratchDir } from '@archon/paths/archon-paths';
 import { randomUUID } from 'node:crypto';
+import { releaseNodeScratch } from '../run-scratch';
 
 /** Whether the node runs at all; a node the trigger rule or its `when:` turns away is recorded here. */
 function isReached(
@@ -147,12 +148,24 @@ async function simulateNode(
   }
   try {
     const packDir = await nodePackDir(ctx.sourceRoots, ctx.workflow.pack, node);
-    // The simulation's temp root is removed whole when it ends, so this needs no release.
-    await runWithNodeScratch(getNodeScratchDir(ctx.artifactsDir, randomUUID()), () =>
-      runWithPackDir(packDir, async () =>
-        simulateNodeKind(node, outputs, ctx, iteration, execution)
-      )
-    );
+    // Released when the simulated node ends, as in a live run, so a dependent that adds a
+    // worktree on the same branch behaves as it would live.
+    const invocationId = randomUUID();
+    try {
+      await runWithNodeScratch(getNodeScratchDir(ctx.artifactsDir, invocationId), () =>
+        runWithPackDir(packDir, async () =>
+          simulateNodeKind(node, outputs, ctx, iteration, execution)
+        )
+      );
+    } finally {
+      await releaseNodeScratch({
+        artifactsDir: ctx.artifactsDir,
+        invocationId,
+        repoPath: ctx.execWorkspace,
+        container: false,
+        logContext: { workflowRunId: 'dry-run', nodeId: node.id, invocationId },
+      });
+    }
   } catch (error) {
     recordFailed(node, outputs, ctx, (error as Error).message, undefined, iteration);
   }

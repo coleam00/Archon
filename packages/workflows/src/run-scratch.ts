@@ -4,8 +4,10 @@
  *
  * `releaseNodeScratch` removes one invocation's `$NODE_SCRATCH_DIR` once that invocation
  * has completed, failed or been skipped; the layer walker calls it, so the invocation's
- * own processes have ended. Run-end release below stays the backstop for an invocation
- * that never got there (interrupted, or its process died).
+ * own processes have ended. A resumed run first releases the scratch of every invocation
+ * that ended while it was paused (`releaseFinishedNodeScratch`). Run-end release below
+ * stays the backstop for an invocation that never got there (interrupted, or its
+ * process died).
  *
  * Scratch is removed only once the run is terminal and nothing of it can still write
  * into it. `releaseRunScratch` proves the second half itself: the run's recorded
@@ -39,6 +41,8 @@ import { execFileAsync, GitFailure } from '@archon/git';
 import { createLogger } from '@archon/paths';
 import { isPidProvablyGone } from '@archon/paths/process-owner';
 import {
+  getNodeScratchDir,
+  getNodeScratchRoot,
   getRunArtifactsDirForRoot,
   getRunScratchDir,
   isPathInside,
@@ -126,22 +130,33 @@ export async function releaseRunScratch(run: ScratchRun): Promise<void> {
  * it from `repoPath` first. A container run's worktrees are registered in the container's
  * git, so only their files are deleted, as at container teardown. Never throws: a failed
  * release is logged and the node's result stands; run-end release retries the removal.
+ *
+ * Nothing is touched unless every directory from `artifactsDir` down to the node-scratch
+ * root is a real directory: through a linked ancestor, the path would name files and
+ * worktrees outside the run. A link in place of the invocation's own directory is removed
+ * without following it.
  */
 export async function releaseNodeScratch({
-  scratchDir,
+  artifactsDir,
+  invocationId,
   repoPath,
   container,
   logContext,
 }: {
-  scratchDir: string;
+  artifactsDir: string;
+  invocationId: string;
   repoPath: string;
   container: boolean;
   logContext: Record<string, unknown>;
 }): Promise<void> {
+  const scratchDir = getNodeScratchDir(artifactsDir, invocationId);
   try {
     const stat = await lstat(scratchDir);
-    // An empty directory, the common case, costs no git subprocess. A link a node put in
-    // place of the directory is removed without following it.
+    if (!(await nodeScratchRootIsDirectory(artifactsDir, logContext))) {
+      getLog().warn({ ...logContext, path: scratchDir }, 'node_scratch.ancestor_not_directory');
+      return;
+    }
+    // An empty directory, the common case, costs no git subprocess.
     if (stat.isDirectory() && !container && (await readdir(scratchDir)).length > 0) {
       await deregisterScratchWorktrees(repoPath, scratchDir, logContext);
     }
@@ -150,6 +165,61 @@ export async function releaseNodeScratch({
     if (error instanceof Error && 'code' in error && error.code === 'ENOENT') return;
     getLog().warn({ ...logContext, err: error, path: scratchDir }, 'node_scratch.remove_failed');
   }
+}
+
+/**
+ * On resume, release the scratch of every invocation that is not still unfinished: a gate
+ * completed by approval while the run was paused, or any invocation a prior pass ended
+ * without releasing. `unfinished` holds the invocation ids the resume reuses, whose
+ * scratch stays. Never throws.
+ */
+export async function releaseFinishedNodeScratch({
+  artifactsDir,
+  unfinished,
+  repoPath,
+  container,
+  logContext,
+}: {
+  artifactsDir: string;
+  unfinished: ReadonlySet<string>;
+  repoPath: string;
+  container: boolean;
+  logContext: Record<string, unknown>;
+}): Promise<void> {
+  if (!(await nodeScratchRootIsDirectory(artifactsDir, logContext))) return;
+  let entries: string[];
+  try {
+    entries = await readdir(getNodeScratchRoot(artifactsDir));
+  } catch (error) {
+    warnFilesystem(error, getNodeScratchRoot(artifactsDir), logContext);
+    return;
+  }
+  for (const invocationId of entries) {
+    if (unfinished.has(invocationId)) continue;
+    await releaseNodeScratch({
+      artifactsDir,
+      invocationId,
+      repoPath,
+      container,
+      logContext: { ...logContext, invocationId },
+    });
+  }
+}
+
+/**
+ * Whether `artifactsDir`, its engine child, the run's scratch and the node-scratch root
+ * are all real directories, links rejected. Creation checks it too, so a node is never
+ * handed a directory outside the run.
+ */
+export async function nodeScratchRootIsDirectory(
+  artifactsDir: string,
+  logContext: Record<string, unknown>
+): Promise<boolean> {
+  return (
+    (await scratchParentIsDirectory(artifactsDir, logContext)) &&
+    (await isDirectory(getRunScratchDir(artifactsDir), logContext)) &&
+    (await isDirectory(getNodeScratchRoot(artifactsDir), logContext))
+  );
 }
 
 /**

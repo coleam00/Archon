@@ -132,7 +132,12 @@ export function getRunScratchDir(artifactsDir: string): string {
  * invocation that never reached its end.
  */
 export function getNodeScratchDir(artifactsDir: string, invocationId: string): string {
-  return join(getRunScratchDir(artifactsDir), 'nodes', invocationId);
+  return join(getNodeScratchRoot(artifactsDir), invocationId);
+}
+
+/** The directory holding every node invocation's scratch: `<run scratch>/nodes`. */
+export function getNodeScratchRoot(artifactsDir: string): string {
+  return join(getRunScratchDir(artifactsDir), 'nodes');
 }
 
 /**
