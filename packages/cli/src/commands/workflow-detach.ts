@@ -18,7 +18,7 @@ import { sealWorkflowRunConfig } from '@archon/core/config';
 import { RUN_AI_CONFIGURATION_METADATA_KEY } from '@archon/workflows/run-ai-configuration';
 import { WORKFLOW_RUN_CONFIG_METADATA_KEY } from '@archon/workflows/run-config';
 import type { PreparedRunAiConfiguration } from '@archon/workflows/run-preflight';
-import { refuseBrokenRunEndedBindings } from '@archon/workflows/run-ended-refusal';
+import { refusePendingStart } from '@archon/workflows/start-refusal';
 import type { WorkflowRunConfigInput } from '@archon/workflows/schemas/run-config';
 import type { ResolvedWorkflow } from '@archon/workflows/schemas/workflow';
 import {
@@ -575,9 +575,11 @@ async function claimDetachedRun(launch: DetachedLaunch): Promise<DetachedRunClai
       `Failed to create the workflow run: ${(withItemHint(error) as Error).message}\nNothing was started.`
     );
   }
-  // Read on the created row, which carries the item the store resolved; the child's
-  // admission checks again before its claim (#5783).
-  const refusal = await refuseBrokenRunEndedBindings(host.deps, created);
+  // Every refusal admission would make on this row (a broken run-ended binding, asks
+  // with no item) is made here, before the fork, so the caller hears it instead of an
+  // acknowledgement. Read on the created row, which carries the item the store resolved
+  // from --item; the child's admission checks again before its claim (#5783).
+  const refusal = await refusePendingStart(host.deps, workflow, created);
   if (refusal) throw new Error(`${refusal}\nNothing was started.`);
   return { detachedRunId: created.id, launchedRunId: created.id, launchToken };
 }
