@@ -585,6 +585,34 @@ export class SqliteAdapter implements IDatabase {
       );
       CREATE INDEX IF NOT EXISTS idx_item_rulings_item_id ON remote_agent_item_rulings(item_id);
 
+      -- Links between items, one row per link, ended not deleted; see migrations/000_combined.sql.
+      CREATE TABLE IF NOT EXISTS remote_agent_item_links (
+        -- Recording order; timestamps tie and the id is random.
+        seq INTEGER PRIMARY KEY AUTOINCREMENT,
+        id TEXT NOT NULL UNIQUE DEFAULT (lower(hex(randomblob(16)))),
+        from_item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        to_item_id TEXT NOT NULL REFERENCES remote_agent_items(id),
+        kind TEXT NOT NULL,
+        by_declared TEXT,
+        by_user_id TEXT,
+        via TEXT NOT NULL,
+        from_run_id TEXT,
+        from_node_path TEXT,
+        created_at TEXT NOT NULL DEFAULT (datetime('now')),
+        ended_at TEXT,
+        ended_by_declared TEXT,
+        ended_by_user_id TEXT,
+        ended_via TEXT,
+        ended_from_run_id TEXT,
+        ended_from_node_path TEXT,
+        CHECK (from_item_id <> to_item_id),
+        CHECK ((ended_at IS NULL) = (ended_via IS NULL))
+      );
+      CREATE UNIQUE INDEX IF NOT EXISTS idx_item_links_active
+        ON remote_agent_item_links(from_item_id, to_item_id, kind) WHERE ended_at IS NULL;
+      CREATE INDEX IF NOT EXISTS idx_item_links_from_item_id ON remote_agent_item_links(from_item_id);
+      CREATE INDEX IF NOT EXISTS idx_item_links_to_item_id ON remote_agent_item_links(to_item_id);
+
       CREATE TABLE IF NOT EXISTS remote_agent_state_revisions (
         project_key TEXT NOT NULL,
         name TEXT NOT NULL,

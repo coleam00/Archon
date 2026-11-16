@@ -1678,8 +1678,9 @@ a guarantee; a prompt instructing an AI node to append is a convention it may no
 A run on an [item](/reference/cli/#items) can read what is recorded about it: the item's
 runs, the questions open in them, and the answers to them together with the item's
 [rulings](/reference/cli/#workflow-rule), the decisions an operator recorded without a
-question being asked. A ruling given to one run reaches every later run on the item this
-way, whichever workflow it is. The engine adds none of it to a prompt; a workflow that
+question being asked, and the item's [links](/reference/cli/#workflow-link) to other items.
+A ruling given to one run reaches every later run on the item this way, whichever workflow
+it is. The engine adds none of it to a prompt; a workflow that
 wants it reads it in a `script:` node and hands it on like any other output:
 
 ```yaml
@@ -1702,7 +1703,9 @@ nodes:
 
 `item()` reads the item of the run's top-level run, so a `workflow:` child reads its
 parent's item. It returns `null` for a run on no item. A withdrawn ruling stays in the
-list with `withdrawn` set; what a ruling means is for the reading node to judge. Like
+list with `withdrawn` set; what a ruling means is for the reading node to judge. `links`
+holds every link from or to the item, each with its `direction` and the `other` item; an
+ended link stays with `ended` set, and the engine acts on no link. Like
 `state`, it runs on the host: a container-isolated node cannot call it.
 
 ## Durable state documents

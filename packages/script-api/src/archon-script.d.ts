@@ -2022,7 +2022,7 @@ declare module 'archon:script' {
     }>;
   };
 
-  /** The item a run belongs to: its runs, open questions, and answers with rulings, oldest first. */
+  /** The item a run belongs to: its runs, open questions, answers with rulings, oldest first, and links. */
   export type ItemRead = {
     readonly item: {
       readonly id: string;
@@ -2268,6 +2268,40 @@ declare module 'archon:script' {
         } | null;
       } | null;
     }>;
+    readonly links: ReadonlyArray<{
+      readonly id: string;
+      readonly kind: 'depends_on' | 'part_of' | 'duplicate_of';
+      readonly direction: 'outgoing' | 'incoming';
+      readonly other: {
+        readonly id: string;
+        readonly projectKey: string;
+        readonly key: string;
+      };
+      readonly at: string;
+      readonly via: string;
+      readonly by: {
+        readonly declared: string;
+      } | {
+        readonly userId: string;
+      } | null;
+      readonly fromRun: {
+        readonly runId: string;
+        readonly nodePath: string;
+      } | null;
+      readonly ended: {
+        readonly at: string;
+        readonly via: string;
+        readonly by: {
+          readonly declared: string;
+        } | {
+          readonly userId: string;
+        } | null;
+        readonly fromRun: {
+          readonly runId: string;
+          readonly nodePath: string;
+        } | null;
+      } | null;
+    }>;
     readonly degraded: ReadonlyArray<{
       readonly type: 'degraded';
       readonly reason: 'run_unreadable';
@@ -2276,6 +2310,10 @@ declare module 'archon:script' {
       readonly type: 'degraded';
       readonly reason: 'ruling_unreadable';
       readonly rulingId: string;
+    } | {
+      readonly type: 'degraded';
+      readonly reason: 'link_unreadable';
+      readonly linkId: string;
     }>;
   };
 
@@ -2419,8 +2457,10 @@ declare module 'archon:script' {
    * The item this run belongs to (`archon workflow runs --item-of`): the item of the run's
    * root, since a `workflow:` child carries none of its own. It holds the item's runs, open
    * questions, and its answers and rulings in one list, oldest first; a withdrawn ruling
-   * stays, with `withdrawn` set. Null when the run is on no item. Read it in a `script:`
-   * node and `emit()` what a later node needs; the engine hands rulings to no node itself.
+   * stays, with `withdrawn` set. `links` holds every link from or to the item, each with
+   * its direction and the other item; an ended link stays, with `ended` set. Null when the
+   * run is on no item. Read it in a `script:` node and `emit()` what a later node needs; the
+   * engine hands rulings and links to no node itself.
    * A container run cannot call it, as it cannot call `state`.
    */
   export function item(): ItemRead | null;
