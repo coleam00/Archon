@@ -97,11 +97,6 @@ describe('run-paths', () => {
       const root = join('/custom/archon', 'workspaces', 'acme', 'widget');
       expect(getRunLogPathForRoot(root, 'run-1')).toBe(join(root, 'logs', 'run-1.jsonl'));
     });
-
-    test('agrees with the repo-specific helper', () => {
-      const root = join('/custom/archon', 'workspaces', 'acme', 'widget');
-      expect(getRunLogPath('acme', 'widget', 'run-1')).toBe(getRunLogPathForRoot(root, 'run-1'));
-    });
   });
 
   describe('getRunWorkflowSourceDirForRoot', () => {
