@@ -1,13 +1,15 @@
 import { describe, test, expect } from 'bun:test';
 import { dirname, join } from 'path';
-import { existsSync, readFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, symlinkSync } from 'fs';
 import {
   getAppArchonBasePath,
   getSourceWebDistDir,
   getBundledWorkflowsPath,
+  runningBuildInsideWorkspacesOf,
   validateAppDefaultsPaths,
 } from './source-tree-paths';
-import { usePathEnvSnapshot } from './test-utils';
+import { trackTempRoots, usePathEnvSnapshot } from './test-utils';
 
 describe('source-tree-paths', () => {
   usePathEnvSnapshot();
@@ -75,5 +77,55 @@ describe('validateAppDefaultsPaths', () => {
         process.env.ARCHON_DOCKER = originalEnv;
       }
     }
+  });
+});
+
+describe('runningBuildInsideWorkspacesOf', () => {
+  const trackTempRoot = trackTempRoots();
+  function makeRoot(): string {
+    return realpathSync(trackTempRoot(mkdtempSync(join(tmpdir(), 'build-in-workspaces-'))));
+  }
+
+  test('returns the build when it sits inside the home workspaces', () => {
+    const home = makeRoot();
+    const build = join(home, 'workspaces', 'owner', 'repo', 'worktrees', 'task');
+    mkdirSync(build, { recursive: true });
+    expect(runningBuildInsideWorkspacesOf(home, build)).toBe(build);
+  });
+
+  test('returns null for a build outside the home workspaces', () => {
+    const root = makeRoot();
+    const home = join(root, 'home');
+    const build = join(root, 'checkout');
+    mkdirSync(join(home, 'workspaces'), { recursive: true });
+    mkdirSync(build);
+    expect(runningBuildInsideWorkspacesOf(home, build)).toBeNull();
+  });
+
+  test('returns null when a workspaces symlink only points at the build', () => {
+    const root = makeRoot();
+    const home = join(root, 'home');
+    const build = join(root, 'checkout');
+    mkdirSync(join(home, 'workspaces', 'owner', 'repo'), { recursive: true });
+    mkdirSync(build);
+    symlinkSync(build, join(home, 'workspaces', 'owner', 'repo', 'source'), 'junction');
+    expect(
+      runningBuildInsideWorkspacesOf(home, join(home, 'workspaces', 'owner', 'repo', 'source'))
+    ).toBeNull();
+  });
+
+  test('follows a home whose workspaces directory is a symlink', () => {
+    const root = makeRoot();
+    const home = join(root, 'home');
+    const build = join(root, 'elsewhere', 'task');
+    mkdirSync(home);
+    mkdirSync(build, { recursive: true });
+    symlinkSync(join(root, 'elsewhere'), join(home, 'workspaces'), 'junction');
+    expect(runningBuildInsideWorkspacesOf(home, build)).toBe(build);
+  });
+
+  test('returns null for a home with no workspaces directory', () => {
+    const home = makeRoot();
+    expect(runningBuildInsideWorkspacesOf(home, home)).toBeNull();
   });
 });

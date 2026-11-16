@@ -8,9 +8,23 @@ Thank you for your interest in contributing to Archon!
 2. Clone your fork
 3. Install dependencies: `bun install`
 4. Copy `.env.example` to `.env` in the Archon checkout and configure it for the source server. This file loads after CWD env stripping, without overriding remaining process values, and before `~/.archon/.env` and `<cwd>/.archon/.env`. See [environment file locations](packages/docs-web/src/content/docs/reference/configuration.md#env-file-locations) for precedence and the distinction from a target repository's `.env`.
-5. Start development: `bun run dev`
+5. Start development: `bun run dev`. It uses `~/.archon` unless `ARCHON_HOME` is set; see [Running a checkout](#running-a-checkout) before you run a branch.
 
 ## Development Workflow
+
+### Running a checkout
+
+Archon applies its schema migrations when it opens a database. Running a checkout's CLI, server or tests against your own `~/.archon` writes that branch's unmerged schema into your live database, and the additive-only rule means it stays there.
+
+Before you run a checkout, give it its own home and remove it afterwards:
+
+```bash
+export ARCHON_HOME="$(mktemp -d)"
+```
+
+If `DATABASE_URL` is set in your shell, point it at a scratch database you create and drop. Copy `config.yaml` into the scratch home when the change needs your configuration; do not copy `archon.db` or credentials.
+
+A build running from inside an Archon home's `workspaces/` (a run's worktree or a managed clone) refuses to open that home's database and prints this instruction. That refusal is the guard; set a scratch home rather than routing around it.
 
 ### Code Quality
 

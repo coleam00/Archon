@@ -4,9 +4,12 @@
  * Strategy:
  * - If DATABASE_URL is set: Use PostgreSQL (shared with server)
  * - Otherwise: Use SQLite at ~/.archon/archon.db (standalone CLI)
+ * - Either way, refuse when this build runs from inside the home's workspaces:
+ *   that is code under work, and opening would migrate the live database.
  */
 import { join } from 'path';
 import { getArchonHome } from '@archon/paths';
+import { runningBuildInsideWorkspacesOf } from '@archon/paths/source-tree-paths';
 import type { DbNotificationListener, IDatabase, SqlDialect, QueryResult } from './adapters/types';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { SqliteAdapter, sqliteDialect } from './adapters/sqlite';
@@ -38,6 +41,29 @@ export function getSqliteDbPath(): string {
 }
 
 /**
+ * A build inside the home's workspaces is a run's worktree or a managed clone,
+ * not the install that owns the home. Opening the home's database from there
+ * would apply that unmerged code's schema migrations to the live database, and
+ * an inherited `ARCHON_HOME` says nothing about whether anyone chose that home
+ * for this work, so the refusal has no override.
+ */
+function refuseCodeUnderWork(): void {
+  const home = getArchonHome();
+  const build = runningBuildInsideWorkspacesOf(home);
+  if (!build) return;
+  const databaseHint = process.env.DATABASE_URL
+    ? ' DATABASE_URL is set, so also point it at a scratch database you create and drop.'
+    : '';
+  throw new Error(
+    `Refusing to open the database of Archon home ${home}. This build runs from ${build}, ` +
+      "inside that home's workspaces, so it is code under work and not the install that owns " +
+      "the home. Opening the database would apply this build's schema migrations to that " +
+      'live database. Set ARCHON_HOME to a scratch directory, for example ' +
+      `ARCHON_HOME="$(mktemp -d)".${databaseHint}`
+  );
+}
+
+/**
  * Get or create the database connection
  * Auto-detects PostgreSQL vs SQLite based on DATABASE_URL
  */
@@ -45,6 +71,8 @@ export function getDatabase(): IDatabase {
   if (database) {
     return database;
   }
+
+  refuseCodeUnderWork();
 
   if (process.env.DATABASE_URL) {
     getLog().info('db.connection_postgresql_selected');
