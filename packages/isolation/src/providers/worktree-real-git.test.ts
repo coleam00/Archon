@@ -1368,6 +1368,7 @@ describe('WorktreeProvider against real git', () => {
     expect(failure.kind).toBe('branch_exists');
     expect(failure.message).toContain(`worktree at ${target}`);
     expect(failure.message).toContain('--from main');
+    expect(failure.message).toContain(`based on ${oldBase.slice(0, 12)}`);
     // HEAD names the repository's HEAD, as on creation, not the worktree's own.
     expect((await typedFailure(provider.create(reuseRequest('HEAD')))).kind).toBe('branch_exists');
     expect(await git(target, 'rev-parse', 'HEAD')).toBe(head);

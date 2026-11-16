@@ -119,9 +119,13 @@ export async function refuseUnappliedStartPoint(
   const fromCommit = stdout.trim();
   if (await isAncestorOf(worktreePath, fromCommit)) return;
 
+  const base = await execFileAsync('git', ['-C', worktreePath, 'merge-base', 'HEAD', fromCommit], {
+    timeout: 10000,
+  });
   throw new IsolationFailure(
     'branch_exists',
-    `Branch "${branch}" already has a worktree at ${worktreePath}. ` +
+    `Branch "${branch}" already has a worktree at ${worktreePath}, ` +
+      `based on ${base.stdout.trim().slice(0, 12)}. ` +
       `--from ${fromBranch} (${fromCommit.slice(0, 12)}) is not in its history, ` +
       'so the run would start from a different base. Choose a different --branch, ' +
       'omit --from to continue in this worktree, or remove the worktree and delete the ' +
