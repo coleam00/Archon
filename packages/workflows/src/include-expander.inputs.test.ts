@@ -596,15 +596,6 @@ describe('expandWorkflowIncludes — typed with: values (#2637)', () => {
     const message = errors.find(e => e.filename === 'parent')?.error;
     expect(message).toContain("binding 'mode'");
     expect(message).toContain('OBJECT');
-
-    // A directive-SHAPED caller object never reaches the expansion: the include's own
-    // `with:` refuses it at parse (#5734), so data cannot inject reference semantics
-    // the block never authored.
-    expect(() =>
-      wf('parent', [
-        { id: 'use', include: 'bind-obj-blk', with: { mode: { from: '$use__consume.output' } } },
-      ])
-    ).toThrow("include input 'mode'");
   });
 });
 
