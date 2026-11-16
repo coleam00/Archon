@@ -65,7 +65,7 @@ A skipped execution instead carries a lifecycle reason and typed `cause`. The ca
 | `archon workflow get <run-id> --json --verbose` | Node summaries with execution metadata reconstructed from durable events when present |
 | `archon workflow get <run-id> --json --verbose --events` | Durable event envelopes and serialized `data` |
 | `GET /api/workflows/runs/{runId}` | Serialized events, with event-level `cost_scope` when `data.cost_usd` is numeric; separate run terminal/node summaries |
-| Live emitter and JSONL transcript | Shared `executionMetadata`, excluding output, diagnostics, and the full session ID |
+| Live emitter and JSONL transcript | Shared `executionMetadata`, excluding output, diagnostics, and the full session ID; a fan-out node's JSONL `node_complete` or `node_error` row also carries `fan_out_outcome` |
 
 The terminal record's `nodes` are lifecycle summaries from `foldNodeEvents` and `runNodeStateSchema`, not embedded full execution metadata. A `workflow:` fan-out node's summary also carries `fan_out_outcome`, the per-slot record its `node_completed` or `node_failed` event persisted as `data.fan_out_outcome` (`diagnostics.fanOutOutcome` on the execution record). Historical rows may lack execution metadata. See the [API reference](/reference/api/#runs) for the detail endpoint and the [CLI reference](/reference/cli/) for command options.
 
