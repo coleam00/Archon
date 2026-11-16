@@ -386,6 +386,68 @@ export function registerSameContextTests(): void {
       expect(callsTo('build')).toEqual([{ resume: 'build1', fork: false }]);
     });
 
+    it('a changed model between rounds starts the next round fresh, and the run says so', async () => {
+      const nodes = (model?: string): DagNode[] => [
+        {
+          id: 'group',
+          kind: 'loop_group',
+          loop_group: {
+            max_iterations: 2,
+            fresh_context: false,
+            until_bash: 'exit 1',
+            nodes: [
+              {
+                id: 'build',
+                kind: 'agent',
+                ...(model !== undefined ? { model } : {}),
+                source: { kind: 'inline', prompt: 'build' },
+                context: 'same',
+              },
+              dagNodeSchema.parse({
+                id: 'pause',
+                depends_on: ['build'],
+                approval: { message: 'Continue?' },
+              }),
+            ],
+          },
+        },
+      ];
+      const firstStore = createEscalationStore('run-1');
+      await run(nodes(), { store: firstStore });
+      const metadata = JSON.parse(JSON.stringify(firstStore.getState().metadata));
+      metadata.approval.resolved = 'approved';
+      calls = [];
+      const resumedStore = createEscalationStore('run-1');
+      const platform = createMockPlatform();
+      await executeDagWorkflow(
+        dagOptions({
+          deps: createMockDeps(resumedStore),
+          platform,
+          cwd: testDir,
+          workflow: { name: 'same-test', nodes: nodes('opus') },
+          workflowRun: makeWorkflowRun('run-1', { metadata }),
+        })
+      );
+      expect(callsTo('build')).toEqual([{ resume: undefined, fork: undefined }]);
+      expect(
+        persistedEvents(resumedStore).find(e => e.event_type === 'node_session_not_continued')?.data
+      ).toMatchObject({ reason: 'model_changed', model: 'opus' });
+      expect(deliveredMessages(platform).some(m => m.includes('started fresh'))).toBe(true);
+    });
+
+    it('a node that declares no context starts fresh on every run of the item', async () => {
+      const store = await sessionStore();
+      // Independent of build, so its only possible source of a session is the item.
+      const nodes: DagNode[] = [
+        ...build(),
+        { id: 'plain', kind: 'agent', source: { kind: 'inline', prompt: 'plain' } },
+      ];
+      await run(nodes, { store, itemId: 'K', runId: 'run-1' });
+      await run(nodes, { store, itemId: 'K', runId: 'run-2' });
+      expect(callsTo('plain').map(c => c.resume)).toEqual([undefined, undefined]);
+      expect(callsTo('build').map(c => c.resume)).toEqual([undefined, 'build1']);
+    });
+
     it('sessions from two providers tied as newest are not continued', async () => {
       // Stores may record seconds only; the matching provider's row is not provably the last.
       const row = (provider: string, id: string) => ({
