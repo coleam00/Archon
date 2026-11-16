@@ -203,8 +203,8 @@ async function reportNoOutcome(
 
 /**
  * A binding that matched this end but could not start its stage (its result pointer did
- * not resolve) is recorded on its receipt; say so where the run ends, so the completion
- * does not read as a hand-off that happened.
+ * not resolve, or the run left no checkout to take) is recorded on its receipt; say so
+ * where the run ends, so the completion does not read as a hand-off that happened.
  */
 async function reportUnstartedStages(
   ctx: RunTerminalContext,
@@ -215,7 +215,7 @@ async function reportUnstartedStages(
     await safeSendMessage(
       ctx.platform,
       ctx.conversationId,
-      `\u26a0\ufe0f The next stage was not started: ${accepted.reason ?? 'its binding was rejected'}. Receipt ${accepted.receipt.id} records it (archon trigger inspect ${accepted.receipt.id}). After fixing the trigger, start the stage with archon trigger fire.`,
+      `\u26a0\ufe0f The next stage was not started: ${accepted.reason ?? 'its binding was rejected'}. Receipt ${accepted.receipt.id} records it (archon trigger inspect ${accepted.receipt.id}). Fix what it names, then start the stage again: for a binding that maps inputs, with archon trigger fire --item <key>; for one that takes this run's checkout (on.runEnded.checkout), which a fire refuses, run '${ctx.workflow.name}' again on the item in a worktree, and its end starts the stage.`,
       { workflowId: ctx.workflowRun.id }
     );
   }
@@ -445,7 +445,9 @@ async function completeRun(
   // throw. Terminal telemetry is reported by the run store after the write commits.
   await logWorkflowComplete(logDir, workflowRun.id, runTranscriptUsage);
 
-  const { completedRun, worktreeDisposition } = await assessCompletedWorktree(deps, workflowRun);
+  const assessed = await assessCompletedWorktree(deps, workflowRun);
+  const { completedRun } = assessed;
+  const worktreeDisposition = keepHandedOff(assessed.worktreeDisposition, workflowRun, result);
 
   try {
     await requireTerminalStatusWrite(
@@ -523,6 +525,30 @@ async function completeRun(
     const lost = wouldBeLost(worktreeDisposition);
     if (lost) await sendRetentionWarning(ctx, keptPath, lost);
   }
+}
+
+/**
+ * A worktree this end hands to the stage it starts is kept for that stage, which works in
+ * it once admitted. `in_use` is the reason an older binary also reads. Only the end's own
+ * write keeps it: `archon isolation cleanup` before the stage starts can still remove it,
+ * and then the stage checks the branch out again or is refused.
+ */
+function keepHandedOff(
+  disposition: WorktreeDisposition | null | undefined,
+  workflowRun: WorkflowRun,
+  result: Parameters<WorkflowDeps['store']['completeWorkflowRun']>[3]
+): WorktreeDisposition | null | undefined {
+  if (disposition?.disposition !== 'release') return disposition;
+  const stage = result?.startReceipts
+    ?.flatMap(accepted => accepted.bindings)
+    .find(binding => binding.checkoutFrom?.runId === workflowRun.id);
+  return stage
+    ? {
+        disposition: 'retained',
+        reason: 'in_use',
+        detail: `the stage '${stage.launch.workflowName}' its end started`,
+      }
+    : disposition;
 }
 
 /** What removing a kept checkout would lose, or undefined when keeping it needs no warning. */

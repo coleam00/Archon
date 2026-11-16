@@ -675,6 +675,7 @@ export class SqliteAdapter implements IDatabase {
         intent TEXT,
         event_input_names TEXT,
         item_key TEXT,
+        checkout_from TEXT,
         preparation_status TEXT NOT NULL CHECK (preparation_status IN ('pending', 'preparing', 'failed', 'rejected', 'unmatched', 'complete')),
         preparation_owner TEXT,
         preparation_error TEXT,

@@ -34,6 +34,7 @@ import {
   sourceReceiptInputSchema,
   preparedWorkflowLaunchSchema,
   resourceStartBindingIntentSchema,
+  checkoutHandoffSchema,
 } from '@archon/workflows/schemas/resource-start';
 import { workflowRunStatusSchema } from '@archon/workflows/schemas/workflow-run';
 import { getDatabase, getDatabaseType, getDialect } from './connection';
@@ -292,10 +293,25 @@ function parseStoredJson(value: unknown): unknown {
 function readStoredIntent(
   intent: unknown,
   eventInputNames: unknown,
+  checkoutFrom: unknown,
   itemKey: unknown
 ): ResourceStartBindingIntent {
   const parsed = resourceStartBindingIntentSchema.parse(parseStoredJson(intent));
-  const stored = typeof itemKey === 'string' ? { ...parsed, itemKey } : parsed;
+  const stored = withEventInputs(
+    typeof itemKey === 'string' ? { ...parsed, itemKey } : parsed,
+    eventInputNames
+  );
+  // A malformed hand-off throws like a malformed intent: read as absent, the start would
+  // run on the branch with no commit pin.
+  return checkoutFrom == null
+    ? stored
+    : { ...stored, checkoutFrom: checkoutHandoffSchema.parse(parseStoredJson(checkoutFrom)) };
+}
+
+function withEventInputs(
+  stored: ResourceStartBindingIntent,
+  eventInputNames: unknown
+): ResourceStartBindingIntent {
   if (eventInputNames == null) return stored;
   const names = new Set(z.array(z.string()).parse(parseStoredJson(eventInputNames)));
   for (const name of names)
@@ -348,7 +364,9 @@ function inspectBinding(row: Record<string, unknown>): StartBindingInspection {
     ownerId: typeof row.preparation_owner === 'string' ? row.preparation_owner : null,
     error: typeof row.preparation_error === 'string' ? row.preparation_error : null,
     intent:
-      row.intent == null ? null : readStoredIntent(row.intent, row.event_input_names, row.item_key),
+      row.intent == null
+        ? null
+        : readStoredIntent(row.intent, row.event_input_names, row.checkout_from, row.item_key),
     requestStatus,
     disposition: requestDisposition,
   };

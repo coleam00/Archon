@@ -19,7 +19,7 @@ import {
 } from '@archon/workflows/schemas/resource-start';
 
 export const githubSourceBindingSchema = resourceStartBindingIntentSchema
-  .omit({ bindingRevision: true, eventInputs: true, itemKey: true })
+  .omit({ bindingRevision: true, eventInputs: true, checkoutFrom: true, itemKey: true })
   .extend({
     selector: forgeEventSelectorSchema,
     inputMapping: z.record(z.string(), createForgeInputBindingSchema(jsonValueSchema)),
