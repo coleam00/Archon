@@ -2,8 +2,9 @@
  * The review's head rule: a round's verdict is about one commit, and it stands on a
  * pull request only while that pull request's remote head is that commit.
  *
- * publish-review applies it before the verdict goes public: the head can move during
- * a long review, and a standalone review can start from another checkout.
+ * review-round applies it when the round starts, so a standalone review started from
+ * the wrong checkout refuses before any agent runs. publish-review applies it again
+ * before the verdict goes public, because the head can move during a long review.
  */
 
 import type { QualifiedPr } from './identity.ts';
