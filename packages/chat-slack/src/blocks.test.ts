@@ -5,6 +5,7 @@ import {
   buildApprovalBlocks,
   parseApprovalValue,
   buildApprovalResolutionBlocks,
+  buildNoticeTerminalBlocks,
   buildStatusBlocks,
   formatCostFooter,
   type RunSnapshot,
@@ -303,6 +304,30 @@ describe('buildStatusBlocks', () => {
       '*Authored outcome:* `built`'
     );
     expect(fallbackText).toContain('authored outcome: built');
+  });
+
+  test('a long named outcome stays within the Slack text limit', () => {
+    const long = 'x'.repeat(5000);
+    const status = buildStatusBlocks(
+      snapshot({ status: 'completed', outcome: { kind: 'value', value: long } }),
+      startedAt + 1000
+    );
+    const notice = buildNoticeTerminalBlocks({
+      type: 'terminal',
+      runId: 'run-1',
+      workflowName: 'assist',
+      status: 'completed',
+      completedOutcome: long,
+    });
+    const texts: string[] = [];
+    JSON.stringify([...status.blocks, ...notice.blocks], (key, value: unknown) => {
+      if (key === 'text' && typeof value === 'string') texts.push(value);
+      return value;
+    });
+    expect(texts.length).toBeGreaterThan(0);
+    for (const text of texts) expect(text.length).toBeLessThanOrEqual(3000);
+    expect(status.fallbackText.length).toBeLessThanOrEqual(3000);
+    expect(notice.fallbackText.length).toBeLessThanOrEqual(3000);
   });
 
   test('distinguishes an unavailable authored outcome from an undeclared outcome', () => {

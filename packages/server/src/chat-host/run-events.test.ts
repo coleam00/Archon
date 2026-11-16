@@ -257,6 +257,44 @@ test('a cancelled run carries its cancellation reason to the plugin', async () =
   }
 });
 
+test('a failed event for a run that has since completed carries no outcome', async () => {
+  const delivered: ChatRunEvent[] = [];
+  const supervisor = new ChatSupervisor(
+    { descriptor, argv: [process.execPath] },
+    () => {},
+    () => {}
+  );
+  supervisor.runEvent = async event => {
+    delivered.push(event);
+  };
+  const unsubscribe = subscribeChatRunEvents(new Map([['fixture-chat', supervisor]]), new Map());
+  try {
+    const run = await createRun('fixture-chat');
+    // The run was resumed in place and completed before the failed event was routed.
+    await getDatabase().query(
+      `UPDATE remote_agent_workflow_runs
+       SET status = 'completed', completed_outcome = 'built' WHERE id = $1`,
+      [run.id]
+    );
+    getWorkflowEventEmitter().emit({
+      type: 'workflow_failed',
+      runId: run.id,
+      workflowName: run.workflow_name,
+      error: 'boom',
+    });
+    const deadline = Date.now() + DEFAULT_TEST_TIMEOUT_MS;
+    while (delivered.length < 1) {
+      if (Date.now() > deadline) throw new Error('Event was not forwarded');
+      await new Promise(resolve => setTimeout(resolve, 5));
+    }
+    expect(delivered[0]).toMatchObject({ type: 'terminal', status: 'failed' });
+    expect(delivered[0]).not.toHaveProperty('completedOutcome');
+    expect(delivered[0]).not.toHaveProperty('authoredOutcome');
+  } finally {
+    unsubscribe();
+  }
+});
+
 test('suspended and prior-success nodes retain the Slack rendering states', () => {
   expect(
     projectRunEvent({

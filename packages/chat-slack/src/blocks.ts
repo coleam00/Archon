@@ -326,8 +326,13 @@ export function shownOutcome(
 
 const READ_FAILED_TEXT = 'unavailable — failed to read persisted run';
 
+// A named outcome has no length limit on the wire; Slack rejects text over 3000 characters.
+const OUTCOME_TEXT_MAX = 200;
+
 function outcomeText(outcome: ShownOutcome): string {
-  return outcome.kind === 'read_failed' ? READ_FAILED_TEXT : outcome.value;
+  return outcome.kind === 'read_failed'
+    ? READ_FAILED_TEXT
+    : truncate(outcome.value, OUTCOME_TEXT_MAX);
 }
 
 function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: string): KnownBlock {
@@ -337,7 +342,7 @@ function buildStatusHeader(snapshot: RunSnapshot, header: string, elapsed: strin
       : `\n*Execution status:* \`${snapshot.status}\` · *Authored outcome:* ${
           snapshot.outcome.kind === 'read_failed'
             ? READ_FAILED_TEXT
-            : `\`${snapshot.outcome.value}\``
+            : `\`${outcomeText(snapshot.outcome)}\``
         }`;
   return {
     type: 'section',

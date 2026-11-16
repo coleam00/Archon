@@ -144,7 +144,9 @@ function applyRunDetails(
     ).messageFor(surface);
   }
   if (routed.type === 'terminal') {
-    Object.assign(routed, chatRunOutcome(run));
+    // The row may be newer than the event: a failed or cancelled run resumed in place can
+    // have completed since. Only a completed event takes the completion's outcome.
+    if (routed.status === 'completed') Object.assign(routed, chatRunOutcome(run));
     const cost = runTotalCostUsd(run);
     if (cost !== undefined) routed.totalCostUsd = cost;
   }
