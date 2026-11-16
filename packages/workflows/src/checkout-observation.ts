@@ -124,7 +124,7 @@ type ContainerProbe = 'marker' | 'none' | 'failed';
  * calls, so tests can answer for a container that does not exist instead of spawning
  * `docker`.
  */
-async function probeContainerMarker(
+export async function probeContainerMarker(
   cwd: string,
   execContext: Extract<ExecutionContext, { kind: 'container' }>
 ): Promise<ContainerProbe> {

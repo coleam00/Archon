@@ -18,6 +18,7 @@ import {
   ready,
   readAllArtifacts,
   makeWorkflowRun,
+  isEngineHousekeepingCall,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import type { DagNode } from '../../../schemas';
@@ -518,7 +519,8 @@ describe('loop_group body inputs: included blocks, command files and loop variab
     let outerGatesRun = 0;
     const exitCodeErr = (code: number) =>
       Object.assign(new Error(`exit ${String(code)}`), { code });
-    const execSpy = spyOnNodeExec().mockImplementation(async (_cmd, _args, options) => {
+    const execSpy = spyOnNodeExec().mockImplementation(async (cmd, args, options) => {
+      if (isEngineHousekeepingCall([cmd, args])) return { stdout: '', stderr: '' };
       const script = options?.input ?? '';
       observedScripts.push(script);
       if (script === `echo "inner's ready"`) return { stdout: "inner's ready\n", stderr: '' };

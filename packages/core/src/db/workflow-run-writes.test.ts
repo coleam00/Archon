@@ -221,17 +221,18 @@ describe('workflow run writes', () => {
     test('deletes events then run within a transaction for terminal run', async () => {
       mockQuery
         .mockResolvedValueOnce(createQueryResult([{ status: 'completed' }])) // SELECT guard
+        .mockResolvedValueOnce(createQueryResult([{ open: 0 }])) // open asks guard
         .mockResolvedValueOnce(createQueryResult([], 1)) // events DELETE
         .mockResolvedValueOnce(createQueryResult([], 1)); // run DELETE
 
       await deleteWorkflowRun('run-123');
 
-      expect(mockQuery).toHaveBeenCalledTimes(3);
+      expect(mockQuery).toHaveBeenCalledTimes(4);
       const [selectSql] = mockQuery.mock.calls[0] as [string, unknown[]];
       expect(selectSql).toContain('SELECT status');
-      const [eventsSql] = mockQuery.mock.calls[1] as [string, unknown[]];
+      const [eventsSql] = mockQuery.mock.calls[2] as [string, unknown[]];
       expect(eventsSql).toContain('remote_agent_workflow_events');
-      const [runsSql] = mockQuery.mock.calls[2] as [string, unknown[]];
+      const [runsSql] = mockQuery.mock.calls[3] as [string, unknown[]];
       expect(runsSql).toContain('remote_agent_workflow_runs');
     });
 

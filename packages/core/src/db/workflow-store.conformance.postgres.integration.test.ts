@@ -15,6 +15,8 @@ import {
   makeSqlConformanceHarness,
   describeSqlStatusReadConformance,
 } from './workflow-store.conformance-harness';
+import { describeItemLinkConformance } from './item-links.conformance-harness';
+import { describeSqlItemAskConformance } from './item-asks.conformance';
 import { PostgresAdapter, postgresDialect } from './adapters/postgres';
 import { getSchemaSQL } from './bundled-schema';
 
@@ -315,6 +317,8 @@ describe.skipIf(!baseUrl)('scratch PostgreSQL', () => {
   }
 
   describeSqlStatusReadConformance(makeHarness);
+  describeItemLinkConformance(makeHarness);
+  describeSqlItemAskConformance(makeHarness);
   test('SQL attention reads report unreadable origins without losing valid rows or writing state', async () => {
     const harness = await makeHarness();
     try {

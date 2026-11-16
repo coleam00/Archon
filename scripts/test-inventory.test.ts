@@ -312,7 +312,7 @@ function formatMismatches(mismatches: InventoryMismatch[]): string {
     'Package test inventory is out of sync.',
     ...details,
     'Add each test to a compatible Bun batch or cover it with a directory selector; remove stale selectors.',
-    `Declare package tests either as an explicit \`bun test <src selectors>\` chain in scripts.test, or with scripts.test set to "${PACKAGE_TEST_RUNNER}", with optional legacy testGroups; otherwise src tests are discovered, so execution and inventory agree.`,
+    `Declare package tests either as an explicit \`bun test <src selectors>\` chain in scripts.test, or with scripts.test set to "${PACKAGE_TEST_RUNNER}", where src tests not named in legacy testGroups are discovered, so execution and inventory agree.`,
     'Keep separate `bun test` invocations where `mock.module()` factories conflict.',
   ].join('\n');
 }

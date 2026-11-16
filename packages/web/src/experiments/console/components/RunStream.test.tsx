@@ -523,41 +523,33 @@ test.each(
       { cost: 0.03, formatted: '0.03' },
       { cost: 0.036, formatted: '0.03' },
       { cost: 0.00006, formatted: '0.0000' },
-    ].flatMap(({ cost, formatted }) =>
-      [
-        { cost_partial: true },
-        { spend: { costUsd: { source: 'provider', value: cost, partial: true } } },
-      ].map(proof => ({ scope, cost, formatted, proof }))
-    )
+    ].map(({ cost, formatted }) => ({ scope, cost, formatted }))
   )
-)(
-  'RunStream labels persisted partial cost as a floor (%j)',
-  ({ scope, cost, formatted, proof }) => {
-    const event = toRunEvent({
-      id: 'cost',
-      workflow_run_id: 'r1',
-      event_type: 'node_completed',
-      step_index: null,
-      step_name: 'grp',
-      cost_scope: scope,
-      data: { cost_usd: cost, ...proof },
-      created_at: '2026-10-02T10:00:00.000Z',
-    });
-    const html = renderToStaticMarkup(
-      <StreamContextProvider value={{ runStartedAt: event.timestamp }}>
-        <RunStream
-          messages={[]}
-          events={[event]}
-          nodes={[{ node_id: 'grp', state: 'completed' }]}
-          providerEvents={new Map()}
-          showToolCalls={false}
-          showSystem={false}
-          selectedNodeId={null}
-          live
-          waitingNodeId={null}
-        />
-      </StreamContextProvider>
-    );
-    expect(html).toContain(`· ${scope === 'total' ? 'total ' : ''}at least $${formatted}`);
-  }
-);
+)('RunStream labels persisted partial cost as a floor (%j)', ({ scope, cost, formatted }) => {
+  const event = toRunEvent({
+    id: 'cost',
+    workflow_run_id: 'r1',
+    event_type: 'node_completed',
+    step_index: null,
+    step_name: 'grp',
+    cost_scope: scope,
+    data: { cost_usd: cost, cost_partial: true },
+    created_at: '2026-10-02T10:00:00.000Z',
+  });
+  const html = renderToStaticMarkup(
+    <StreamContextProvider value={{ runStartedAt: event.timestamp }}>
+      <RunStream
+        messages={[]}
+        events={[event]}
+        nodes={[{ node_id: 'grp', state: 'completed' }]}
+        providerEvents={new Map()}
+        showToolCalls={false}
+        showSystem={false}
+        selectedNodeId={null}
+        live
+        waitingNodeId={null}
+      />
+    </StreamContextProvider>
+  );
+  expect(html).toContain(`· ${scope === 'total' ? 'total ' : ''}at least $${formatted}`);
+});

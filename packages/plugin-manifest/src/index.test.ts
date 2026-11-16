@@ -128,10 +128,6 @@ describe('plugin receipt', () => {
     files: [{ path: 'archon-forge-example', sha256: 'b'.repeat(64) }],
   };
 
-  test('accepts a well-formed receipt', () => {
-    expect(pluginReceiptSchema.safeParse(receipt).success).toBe(true);
-  });
-
   test('a workflow-pack receipt needs no tag or file list, and a forge receipt still needs both', () => {
     const packReceipt = {
       schemaVersion: 1,

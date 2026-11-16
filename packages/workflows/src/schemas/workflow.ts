@@ -245,7 +245,7 @@ export const workflowBaseSchema = z.object({
    * sub-run child. Selecting by id (not text) works for every node type,
    * including a non-sink node.
    *
-   * Authored as `returns: <id>` or `returns: { node: <id>, outcome: <field> }`. The
+   * Authored as `returns: <id>` or `returns: { node: <id>, outcome?: <field>, asks?: <field> }`. The
    * loader keeps the node id here and the rest of the declaration in `result`.
    */
   returns: z.string().min(1).optional(),
@@ -276,6 +276,13 @@ export const workflowResultContractSchema = z.strictObject({
    * the write that completes the run.
    */
   outcome: z.string().min(1).optional(),
+  /**
+   * A property of the returns node's output that holds the decisions the run leaves for
+   * an operator. The engine defines its schema (`schemas/item-ask.ts`) and adds it to the
+   * node's `output_format`; the asks a completed top-level run leaves open on its item in
+   * the write that completes it. A workflow that declares it runs on an item.
+   */
+  asks: z.string().min(1).optional(),
 });
 
 export type WorkflowResultContract = z.infer<typeof workflowResultContractSchema>;

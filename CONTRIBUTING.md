@@ -8,23 +8,39 @@ Thank you for your interest in contributing to Archon!
 2. Clone your fork
 3. Install dependencies: `bun install`
 4. Copy `.env.example` to `.env` in the Archon checkout and configure it for the source server. This file loads after CWD env stripping, without overriding remaining process values, and before `~/.archon/.env` and `<cwd>/.archon/.env`. See [environment file locations](packages/docs-web/src/content/docs/reference/configuration.md#env-file-locations) for precedence and the distinction from a target repository's `.env`.
-5. Start development: `bun run dev`
+5. Start development: `bun run dev`. It uses `~/.archon` unless `ARCHON_HOME` is set; see [Running a checkout](#running-a-checkout) before you run a branch.
 
 ## Development Workflow
 
+### Running a checkout
+
+Archon applies its schema migrations when it opens a database. Running a checkout's CLI, server or tests against your own `~/.archon` writes that branch's unmerged schema into your live database, and the additive-only rule means it stays there.
+
+Before you run a checkout, give it its own home and remove it afterwards:
+
+```bash
+export ARCHON_HOME="$(mktemp -d)"
+```
+
+If `DATABASE_URL` is set, in your shell or in the checkout's `.env`, unset it or point it at a scratch database you create and drop. A scratch home does not change which database `DATABASE_URL` names. Copy `config.yaml` into the scratch home when the change needs your configuration; do not copy `archon.db` or credentials.
+
+A build running from inside an Archon home's `workspaces/` (a run's worktree or a managed clone) refuses to open any database, SQLite or PostgreSQL, while `ARCHON_HOME` names that home, and prints this instruction. The check reads only the home: once `ARCHON_HOME` is a scratch directory, a `DATABASE_URL` is opened as given, live or not. Set a scratch home rather than routing around the refusal.
+
 ### Code Quality
 
-Packages using the shared test runner without legacy `testGroups` discover tests
-under `src` automatically (`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents).
-Core uses this default. A test that uses `mock.module()`, directly
+Packages using the shared test runner discover tests under `src` automatically
+(`*.test.ts`, `*.spec.ts`, and their `.tsx` equivalents). Core uses this default.
+A package's legacy `testGroups` pin the files their selectors name into fixed processes;
+discovery groups every other test, so a new test needs no manifest edit. A test that uses `mock.module()`, directly
 or through a helper, must start with the exact line `// @archon-test-isolated`;
-discovery fails on a direct call without it.
+discovery fails on a direct call without it. The line isolates only a discovered test: a file a
+directory selector such as `src/` covers stays in that selector's group until the selector is
+narrowed to leave it out.
 Use the same directive for any other test requiring a fresh process. Unmarked tests
 share one process. Run package test scripts to preserve isolation; requested selectors
 retain Bun's substring-filter meaning and run only matching files, preserving the same
 isolation groups. Every requested group runs, and any failed group makes the command
-fail. Discovery errors, including selected files outside explicit `testGroups`, stop
-the request before any group starts. Test flags apply to each selected group; JUnit output
+fail. Discovery errors stop the request before any group starts. Test flags apply to each selected group; JUnit output
 is combined across groups and, from the repository root, across every started owner.
 Name filters (`-t` or `--test-name-pattern`) are supported only when the request selects
 one isolation group, preserving Bun's native exit result. Requests selecting multiple

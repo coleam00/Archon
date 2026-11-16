@@ -22,6 +22,8 @@ import {
   dagOptions,
   makeWorkflowRun,
   readTranscript,
+  isEngineHousekeepingCall,
+  nodeExecCalls,
 } from '../../test-utils';
 import { executeDagWorkflow } from '../../../dag-executor';
 import { getWorkflowEventEmitter, type WorkflowEmitterEvent } from '../../../event-emitter';
@@ -475,7 +477,9 @@ describe('subprocess credential redaction', () => {
     const execSpy = spyOn(git, 'execFileAsync').mockImplementation(
       async (command: string, args: string[]) => {
         const commandLine = [command, ...args].join(' ');
-        rejection = Object.assign(
+        // Every call fails with the echoed secrets, so the durable checks below also cover
+        // the engine's marker probes; the rejection checked field by field is the node's.
+        const failure = Object.assign(
           new Error(`Command failed: ${commandLine}\nmessage echoed ${openAiSecret}`),
           {
             code: 1,
@@ -486,7 +490,8 @@ describe('subprocess credential redaction', () => {
             stderr: `stderr echoed ${openAiSecret}, ${otherInjectedSecret}, ${projectSecret}, ${databaseUrl}, and ${fileDeliveredSecret}`,
           }
         );
-        throw rejection;
+        if (!isEngineHousekeepingCall([command, args])) rejection = failure;
+        throw failure;
       }
     );
 
@@ -603,7 +608,9 @@ describe('subprocess credential redaction', () => {
       | undefined;
     const execSpy = spyOnNodeExec().mockImplementation(async (command: string, args: string[]) => {
       const commandLine = [command, ...args].join(' ');
-      rejection = Object.assign(
+      // Node scratch release asks the host's git for worktrees; it fails with the echoed
+      // secrets too, so the durable checks cover it. The node's call is the one checked.
+      const failure = Object.assign(
         new Error(
           `Command failed: ${commandLine}\nmessage echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`
         ),
@@ -615,7 +622,8 @@ describe('subprocess credential redaction', () => {
           stderr: `stderr echoed ${protectedSecret}, ${ambientSecret}, and ${ambientDatabaseUrl}`,
         }
       );
-      throw rejection;
+      if (!isEngineHousekeepingCall([command, args])) rejection = failure;
+      throw failure;
     });
 
     try {
@@ -642,8 +650,9 @@ describe('subprocess credential redaction', () => {
         })
       );
 
-      expect(execSpy).toHaveBeenCalledTimes(1);
-      expect(execSpy.mock.calls[0]?.[0]).not.toBe('docker');
+      const nodeCalls = nodeExecCalls(execSpy.mock.calls);
+      expect(nodeCalls).toHaveLength(1);
+      expect(nodeCalls[0]?.[0]).not.toBe('docker');
       const rejectionText = [
         rejection?.message,
         rejection?.stack,
