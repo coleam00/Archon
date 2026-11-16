@@ -1657,12 +1657,6 @@ nodes:
     }
   }, 45_000);
 
-  /**
-   * A trigger binding on a capacity-1 resource whose run holds its node in `sleep`, in a
-   * scratch ARCHON_HOME. `fire()` starts a detached `trigger execute` owner; the bash
-   * node records `$PPID $$`, which is that owner and the node. `holdPrefix` runs first
-   * in the node's shell.
-   */
   /** A second git project with a fire-only binding into it, written next to the fixture's. */
   async function writeOtherProject(root: string): Promise<string> {
     const otherRoot = join(root, 'other');
@@ -1684,6 +1678,12 @@ nodes:
     return otherConfig;
   }
 
+  /**
+   * A trigger binding on a capacity-1 resource whose run holds its node in `sleep`, in a
+   * scratch ARCHON_HOME. `fire()` starts a detached `trigger execute` owner; the bash
+   * node records `$PPID $$`, which is that owner and the node. `holdPrefix` runs first
+   * in the node's shell.
+   */
   async function heldTriggerRun(
     label: string,
     holdPrefix = ''
